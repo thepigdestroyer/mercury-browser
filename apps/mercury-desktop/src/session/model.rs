@@ -63,9 +63,9 @@ pub(crate) fn restored_tab(tab: &TabSnapshot) -> RestoredTab {
 /// The window's place and state, as last seen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WindowGeometry {
-    /// The last position and size of the window's content (below the title bar) while it was
-    /// neither maximised, full screen nor minimised: what it returns to. The content origin is
-    /// what a position set before the window exists means on macOS, so it is saved as such.
+    /// The last position and size of the window while it was neither maximised, full screen
+    /// nor minimised: what it returns to. The position is the origin `saved_origin` names (the
+    /// content's on macOS); the size is the content's.
     pub bounds: Option<WindowBounds>,
     pub maximized: bool,
     pub fullscreen: bool,
@@ -94,6 +94,44 @@ impl WindowGeometry {
         if !maximized && !user_fullscreen {
             self.bounds = Some(bounds);
         }
+    }
+}
+
+/// Which corner of the window is saved as its position.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum SavedOrigin {
+    /// The content's top-left, below the title bar.
+    Content,
+    /// The window's outer top-left, decorations included.
+    Outer,
+}
+
+/// The origin to save is the one that a position set before the window exists means, so that
+/// a restored window opens where it was instead of moving by its decorations at every start.
+/// winit 0.30.13 `WindowAttributes::with_position` (`src/window.rs:229-246`): on macOS it is
+/// the content's top-left; on X11 and Windows the outer top-left; Wayland ignores it.
+pub(crate) const fn saved_origin(platform: crate::shortcuts::Platform) -> SavedOrigin {
+    match platform {
+        crate::shortcuts::Platform::MacOs => SavedOrigin::Content,
+        crate::shortcuts::Platform::Other => SavedOrigin::Outer,
+    }
+}
+
+/// The bounds to take in: `position` when the platform tells it (Wayland does not), otherwise
+/// the last one known (or the origin, which is never applied where positions are unknown).
+pub(crate) fn observed_bounds(
+    position: Option<(i32, i32)>,
+    size: (u32, u32),
+    previous: Option<WindowBounds>,
+) -> WindowBounds {
+    let (x, y) = position
+        .or(previous.map(|previous| (previous.x, previous.y)))
+        .unwrap_or((0, 0));
+    WindowBounds {
+        x,
+        y,
+        width: size.0,
+        height: size.1,
     }
 }
 
@@ -381,6 +419,7 @@ mod tests {
     use talaria_core::{BrowserEvent, TabActivation};
 
     use super::*;
+    use crate::shortcuts::Platform;
 
     const NOW: i64 = 1_700_000_000_000;
 
@@ -575,6 +614,50 @@ mod tests {
             false,
         );
         assert!(tracker.observe_geometry(geometry), "resized");
+    }
+
+    #[test]
+    fn the_saved_origin_is_the_one_a_position_set_before_showing_means() {
+        assert_eq!(saved_origin(Platform::MacOs), SavedOrigin::Content);
+        assert_eq!(saved_origin(Platform::Other), SavedOrigin::Outer);
+    }
+
+    #[test]
+    fn an_unknown_position_keeps_the_last_one_and_still_takes_the_size() {
+        let previous = WindowBounds {
+            x: 40,
+            y: 60,
+            width: 800,
+            height: 600,
+        };
+
+        assert_eq!(
+            observed_bounds(None, (900, 700), Some(previous)),
+            WindowBounds {
+                x: 40,
+                y: 60,
+                width: 900,
+                height: 700,
+            }
+        );
+        assert_eq!(
+            observed_bounds(None, (900, 700), None),
+            WindowBounds {
+                x: 0,
+                y: 0,
+                width: 900,
+                height: 700,
+            }
+        );
+        assert_eq!(
+            observed_bounds(Some((5, 6)), (900, 700), Some(previous)),
+            WindowBounds {
+                x: 5,
+                y: 6,
+                width: 900,
+                height: 700,
+            }
+        );
     }
 
     #[test]

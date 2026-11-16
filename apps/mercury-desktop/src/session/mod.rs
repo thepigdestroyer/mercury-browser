@@ -38,10 +38,11 @@ use slint::{
 use talaria_core::BrowserController;
 
 use crate::profile::ActiveProfile;
+use crate::shortcuts::Platform;
 use crate::ui_sync::sync_ui;
 use model::{
-    RestorePlan, SessionTracker, WindowGeometry, duplicate_of_active, place_window, plan_restore,
-    recovery_label, reopen_index, restored_tab,
+    RestorePlan, SavedOrigin, SessionTracker, WindowGeometry, duplicate_of_active, observed_bounds,
+    place_window, plan_restore, recovery_label, reopen_index, restored_tab, saved_origin,
 };
 use saving::{Resolve, SaveState, Written};
 
@@ -455,25 +456,31 @@ impl Session {
     fn observe_window(&mut self, window: &MainWindow) {
         let native = window.window();
         let scale_factor = native.scale_factor();
-        // The content's origin, not Slint's `position()` (winit's outer position, which on
-        // macOS includes the title bar): a position set before the window exists is taken as
-        // the content's origin, so saving the same kind keeps the window from creeping up by a
-        // title bar at every start. Where it is unknown (Wayland), the window is not followed.
-        let Some(Ok(inner)) =
-            native.with_winit_window(|winit_window| winit_window.inner_position())
-        else {
-            return;
-        };
-        let position = slint::PhysicalPosition::new(inner.x, inner.y).to_logical(scale_factor);
+        // The origin saved is the one a position set before the window exists means on this
+        // platform (see `saved_origin`). Where none is known (Wayland), the last position is
+        // kept and the size and state are still followed.
+        let position = native
+            .with_winit_window(|winit_window| match saved_origin(Platform::current()) {
+                SavedOrigin::Content => winit_window.inner_position().ok(),
+                SavedOrigin::Outer => winit_window.outer_position().ok(),
+            })
+            .flatten()
+            .map(|position| {
+                let logical =
+                    slint::PhysicalPosition::new(position.x, position.y).to_logical(scale_factor);
+                (logical.x.round() as i32, logical.y.round() as i32)
+            });
         let size = native.size().to_logical(scale_factor);
         let mut geometry = self.tracker.geometry();
         geometry.update(
-            WindowBounds {
-                x: position.x.round() as i32,
-                y: position.y.round() as i32,
-                width: size.width.round().max(0.0) as u32,
-                height: size.height.round().max(0.0) as u32,
-            },
+            observed_bounds(
+                position,
+                (
+                    size.width.round().max(0.0) as u32,
+                    size.height.round().max(0.0) as u32,
+                ),
+                geometry.bounds,
+            ),
             native.is_maximized(),
             native.is_fullscreen(),
             window.get_chrome_hidden(),
