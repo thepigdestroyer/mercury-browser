@@ -31,15 +31,24 @@
   Deliberately absent: com.apple.security.cs.disable-library-validation (with
   a Developer ID, the libraries in Contents/MacOS/lib carry the same team
   identifier as the executable, so validation passes and stays on) and
-  every App Sandbox key (Mercury Browser is not sandboxed). Camera, microphone
-  and location would need Info.plist usage strings, not entitlements, and those
-  features are off.
+  every App Sandbox key (Mercury Browser is not sandboxed).
+
+    com.apple.security.device.camera
+    com.apple.security.device.audio-input
+      the hardened runtime refuses camera and microphone access without
+      them. Websites can ask for both (navigator.mediaDevices); the content
+      process that runs the page opens the device, and it is this same
+      executable. Info.plist.in carries the matching usage descriptions.
 -->
 <plist version="1.0">
 <dict>
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.device.camera</key>
+	<true/>
+	<key>com.apple.security.device.audio-input</key>
 	<true/>
 </dict>
 </plist>

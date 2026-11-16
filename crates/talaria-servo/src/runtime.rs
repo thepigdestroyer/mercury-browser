@@ -255,10 +255,18 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
     // exposes `GPUCanvasContext` and other WebGPU names over unimplemented stubs, which makes
     // feature detection report WebGPU that is not there.
     preferences.dom_webgpu_enabled = false;
-    // Always off: in Servo 0.8.0 `getUserMedia` opens the camera and microphone without asking
-    // the embedder for permission (`mediadevices.rs`), so WebRTC must stay disabled until
-    // Mercury can gate device access itself.
-    preferences.dom_webrtc_enabled = false;
+    // media-capture: camera and microphone (`navigator.mediaDevices`), on macOS only for now; on
+    // other platforms the preference stays off and `navigator.mediaDevices` does not exist.
+    // Mercury's vendored servo-script asks the embedder before opening a device and releases
+    // devices when the page goes away (`third_party/servo-script/MERCURY.md`); in Servo 0.8.0
+    // as published `getUserMedia` asked nobody. The usage descriptions in `Info.plist.in` and
+    // the device entitlements must stay with this line: macOS ends a process that opens a
+    // device without them.
+    preferences.dom_webrtc_enabled = cfg!(target_os = "macos");
+    // media-capture: always off. The vendored bindings gate `RTCPeerConnection` and the other
+    // WebRTC interfaces by this preference (not by `dom_webrtc_enabled`); Servo 0.8's WebRTC
+    // gives every local IP address to the page and cannot call modern sites (R8 section 4).
+    preferences.dom_webrtc_transceiver_enabled = false;
     preferences.user_agent = firefox_compatible_user_agent(&preferences.user_agent);
     preferences
 }
@@ -709,10 +717,24 @@ mod tests {
         }
     }
 
+    // media-capture
     #[test]
-    fn webrtc_stays_disabled() {
+    fn camera_and_microphone_capture_is_on_for_macos_only() {
         for enabled in [true, false] {
-            assert!(!preferences_with_experimental_web_features(enabled).dom_webrtc_enabled);
+            assert_eq!(
+                preferences_with_experimental_web_features(enabled).dom_webrtc_enabled,
+                cfg!(target_os = "macos")
+            );
+        }
+    }
+
+    // media-capture
+    #[test]
+    fn webrtc_peer_connections_stay_hidden() {
+        for enabled in [true, false] {
+            assert!(
+                !preferences_with_experimental_web_features(enabled).dom_webrtc_transceiver_enabled
+            );
         }
     }
 
