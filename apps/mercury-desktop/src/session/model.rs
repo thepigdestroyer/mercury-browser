@@ -63,8 +63,9 @@ pub(crate) fn restored_tab(tab: &TabSnapshot) -> RestoredTab {
 /// The window's place and state, as last seen.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct WindowGeometry {
-    /// The last position and size of the window while it was neither maximised, full screen
-    /// nor minimised: what it returns to.
+    /// The last position and size of the window's content (below the title bar) while it was
+    /// neither maximised, full screen nor minimised: what it returns to. The content origin is
+    /// what a position set before the window exists means on macOS, so it is saved as such.
     pub bounds: Option<WindowBounds>,
     pub maximized: bool,
     pub fullscreen: bool,
@@ -304,14 +305,17 @@ pub(crate) struct WindowPlacement {
     pub size: (u32, u32),
 }
 
-/// How much of a window's top edge must be on a screen for the window to be reachable: a
-/// strip this wide and this tall (or the whole window, if smaller).
+/// The height of a standard macOS title bar, in points. Saved bounds are the window's
+/// content (`inner_position` and the inner size), so the title bar is this far above them.
+const TITLE_BAR_HEIGHT: f64 = 28.0;
+/// How much of the title bar must be on a screen for the window to be reachable: this wide
+/// (or the whole window, if narrower) and half its height.
 const REACHABLE_WIDTH: f64 = 100.0;
-const REACHABLE_HEIGHT: f64 = 30.0;
+const REACHABLE_HEIGHT: f64 = TITLE_BAR_HEIGHT / 2.0;
 
-/// Puts saved bounds back where the user can reach them. A window whose top edge is on a
-/// screen keeps its place; one off every screen (a screen was unplugged) is centred on the
-/// main screen (`screens[0]`), shrunk to fit it.
+/// Puts saved content bounds back where the user can reach them. A window whose title bar is
+/// on a screen keeps its place; one off every screen (a screen was unplugged) is centred on
+/// the main screen (`screens[0]`), title bar included, shrunk to fit it.
 pub(crate) fn place_window(bounds: WindowBounds, screens: &[ScreenArea]) -> WindowPlacement {
     let size = (bounds.width, bounds.height);
     let Some(main) = screens.first() else {
@@ -324,13 +328,8 @@ pub(crate) fn place_window(bounds: WindowBounds, screens: &[ScreenArea]) -> Wind
     let (width, height) = (f64::from(bounds.width), f64::from(bounds.height));
     let reachable = screens.iter().any(|screen| {
         let across = overlap(x, x + width, screen.x, screen.x + screen.width);
-        let down = overlap(
-            y,
-            y + height.min(REACHABLE_HEIGHT),
-            screen.y,
-            screen.y + screen.height,
-        );
-        across >= width.min(REACHABLE_WIDTH) && down >= height.min(REACHABLE_HEIGHT)
+        let down = overlap(y - TITLE_BAR_HEIGHT, y, screen.y, screen.y + screen.height);
+        across >= width.min(REACHABLE_WIDTH) && down >= REACHABLE_HEIGHT
     });
     if reachable {
         return WindowPlacement {
@@ -339,12 +338,13 @@ pub(crate) fn place_window(bounds: WindowBounds, screens: &[ScreenArea]) -> Wind
         };
     }
 
+    let room = (main.height - TITLE_BAR_HEIGHT).max(1.0);
     let fitted_width = width.min(main.width).max(1.0);
-    let fitted_height = height.min(main.height).max(1.0);
+    let fitted_height = height.min(room).max(1.0);
     WindowPlacement {
         position: Some((
             (main.x + (main.width - fitted_width) / 2.0).round() as i32,
-            (main.y + (main.height - fitted_height) / 2.0).round() as i32,
+            (main.y + TITLE_BAR_HEIGHT + (room - fitted_height) / 2.0).round() as i32,
         )),
         size: (fitted_width as u32, fitted_height as u32),
     }
@@ -964,7 +964,7 @@ mod tests {
         assert_eq!(
             place_window(bounds, &[MAIN]),
             WindowPlacement {
-                position: Some((256, 135)),
+                position: Some((256, 149)),
                 size: (1000, 700),
             }
         );
@@ -982,8 +982,8 @@ mod tests {
         assert_eq!(
             place_window(bounds, &[MAIN]),
             WindowPlacement {
-                position: Some((0, 25)),
-                size: (1512, 920),
+                position: Some((0, 53)),
+                size: (1512, 892),
             }
         );
     }
@@ -999,6 +999,32 @@ mod tests {
         };
 
         assert_ne!(place_window(bounds, &[MAIN]).position, Some((100, -500)));
+    }
+
+    #[test]
+    fn a_window_whose_title_bar_is_on_screen_keeps_its_place() {
+        // The content starts one title bar below the top of the visible area.
+        let bounds = WindowBounds {
+            x: 100,
+            y: 25 + 28,
+            width: 800,
+            height: 600,
+        };
+
+        assert_eq!(place_window(bounds, &[MAIN]).position, Some((100, 53)));
+    }
+
+    #[test]
+    fn a_window_whose_title_bar_would_be_under_the_menu_bar_is_moved() {
+        // Content at the very top of the visible area: the title bar above it is out of reach.
+        let bounds = WindowBounds {
+            x: 100,
+            y: 25,
+            width: 800,
+            height: 600,
+        };
+
+        assert_ne!(place_window(bounds, &[MAIN]).position, Some((100, 25)));
     }
 
     #[test]

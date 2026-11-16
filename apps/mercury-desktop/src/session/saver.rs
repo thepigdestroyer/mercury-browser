@@ -115,4 +115,20 @@ mod tests {
         assert!(written.contains("https://b.test/"), "{written}");
         assert!(written.contains("\"exited_cleanly\": true"), "{written}");
     }
+
+    #[test]
+    fn a_deadline_already_passed_returns_at_once_without_an_outcome() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut worker = SaveWorker::start(SessionStore::new(directory.path())).unwrap();
+        let started = Instant::now();
+
+        let outcome = worker.wait(
+            started
+                .checked_sub(Duration::from_secs(1))
+                .unwrap_or(started),
+        );
+
+        assert!(outcome.is_none());
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
 }

@@ -154,7 +154,12 @@ impl<W: SessionWriter> SaveState<W> {
         if let Some(resolve) = resolve {
             self.pending.push_back((resolve, self.changes));
         }
-        if !self.saving_refused {
+        if self.saving_refused {
+            self.warn_once(
+                "the restored tabs cannot be saved this run (the session file is from a newer \
+                 version); the session they came from stays offered at the next start",
+            );
+        } else {
             let holds_pages = holds_pages(&snapshot);
             self.send_save(snapshot, false, None, holds_pages);
         }

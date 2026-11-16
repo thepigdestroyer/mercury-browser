@@ -31,6 +31,7 @@ use mercury_settings::{
     sweep_stale_temporaries,
 };
 use mercury_ui::MainWindow;
+use slint::winit_030::WinitWindowAccessor;
 use slint::{
     ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, Timer, VecModel,
 };
@@ -405,6 +406,10 @@ fn apply_window_geometry(window: &MainWindow, saved: &WindowSnapshot) -> WindowG
         }
         let (width, height) = placement.size;
         native.set_size(LogicalSize::new(width as f32, height as f32));
+        log::debug!(
+            "session: placing the window's content at {:?}, {width} x {height}",
+            placement.position
+        );
         let (x, y) = placement.position.unwrap_or((bounds.x, bounds.y));
         geometry.bounds = Some(WindowBounds {
             x,
@@ -450,7 +455,16 @@ impl Session {
     fn observe_window(&mut self, window: &MainWindow) {
         let native = window.window();
         let scale_factor = native.scale_factor();
-        let position = native.position().to_logical(scale_factor);
+        // The content's origin, not Slint's `position()` (winit's outer position, which on
+        // macOS includes the title bar): a position set before the window exists is taken as
+        // the content's origin, so saving the same kind keeps the window from creeping up by a
+        // title bar at every start. Where it is unknown (Wayland), the window is not followed.
+        let Some(Ok(inner)) =
+            native.with_winit_window(|winit_window| winit_window.inner_position())
+        else {
+            return;
+        };
+        let position = slint::PhysicalPosition::new(inner.x, inner.y).to_logical(scale_factor);
         let size = native.size().to_logical(scale_factor);
         let mut geometry = self.tracker.geometry();
         geometry.update(
@@ -466,6 +480,7 @@ impl Session {
             native.is_minimized(),
         );
         if self.tracker.observe_geometry(geometry) {
+            log::debug!("session: the window is now {geometry:?}");
             self.saving.mark_dirty();
         }
     }
