@@ -1,0 +1,37 @@
+import { Palette } from "std-widgets.slint";
+
+// Every colour the bookmarks lane's components use, in one place until `ChromePalette` is merged.
+// Each role's comment names the `ChromePalette` role it becomes; the dark values are the chrome's
+// own, and the light values are `ChromePalette`'s. `forced` lets a rendering pick a scheme; by
+// default the colours follow the window's colour scheme, as `ChromePalette`'s `system` does.
+export global BookmarkColors {
+    in property <ColorScheme> forced: ColorScheme.unknown;
+    out property <bool> dark: root.forced == ColorScheme.unknown
+        ? Palette.color-scheme != ColorScheme.light
+        : root.forced == ColorScheme.dark;
+
+    // toolbar-background
+    out property <color> bar-background: root.dark ? #11171f : #f7f8fa;
+    // toolbar-divider
+    out property <color> divider: root.dark ? #202832 : #d6dce3;
+    // text
+    out property <color> text: root.dark ? #edf4fa : #141a21;
+    // text-secondary
+    out property <color> text-secondary: root.dark ? #8c99a9 : #5a6573;
+    // button-label
+    out property <color> button-label: root.dark ? #9aa6b5 : #4d5866;
+    // accent (the filled star, focus rings)
+    out property <color> accent: root.dark ? #62bfff : #1683d8;
+    // button-hover
+    out property <color> button-hover: root.dark ? #19222c : #e2e7ed;
+    // button-pressed
+    out property <color> button-pressed: root.dark ? #222d39 : #d3dae2;
+    // field-background (popups and the popover)
+    out property <color> popup-background: root.dark ? #1a222c : #ffffff;
+    // field-border
+    out property <color> popup-border: root.dark ? #29323d : #c5ccd5;
+    // new role: a selected row
+    out property <color> selection: root.dark ? #1d3a55 : #d6e8f8;
+    // new role: an error message
+    out property <color> problem: root.dark ? #ff8a80 : #b3261e;
+}

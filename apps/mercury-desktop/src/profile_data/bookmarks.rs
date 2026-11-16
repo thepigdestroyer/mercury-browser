@@ -1,15 +1,204 @@
 //! Bookmark requests: reading and editing the tree. New nodes get a fresh GUID
 //! ([`new_guid`](super::new_guid)). Writes notify [`Area::Bookmarks`].
 //! Each reply runs on the UI thread with `Result<T, ProfileDataError>`.
+//!
+//! The requests after the store's own (the folder list, search, deletion with undo, the tree
+//! for export) walk the tree on the service thread with `bookmark_children`, one folder at a
+//! time: the store offers no paging and no bookmark search, so only what the caller needs (the
+//! folders, the matches) crosses to the UI thread.
 
-#![cfg_attr(
-    not(test),
-    expect(dead_code, reason = "called by the bookmarks and import work")
-)]
-
-use mercury_store::{BookmarkId, BookmarkNode, BookmarkRoot};
+use mercury_store::{BookmarkId, BookmarkImport, BookmarkKind, BookmarkNode, BookmarkRoot, Store};
 
 use super::{Area, ProfileData, ProfileDataError, guid_or_error};
+
+/// A node of a walk, with its depth below the node the walk started at (which is at 0).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Walked {
+    pub(crate) depth: usize,
+    pub(crate) node: BookmarkNode,
+}
+
+/// A deleted entry and everything that was in it, as it was: enough to put it back.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RemovedBookmark {
+    pub(crate) parent: BookmarkId,
+    pub(crate) position: u32,
+    /// The entry's title, for "Undo delete of …".
+    pub(crate) title: String,
+    /// The entry with its original GUIDs and dates.
+    pub(crate) tree: BookmarkImport,
+}
+
+/// The most results a search returns.
+pub(crate) const MAX_SEARCH_RESULTS: usize = 1_000;
+
+/// `start` and everything below it, in pre-order, without recursion.
+pub(crate) fn walk(store: &Store, start: BookmarkId) -> mercury_store::Result<Vec<Walked>> {
+    let mut walked = Vec::new();
+    let mut stack = vec![Walked {
+        depth: 0,
+        node: store.bookmark(start)?,
+    }];
+    while let Some(entry) = stack.pop() {
+        if entry.node.kind == BookmarkKind::Folder {
+            let children = store.bookmark_children(entry.node.id)?;
+            stack.extend(children.into_iter().rev().map(|node| Walked {
+                depth: entry.depth + 1,
+                node,
+            }));
+        }
+        walked.push(entry);
+    }
+    Ok(walked)
+}
+
+/// Both roots, the bookmarks bar first, walked.
+fn walk_roots(store: &Store) -> mercury_store::Result<Vec<Walked>> {
+    let mut walked = walk(store, store.bookmark_root(BookmarkRoot::Toolbar)?)?;
+    walked.extend(walk(store, store.bookmark_root(BookmarkRoot::Other)?)?);
+    Ok(walked)
+}
+
+impl ProfileData {
+    /// The star: the first bookmark of `url`, or a new one with `title` at the end of
+    /// `root`, in one job so that a click on a page whose lookup is still pending cannot add a
+    /// second bookmark. Replies with the bookmark and whether it was added.
+    pub(crate) fn find_or_add_bookmark(
+        &self,
+        root: BookmarkRoot,
+        title: String,
+        url: String,
+        reply: impl FnOnce(Result<(BookmarkId, bool), ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            Some(Area::Bookmarks),
+            move |db, now| {
+                let store = db.store();
+                if let Some(id) = store.bookmark_for_url(&url)? {
+                    return Ok((id, false));
+                }
+                let parent = store.bookmark_root(root)?;
+                let guid = guid_or_error()?;
+                let id = store.add_bookmark(parent, None, &title, &url, &guid, now)?;
+                Ok((id, true))
+            },
+            reply,
+        );
+    }
+
+    /// Every folder of both roots (the bookmarks bar's first), in pre-order with their depth.
+    pub(crate) fn bookmark_folders(
+        &self,
+        reply: impl FnOnce(Result<Vec<Walked>, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            None,
+            |db, _| {
+                Ok(walk_roots(db.store())?
+                    .into_iter()
+                    .filter(|entry| entry.node.kind == BookmarkKind::Folder)
+                    .collect())
+            },
+            reply,
+        );
+    }
+
+    /// The bookmarks and folders whose title or URL contains every word of `query` (ignoring
+    /// case), in tree order, at most [`MAX_SEARCH_RESULTS`].
+    pub(crate) fn search_bookmarks(
+        &self,
+        query: String,
+        reply: impl FnOnce(Result<Vec<BookmarkNode>, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            None,
+            move |db, _| {
+                let words = crate::bookmarks::tree::search_words(&query);
+                Ok(walk_roots(db.store())?
+                    .into_iter()
+                    .filter(|entry| entry.depth > 0)
+                    .map(|entry| entry.node)
+                    .filter(|node| crate::bookmarks::tree::matches(node, &words))
+                    .take(MAX_SEARCH_RESULTS)
+                    .collect())
+            },
+            reply,
+        );
+    }
+
+    /// Both roots walked, for writing a bookmarks file.
+    pub(crate) fn bookmark_trees(
+        &self,
+        reply: impl FnOnce(Result<(Vec<Walked>, Vec<Walked>), ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            None,
+            |db, _| {
+                let store = db.store();
+                let toolbar = walk(store, store.bookmark_root(BookmarkRoot::Toolbar)?)?;
+                let other = walk(store, store.bookmark_root(BookmarkRoot::Other)?)?;
+                Ok((toolbar, other))
+            },
+            reply,
+        );
+    }
+
+    /// Removes a node and everything in it, replying with what is needed to put it back.
+    pub(crate) fn remove_bookmark_keeping_undo(
+        &self,
+        id: BookmarkId,
+        reply: impl FnOnce(Result<RemovedBookmark, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            Some(Area::Bookmarks),
+            move |db, now| {
+                let store = db.store();
+                let walked = walk(store, id)?;
+                let Some(first) = walked.first() else {
+                    return Err(mercury_store::StoreError::NotFound);
+                };
+                let Some(parent) = first.node.parent else {
+                    return Err(mercury_store::StoreError::CannotModifyRoot);
+                };
+                let removed = RemovedBookmark {
+                    parent,
+                    position: first.node.position,
+                    title: first.node.title.clone(),
+                    tree: crate::bookmarks::tree::undo_tree(&walked).ok_or(
+                        mercury_store::StoreError::InvalidState("the deleted entry was empty"),
+                    )?,
+                };
+                store.remove_bookmark(id, now)?;
+                Ok(removed)
+            },
+            reply,
+        );
+    }
+
+    /// Puts a removed entry back where it was (its old position, or the end if the folder
+    /// has fewer entries now), with its GUIDs and dates. Fails with `NotFound` if its folder
+    /// is gone.
+    pub(crate) fn restore_bookmark(
+        &self,
+        removed: RemovedBookmark,
+        reply: impl FnOnce(Result<BookmarkId, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            Some(Area::Bookmarks),
+            move |db, now| {
+                let store = db.store();
+                store.import_bookmarks(removed.parent, std::slice::from_ref(&removed.tree), now)?;
+                let restored = store
+                    .bookmark_children(removed.parent)?
+                    .pop()
+                    .ok_or(mercury_store::StoreError::NotFound)?;
+                store.move_bookmark(restored.id, removed.parent, Some(removed.position), now)?;
+                Ok(restored.id)
+            },
+            reply,
+        );
+    }
+}
 
 impl ProfileData {
     /// The id of a root folder.
@@ -53,6 +242,13 @@ impl ProfileData {
     }
 
     /// Adds a bookmark in `parent` at `position` (`None` appends).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the star uses find_or_add_bookmark; kept for the import work"
+        )
+    )]
     pub(crate) fn add_bookmark(
         &self,
         parent: BookmarkId,

@@ -56,7 +56,7 @@
 //! between chunks (each reports what it finished), closes the database and returns, waiting no
 //! longer than its deadline.
 
-mod bookmarks;
+pub(crate) mod bookmarks;
 pub(crate) mod downloads;
 mod history;
 pub(crate) mod import;
@@ -419,17 +419,12 @@ impl ProfileData {
 
     /// Why the database is not available in this run, once the service has tried to open it;
     /// `None` while it is opening and when it is available.
-    #[cfg_attr(not(test), expect(dead_code, reason = "shown by the history window"))]
     pub(crate) fn unavailable_reason(&self) -> Option<Arc<str>> {
         self.shared.unavailable.get().cloned().flatten()
     }
 
     /// Calls `callback` on the UI thread after each delivery in which a write to `area`
     /// succeeded, after that delivery's replies.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "called by the bookmarks and downloads work")
-    )]
     pub(crate) fn on_change(&self, area: Area, callback: impl Fn() + 'static) -> ChangeListener {
         let listener = ChangeListener(self.next_id());
         self.shared

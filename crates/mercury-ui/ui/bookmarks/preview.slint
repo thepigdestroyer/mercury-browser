@@ -1,0 +1,53 @@
+import { Palette } from "std-widgets.slint";
+import { BookmarkColors } from "colors.slint";
+import { BookmarkPopoverContent } from "star.slint";
+import { BookmarkMenuList, BookmarkMenuRow, BookmarksBar, BookmarkBarItem } from "bar.slint";
+
+// Shows the popover and a folder popup's list as plain elements, under a bookmarks bar, so that
+// the rendering example can draw them without opening popups (which need input).
+export component BookmarksPreview inherits Window {
+    in property <ColorScheme> forced-color-scheme: ColorScheme.unknown;
+    in property <[BookmarkBarItem]> bar-items;
+    in property <bool> bar-overflow;
+    out property <length> bar-available-width: bar.available-width;
+    in property <[BookmarkMenuRow]> menu-rows;
+    in property <string> popover-name;
+    in property <[string]> popover-folders;
+    in property <int> popover-folder-index;
+    callback bar-measured(int, length);
+
+    init => {
+        Palette.color-scheme = root.forced-color-scheme;
+        BookmarkColors.forced = root.forced-color-scheme;
+    }
+
+    width: 760px;
+    height: 520px;
+    background: BookmarkColors.dark ? #0c1117 : #f4f6f8;
+
+    bar := BookmarksBar {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        items: root.bar-items;
+        overflow: root.bar-overflow;
+        measured(index, width) => {
+            root.bar-measured(index, width);
+        }
+    }
+
+    BookmarkMenuList {
+        x: 20px;
+        y: 44px;
+        rows: root.menu-rows;
+    }
+
+    BookmarkPopoverContent {
+        x: parent.width - self.width - 20px;
+        y: 44px;
+        is-new: true;
+        name: root.popover-name;
+        folders: root.popover-folders;
+        folder-index: root.popover-folder-index;
+    }
+}

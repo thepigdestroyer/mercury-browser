@@ -15,6 +15,7 @@ use talaria_core::{BrowserController, TabActivation};
 use talaria_servo::{RuntimeOptions, record_browser_process_id, run_content_process_if_requested};
 use ui_sync::sync_ui;
 
+mod bookmarks;
 mod callbacks;
 mod cli;
 mod crash_handler;
@@ -124,6 +125,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
+    bookmarks::connect(&window, Rc::clone(&controller)); // bookmarks lane
 
     let screenshot_result = Rc::new(Cell::new(ScreenshotResult::Pending));
     let screenshot_timer = options.screenshot.map(|screenshot| {

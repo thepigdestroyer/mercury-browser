@@ -1,0 +1,214 @@
+//! Bookmarks: the star button, the bookmarks bar, the bookmarks manager and bookmark files.
+//!
+//! Everything runs on the UI thread and talks to the profile database through the
+//! profile-data service. The state lives in one thread-local [`Bookmarks`]; Slint callbacks
+//! and service replies reach it through [`with`], and never keep it borrowed across a call
+//! that could come back into it.
+//!
+//! **Refreshing:** the views (the bar, the manager's lists, the star) are re-read only when the
+//! service reports a change to the bookmarks, which also follows this module's own writes; the
+//! replies to those writes update only what the write itself decided (the star of the page it
+//! bookmarked, the selection, the undo entry), so no edit is read back twice.
+
+pub(crate) mod bar;
+pub(crate) mod file;
+pub(crate) mod layout;
+pub(crate) mod manager;
+pub(crate) mod menu;
+mod panel;
+pub(crate) mod popover;
+pub(crate) mod star;
+pub(crate) mod tree;
+
+#[cfg(test)]
+mod tests;
+
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+
+use mercury_store::BookmarkRoot;
+use mercury_ui::MainWindow;
+use slint::ComponentHandle;
+use talaria_core::{BrowserController, LoadState, NavigationOrigin, TabActivation};
+
+use crate::profile_data::{self, Area};
+use crate::ui_sync::sync_ui;
+
+/// The root new bookmarks from the star go into: "Other Bookmarks". The bar stays what the
+/// user put there instead of growing with every starred page (Firefox and Safari keep their
+/// bars curated the same way); the popover's folder chooser moves a bookmark to the bar.
+pub(crate) const STAR_ROOT: BookmarkRoot = BookmarkRoot::Other;
+
+thread_local! {
+    static BOOKMARKS: RefCell<Option<Rc<Bookmarks>>> = const { RefCell::new(None) };
+}
+
+/// The bookmarks features of the browser window.
+pub(crate) struct Bookmarks {
+    window: slint::Weak<MainWindow>,
+    controller: Rc<RefCell<BrowserController>>,
+    star: RefCell<star::StarModel>,
+    error_page_titles: Vec<String>,
+    popover: RefCell<Option<popover::Popover>>,
+    bar: RefCell<bar::Bar>,
+    bar_shown: Cell<bool>,
+    manager: RefCell<Option<Rc<manager::Manager>>>,
+}
+
+/// Runs `action` with the bookmarks state, if it is set up.
+pub(crate) fn with<R>(action: impl FnOnce(&Rc<Bookmarks>) -> R) -> Option<R> {
+    let bookmarks = BOOKMARKS.with(|current| current.borrow().clone())?;
+    Some(action(&bookmarks))
+}
+
+/// Whether the bookmarks bar is shown when the browser starts: the stored setting. The
+/// settings lane's loading is not merged yet, so this is the setting's stored default
+/// (`AppearanceSettings::default().show_bookmarks_bar`, true); its accessor replaces it.
+pub(crate) fn show_bookmarks_bar_setting() -> bool {
+    mercury_settings::AppearanceSettings::default().show_bookmarks_bar
+}
+
+/// Wires the star, the bar and their popups to the window, and starts listening for changes.
+/// Call once, after `profile_data::start` and the window's other callbacks.
+pub(crate) fn connect(window: &MainWindow, controller: Rc<RefCell<BrowserController>>) {
+    let bookmarks = Rc::new(Bookmarks {
+        window: window.as_weak(),
+        controller,
+        star: RefCell::new(star::StarModel::default()),
+        error_page_titles: talaria_servo::error_page_titles(),
+        popover: RefCell::new(None),
+        bar: RefCell::new(bar::Bar::new()),
+        bar_shown: Cell::new(show_bookmarks_bar_setting()),
+        manager: RefCell::new(None),
+    });
+    BOOKMARKS.with(|current| *current.borrow_mut() = Some(Rc::clone(&bookmarks)));
+    window.set_bookmarks_bar_shown(bookmarks.bar_shown.get());
+    popover::connect(window);
+    bar::connect(window);
+    if let Some(data) = profile_data::handle() {
+        // `handle()` inside the listener rather than a captured clone: no `Rc` cycle.
+        let _listener = data.on_change(Area::Bookmarks, || {
+            with(|bookmarks| bookmarks.bookmarks_changed());
+        });
+    }
+    bookmarks.reload_bar();
+    let controller = bookmarks.controller.borrow();
+    bookmarks.sync_star(window, &controller);
+}
+
+/// Called by `sync_ui` whenever the window shows the controller's state: the star follows the
+/// active tab's page (every committed navigation and every tab switch passes here).
+pub(crate) fn sync(window: &MainWindow, controller: &BrowserController) {
+    with(|bookmarks| bookmarks.sync_star(window, controller));
+}
+
+/// Cmd+D (Ctrl+D elsewhere), the star, and the Bookmarks menu's "Bookmark This Page".
+pub(crate) fn bookmark_this_page() {
+    with(popover::star_clicked);
+}
+
+/// Cmd+Shift+B (Ctrl+Shift+B elsewhere) and the menu's "Show Bookmarks Bar".
+pub(crate) fn toggle_bookmarks_bar() {
+    with(|bookmarks| {
+        bookmarks.bar_shown.set(!bookmarks.bar_shown.get());
+        if let Some(window) = bookmarks.window.upgrade() {
+            window.set_bookmarks_bar_shown(bookmarks.bar_shown.get());
+            window.window().request_redraw();
+        }
+    });
+}
+
+/// Whether the bookmarks bar is shown now (the menu's check mark).
+#[expect(
+    dead_code,
+    reason = "called by the menus lane's Bookmarks seam, not merged yet"
+)]
+pub(crate) fn bookmarks_bar_shown() -> bool {
+    with(|bookmarks| bookmarks.bar_shown.get()).unwrap_or(false)
+}
+
+/// Cmd+Alt+B on macOS (Ctrl+Shift+O elsewhere) and the menu's "Bookmarks Manager".
+pub(crate) fn show_bookmarks_manager() {
+    with(manager::show);
+}
+
+impl Bookmarks {
+    fn bookmarks_changed(self: &Rc<Self>) {
+        // Without a hint about which folders changed, everything shown is read again.
+        if let Some(lookup) = self.star.borrow_mut().refresh() {
+            self.look_up_star(lookup);
+        }
+        self.reload_bar();
+        let manager = self.manager.borrow().clone();
+        if let Some(manager) = manager {
+            manager.refresh();
+        }
+    }
+
+    fn sync_star(self: &Rc<Self>, window: &MainWindow, controller: &BrowserController) {
+        let state = controller.active_state();
+        let page = star::bookmarkable_url(
+            state.url(),
+            state.page_title(),
+            matches!(state.load_state(), LoadState::Failed { .. }),
+            &self.error_page_titles,
+        );
+        let lookup = self.star.borrow_mut().show_page(page);
+        self.show_star(window);
+        if let Some(lookup) = lookup {
+            self.look_up_star(lookup);
+        }
+    }
+
+    fn look_up_star(self: &Rc<Self>, lookup: star::Lookup) {
+        let Some(data) = profile_data::handle() else {
+            return;
+        };
+        let token = lookup.token;
+        data.bookmark_for_url(lookup.url, move |result| {
+            with(|bookmarks| {
+                let answer = result.map_err(|error| log::debug!("star lookup failed: {error}"));
+                if bookmarks.star.borrow_mut().answer(token, answer)
+                    && let Some(window) = bookmarks.window.upgrade()
+                {
+                    bookmarks.show_star(&window);
+                }
+            });
+        });
+    }
+
+    fn show_star(&self, window: &MainWindow) {
+        let state = self.star.borrow().state();
+        window.set_bookmark_star_enabled(state != star::StarState::Disabled);
+        window.set_bookmark_star_filled(matches!(state, star::StarState::Bookmarked(_)));
+    }
+
+    fn reload_bar(self: &Rc<Self>) {
+        bar::reload(self);
+    }
+
+    /// Opens `url` from a bookmark: in the active tab, or in a new background tab.
+    pub(crate) fn open_url(&self, url: &str, new_tab: bool) {
+        let opened = {
+            let mut controller = self.controller.borrow_mut();
+            if new_tab {
+                controller
+                    .open_tab_with(Some(url), TabActivation::Background)
+                    .map(|tab| controller.set_navigation_origin(tab, NavigationOrigin::Bookmark))
+            } else {
+                controller.queue_navigation(url).map(|()| {
+                    let tab = controller.active_tab_id();
+                    controller.set_navigation_origin(tab, NavigationOrigin::Bookmark)
+                })
+            }
+        };
+        if let Err(error) = opened {
+            log::warn!("the bookmark could not be opened: {error}");
+            return;
+        }
+        if let Some(window) = self.window.upgrade() {
+            sync_ui(&window, &self.controller.borrow());
+            window.window().request_redraw();
+        }
+    }
+}
