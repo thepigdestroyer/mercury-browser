@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::sync::mpsc::Sender;
 
 use dpi::PhysicalSize;
 use euclid::{Point2D, Scale};
@@ -13,9 +14,15 @@ use talaria_core::{
     ColorScheme, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput, PointerButton,
     PointerButtonAction, TabId, WebView as TalariaWebView,
 };
+// media session
+use talaria_core::{BrowserEvent, MediaSessionAction, TabEvent};
 use url::Url;
 
 use crate::frame_ready::FrameReadySignal;
+// media session
+use crate::media_session::{
+    ActionRoute, EngineMediaSession, mute_script, probe_from_js, probe_script, route_action,
+};
 use crate::{ServoWebViewError, ViewportSize};
 
 pub struct ServoWebView {
@@ -24,6 +31,10 @@ pub struct ServoWebView {
     tab_id: TabId,
     /// Device pixels per logical pixel; pointer positions arrive in logical pixels.
     scale_factor: Cell<f32>,
+    // media session
+    /// Where script results (the media probe) are reported; `None` until `with_media_session`.
+    browser_event_sender: Option<Sender<TabEvent>>,
+    engine_media_session: EngineMediaSession,
 }
 
 impl ServoWebView {
@@ -38,7 +49,30 @@ impl ServoWebView {
             frame_ready,
             tab_id,
             scale_factor: Cell::new(scale_factor),
+            // media session
+            browser_event_sender: None,
+            engine_media_session: EngineMediaSession::default(),
         }
+    }
+
+    // media session
+    pub(crate) fn with_media_session(
+        mut self,
+        browser_event_sender: Sender<TabEvent>,
+        engine_media_session: EngineMediaSession,
+    ) -> Self {
+        self.browser_event_sender = Some(browser_event_sender);
+        self.engine_media_session = engine_media_session;
+        self
+    }
+
+    fn run_script(&self, script: String, what: &'static str) {
+        let tab_id = self.tab_id;
+        self.inner.evaluate_javascript(script, move |result| {
+            if let Err(error) = result {
+                log::info!("tab {}: {what} script failed: {error:?}", tab_id.value());
+            }
+        });
     }
 
     pub fn resize(&self, size: ViewportSize) {
@@ -207,6 +241,43 @@ impl TalariaWebView for ServoWebView {
         let _event_id = self.inner.notify_input_event(InputEvent::MouseLeftViewport(
             MouseLeftViewportEvent::default(),
         ));
+        Ok(())
+    }
+
+    // media session
+    fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error> {
+        self.run_script(mute_script(muted), "mute");
+        Ok(())
+    }
+
+    fn media_session_action(&mut self, action: MediaSessionAction) -> Result<(), Self::Error> {
+        let owns_engine_session = self.engine_media_session.get() == Some(self.tab_id);
+        match route_action(action, owns_engine_session) {
+            ActionRoute::Engine(action) => self.inner.notify_media_session_action_event(action),
+            ActionRoute::Script(script) => self.run_script(script, "media key"),
+            ActionRoute::Drop => log::info!(
+                "tab {}: {action:?} dropped: Servo's media session belongs to another tab",
+                self.tab_id.value()
+            ),
+        }
+        Ok(())
+    }
+
+    fn probe_media(&mut self) -> Result<(), Self::Error> {
+        let tab_id = self.tab_id;
+        let sender = self.browser_event_sender.clone();
+        self.inner
+            .evaluate_javascript(probe_script(), move |result| match result {
+                Ok(value) => {
+                    if let (Some(probe), Some(sender)) = (probe_from_js(&value), sender) {
+                        let _send_result =
+                            sender.send(TabEvent::new(tab_id, BrowserEvent::MediaProbed { probe }));
+                    }
+                }
+                Err(error) => {
+                    log::debug!("tab {}: media probe failed: {error:?}", tab_id.value());
+                }
+            });
         Ok(())
     }
 }

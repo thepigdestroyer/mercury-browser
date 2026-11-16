@@ -1,4 +1,9 @@
 use crate::{ColorScheme, DEFAULT_ZOOM_PERCENT, ImeInput, KeyboardInput, PageIcon, PointerCursor};
+// media session
+use crate::{
+    MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
+    TabAudio,
+};
 
 const DEFAULT_PAGE_TITLE: &str = "New Tab";
 const INITIAL_ADDRESS: &str = "";
@@ -68,6 +73,14 @@ pub enum BrowserCommand {
     ExitFullscreen,
     /// The pointer left the web view, or the tab stopped being shown.
     PointerLeft,
+    // media session
+    /// Mutes (or unmutes) the page's media elements from script; the page can undo it.
+    SetAudioMuted {
+        muted: bool,
+    },
+    MediaSessionAction(MediaSessionAction),
+    /// Looks into the page's document; the engine answers with `BrowserEvent::MediaProbed`.
+    ProbeMedia,
 }
 
 impl BrowserCommand {
@@ -122,6 +135,19 @@ pub enum BrowserEvent {
     FullscreenChanged {
         fullscreen: bool,
     },
+    // media session
+    MediaPlaybackChanged {
+        state: MediaPlaybackState,
+    },
+    MediaMetadataChanged {
+        metadata: MediaMetadata,
+    },
+    MediaPositionChanged {
+        position: MediaPosition,
+    },
+    MediaProbed {
+        probe: MediaProbe,
+    },
 }
 
 impl BrowserEvent {
@@ -146,6 +172,10 @@ pub struct BrowserState {
     cursor: PointerCursor,
     status_text: Option<String>,
     fullscreen: bool,
+    // media session
+    media: MediaState,
+    /// The user's choice; kept across navigations in the tab.
+    audio_muted: bool,
 }
 
 impl Default for BrowserState {
@@ -161,6 +191,9 @@ impl Default for BrowserState {
             cursor: PointerCursor::Default,
             status_text: None,
             fullscreen: false,
+            // media session
+            media: MediaState::default(),
+            audio_muted: false,
         }
     }
 }
@@ -202,7 +235,43 @@ impl BrowserState {
         self.zoom_percent = percent;
     }
 
+    // media session
+    pub fn media(&self) -> &MediaState {
+        &self.media
+    }
+    pub fn is_audio_muted(&self) -> bool {
+        self.audio_muted
+    }
+    pub fn audio_indicator(&self) -> TabAudio {
+        if self.audio_muted {
+            TabAudio::Muted
+        } else if self.media.is_audible() {
+            TabAudio::Playing
+        } else {
+            TabAudio::Silent
+        }
+    }
+    pub(crate) fn set_audio_muted(&mut self, muted: bool) {
+        self.audio_muted = muted;
+    }
+    /// A page that starts loading replaces the document whose media was reported (Servo then
+    /// reports `HeadParsed` as a second `Loading`, which keeps it); a failed or crashed page
+    /// plays nothing.
+    fn forget_media_of_a_replaced_document(&mut self, event: &BrowserEvent) {
+        if let BrowserEvent::LoadStateChanged { state } = event
+            && match state {
+                LoadState::Loading => self.load_state != LoadState::Loading,
+                LoadState::Failed { .. } => true,
+                LoadState::Idle | LoadState::Loaded => false,
+            }
+        {
+            self.media = MediaState::default();
+        }
+    }
+
     pub fn apply(&mut self, event: BrowserEvent) {
+        // media session
+        self.forget_media_of_a_replaced_document(&event);
         match event {
             BrowserEvent::AddressChanged { url } => {
                 // Cursor and status text are deliberately not reset here: the engine only
@@ -247,6 +316,11 @@ impl BrowserState {
             BrowserEvent::FullscreenChanged { fullscreen } => {
                 self.fullscreen = fullscreen;
             }
+            // media session
+            BrowserEvent::MediaPlaybackChanged { state } => self.media.set_playback(state),
+            BrowserEvent::MediaMetadataChanged { metadata } => self.media.set_metadata(metadata),
+            BrowserEvent::MediaPositionChanged { position } => self.media.set_position(position),
+            BrowserEvent::MediaProbed { probe } => self.media.set_probe(probe),
         }
     }
 }

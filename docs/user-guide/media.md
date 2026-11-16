@@ -77,6 +77,30 @@ Mercury's Servo 0.7.0 integration can play YouTube video and audio on Linux. Str
 
 If a streaming site fails, first test a direct MP4 or WebM file. That comparison separates a website compatibility problem from a GStreamer, decoder, or audio-output problem.
 
+## Which tab is playing, and muting a tab
+
+A tab whose page plays sound shows a speaker on its tab; click the speaker, or press ++ctrl+m++
+(++cmd+shift+m++ on macOS), to mute the tab, and again to unmute it. A muted tab shows a crossed-out
+speaker for as long as it stays muted, including after it goes to another page.
+
+- The speaker follows the page's `<audio>` and `<video>` elements. Video that the page itself keeps
+  muted (as many sites do with background videos) shows no speaker. Sound made only with Web Audio
+  (`AudioContext`) is not shown.
+- Muting is done inside the page: Mercury mutes its media elements, including ones added later,
+  and suspends audio contexts it can reach. A page can undo this, and media inside frames from
+  other sites (embedded players) is not muted. Servo has no engine-level mute yet.
+
+## Media keys and Now Playing (macOS)
+
+The tab that most recently started playing sound appears in Control Centre's Now Playing with
+the page's title, artist and album. The play/pause key (and AirPods controls) acts on that tab;
+next and previous reach pages that handle them through the Media Session API. It stays there while paused, so play resumes it, and is removed when the
+tab stops, goes to another page or is closed. Muted tabs and silent background videos never take the
+media keys.
+
+While the active tab plays a video in fullscreen, Mercury keeps the display from going to sleep;
+pausing, leaving fullscreen, switching tabs or quitting lets it sleep again.
+
 ## Diagnose playback
 
 Start Mercury with more detailed media and Servo logs:

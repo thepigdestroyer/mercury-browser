@@ -3,6 +3,7 @@ mod browser;
 mod controller;
 mod cursor;
 mod input;
+mod media;
 mod page_icon;
 mod tab;
 mod web_view;
@@ -16,6 +17,11 @@ pub use controller::BrowserController;
 pub use cursor::{ColorScheme, PointerCursor};
 pub use input::{
     CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers,
+};
+// media session
+pub use media::{
+    MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
+    TabAudio,
 };
 pub use page_icon::PageIcon;
 pub use tab::{Tab, TabActivation, TabCommand, TabEvent, TabId};

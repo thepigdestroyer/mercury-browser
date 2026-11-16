@@ -1,4 +1,5 @@
 import { Palette } from "std-widgets.slint";
+import { TabAudioButton, TabAudioState } from "media/tab-audio.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -45,6 +46,8 @@ export struct BrowserTab {
     has-icon: bool,
     active: bool,
     loading: bool,
+    // media-session lane
+    audio: TabAudioState,
 }
 
 component ChromeButton inherits Rectangle {
@@ -97,6 +100,8 @@ component BrowserTabButton inherits Rectangle {
     in property <bool> closable;
     callback selected;
     callback closed;
+    // media-session lane
+    callback audio-clicked;
 
     min-width: 112px;
     max-width: 248px;
@@ -150,6 +155,19 @@ component BrowserTabButton inherits Rectangle {
             background: #62bfff;
         }
 
+        // media-session lane
+        if root.tab.audio != TabAudioState.silent: VerticalLayout {
+            alignment: center;
+
+            TabAudioButton {
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
+        }
+
         if root.closable: Rectangle {
             width: 22px;
             height: 22px;
@@ -201,6 +219,9 @@ export component MainWindow inherits Window {
     property <bool> new-tab-search-focused: false;
     // The window's colour scheme as Slint determined it, used when winit reports none.
     out property <ColorScheme> system-color-scheme: Palette.color-scheme;
+    // --- media-session ---
+    callback toggle-tab-muted(int);
+    // --- end media-session ---
 
     callback navigate(string);
     callback go-back;
@@ -363,6 +384,11 @@ export component MainWindow inherits Window {
 
                             closed => {
                                 root.close-tab(index);
+                            }
+
+                            // media-session lane
+                            audio-clicked => {
+                                root.toggle-tab-muted(index);
                             }
                         }
                     }

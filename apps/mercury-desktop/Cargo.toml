@@ -34,6 +34,8 @@ ash.workspace = true
 # `objc2-app-kit` and `objc2-foundation`: `NSScreen.visibleFrame`, the screen area outside the menu
 # bar and Dock (`window.screen.avail*`), and `deviceDescription` to find the monitor's screen.
 [target.'cfg(target_os = "macos")'.dependencies]
+# media-session lane: blocks for `MPRemoteCommand` handlers (block2 0.6.2 is already in Cargo.lock).
+block2 = "0.6.2"
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",

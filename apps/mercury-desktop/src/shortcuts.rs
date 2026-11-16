@@ -45,6 +45,9 @@ pub(crate) enum ShortcutAction {
     Quit,
     /// Escape while the active tab's page is fullscreen.
     ExitFullscreen,
+    // media-session lane
+    /// Cmd+Shift+M on macOS (Cmd+M stays Minimize), Ctrl+M elsewhere (as Firefox and Edge).
+    ToggleMute,
 }
 
 impl ShortcutAction {
@@ -164,6 +167,9 @@ pub(crate) fn shortcut_action(
             (Some("-"), false) => Some(ZoomOut),
             (Some("0"), false) => Some(ZoomReset),
             (Some("9"), false) => Some(SelectLastTab),
+            // media-session lane
+            (Some("m"), true) if platform == Platform::MacOs => Some(ToggleMute),
+            (Some("m"), false) if platform == Platform::Other => Some(ToggleMute),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -324,6 +330,11 @@ fn run_shortcut(
         ShortcutAction::ExitFullscreen => controller
             .borrow_mut()
             .queue_command(BrowserCommand::ExitFullscreen),
+        // media-session lane
+        ShortcutAction::ToggleMute => {
+            let active_tab_id = controller.borrow().active_tab_id();
+            crate::media_session::toggle_mute(window, controller, active_tab_id);
+        }
     }
 }
 
@@ -568,13 +579,14 @@ mod tests {
             (ZoomReset, false),
             (Quit, false),
             (ExitFullscreen, false),
+            (ToggleMute, false),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
                 NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
                 | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen => {}
+                | ExitFullscreen | ToggleMute => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -686,5 +698,17 @@ mod tests {
                 None
             );
         }
+    }
+
+    // media-session lane
+    #[test]
+    fn toggle_mute_shortcuts() {
+        assert_eq!(mac(character("m"), CMD | SHIFT), Some(ToggleMute));
+        assert_eq!(mac(character("M"), CMD | SHIFT), Some(ToggleMute));
+        // Cmd+M is the system's Minimize; Ctrl+M belongs to the page on macOS.
+        assert_eq!(mac(character("m"), CMD), None);
+        assert_eq!(mac(character("m"), CTRL), None);
+        assert_eq!(other(character("m"), CTRL), Some(ToggleMute));
+        assert_eq!(other(character("m"), CTRL | SHIFT), None);
     }
 }

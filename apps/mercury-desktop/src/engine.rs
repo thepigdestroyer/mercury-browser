@@ -140,6 +140,11 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
     state.shut_down(window.as_ref(), exit_code_if_stuck);
 }
 
+// media-session lane: media keys arrive outside a pump and need their command dispatched.
+pub(crate) fn request_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
 fn pump_after_wake() {
     let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
         return;
@@ -451,6 +456,8 @@ impl EngineState {
             self.current_viewport_size = Some(viewport_size);
         }
 
+        // media-session lane
+        crate::media_session::after_pump(&mut self.controller.borrow_mut());
         match dispatch_pending_commands(&self.controller, &mut self.web_views) {
             Ok(has_pending_commands) => {
                 if has_pending_commands {
@@ -764,6 +771,19 @@ mod tests {
             Ok(())
         }
         fn pointer_left(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        // media session
+        fn set_audio_muted(&mut self, _muted: bool) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn media_session_action(
+            &mut self,
+            _action: talaria_core::MediaSessionAction,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn probe_media(&mut self) -> Result<(), Self::Error> {
             Ok(())
         }
     }

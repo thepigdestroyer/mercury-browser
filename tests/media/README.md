@@ -12,6 +12,7 @@ FFmpeg 9.0.2 on macOS; only the command-line tool was used, nothing links agains
 | `tone-opus.ogg` | 3 s, Opus 440 Hz mono | about 16 KB |
 | `tone.mp3` | 3 s, MP3 440 Hz mono, 44.1 kHz | about 24 KB |
 | `tone.wav` | 2 s, 16-bit PCM 441 Hz mono, 22.05 kHz | about 88 KB |
+| `silence.wav` | 2 s, 16-bit PCM mono, 8 kHz, every sample 0 (digital silence; for `media-session.html`, which plays it unmuted) | about 32 KB |
 
 The video picture is a solid band across the top 80 rows — **red for the first 2 seconds, blue
 for the last 2** — above FFmpeg's `testsrc2` pattern (moving gradient, timestamp and frame counter).
@@ -44,6 +45,8 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=440:sample_ra
 ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=441:sample_rate=22050:duration=2" \
   -c:a pcm_s16le -ac 1 -map_metadata -1 -fflags +bitexact tone.wav
 ```
+
+`silence.wav` was written with Python's standard `wave` module (16 000 zero samples), no FFmpeg.
 
 ## Running the checks
 

@@ -3,6 +3,7 @@ mod content_process;
 mod error;
 mod frame_ready;
 mod load_metrics;
+mod media_session;
 mod opengl_context;
 mod page_defaults;
 mod panics;

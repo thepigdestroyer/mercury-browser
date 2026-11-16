@@ -39,6 +39,8 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
                 has_icon,
                 active: tab.id() == active_tab_id,
                 loading: matches!(state.load_state(), LoadState::Loading),
+                // media-session lane
+                audio: crate::media_session::tab_audio_state(state.audio_indicator()),
             }
         })
         .collect::<Vec<_>>();

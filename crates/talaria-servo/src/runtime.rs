@@ -19,6 +19,8 @@ use url::Url;
 use crate::adblocker::ContentBlocker;
 use crate::frame_ready::FrameReadySignal;
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
+// media session
+use crate::media_session::{EngineMediaSession, browser_event_from_servo};
 use crate::page_defaults::page_defaults_user_content;
 use crate::screen::ScreenMetrics;
 use crate::session_data::{AfterEngineCleanup, clean_up_before_engine_start, end_session_cookies};
@@ -98,6 +100,8 @@ pub struct ServoRuntime {
     /// so it is dropped after the last of them. Every web view's delegate holds a clone too;
     /// see `AfterEngineCleanup`.
     after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
+    // media session
+    engine_media_session: EngineMediaSession,
 }
 
 impl ServoRuntime {
@@ -150,6 +154,8 @@ impl ServoRuntime {
             screen_metrics: Rc::default(),
             user_content,
             after_engine_cleanup,
+            // media session
+            engine_media_session: EngineMediaSession::default(),
         }
     }
 
@@ -176,6 +182,8 @@ impl ServoRuntime {
             content_blocker: Rc::clone(&self.content_blocker),
             screen_metrics: Rc::clone(&self.screen_metrics),
             _after_engine_cleanup: self.after_engine_cleanup.clone(),
+            // media session
+            engine_media_session: Rc::clone(&self.engine_media_session),
         });
 
         let inner = WebViewBuilder::new(&self.inner, rendering_context)
@@ -189,7 +197,12 @@ impl ServoRuntime {
             let _send_result = browser_event_sender.send(TabEvent::new(tab_id, event));
         }
         info!("created Servo WebView for tab {}", tab_id.value());
-        Ok(ServoWebView::new(inner, frame_ready, tab_id, scale_factor))
+        let web_view = ServoWebView::new(inner, frame_ready, tab_id, scale_factor);
+        // media session
+        Ok(
+            web_view
+                .with_media_session(browser_event_sender, Rc::clone(&self.engine_media_session)),
+        )
     }
 
     pub fn spin_event_loop(&self) {
@@ -320,6 +333,8 @@ struct BrowserDelegate {
     screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
     /// Servo's `WebView` drops its handle to Servo before its delegate, so this goes after it.
     _after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
+    // media session
+    engine_media_session: EngineMediaSession,
 }
 
 impl BrowserDelegate {
@@ -426,6 +441,23 @@ impl servo::WebViewDelegate for BrowserDelegate {
         for event in crash_feedback(reason, web_view.cursor(), web_view.status_text()) {
             self.send_browser_event(event);
         }
+    }
+
+    // media session
+    fn notify_media_session_event(
+        &self,
+        _web_view: servo::WebView,
+        event: servo::MediaSessionEvent,
+    ) {
+        // The constellation forwards an event only after making its sender the active session.
+        self.engine_media_session.set(Some(self.tab_id));
+        let event = browser_event_from_servo(event);
+        if matches!(event, BrowserEvent::MediaPositionChanged { .. }) {
+            log::debug!("tab {}: media session: {event:?}", self.tab_id.value());
+        } else {
+            info!("tab {}: media session: {event:?}", self.tab_id.value());
+        }
+        self.send_browser_event(event);
     }
 }
 

@@ -1,0 +1,44 @@
+// media-session lane: the sound indicator on a tab, which mutes or unmutes the tab when clicked.
+
+export enum TabAudioState {
+    silent,
+    playing,
+    muted,
+}
+
+export component TabAudioButton inherits Rectangle {
+    in property <TabAudioState> state;
+    in property <bool> active-tab;
+    callback clicked;
+
+    // Colours, kept together for the move to ChromePalette at merge.
+    property <color> icon-color: root.active-tab ? #edf4fa : #8b98a8;
+    property <color> icon-hover-color: #71c5ff;
+    property <color> muted-icon-color: #e08a8a;
+    property <color> hover-background: #222c37;
+    property <color> pressed-background: #2b3744;
+
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: touch.pressed ? root.pressed-background : touch.has-hover ? root.hover-background : transparent;
+    accessible-role: button;
+    accessible-label: root.state == TabAudioState.muted ? "Unmute tab" : "Mute tab";
+
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: root.state == TabAudioState.muted ? @image-url("speaker-muted.svg") : @image-url("speaker.svg");
+        colorize: touch.has-hover ? root.icon-hover-color : root.state == TabAudioState.muted ? root.muted-icon-color : root.icon-color;
+        image-fit: contain;
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

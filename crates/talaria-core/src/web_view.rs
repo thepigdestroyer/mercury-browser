@@ -1,5 +1,5 @@
 use crate::browser::{BrowserCommand, PointerButton, PointerButtonAction};
-use crate::{ColorScheme, ImeInput, KeyboardInput};
+use crate::{ColorScheme, ImeInput, KeyboardInput, MediaSessionAction};
 
 pub trait WebView {
     type Error;
@@ -25,6 +25,10 @@ pub trait WebView {
     fn set_color_scheme(&mut self, scheme: ColorScheme) -> Result<(), Self::Error>;
     fn exit_fullscreen(&mut self) -> Result<(), Self::Error>;
     fn pointer_left(&mut self) -> Result<(), Self::Error>;
+    // media session
+    fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error>;
+    fn media_session_action(&mut self, action: MediaSessionAction) -> Result<(), Self::Error>;
+    fn probe_media(&mut self) -> Result<(), Self::Error>;
 }
 
 pub fn dispatch_command<W>(web_view: &mut W, command: BrowserCommand) -> Result<(), W::Error>
@@ -57,5 +61,9 @@ where
         BrowserCommand::SetColorScheme(scheme) => web_view.set_color_scheme(scheme),
         BrowserCommand::ExitFullscreen => web_view.exit_fullscreen(),
         BrowserCommand::PointerLeft => web_view.pointer_left(),
+        // media session
+        BrowserCommand::SetAudioMuted { muted } => web_view.set_audio_muted(muted),
+        BrowserCommand::MediaSessionAction(action) => web_view.media_session_action(action),
+        BrowserCommand::ProbeMedia => web_view.probe_media(),
     }
 }

@@ -1,6 +1,7 @@
 use talaria_core::{
     BrowserCommand, ColorScheme, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
-    KeyboardModifiers, PointerButton, PointerButtonAction, WebView, dispatch_command,
+    KeyboardModifiers, MediaSessionAction, PointerButton, PointerButtonAction, WebView,
+    dispatch_command,
 };
 
 #[derive(Debug, PartialEq)]
@@ -37,6 +38,10 @@ enum FakeCall {
         x: f32,
         y: f32,
     },
+    // media session
+    SetAudioMuted(bool),
+    MediaSessionAction(MediaSessionAction),
+    ProbeMedia,
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -142,6 +147,19 @@ impl WebView for FakeWebView {
 
     fn pointer_left(&mut self) -> Result<(), Self::Error> {
         self.record(FakeCall::PointerLeft)
+    }
+
+    // media session
+    fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error> {
+        self.record(FakeCall::SetAudioMuted(muted))
+    }
+
+    fn media_session_action(&mut self, action: MediaSessionAction) -> Result<(), Self::Error> {
+        self.record(FakeCall::MediaSessionAction(action))
+    }
+
+    fn probe_media(&mut self) -> Result<(), Self::Error> {
+        self.record(FakeCall::ProbeMedia)
     }
 }
 
@@ -389,4 +407,30 @@ fn pointer_left_command_calls_pointer_left() {
 
     assert_eq!(result, Ok(()));
     assert_eq!(web_view.calls, vec![FakeCall::PointerLeft]);
+}
+
+#[test]
+fn media_session_commands_reach_the_web_view() {
+    let mut web_view = FakeWebView::default();
+
+    for command in [
+        BrowserCommand::SetAudioMuted { muted: true },
+        BrowserCommand::SetAudioMuted { muted: false },
+        BrowserCommand::MediaSessionAction(MediaSessionAction::Pause),
+        BrowserCommand::MediaSessionAction(MediaSessionAction::NextTrack),
+        BrowserCommand::ProbeMedia,
+    ] {
+        assert_eq!(dispatch_command(&mut web_view, command), Ok(()));
+    }
+
+    assert_eq!(
+        web_view.calls,
+        vec![
+            FakeCall::SetAudioMuted(true),
+            FakeCall::SetAudioMuted(false),
+            FakeCall::MediaSessionAction(MediaSessionAction::Pause),
+            FakeCall::MediaSessionAction(MediaSessionAction::NextTrack),
+            FakeCall::ProbeMedia,
+        ]
+    );
 }

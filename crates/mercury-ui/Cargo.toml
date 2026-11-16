@@ -11,3 +11,9 @@ slint.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+
+# Headless rendering tests (media-session lane, tests/render_tab_audio.rs; the menus, dialogs and
+# controls lanes add the same lines). Slint's software renderer is already in Cargo.lock.
+[dev-dependencies]
+image.workspace = true
+slint = { workspace = true, features = ["renderer-software"] }

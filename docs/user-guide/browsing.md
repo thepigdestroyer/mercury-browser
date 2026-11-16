@@ -19,6 +19,7 @@ Mercury follows familiar desktop-browser shortcuts while keeping the interface i
 | ++ctrl+r++ or ++f5++ | Reload the current page |
 | ++alt+left++ | Go back |
 | ++alt+right++ | Go forward |
+| ++ctrl+m++ (++cmd+shift+m++ on macOS) | Mute or unmute the active tab |
 
 ## Mouse and trackpad input
 

@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mercury media session test page</title>
+<style>
+  html, body { margin: 0; background: #ffffff; color: #000000; font-family: sans-serif; }
+  #results { margin: 10px; font: bold 14px/1.3 monospace; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; }
+  .note { color: #555555; }
+</style>
+</head>
+<body>
+  <!-- The only source is ../media/silence.wav: digital silence (every sample is 0), so nothing is
+       heard although the element is not muted; it is also at volume 0.01. Not muting it is what
+       lets the browser count the tab as audible. -->
+  <audio id="tone" loop></audio>
+  <div id="results"></div>
+  <script>
+    "use strict";
+    // ?muted: the run starts with the tab muted (MERCURY_START_MUTED=1); the page checks that
+    // its media reports muted, including elements added or created later.
+    const expectMuted = new URLSearchParams(location.search).has("muted");
+    const results = document.getElementById("results");
+    const started = performance.now();
+    let finished = false;
+
+    function line(text, ok) {
+      if (finished) return;
+      const element = document.createElement("div");
+      element.className = ok === null ? "note" : ok ? "pass" : "fail";
+      const at = "[" + ((performance.now() - started) / 1000).toFixed(1) + "s] ";
+      element.textContent = at + (ok === null ? text : text + " " + (ok ? "PASS" : "FAIL"));
+      results.appendChild(element);
+      console.log(element.textContent);
+    }
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function silentElement(element) {
+      element.src = "../media/silence.wav";
+      element.loop = true;
+      element.volume = 0.01;
+      return element;
+    }
+
+    async function run() {
+      line("expecting the tab to be " + (expectMuted ? "muted" : "unmuted"), null);
+      const session = navigator.mediaSession;
+      line("navigator.mediaSession is present", !!session);
+      if (session && typeof MediaMetadata === "function") {
+        session.metadata = new MediaMetadata({
+          title: "Mercury test silence",
+          artist: "Mercury Browser",
+          album: "Media session checks",
+        });
+        session.setActionHandler("pause", () => line("action handler: pause", null));
+        session.setActionHandler("nexttrack", () => line("action handler: nexttrack", null));
+        line("metadata set: " + session.metadata.title + " / " + session.metadata.artist, true);
+      } else {
+        line("MediaMetadata is available", false);
+      }
+
+      const tone = silentElement(document.getElementById("tone"));
+      try {
+        await tone.play();
+        const before = tone.currentTime;
+        await wait(1200);
+        line("in-document audio plays (currentTime " + before.toFixed(2) + " -> "
+          + tone.currentTime.toFixed(2) + ", paused=" + tone.paused + ")",
+          !tone.paused && tone.currentTime > before);
+      } catch (error) {
+        line("in-document audio plays", false);
+        line("play() failed: " + error.message, null);
+      }
+
+      // Created after load: one inserted into the document, one that never is.
+      const added = silentElement(document.createElement("audio"));
+      document.body.appendChild(added);
+      const detached = silentElement(new Audio());
+      await Promise.all([added.play().catch(() => {}), detached.play().catch(() => {})]);
+      await wait(800);
+
+      for (const [name, element] of [["in-document", tone], ["added later", added], ["never inserted", detached]]) {
+        line(name + " element reports muted=" + element.muted, element.muted === expectMuted);
+      }
+      // Keep only the first element playing for the screenshot.
+      added.pause();
+      detached.pause();
+    }
+
+    run()
+      .catch((error) => line("unexpected: " + error.message, false))
+      .finally(() => { line("DONE", null); finished = true; });
+  </script>
+</body>
+</html>
