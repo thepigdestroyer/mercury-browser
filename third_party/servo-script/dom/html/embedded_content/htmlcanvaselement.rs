@@ -342,6 +342,8 @@ impl HTMLCanvasElement {
         Some(context)
     }
 
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     #[cfg(not(feature = "webgpu"))]
     fn get_or_init_webgpu_context(&self) -> Option<DomRoot<GPUCanvasContext>> {
         None
@@ -395,6 +397,8 @@ impl HTMLCanvasElement {
         }
     }
 
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn is_valid(&self) -> bool {
         self.Height() != 0 && self.Width() != 0
     }

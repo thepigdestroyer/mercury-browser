@@ -52,6 +52,22 @@ impl MediaStream for GStreamerMediaStream {
     fn ty(&self) -> MediaStreamType {
         self.type_
     }
+
+    /// Mercury: takes the source element out (the device is closed in the NULL state), so that
+    /// a consumer that attaches this stream later cannot start the device again.
+    fn stop(&mut self) {
+        if let Some(pipeline) = &self.pipeline {
+            let _ = pipeline.set_state(gstreamer::State::Null);
+        }
+        if self.elements.len() < 2 {
+            return;
+        }
+        let source = self.elements.remove(0);
+        if let Some(pipeline) = &self.pipeline {
+            let _ = pipeline.remove(&source);
+        }
+        let _ = source.set_state(gstreamer::State::Null);
+    }
 }
 
 impl GStreamerMediaStream {

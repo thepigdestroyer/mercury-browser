@@ -27,6 +27,8 @@ use net_traits::{
 };
 use pixels::{Snapshot, SnapshotAlphaMode, SnapshotPixelFormat};
 use script_bindings::cell::DomRefCell;
+// Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+#[allow(unused_imports)]
 use script_bindings::error::Fallible;
 use servo_media::player::video::VideoFrame;
 use servo_url::ServoUrl;

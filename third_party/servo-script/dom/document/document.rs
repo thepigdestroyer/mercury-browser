@@ -882,6 +882,10 @@ impl Document {
 
         self.clean_up_media_elements(cx.no_gc());
 
+        // Mercury: <https://w3c.github.io/mediacapture-main/#life-cycle-and-media-flow>: a
+        // document that is unloaded stops its camera and microphone tracks.
+        self.window.stop_media_capture();
+
         // Step 3. For each WebTransport object transport whose relevant global object is window, run the context cleanup steps given transport.
         // TODO
 
@@ -2531,6 +2535,8 @@ impl Document {
     }
 
     /// Step 9 of <https://html.spec.whatwg.org/multipage/#the-end>
+    // Mercury: `cx` is unused here (the task closure has its own); see MERCURY.md, "Warnings".
+    #[allow(unused_variables)]
     fn queue_document_completion(&self, cx: &mut JSContext) {
         // The initial about:blank document passes through
         // https://html.spec.whatwg.org/multipage/#creating-a-new-browsing-context
@@ -3605,7 +3611,7 @@ impl Document {
     }
 
     /// <https://html.spec.whatwg.org/multipage/#allowed-to-use>
-    pub(crate) fn allowed_to_use_feature(&self, _feature: PermissionName) -> bool {
+    pub(crate) fn allowed_to_use_feature(&self, feature: PermissionName) -> bool {
         // Step 1. If document's browsing context is null, then return false.
         if !self.has_browsing_context {
             return false;
@@ -3621,6 +3627,19 @@ impl Document {
         // Step 4. Return false.
         // TODO: All features are currently enabled for `Document`s because we do not
         // implement the Permissions Policy specification.
+        //
+        // Mercury: except camera and microphone, which get their default allowlist `'self'`:
+        // the top-level document and documents same origin with it. `allow=` on an iframe is
+        // not honoured. Servo labels every permission request with the top-level origin, so
+        // this also keeps a cross-origin frame from asking in its embedder's name.
+        if matches!(feature, PermissionName::Camera | PermissionName::Microphone) &&
+            !self.window.is_top_level()
+        {
+            return self
+                .window
+                .top_level_document_if_local()
+                .is_some_and(|top| top.origin().same_origin(&self.origin()));
+        }
         true
     }
 
@@ -5133,6 +5152,8 @@ impl Document {
             .collect()
     }
 
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn advance_animation_timeline_for_testing(&self, delta: TimeDuration) {
         self.timeline.advance_specific(delta);
         let current_timeline_value = self.current_animation_timeline_value();

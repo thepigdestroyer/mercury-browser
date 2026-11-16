@@ -188,6 +188,11 @@ impl Navigator {
         self.geolocation.get()
     }
 
+    /// Mercury: the `MediaDevices` object, if `navigator.mediaDevices` was ever accessed.
+    pub(crate) fn maybe_media_devices(&self) -> Option<DomRoot<MediaDevices>> {
+        self.mediadevices.get()
+    }
+
     #[cfg(feature = "gamepad")]
     pub(crate) fn get_gamepad(&self, index: usize) -> Option<DomRoot<Gamepad>> {
         self.gamepads.borrow().get(index).and_then(|g| g.get())

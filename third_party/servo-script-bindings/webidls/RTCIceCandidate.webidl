@@ -5,7 +5,9 @@
 // https://w3c.github.io/webrtc-pc/#rtcicecandidate-interface
 
 
-[Exposed=Window, Pref="dom_webrtc_enabled"]
+// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
+// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/MERCURY.md).
+[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
 interface RTCIceCandidate {
     [Throws] constructor(optional RTCIceCandidateInit candidateInitDict = {});
     readonly attribute DOMString               candidate;

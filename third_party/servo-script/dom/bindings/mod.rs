@@ -176,7 +176,8 @@ pub(crate) mod codegen {
     }
     pub(crate) use script_bindings::codegen::GenericBindings;
     #[expect(dead_code)]
-    #[expect(non_camel_case_types)]
+    // Mercury: `allow`, not `expect`: unfulfilled with Mercury's toolchain (MERCURY.md).
+    #[allow(non_camel_case_types)]
     #[expect(clippy::upper_case_acronyms)]
     pub(crate) mod Bindings {
         include!(concat!(env!("OUT_DIR"), "/ConcreteBindings/mod.rs"));

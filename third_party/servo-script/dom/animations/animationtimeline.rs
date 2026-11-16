@@ -39,6 +39,8 @@ impl AnimationTimeline {
         self.current_time.set(duration);
     }
 
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn advance_specific(&self, by: Duration) {
         self.current_time.set(self.current_time.get() + by);
     }

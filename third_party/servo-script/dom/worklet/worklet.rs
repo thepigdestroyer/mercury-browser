@@ -277,6 +277,8 @@ pub trait WorkletThreadPool: JSTraceable {
     /// Queue a [`WorkletTask`] for execution on this [`WorkletThreadPool`].
     /// The task will be executed in the context of the [`WorkletGlobalScope`]
     /// represented by the [`WorketId`].
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     fn perform_a_worklet_task(&self, worklet_id: WorkletId, worklet_task: WorkletTask);
 }
 

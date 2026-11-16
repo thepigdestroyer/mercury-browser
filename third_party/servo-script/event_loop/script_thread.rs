@@ -3366,6 +3366,8 @@ impl ScriptThread {
     }
 
     /// Handles animation tick requested during testing.
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn handle_tick_all_animations_for_testing(no_gc: &NoGC, id: PipelineId) {
         with_script_thread(|script_thread| {
             let Some(document) = script_thread.documents.borrow().find_document(id) else {

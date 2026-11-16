@@ -65,7 +65,8 @@ impl AddToCaps for Constrain<f64> {
     ) -> Option<gstreamer::caps::Builder<NoFeature>> {
         match self {
             Constrain::Value(v) => {
-                Some(builder.field("name", gstreamer::Fraction::approximate_f64(*v)?))
+                // Mercury: the field is `name`, not the literal "name".
+                Some(builder.field(name, gstreamer::Fraction::approximate_f64(*v)?))
             },
             Constrain::Range(r) => {
                 let min = r

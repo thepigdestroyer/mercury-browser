@@ -70,7 +70,7 @@ wildcards = "deny"
 allow-wildcard-paths = true
 
 [sources]
-# Everything comes from crates.io. The three crates under third_party/ are
+# Everything comes from crates.io. The seven crates under third_party/ are
 # path dependencies through [patch.crates-io] and are not "sources" at all.
 unknown-registry = "deny"
 unknown-git = "deny"

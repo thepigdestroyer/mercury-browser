@@ -77,6 +77,10 @@ zeroize = "1.9"
 [patch.crates-io]
 gaol = { path = "third_party/gaol" }
 servo-canvas = { path = "third_party/servo-canvas" }
+servo-media-gstreamer = { path = "third_party/servo-media-gstreamer" }
+servo-media-streams = { path = "third_party/servo-media-streams" }
+servo-script = { path = "third_party/servo-script" }
+servo-script-bindings = { path = "third_party/servo-script-bindings" }
 surfman = { path = "third_party/surfman" }
 
 # Keep the controller easy to debug while optimizing the browser-engine, frame-transfer, and media

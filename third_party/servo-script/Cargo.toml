@@ -499,3 +499,9 @@ check-cfg = [
     "cfg(llvm_pgo)",
     "cfg(ohos_mock)",
 ]
+
+# Mercury: `backtrace` is used only with features Mercury does not build
+# (`webgl_backtrace`, testing), and Cargo reports unused dependencies of path
+# crates. See MERCURY.md, "Warnings".
+[lints.cargo]
+unused_dependencies = "allow"

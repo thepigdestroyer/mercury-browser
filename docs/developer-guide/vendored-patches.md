@@ -1,6 +1,6 @@
 ---
 title: Vendored Patches
-description: Maintain and eventually remove Mercury's focused gaol, Surfman and servo-canvas compatibility patches.
+description: Maintain and eventually remove Mercury's focused gaol, Surfman and servo-canvas compatibility patches and its Servo engine patches, and re-vendor them on a Servo upgrade.
 ---
 
 # Vendored patches
@@ -14,8 +14,12 @@ Mercury vendors code when a pinned Servo dependency needs a small, reviewable co
 | `third_party/gaol` | 0.2.1 | Modern Linux syscall compatibility and a non-zero file-size limit for Servo shared-memory IPC |
 | `third_party/surfman` | 0.14.0 | Avoid process-global `DRI_PRIME=1` selection and its race with media initialization |
 | `third_party/servo-canvas` | 0.8.0 | Make Servo's GPU 2D-canvas backend (`vello` feature) build against wgpu 30, fall back to the CPU backend when it cannot start, survive failed renders and read-backs, share one GPU device, and fix GPU drawing defects (lost drawing, clips, oversized canvases, shapes with shadows) |
+| `third_party/servo-script` | 0.8.0 | Home of Mercury's engine patches. Camera and microphone: ask before opening a device, expose device names only with permission, `MediaStreamTrack.stop()`, release devices when a document goes away, camera and microphone `'self'` in frames |
+| `third_party/servo-script-bindings` | 0.8.0 | WebIDL for the above (`stop()`, `readyState`, `[SecureContext]` `mediaDevices`); WebRTC moved behind `dom_webrtc_transceiver_enabled` so capture can be on without it |
+| `third_party/servo-media-streams` | 0.8.0 | `MediaStream::stop()`, so a device can be released |
+| `third_party/servo-media-gstreamer` | 0.8.0 | Its GStreamer implementation, and a caps-field fix for fractional constraints |
 
-The gaol and Surfman patches were introduced by [Hermes Browser](https://github.com/KaykCaputo/hermes-browser), the project Mercury is derived from, and Mercury continues to carry them. Mercury added the servo-canvas patch.
+The gaol and Surfman patches were introduced by [Hermes Browser](https://github.com/KaykCaputo/hermes-browser), the project Mercury is derived from, and Mercury continues to carry them. Mercury added the servo-canvas patch and the Servo engine patches (`servo-script` and the three crates vendored with it).
 
 The root `[patch.crates-io]` section redirects Servo's dependency graph to these directories.
 
@@ -96,3 +100,37 @@ When an equivalent fix reaches the Servo dependency graph used by Mercury:
 5. Remove the vendored directory in the same commit.
 
 The removal commit should explain which upstream release absorbed the patch.
+
+## The Servo engine patches (`servo-script` and friends)
+
+`third_party/servo-script`, `servo-script-bindings`, `servo-media-streams` and `servo-media-gstreamer` were vendored together (commit `ea292e9`, each crate byte-identical to its published `.crate`) for camera and microphone capture. `servo-script` is also where later engine patches go. Each crate's `MERCURY.md` lists its changes; `third_party/servo-script/MERCURY.md` describes the capture patch as a whole and the rustc warnings the vendored crate shows with Mercury's feature set and how each is silenced at its own site.
+
+Rules on top of the general ones:
+
+- **Mark every change** with a `// Mercury:` comment (also in WebIDL) at the changed lines, and list it in that crate's `MERCURY.md` with the upstream file and line it changes. `grep -rn "Mercury:" third_party/servo-script` must find every hunk of `git diff ea292e9 -- third_party/servo-script`.
+- **No formatting churn.** The vendored files follow Servo's rustfmt settings, which differ from Mercury's; `cargo fmt --all` does not touch `third_party/`. Format new code with `rustfmt --edition 2024 --config match_block_trailing_comma=true,binop_separator=Back,imports_granularity=Module,group_imports=StdExternalCrate,style_edition=2024 <file>` (these leave the upstream files unchanged).
+- **Zero warnings.** Cargo does not cap lints for path dependencies, so warnings from the vendored crates appear in `cargo build`. Silence one only at its own site and record it in `MERCURY.md`; never with a crate-wide `[lints]` entry, which would hide warnings in Mercury's own changes.
+
+### Vendor a crate exactly as published
+
+```bash
+c=servo-script v=0.8.0
+crate=~/.cargo/registry/cache/index.crates.io-1949cf8c6b5b557f/$c-$v.crate   # fetched by cargo
+shasum -a 256 "$crate"            # must equal the checksum in Cargo.lock before the patch entry
+mkdir -p third_party/$c && tar -xzf "$crate" -C third_party/$c --strip-components 1
+git add third_party/$c && git commit -m "chore(third_party): vendor $c $v"
+# check the commit against the archive: no output means byte-identical
+d=$(mktemp -d) && git archive HEAD third_party/$c | tar -x -C "$d" && mkdir "$d/orig" \
+  && tar -xzf "$crate" -C "$d/orig" && diff -r "$d/third_party/$c" "$d/orig/$c-$v"
+```
+
+Then, in a separate commit, add `$c = { path = "third_party/$c" }` to `[patch.crates-io]`, let cargo update `Cargo.lock` (the entry loses its `source` and `checksum` lines and nothing else), add the crate's `MERCURY.md`, a row above and an entry in `THIRD-PARTY-NOTICES.md`, and the changes.
+
+### Re-vendor on a Servo upgrade
+
+1. Save the current patch: `git diff <vendoring commit> -- third_party/<crate> ':(exclude)third_party/<crate>/MERCURY.md' > <crate>.patch` for each crate.
+2. Bump the Servo pin, remove the four `[patch.crates-io]` entries and let cargo resolve the new versions, so that their `.crate` files are fetched.
+3. Replace each directory with the new crate as published (procedure above), keeping only `MERCURY.md`, and commit that alone.
+4. Re-apply each saved patch with `git apply --3way <crate>.patch`. Resolve conflicts by re-reading the upstream code the `MERCURY.md` entry names; drop a change whose "drop when" condition the new release meets.
+5. Restore the `[patch.crates-io]` entries, build, and redo the warning table in `third_party/servo-script/MERCURY.md` from a clean build's output (new upstream warnings are silenced at their site; silencing that is no longer needed is removed).
+6. Update the versions, checksums, commits and line numbers in each `MERCURY.md`, and run the capture tests (`make test-capture-macos`) and the full gate.

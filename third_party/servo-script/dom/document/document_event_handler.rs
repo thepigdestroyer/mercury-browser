@@ -75,6 +75,8 @@ use crate::dom::links::htmlhyperlinkelementutils::HyperlinkElementTraits;
 use crate::dom::node::focus::FocusTrigger;
 use crate::dom::node::{self, Node, NodeTraits};
 use crate::dom::pointerevent::{PointerEvent, PointerId};
+// Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+#[allow(unused_imports)]
 use crate::dom::types::{
     CompositionEvent, Element, Event, EventTarget, GlobalScope, HTMLAnchorElement, HTMLAreaElement,
     HTMLElement, HTMLLabelElement, MouseEvent, Touch, TouchEvent, TouchList, WheelEvent, Window,

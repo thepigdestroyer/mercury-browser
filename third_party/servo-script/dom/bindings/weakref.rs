@@ -30,6 +30,8 @@ impl<T: WeakReferenceable> MutableWeakRef<T> {
     }
 
     /// Set the pointee of a mutable weak reference.
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn set(&self, value: Option<&T>) {
         unsafe {
             *self.cell.get() = value.map(WeakRef::new);

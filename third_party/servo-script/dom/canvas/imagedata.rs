@@ -189,6 +189,8 @@ impl ImageData {
         )
     }
 
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn get_snapshot(&self, no_gc: &NoGC) -> Snapshot {
         Snapshot::from_vec(
             self.get_size(),

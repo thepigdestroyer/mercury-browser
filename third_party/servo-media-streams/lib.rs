@@ -16,6 +16,10 @@ pub trait MediaStream: Any + Send {
     fn as_mut_any(&mut self) -> &mut dyn Any;
     fn set_id(&mut self, id: registry::MediaStreamId);
     fn ty(&self) -> MediaStreamType;
+    /// Mercury: stops the stream's source for good (a camera or microphone is released).
+    /// The stream stays registered, so that consumers that look it up do not fail; it produces
+    /// nothing from then on.
+    fn stop(&mut self) {}
 }
 
 /// A MediaSocket is a way for a backend to represent a

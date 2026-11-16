@@ -169,6 +169,7 @@ use crate::dom::html::htmliframeelement::HTMLIFrameElement;
 use crate::dom::idbfactory::IDBFactory;
 use crate::dom::inputevent::HitTestResult;
 use crate::dom::location::Location;
+use crate::dom::mediadevices::MediaDevices;
 use crate::dom::medialist::MediaList;
 use crate::dom::mediaquerylist::{MediaQueryList, MediaQueryListMatchState};
 use crate::dom::mediaquerylistevent::MediaQueryListEvent;
@@ -569,6 +570,8 @@ impl Window {
 
     fn clear_js_runtime_common(&self) {
         self.stop_geolocation_watches();
+        // Mercury: no camera or microphone outlives the window that opened it.
+        self.stop_media_capture();
         self.as_global_scope()
             .remove_web_messaging_and_dedicated_workers_infra();
         self.current_state.set(WindowState::Zombie);
@@ -597,6 +600,18 @@ impl Window {
     /// The `Geolocation` object of this `Window`'s `Navigator`.
     pub(crate) fn maybe_geolocation(&self) -> Option<DomRoot<Geolocation>> {
         self.navigator.get()?.maybe_geolocation()
+    }
+
+    /// Mercury: the `MediaDevices` object of this `Window`'s `Navigator`, if one was made.
+    pub(crate) fn maybe_media_devices(&self) -> Option<DomRoot<MediaDevices>> {
+        self.navigator.get()?.maybe_media_devices()
+    }
+
+    /// Mercury: ends every camera and microphone track of this window and releases the devices.
+    pub(crate) fn stop_media_capture(&self) {
+        if let Some(media_devices) = self.maybe_media_devices() {
+            media_devices.stop_all_capture();
+        }
     }
 
     /// A convenience method for
@@ -1084,6 +1099,8 @@ impl Window {
     }
 
     #[expect(unsafe_code)]
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn gc(&self, cx: &mut JSContext) {
         unsafe { JS_GC(cx, GCReason::API) };
     }
@@ -2698,6 +2715,8 @@ impl Window {
 
     /// Prepares to tick animations and then does a reflow which also advances the
     /// layout animation clock.
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn advance_animation_clock(&self, no_gc: &NoGC, delta: TimeDuration) {
         self.Document()
             .advance_animation_timeline_for_testing(delta);

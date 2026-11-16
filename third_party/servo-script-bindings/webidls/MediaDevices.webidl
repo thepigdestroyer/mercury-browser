@@ -13,7 +13,8 @@ interface MediaDevices : EventTarget {
 
 partial interface Navigator {
     // [SameObject, SecureContext]
-    [Pref="dom_webrtc_enabled"] readonly        attribute MediaDevices mediaDevices;
+    // Mercury: SecureContext, so that the attribute is absent where the interface is.
+    [SecureContext, Pref="dom_webrtc_enabled"] readonly        attribute MediaDevices mediaDevices;
 };
 
 partial interface MediaDevices {

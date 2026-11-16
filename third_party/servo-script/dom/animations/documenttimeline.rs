@@ -77,6 +77,8 @@ impl DocumentTimeline {
 
     /// Increments the current value of the timeline by a specific number of seconds.
     /// This is used for testing.
+    // Mercury: unused in Mercury's feature set (see MERCURY.md, "Warnings").
+    #[allow(dead_code)]
     pub(crate) fn advance_specific(&self, by: Duration) {
         self.animation_timeline.advance_specific(by);
     }

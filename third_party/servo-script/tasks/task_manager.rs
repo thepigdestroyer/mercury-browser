@@ -142,6 +142,8 @@ impl TaskManager {
     task_source_functions!(self, dom_manipulation_task_source, DOMManipulation);
     task_source_functions!(self, file_reading_task_source, FileReading);
     task_source_functions!(self, font_loading_task_source, FontLoading);
+    // Mercury: only the `gamepad` feature uses it (see MERCURY.md, "Warnings").
+    #[cfg(feature = "gamepad")]
     task_source_functions!(self, gamepad_task_source, Gamepad);
     task_source_functions!(self, geolocation_task_source, Geolocation);
     task_source_functions!(self, media_element_task_source, MediaElement);
