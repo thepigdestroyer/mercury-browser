@@ -21,8 +21,11 @@ mod crash_handler;
 mod engine;
 mod keyboard;
 mod keyutils;
+// media-capture
 #[cfg(target_os = "macos")]
 mod media_buffers;
+#[cfg(target_os = "macos")]
+mod media_capture;
 #[cfg(target_os = "macos")]
 mod media_isolation;
 mod panic_hook;
@@ -79,6 +82,20 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             return Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)));
         }
     };
+
+    // media-capture: `--fake-media-devices`; refused unless no plugin beside this executable can
+    // open a real camera or microphone. Sets the content processes' environment, so before
+    // any thread starts.
+    #[cfg(target_os = "macos")]
+    if let Err(message) = media_capture::select_fake_media_devices(options.fake_media_devices) {
+        eprintln!("mercury-browser: {message}");
+        return Ok(ExitCode::from(2));
+    }
+    #[cfg(not(target_os = "macos"))]
+    if options.fake_media_devices {
+        eprintln!("mercury-browser: --fake-media-devices is available on macOS only");
+        return Ok(ExitCode::from(2));
+    }
 
     use_automatic_gpu_selection();
     // Dropped last, after the engine has saved its data: a temporary profile is deleted then.

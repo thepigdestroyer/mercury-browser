@@ -27,6 +27,12 @@
 #                                      read by scripts/macos/gstreamer-plugins.sh
 #   MERCURY_GSTREAMER_UPDATE_NOTICES   1 = rewrite the THIRD-PARTY-NOTICES.md table
 #                                      instead of checking it
+#   MERCURY_GSTREAMER_EXTRA_PLUGINS    test runs only: space-separated plugins to collect
+#                                      in addition, from the ones the fake camera and
+#                                      microphone need ("videotestsrc audiotestsrc"; see
+#                                      scripts/macos/test-capture.sh). Servo does not load
+#                                      them; the fake-device mode does. Refused for an
+#                                      application bundle.
 #
 # Adapted from Servo's `package_gstreamer_dylibs` and
 # `load_plugin_libraries_from_text_file`:
@@ -96,7 +102,17 @@ contains() { # needle, haystack...
     return 1
 }
 
-for plugin in "${PLUGINS[@]}"; do
+# Test-only extras (media-capture): only the test sources the fake devices use.
+ALLOWED_EXTRAS=(videotestsrc audiotestsrc)
+EXTRAS=()
+read -r -a EXTRA_NAMES <<<"${MERCURY_GSTREAMER_EXTRA_PLUGINS:-}"
+for name in ${EXTRA_NAMES[@]+"${EXTRA_NAMES[@]}"}; do
+    contains "$name" "${ALLOWED_EXTRAS[@]}" \
+        || die "MERCURY_GSTREAMER_EXTRA_PLUGINS names '$name'; only ${ALLOWED_EXTRAS[*]} may be added (for test runs)"
+    contains "gst$name" "${PLUGINS[@]}" || EXTRAS+=("gst$name")
+done
+
+for plugin in "${PLUGINS[@]}" ${EXTRAS[@]+"${EXTRAS[@]}"}; do
     [ -f "$PREFIX_LIB/gstreamer-1.0/lib$plugin.dylib" ] \
         || die "plugin $plugin is missing from $PREFIX_LIB/gstreamer-1.0"
 done
@@ -190,6 +206,7 @@ marker_inputs() {
     printf 'architecture %s\n' "$ARCH"
     printf 'plugin %s\n' "${PLUGINS[@]}"
     if [ "${#EXCLUDED_FILES[@]}" -gt 0 ]; then printf 'excluded %s\n' "${EXCLUDED_FILES[@]}"; fi
+    if [ "${#EXTRAS[@]}" -gt 0 ]; then printf 'extra %s\n' "${EXTRAS[@]}"; fi
     if [ "${#EXECUTABLE_DEPS[@]}" -gt 0 ]; then printf 'dependency %s\n' "${EXECUTABLE_DEPS[@]}"; fi
 }
 
@@ -231,6 +248,9 @@ BUNDLE_MODE=0
 case "$DESTINATION" in
     *.app/Contents/MacOS/lib) BUNDLE_MODE=1 ;;
 esac
+if [ "$BUNDLE_MODE" = 1 ] && [ "${#EXTRAS[@]}" -gt 0 ]; then
+    die "MERCURY_GSTREAMER_EXTRA_PLUGINS is for test runs; an application bundle never ships ${EXTRAS[*]}"
+fi
 if [ "$BUNDLE_MODE" = 1 ]; then
     if [ -e "$DESTINATION" ] || [ -L "$DESTINATION" ]; then
         die "$DESTINATION already exists; an application bundle's lib directory is collected once, into a fresh bundle"
@@ -272,7 +292,7 @@ trap 'rm -rf -- "$STAGING"' EXIT
 
 # ── Dependency walk ───────────────────────────────────────────────────────
 PENDING=(${EXECUTABLE_DEPS[@]+"${EXECUTABLE_DEPS[@]}"})
-for plugin in "${PLUGINS[@]}"; do
+for plugin in "${PLUGINS[@]}" ${EXTRAS[@]+"${EXTRAS[@]}"}; do
     PENDING+=("$PREFIX_LIB/gstreamer-1.0/lib$plugin.dylib")
 done
 SEEN=()

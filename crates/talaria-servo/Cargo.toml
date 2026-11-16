@@ -30,5 +30,11 @@ libc.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 servo = { workspace = true, features = ["media-gstreamer"] }
 
+# media-capture: the fake camera and microphone of `--fake-media-devices`
+# (`src/fake_media_devices.rs`), a GStreamer device provider. The same gstreamer
+# release Servo's media backend uses (already in Cargo.lock).
+[target.'cfg(target_os = "macos")'.dependencies]
+gstreamer = "0.25"
+
 [build-dependencies]
 adblock.workspace = true

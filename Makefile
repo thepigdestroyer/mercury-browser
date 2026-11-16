@@ -64,6 +64,7 @@ endif
 	app-macos \
 	package-macos \
 	test-bundle-macos \
+	test-capture-macos \
 	run \
 	run-debug \
 	run-release \
@@ -100,6 +101,7 @@ help:
 		'app-macos' 'Build the release and assemble the signed Mercury Browser.app.' \
 		'package-macos' 'Build Mercury Browser.app and its .dmg for macOS arm64.' \
 		'test-bundle-macos' 'Check the macOS bundle script helpers (no build needed).' \
+		'test-capture-macos' 'Check camera and microphone capture with fake devices (needs build-release).' \
 		'run' 'Run the optimized Mercury Desktop build.' \
 		'run-debug' 'Run Mercury Desktop with development debug information.' \
 		'run-release' 'Alias for the optimized run target.' \
@@ -301,6 +303,11 @@ package-macos:
 test-bundle-macos:
 	$(REQUIRE_MACOS)
 	scripts/macos/test-bundle.sh
+
+# media-capture: fake devices only, from a copy whose lib lacks the real capture plugins.
+test-capture-macos:
+	$(REQUIRE_MACOS)
+	scripts/macos/test-capture.sh
 
 run:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) "$(CARGO)" build --package "$(APP_PACKAGE)" --release)

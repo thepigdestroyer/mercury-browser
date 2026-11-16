@@ -36,6 +36,10 @@ pub fn run_content_process_if_requested() -> Result<bool, ContentProcessArgument
     };
 
     exit_when_the_browser_process_is_gone();
+    // media-capture: the fake camera and microphone of `--fake-media-devices`, registered
+    // before Servo starts its media backend.
+    #[cfg(target_os = "macos")]
+    crate::fake_media_devices::install_if_requested();
     servo::run_content_process(token);
     Ok(true)
 }

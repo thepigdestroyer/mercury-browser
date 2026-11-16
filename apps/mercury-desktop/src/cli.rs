@@ -10,6 +10,10 @@ pub(crate) struct LaunchOptions {
     pub gpu_canvas: bool,
     pub profile_dir: Option<PathBuf>,
     pub experimental_web_features: bool,
+    /// media-capture: `--fake-media-devices`, a diagnostic for automated runs: pages get a fake
+    /// camera and microphone. Allowed only beside a `lib` directory without the plugins that
+    /// can open real ones (checked in `main`).
+    pub fake_media_devices: bool,
 }
 
 impl Default for LaunchOptions {
@@ -22,6 +26,7 @@ impl Default for LaunchOptions {
             gpu_canvas: true,
             profile_dir: None,
             experimental_web_features: true,
+            fake_media_devices: false,
         }
     }
 }
@@ -111,6 +116,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut gpu_canvas = true;
     let mut profile_dir = None;
     let mut experimental_web_features = true;
+    let mut fake_media_devices = false;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -148,6 +154,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
             "--background" => background = true,
             "--disable-gpu-canvas" => gpu_canvas = false,
             "--disable-experimental-web-features" => experimental_web_features = false,
+            // media-capture: a diagnostic, deliberately not in USAGE.
+            "--fake-media-devices" => fake_media_devices = true,
             "--profile-dir" => {
                 let value = option_value(&mut arguments, "--profile-dir", "<directory>")?;
                 profile_dir = Some(PathBuf::from(value));
@@ -168,6 +176,9 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, Some(_)) => return Err("--screenshot-delay requires --screenshot".to_owned()),
         (None, None) => None,
     };
+    if fake_media_devices && screenshot.is_none() && !background {
+        return Err("--fake-media-devices requires --screenshot or --background".to_owned());
+    }
 
     Ok(CliOutcome::Run(LaunchOptions {
         urls,
@@ -177,6 +188,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         gpu_canvas,
         profile_dir,
         experimental_web_features,
+        fake_media_devices,
     }))
 }
 
@@ -259,6 +271,7 @@ mod tests {
                 gpu_canvas: true,
                 profile_dir: None,
                 experimental_web_features: true,
+                fake_media_devices: false,
             })
         );
     }
@@ -553,5 +566,41 @@ mod tests {
                 ..LaunchOptions::default()
             })
         );
+    }
+
+    // media-capture
+    #[test]
+    fn fake_media_devices_are_for_automated_runs() {
+        for arguments in [
+            &["--fake-media-devices", "--background"][..],
+            &["--screenshot", "out.png", "--fake-media-devices"][..],
+        ] {
+            let CliOutcome::Run(options) = parse(arguments) else {
+                panic!("{arguments:?} should be accepted");
+            };
+            assert!(options.fake_media_devices, "{arguments:?}");
+        }
+        assert!(!LaunchOptions::default().fake_media_devices);
+    }
+
+    // media-capture
+    #[test]
+    fn fake_media_devices_without_an_automated_run_are_a_usage_error() {
+        let outcome = parse(&["--fake-media-devices", "https://a.test"]);
+
+        assert_eq!(exit_code(&outcome), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = outcome else {
+            unreachable!()
+        };
+        assert!(
+            text.contains("--fake-media-devices requires --screenshot or --background"),
+            "{text}"
+        );
+    }
+
+    // media-capture: a diagnostic, not listed in the help.
+    #[test]
+    fn fake_media_devices_are_not_in_the_help() {
+        assert!(!USAGE.contains("--fake-media-devices"));
     }
 }

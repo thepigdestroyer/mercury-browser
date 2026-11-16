@@ -227,6 +227,27 @@ else
     result="$(collect "$PREFIX" "$app/lib")"
     check "a bundle destination is never collected twice" "1|yes" "${result%%|*}|$(stderr_has "already exists")"
 
+    # Test-only extras (media-capture): the fake camera and microphone's sources.
+    mkdir -p "$TMP/capture"
+    cp "$EXE" "$TMP/capture/mercury-browser"
+    result="$(MERCURY_GSTREAMER_EXCLUDE_PLUGINS='ogg applemedia osxaudio' \
+        MERCURY_GSTREAMER_EXTRA_PLUGINS='videotestsrc audiotestsrc' collect "$PREFIX" "$TMP/capture/lib")"
+    check "test sources can be added for a capture test run" "0|yes|yes|no|no" \
+        "${result%%|*}|$([ -e "$TMP/capture/lib/libgstvideotestsrc.dylib" ] && echo yes || echo no)|$([ -e "$TMP/capture/lib/libgstaudiotestsrc.dylib" ] && echo yes || echo no)|$([ -e "$TMP/capture/lib/libgstapplemedia.dylib" ] && echo yes || echo no)|$([ -e "$TMP/capture/lib/libgstosxaudio.dylib" ] && echo yes || echo no)"
+    check "the marker records the extras" "extra gstvideotestsrc|extra gstaudiotestsrc" \
+        "$(grep '^extra' "$TMP/capture/lib/.gstreamer-1.28.9" | paste -sd '|' -)"
+    mkdir -p "$TMP/capture-other"
+    cp "$EXE" "$TMP/capture-other/mercury-browser"
+    result="$(MERCURY_GSTREAMER_EXTRA_PLUGINS='osxaudio' collect "$PREFIX" "$TMP/capture-other/lib")"
+    check "only the test sources may be added" "1|yes" \
+        "${result%%|*}|$(stderr_has "only videotestsrc audiotestsrc may be added")"
+    app_extra="$TMP/Extra.app/Contents/MacOS"
+    mkdir -p "$app_extra"
+    cp "$EXE" "$app_extra/mercury-browser"
+    result="$(MERCURY_GSTREAMER_EXTRA_PLUGINS='videotestsrc' collect "$PREFIX" "$app_extra/lib")"
+    check "an application bundle never gets the test sources" "1|yes|no" \
+        "${result%%|*}|$(stderr_has "an application bundle never ships")|$([ -e "$app_extra/lib" ] && echo yes || echo no)"
+
     mkdir -p "$TMP/fake-out"
     cp "$EXE" "$TMP/fake-out/mercury-browser"
 

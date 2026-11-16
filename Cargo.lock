@@ -10895,6 +10895,7 @@ dependencies = [
  "content-security-policy",
  "dpi",
  "euclid",
+ "gstreamer",
  "libc",
  "log",
  "rustls",
