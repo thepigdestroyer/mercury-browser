@@ -315,9 +315,10 @@ fn receive(stream: &mut UnixStream) -> Result<Vec<String>, HandoffError> {
 /// The second launch's side: resolves the command line's addresses as the first launch would,
 /// and hands them over. Returns how many the running browser accepted.
 pub(crate) fn hand_over(profile_root: &Path, addresses: &[String]) -> Result<usize, HandoffError> {
+    let no_search = talaria_core::SearchUrlBuilder::new(|_| Err("not searched".to_owned()));
     let urls = addresses
         .iter()
-        .filter_map(|address| match talaria_core::resolve_address(address) {
+        .filter_map(|address| match talaria_core::resolve_address(address, &no_search) {
             Ok(url) if is_acceptable_url(url.as_str()) => Some(url.to_string()),
             Ok(url) => {
                 eprintln!("mercury-browser: skipping '{address}': {url} cannot be handed over");
