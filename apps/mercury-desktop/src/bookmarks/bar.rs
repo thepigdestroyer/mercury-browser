@@ -311,7 +311,7 @@ fn relayout(bookmarks: &Rc<Bookmarks>) {
         let placed = layout
             .positions
             .get(index)
-            .map(|x| (*x, bar.widths[index].unwrap_or(0.0)));
+            .map(|x| (*x, bar.widths.get(index).copied().flatten().unwrap_or(0.0)));
         let (x, width, shown) = placed.map_or((0.0, 0.0, false), |(x, width)| (x, width, true));
         if item.x != x || item.width != width || item.shown != shown {
             item.x = x;
