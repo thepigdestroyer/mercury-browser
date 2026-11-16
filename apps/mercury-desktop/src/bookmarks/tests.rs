@@ -429,3 +429,52 @@ fn an_exported_tree_imports_back_into_a_new_folder_unchanged() {
     strip_dates(&mut expected);
     assert_eq!(again, expected);
 }
+
+#[test]
+fn the_lanes_requests_name_the_folders_they_change() {
+    let service = Service::new();
+    let other = service.root(BookmarkRoot::Other);
+    let folder = service.folder(other, "F");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let record = Rc::clone(&seen);
+    let _listener = service
+        .data
+        .on_change(crate::profile_data::Area::Bookmarks, move |change| {
+            record.borrow_mut().push(change.folders.clone());
+        });
+    let take = || std::mem::take(&mut *seen.borrow_mut());
+    let star = |title: &str| {
+        let title = title.to_owned();
+        service
+            .ask(|data, reply| {
+                data.find_or_add_bookmark(
+                    BookmarkRoot::Other,
+                    title,
+                    "https://a.test/".to_owned(),
+                    reply,
+                )
+            })
+            .unwrap()
+    };
+    let (a, _) = star("A");
+    service.settle(|| !seen.borrow().is_empty());
+    assert_eq!(take(), vec![Some(vec![other])]);
+    star("A again");
+    service.settle(|| !seen.borrow().is_empty());
+    assert_eq!(take(), vec![Some(Vec::new())], "found, nothing written");
+
+    let inner = service.bookmark(folder, "Inner", "https://inner.test/");
+    service.settle(|| !seen.borrow().is_empty());
+    take();
+    let removed = service
+        .ask(|data, reply| data.remove_bookmark_keeping_undo(inner, reply))
+        .unwrap();
+    service.settle(|| !seen.borrow().is_empty());
+    assert_eq!(take(), vec![Some(vec![folder])]);
+    service
+        .ask(|data, reply| data.restore_bookmark(removed, reply))
+        .unwrap();
+    service.settle(|| !seen.borrow().is_empty());
+    assert_eq!(take(), vec![Some(vec![folder])]);
+    let _ = a;
+}

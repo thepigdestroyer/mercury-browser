@@ -78,10 +78,10 @@ fn items(count: u64) -> String {
     }
 }
 
-/// What an import from a file did, in one sentence. Items are bookmarks, folders and
-/// separators.
+/// What an import from a file did. Items are bookmarks, folders and separators; the store
+/// leaves out what it refuses (an address too long, folders nested too deeply).
 pub(crate) fn import_summary_text(folder: &str, summary: &ImportSummary) -> String {
-    match &summary.outcome {
+    let main = match &summary.outcome {
         ImportOutcome::Completed => {
             format!("Imported {} into “{folder}”.", items(summary.imported))
         }
@@ -94,6 +94,17 @@ pub(crate) fn import_summary_text(folder: &str, summary: &ImportSummary) -> Stri
             "Imported {} of {} into “{folder}”; the rest could not be imported: {error}",
             grouped(summary.imported),
             items(summary.total)
+        ),
+    };
+    match summary.skipped {
+        0 => main,
+        1 => format!(
+            "{main} 1 item was left out: its address is too long or it is nested too deeply."
+        ),
+        n => format!(
+            "{main} {} items were left out: their addresses are too long or they are nested \
+             too deeply.",
+            grouped(n)
         ),
     }
 }
@@ -198,7 +209,7 @@ fn import_read(read: Result<(Vec<BookmarkImport>, u64), String>) {
             let progress_folder = folder.clone();
             let _job = data.import_bookmarks(
                 vec![(target, imports)],
-                move |ImportProgress { done, total }| {
+                move |ImportProgress { done, total, .. }| {
                     if let Some(manager) = manager::current() {
                         manager.set_status(&format!(
                             "Importing into “{progress_folder}”: {} of {}…",
@@ -292,7 +303,9 @@ mod tests {
     fn summary(imported: u64, total: u64, outcome: ImportOutcome) -> ImportSummary {
         ImportSummary {
             imported,
+            skipped: 0,
             total,
+            resume_from: 0,
             outcome,
             longest_chunk: Duration::ZERO,
         }
@@ -321,6 +334,19 @@ mod tests {
             failed.starts_with("Imported 500 of 900 items into “Imported 2026-11-16”; the rest")
         );
         assert!(failed.contains("gone"));
+        let mut skipped = summary(8, 10, ImportOutcome::Completed);
+        skipped.skipped = 2;
+        assert_eq!(
+            import_summary_text(folder, &skipped),
+            "Imported 8 items into “Imported 2026-11-16”. 2 items were left out: their \
+             addresses are too long or they are nested too deeply."
+        );
+        skipped.skipped = 1;
+        assert!(
+            import_summary_text(folder, &skipped).ends_with(
+                "1 item was left out: its address is too long or it is nested too deeply."
+            )
+        );
         assert_eq!(
             import_summary_text(folder, &summary(0, 3, ImportOutcome::Cancelled)),
             "The import stopped: 0 of 3 items were imported into “Imported 2026-11-16”."

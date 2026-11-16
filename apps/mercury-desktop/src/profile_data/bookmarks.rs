@@ -1,5 +1,6 @@
 //! Bookmark requests: reading and editing the tree. New nodes get a fresh GUID
-//! ([`new_guid`](super::new_guid)). Writes notify [`Area::Bookmarks`].
+//! ([`new_guid`](super::new_guid)). Writes notify [`Area::Bookmarks`] with the folders whose
+//! listing changed (both folders for a move).
 //! Each reply runs on the UI thread with `Result<T, ProfileDataError>`.
 //!
 //! The requests after the store's own (the folder list, search, deletion with undo, the tree
@@ -9,7 +10,14 @@
 
 use mercury_store::{BookmarkId, BookmarkImport, BookmarkKind, BookmarkNode, BookmarkRoot, Store};
 
-use super::{Area, ProfileData, ProfileDataError, guid_or_error};
+use super::{Area, Change, Database, ProfileData, ProfileDataError, guid_or_error};
+
+/// The change hint for editing node `id`: the folder that lists it (the node itself for a
+/// root).
+fn listing_of(db: &mut Database, id: BookmarkId) -> mercury_store::Result<Change> {
+    let node = db.store().bookmark(id)?;
+    Ok(Change::folders([node.parent.unwrap_or(id)]))
+}
 
 /// A node of a walk, with its depth below the node the walk started at (which is at 0).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -75,11 +83,14 @@ impl ProfileData {
             move |db, now| {
                 let store = db.store();
                 if let Some(id) = store.bookmark_for_url(&url)? {
+                    // Nothing was written: no folder's listing changed.
+                    db.changed(Change::folders([]));
                     return Ok((id, false));
                 }
                 let parent = store.bookmark_root(root)?;
                 let guid = guid_or_error()?;
                 let id = store.add_bookmark(parent, None, &title, &url, &guid, now)?;
+                db.changed(Change::folders([parent]));
                 Ok((id, true))
             },
             reply,
@@ -169,6 +180,7 @@ impl ProfileData {
                     )?,
                 };
                 store.remove_bookmark(id, now)?;
+                db.changed(Change::folders([parent]));
                 Ok(removed)
             },
             reply,
@@ -193,6 +205,7 @@ impl ProfileData {
                     .pop()
                     .ok_or(mercury_store::StoreError::NotFound)?;
                 store.move_bookmark(restored.id, removed.parent, Some(removed.position), now)?;
+                db.changed(Change::folders([removed.parent]));
                 Ok(restored.id)
             },
             reply,
@@ -261,6 +274,7 @@ impl ProfileData {
             Some(Area::Bookmarks),
             move |db, now| {
                 let guid = guid_or_error()?;
+                db.changed(Change::folders([parent]));
                 db.store()
                     .add_bookmark(parent, position, &title, &url, &guid, now)
             },
@@ -280,6 +294,7 @@ impl ProfileData {
             Some(Area::Bookmarks),
             move |db, now| {
                 let guid = guid_or_error()?;
+                db.changed(Change::folders([parent]));
                 db.store()
                     .add_bookmark_folder(parent, position, &title, &guid, now)
             },
@@ -298,6 +313,7 @@ impl ProfileData {
             Some(Area::Bookmarks),
             move |db, now| {
                 let guid = guid_or_error()?;
+                db.changed(Change::folders([parent]));
                 db.store()
                     .add_bookmark_separator(parent, position, &guid, now)
             },
@@ -314,7 +330,11 @@ impl ProfileData {
     ) {
         self.request(
             Some(Area::Bookmarks),
-            move |db, now| db.store().rename_bookmark(id, &title, now),
+            move |db, now| {
+                let change = listing_of(db, id)?;
+                db.changed(change);
+                db.store().rename_bookmark(id, &title, now)
+            },
             reply,
         );
     }
@@ -328,7 +348,11 @@ impl ProfileData {
     ) {
         self.request(
             Some(Area::Bookmarks),
-            move |db, now| db.store().set_bookmark_url(id, &url, now),
+            move |db, now| {
+                let change = listing_of(db, id)?;
+                db.changed(change);
+                db.store().set_bookmark_url(id, &url, now)
+            },
             reply,
         );
     }
@@ -343,7 +367,12 @@ impl ProfileData {
     ) {
         self.request(
             Some(Area::Bookmarks),
-            move |db, now| db.store().move_bookmark(id, parent, position, now),
+            move |db, now| {
+                let mut change = listing_of(db, id)?;
+                change.merge(Change::folders([parent]));
+                db.changed(change);
+                db.store().move_bookmark(id, parent, position, now)
+            },
             reply,
         );
     }
@@ -356,7 +385,11 @@ impl ProfileData {
     ) {
         self.request(
             Some(Area::Bookmarks),
-            move |db, now| db.store().remove_bookmark(id, now),
+            move |db, now| {
+                let change = listing_of(db, id)?;
+                db.changed(change);
+                db.store().remove_bookmark(id, now)
+            },
             reply,
         );
     }

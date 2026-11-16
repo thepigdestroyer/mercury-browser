@@ -83,7 +83,17 @@ pub(crate) fn layout_widths(widths: &[Option<f32>], entries: usize) -> Vec<Optio
     widths
 }
 
+/// Whether a change to the listings of `folders` (`None`: any) can change the bar, whose
+/// folder is `root` (`None` until it has been read).
+pub(crate) fn affected_by(root: Option<BookmarkId>, folders: Option<&[BookmarkId]>) -> bool {
+    match (root, folders) {
+        (Some(root), Some(folders)) => folders.contains(&root),
+        _ => true,
+    }
+}
+
 pub(crate) struct Bar {
+    root: Option<BookmarkId>,
     nodes: Vec<BookmarkNode>,
     widths: Vec<Option<f32>>,
     model: Rc<VecModel<BookmarkBarItem>>,
@@ -98,6 +108,7 @@ pub(crate) struct Bar {
 impl Bar {
     pub(crate) fn new() -> Self {
         Self {
+            root: None,
             nodes: Vec::new(),
             widths: Vec::new(),
             model: Rc::new(VecModel::default()),
@@ -108,6 +119,11 @@ impl Bar {
             entries: Vec::new(),
             menu_generation: 0,
         }
+    }
+
+    /// The bar's folder, once read.
+    pub(crate) fn root(&self) -> Option<BookmarkId> {
+        self.root
     }
 
     /// The entries of the bar root, in order (the Bookmarks menu lists them).
@@ -264,6 +280,7 @@ pub(crate) fn reload(bookmarks: &Rc<Bookmarks>) {
                             shown: false,
                         })
                         .collect::<Vec<_>>();
+                    bar.root = Some(root);
                     bar.nodes = children;
                     bar.widths = widths;
                     bar.model.set_vec(items);
@@ -428,6 +445,22 @@ mod tests {
         assert_eq!(
             (row.title.as_str(), row.url.as_str(), row.kind),
             ("A", "https://a.test/", BookmarkRowKind::Bookmark)
+        );
+    }
+
+    #[test]
+    fn the_bar_is_read_again_only_when_its_folder_changed() {
+        let root = Some(BookmarkId(1));
+        assert!(affected_by(root, Some(&[BookmarkId(5), BookmarkId(1)])));
+        assert!(!affected_by(root, Some(&[BookmarkId(5)])));
+        assert!(!affected_by(root, Some(&[])));
+        assert!(
+            affected_by(root, None),
+            "no hint: anything may have changed"
+        );
+        assert!(
+            affected_by(None, Some(&[BookmarkId(5)])),
+            "the bar was never read"
         );
     }
 

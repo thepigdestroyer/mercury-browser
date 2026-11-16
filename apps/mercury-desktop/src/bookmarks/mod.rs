@@ -26,7 +26,7 @@ mod tests;
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use mercury_store::BookmarkRoot;
+use mercury_store::{BookmarkId, BookmarkRoot};
 use mercury_ui::MainWindow;
 use slint::ComponentHandle;
 use talaria_core::{BrowserController, LoadState, NavigationOrigin, TabActivation};
@@ -87,8 +87,9 @@ pub(crate) fn connect(window: &MainWindow, controller: Rc<RefCell<BrowserControl
     bar::connect(window);
     if let Some(data) = profile_data::handle() {
         // `handle()` inside the listener rather than a captured clone: no `Rc` cycle.
-        let _listener = data.on_change(Area::Bookmarks, || {
-            with(|bookmarks| bookmarks.bookmarks_changed());
+        let _listener = data.on_change(Area::Bookmarks, |change| {
+            let folders = change.folders.clone();
+            with(|bookmarks| bookmarks.bookmarks_changed(folders.as_deref()));
         });
     }
     bookmarks.reload_bar();
@@ -133,12 +134,19 @@ pub(crate) fn show_bookmarks_manager() {
 }
 
 impl Bookmarks {
-    fn bookmarks_changed(self: &Rc<Self>) {
-        // Without a hint about which folders changed, everything shown is read again.
+    /// The bookmarks changed; `folders` are the folders whose listing changed (`None`: any
+    /// may have). An empty hint (a write that found nothing to change) refreshes nothing; the
+    /// bar is read again only when its own folder is among those changed.
+    fn bookmarks_changed(self: &Rc<Self>, folders: Option<&[BookmarkId]>) {
+        if folders.is_some_and(<[BookmarkId]>::is_empty) {
+            return;
+        }
         if let Some(lookup) = self.star.borrow_mut().refresh() {
             self.look_up_star(lookup);
         }
-        self.reload_bar();
+        if bar::affected_by(self.bar.borrow().root(), folders) {
+            self.reload_bar();
+        }
         let manager = self.manager.borrow().clone();
         if let Some(manager) = manager {
             manager.refresh();
