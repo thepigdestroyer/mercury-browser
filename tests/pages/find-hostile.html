@@ -1,0 +1,24 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find: page that overrides selection built-ins</title>
+<style>body { font: 18px/1.5 sans-serif; margin: 24px; }</style>
+<script>
+  // A page that replaces the selection and range built-ins with its own.
+  Range.prototype.selectNode = function () { throw new Error("page: selectNode"); };
+  window.getSelection = function () { return null; };
+  window.Range = function () { throw new Error("page: Range"); };
+  Math.min = function () { return -1; };
+  Object.defineProperty(Object.prototype, "block", {
+    get() { throw new Error("page: block"); }, configurable: true,
+  });
+</script>
+</head>
+<body>
+<h1>Overridden built-ins</h1>
+<p>needle one, needle two, needle three.</p>
+<!-- Expected with `--find needle`: "1 of 3" and the first match selected; the page's
+     replacements are never called. -->
+</body>
+</html>

@@ -1,6 +1,7 @@
 use talaria_core::{
-    BrowserCommand, ColorScheme, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
-    KeyboardModifiers, PointerButton, PointerButtonAction, WebView, dispatch_command,
+    BrowserCommand, ColorScheme, CompositionState, EndFindRequest, FindRequest, FindStep, ImeInput,
+    KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, PointerButton, PointerButtonAction,
+    WebView, dispatch_command,
 };
 
 #[derive(Debug, PartialEq)]
@@ -37,6 +38,10 @@ enum FakeCall {
         x: f32,
         y: f32,
     },
+    // find
+    BeginFind(u64),
+    Find(FindRequest),
+    EndFind(EndFindRequest),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -142,6 +147,19 @@ impl WebView for FakeWebView {
 
     fn pointer_left(&mut self) -> Result<(), Self::Error> {
         self.record(FakeCall::PointerLeft)
+    }
+
+    // find
+    fn begin_find(&mut self, request_id: u64) -> Result<(), Self::Error> {
+        self.record(FakeCall::BeginFind(request_id))
+    }
+
+    fn find(&mut self, request: FindRequest) -> Result<(), Self::Error> {
+        self.record(FakeCall::Find(request))
+    }
+
+    fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error> {
+        self.record(FakeCall::EndFind(request))
     }
 }
 
@@ -389,4 +407,38 @@ fn pointer_left_command_calls_pointer_left() {
 
     assert_eq!(result, Ok(()));
     assert_eq!(web_view.calls, vec![FakeCall::PointerLeft]);
+}
+
+#[test]
+fn find_commands_reach_the_web_view() {
+    let mut web_view = FakeWebView::default();
+    let request = FindRequest {
+        id: 2,
+        query: "needle".to_owned(),
+        match_case: true,
+        step: FindStep::Previous,
+        current: Some(3),
+    };
+    let end = EndFindRequest {
+        query: "needle".to_owned(),
+        match_case: true,
+        restore_selection: None,
+    };
+
+    for command in [
+        BrowserCommand::BeginFind { request_id: 1 },
+        BrowserCommand::Find(request.clone()),
+        BrowserCommand::EndFind(end.clone()),
+    ] {
+        assert_eq!(dispatch_command(&mut web_view, command), Ok(()));
+    }
+
+    assert_eq!(
+        web_view.calls,
+        vec![
+            FakeCall::BeginFind(1),
+            FakeCall::Find(request),
+            FakeCall::EndFind(end),
+        ]
+    );
 }

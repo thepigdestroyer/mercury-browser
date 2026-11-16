@@ -45,6 +45,10 @@ pub(crate) enum ShortcutAction {
     Quit,
     /// Escape while the active tab's page is fullscreen.
     ExitFullscreen,
+    // find
+    Find,
+    FindNext,
+    FindPrevious,
 }
 
 impl ShortcutAction {
@@ -53,7 +57,13 @@ impl ShortcutAction {
     pub(crate) const fn repeats(self) -> bool {
         matches!(
             self,
-            Self::ZoomIn | Self::ZoomOut | Self::NextTab | Self::PreviousTab
+            Self::ZoomIn
+                | Self::ZoomOut
+                | Self::NextTab
+                | Self::PreviousTab
+                // find
+                | Self::FindNext
+                | Self::FindPrevious
         )
     }
 }
@@ -164,6 +174,10 @@ pub(crate) fn shortcut_action(
             (Some("-"), false) => Some(ZoomOut),
             (Some("0"), false) => Some(ZoomReset),
             (Some("9"), false) => Some(SelectLastTab),
+            // find
+            (Some("f"), false) => Some(Find),
+            (Some("g"), false) => Some(FindNext),
+            (Some("g"), true) => Some(FindPrevious),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -185,6 +199,11 @@ pub(crate) fn shortcut_action(
             (Platform::Other, Key::Named(NamedKey::PageUp), _, false) => Some(PreviousTab),
             _ => None,
         };
+    }
+
+    // find: F3 / Shift+F3 outside macOS
+    if platform == Platform::Other && !primary && !alt && matches!(key, Key::Named(NamedKey::F3)) {
+        return Some(if shift { FindPrevious } else { FindNext });
     }
 
     if platform != Platform::Other || primary || shift {
@@ -324,6 +343,14 @@ fn run_shortcut(
         ShortcutAction::ExitFullscreen => controller
             .borrow_mut()
             .queue_command(BrowserCommand::ExitFullscreen),
+        // find
+        ShortcutAction::Find => crate::find::open_find_bar(window, controller, web_view_focused),
+        ShortcutAction::FindNext | ShortcutAction::FindPrevious => crate::find::step_find(
+            window,
+            controller,
+            web_view_focused,
+            action == ShortcutAction::FindNext,
+        ),
     }
 }
 
@@ -568,16 +595,41 @@ mod tests {
             (ZoomReset, false),
             (Quit, false),
             (ExitFullscreen, false),
+            (Find, false),
+            (FindNext, true),
+            (FindPrevious, true),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
                 NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
                 | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen => {}
+                | ExitFullscreen | Find | FindNext | FindPrevious => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
+    }
+
+    // find
+    #[test]
+    fn find_on_macos() {
+        assert_eq!(mac(character("f"), CMD), Some(Find));
+        assert_eq!(mac(character("g"), CMD), Some(FindNext));
+        assert_eq!(mac(character("g"), CMD | SHIFT), Some(FindPrevious));
+        // macOS reports the shifted character while Cmd is held.
+        assert_eq!(mac(character("G"), CMD | SHIFT), Some(FindPrevious));
+        assert_eq!(mac(character("f"), CTRL), None);
+        assert_eq!(mac(named(NamedKey::F3), NONE), None);
+    }
+
+    #[test]
+    fn find_elsewhere() {
+        assert_eq!(other(character("f"), CTRL), Some(Find));
+        assert_eq!(other(character("g"), CTRL), Some(FindNext));
+        assert_eq!(other(character("g"), CTRL | SHIFT), Some(FindPrevious));
+        assert_eq!(other(named(NamedKey::F3), NONE), Some(FindNext));
+        assert_eq!(other(named(NamedKey::F3), SHIFT), Some(FindPrevious));
+        assert_eq!(other(character("f"), CMD), None);
     }
 
     const KEY_R: PhysicalKey = PhysicalKey::Code(KeyCode::KeyR);

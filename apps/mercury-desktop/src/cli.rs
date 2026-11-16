@@ -10,6 +10,17 @@ pub(crate) struct LaunchOptions {
     pub gpu_canvas: bool,
     pub profile_dir: Option<PathBuf>,
     pub experimental_web_features: bool,
+    // find
+    pub find: Option<FindDiagnostic>,
+}
+
+/// `--find`: a diagnostic that opens the find bar once the first page has loaded.
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FindDiagnostic {
+    /// Searched as if typed; empty opens the bar as Cmd+F does (the page's selection, if any).
+    pub query: String,
+    /// Next (positive) or Previous (negative) presses after the first search.
+    pub steps: i32,
 }
 
 impl Default for LaunchOptions {
@@ -22,6 +33,7 @@ impl Default for LaunchOptions {
             gpu_canvas: true,
             profile_dir: None,
             experimental_web_features: true,
+            find: None,
         }
     }
 }
@@ -65,6 +77,10 @@ Options:
                                    WebGPU, which are always off)
   --profile-dir <directory>        Keep cookies and site data in this directory
                                    (screenshot and background runs otherwise use a temporary one)
+  --find <text>                    Diagnostic: once the page has loaded, open the find bar and
+                                   search for <text> (empty: use the page's selection) and
+                                   print the result
+  --find-steps <n>                 Diagnostic: then press Next n times (Previous if negative)
   --help                           Print this help and exit
   --version                        Print the version and exit
 
@@ -111,6 +127,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut gpu_canvas = true;
     let mut profile_dir = None;
     let mut experimental_web_features = true;
+    let mut find_query = None;
+    let mut find_steps = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -152,6 +170,13 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--profile-dir", "<directory>")?;
                 profile_dir = Some(PathBuf::from(value));
             }
+            "--find" => find_query = Some(option_value(&mut arguments, "--find", "<text>")?),
+            "--find-steps" => {
+                let value = option_value(&mut arguments, "--find-steps", "<n>")?;
+                find_steps = Some(value.parse::<i32>().map_err(|_| {
+                    format!("invalid --find-steps '{value}': expected a whole number")
+                })?);
+            }
             _ if argument.starts_with("-psn_") => {}
             _ if argument.starts_with('-') => {
                 return Err(format!("unknown option '{argument}'"));
@@ -169,6 +194,15 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, None) => None,
     };
 
+    let find = match (find_query, find_steps) {
+        (Some(query), steps) => Some(FindDiagnostic {
+            query,
+            steps: steps.unwrap_or(0),
+        }),
+        (None, Some(_)) => return Err("--find-steps requires --find".to_owned()),
+        (None, None) => None,
+    };
+
     Ok(CliOutcome::Run(LaunchOptions {
         urls,
         screenshot,
@@ -177,6 +211,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         gpu_canvas,
         profile_dir,
         experimental_web_features,
+        find,
     }))
 }
 
@@ -259,6 +294,7 @@ mod tests {
                 gpu_canvas: true,
                 profile_dir: None,
                 experimental_web_features: true,
+                find: None,
             })
         );
     }
@@ -553,5 +589,41 @@ mod tests {
                 ..LaunchOptions::default()
             })
         );
+    }
+
+    // find
+    #[test]
+    fn the_find_diagnostic_takes_a_query_and_optional_steps() {
+        let CliOutcome::Run(options) = parse(&["--find", "needle", "--find-steps", "-2"]) else {
+            panic!("--find with steps should be accepted");
+        };
+        assert_eq!(
+            options.find,
+            Some(FindDiagnostic {
+                query: "needle".to_owned(),
+                steps: -2,
+            })
+        );
+
+        let CliOutcome::Run(options) = parse(&["--find", ""]) else {
+            panic!("an empty --find query should be accepted");
+        };
+        assert_eq!(
+            options.find,
+            Some(FindDiagnostic {
+                query: String::new(),
+                steps: 0,
+            })
+        );
+    }
+
+    #[test]
+    fn find_steps_need_find_and_a_number() {
+        assert_eq!(exit_code(&parse(&["--find-steps", "2"])), Some(2));
+        assert_eq!(
+            exit_code(&parse(&["--find", "x", "--find-steps", "two"])),
+            Some(2)
+        );
+        assert_eq!(exit_code(&parse(&["--find"])), Some(2));
     }
 }

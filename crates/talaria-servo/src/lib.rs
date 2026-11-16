@@ -1,6 +1,7 @@
 mod adblocker;
 mod content_process;
 mod error;
+mod find_in_page;
 mod frame_ready;
 mod load_metrics;
 mod opengl_context;

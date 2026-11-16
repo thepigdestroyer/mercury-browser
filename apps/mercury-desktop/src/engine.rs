@@ -140,6 +140,12 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
     state.shut_down(window.as_ref(), exit_code_if_stuck);
 }
 
+// find: commands queued outside a render (find's debounce timer, the `--find` diagnostic) are
+// dispatched even while the window is covered and skips its renders.
+pub(crate) fn request_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
 fn pump_after_wake() {
     let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
         return;
@@ -764,6 +770,16 @@ mod tests {
             Ok(())
         }
         fn pointer_left(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        // find
+        fn begin_find(&mut self, _request_id: u64) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn find(&mut self, _request: talaria_core::FindRequest) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn end_find(&mut self, _request: talaria_core::EndFindRequest) -> Result<(), Self::Error> {
             Ok(())
         }
     }

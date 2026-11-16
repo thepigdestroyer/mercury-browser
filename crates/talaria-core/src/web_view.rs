@@ -1,5 +1,5 @@
 use crate::browser::{BrowserCommand, PointerButton, PointerButtonAction};
-use crate::{ColorScheme, ImeInput, KeyboardInput};
+use crate::{ColorScheme, EndFindRequest, FindRequest, ImeInput, KeyboardInput};
 
 pub trait WebView {
     type Error;
@@ -25,6 +25,12 @@ pub trait WebView {
     fn set_color_scheme(&mut self, scheme: ColorScheme) -> Result<(), Self::Error>;
     fn exit_fullscreen(&mut self) -> Result<(), Self::Error>;
     fn pointer_left(&mut self) -> Result<(), Self::Error>;
+    // find
+    /// Reads the page's selection; the answer arrives as `BrowserEvent::FindSelectionRead`.
+    fn begin_find(&mut self, request_id: u64) -> Result<(), Self::Error>;
+    /// Searches the page; the answer arrives as `BrowserEvent::FindResult`.
+    fn find(&mut self, request: FindRequest) -> Result<(), Self::Error>;
+    fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error>;
 }
 
 pub fn dispatch_command<W>(web_view: &mut W, command: BrowserCommand) -> Result<(), W::Error>
@@ -57,5 +63,9 @@ where
         BrowserCommand::SetColorScheme(scheme) => web_view.set_color_scheme(scheme),
         BrowserCommand::ExitFullscreen => web_view.exit_fullscreen(),
         BrowserCommand::PointerLeft => web_view.pointer_left(),
+        // find
+        BrowserCommand::BeginFind { request_id } => web_view.begin_find(request_id),
+        BrowserCommand::Find(request) => web_view.find(request),
+        BrowserCommand::EndFind(request) => web_view.end_find(request),
     }
 }

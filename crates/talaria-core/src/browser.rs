@@ -1,4 +1,8 @@
-use crate::{ColorScheme, DEFAULT_ZOOM_PERCENT, ImeInput, KeyboardInput, PageIcon, PointerCursor};
+use crate::find::is_other_document;
+use crate::{
+    ColorScheme, DEFAULT_ZOOM_PERCENT, EndFindRequest, FindOutcome, FindRequest, FindSelection,
+    FindState, ImeInput, KeyboardInput, PageIcon, PointerCursor,
+};
 
 const DEFAULT_PAGE_TITLE: &str = "New Tab";
 const INITIAL_ADDRESS: &str = "";
@@ -68,6 +72,14 @@ pub enum BrowserCommand {
     ExitFullscreen,
     /// The pointer left the web view, or the tab stopped being shown.
     PointerLeft,
+    // find
+    /// The find bar opened: read the page's selection (answered by `FindSelectionRead`).
+    BeginFind {
+        request_id: u64,
+    },
+    /// Search the page and select a match (answered by `FindResult`).
+    Find(FindRequest),
+    EndFind(EndFindRequest),
 }
 
 impl BrowserCommand {
@@ -122,6 +134,16 @@ pub enum BrowserEvent {
     FullscreenChanged {
         fullscreen: bool,
     },
+    // find
+    FindResult {
+        request_id: u64,
+        outcome: FindOutcome,
+    },
+    /// The answer to `BeginFind`; `None` if the page has no selection or could not be read.
+    FindSelectionRead {
+        request_id: u64,
+        selection: Option<FindSelection>,
+    },
 }
 
 impl BrowserEvent {
@@ -146,6 +168,8 @@ pub struct BrowserState {
     cursor: PointerCursor,
     status_text: Option<String>,
     fullscreen: bool,
+    // find
+    find: FindState,
 }
 
 impl Default for BrowserState {
@@ -161,6 +185,8 @@ impl Default for BrowserState {
             cursor: PointerCursor::Default,
             status_text: None,
             fullscreen: false,
+            // find
+            find: FindState::default(),
         }
     }
 }
@@ -198,6 +224,15 @@ impl BrowserState {
         self.fullscreen
     }
 
+    // find
+    pub const fn find(&self) -> &FindState {
+        &self.find
+    }
+
+    pub(crate) fn find_mut(&mut self) -> &mut FindState {
+        &mut self.find
+    }
+
     pub(crate) fn set_zoom_percent(&mut self, percent: u16) {
         self.zoom_percent = percent;
     }
@@ -209,6 +244,10 @@ impl BrowserState {
                 // reports changes against its own cached values, so the engine's notifications
                 // must stay the only source of both.
                 if self.url != url {
+                    // find
+                    if is_other_document(&self.url, &url) {
+                        self.find.page_changed();
+                    }
                     self.url = url;
                     self.page_icon = None;
                 }
@@ -228,6 +267,8 @@ impl BrowserState {
                     // web view still caches its old cursor and reports it again.
                     self.fullscreen = false;
                     self.status_text = None;
+                    // find
+                    self.find.page_changed();
                 }
                 self.load_state = state;
             }
@@ -247,6 +288,15 @@ impl BrowserState {
             BrowserEvent::FullscreenChanged { fullscreen } => {
                 self.fullscreen = fullscreen;
             }
+            // find
+            BrowserEvent::FindResult {
+                request_id,
+                outcome,
+            } => self.find.apply_result(request_id, outcome),
+            BrowserEvent::FindSelectionRead {
+                request_id,
+                selection,
+            } => self.find.apply_selection(request_id, selection),
         }
     }
 }

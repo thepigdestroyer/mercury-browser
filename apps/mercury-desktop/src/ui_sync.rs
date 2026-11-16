@@ -54,6 +54,8 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
         LoadState::Loaded => "",
     };
     window.set_content_message(content_message.into());
+    // find
+    crate::find::sync_find_bar(window, state);
 }
 
 /// Only page-requested fullscreen is mirrored, so a window the user made fullscreen is left

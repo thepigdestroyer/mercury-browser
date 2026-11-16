@@ -189,7 +189,13 @@ impl ServoRuntime {
             let _send_result = browser_event_sender.send(TabEvent::new(tab_id, event));
         }
         info!("created Servo WebView for tab {}", tab_id.value());
-        Ok(ServoWebView::new(inner, frame_ready, tab_id, scale_factor))
+        Ok(ServoWebView::new(
+            inner,
+            frame_ready,
+            tab_id,
+            scale_factor,
+            browser_event_sender,
+        ))
     }
 
     pub fn spin_event_loop(&self) {

@@ -342,7 +342,66 @@ impl BrowserController {
             tab.mark_engine_ready();
         }
         tab.state_mut().apply(event);
+        // find: a selection read can ask for a search
+        if let Some(command) = tab.state_mut().find_mut().take_requested_search() {
+            self.queue_command_for(tab_id, command);
+        }
         true
+    }
+
+    // find
+    /// Opens the active tab's find bar; false if it was already open.
+    pub fn open_find(&mut self) -> bool {
+        let command = self.active_find_mut().open();
+        let opened = command.is_some();
+        self.queue_find_command(command);
+        opened
+    }
+
+    /// Records the text in the active tab's find field; `run_due_find` searches it.
+    pub fn set_find_query(&mut self, query: &str) {
+        self.active_find_mut().set_query(query);
+    }
+
+    /// Searches the active tab's query if it changed since its last search (the end of the
+    /// typing debounce).
+    pub fn run_due_find(&mut self) {
+        let command = self.active_find_mut().due_search();
+        self.queue_find_command(command);
+    }
+
+    pub fn find_next(&mut self) {
+        let command = self.active_find_mut().step(true);
+        self.queue_find_command(command);
+    }
+
+    pub fn find_previous(&mut self) {
+        let command = self.active_find_mut().step(false);
+        self.queue_find_command(command);
+    }
+
+    pub fn toggle_find_match_case(&mut self) {
+        let command = self.active_find_mut().toggle_match_case();
+        self.queue_find_command(command);
+    }
+
+    pub fn close_find(&mut self) {
+        let command = self.active_find_mut().close();
+        self.queue_find_command(command);
+    }
+
+    fn active_find_mut(&mut self) -> &mut crate::FindState {
+        let tab_id = self.active_tab_id;
+        self.tab_mut(tab_id)
+            .expect("the controller always owns an active tab")
+            .state_mut()
+            .find_mut()
+    }
+
+    fn queue_find_command(&mut self, command: Option<BrowserCommand>) {
+        if let Some(command) = command {
+            self.queue_command(command);
+        }
     }
 
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {

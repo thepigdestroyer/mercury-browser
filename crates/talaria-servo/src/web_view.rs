@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::sync::mpsc::Sender;
 
 use dpi::PhysicalSize;
 use euclid::{Point2D, Scale};
@@ -10,11 +11,13 @@ use servo::{
     MouseMoveEvent, NamedKey, Theme, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
 };
 use talaria_core::{
-    ColorScheme, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput, PointerButton,
-    PointerButtonAction, TabId, WebView as TalariaWebView,
+    BrowserEvent, ColorScheme, CompositionState, EndFindRequest, FindRequest, ImeInput,
+    KeyLocation, KeyState, KeyboardInput, PointerButton, PointerButtonAction, TabEvent, TabId,
+    WebView as TalariaWebView,
 };
 use url::Url;
 
+use crate::find_in_page;
 use crate::frame_ready::FrameReadySignal;
 use crate::{ServoWebViewError, ViewportSize};
 
@@ -24,6 +27,8 @@ pub struct ServoWebView {
     tab_id: TabId,
     /// Device pixels per logical pixel; pointer positions arrive in logical pixels.
     scale_factor: Cell<f32>,
+    // find: answers to the find script arrive as the tab's events
+    browser_event_sender: Sender<TabEvent>,
 }
 
 impl ServoWebView {
@@ -32,13 +37,33 @@ impl ServoWebView {
         frame_ready: FrameReadySignal,
         tab_id: TabId,
         scale_factor: f32,
+        browser_event_sender: Sender<TabEvent>,
     ) -> Self {
         Self {
             inner,
             frame_ready,
             tab_id,
             scale_factor: Cell::new(scale_factor),
+            browser_event_sender,
         }
+    }
+
+    // find
+    fn evaluate_for_find(
+        &self,
+        script: String,
+        answer: impl FnOnce(
+            Result<servo::JSValue, servo::JavaScriptEvaluationError>,
+        ) -> Option<BrowserEvent>
+        + 'static,
+    ) {
+        let sender = self.browser_event_sender.clone();
+        let tab_id = self.tab_id;
+        self.inner.evaluate_javascript(script, move |result| {
+            if let Some(event) = answer(result) {
+                let _send_result = sender.send(TabEvent::new(tab_id, event));
+            }
+        });
     }
 
     pub fn resize(&self, size: ViewportSize) {
@@ -207,6 +232,33 @@ impl TalariaWebView for ServoWebView {
         let _event_id = self.inner.notify_input_event(InputEvent::MouseLeftViewport(
             MouseLeftViewportEvent::default(),
         ));
+        Ok(())
+    }
+
+    // find
+    fn begin_find(&mut self, request_id: u64) -> Result<(), Self::Error> {
+        self.evaluate_for_find(find_in_page::begin_script(), move |result| {
+            Some(BrowserEvent::FindSelectionRead {
+                request_id,
+                selection: find_in_page::selection_read(result),
+            })
+        });
+        Ok(())
+    }
+
+    fn find(&mut self, request: FindRequest) -> Result<(), Self::Error> {
+        let request_id = request.id;
+        self.evaluate_for_find(find_in_page::find_script(&request), move |result| {
+            Some(BrowserEvent::FindResult {
+                request_id,
+                outcome: find_in_page::find_outcome(result),
+            })
+        });
+        Ok(())
+    }
+
+    fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error> {
+        self.evaluate_for_find(find_in_page::end_script(&request), |_result| None);
         Ok(())
     }
 }
