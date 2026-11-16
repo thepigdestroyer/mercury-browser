@@ -129,8 +129,6 @@ pub(crate) struct SessionTracker {
     /// The saved tabs as last seen, in strip order.
     seen: Vec<(TabId, TabSnapshot)>,
     active_tab: Option<TabId>,
-    /// Whether the last look found another tab selected.
-    active_tab_changed: bool,
     geometry: WindowGeometry,
     /// Only `closed_tabs` is used.
     closed: SessionSnapshot,
@@ -148,8 +146,7 @@ impl SessionTracker {
             .map(|tab| (tab.id(), tab_snapshot(tab)))
             .collect();
         let active_tab = Some(controller.active_tab_id());
-        self.active_tab_changed = active_tab != self.active_tab;
-        if current == self.seen && !self.active_tab_changed {
+        if current == self.seen && active_tab == self.active_tab {
             return false;
         }
 
@@ -169,12 +166,6 @@ impl SessionTracker {
         self.seen = current;
         self.active_tab = active_tab;
         true
-    }
-
-    /// Whether the last `observe_tabs` found another tab selected (a restored tab then needs
-    /// its page created).
-    pub(crate) fn active_tab_changed(&self) -> bool {
-        self.active_tab_changed
     }
 
     /// Takes in the window's place and state; returns whether what is saved changed.
@@ -693,32 +684,6 @@ mod tests {
             urls,
             vec!["", "https://a.test/", "https://b.test/", "https://c.test/"]
         );
-    }
-
-    #[test]
-    fn selecting_another_tab_is_reported_so_the_engine_can_be_woken() {
-        let mut controller = BrowserController::default();
-        let mut tracker = SessionTracker::default();
-        let first = controller.active_tab_id();
-        let second = page(&mut controller, "https://a.test/", "A");
-        tracker.observe_tabs(&controller, NOW);
-        assert!(tracker.active_tab_changed(), "the first look");
-
-        controller.handle_event(
-            second,
-            BrowserEvent::PageTitleChanged {
-                title: Some("A2".to_owned()),
-            },
-        );
-        tracker.observe_tabs(&controller, NOW);
-        assert!(!tracker.active_tab_changed());
-
-        controller.select_tab(second);
-        tracker.observe_tabs(&controller, NOW);
-        assert!(tracker.active_tab_changed());
-        tracker.observe_tabs(&controller, NOW);
-        assert!(!tracker.active_tab_changed());
-        assert_ne!(first, second);
     }
 
     #[test]

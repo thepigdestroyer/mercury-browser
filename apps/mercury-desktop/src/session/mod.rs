@@ -8,9 +8,11 @@
 //!   asks for it, keeping it for "Restore previous session" otherwise (6).
 //! - Every change is marked; a timer writes through the throttle off the UI thread, one write at
 //!   a time, the token handed back only for a write that landed (8). See `saving::SaveState`.
-//! - Restored tabs are written before the recovery entry they came from is removed (5).
-//! - `finish_run` waits (bounded) for the write in flight, then writes with
-//!   `exited_cleanly: true`, even when nothing changed (9).
+//! - Restored tabs are written before the recovery entry they came from is removed (5); the
+//!   UI thread does not wait for either.
+//! - `finish_run` / `finish_run_by(deadline)` (or `begin_final_save` then
+//!   `collect_final_save(deadline)`) queue a write with `exited_cleanly: true` behind the write
+//!   in flight, even when nothing changed, and wait for it until the deadline (9).
 //! - New-tab pages are saved as `about:newtab` (10). A `NewerVersion` refusal stops saving for
 //!   the rest of the run and tells the user once (11).
 
@@ -22,7 +24,7 @@ mod screens;
 use std::cell::RefCell;
 use std::path::Path;
 use std::rc::Rc;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mercury_settings::{
     SessionSnapshot, SessionStore, SettingsStore, StartupBehavior, WindowBounds, WindowSnapshot,
@@ -41,6 +43,10 @@ use model::{
     recovery_label, reopen_index, restored_tab,
 };
 use saving::{Resolve, SaveState, Written};
+
+/// How long `finish_run` waits for the final save: the time quitting may take for it before
+/// the window goes and the engine's own 5 s shutdown watchdog starts (`shutdown.rs`).
+const FINAL_SAVE_BUDGET: Duration = Duration::from_secs(2);
 
 /// The session is written at most this often while it keeps changing.
 const SAVE_INTERVAL_MS: i64 = 5_000;
@@ -63,6 +69,7 @@ struct Session {
     controller: Rc<RefCell<BrowserController>>,
     window: slint::Weak<MainWindow>,
     timer: Timer,
+    final_save_begun: bool,
 }
 
 /// Begins the run: call once, after the profile is open and locked and the start-up tabs from
@@ -81,6 +88,15 @@ pub(crate) fn start(
         log::warn!("could not remove stale temporary files: {error}");
     }
     let store = SessionStore::new(root);
+    // Before `begin_run`, which marks the session file as running: without a saver this run
+    // could never write the final save, and every later start would report a crash.
+    let worker = match saver::SaveWorker::start(store.clone()) {
+        Ok(worker) => worker,
+        Err(error) => {
+            log::error!("could not start the session saver; tabs will not be saved: {error}");
+            return;
+        }
+    };
     let startup = match store.begin_run() {
         Ok(startup) => startup,
         Err(error) => {
@@ -88,24 +104,18 @@ pub(crate) fn start(
             return;
         }
     };
-    let worker = match saver::SaveWorker::start(store) {
-        Ok(worker) => worker,
-        Err(error) => {
-            log::error!("could not start the session saver; tabs will not be saved: {error}");
-            return;
-        }
-    };
 
     let mut tracker = SessionTracker::default();
     let mut previous = None;
-    // The window goes back where the session to restore (or the newest crashed one) had it.
-    let mut geometry_from = startup
-        .recovery
-        .first()
-        .and_then(|crashed| crashed.windows.first());
+    // The window goes back where the last run had it (or, without one, the newest crash).
+    let geometry_from = startup
+        .last
+        .as_ref()
+        .map(|last| &last.snapshot)
+        .or(startup.recovery.first())
+        .and_then(|session| session.windows.first());
     if let Some(last) = startup.last.as_ref().filter(|last| last.exited_cleanly) {
         if startup_behavior(root) == StartupBehavior::RestoreSession {
-            geometry_from = last.snapshot.windows.first();
             let plan = plan_restore(&last.snapshot, &controller.borrow(), false);
             apply_plan(controller, &mut tracker, plan);
         } else {
@@ -141,29 +151,57 @@ pub(crate) fn start(
             controller: Rc::clone(controller),
             window: window.as_weak(),
             timer,
+            final_save_begun: false,
         });
     });
 }
 
-/// The final save of an orderly quit: waits for the write in flight, then writes the session
-/// marked as having quit in order — at most `2 × saving::WAIT_BUDGET` in all. Call once, after
-/// the event loop has ended and before the engine shuts down. Does nothing if the session was
-/// never started.
+/// The final save of an orderly quit, with today's budget: `finish_run_by` two seconds from
+/// now. Call once, after the event loop has ended and before the engine shuts down.
 pub(crate) fn finish_run() {
+    finish_run_by(Instant::now() + FINAL_SAVE_BUDGET);
+}
+
+/// The final save of an orderly quit, waited for until `deadline` at most:
+/// `begin_final_save` then `collect_final_save`.
+pub(crate) fn finish_run_by(deadline: Instant) {
+    begin_final_save();
+    collect_final_save(deadline);
+}
+
+/// Starts the final save: stops the periodic saves and queues the session, marked as having
+/// quit in order — even when nothing changed — behind any write in flight. Returns at once,
+/// so the quit sequence can do other work before `collect_final_save`. Does nothing if the
+/// session was never started or the final save was already begun.
+pub(crate) fn begin_final_save() {
+    with_session(|session| {
+        if session.final_save_begun {
+            return;
+        }
+        session.final_save_begun = true;
+        session.timer.stop();
+        let now = now_ms();
+        let Ok(controller) = session.controller.try_borrow() else {
+            log::error!("the session could not be saved at quit: the browser state is busy");
+            return;
+        };
+        if session.tracker.observe_tabs(&controller, now) {
+            session.saving.mark_dirty();
+        }
+        let snapshot = session.tracker.snapshot(&controller, now);
+        drop(controller);
+        session.saving.begin_final(snapshot);
+    });
+}
+
+/// Waits until `deadline` at most for the final save begun by `begin_final_save`, then ends
+/// the session. If it has not landed by then, the run stays marked as running and is offered
+/// as a crash next time — the safe state.
+pub(crate) fn collect_final_save(deadline: Instant) {
     let Some(mut session) = SESSION.with(|session| session.borrow_mut().take()) else {
         return;
     };
-    session.timer.stop();
-    let now = now_ms();
-    let Ok(controller) = session.controller.try_borrow() else {
-        log::error!("the session could not be saved at quit: the browser state is busy");
-        return;
-    };
-    if session.tracker.observe_tabs(&controller, now) {
-        session.saving.mark_dirty();
-    }
-    let snapshot = session.tracker.snapshot(&controller, now);
-    match session.saving.finish(now, snapshot) {
+    match session.saving.collect_final(now_ms(), deadline) {
         Written::Saved | Written::Refused => {}
         Written::TimedOut | Written::Failed => {
             log::error!("the session was not saved at quit; it will be offered as a crash");
@@ -171,16 +209,15 @@ pub(crate) fn finish_run() {
     }
 }
 
-/// Notes a change of the tabs; called whenever the window is brought up to date. When another
-/// tab was selected, the engine is woken so that a restored tab's page is created at once,
-/// even if the window is covered and skips its redraw.
+/// Notes a change of the tabs; called whenever the window is brought up to date. While the
+/// active tab is a restored tab without its page, the engine is woken so that the page is
+/// created at once, even if the window is covered and skips its redraw.
 pub(crate) fn observe(window: &MainWindow, controller: &BrowserController) {
-    let selection_changed = with_session(|session| {
+    with_session(|session| {
         session.observe_tabs(controller, now_ms());
         window.set_can_reopen_closed_tab(session.tracker.has_closed_tabs());
-        session.tracker.active_tab_changed()
     });
-    if selection_changed == Some(true) {
+    if controller.is_restored_without_page(controller.active_tab_id()) {
         crate::engine::request_pump();
     }
 }
@@ -265,7 +302,7 @@ fn answer_recovery(
         }
         let snapshot = session.recovery.remove(index);
         let plan = plan_restore(&snapshot, &controller.borrow(), true);
-        session.restore(controller, plan, Some(Resolve::Entry(index)));
+        session.restore(controller, plan, Some(Resolve::Entry(snapshot)));
         true
     });
     let Some(restored) = answered else {
@@ -392,7 +429,8 @@ impl Session {
         }
     }
 
-    /// Puts a session's tabs back, then writes them before `resolve` touches the recovery list.
+    /// Puts a session's tabs back and queues them to be written; `resolve` touches the recovery
+    /// list only once they are on disk.
     fn restore(
         &mut self,
         controller: &RefCell<BrowserController>,
@@ -406,14 +444,7 @@ impl Session {
             self.observe_tabs(&controller, now);
             self.tracker.snapshot(&controller, now)
         };
-        match self.saving.persist_restore(now, snapshot, resolve) {
-            Written::Saved | Written::Refused => {}
-            Written::TimedOut | Written::Failed => log::warn!(
-                "the restored tabs are not saved yet; the session they came from is kept until \
-                 they are"
-            ),
-        }
-        self.tell_refusal();
+        self.saving.persist_restore(snapshot, resolve);
     }
 
     fn observe_window(&mut self, window: &MainWindow) {
