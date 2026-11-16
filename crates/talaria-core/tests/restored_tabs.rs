@@ -240,3 +240,38 @@ fn a_waiting_restored_tab_can_be_closed() {
     assert!(controller.close_tab(restored_id));
     assert_eq!(tab_ids(&controller), vec![first]);
 }
+
+#[test]
+fn a_waiting_tab_holds_only_the_latest_colour_scheme() {
+    use talaria_core::ColorScheme;
+
+    let mut controller = BrowserController::default();
+    let restored_id = controller
+        .open_restored_tab(1, &restored(Some("https://a.test/"), "A", 100))
+        .unwrap();
+    controller.queue_command_for(restored_id, BrowserCommand::Reload);
+    for scheme in [ColorScheme::Dark, ColorScheme::Light, ColorScheme::Dark] {
+        controller.set_color_scheme(scheme);
+    }
+
+    controller.select_tab(restored_id);
+    let _url = controller.take_initial_url(restored_id);
+    controller.handle_event(
+        restored_id,
+        BrowserEvent::AddressChanged {
+            url: "https://a.test/".to_owned(),
+        },
+    );
+    let held = std::iter::from_fn(|| controller.next_command())
+        .filter(|queued| queued.tab_id() == restored_id)
+        .map(TabCommand::into_command)
+        .collect::<Vec<_>>();
+
+    assert_eq!(
+        held,
+        vec![
+            BrowserCommand::Reload,
+            BrowserCommand::SetColorScheme(ColorScheme::Dark),
+        ]
+    );
+}

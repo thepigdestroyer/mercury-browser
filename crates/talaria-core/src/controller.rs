@@ -255,6 +255,19 @@ impl BrowserController {
             return true;
         }
 
+        // A tab that is not ready (a restored tab may wait a long time) holds one colour
+        // scheme, the latest, rather than every change.
+        if !tab.is_engine_ready()
+            && let BrowserCommand::SetColorScheme(scheme) = command
+            && let Some(held) = self.command_queue.iter_mut().find(|queued| {
+                queued.tab_id() == tab_id
+                    && matches!(queued.command(), BrowserCommand::SetColorScheme(_))
+            })
+        {
+            *held.command_mut() = BrowserCommand::SetColorScheme(scheme);
+            return true;
+        }
+
         if let Some(last_command) = self.command_queue.back_mut() {
             if last_command.tab_id() != tab_id {
                 self.command_queue
