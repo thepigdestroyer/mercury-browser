@@ -10,6 +10,9 @@ pub(crate) struct LaunchOptions {
     pub gpu_canvas: bool,
     pub profile_dir: Option<PathBuf>,
     pub experimental_web_features: bool,
+    // import-ui lane: diagnostics.
+    pub import_from: Option<PathBuf>,
+    pub import_snapshot: Option<PathBuf>,
 }
 
 impl Default for LaunchOptions {
@@ -22,6 +25,8 @@ impl Default for LaunchOptions {
             gpu_canvas: true,
             profile_dir: None,
             experimental_web_features: true,
+            import_from: None,
+            import_snapshot: None,
         }
     }
 }
@@ -29,7 +34,7 @@ impl Default for LaunchOptions {
 impl LaunchOptions {
     /// Screenshot and background runs are automated: they never use the user's own profile.
     pub(crate) fn is_automated(&self) -> bool {
-        self.screenshot.is_some() || self.background
+        self.screenshot.is_some() || self.background || self.import_from.is_some()
     }
 }
 
@@ -65,6 +70,12 @@ Options:
                                    WebGPU, which are always off)
   --profile-dir <directory>        Keep cookies and site data in this directory
                                    (screenshot and background runs otherwise use a temporary one)
+  --import-from <directory>        Diagnostic: import the bookmarks and history of every
+                                   browser profile found under this directory (laid out like
+                                   the application-support directory) into the profile, print
+                                   what was imported, then exit
+  --import-snapshot <file.png>     Diagnostic: with --import-from, save the import window as
+                                   a PNG before exiting
   --help                           Print this help and exit
   --version                        Print the version and exit
 
@@ -79,7 +90,10 @@ Exit status:
 /// silently altered by the conversion to `String`. Returns the usage error to print, if any.
 pub(crate) fn reject_non_utf8_paths(arguments: &[std::ffi::OsString]) -> Option<CliOutcome> {
     let pair = arguments.windows(2).find(|pair| {
-        (pair[0] == "--profile-dir" || pair[0] == "--screenshot") && pair[1].to_str().is_none()
+        matches!(
+            pair[0].to_str(),
+            Some("--profile-dir" | "--screenshot" | "--import-from" | "--import-snapshot")
+        ) && pair[1].to_str().is_none()
     })?;
     Some(CliOutcome::PrintAndExit {
         text: format!(
@@ -111,6 +125,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut gpu_canvas = true;
     let mut profile_dir = None;
     let mut experimental_web_features = true;
+    let mut import_from = None;
+    let mut import_snapshot = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -152,6 +168,14 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--profile-dir", "<directory>")?;
                 profile_dir = Some(PathBuf::from(value));
             }
+            "--import-from" => {
+                let value = option_value(&mut arguments, "--import-from", "<directory>")?;
+                import_from = Some(PathBuf::from(value));
+            }
+            "--import-snapshot" => {
+                let value = option_value(&mut arguments, "--import-snapshot", "<file.png>")?;
+                import_snapshot = Some(PathBuf::from(value));
+            }
             _ if argument.starts_with("-psn_") => {}
             _ if argument.starts_with('-') => {
                 return Err(format!("unknown option '{argument}'"));
@@ -168,6 +192,9 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, Some(_)) => return Err("--screenshot-delay requires --screenshot".to_owned()),
         (None, None) => None,
     };
+    if import_snapshot.is_some() && import_from.is_none() {
+        return Err("--import-snapshot requires --import-from".to_owned());
+    }
 
     Ok(CliOutcome::Run(LaunchOptions {
         urls,
@@ -177,6 +204,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         gpu_canvas,
         profile_dir,
         experimental_web_features,
+        import_from,
+        import_snapshot,
     }))
 }
 
@@ -259,6 +288,8 @@ mod tests {
                 gpu_canvas: true,
                 profile_dir: None,
                 experimental_web_features: true,
+                import_from: None,
+                import_snapshot: None,
             })
         );
     }
@@ -553,5 +584,30 @@ mod tests {
                 ..LaunchOptions::default()
             })
         );
+    }
+
+    #[test]
+    fn import_from_is_a_diagnostic_that_makes_the_run_automated() {
+        let CliOutcome::Run(options) = parse(&[
+            "--import-from",
+            "/fixtures",
+            "--import-snapshot",
+            "import.png",
+        ]) else {
+            panic!("--import-from should run the browser");
+        };
+        assert_eq!(options.import_from, Some(PathBuf::from("/fixtures")));
+        assert_eq!(options.import_snapshot, Some(PathBuf::from("import.png")));
+        assert!(options.is_automated());
+        assert_eq!(exit_code(&parse(&["--import-from"])), Some(2));
+        assert_eq!(
+            exit_code(&parse(&["--import-snapshot", "import.png"])),
+            Some(2),
+            "a snapshot needs --import-from"
+        );
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(text.contains("--import-from <directory>"));
     }
 }

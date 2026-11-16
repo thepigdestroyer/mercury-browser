@@ -19,6 +19,7 @@ mod callbacks;
 mod cli;
 mod crash_handler;
 mod engine;
+mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -109,6 +110,11 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     let controller = Rc::new(RefCell::new(BrowserController::default()));
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
     profile_data::start(&profile, &mut controller.borrow_mut()); // history lane
+    import_ui::configure(
+        options.is_automated(),
+        options.import_from.as_deref(),
+        profile.paths.as_ref().map(|paths| paths.root.clone()),
+    ); // import-ui lane
     let web_view_focused = Rc::new(Cell::new(false));
 
     connect_servo_runtime(
@@ -124,6 +130,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
+    if options.import_from.is_some() {
+        import_ui::run_diagnostic_import(options.import_snapshot.clone()); // import-ui lane
+    }
 
     let screenshot_result = Rc::new(Cell::new(ScreenshotResult::Pending));
     let screenshot_timer = options.screenshot.map(|screenshot| {
@@ -151,6 +160,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // Nothing may capture, pump or render while the engine shuts down, and the engine must be
     // gone before the window (and the renderer whose device Servo uses) is destroyed.
     drop(screenshot_timer);
+    import_ui::shut_down(std::time::Instant::now() + std::time::Duration::from_secs(5)); // import-ui lane
     profile_data::shut_down(std::time::Instant::now() + profile_data::SHUTDOWN_TIMEOUT); // history lane
     shut_down_engine(exit_code);
     drop(window);

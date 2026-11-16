@@ -20,9 +20,11 @@ glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
+mercury-import = { path = "../../crates/mercury-import" }
 mercury-store = { path = "../../crates/mercury-store" }
 mercury-ui = { path = "../../crates/mercury-ui" }
 rusqlite.workspace = true
+serde_json.workspace = true
 servo.workspace = true
 slint.workspace = true
 surfman.workspace = true

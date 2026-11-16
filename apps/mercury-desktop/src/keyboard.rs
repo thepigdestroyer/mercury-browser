@@ -104,6 +104,7 @@ pub(crate) fn connect_native_keyboard_input(
                         .set_color_scheme(color_scheme_from_winit(*theme));
                     window.window().request_redraw();
                 }
+                WindowEvent::CloseRequested => crate::import_ui::main_window_closing(), // import-ui lane
                 WindowEvent::Focused(false) => {
                     // Key-ups that happen while another window has focus never arrive.
                     shortcut_keys.clear();

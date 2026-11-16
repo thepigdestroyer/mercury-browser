@@ -60,6 +60,7 @@ mod bookmarks;
 pub(crate) mod downloads;
 mod history;
 pub(crate) mod import;
+pub(crate) mod import_merge; // import-ui lane
 pub(crate) mod jobs;
 #[cfg(test)]
 mod tests;
