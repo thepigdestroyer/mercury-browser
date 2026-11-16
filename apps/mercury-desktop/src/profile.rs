@@ -289,6 +289,12 @@ impl ActiveProfile {
             .as_ref()
             .map(|paths| paths.servo_config_dir.clone())
     }
+
+    // openurl
+    /// A temporary profile belongs to this run alone; no other launch can share it.
+    pub(crate) fn is_temporary(&self) -> bool {
+        self._temporary.is_some()
+    }
 }
 
 /// Chooses, creates and locks the profile: `override_root` when given; otherwise a fresh

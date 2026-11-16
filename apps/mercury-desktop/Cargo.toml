@@ -26,6 +26,8 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+# openurl
+url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash.workspace = true
@@ -37,7 +39,9 @@ ash.workspace = true
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
+    "NSApplication",
     "NSGraphics",
+    "NSResponder",
     "NSScreen",
 ] }
 objc2-foundation = { workspace = true, features = [

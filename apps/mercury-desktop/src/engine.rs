@@ -140,6 +140,12 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
     state.shut_down(window.as_ref(), exit_code_if_stuck);
 }
 
+// openurl
+/// Asks for a pump soon, even while the window is covered and skips its renders.
+pub(crate) fn request_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
 fn pump_after_wake() {
     let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
         return;
@@ -332,6 +338,8 @@ impl EngineState {
         if state_changed {
             sync_ui(window, &self.controller.borrow());
         }
+        // openurl: links pages asked other apps to open.
+        crate::openurl::handle_external_link_requests(&self.controller);
 
         let Some(rendering_context) = self.rendering_context.clone() else {
             return;

@@ -15,6 +15,8 @@ use talaria_core::{BrowserController, TabActivation};
 use talaria_servo::{RuntimeOptions, record_browser_process_id, run_content_process_if_requested};
 use ui_sync::sync_ui;
 
+// activation (tabs lane)
+mod activation;
 mod callbacks;
 mod cli;
 mod crash_handler;
@@ -25,6 +27,8 @@ mod keyutils;
 mod media_buffers;
 #[cfg(target_os = "macos")]
 mod media_isolation;
+// openurl
+mod openurl;
 mod panic_hook;
 #[cfg(target_os = "macos")]
 mod platform_macos;
@@ -89,6 +93,22 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     ) {
         Ok(profile) => profile,
         Err(ProfileInUse { root }) => {
+            // openurl: the running browser opens this launch's URLs.
+            if !options.urls.is_empty() {
+                match openurl::handoff::hand_over(&root, &options.urls) {
+                    Ok(count) => {
+                        eprintln!(
+                            "mercury-browser: handed {count} URL(s) to the Mercury Browser using {}",
+                            root.display()
+                        );
+                        return Ok(ExitCode::SUCCESS);
+                    }
+                    Err(error) => eprintln!(
+                        "mercury-browser: could not hand the URLs to the Mercury Browser using {}: {error}",
+                        root.display()
+                    ),
+                }
+            }
             eprintln!(
                 "mercury-browser: the profile at {} is in use by another Mercury Browser; \
                  close it or choose another --profile-dir",
@@ -98,6 +118,14 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         }
     };
     select_hardware_accelerated_backend(options.is_automated())?;
+    // openurl: links and files from other apps, from here on; queued until the window exists.
+    #[cfg(target_os = "macos")]
+    openurl::macos::receive_urls_from_other_apps();
+    let diagnostic_open_events = openurl::diagnostic_open_events(options.is_automated());
+    #[cfg(target_os = "macos")]
+    if let Some((openurl::EventTime::Start, urls)) = &diagnostic_open_events {
+        openurl::macos::send_open_events_to_this_process(urls);
+    }
 
     let window = MainWindow::new()?;
     if let Some((width, height)) = options.window_size {
@@ -115,6 +143,17 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
         runtime_options(&options, &profile),
     )?;
+    // openurl
+    openurl::attach(&window, Rc::clone(&controller), options.is_automated());
+    let _handoff = listen_for_second_launches(&profile);
+    #[cfg(target_os = "macos")]
+    if let Some((openurl::EventTime::Running, urls)) = diagnostic_open_events {
+        slint::Timer::single_shot(std::time::Duration::from_secs(3), move || {
+            openurl::macos::send_open_events_to_this_process(&urls);
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    let _ = diagnostic_open_events;
     sync_ui(&window, &controller.borrow());
     connect_ui_callbacks(
         &window,
@@ -154,6 +193,26 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     run_result?;
     Ok(ExitCode::from(exit_code))
+}
+
+// openurl
+/// A profile another launch can find (not a temporary one) listens for that launch's URLs.
+fn listen_for_second_launches(
+    profile: &ActiveProfile,
+) -> Option<openurl::handoff::HandoffListener> {
+    let paths = profile.paths.as_ref().filter(|_| !profile.is_temporary())?;
+    match openurl::handoff::listen(&paths.root, |urls| {
+        openurl::deliver_from_any_thread(urls, "a second launch");
+    }) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            log::warn!(
+                "openurl: a second launch cannot hand over URLs ({}): {error}",
+                openurl::handoff::socket_path(&paths.root).display()
+            );
+            None
+        }
+    }
 }
 
 /// Engine settings for this run: the launch options and the profile's Servo directory.
