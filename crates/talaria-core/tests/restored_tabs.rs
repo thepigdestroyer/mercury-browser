@@ -275,3 +275,23 @@ fn a_waiting_tab_holds_only_the_latest_colour_scheme() {
         ]
     );
 }
+
+#[test]
+fn a_restored_tab_is_known_to_need_its_page_until_the_engine_takes_it() {
+    let mut controller = BrowserController::default();
+    let first = controller.active_tab_id();
+    let restored_id = controller
+        .open_restored_tab(1, &restored(Some("https://a.test/"), "A", 100))
+        .unwrap();
+
+    assert!(controller.is_restored_without_page(restored_id));
+    controller.select_tab(restored_id);
+    assert!(
+        controller.is_restored_without_page(restored_id),
+        "selected, but the engine has not created its page yet"
+    );
+    let _url = controller.take_initial_url(restored_id);
+    assert!(!controller.is_restored_without_page(restored_id));
+    assert!(!controller.is_restored_without_page(first));
+    assert!(!controller.is_restored_without_page(TabId::new(999)));
+}

@@ -414,6 +414,14 @@ impl BrowserController {
                 .any(|tab| tab.id() == tab_id && tab.is_load_deferred())
     }
 
+    /// Whether the tab was restored and its page has not been created yet, selected or not.
+    /// While the active tab is such a tab, the engine has work to do at its next pump.
+    pub fn is_restored_without_page(&self, tab_id: TabId) -> bool {
+        self.tabs
+            .iter()
+            .any(|tab| tab.id() == tab_id && tab.is_load_deferred())
+    }
+
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {
         let tab_id = TabId::new(self.next_tab_id);
         self.next_tab_id += 1;
