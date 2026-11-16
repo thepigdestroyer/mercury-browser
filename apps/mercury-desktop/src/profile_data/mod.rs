@@ -328,8 +328,13 @@ pub(crate) enum Area {
     Downloads,
 }
 
-/// What a write changed, as told to [`ProfileData::on_change`] listeners. More hints may be
-/// added; a listener reads the ones it knows.
+/// What a write changed, as told to [`ProfileData::on_change`] listeners. More hints will be
+/// added: listeners only **read** the fields they know, and never build or destructure a
+/// `Change` (`#[non_exhaustive]` cannot enforce that inside the crate; this is the rule).
+///
+/// A hint names the folders whose *listing* changed. A removed folder is not named itself,
+/// only its parent: a menu or view showing a folder that is no longer found must treat it as
+/// removed and close.
 #[non_exhaustive]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Change {

@@ -135,29 +135,188 @@ pub(crate) fn move_selection(selected: Option<usize>, len: usize, down: bool) ->
     }
 }
 
-/// The text to add after `typed` so that it reads as the top suggestion's host, if that host
-/// starts with what was typed (`exa` → `mple.com`). Only for something that looks like the
-/// start of a host: no spaces, slashes or scheme.
-pub(crate) fn inline_completion(typed: &str, top: &Suggestion) -> Option<String> {
+/// The text to add after `typed` so that it reads as a suggested host, if one starts with what
+/// was typed (`exa` → `mple.com`). Only for something that looks like the start of a host (no
+/// spaces, slashes or scheme), and only:
+///
+/// - to a host the user **typed or bookmarked** (a host reached only by a link or a redirect
+///   could be a look-alike such as `paypal.com.evil.example`), the first such suggestion that
+///   matches;
+/// - in the host's **Unicode** form (`bü` completes `bücher.example`; typing `xn` never runs
+///   into punycode);
+/// - **never past a completed label**: if the host goes on with `.` right after what was typed,
+///   nothing is completed (`example.com` never becomes `example.com.au`).
+pub(crate) fn inline_completion(typed: &str, suggestions: &[Suggestion]) -> Option<String> {
     if typed.is_empty() || typed.contains([' ', '/', ':', '?', '#']) {
         return None;
     }
-    let host = Url::parse(&top.url).ok()?.host_str()?.to_owned();
     let lower = typed.to_lowercase();
-    let host = if lower.starts_with("www.") {
-        host
-    } else {
-        host.strip_prefix("www.")
-            .map_or(host.clone(), str::to_owned)
-    };
-    (host.len() > lower.len() && host.starts_with(&lower) && lower.len() == typed.len())
-        .then(|| host[typed.len()..].to_owned())
+    if lower.len() != typed.len() {
+        return None;
+    }
+    suggestions
+        .iter()
+        .filter(|suggestion| suggestion.typed || suggestion.is_bookmark)
+        .find_map(|suggestion| {
+            let host = unicode_host(&suggestion.url)?;
+            let host = if lower.starts_with("www.") {
+                host
+            } else {
+                host.strip_prefix("www.")
+                    .map_or(host.clone(), str::to_owned)
+            };
+            let rest = host.strip_prefix(lower.as_str())?;
+            (!rest.is_empty() && !rest.starts_with('.')).then(|| rest.to_owned())
+        })
+}
+
+/// A URL's host in lower-case Unicode, as the address bar shows and the store indexes it.
+fn unicode_host(url: &str) -> Option<String> {
+    let url = Url::parse(url).ok()?;
+    let host = url.host_str()?;
+    let unicode = url::quirks::domain_to_unicode(host);
+    Some(
+        if unicode.is_empty() {
+            host.to_owned()
+        } else {
+            unicode
+        }
+        .to_lowercase(),
+    )
 }
 
 /// Whether an edit added to the text (typing), as opposed to deleting: only typing completes,
 /// so Backspace can remove a completion.
 pub(crate) fn extends(previous: &str, edited: &str) -> bool {
     edited.len() > previous.len() && edited.starts_with(previous)
+}
+
+/// What an edit of the address field asks for.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Edit {
+    /// Nothing to suggest: close the list.
+    Close,
+    /// Ask the store about `input`; the reply carries `generation`.
+    Ask { generation: u64, input: String },
+}
+
+/// Text to put in the address field, with the part from `start` to `end` (UTF-8 offsets)
+/// selected.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Completion {
+    pub(crate) text: String,
+    pub(crate) start: usize,
+    pub(crate) end: usize,
+}
+
+/// The suggestion list's life. Every edit, and every close (the field losing focus, Return,
+/// Escape, a choice), starts a new generation: a reply for an older one is dropped, so a list
+/// closed before its reply arrived never comes back, and nothing acts on rows no longer shown.
+#[derive(Debug, Default)]
+pub(crate) struct Session {
+    generation: u64,
+    /// What the user typed, without any completion.
+    typed: String,
+    /// Whether the last edit added to the text (only then is a host completed).
+    typing: bool,
+    rows: Vec<Row>,
+    selected: Option<usize>,
+    open: bool,
+}
+
+impl Session {
+    pub(crate) fn edited(&mut self, text: &str) -> Edit {
+        self.typing = extends(&self.typed, text);
+        self.typed = text.to_owned();
+        if text.trim().is_empty() {
+            self.close();
+            return Edit::Close;
+        }
+        self.generation += 1;
+        self.selected = None;
+        Edit::Ask {
+            generation: self.generation,
+            input: text.to_owned(),
+        }
+    }
+
+    /// A reply for `generation`. `None` if it is stale (dropped); otherwise the list is open
+    /// and this is the completion to apply, if any. `field` is what the address field holds
+    /// now: a completion is offered only if that is still exactly what was typed.
+    pub(crate) fn replied(
+        &mut self,
+        generation: u64,
+        suggestions: &[Suggestion],
+        field: &str,
+    ) -> Option<Option<Completion>> {
+        if generation != self.generation {
+            return None;
+        }
+        self.rows = rows(&self.typed, suggestions);
+        self.selected = None;
+        self.open = !self.rows.is_empty();
+        let completion = (self.typing && field == self.typed)
+            .then(|| inline_completion(&self.typed, suggestions))
+            .flatten()
+            .map(|rest| Completion {
+                text: format!("{}{rest}", self.typed),
+                start: self.typed.len(),
+                end: self.typed.len() + rest.len(),
+            });
+        Some(completion)
+    }
+
+    /// What to ask the store for generation `generation`, unless it went stale.
+    pub(crate) fn pending_input(&self, generation: u64) -> Option<String> {
+        (generation == self.generation).then(|| self.typed.clone())
+    }
+
+    /// Closes the list; a reply on its way is dropped.
+    pub(crate) fn close(&mut self) {
+        self.generation += 1;
+        self.open = false;
+        self.selected = None;
+    }
+
+    pub(crate) fn is_open(&self) -> bool {
+        self.open
+    }
+
+    pub(crate) fn rows(&self) -> &[Row] {
+        &self.rows
+    }
+
+    pub(crate) fn selected(&self) -> Option<usize> {
+        self.selected
+    }
+
+    pub(crate) fn move_selection(&mut self, down: bool) {
+        if self.open {
+            self.selected = move_selection(self.selected, self.rows.len(), down);
+        }
+    }
+
+    /// Return: the selected row's target if the list is open and a row is selected; the list
+    /// closes either way (the field then navigates to what it holds).
+    pub(crate) fn accept(&mut self) -> Option<String> {
+        let target = self
+            .selected
+            .filter(|_| self.open)
+            .and_then(|index| self.rows.get(index).map(|row| row.target.clone()));
+        self.close();
+        target
+    }
+
+    /// A click on row `index` of the list shown.
+    pub(crate) fn choose(&mut self, index: usize) -> Option<String> {
+        let target = self
+            .rows
+            .get(index)
+            .filter(|_| self.open)
+            .map(|row| row.target.clone());
+        self.close();
+        target
+    }
 }
 
 #[cfg(test)]
@@ -169,7 +328,15 @@ mod tests {
             url: url.to_owned(),
             title: title.map(str::to_owned),
             is_bookmark,
+            typed: false,
             frecency: 100,
+        }
+    }
+
+    fn typed(url: &str) -> Suggestion {
+        Suggestion {
+            typed: true,
+            ..suggestion(url, None, false)
         }
     }
 
@@ -262,8 +429,8 @@ mod tests {
     }
 
     #[test]
-    fn the_top_suggestions_host_completes_what_was_typed() {
-        let top = suggestion("https://www.example.com/some/page", None, false);
+    fn a_typed_hosts_rest_completes_what_was_typed() {
+        let top = [typed("https://www.example.com/some/page")];
 
         assert_eq!(inline_completion("exa", &top).as_deref(), Some("mple.com"));
         assert_eq!(
@@ -280,10 +447,180 @@ mod tests {
     }
 
     #[test]
+    fn only_hosts_the_user_typed_or_bookmarked_complete() {
+        // Once redirected through a look-alike host: never offered as a completion.
+        let redirected = [suggestion("https://paypal.com.evil.example/", None, false)];
+        assert_eq!(inline_completion("paypal", &redirected), None);
+        assert_eq!(inline_completion("paypal.com", &redirected), None);
+
+        let bookmarked = [suggestion("https://example.com/", None, true)];
+        assert_eq!(
+            inline_completion("exa", &bookmarked).as_deref(),
+            Some("mple.com")
+        );
+
+        // The first suggestion that may complete is used.
+        let mixed = [
+            suggestion("https://example.com/", None, false),
+            typed("https://exam.test/"),
+        ];
+        assert_eq!(inline_completion("exa", &mixed).as_deref(), Some("m.test"));
+    }
+
+    #[test]
+    fn a_completed_label_is_never_extended() {
+        let longer = [typed("https://example.com.au/")];
+
+        assert_eq!(inline_completion("example.com", &longer), None);
+        assert_eq!(inline_completion("example", &longer), None);
+        assert_eq!(
+            inline_completion("exam", &longer).as_deref(),
+            Some("ple.com.au")
+        );
+    }
+
+    #[test]
+    fn hosts_complete_in_unicode_not_punycode() {
+        let unicode = [typed("https://xn--bcher-kva.example/")];
+
+        assert_eq!(inline_completion("xn", &unicode), None);
+        assert_eq!(
+            inline_completion("bü", &unicode).as_deref(),
+            Some("cher.example")
+        );
+        assert_eq!(
+            inline_completion("BÜ", &unicode).as_deref(),
+            Some("cher.example")
+        );
+    }
+
+    #[test]
     fn only_typing_completes() {
         assert!(extends("exa", "exam"));
         assert!(!extends("example.com", "exa"));
         assert!(!extends("exa", "exa"));
         assert!(!extends("exa", "ex"));
+    }
+
+    // The list's life: what it shows, and that a stale one never comes back.
+
+    fn rows_of(session: &Session) -> usize {
+        session.rows().len()
+    }
+
+    fn ask(session: &mut Session, text: &str) -> u64 {
+        match session.edited(text) {
+            Edit::Ask { generation, input } => {
+                assert_eq!(input, text);
+                generation
+            }
+            Edit::Close => panic!("{text:?} should ask for suggestions"),
+        }
+    }
+
+    #[test]
+    fn a_reply_to_the_latest_edit_opens_the_list() {
+        let mut session = Session::default();
+        let generation = ask(&mut session, "exa");
+
+        let shown = session.replied(generation, &[typed("https://example.com/")], "exa");
+
+        assert_eq!(
+            shown,
+            Some(Some(Completion {
+                text: "example.com".into(),
+                start: 3,
+                end: 11,
+            }))
+        );
+        assert!(session.is_open());
+        assert_eq!(rows_of(&session), 2);
+    }
+
+    #[test]
+    fn a_reply_to_an_older_edit_is_dropped() {
+        let mut session = Session::default();
+        let first = ask(&mut session, "ex");
+        let second = ask(&mut session, "exa");
+
+        assert_eq!(session.replied(first, &[], "exa"), None);
+        assert!(!session.is_open());
+        assert!(session.replied(second, &[], "exa").is_some());
+    }
+
+    #[test]
+    fn losing_focus_closes_the_list_and_drops_the_reply_on_its_way() {
+        let mut session = Session::default();
+        let generation = ask(&mut session, "exa");
+
+        session.close();
+        assert_eq!(
+            session.replied(generation, &[typed("https://example.com/")], "exa"),
+            None
+        );
+
+        // Focus comes back (Cmd+L): nothing reopens until the next edit.
+        assert!(!session.is_open());
+        assert_eq!(session.accept(), None);
+        session.move_selection(true);
+        assert_eq!(session.selected(), None);
+    }
+
+    #[test]
+    fn return_before_the_first_reply_leaves_no_list() {
+        let mut session = Session::default();
+        let generation = ask(&mut session, "exa");
+
+        assert_eq!(session.accept(), None);
+
+        assert_eq!(session.replied(generation, &[], "exa"), None);
+        assert!(!session.is_open());
+        assert_eq!(session.pending_input(generation), None);
+    }
+
+    #[test]
+    fn return_opens_the_selected_row_and_closes_the_list() {
+        let mut session = Session::default();
+        let generation = ask(&mut session, "exa");
+        session.replied(generation, &[typed("https://example.com/")], "example.com");
+
+        session.move_selection(true);
+        session.move_selection(true);
+
+        assert_eq!(session.accept().as_deref(), Some("https://example.com/"));
+        assert!(!session.is_open());
+    }
+
+    #[test]
+    fn a_completion_needs_typing_and_an_unchanged_field() {
+        let suggestions = [typed("https://example.com/")];
+        let mut session = Session::default();
+        let generation = ask(&mut session, "exa");
+        // The field changed since (a page event replaced it).
+        assert_eq!(
+            session.replied(generation, &suggestions, "other"),
+            Some(None)
+        );
+
+        let generation = ask(&mut session, "exam");
+        assert!(
+            session
+                .replied(generation, &suggestions, "exam")
+                .unwrap()
+                .is_some()
+        );
+        // Deleting back to "exa" does not complete again.
+        let generation = ask(&mut session, "exa");
+        assert_eq!(session.replied(generation, &suggestions, "exa"), Some(None));
+    }
+
+    #[test]
+    fn clearing_the_field_closes_the_list() {
+        let mut session = Session::default();
+        let generation = ask(&mut session, "exa");
+        session.replied(generation, &[], "exa");
+
+        assert_eq!(session.edited("  "), Edit::Close);
+        assert!(!session.is_open());
     }
 }

@@ -52,6 +52,7 @@ export component HistoryPanel inherits FocusScope {
     in property <string> message;
     in-out property <string> query;
     callback search(string);
+    callback search-focus-changed(bool);
     callback open(int, bool);
     callback delete-entry(int);
     callback delete-site(int);
@@ -126,6 +127,9 @@ export component HistoryPanel inherits FocusScope {
                         single-line: true;
                         edited => {
                             root.search(self.text);
+                        }
+                        changed has-focus => {
+                            root.search-focus-changed(self.has-focus);
                         }
                     }
                 }
@@ -238,7 +242,7 @@ export component HistoryPanel inherits FocusScope {
 
                         HorizontalLayout {
                             spacing: 4px;
-                            width: 250px;
+                            width: 400px;
                             alignment: end;
 
                             TextButton {
@@ -249,9 +253,11 @@ export component HistoryPanel inherits FocusScope {
                                 }
                             }
 
+                            // Only this host's visits, unlike Firefox's "Forget About
+                            // This Site".
                             if row.host != "": TextButton {
                                 y: 8px;
-                                label: "Forget site";
+                                label: "Delete all visits to " + row.host;
                                 danger: true;
                                 clicked => {
                                     root.delete-site(row.entry);

@@ -56,6 +56,56 @@ pub(crate) fn lines(entries: &[HistoryEntry], now_ms: i64) -> Vec<Line> {
     lines
 }
 
+/// After a history change: the newest `page` visits as listed now (`fresh`), followed by the
+/// visits shown before that are older than all of them, so pages fetched with "Show more" stay
+/// shown without being read again. Returns the list and whether more can be fetched.
+pub(crate) fn merge_refresh(
+    shown: &[HistoryEntry],
+    fresh: Vec<HistoryEntry>,
+    page: usize,
+    had_more: bool,
+) -> (Vec<HistoryEntry>, bool) {
+    let Some(last) = fresh
+        .last()
+        .filter(|_| fresh.len() >= page)
+        .map(HistoryEntry::cursor)
+    else {
+        return (fresh, false);
+    };
+    let older = shown
+        .iter()
+        .filter(|entry| (entry.visited_at_ms, entry.visit_id) < (last.visited_at_ms, last.visit_id))
+        .cloned()
+        .collect::<Vec<_>>();
+    let has_more = if older.is_empty() { true } else { had_more };
+    ([fresh, older].concat(), has_more)
+}
+
+/// What a deletion removed, to take out of the list at once.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Removed {
+    Visit(mercury_store::VisitId),
+    /// Every visit of this host (and of `www.` before it, as the store deletes them).
+    Site(String),
+}
+
+pub(crate) fn remove_visits(entries: &mut Vec<HistoryEntry>, removed: &Removed) {
+    let site = |url: &str, host: &str| {
+        Url::parse(url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_lowercase))
+            .is_some_and(|candidate| {
+                let host = host.to_lowercase();
+                let host = host.strip_prefix("www.").unwrap_or(&host);
+                candidate.strip_prefix("www.").unwrap_or(&candidate) == host
+            })
+    };
+    entries.retain(|entry| match removed {
+        Removed::Visit(id) => entry.visit_id != *id,
+        Removed::Site(host) => !site(&entry.url, host),
+    });
+}
+
 /// The clear dialog's time ranges, in the order it lists them.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum Period {
@@ -69,10 +119,11 @@ impl Period {
     /// The dialog's index of each choice.
     pub(crate) fn from_index(index: i32) -> Self {
         match index {
-            0 => Self::LastHour,
             1 => Self::Today,
             2 => Self::LastSevenDays,
-            _ => Self::AllTime,
+            3 => Self::AllTime,
+            // An unknown choice is the least destructive one.
+            _ => Self::LastHour,
         }
     }
 
@@ -202,6 +253,63 @@ mod tests {
         );
         assert_eq!(local_time(week).hour, 0);
         assert_eq!(Period::AllTime.range(NOW), ClearRange::All);
-        assert_eq!(Period::from_index(7), Period::AllTime);
+        assert_eq!(Period::from_index(3), Period::AllTime);
+        // An unknown choice is the least destructive one.
+        assert_eq!(Period::from_index(7), Period::LastHour);
+        assert_eq!(Period::from_index(-1), Period::LastHour);
+    }
+
+    #[test]
+    fn a_refresh_replaces_the_newest_page_and_keeps_older_pages_shown() {
+        // Shown: two pages of 3 (ids 6..1), and more after them.
+        let shown = (1..=6)
+            .rev()
+            .map(|id| {
+                entry(
+                    id,
+                    &format!("https://{id}.test/"),
+                    None,
+                    NOW - (10 - id) * 1000,
+                )
+            })
+            .collect::<Vec<_>>();
+        // A new visit (7) and visit 5 deleted: the first page is now 7, 6, 4.
+        let fresh = vec![shown[0].clone(), shown[2].clone()];
+        let fresh = [vec![entry(7, "https://7.test/", None, NOW)], fresh].concat();
+
+        let (merged, has_more) = merge_refresh(&shown, fresh, 3, true);
+
+        let ids = merged.iter().map(|e| e.visit_id.0).collect::<Vec<_>>();
+        assert_eq!(ids, vec![7, 6, 4, 3, 2, 1]);
+        assert!(has_more);
+    }
+
+    #[test]
+    fn a_short_refresh_is_the_whole_list() {
+        let shown = vec![
+            entry(2, "https://2.test/", None, NOW),
+            entry(1, "https://1.test/", None, NOW - 1),
+        ];
+
+        let (merged, has_more) = merge_refresh(&shown, vec![shown[1].clone()], 3, true);
+
+        assert_eq!(merged, vec![shown[1].clone()]);
+        assert!(!has_more);
+    }
+
+    #[test]
+    fn deleted_visits_leave_the_list_at_once() {
+        let mut shown = vec![
+            entry(3, "https://a.test/x", None, NOW),
+            entry(2, "https://www.a.test/y", None, NOW - 1),
+            entry(1, "https://b.test/", None, NOW - 2),
+        ];
+
+        remove_visits(&mut shown, &Removed::Visit(mercury_store::VisitId(1)));
+        assert_eq!(shown.len(), 2);
+        remove_visits(&mut shown, &Removed::Site("a.test".into()));
+        assert!(shown.iter().all(|e| e.url != "https://a.test/x"));
+        // `www.` belongs to the site too, as the store deletes it.
+        assert!(shown.is_empty());
     }
 }

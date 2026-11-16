@@ -124,7 +124,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
     );
-    history_ui::connect(&window, Rc::clone(&controller)); // history lane
+    history_ui::connect(&window, Rc::clone(&controller), options.is_automated()); // history lane
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
 
     let screenshot_result = Rc::new(Cell::new(ScreenshotResult::Pending));
