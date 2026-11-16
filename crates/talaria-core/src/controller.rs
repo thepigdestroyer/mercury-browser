@@ -3,7 +3,10 @@ use std::collections::VecDeque;
 use crate::address::{AddressResolutionError, resolve_address};
 use crate::browser::LoadState;
 use crate::browser::{BrowserCommand, BrowserEvent, BrowserState};
-use crate::{ColorScheme, DEFAULT_ZOOM_PERCENT, Tab, TabActivation, TabCommand, TabId};
+use crate::{
+    ColorScheme, DEFAULT_ZOOM_PERCENT, RestoredTab, Tab, TabActivation, TabCommand, TabId,
+    ZOOM_STEPS,
+};
 
 #[derive(Debug)]
 pub struct BrowserController {
@@ -111,8 +114,14 @@ impl BrowserController {
     /// Returns the tab's initial URL exactly once (None afterwards, and None for a blank tab),
     /// unless a navigation before the first commit made a new one pending. When it returns a
     /// URL the tab is no longer engine-ready and shows that URL as loading.
+    ///
+    /// A restored tab that has not been selected yet keeps its URL (see `is_load_deferred`).
     pub fn take_initial_url(&mut self, tab_id: TabId) -> Option<String> {
+        if self.is_load_deferred(tab_id) {
+            return None;
+        }
         let tab = self.tab_mut(tab_id)?;
+        tab.end_load_deferral();
         let url = tab.take_initial_url()?;
         show_loading(tab, url.clone());
         Some(url)
@@ -343,6 +352,53 @@ impl BrowserController {
         }
         tab.state_mut().apply(event);
         true
+    }
+
+    /// Opens a tab from a saved session or the closed-tab list at `index` (clamped to the
+    /// strip), in the background. It shows `restored`'s address, title and zoom at once, but its
+    /// page is not created until the tab is first selected: see `is_load_deferred`. The address
+    /// is resolved like `queue_navigation`; if it does not resolve, no tab is opened.
+    pub fn open_restored_tab(
+        &mut self,
+        index: usize,
+        restored: &RestoredTab,
+    ) -> Result<TabId, AddressResolutionError> {
+        let url = restored
+            .url
+            .as_deref()
+            .map(|address| resolve_address(address).map(|url| url.to_string()))
+            .transpose()?;
+        let tab_id = TabId::new(self.next_tab_id);
+        self.next_tab_id += 1;
+
+        let mut tab = Tab::new(tab_id, BrowserState::default());
+        tab.defer_load();
+        let state = tab.state_mut();
+        state.apply(BrowserEvent::PageTitleChanged {
+            title: Some(restored.title.clone()),
+        });
+        state.set_zoom_percent(
+            restored
+                .zoom_percent
+                .clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]),
+        );
+        if let Some(url) = url {
+            tab.set_initial_url(url.clone());
+            tab.state_mut().apply(BrowserEvent::AddressChanged { url });
+        }
+        self.tabs.insert(index.min(self.tabs.len()), tab);
+        Ok(tab_id)
+    }
+
+    /// Whether the engine must leave this tab without a page for now: it was restored and has
+    /// not been the active tab since. Such a tab is not engine-ready, so commands for it are
+    /// held (and pointer input dropped) exactly as for any tab whose page does not exist yet.
+    pub fn is_load_deferred(&self, tab_id: TabId) -> bool {
+        tab_id != self.active_tab_id
+            && self
+                .tabs
+                .iter()
+                .any(|tab| tab.id() == tab_id && tab.is_load_deferred())
     }
 
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {

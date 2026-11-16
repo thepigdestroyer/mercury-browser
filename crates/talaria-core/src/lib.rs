@@ -18,6 +18,6 @@ pub use input::{
     CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers,
 };
 pub use page_icon::PageIcon;
-pub use tab::{Tab, TabActivation, TabCommand, TabEvent, TabId};
+pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};
