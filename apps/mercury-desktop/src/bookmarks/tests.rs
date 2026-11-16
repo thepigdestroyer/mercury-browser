@@ -478,3 +478,44 @@ fn the_lanes_requests_name_the_folders_they_change() {
     assert_eq!(take(), vec![Some(vec![folder])]);
     let _ = a;
 }
+
+/// Fills a scratch profile's database for the end-to-end check (run with `--ignored`):
+/// `MERCURY_FILL_PLACES=<profile>/places.sqlite MERCURY_FILL_URL=<start URL>`. The bar gets a
+/// bookmark of the start URL, a folder, and enough long titles to need "»".
+#[test]
+#[ignore = "a tool for the end-to-end check, not a test"]
+fn fill_a_scratch_profile() {
+    let path = std::env::var_os("MERCURY_FILL_PLACES").expect("MERCURY_FILL_PLACES");
+    let url = std::env::var("MERCURY_FILL_URL").expect("MERCURY_FILL_URL");
+    let mut store = Store::open(std::path::Path::new(&path)).unwrap();
+    let bar = store.bookmark_root(BookmarkRoot::Toolbar).unwrap();
+    let mut serial = 0;
+    let mut guid = || {
+        serial += 1;
+        format!("e2e{serial:09}")
+    };
+    store
+        .add_bookmark(bar, None, "Colours test page", &url, &guid(), NOW)
+        .unwrap();
+    let news = store
+        .add_bookmark_folder(bar, None, "News", &guid(), NOW)
+        .unwrap();
+    store
+        .add_bookmark(news, None, "Example", "https://example.com/", &guid(), NOW)
+        .unwrap();
+    for title in [
+        "Rust documentation",
+        "A page with a rather long title that is cut short",
+        "Weather forecast for the week",
+        "Recipes",
+        "Maps",
+        "Another long title to push the bar past its width",
+        "Music",
+        "Photos",
+    ] {
+        let url = format!("https://{}.example/", title.len());
+        store
+            .add_bookmark(bar, None, title, &url, &guid(), NOW)
+            .unwrap();
+    }
+}
