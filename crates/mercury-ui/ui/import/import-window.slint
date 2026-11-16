@@ -38,21 +38,31 @@ component Note inherits Text {
     wrap: word-wrap;
 }
 
+// One profile in the list. Rows take keyboard focus (Tab, or Up and Down once the list has
+// focus), and the focused row is the selected one, so a screen reader announces the selection.
 component ProfileRowView inherits Rectangle {
     in property <ImportProfileRow> profile;
     in property <bool> selected;
+    in property <int> index;
+    in property <int> count;
+    // Whether the keyboard is in the list: then the selected row takes the focus.
+    in property <bool> keyboard-in-list;
     callback clicked;
+    callback step(int);
+    callback focus-changed(bool);
 
     height: 52px;
     border-radius: 6px;
+    border-width: focus.has-focus ? 2px : 0px;
+    border-color: Palette.accent-background;
     background: root.selected
         ? Palette.selection-background
         : touch.has-hover ? Palette.alternate-background : transparent;
-    accessible-role: list-item;
-    accessible-label: root.profile.browser + ", " + root.profile.name + ", " + root.profile.holds;
-    accessible-item-selected: root.selected;
-    accessible-action-default => {
-        root.clicked();
+
+    changed selected => {
+        if root.selected && root.keyboard-in-list && !focus.has-focus {
+            focus.focus();
+        }
     }
 
     VerticalLayout {
@@ -78,7 +88,38 @@ component ProfileRowView inherits Rectangle {
 
     touch := TouchArea {
         clicked => {
+            focus.focus();
             root.clicked();
+        }
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        accessible-role: list-item;
+        accessible-label: root.profile.browser + ", " + root.profile.name + ", " + root.profile.holds;
+        accessible-item-selectable: true;
+        accessible-item-selected: root.selected;
+        accessible-item-index: root.index;
+        accessible-item-count: root.count;
+        accessible-action-default => {
+            root.clicked();
+        }
+        changed has-focus => {
+            root.focus-changed(self.has-focus);
+            if self.has-focus {
+                root.clicked();
+            }
+        }
+        key-pressed(event) => {
+            if event.text == Key.UpArrow {
+                root.step(-1);
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                root.step(1);
+                return accept;
+            }
+            reject
         }
     }
 }
@@ -105,6 +146,7 @@ export component ImportWindow inherits Window {
     in property <string> summary-title: "Import finished";
     in property <[ImportSummaryLine]> summary;
     in property <bool> can-import-from-file;
+    property <bool> keyboard-in-list;
 
     callback start-import();
     callback cancel-import();
@@ -162,10 +204,12 @@ export component ImportWindow inherits Window {
                 }
             }
             if root.page == ImportPage.choose && event.text == Key.UpArrow {
+                root.keyboard-in-list = true;
                 root.choose(root.selected - 1);
                 return accept;
             }
             if root.page == ImportPage.choose && event.text == Key.DownArrow {
+                root.keyboard-in-list = true;
                 root.choose(root.selected + 1);
                 return accept;
             }
@@ -184,6 +228,7 @@ export component ImportWindow inherits Window {
 
                 ProgressIndicator {
                     indeterminate: true;
+                    accessible-label: "Looking for other browsers";
                 }
 
                 Rectangle {
@@ -222,6 +267,8 @@ export component ImportWindow inherits Window {
                 Rectangle {
                     vertical-stretch: 1;
                     min-height: 120px;
+                    accessible-role: list;
+                    accessible-label: "Browser profiles";
                     border-width: 1px;
                     border-radius: 6px;
                     border-color: Palette.border;
@@ -233,9 +280,17 @@ export component ImportWindow inherits Window {
                             for row[index] in root.profiles: ProfileRowView {
                                 profile: row;
                                 selected: index == root.selected;
+                                index: index;
+                                count: root.profiles.length;
+                                keyboard-in-list: root.keyboard-in-list;
                                 clicked => {
                                     root.choose(index);
-                                    keys.focus();
+                                }
+                                step(by) => {
+                                    root.choose(root.selected + by);
+                                }
+                                focus-changed(focused) => {
+                                    root.keyboard-in-list = focused;
                                 }
                             }
                         }
@@ -337,6 +392,7 @@ export component ImportWindow inherits Window {
                 ProgressIndicator {
                     indeterminate: !root.progress-known;
                     progress: root.progress;
+                    accessible-label: root.progress-title;
                 }
 
                 Note {
@@ -344,7 +400,7 @@ export component ImportWindow inherits Window {
                 }
 
                 Note {
-                    text: "You can keep browsing while the import runs.";
+                    text: "You can keep browsing while the import runs. Closing this window cancels the import; what was imported so far stays.";
                 }
 
                 Rectangle {

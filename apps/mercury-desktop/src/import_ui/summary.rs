@@ -21,7 +21,9 @@ pub(crate) struct KindResult {
     pub(crate) imported: u64,
     /// Entries of the source the profile already held, left out.
     pub(crate) already_present: u64,
-    /// Entries the profile cannot store (an address that is too long, say), left out.
+    /// Entries the profile cannot keep, left out, for any reason: an address that is too long,
+    /// a folder nested too deeply, a visit dated in the future, or an entry the profile
+    /// database refused. One count; the summary words it neutrally.
     pub(crate) skipped: u64,
     /// Entries the source holds.
     pub(crate) total: u64,
@@ -179,13 +181,9 @@ pub(crate) fn summary_lines(result: &ProfileResult) -> Vec<SummaryLine> {
     for (kind, counts) in result.kinds() {
         if counts.skipped > 0 {
             lines.push(SummaryLine::problem(format!(
-                "{} could not be kept because {} too long.",
+                "{} could not be kept (for example, an address that is too long or a date in \
+                 the future).",
                 capitalised(&kind.count(counts.skipped)),
-                if counts.skipped == 1 {
-                    "its address is"
-                } else {
-                    "their addresses are"
-                }
             )));
         }
         match &counts.end {
@@ -251,6 +249,10 @@ pub(crate) fn describe_error(browser: &str, error: &ImportError) -> String {
         ImportError::Malformed(_) => {
             format!("the files are not in a form this version of {browser} is known to write.")
         }
+        ImportError::NotARegularFile(_) => {
+            "a file of the profile is a link to somewhere else, which is never followed.".to_owned()
+        }
+        ImportError::Cancelled => "the import was cancelled.".to_owned(),
     }
 }
 
@@ -371,7 +373,9 @@ mod tests {
                     true
                 ),
                 (
-                    "2 visits could not be kept because their addresses are too long.".into(),
+                    "2 visits could not be kept (for example, an address that is too long or a \
+                     date in the future)."
+                        .into(),
                     true
                 ),
                 (

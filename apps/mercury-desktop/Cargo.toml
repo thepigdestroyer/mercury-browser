@@ -5,6 +5,11 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[features]
+# Diagnostic command-line options (`--import-from`), never in released builds; `make lint` and
+# `make test` turn them on with `--all-features`.
+diagnostics = []
+
 [[bin]]
 name = "mercury-browser"
 path = "src/main.rs"

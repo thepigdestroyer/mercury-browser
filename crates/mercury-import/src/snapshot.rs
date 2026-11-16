@@ -29,6 +29,8 @@
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime};
 
+use crate::model::{MAX_DATABASE_BYTES, ReadContext};
+
 use rusqlite::{Connection, OpenFlags, Row};
 use tempfile::TempDir;
 
@@ -36,6 +38,7 @@ use crate::model::ImportError;
 
 pub(crate) struct Snapshot {
     conn: Connection,
+    context: ReadContext,
     /// The original file, named in errors.
     path: PathBuf,
     // Dropped after the connection, removing the copy.
@@ -57,9 +60,12 @@ const PAUSE: Duration = Duration::from_millis(50);
 /// again, up to `ATTEMPTS` times, and then the import reports [`ImportError::Locked`]; a copy
 /// that fails `quick_check` is reported as [`ImportError::Database`]. See the module
 /// documentation for what this cannot detect.
-pub(crate) fn open(path: &Path) -> Result<Snapshot, ImportError> {
-    open_in(path, &std::env::temp_dir(), stamps)
+pub(crate) fn open(path: &Path, context: &ReadContext) -> Result<Snapshot, ImportError> {
+    open_in(path, context, stamps)
 }
+
+/// Rows read between two checks of the cancel flag.
+const ROWS_BETWEEN_CHECKS: u32 = 4096;
 
 /// What is known of the source files before and after a copy; any difference means the copy
 /// may mix two states.
@@ -106,6 +112,14 @@ fn wal_header(wal: &Path) -> Option<[u8; 12]> {
     header[12..24].try_into().ok()
 }
 
+/// The last part of `path` ("History", "places.sqlite"): logs never carry the full path into
+/// another browser's profile, which holds the user's name.
+pub(crate) fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_default()
+}
+
 fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
     let mut name = path.as_os_str().to_owned();
     name.push(suffix);
@@ -114,16 +128,22 @@ fn with_suffix(path: &Path, suffix: &str) -> PathBuf {
 
 fn open_in(
     path: &Path,
-    temp_root: &Path,
+    context: &ReadContext,
     stamps: impl Fn(&Path) -> Stamps,
 ) -> Result<Snapshot, ImportError> {
-    if !path.is_file() {
-        return Err(ImportError::NotFound(path.to_owned()));
+    context.check()?;
+    let size = source_size(path)?;
+    if size > MAX_DATABASE_BYTES {
+        return Err(ImportError::TooLarge {
+            path: path.to_owned(),
+            limit: MAX_DATABASE_BYTES,
+        });
     }
     // Every early return below drops `dir`, which removes it with whatever was copied into it.
-    let dir = private_dir(temp_root)?;
+    let dir = private_dir(context.copy_dir())?;
     let copy = dir.path().join("snapshot.sqlite");
-    copy_settled(path, &copy, stamps)?;
+    copy_settled(path, &copy, stamps, context)?;
+    context.check()?;
     // Opened read-write only so SQLite can replay the copied log into the copy; `query_only`
     // then refuses every write. The browser's own files are never opened.
     let conn = Connection::open_with_flags(
@@ -136,6 +156,7 @@ fn open_in(
     let check: String = conn
         .query_row("PRAGMA quick_check", [], |row| row.get(0))
         .map_err(|error| ImportError::database(path, error))?;
+    context.check()?;
     if check != "ok" {
         return Err(ImportError::database(
             path,
@@ -147,9 +168,29 @@ fn open_in(
     }
     Ok(Snapshot {
         conn,
+        context: context.clone(),
         path: path.to_owned(),
         _dir: dir,
     })
+}
+
+/// The size of the database and its companions together. None of them may be a symbolic link
+/// or anything but a regular file: links are never followed, so a link cannot make the reader
+/// copy a file elsewhere.
+fn source_size(path: &Path) -> Result<u64, ImportError> {
+    let mut total = 0;
+    for (index, file) in std::iter::once(path.to_owned())
+        .chain(COMPANIONS.iter().map(|suffix| with_suffix(path, suffix)))
+        .enumerate()
+    {
+        match std::fs::symlink_metadata(&file) {
+            Ok(metadata) if metadata.file_type().is_file() => total += metadata.len(),
+            Ok(_) => return Err(ImportError::NotARegularFile(file)),
+            Err(error) if index > 0 && error.kind() == std::io::ErrorKind::NotFound => {}
+            Err(error) => return Err(ImportError::io(&file, error)),
+        }
+    }
+    Ok(total)
 }
 
 /// A temporary directory only this user can enter (on Unix; elsewhere the platform's per-user
@@ -173,8 +214,10 @@ fn copy_settled(
     path: &Path,
     copy: &Path,
     stamps: impl Fn(&Path) -> Stamps,
+    context: &ReadContext,
 ) -> Result<(), ImportError> {
     for attempt in 0..ATTEMPTS {
+        context.check()?;
         if attempt > 0 {
             std::thread::sleep(PAUSE);
         }
@@ -186,7 +229,7 @@ fn copy_settled(
     }
     log::debug!(
         "{} kept changing while it was copied {ATTEMPTS} times",
-        path.display()
+        file_name(path)
     );
     Err(ImportError::Locked(path.to_owned()))
 }
@@ -261,13 +304,13 @@ impl Snapshot {
         if present.is_empty() {
             return Err(ImportError::Malformed(format!(
                 "{} has no table {table}",
-                self.path.display()
+                self.name()
             )));
         }
         if !missing.is_empty() {
             return Err(ImportError::Malformed(format!(
                 "{} table {table} lacks {}",
-                self.path.display(),
+                self.name(),
                 missing.join(", ")
             )));
         }
@@ -280,17 +323,36 @@ impl Snapshot {
         sql: &str,
         mut each: impl FnMut(&Row<'_>) -> rusqlite::Result<bool>,
     ) -> Result<(), ImportError> {
+        let mut cancelled = false;
         let mut run = || -> rusqlite::Result<()> {
             let mut statement = self.conn.prepare(sql)?;
             let mut rows = statement.query([])?;
+            let mut since_check = 0;
             while let Some(row) = rows.next()? {
+                since_check += 1;
+                if since_check == ROWS_BETWEEN_CHECKS {
+                    since_check = 0;
+                    if self.context.is_cancelled() {
+                        cancelled = true;
+                        break;
+                    }
+                }
                 if !each(row)? {
                     break;
                 }
             }
             Ok(())
         };
-        run().map_err(|error| self.error(error))
+        let result = run().map_err(|error| self.error(error));
+        if cancelled {
+            return Err(ImportError::Cancelled);
+        }
+        result
+    }
+
+    /// The file's name, for messages that must not name the user's directories.
+    pub(crate) fn name(&self) -> String {
+        file_name(&self.path)
     }
 }
 
@@ -311,6 +373,10 @@ mod tests {
         )
         .unwrap();
         (path, conn)
+    }
+
+    fn context(temp_root: &tempfile::TempDir) -> ReadContext {
+        ReadContext::new(temp_root.path().to_owned())
     }
 
     fn leftovers(temp_root: &Path) -> Vec<PathBuf> {
@@ -343,7 +409,7 @@ mod tests {
             .unwrap();
         }
 
-        let snapshot = open_in(&path, temp_root.path(), stamps).unwrap();
+        let snapshot = open_in(&path, &context(&temp_root), stamps).unwrap();
         assert_eq!(count(&snapshot), 2, "the rows in the log are read");
 
         let mode = |path: &Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
@@ -363,7 +429,7 @@ mod tests {
         let temp_root = tempfile::tempdir().unwrap();
         let (path, _browser) = database_with_log(source.path());
 
-        let snapshot = open_in(&path, temp_root.path(), stamps).unwrap();
+        let snapshot = open_in(&path, &context(&temp_root), stamps).unwrap();
         assert_eq!(count(&snapshot), 2);
         drop(snapshot);
         assert_eq!(
@@ -381,7 +447,7 @@ mod tests {
             }
         };
         assert!(matches!(
-            open_in(&path, temp_root.path(), never_settles),
+            open_in(&path, &context(&temp_root), never_settles),
             Err(ImportError::Locked(_))
         ));
         assert_eq!(
@@ -393,7 +459,7 @@ mod tests {
         let garbage = source.path().join("garbage.sqlite");
         std::fs::write(&garbage, b"not a database at all").unwrap();
         assert!(matches!(
-            open_in(&garbage, temp_root.path(), stamps),
+            open_in(&garbage, &context(&temp_root), stamps),
             Err(ImportError::Database { .. })
         ));
         assert_eq!(
@@ -403,7 +469,7 @@ mod tests {
         );
 
         assert!(matches!(
-            open_in(&source.path().join("missing"), temp_root.path(), stamps),
+            open_in(&source.path().join("missing"), &context(&temp_root), stamps),
             Err(ImportError::NotFound(_))
         ));
         assert_eq!(
@@ -429,7 +495,7 @@ mod tests {
             seen
         };
 
-        let snapshot = open_in(&path, temp_root.path(), settles_later).unwrap();
+        let snapshot = open_in(&path, &context(&temp_root), settles_later).unwrap();
 
         assert_eq!(count(&snapshot), 2);
         assert_eq!(calls.get(), 4, "two stamps for each of two copies");
@@ -460,7 +526,7 @@ mod tests {
         std::fs::write(&path, bytes).unwrap();
 
         assert!(matches!(
-            open_in(&path, temp_root.path(), stamps),
+            open_in(&path, &context(&temp_root), stamps),
             Err(ImportError::Database { .. })
         ));
     }
@@ -523,7 +589,7 @@ mod tests {
             }
         };
 
-        let snapshot = open_in(&path, temp_root.path(), coarse).unwrap();
+        let snapshot = open_in(&path, &context(&temp_root), coarse).unwrap();
 
         assert_eq!(
             calls.get(),
@@ -531,5 +597,82 @@ mod tests {
             "the copy taken across the reset is taken again"
         );
         assert_eq!(count(&snapshot), 3);
+    }
+
+    #[test]
+    fn a_cancelled_read_stops_and_leaves_nothing() {
+        let source = tempfile::tempdir().unwrap();
+        let temp_root = tempfile::tempdir().unwrap();
+        let (path, _browser) = database_with_log(source.path());
+
+        let cancelled = context(&temp_root);
+        cancelled.cancel();
+        assert!(matches!(
+            open_in(&path, &cancelled, stamps),
+            Err(ImportError::Cancelled)
+        ));
+
+        // Cancelled while the copy is being taken: between the copy and the check.
+        let during = context(&temp_root);
+        let flag = during.clone();
+        let cancel_on_second_stamp = |path: &Path| {
+            let seen = stamps(path);
+            if !flag.is_cancelled() && leftovers(temp_root.path()).len() == 1 {
+                flag.cancel();
+            }
+            seen
+        };
+        assert!(matches!(
+            open_in(&path, &during, cancel_on_second_stamp),
+            Err(ImportError::Cancelled)
+        ));
+        assert_eq!(leftovers(temp_root.path()), Vec::<PathBuf>::new());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn symbolic_links_are_never_followed() {
+        let source = tempfile::tempdir().unwrap();
+        let temp_root = tempfile::tempdir().unwrap();
+        let (real, _browser) = database_with_log(source.path());
+        let link = source.path().join("History");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        assert!(matches!(
+            open_in(&link, &context(&temp_root), stamps),
+            Err(ImportError::NotARegularFile(_))
+        ));
+
+        // A journal that is a link refuses the database too.
+        let other = tempfile::tempdir().unwrap();
+        let (path, browser) = database_with_log(other.path());
+        drop(browser);
+        let wal = with_suffix(&path, "-wal");
+        let _ = std::fs::remove_file(&wal);
+        std::os::unix::fs::symlink(&real, &wal).unwrap();
+        assert!(matches!(
+            open_in(&path, &context(&temp_root), stamps),
+            Err(ImportError::NotARegularFile(_))
+        ));
+        assert_eq!(leftovers(temp_root.path()), Vec::<PathBuf>::new());
+    }
+
+    #[test]
+    fn a_database_larger_than_the_cap_is_refused_before_it_is_copied() {
+        let source = tempfile::tempdir().unwrap();
+        let temp_root = tempfile::tempdir().unwrap();
+        let path = source.path().join("places.sqlite");
+        // Sparse: no space is used.
+        std::fs::File::create(&path)
+            .unwrap()
+            .set_len(MAX_DATABASE_BYTES + 1)
+            .unwrap();
+        assert!(matches!(
+            open_in(&path, &context(&temp_root), stamps),
+            Err(ImportError::TooLarge {
+                limit: MAX_DATABASE_BYTES,
+                ..
+            })
+        ));
+        assert_eq!(leftovers(temp_root.path()), Vec::<PathBuf>::new());
     }
 }

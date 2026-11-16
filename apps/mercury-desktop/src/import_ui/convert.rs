@@ -8,7 +8,8 @@ use mercury_store::{
 
 use crate::profile_data::import::ImportVisit;
 
-/// What is sent, and how many entries were left out because the store would refuse them.
+/// What is sent, and how many entries (bookmarks or visits) were left out because they cannot
+/// be kept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Converted<T> {
     pub(crate) items: T,
@@ -54,7 +55,7 @@ fn convert_level(
         // nested too deeply), so that the summary counts them as bookmarks; the service
         // skips anything else it refuses and counts it in nodes.
         if depth > BOOKMARK_IMPORT_MAX_DEPTH {
-            *skipped += count_nodes(&node);
+            *skipped += count_bookmarks(&node);
             continue;
         }
         let converted = match node {
@@ -92,21 +93,30 @@ fn convert_level(
     Ok(out)
 }
 
-fn count_nodes(node: &ImportedNode) -> u64 {
+fn count_bookmarks(node: &ImportedNode) -> u64 {
     match node {
-        ImportedNode::Folder { children, .. } => 1 + children.iter().map(count_nodes).sum::<u64>(),
-        _ => 1,
+        ImportedNode::Folder { children, .. } => children.iter().map(count_bookmarks).sum(),
+        ImportedNode::Bookmark { .. } => 1,
+        ImportedNode::Separator => 0,
     }
 }
 
-/// Visits as links, newest first as read.
-pub(crate) fn visits_for_store(visits: Vec<ImportedVisit>) -> Converted<Vec<ImportVisit>> {
+/// Visits later than this after the time of the import are left out: a clock that far wrong
+/// in the other browser would otherwise put them above every real visit.
+pub(crate) const FUTURE_TOLERANCE_MS: i64 = 86_400_000;
+
+/// Visits as links, newest first as read. Visits later than a day after `now_ms` are left out.
+pub(crate) fn visits_for_store(
+    visits: Vec<ImportedVisit>,
+    now_ms: i64,
+) -> Converted<Vec<ImportVisit>> {
     let before = visits.len() as u64;
+    let latest = now_ms.saturating_add(FUTURE_TOLERANCE_MS);
     // Visits whose address the store would refuse (longer than MAX_URL_BYTES) are left out
     // here; the service would skip them too.
     let items = visits
         .into_iter()
-        .filter(|visit| visit.url.len() <= MAX_URL_BYTES)
+        .filter(|visit| visit.url.len() <= MAX_URL_BYTES && visit.visited_at_ms <= latest)
         .map(|visit| ImportVisit {
             url: visit.url,
             title: visit.title.map(stored_title),
@@ -130,30 +140,6 @@ pub(crate) fn bookmark_count(nodes: &[BookmarkImport]) -> u64 {
             BookmarkImport::Separator { .. } => 0,
         })
         .sum()
-}
-
-/// The bookmarks among the first `nodes` nodes of a pre-order walk of `sets`: what an import
-/// that stopped after `nodes` nodes had imported.
-pub(crate) fn bookmarks_in_first<P>(sets: &[(P, Vec<BookmarkImport>)], nodes: u64) -> u64 {
-    let mut left = nodes;
-    let mut bookmarks = 0;
-    let mut stack = sets
-        .iter()
-        .rev()
-        .flat_map(|(_, nodes)| nodes.iter().rev())
-        .collect::<Vec<_>>();
-    while left > 0 {
-        let Some(node) = stack.pop() else {
-            break;
-        };
-        left -= 1;
-        match node {
-            BookmarkImport::Folder { children, .. } => stack.extend(children.iter().rev()),
-            BookmarkImport::Bookmark { .. } => bookmarks += 1,
-            BookmarkImport::Separator { .. } => {}
-        }
-    }
-    bookmarks
 }
 
 #[cfg(test)]
@@ -249,19 +235,39 @@ mod tests {
         assert_eq!(converted.skipped, 2);
         assert_eq!(converted.items.len(), 2);
 
-        let visits = visits_for_store(vec![
-            ImportedVisit {
-                url: long,
-                title: None,
-                visited_at_ms: 2,
-            },
-            ImportedVisit {
-                url: "https://fine.example/".into(),
-                title: Some("Fine".into()),
-                visited_at_ms: 1,
-            },
-        ]);
-        assert_eq!(visits.skipped, 1);
+        let visits = visits_for_store(
+            vec![
+                ImportedVisit {
+                    url: long,
+                    title: None,
+                    visited_at_ms: 2,
+                },
+                ImportedVisit {
+                    url: "https://fine.example/".into(),
+                    title: Some("Fine".into()),
+                    visited_at_ms: 1,
+                },
+                ImportedVisit {
+                    url: "https://future.example/".into(),
+                    title: None,
+                    visited_at_ms: 1_000 + FUTURE_TOLERANCE_MS + 1,
+                },
+                ImportedVisit {
+                    url: "https://fine.example/".into(),
+                    title: None,
+                    visited_at_ms: 1_000 + FUTURE_TOLERANCE_MS,
+                },
+            ],
+            1_000,
+        );
+        assert_eq!(
+            visits.skipped, 2,
+            "the long address and the visit from the future"
+        );
+        let visits = Converted {
+            items: visits.items[..1].to_vec(),
+            skipped: visits.skipped,
+        };
         assert_eq!(
             visits.items,
             vec![ImportVisit {
@@ -296,7 +302,7 @@ mod tests {
     }
 
     #[test]
-    fn bookmarks_are_counted_in_the_whole_tree_and_in_an_imported_prefix() {
+    fn bookmarks_are_counted_in_the_whole_tree() {
         let tree = bookmarks_for_store(
             vec![
                 folder(
@@ -314,14 +320,6 @@ mod tests {
         .unwrap()
         .items;
         assert_eq!(bookmark_count(&tree), 3);
-        let sets = vec![((), tree)];
-        // Pre-order: Toolbar, A, separator, Inner, B, C.
-        assert_eq!(bookmarks_in_first(&sets, 0), 0);
-        assert_eq!(bookmarks_in_first(&sets, 2), 1);
-        assert_eq!(bookmarks_in_first(&sets, 4), 1);
-        assert_eq!(bookmarks_in_first(&sets, 5), 2);
-        assert_eq!(bookmarks_in_first(&sets, 6), 3);
-        assert_eq!(bookmarks_in_first(&sets, 60), 3);
     }
 
     #[test]

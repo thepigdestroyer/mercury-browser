@@ -7,7 +7,7 @@
 
 use std::path::{Path, PathBuf};
 
-use mercury_import::{BrowserProfile, find_chromium_profiles, find_firefox_profiles};
+use mercury_import::{BrowserProfile, ReadContext, find_chromium_profiles, find_firefox_profiles};
 
 /// Which reader a profile needs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -88,12 +88,13 @@ fn platform_directories() -> Vec<PathBuf> {
 }
 
 /// The profiles under `base_dirs`, Firefox-family browsers first. With no directories nothing
-/// is read and nothing is found.
-pub(crate) fn discover(base_dirs: &[PathBuf]) -> Vec<FoundProfile> {
+/// is read and nothing is found. Firefox's profile-group databases are copied into
+/// `context`'s directory to be read.
+pub(crate) fn discover(base_dirs: &[PathBuf], context: &ReadContext) -> Vec<FoundProfile> {
     if base_dirs.is_empty() {
         return Vec::new();
     }
-    let firefox = find_firefox_profiles(base_dirs)
+    let firefox = find_firefox_profiles(base_dirs, context)
         .into_iter()
         .map(|profile| found(profile, Family::Firefox));
     let chromium = find_chromium_profiles(base_dirs)
@@ -125,7 +126,7 @@ fn found(profile: BrowserProfile, family: Family) -> FoundProfile {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::import_ui::fixtures;
+    use crate::import_ui::fixtures::{self, discover};
 
     #[test]
     fn firefox_and_chromium_layouts_are_found_with_what_they_hold() {
@@ -172,6 +173,9 @@ mod tests {
     #[test]
     fn with_no_directories_nothing_is_looked_at() {
         assert_eq!(discover(&[]), Vec::new());
+        // Nothing is read, so even a context whose copy directory does not exist is never used.
+        let nowhere = ReadContext::new(PathBuf::from("/nonexistent/copies"));
+        assert_eq!(super::discover(&[], &nowhere), Vec::new());
         assert_eq!(directories(&Search::Nowhere), Vec::<PathBuf>::new());
     }
 

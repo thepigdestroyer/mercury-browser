@@ -1,9 +1,11 @@
 //! Reading another browser's profile, on a background thread: `mercury-import` copies its
-//! databases to a private temporary directory, reads the copies and removes them.
+//! databases into the profile's private copy area (see `copies`), reads the copies and removes
+//! them. Logs name the profile ("Firefox — Default") and the kind of error, never a path into
+//! the other browser's profile, which holds the user's name.
 
 use mercury_import::{
-    MAX_IMPORTED_VISITS, read_chromium_bookmarks, read_chromium_history, read_firefox_bookmarks,
-    read_firefox_history,
+    ImportError, MAX_IMPORTED_VISITS, ReadContext, read_chromium_bookmarks, read_chromium_history,
+    read_firefox_bookmarks, read_firefox_history,
 };
 use mercury_store::BookmarkImport;
 
@@ -27,34 +29,54 @@ pub(crate) struct Prepared {
     pub(crate) history: Option<Result<Converted<Vec<ImportVisit>>, String>>,
 }
 
-/// Reads what `choice` asks for from `profile`. Blocking: never call it on the UI thread.
-pub(crate) fn read_profile(profile: &FoundProfile, choice: Choice) -> Prepared {
+/// The kind of a read error, for the log.
+fn error_kind(error: &ImportError) -> &'static str {
+    match error {
+        ImportError::NotFound(_) => "not found",
+        ImportError::Locked(_) => "in use",
+        ImportError::TooLarge { .. } => "too large",
+        ImportError::Io { .. } => "input/output error",
+        ImportError::Database { .. } => "damaged database",
+        ImportError::Malformed(_) => "unexpected format",
+        ImportError::NotARegularFile(_) => "not a regular file",
+        ImportError::Cancelled => "cancelled",
+    }
+}
+
+/// Reads what `choice` asks for from `profile`, copying databases under `context`. Visits later
+/// than a day after `now_ms` are left out. Blocking: never call it on the UI thread.
+pub(crate) fn read_profile(
+    profile: &FoundProfile,
+    choice: Choice,
+    context: &ReadContext,
+    now_ms: i64,
+) -> Prepared {
     let browser = profile.browser.as_str();
+    let failed = |what: &str, error: ImportError| {
+        log::info!(
+            "could not read the {what} of {}: {}",
+            profile.label(),
+            error_kind(&error)
+        );
+        describe_error(browser, &error)
+    };
     let bookmarks = choice.bookmarks.then(|| {
         let read = match profile.family {
-            Family::Firefox => read_firefox_bookmarks(&profile.path),
-            Family::Chromium => read_chromium_bookmarks(&profile.path),
+            Family::Firefox => read_firefox_bookmarks(&profile.path, context),
+            Family::Chromium => read_chromium_bookmarks(&profile.path, context),
         };
-        let nodes = read.map_err(|error| {
-            log::info!(
-                "could not read the bookmarks of {}: {error}",
-                profile.label()
-            );
-            describe_error(browser, &error)
-        })?;
+        let nodes = read.map_err(|error| failed("bookmarks", error))?;
         bookmarks_for_store(nodes, &mut crate::profile_data::new_guid).map_err(|_| {
             "the system's random source is unavailable, so no bookmark could be added.".to_owned()
         })
     });
     let history = choice.history.then(|| {
         let read = match profile.family {
-            Family::Firefox => read_firefox_history(&profile.path, MAX_IMPORTED_VISITS),
-            Family::Chromium => read_chromium_history(&profile.path, MAX_IMPORTED_VISITS),
+            Family::Firefox => read_firefox_history(&profile.path, MAX_IMPORTED_VISITS, context),
+            Family::Chromium => read_chromium_history(&profile.path, MAX_IMPORTED_VISITS, context),
         };
-        read.map(visits_for_store).map_err(|error| {
-            log::info!("could not read the history of {}: {error}", profile.label());
-            describe_error(browser, &error)
-        })
+        read.map(|visits| visits_for_store(visits, now_ms))
+            .map_err(|error| failed("history", error))
     });
     Prepared { bookmarks, history }
 }
@@ -62,8 +84,11 @@ pub(crate) fn read_profile(profile: &FoundProfile, choice: Choice) -> Prepared {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::import_ui::fixtures;
-    use crate::import_ui::sources::discover;
+    use crate::import_ui::fixtures::{self, discover};
+
+    fn read_profile(profile: &FoundProfile, choice: Choice) -> Prepared {
+        fixtures::read(profile, choice)
+    }
 
     #[test]
     fn a_firefox_fixture_is_read_and_converted() {

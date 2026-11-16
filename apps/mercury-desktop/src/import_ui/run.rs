@@ -7,13 +7,15 @@
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use mercury_store::{BookmarkId, BookmarkImport, BookmarkRoot};
+use mercury_store::{BookmarkImport, BookmarkRoot};
 
-use super::convert::{Converted, bookmark_count, bookmarks_in_first, folder_title};
+use super::convert::{Converted, bookmark_count, folder_title};
 use super::read::Prepared;
 use super::summary::{KindEnd, KindResult, ProfileResult};
 use crate::profile_data::import::{ImportOutcome, ImportProgress, ImportSummary, ImportVisit};
-use crate::profile_data::import_merge::{FilterOutcome, FilterProgress, FilterSummary};
+use crate::profile_data::import_merge::{
+    BookmarkPlan, FilterProgress, FilterSummary, InsertProgress, InsertSummary, StepOutcome,
+};
 use crate::profile_data::jobs::JobHandle;
 use crate::profile_data::{ProfileData, ProfileDataError};
 
@@ -154,8 +156,9 @@ impl ImportRun {
     }
 
     fn bookmarks(&self, converted: Converted<Vec<BookmarkImport>>) {
-        let total = bookmark_count(&converted.items);
         let skipped = converted.skipped;
+        // Like history's, `total` counts every bookmark read, including those not kept.
+        let total = bookmark_count(&converted.items) + skipped;
         let stopped = move |end| KindResult {
             imported: 0,
             already_present: 0,
@@ -185,8 +188,7 @@ impl ImportRun {
                 }
                 Ok(plan) => {
                     log::debug!(
-                        "importing bookmarks into folder {:?} (new: {}); {} nodes already there",
-                        plan.folder,
+                        "bookmark import: new folder: {}; {} nodes already there",
                         plan.created_folder,
                         plan.already_present
                     );
@@ -195,19 +197,14 @@ impl ImportRun {
                         .iter()
                         .map(|(_, nodes)| bookmark_count(nodes))
                         .sum::<u64>();
-                    run.import_bookmarks(plan.sets, total, total - new, skipped);
+                    let already_present = total - skipped - new;
+                    run.insert_bookmarks(plan, total, already_present, skipped);
                 }
             },
         );
     }
 
-    fn import_bookmarks(
-        &self,
-        sets: Vec<(BookmarkId, Vec<BookmarkImport>)>,
-        total: u64,
-        already_present: u64,
-        skipped: u64,
-    ) {
+    fn insert_bookmarks(&self, plan: BookmarkPlan, total: u64, already_present: u64, skipped: u64) {
         let result = move |imported, end| KindResult {
             imported,
             already_present,
@@ -215,8 +212,22 @@ impl ImportRun {
             total,
             end,
         };
+        // A folder this import created and nothing landed in is removed again.
+        let empty_folder = plan.created_folder.then_some(plan.folder);
+        let remove_if_empty = move |data: &ProfileData, nodes: u64| {
+            if let (Some(folder), 0) = (empty_folder, nodes) {
+                data.remove_bookmark(folder, |result| {
+                    if let Err(error) = result {
+                        log::warn!("could not remove the empty import folder: {error}");
+                    }
+                });
+            }
+        };
         let data = match (self.cancelled(), (self.0.data)()) {
-            (true, _) => {
+            (true, data) => {
+                if let Some(data) = data {
+                    remove_if_empty(&data, 0);
+                }
                 self.0.state.borrow_mut().bookmarks = Some(result(0, KindEnd::Cancelled));
                 return self.history();
             }
@@ -227,30 +238,23 @@ impl ImportRun {
             }
             (false, Some(data)) => data,
         };
-        // Kept to count the bookmarks among the nodes a stopped import had imported.
-        let shape = Rc::new(sets.clone());
-        let progress_shape = Rc::clone(&shape);
         let progress_run = self.clone();
         let run = self.clone();
-        let job = data.import_bookmarks(
-            sets,
-            move |progress: ImportProgress| {
+        let job = data.insert_bookmarks(
+            plan.sets,
+            move |progress: InsertProgress| {
                 (progress_run.0.on_stage)(Stage::Bookmarks {
-                    done: already_present + bookmarks_in_first(&progress_shape, progress.done),
+                    done: already_present + skipped + progress.bookmarks,
                     total,
                 });
             },
-            move |summary: ImportSummary| {
-                log::debug!("bookmark import: longest chunk {:?}", summary.longest_chunk);
-                // Chunks are whole top-level nodes, so the nodes dealt with (imported or
-                // refused) are a prefix of the pre-order walk. The service counts refusals in
-                // nodes; they are taken as bookmarks here (exact unless a whole folder was
-                // refused, which the conversion's own checks make unlikely).
-                let dealt_with = bookmarks_in_first(&shape, summary.imported + summary.skipped);
-                let refused = summary.skipped.min(dealt_with);
-                let mut kind = result(dealt_with - refused, end_of_import(&summary.outcome));
-                kind.skipped += refused;
-                run.0.state.borrow_mut().bookmarks = Some(kind);
+            move |summary: InsertSummary| {
+                log::debug!("bookmark import: longest step {:?}", summary.longest_chunk);
+                if let Some(data) = (run.0.data)() {
+                    remove_if_empty(&data, summary.nodes);
+                }
+                run.0.state.borrow_mut().bookmarks =
+                    Some(result(summary.bookmarks, end_of_step(&summary.outcome)));
                 run.history();
             },
         );
@@ -300,18 +304,19 @@ impl ImportRun {
             },
             move |summary: FilterSummary| {
                 log::debug!(
-                    "visit comparison: longest chunk {:?}",
-                    summary.longest_chunk
+                    "visit comparison: longest step {:?}, {} stored visits read",
+                    summary.longest_chunk,
+                    summary.rows_read
                 );
                 match summary.outcome {
-                    FilterOutcome::Completed => {
+                    StepOutcome::Completed => {
                         run.import_visits(summary.new, summary.already_present, skipped)
                     }
-                    FilterOutcome::Cancelled => {
+                    StepOutcome::Cancelled => {
                         run.0.state.borrow_mut().history = Some(stopped(KindEnd::Cancelled));
                         run.finish();
                     }
-                    FilterOutcome::Failed(error) => {
+                    StepOutcome::Failed(error) => {
                         run.0.state.borrow_mut().history =
                             Some(stopped(KindEnd::Failed(store_error(&error))));
                         run.finish();
@@ -389,6 +394,14 @@ fn end_of_import(outcome: &ImportOutcome) -> KindEnd {
         ImportOutcome::Completed => KindEnd::Completed,
         ImportOutcome::Cancelled => KindEnd::Cancelled,
         ImportOutcome::Failed(error) => KindEnd::Failed(store_error(error)),
+    }
+}
+
+fn end_of_step(outcome: &StepOutcome) -> KindEnd {
+    match outcome {
+        StepOutcome::Completed => KindEnd::Completed,
+        StepOutcome::Cancelled => KindEnd::Cancelled,
+        StepOutcome::Failed(error) => KindEnd::Failed(store_error(error)),
     }
 }
 

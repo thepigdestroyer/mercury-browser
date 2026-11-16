@@ -9,8 +9,8 @@ use mercury_store::Store;
 
 use super::{ImportRun, Stage};
 use crate::import_ui::fixtures;
-use crate::import_ui::read::{Choice, read_profile};
-use crate::import_ui::sources::discover;
+use crate::import_ui::fixtures::{discover, read as read_profile};
+use crate::import_ui::read::Choice;
 use crate::import_ui::summary::{KindEnd, KindResult, ProfileResult};
 use crate::profile_data::{ProfileData, Timing};
 
@@ -92,6 +92,22 @@ impl Service {
         run_slot.borrow_mut().take();
         let result = result.borrow_mut().take().unwrap();
         (result, stages.take())
+    }
+
+    /// Waits until every request sent so far has run.
+    fn sync(&self) {
+        let done = Rc::new(RefCell::new(false));
+        let flag = Rc::clone(&done);
+        let data = self.data.borrow().clone().unwrap();
+        data.bookmark_root(mercury_store::BookmarkRoot::Other, move |_| {
+            *flag.borrow_mut() = true;
+        });
+        let deadline = Instant::now() + PATIENCE;
+        while !*done.borrow() {
+            let left = deadline.saturating_duration_since(Instant::now());
+            self.wakes.recv_timeout(left).expect("the service answers");
+            data.deliver_replies();
+        }
     }
 
     fn count(&self, sql: &str) -> i64 {
@@ -281,4 +297,26 @@ fn without_the_profile_database_every_kind_fails_without_a_crash() {
             KindEnd::Failed("the profile database is not available.".into())
         );
     }
+}
+
+#[test]
+fn a_first_import_cancelled_before_anything_landed_leaves_no_empty_folder() {
+    let source = tempfile::tempdir().unwrap();
+    fixtures::firefox_profile(source.path(), "Default", fixtures::SAMPLE_FIREFOX);
+    let service = Service::new();
+
+    let (result, _) = service.import(source.path(), BOTH, |run, stage| {
+        if stage == (Stage::Bookmarks { done: 0, total: 3 }) {
+            run.cancel();
+        }
+    });
+
+    assert_eq!(result.bookmarks.unwrap().end, KindEnd::Cancelled);
+    assert_eq!(result.history.unwrap().end, KindEnd::Cancelled);
+    service.sync();
+    assert_eq!(
+        service.count("SELECT count(*) FROM bookmarks WHERE title = 'Imported from Firefox'"),
+        0
+    );
+    assert_eq!(service.count(VISITS), 0);
 }

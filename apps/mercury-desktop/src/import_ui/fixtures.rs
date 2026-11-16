@@ -129,3 +129,30 @@ pub(crate) fn chromium_profile(
     }
     profile
 }
+
+/// Discovery under `dirs`, with copies in a temporary directory of the test's own.
+pub(crate) fn discover(dirs: &[PathBuf]) -> Vec<super::sources::FoundProfile> {
+    let copies = tempfile::tempdir().unwrap();
+    super::sources::discover(
+        dirs,
+        &mercury_import::ReadContext::new(copies.path().to_owned()),
+    )
+}
+
+/// Reads `profile` as the import does, with copies in a temporary directory of the test's
+/// own, which must be empty afterwards.
+pub(crate) fn read(
+    profile: &super::sources::FoundProfile,
+    choice: super::read::Choice,
+) -> super::read::Prepared {
+    let copies = tempfile::tempdir().unwrap();
+    let context = mercury_import::ReadContext::new(copies.path().to_owned());
+    let prepared =
+        super::read::read_profile(profile, choice, &context, crate::profile_data::now_ms());
+    assert_eq!(
+        std::fs::read_dir(copies.path()).unwrap().count(),
+        0,
+        "the copies are removed after a read"
+    );
+    prepared
+}

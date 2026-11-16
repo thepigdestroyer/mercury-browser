@@ -114,6 +114,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         options.is_automated(),
         options.import_from.as_deref(),
         profile.paths.as_ref().map(|paths| paths.root.clone()),
+        options.profile_dir.is_none() && !options.is_automated(),
     ); // import-ui lane
     let web_view_focused = Rc::new(Cell::new(false));
 
@@ -130,6 +131,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
+    #[cfg(feature = "diagnostics")]
     if options.import_from.is_some() {
         import_ui::run_diagnostic_import(options.import_snapshot.clone()); // import-ui lane
     }
@@ -160,7 +162,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // Nothing may capture, pump or render while the engine shuts down, and the engine must be
     // gone before the window (and the renderer whose device Servo uses) is destroyed.
     drop(screenshot_timer);
-    import_ui::shut_down(std::time::Instant::now() + std::time::Duration::from_secs(5)); // import-ui lane
+    import_ui::shut_down(); // import-ui lane
     profile_data::shut_down(std::time::Instant::now() + profile_data::SHUTDOWN_TIMEOUT); // history lane
     shut_down_engine(exit_code);
     drop(window);

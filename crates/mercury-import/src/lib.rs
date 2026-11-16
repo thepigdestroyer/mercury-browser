@@ -9,7 +9,8 @@
 //! Profile discovery takes the directories to look in from the caller: the platform's
 //! application-support directory on macOS (`~/Library/Application Support`), the config
 //! directory and the home directory on Linux (`~/.config`, `~`), and `%LOCALAPPDATA%` and
-//! `%APPDATA%` on Windows. Tests pass a directory of their own.
+//! `%APPDATA%` on Windows. Tests pass a directory of their own. The copies of databases go into
+//! a directory the caller names in a [`ReadContext`], never the system's temporary directory.
 
 #![forbid(unsafe_code)]
 
@@ -21,5 +22,8 @@ mod snapshot;
 
 pub use chromium::{find_chromium_profiles, read_chromium_bookmarks, read_chromium_history};
 pub use firefox::{find_firefox_profiles, read_firefox_bookmarks, read_firefox_history};
-pub use model::{BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_IMPORTED_VISITS};
+pub use model::{
+    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_DATABASE_BYTES,
+    MAX_IMPORTED_VISITS, MAX_TITLE_CHARS, MAX_URL_BYTES, ReadContext,
+};
 pub use netscape::{parse_netscape_bookmarks, write_netscape_bookmarks};

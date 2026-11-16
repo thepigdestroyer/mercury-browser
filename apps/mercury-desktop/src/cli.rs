@@ -70,12 +70,6 @@ Options:
                                    WebGPU, which are always off)
   --profile-dir <directory>        Keep cookies and site data in this directory
                                    (screenshot and background runs otherwise use a temporary one)
-  --import-from <directory>        Diagnostic: import the bookmarks and history of every
-                                   browser profile found under this directory (laid out like
-                                   the application-support directory) into the profile, print
-                                   what was imported, then exit
-  --import-snapshot <file.png>     Diagnostic: with --import-from, save the import window as
-                                   a PNG before exiting
   --help                           Print this help and exit
   --version                        Print the version and exit
 
@@ -85,6 +79,24 @@ Exit status:
   2  Invalid command line
   3  The screenshot's page did not finish loading
   4  The profile is in use by another Mercury Browser";
+
+// import-ui lane: diagnostic options, only in builds with the `diagnostics` feature.
+#[cfg(feature = "diagnostics")]
+const DIAGNOSTIC_USAGE: &str = "
+
+Diagnostic options (this build has the `diagnostics` feature):
+  --import-from <directory>        Import the bookmarks and history of every browser profile
+                                   found under this directory (laid out like the
+                                   application-support directory) into the profile, print
+                                   what was imported, then exit
+  --import-snapshot <file.png>     With --import-from, save the import window as a PNG
+                                   before exiting";
+#[cfg(not(feature = "diagnostics"))]
+const DIAGNOSTIC_USAGE: &str = "";
+
+fn usage() -> String {
+    format!("{USAGE}{DIAGNOSTIC_USAGE}")
+}
 
 /// `--profile-dir` and `--screenshot` need paths that are valid UTF-8; anything else would be
 /// silently altered by the conversion to `String`. Returns the usage error to print, if any.
@@ -97,9 +109,10 @@ pub(crate) fn reject_non_utf8_paths(arguments: &[std::ffi::OsString]) -> Option<
     })?;
     Some(CliOutcome::PrintAndExit {
         text: format!(
-            "mercury-browser: the {} path '{}' is not valid UTF-8; choose another path\n\n{USAGE}",
+            "mercury-browser: the {} path '{}' is not valid UTF-8; choose another path\n\n{}",
             pair[0].to_string_lossy(),
-            pair[1].to_string_lossy()
+            pair[1].to_string_lossy(),
+            usage()
         ),
         code: 2,
     })
@@ -110,7 +123,7 @@ pub(crate) fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Cl
     match parse_launch_options(arguments.into_iter()) {
         Ok(outcome) => outcome,
         Err(message) => CliOutcome::PrintAndExit {
-            text: format!("mercury-browser: {message}\n\n{USAGE}"),
+            text: format!("mercury-browser: {message}\n\n{}", usage()),
             code: 2,
         },
     }
@@ -125,14 +138,22 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut gpu_canvas = true;
     let mut profile_dir = None;
     let mut experimental_web_features = true;
+    #[cfg_attr(
+        not(feature = "diagnostics"),
+        expect(unused_mut, reason = "set by diagnostics")
+    )]
     let mut import_from = None;
+    #[cfg_attr(
+        not(feature = "diagnostics"),
+        expect(unused_mut, reason = "set by diagnostics")
+    )]
     let mut import_snapshot = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--help" => {
                 return Ok(CliOutcome::PrintAndExit {
-                    text: USAGE.to_owned(),
+                    text: usage(),
                     code: 0,
                 });
             }
@@ -168,10 +189,12 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--profile-dir", "<directory>")?;
                 profile_dir = Some(PathBuf::from(value));
             }
+            #[cfg(feature = "diagnostics")]
             "--import-from" => {
                 let value = option_value(&mut arguments, "--import-from", "<directory>")?;
                 import_from = Some(PathBuf::from(value));
             }
+            #[cfg(feature = "diagnostics")]
             "--import-snapshot" => {
                 let value = option_value(&mut arguments, "--import-snapshot", "<file.png>")?;
                 import_snapshot = Some(PathBuf::from(value));
@@ -586,6 +609,17 @@ mod tests {
         );
     }
 
+    #[cfg(not(feature = "diagnostics"))]
+    #[test]
+    fn without_the_diagnostics_feature_import_from_is_unknown() {
+        assert_eq!(exit_code(&parse(&["--import-from", "/fixtures"])), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(!text.contains("--import-from"));
+    }
+
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn import_from_is_a_diagnostic_that_makes_the_run_automated() {
         let CliOutcome::Run(options) = parse(&[

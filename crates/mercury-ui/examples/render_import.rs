@@ -150,7 +150,8 @@ fn main() -> Result<(), Box<dyn Error>> {
                 false,
             ),
             line(
-                "2 visits could not be kept because their addresses are too long.",
+                "2 visits could not be kept (for example, an address that is too long or a date \
+                 in the future).",
                 true,
             ),
         ])));
