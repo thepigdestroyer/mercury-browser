@@ -5383,6 +5383,7 @@ dependencies = [
  "surfman",
  "talaria-core",
  "talaria-servo",
+ "tempfile",
  "thiserror 2.0.21",
 ]
 

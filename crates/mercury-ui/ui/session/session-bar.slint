@@ -6,11 +6,17 @@ component SessionBarButton inherits Rectangle {
     in property <bool> primary: false;
     callback clicked;
 
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
     width: label-text.preferred-width + 24px;
     height: 28px;
     border-radius: 7px;
-    border-width: root.primary ? 0px : 1px;
-    border-color: #2f3a46;
+    border-width: focus.has-focus ? 2px : root.primary ? 0px : 1px;
+    border-color: focus.has-focus ? #b7e2ff : #2f3a46;
     background: root.primary
         ? (touch.pressed ? #45a9ed : touch.has-hover ? #78caff : #62bfff)
         : (touch.pressed ? #222d39 : touch.has-hover ? #19222c : #141b23);
@@ -24,9 +30,22 @@ component SessionBarButton inherits Rectangle {
         vertical-alignment: center;
     }
 
-    touch := TouchArea {
-        clicked => {
-            root.clicked();
+    // Reached with Tab (never focused by a click, so typing elsewhere is not interrupted);
+    // Return or Space presses it.
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+
+        touch := TouchArea {
+            clicked => {
+                root.clicked();
+            }
         }
     }
 }
@@ -34,6 +53,12 @@ component SessionBarButton inherits Rectangle {
 component SessionChoice inherits Rectangle {
     in property <string> label;
     callback clicked;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
 
     height: 32px;
     border-radius: 6px;

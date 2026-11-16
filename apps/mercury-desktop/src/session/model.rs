@@ -42,6 +42,15 @@ pub(crate) fn is_new_tab_page(url: &str) -> bool {
     NEW_TAB_PAGE_URLS.contains(&url)
 }
 
+/// Whether a session holds nothing but new-tab pages (or nothing at all).
+pub(crate) fn only_new_tab_pages(snapshot: &SessionSnapshot) -> bool {
+    snapshot
+        .windows
+        .iter()
+        .flat_map(|window| &window.tabs)
+        .all(|tab| is_new_tab_page(&tab.url))
+}
+
 /// The tab to open for a saved one: a new-tab page opens blank.
 pub(crate) fn restored_tab(tab: &TabSnapshot) -> RestoredTab {
     RestoredTab {
@@ -120,6 +129,8 @@ pub(crate) struct SessionTracker {
     /// The saved tabs as last seen, in strip order.
     seen: Vec<(TabId, TabSnapshot)>,
     active_tab: Option<TabId>,
+    /// Whether the last look found another tab selected.
+    active_tab_changed: bool,
     geometry: WindowGeometry,
     /// Only `closed_tabs` is used.
     closed: SessionSnapshot,
@@ -128,7 +139,8 @@ pub(crate) struct SessionTracker {
 impl SessionTracker {
     /// Looks at the tabs. Returns whether anything that is saved changed: a tab opened,
     /// closed, moved, navigated, retitled or zoomed, or another tab selected. Tabs that are
-    /// gone are added to the closed list (new-tab pages excepted), newest first.
+    /// gone are added to the closed list (new-tab pages excepted), newest first; several gone
+    /// at once go in so that the lowest index comes back first.
     pub(crate) fn observe_tabs(&mut self, controller: &BrowserController, now_ms: i64) -> bool {
         let current: Vec<(TabId, TabSnapshot)> = controller
             .tabs()
@@ -136,11 +148,14 @@ impl SessionTracker {
             .map(|tab| (tab.id(), tab_snapshot(tab)))
             .collect();
         let active_tab = Some(controller.active_tab_id());
-        if current == self.seen && active_tab == self.active_tab {
+        self.active_tab_changed = active_tab != self.active_tab;
+        if current == self.seen && !self.active_tab_changed {
             return false;
         }
 
-        for (index, (tab_id, tab)) in self.seen.iter().enumerate() {
+        // Highest index first, so that the lowest is reopened first and each reopened tab
+        // lands at its old place.
+        for (index, (tab_id, tab)) in self.seen.iter().enumerate().rev() {
             let still_open = current.iter().any(|(open_id, _)| open_id == tab_id);
             if !still_open && !is_new_tab_page(&tab.url) {
                 self.closed.push_closed(ClosedTab {
@@ -154,6 +169,12 @@ impl SessionTracker {
         self.seen = current;
         self.active_tab = active_tab;
         true
+    }
+
+    /// Whether the last `observe_tabs` found another tab selected (a restored tab then needs
+    /// its page created).
+    pub(crate) fn active_tab_changed(&self) -> bool {
+        self.active_tab_changed
     }
 
     /// Takes in the window's place and state; returns whether what is saved changed.
@@ -642,6 +663,84 @@ mod tests {
             ("https://a.test/", 1, NOW + 1)
         );
         assert_eq!(tracker.pop_closed(), None);
+    }
+
+    #[test]
+    fn several_tabs_closed_at_once_reopen_at_their_old_places() {
+        let mut controller = BrowserController::default();
+        let mut tracker = SessionTracker::default();
+        let a = page(&mut controller, "https://a.test/", "A");
+        let b = page(&mut controller, "https://b.test/", "B");
+        let c = page(&mut controller, "https://c.test/", "C");
+        tracker.observe_tabs(&controller, NOW);
+
+        for tab_id in [b, a, c] {
+            controller.close_tab(tab_id);
+        }
+        tracker.observe_tabs(&controller, NOW);
+        while let Some(closed) = tracker.pop_closed() {
+            let index = reopen_index(&closed, controller.tabs().len());
+            controller
+                .open_restored_tab(index, &restored_tab(&closed.tab))
+                .unwrap();
+        }
+
+        let urls = controller
+            .tabs()
+            .map(|tab| tab.state().url().to_owned())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            urls,
+            vec!["", "https://a.test/", "https://b.test/", "https://c.test/"]
+        );
+    }
+
+    #[test]
+    fn selecting_another_tab_is_reported_so_the_engine_can_be_woken() {
+        let mut controller = BrowserController::default();
+        let mut tracker = SessionTracker::default();
+        let first = controller.active_tab_id();
+        let second = page(&mut controller, "https://a.test/", "A");
+        tracker.observe_tabs(&controller, NOW);
+        assert!(tracker.active_tab_changed(), "the first look");
+
+        controller.handle_event(
+            second,
+            BrowserEvent::PageTitleChanged {
+                title: Some("A2".to_owned()),
+            },
+        );
+        tracker.observe_tabs(&controller, NOW);
+        assert!(!tracker.active_tab_changed());
+
+        controller.select_tab(second);
+        tracker.observe_tabs(&controller, NOW);
+        assert!(tracker.active_tab_changed());
+        tracker.observe_tabs(&controller, NOW);
+        assert!(!tracker.active_tab_changed());
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn a_session_of_new_tab_pages_only_is_recognised() {
+        let blank = session(vec![window(
+            vec![
+                saved_tab(NEW_TAB_PAGE_URL, "New Tab"),
+                saved_tab("about:blank", ""),
+            ],
+            0,
+        )]);
+        let real = session(vec![window(
+            vec![
+                saved_tab(NEW_TAB_PAGE_URL, "New Tab"),
+                saved_tab("https://a.test/", "A"),
+            ],
+            0,
+        )]);
+
+        assert!(only_new_tab_pages(&blank));
+        assert!(only_new_tab_pages(&SessionSnapshot::default()));
+        assert!(!only_new_tab_pages(&real));
     }
 
     #[test]

@@ -140,6 +140,12 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
     state.shut_down(window.as_ref(), exit_code_if_stuck);
 }
 
+// session: lets a newly selected restored tab get its web view without waiting for a redraw
+/// Asks for a pump from the event loop, as Servo's waker does.
+pub(crate) fn request_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
 fn pump_after_wake() {
     let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
         return;

@@ -1,61 +1,77 @@
-//! Writes the running session off the UI thread, one write at a time.
+//! Writes the session file off the UI thread, one write at a time, in order.
 
-use std::sync::mpsc::{self, Receiver, Sender};
-use std::thread::{self, JoinHandle};
+use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};
+use std::thread;
+use std::time::Duration;
 
 use mercury_settings::{SessionSnapshot, SessionStore, SettingsError};
 
-/// A thread that writes snapshots with `exited_cleanly: false`, in the order given, and reports
-/// each outcome.
+use super::saving::SessionWriter;
+
+/// A thread that writes the snapshots it is given, in order, and reports each outcome. Edits
+/// of the recovery list are made on the caller's thread: they are rare and follow a write the
+/// caller has already waited for.
 pub(crate) struct SaveWorker {
-    requests: Option<Sender<SessionSnapshot>>,
+    store: SessionStore,
+    requests: Sender<(SessionSnapshot, bool)>,
     outcomes: Receiver<Result<(), SettingsError>>,
-    thread: Option<JoinHandle<()>>,
 }
 
 impl SaveWorker {
+    /// The thread ends when the worker is dropped, after the write it is doing; nothing waits
+    /// for it (a stalled disk must not hold up quitting).
     pub(crate) fn start(store: SessionStore) -> std::io::Result<Self> {
-        let (requests, requested) = mpsc::channel::<SessionSnapshot>();
+        let (requests, requested) = mpsc::channel::<(SessionSnapshot, bool)>();
         let (report, outcomes) = mpsc::channel();
-        let thread = thread::Builder::new()
+        let thread_store = store.clone();
+        thread::Builder::new()
             .name("session saver".to_owned())
             .spawn(move || {
-                for snapshot in requested {
-                    if report.send(store.save(&snapshot, false)).is_err() {
+                for (snapshot, exited_cleanly) in requested {
+                    if report
+                        .send(thread_store.save(&snapshot, exited_cleanly))
+                        .is_err()
+                    {
                         break;
                     }
                 }
             })?;
         Ok(Self {
-            requests: Some(requests),
+            store,
+            requests,
             outcomes,
-            thread: Some(thread),
         })
     }
+}
 
-    /// Hands a snapshot to the thread. False if the thread is gone.
-    pub(crate) fn save(&self, snapshot: SessionSnapshot) -> bool {
-        self.requests
-            .as_ref()
-            .is_some_and(|requests| requests.send(snapshot).is_ok())
+impl SessionWriter for SaveWorker {
+    fn begin_save(&mut self, snapshot: SessionSnapshot, exited_cleanly: bool) -> bool {
+        self.requests.send((snapshot, exited_cleanly)).is_ok()
     }
 
-    /// The outcome of a write that has finished, if any.
-    pub(crate) fn try_outcome(&self) -> Option<Result<(), SettingsError>> {
+    fn poll(&mut self) -> Option<Result<(), SettingsError>> {
         self.outcomes.try_recv().ok()
     }
 
-    /// Waits for every write handed over to finish and stops the thread. Returns the outcomes
-    /// not yet collected.
-    pub(crate) fn finish(mut self) -> Vec<Result<(), SettingsError>> {
-        // Closing the channel ends the thread's loop once the queued writes are done.
-        drop(self.requests.take());
-        if let Some(thread) = self.thread.take()
-            && thread.join().is_err()
-        {
-            log::error!("the session saver panicked");
+    fn wait(&mut self, budget: Duration) -> Option<Result<(), SettingsError>> {
+        match self.outcomes.recv_timeout(budget) {
+            Ok(outcome) => Some(outcome),
+            Err(RecvTimeoutError::Timeout) => None,
+            // The thread is gone (it panicked): the write did not land.
+            Err(RecvTimeoutError::Disconnected) => Some(Err(SettingsError::Io {
+                action: "save",
+                path: "session.json".into(),
+                source: std::io::Error::other("the session saver stopped"),
+            })),
         }
-        self.outcomes.try_iter().collect()
+    }
+
+    fn remove_recovery(&mut self, index: usize) -> Result<bool, SettingsError> {
+        self.store.remove_recovery(index)
+    }
+
+    fn resolve_recovery(&mut self) -> Result<(), SettingsError> {
+        self.store.resolve_recovery()
     }
 }
 
@@ -79,21 +95,18 @@ mod tests {
     }
 
     #[test]
-    fn finishing_waits_for_the_writes_in_flight_and_reports_them() {
-        let directory =
-            std::env::temp_dir().join(format!("mercury-session-saver-test-{}", std::process::id()));
-        std::fs::create_dir_all(&directory).unwrap();
-        let worker = SaveWorker::start(SessionStore::new(&directory)).unwrap();
+    fn writes_land_in_order_with_their_mark_and_are_reported() {
+        let directory = tempfile::tempdir().unwrap();
+        let mut worker = SaveWorker::start(SessionStore::new(directory.path())).unwrap();
 
-        assert!(worker.save(one_tab("https://a.test/")));
-        assert!(worker.save(one_tab("https://b.test/")));
-        let outcomes = worker.finish();
+        assert!(worker.begin_save(one_tab("https://a.test/"), false));
+        assert!(worker.wait(Duration::from_secs(5)).unwrap().is_ok());
+        assert!(worker.begin_save(one_tab("https://b.test/"), true));
+        assert!(worker.wait(Duration::from_secs(5)).unwrap().is_ok());
+        assert!(worker.poll().is_none());
 
-        let written = std::fs::read_to_string(directory.join("session.json")).unwrap();
-        let _ = std::fs::remove_dir_all(&directory);
-        assert_eq!(outcomes.len(), 2);
-        assert!(outcomes.iter().all(Result::is_ok));
+        let written = std::fs::read_to_string(directory.path().join("session.json")).unwrap();
         assert!(written.contains("https://b.test/"), "{written}");
-        assert!(written.contains("\"exited_cleanly\": false"), "{written}");
+        assert!(written.contains("\"exited_cleanly\": true"), "{written}");
     }
 }

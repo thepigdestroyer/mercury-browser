@@ -5,7 +5,7 @@ use std::rc::Rc;
 
 use slint::Rgb8Pixel;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
-use slint::platform::{Platform, WindowAdapter};
+use slint::platform::{Key, Platform, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
 
 slint::slint! {
@@ -73,6 +73,12 @@ fn render(window: &MinimalSoftwareWindow, name: &str) {
     .unwrap();
 }
 
+fn press(window: &MinimalSoftwareWindow, key: Key) {
+    let text = SharedString::from(key);
+    window.dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    window.dispatch_event(WindowEvent::KeyReleased { text });
+}
+
 fn labels(items: &[&str]) -> ModelRc<SharedString> {
     ModelRc::new(VecModel::from(
         items
@@ -95,6 +101,15 @@ fn the_session_bar_renders_its_offer_its_chooser_and_its_notice() {
 
     preview.set_sessions(labels(&["Session Alpha (1 tab)"]));
     render(&window, "session-bar-one");
+
+    // Tab reaches Restore, Return presses it; a second Tab and Space press Dismiss.
+    press(&window, Key::Tab);
+    render(&window, "session-bar-focused");
+    press(&window, Key::Return);
+    assert_eq!(preview.get_restored(), 0);
+    press(&window, Key::Tab);
+    press(&window, Key::Space);
+    assert!(preview.get_dismissed());
 
     preview.set_sessions(labels(&[
         "Session Alpha (1 tab)",

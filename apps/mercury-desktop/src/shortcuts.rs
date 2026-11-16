@@ -49,12 +49,16 @@ pub(crate) enum ShortcutAction {
     /// Brings back the most recently closed tab where it was.
     ReopenClosedTab,
     /// Opens the active tab's address again in a new tab just after it. No default shortcut.
-    // Run from the tab context menu once it exists.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "run from the tab context menu once it exists")
+    )]
     DuplicateTab,
     /// Restores the last run's tabs when they were not restored at start-up. No default shortcut.
-    // Run from the History menu once it exists.
-    #[allow(dead_code)]
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "run from the History menu once it exists")
+    )]
     RestorePreviousSession,
 }
 

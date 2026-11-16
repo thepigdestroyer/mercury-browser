@@ -6,15 +6,17 @@
 //!   `SessionStore::begin_run` before any session save (3), offers the recovery list whenever it
 //!   is not empty (5), and restores a `last` that quit in order only when the start-up setting
 //!   asks for it, keeping it for "Restore previous session" otherwise (6).
-//! - Every change is marked on the `SaveThrottle`; a timer writes through it off the UI thread,
-//!   one write at a time, handing the token back only for a write that landed (8).
-//! - `finish_run` waits for the write in flight, then writes with `exited_cleanly: true`, even
-//!   when nothing changed, and calls `flushed` (9).
+//! - Every change is marked; a timer writes through the throttle off the UI thread, one write at
+//!   a time, the token handed back only for a write that landed (8). See `saving::SaveState`.
+//! - Restored tabs are written before the recovery entry they came from is removed (5).
+//! - `finish_run` waits (bounded) for the write in flight, then writes with
+//!   `exited_cleanly: true`, even when nothing changed (9).
 //! - New-tab pages are saved as `about:newtab` (10). A `NewerVersion` refusal stops saving for
 //!   the rest of the run and tells the user once (11).
 
 mod model;
 mod saver;
+mod saving;
 mod screens;
 
 use std::cell::RefCell;
@@ -23,8 +25,8 @@ use std::rc::Rc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use mercury_settings::{
-    SaveThrottle, SaveToken, SessionSnapshot, SessionStore, SettingsError, SettingsStore,
-    StartupBehavior, WindowBounds, WindowSnapshot, sweep_stale_temporaries,
+    SessionSnapshot, SessionStore, SettingsStore, StartupBehavior, WindowBounds, WindowSnapshot,
+    sweep_stale_temporaries,
 };
 use mercury_ui::MainWindow;
 use slint::{
@@ -38,6 +40,7 @@ use model::{
     RestorePlan, SessionTracker, WindowGeometry, duplicate_of_active, place_window, plan_restore,
     recovery_label, reopen_index, restored_tab,
 };
+use saving::{Resolve, SaveState, Written};
 
 /// The session is written at most this often while it keeps changing.
 const SAVE_INTERVAL_MS: i64 = 5_000;
@@ -51,17 +54,11 @@ thread_local! {
 }
 
 struct Session {
-    store: SessionStore,
-    throttle: SaveThrottle,
+    saving: SaveState<saver::SaveWorker>,
     tracker: SessionTracker,
-    worker: Option<saver::SaveWorker>,
-    /// The token of the write the worker is doing; at most one at a time.
-    in_flight: Option<SaveToken>,
-    /// The session file is from a newer version: never written again this run.
-    saving_refused: bool,
     /// The last run's session, which quit in order and was not restored at start-up.
     previous: Option<SessionSnapshot>,
-    /// Sessions that did not quit in order, newest first, until the user answers the bar.
+    /// Sessions that did not quit in order, newest first, as the bar lists them.
     recovery: Vec<SessionSnapshot>,
     controller: Rc<RefCell<BrowserController>>,
     window: slint::Weak<MainWindow>,
@@ -91,35 +88,42 @@ pub(crate) fn start(
             return;
         }
     };
+    let worker = match saver::SaveWorker::start(store) {
+        Ok(worker) => worker,
+        Err(error) => {
+            log::error!("could not start the session saver; tabs will not be saved: {error}");
+            return;
+        }
+    };
 
     let mut tracker = SessionTracker::default();
     let mut previous = None;
-    if let Some(last) = startup.last.filter(|last| last.exited_cleanly) {
+    // The window goes back where the session to restore (or the newest crashed one) had it.
+    let mut geometry_from = startup
+        .recovery
+        .first()
+        .and_then(|crashed| crashed.windows.first());
+    if let Some(last) = startup.last.as_ref().filter(|last| last.exited_cleanly) {
         if startup_behavior(root) == StartupBehavior::RestoreSession {
-            if let Some(first_window) = last.snapshot.windows.first()
-                && !window_size_given
-            {
-                let geometry = apply_window_geometry(window, first_window);
-                tracker.observe_geometry(geometry);
-            }
+            geometry_from = last.snapshot.windows.first();
             let plan = plan_restore(&last.snapshot, &controller.borrow(), false);
             apply_plan(controller, &mut tracker, plan);
         } else {
-            previous = Some(last.snapshot);
+            previous = Some(last.snapshot.clone());
         }
+    }
+    if let Some(saved) = geometry_from
+        && !window_size_given
+    {
+        let geometry = apply_window_geometry(window, saved);
+        tracker.observe_geometry(geometry);
     }
 
-    let mut throttle = SaveThrottle::new(SAVE_INTERVAL_MS);
+    let mut saving = SaveState::new(worker, SAVE_INTERVAL_MS);
+    saving.set_holding_previous(previous.is_some());
     if tracker.observe_tabs(&controller.borrow(), now_ms()) {
-        throttle.mark_dirty();
+        saving.mark_dirty();
     }
-    let worker = match saver::SaveWorker::start(store.clone()) {
-        Ok(worker) => Some(worker),
-        Err(error) => {
-            log::warn!("could not start the session saver; saving only at quit: {error}");
-            None
-        }
-    };
 
     window.set_recovery_sessions(labels(&startup.recovery));
     window.set_can_restore_previous_session(previous.is_some());
@@ -130,12 +134,8 @@ pub(crate) fn start(
     timer.start(slint::TimerMode::Repeated, TICK_INTERVAL, tick);
     SESSION.with(|session| {
         *session.borrow_mut() = Some(Session {
-            store,
-            throttle,
+            saving,
             tracker,
-            worker,
-            in_flight: None,
-            saving_refused: false,
             previous,
             recovery: startup.recovery,
             controller: Rc::clone(controller),
@@ -146,44 +146,43 @@ pub(crate) fn start(
 }
 
 /// The final save of an orderly quit: waits for the write in flight, then writes the session
-/// marked as having quit in order. Call once, after the event loop has ended and before the
-/// engine shuts down. Does nothing if the session was never started.
+/// marked as having quit in order — at most `2 × saving::WAIT_BUDGET` in all. Call once, after
+/// the event loop has ended and before the engine shuts down. Does nothing if the session was
+/// never started.
 pub(crate) fn finish_run() {
     let Some(mut session) = SESSION.with(|session| session.borrow_mut().take()) else {
         return;
     };
     session.timer.stop();
     let now = now_ms();
-    if let Ok(controller) = session.controller.try_borrow()
-        && session.tracker.observe_tabs(&controller, now)
-    {
-        session.throttle.mark_dirty();
-    }
-    if let Some(worker) = session.worker.take() {
-        for outcome in worker.finish() {
-            session.take_outcome(outcome, now);
-        }
-    }
-    if session.saving_refused {
-        return;
-    }
     let Ok(controller) = session.controller.try_borrow() else {
         log::error!("the session could not be saved at quit: the browser state is busy");
         return;
     };
+    if session.tracker.observe_tabs(&controller, now) {
+        session.saving.mark_dirty();
+    }
     let snapshot = session.tracker.snapshot(&controller, now);
-    match session.store.save(&snapshot, true) {
-        Ok(()) => session.throttle.flushed(now),
-        Err(error) => log::error!("could not save the session at quit: {error}"),
+    match session.saving.finish(now, snapshot) {
+        Written::Saved | Written::Refused => {}
+        Written::TimedOut | Written::Failed => {
+            log::error!("the session was not saved at quit; it will be offered as a crash");
+        }
     }
 }
 
-/// Notes a change of the tabs; called whenever the window is brought up to date.
+/// Notes a change of the tabs; called whenever the window is brought up to date. When another
+/// tab was selected, the engine is woken so that a restored tab's page is created at once,
+/// even if the window is covered and skips its redraw.
 pub(crate) fn observe(window: &MainWindow, controller: &BrowserController) {
-    with_session(|session| {
+    let selection_changed = with_session(|session| {
         session.observe_tabs(controller, now_ms());
         window.set_can_reopen_closed_tab(session.tracker.has_closed_tabs());
+        session.tracker.active_tab_changed()
     });
+    if selection_changed == Some(true) {
+        crate::engine::request_pump();
+    }
 }
 
 /// "Reopen closed tab": the most recently closed tab, back at its old place, selected.
@@ -192,7 +191,7 @@ pub(crate) fn reopen_closed_tab(window: &MainWindow, controller: &RefCell<Browse
         // A tab closed since the last look is the one to bring back.
         session.observe_tabs(&controller.borrow(), now_ms());
         let closed = session.tracker.pop_closed()?;
-        session.throttle.mark_dirty();
+        session.saving.mark_dirty();
         let mut controller = controller.borrow_mut();
         let index = reopen_index(&closed, controller.tabs().len());
         match controller.open_restored_tab(index, &restored_tab(&closed.tab)) {
@@ -227,46 +226,57 @@ pub(crate) fn duplicate_tab(window: &MainWindow, controller: &RefCell<BrowserCon
 }
 
 /// "Restore previous session": the last run's tabs, when it quit in order and they were not
-/// restored at start-up. Offered once.
+/// restored at start-up. Offered once. The restored tabs are written at once.
 pub(crate) fn restore_previous_session(
     window: &MainWindow,
     controller: &RefCell<BrowserController>,
 ) {
     let restored = with_session(|session| {
         let snapshot = session.previous.take()?;
+        session.saving.set_holding_previous(false);
         let plan = plan_restore(&snapshot, &controller.borrow(), true);
-        apply_plan(controller, &mut session.tracker, plan);
-        session.throttle.mark_dirty();
+        session.restore(controller, plan, None);
         Some(())
     });
-    window.set_can_restore_previous_session(false);
-    if restored.flatten().is_some() {
-        sync_ui(window, &controller.borrow());
+    // Busy (`None`): nothing happened, and the command stays available.
+    if let Some(restored) = restored {
+        window.set_can_restore_previous_session(false);
+        if restored.is_some() {
+            sync_ui(window, &controller.borrow());
+        }
     }
 }
 
-/// The answer to the recovery bar: `Some(index)` restores that session, `None` dismisses them
-/// all. Either way the list is resolved.
+/// The answer to the recovery bar: `Some(index)` restores that session and keeps the others
+/// offered; `None` dismisses them all.
 fn answer_recovery(
     window: &MainWindow,
     controller: &RefCell<BrowserController>,
     restore: Option<usize>,
 ) {
-    let restored = with_session(|session| {
-        let snapshot = restore.and_then(|index| session.recovery.get(index).cloned());
-        if let Some(snapshot) = &snapshot {
-            let plan = plan_restore(snapshot, &controller.borrow(), true);
-            apply_plan(controller, &mut session.tracker, plan);
-            session.throttle.mark_dirty();
+    let answered = with_session(|session| {
+        let Some(index) = restore else {
+            session.recovery.clear();
+            session.saving.dismiss_all();
+            return false;
+        };
+        if index >= session.recovery.len() {
+            return false;
         }
-        session.recovery.clear();
-        if let Err(error) = session.store.resolve_recovery() {
-            log::warn!("could not clear the list of sessions to recover: {error}");
-        }
-        snapshot.is_some()
+        let snapshot = session.recovery.remove(index);
+        let plan = plan_restore(&snapshot, &controller.borrow(), true);
+        session.restore(controller, plan, Some(Resolve::Entry(index)));
+        true
     });
-    window.set_recovery_sessions(labels(&[]));
-    if restored == Some(true) {
+    let Some(restored) = answered else {
+        return;
+    };
+    SESSION.with(|session| {
+        if let Some(session) = session.borrow().as_ref() {
+            window.set_recovery_sessions(labels(&session.recovery));
+        }
+    });
+    if restored {
         sync_ui(window, &controller.borrow());
     }
 }
@@ -378,8 +388,32 @@ fn apply_window_geometry(window: &MainWindow, saved: &WindowSnapshot) -> WindowG
 impl Session {
     fn observe_tabs(&mut self, controller: &BrowserController, now: i64) {
         if self.tracker.observe_tabs(controller, now) {
-            self.throttle.mark_dirty();
+            self.saving.mark_dirty();
         }
+    }
+
+    /// Puts a session's tabs back, then writes them before `resolve` touches the recovery list.
+    fn restore(
+        &mut self,
+        controller: &RefCell<BrowserController>,
+        plan: RestorePlan,
+        resolve: Option<Resolve>,
+    ) {
+        apply_plan(controller, &mut self.tracker, plan);
+        let now = now_ms();
+        let snapshot = {
+            let controller = controller.borrow();
+            self.observe_tabs(&controller, now);
+            self.tracker.snapshot(&controller, now)
+        };
+        match self.saving.persist_restore(now, snapshot, resolve) {
+            Written::Saved | Written::Refused => {}
+            Written::TimedOut | Written::Failed => log::warn!(
+                "the restored tabs are not saved yet; the session they came from is kept until \
+                 they are"
+            ),
+        }
+        self.tell_refusal();
     }
 
     fn observe_window(&mut self, window: &MainWindow) {
@@ -401,38 +435,20 @@ impl Session {
             native.is_minimized(),
         );
         if self.tracker.observe_geometry(geometry) {
-            self.throttle.mark_dirty();
+            self.saving.mark_dirty();
         }
     }
 
-    fn take_outcome(&mut self, outcome: Result<(), SettingsError>, now: i64) {
-        let token = self.in_flight.take();
-        match outcome {
-            Ok(()) => {
-                if let Some(token) = token {
-                    self.throttle.saved(token, now);
-                }
-            }
-            Err(SettingsError::NewerVersion { .. }) => {
-                log::warn!("the session file is from a newer version; not saving tabs this run");
-                self.saving_refused = true;
-                if let Some(window) = self.window.upgrade() {
-                    window.set_session_notice(NEWER_VERSION_NOTICE.into());
-                }
-            }
-            Err(error) => log::warn!("could not save the session: {error}"),
+    fn tell_refusal(&mut self) {
+        if self.saving.take_refusal_notice()
+            && let Some(window) = self.window.upgrade()
+        {
+            window.set_session_notice(NEWER_VERSION_NOTICE.into());
         }
     }
 
     fn tick(&mut self) {
         let now = now_ms();
-        while let Some(outcome) = self
-            .worker
-            .as_ref()
-            .and_then(saver::SaveWorker::try_outcome)
-        {
-            self.take_outcome(outcome, now);
-        }
         if let Some(window) = self.window.upgrade() {
             self.observe_window(&window);
         }
@@ -441,17 +457,9 @@ impl Session {
             return;
         };
         self.observe_tabs(&controller, now);
-        if self.saving_refused || self.in_flight.is_some() {
-            return;
-        }
-        let Some(worker) = &self.worker else {
-            return;
-        };
-        if let Some(token) = self.throttle.should_save(now)
-            && worker.save(self.tracker.snapshot(&controller, now))
-        {
-            self.in_flight = Some(token);
-        }
+        let tracker = &self.tracker;
+        self.saving.tick(now, || tracker.snapshot(&controller, now));
+        self.tell_refusal();
     }
 }
 
