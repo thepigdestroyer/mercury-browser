@@ -21,7 +21,7 @@ use super::bar::MenuEntry;
 use super::bar::menu_row;
 use super::tree::{self, FolderRow};
 use super::{Bookmarks, file, with};
-use crate::profile_data::bookmarks::{MAX_SEARCH_RESULTS, RemovedBookmark};
+use crate::profile_data::bookmarks::{BookmarkEdit, MAX_SEARCH_RESULTS, RemovedBookmark};
 use crate::profile_data::{self, ProfileDataError};
 
 /// What the manager shows and has selected.
@@ -43,9 +43,14 @@ pub(crate) struct Manager {
     view: RefCell<View>,
     /// Outdates replies to older reads.
     generation: Cell<u64>,
-    /// An import is running.
-    pub(crate) busy: Cell<bool>,
+    /// Holds re-reads back while an import runs.
+    gate: RefCell<RefreshGate>,
+    /// Waits for typing to pause before searching.
+    search_timer: slint::Timer,
 }
+
+/// How long typing in the search field must pause before the search runs.
+const SEARCH_DELAY: std::time::Duration = std::time::Duration::from_millis(150);
 
 /// Opens the manager, making it the first time.
 pub(crate) fn show(bookmarks: &Rc<Bookmarks>) {
@@ -93,10 +98,45 @@ pub(crate) fn show_folder(bookmarks: &Rc<Bookmarks>, folder: BookmarkId) {
 /// The address an edit asks for: a full URL as the address bar would read it, or why not.
 pub(crate) fn edited_url(input: &str) -> Result<String, &'static str> {
     match classify_address(input) {
-        Ok(NavigationTarget::Url(url)) => Ok(url.to_string()),
+        Ok(NavigationTarget::Url(url)) => Ok(tree::without_credentials(url.as_str())),
         Ok(NavigationTarget::SearchQuery(_)) | Err(_) => {
             Err("Enter a full address, such as https://example.com/.")
         }
+    }
+}
+
+/// A name as the manager stores it, trimmed; a blank name is refused, as the popover does.
+pub(crate) fn validate_name(name: &str) -> Result<String, &'static str> {
+    let name = name.trim();
+    if name.is_empty() {
+        return Err("Enter a name.");
+    }
+    Ok(name.to_owned())
+}
+
+/// Coalesces the manager's re-reads: none while an import runs (each of its chunks notifies),
+/// one when it ends if anything changed meanwhile.
+#[derive(Debug, Default)]
+pub(crate) struct RefreshGate {
+    busy: bool,
+    pending: bool,
+}
+
+impl RefreshGate {
+    /// A change arrived: whether to re-read now.
+    pub(crate) fn changed(&mut self) -> bool {
+        self.pending |= self.busy;
+        !self.busy
+    }
+
+    /// An import started or ended: whether to re-read now (it ended and something changed).
+    pub(crate) fn set_busy(&mut self, busy: bool) -> bool {
+        self.busy = busy;
+        !busy && std::mem::take(&mut self.pending)
+    }
+
+    pub(crate) fn busy(&self) -> bool {
+        self.busy
     }
 }
 
@@ -140,7 +180,8 @@ impl Manager {
             bookmarks: Rc::downgrade(bookmarks),
             view: RefCell::new(View::default()),
             generation: Cell::new(0),
-            busy: Cell::new(false),
+            gate: RefCell::new(RefreshGate::default()),
+            search_timer: slint::Timer::default(),
         });
         manager.connect();
         Ok(manager)
@@ -174,7 +215,15 @@ impl Manager {
         self.window.on_search_edited(move |text| {
             if let Some(manager) = this.upgrade() {
                 manager.view.borrow_mut().search = text.to_string();
-                manager.load_rows();
+                // Searched once typing pauses, not on every key: each search walks the tree.
+                let later = Rc::downgrade(&manager);
+                manager
+                    .search_timer
+                    .start(slint::TimerMode::SingleShot, SEARCH_DELAY, move || {
+                        if let Some(manager) = later.upgrade() {
+                            manager.load_rows();
+                        }
+                    });
             }
         });
         let this = on(self);
@@ -237,6 +286,28 @@ impl Manager {
                 file::export_to_file(&manager);
             }
         });
+    }
+
+    /// Whether an import from a file is running.
+    pub(crate) fn busy(&self) -> bool {
+        self.gate.borrow().busy()
+    }
+
+    /// An import started or ended; re-reads once at its end if anything changed meanwhile.
+    pub(crate) fn set_busy(self: &Rc<Self>, busy: bool) {
+        self.window.set_busy(busy);
+        let refresh = self.gate.borrow_mut().set_busy(busy);
+        if refresh {
+            self.refresh();
+        }
+    }
+
+    /// The bookmarks changed: re-reads now, or after the import that is running.
+    pub(crate) fn changed(self: &Rc<Self>) {
+        let now = self.gate.borrow_mut().changed();
+        if now {
+            self.refresh();
+        }
     }
 
     pub(crate) fn set_status(&self, status: &str) {
@@ -498,7 +569,13 @@ impl Manager {
         let (Some(node), Some(data)) = (self.selected(), profile_data::handle()) else {
             return;
         };
-        let name = self.window.get_edit_name().trim().to_owned();
+        let name = match validate_name(&self.window.get_edit_name()) {
+            Ok(name) => name,
+            Err(problem) => {
+                self.set_problem(problem);
+                return;
+            }
+        };
         let url = match &node.kind {
             BookmarkKind::Bookmark { url } => {
                 let typed = self.window.get_edit_url();
@@ -516,11 +593,14 @@ impl Manager {
             }
             _ => None,
         };
-        if name != node.title {
-            data.rename_bookmark(node.id, name, self.report());
-        }
-        if let Some(url) = url {
-            data.set_bookmark_url(node.id, url, self.report());
+        let edit = BookmarkEdit {
+            title: (name != node.title).then_some(name),
+            url,
+            folder: None,
+        };
+        // One request: one reply (the first failure is shown) and one notification.
+        if edit != BookmarkEdit::default() {
+            data.edit_bookmark(node.id, edit, self.report());
         }
     }
 
@@ -619,17 +699,26 @@ impl Manager {
             return;
         };
         self.window.set_can_undo(false);
+        // Kept until the restore succeeds: a failed undo can be tried again.
+        let kept = removed.clone();
         let this = Rc::downgrade(self);
         data.restore_bookmark(removed, move |result| {
             let Some(manager) = this.upgrade() else {
                 return;
             };
             match result {
-                Ok(id) => {
-                    manager.view.borrow_mut().select_next = Some(id);
+                Ok(restored) => {
+                    manager.view.borrow_mut().select_next = Some(restored.id);
                     manager.set_problem("");
+                    if !restored.in_place {
+                        manager.set_status("Restored at the end of its folder.");
+                    }
                 }
-                Err(error) => manager.set_problem(&problem_text(&error)),
+                Err(error) => {
+                    manager.view.borrow_mut().undo = Some(kept);
+                    manager.window.set_can_undo(true);
+                    manager.set_problem(&problem_text(&error));
+                }
             }
         });
     }
@@ -688,6 +777,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_blank_name_is_refused() {
+        assert_eq!(validate_name("  News  "), Ok("News".to_owned()));
+        assert!(validate_name("   ").is_err());
+        assert!(validate_name("").is_err());
+    }
+
+    #[test]
+    fn refreshes_wait_for_an_import_and_then_happen_once() {
+        let mut gate = RefreshGate::default();
+        assert!(gate.changed(), "idle: at once");
+        assert!(!gate.set_busy(true), "nothing pending yet");
+        assert!(!gate.changed());
+        assert!(!gate.changed());
+        assert!(
+            gate.set_busy(false),
+            "one refresh for what changed meanwhile"
+        );
+        assert!(!gate.set_busy(true));
+        assert!(!gate.set_busy(false), "nothing changed during this import");
+    }
+
+    #[test]
     fn edited_addresses_must_be_full_urls() {
         assert_eq!(
             edited_url(" https://example.com/a "),
@@ -700,6 +811,10 @@ mod tests {
         assert!(edited_url("two words").is_err());
         assert!(edited_url("").is_err());
         assert!(edited_url("ftp://example.com/").is_err());
+        assert_eq!(
+            edited_url("https://me:pw@example.com/"),
+            Ok("https://example.com/".to_owned())
+        );
     }
 
     #[test]

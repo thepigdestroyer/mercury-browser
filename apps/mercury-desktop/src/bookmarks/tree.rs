@@ -3,9 +3,23 @@
 //! folder list of the chooser, and search matching.
 
 use mercury_import::ImportedNode;
-use mercury_store::{BookmarkId, BookmarkImport, BookmarkKind, BookmarkNode};
+use mercury_store::{BookmarkId, BookmarkImport, BookmarkKind};
 
-use crate::profile_data::bookmarks::Walked;
+use crate::profile_data::bookmarks::{Walked, nest};
+
+/// `url` without a user name or password, as history records it: a bookmark (made, imported
+/// or exported) never keeps credentials. Text that is not an absolute URL is returned as is.
+pub(crate) fn without_credentials(url: &str) -> String {
+    match url::Url::parse(url) {
+        Ok(mut parsed) if !parsed.username().is_empty() || parsed.password().is_some() => {
+            // Both fail only for URLs that cannot have credentials, which then have none.
+            let _ = parsed.set_username("");
+            let _ = parsed.set_password(None);
+            parsed.into()
+        }
+        _ => url.to_owned(),
+    }
+}
 
 /// One folder as the folder chooser and the manager's tree list it.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -42,38 +56,6 @@ pub(crate) fn chooser_labels(rows: &[FolderRow]) -> Vec<String> {
         .collect()
 }
 
-/// Builds nested trees from a pre-order walk: entries at `base` depth become the top level.
-/// `make` turns a node and its finished children into a tree node.
-fn nest<T>(
-    walked: &[Walked],
-    base: usize,
-    mut make: impl FnMut(&BookmarkNode, Vec<T>) -> Option<T>,
-) -> Vec<T> {
-    let mut top: Vec<T> = Vec::new();
-    let mut open: Vec<(&BookmarkNode, Vec<T>)> = Vec::new();
-    let mut close = |open: &mut Vec<(&BookmarkNode, Vec<T>)>, top: &mut Vec<T>| {
-        if let Some((node, children)) = open.pop()
-            && let Some(made) = make(node, children)
-        {
-            match open.last_mut() {
-                Some((_, siblings)) => siblings.push(made),
-                None => top.push(made),
-            }
-        }
-    };
-    for entry in walked.iter().filter(|entry| entry.depth >= base) {
-        let level = entry.depth - base;
-        while open.len() > level {
-            close(&mut open, &mut top);
-        }
-        open.push((&entry.node, Vec::new()));
-    }
-    while !open.is_empty() {
-        close(&mut open, &mut top);
-    }
-    top
-}
-
 /// The children of the walk's start, as a bookmarks file holds them. Folders carry their
 /// dates; bookmarks their dates too.
 pub(crate) fn imported_nodes(walked: &[Walked]) -> Vec<ImportedNode> {
@@ -81,7 +63,7 @@ pub(crate) fn imported_nodes(walked: &[Walked]) -> Vec<ImportedNode> {
         Some(match &node.kind {
             BookmarkKind::Bookmark { url } => ImportedNode::Bookmark {
                 title: node.title.clone(),
-                url: url.clone(),
+                url: without_credentials(url),
                 added_at_ms: Some(node.added_at_ms),
             },
             BookmarkKind::Folder => ImportedNode::Folder {
@@ -139,7 +121,7 @@ pub(crate) fn bookmark_imports(
                     added_at_ms,
                 } => BookmarkImport::Bookmark {
                     title: title.clone(),
-                    url: url.clone(),
+                    url: without_credentials(url),
                     guid: guid()?,
                     added_at_ms: *added_at_ms,
                 },
@@ -162,58 +144,12 @@ pub(crate) fn count_imported(nodes: &[ImportedNode]) -> u64 {
     count
 }
 
-/// The walked entry (at depth 0) and everything in it, with their own GUIDs and dates, to put
-/// back after a deletion.
-pub(crate) fn undo_tree(walked: &[Walked]) -> Option<BookmarkImport> {
-    let base = walked.first()?.depth;
-    nest(walked, base, |node, children| {
-        Some(match &node.kind {
-            BookmarkKind::Bookmark { url } => BookmarkImport::Bookmark {
-                title: node.title.clone(),
-                url: url.clone(),
-                guid: node.guid.clone(),
-                added_at_ms: Some(node.added_at_ms),
-            },
-            BookmarkKind::Folder => BookmarkImport::Folder {
-                title: node.title.clone(),
-                guid: node.guid.clone(),
-                added_at_ms: Some(node.added_at_ms),
-                children,
-            },
-            BookmarkKind::Separator => BookmarkImport::Separator {
-                guid: node.guid.clone(),
-            },
-        })
-    })
-    .into_iter()
-    .next()
-}
-
-/// A search's words, lower-cased.
-pub(crate) fn search_words(query: &str) -> Vec<String> {
-    query.split_whitespace().map(str::to_lowercase).collect()
-}
-
-/// Whether a bookmark or folder matches every word in its title or URL. Separators and an
-/// empty search match nothing.
-pub(crate) fn matches(node: &BookmarkNode, words: &[String]) -> bool {
-    if words.is_empty() {
-        return false;
-    }
-    let title = node.title.to_lowercase();
-    let url = match &node.kind {
-        BookmarkKind::Bookmark { url } => url.to_lowercase(),
-        BookmarkKind::Folder => String::new(),
-        BookmarkKind::Separator => return false,
-    };
-    words
-        .iter()
-        .all(|word| title.contains(word.as_str()) || url.contains(word.as_str()))
-}
-
 #[cfg(test)]
 mod tests {
+    use mercury_store::BookmarkNode;
+
     use super::*;
+    use crate::profile_data::bookmarks::{matches, search_words, undo_tree};
 
     fn node(id: i64, title: &str, kind: BookmarkKind) -> BookmarkNode {
         BookmarkNode {
@@ -266,6 +202,74 @@ mod tests {
             bookmark(1, 6, "C", "https://c.test/"),
             separator(1, 7),
         ]
+    }
+
+    #[test]
+    fn credentials_are_stripped_from_urls() {
+        assert_eq!(
+            without_credentials("https://user:secret@a.test/x?q=1#f"),
+            "https://a.test/x?q=1#f"
+        );
+        assert_eq!(without_credentials("http://user@a.test/"), "http://a.test/");
+        assert_eq!(without_credentials("https://a.test/"), "https://a.test/");
+        assert_eq!(
+            without_credentials("file:///tmp/a.html"),
+            "file:///tmp/a.html"
+        );
+        assert_eq!(without_credentials("not a url"), "not a url");
+    }
+
+    #[test]
+    fn imports_and_exports_drop_credentials() {
+        let walked = vec![
+            folder(0, 1, "Bar"),
+            bookmark(1, 2, "Secret", "https://me:pw@a.test/"),
+        ];
+        assert_eq!(
+            imported_nodes(&walked),
+            vec![ImportedNode::Bookmark {
+                title: "Secret".into(),
+                url: "https://a.test/".into(),
+                added_at_ms: Some(2000),
+            }]
+        );
+        let mut guid = || Some("g".to_owned());
+        let imports = bookmark_imports(
+            &[ImportedNode::Bookmark {
+                title: "Secret".into(),
+                url: "https://me:pw@a.test/".into(),
+                added_at_ms: None,
+            }],
+            &mut guid,
+        )
+        .unwrap();
+        assert!(
+            matches!(&imports[0], BookmarkImport::Bookmark { url, .. } if url == "https://a.test/")
+        );
+    }
+
+    #[test]
+    fn an_export_escapes_titles_and_urls() {
+        let walked = vec![
+            folder(0, 1, "Bar"),
+            bookmark(
+                1,
+                2,
+                "He said \"hi\" </a><script>alert(1)</script>",
+                "https://a.test/?q=\"</a><script>",
+            ),
+        ];
+        let html = mercury_import::write_netscape_bookmarks(&export_nodes(&walked, &[]));
+        assert!(!html.contains("<script>"), "{html}");
+        assert!(!html.contains("</a><"), "{html}");
+        assert!(
+            html.contains("He said &quot;hi&quot; &lt;/a&gt;&lt;script&gt;alert(1)&lt;/script&gt;"),
+            "{html}"
+        );
+        assert!(
+            html.contains("HREF=\"https://a.test/?q=&quot;&lt;/a&gt;&lt;script&gt;\""),
+            "{html}"
+        );
     }
 
     #[test]

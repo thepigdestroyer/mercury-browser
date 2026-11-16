@@ -10,6 +10,7 @@ use super::star::StarState;
 use super::tree::{self, FolderRow};
 use super::{Bookmarks, STAR_ROOT, with};
 use crate::profile_data;
+use crate::profile_data::bookmarks::BookmarkEdit;
 
 /// The bookmark the open popover edits, as it was when the popover opened.
 #[derive(Debug)]
@@ -175,19 +176,20 @@ fn finish(bookmarks: &Rc<Bookmarks>) {
         &window.get_bookmark_popover_name(),
         window.get_bookmark_popover_folder_index(),
     );
-    let report = |what: &'static str| {
-        move |result: Result<(), profile_data::ProfileDataError>| {
-            if let Err(error) = result {
-                log::warn!("the bookmark could not be {what}: {error}");
-            }
-        }
+    if edits.rename.is_none() && edits.move_to.is_none() {
+        return;
+    }
+    // One request: one notification, and the first failure is the one reported.
+    let edit = BookmarkEdit {
+        title: edits.rename,
+        url: None,
+        folder: edits.move_to,
     };
-    if let Some(name) = edits.rename {
-        data.rename_bookmark(popover.id, name, report("renamed"));
-    }
-    if let Some(folder) = edits.move_to {
-        data.move_bookmark(popover.id, folder, None, report("moved"));
-    }
+    data.edit_bookmark(popover.id, edit, |result| {
+        if let Err(error) = result {
+            log::warn!("the bookmark could not be changed: {error}");
+        }
+    });
 }
 
 fn remove(bookmarks: &Rc<Bookmarks>) {

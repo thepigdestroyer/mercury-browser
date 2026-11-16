@@ -1,144 +1,112 @@
-//! The seam for the macOS menu bar's Bookmarks menu (the menus lane owns the menu; this lane
-//! fills it). The menus lane's `menus/seams.rs` should:
+//! The seam for the macOS menu bar's Bookmarks menu. The menus lane owns the menu and builds
+//! it; its `menus/seams.rs` (at `0ccae6c`) calls these functions, which have its signatures:
 //!
-//! - set `BOOKMARKS_AVAILABLE = true`;
-//! - build the menu from [`bookmarks_menu_entries`] whenever it opens (`menuNeedsUpdate:`, on
-//!   the Slint side, never inside AppKit): its first three entries are its fixed items, then a
-//!   separator and the bookmarks bar's first level;
-//! - call [`activate`] with the entry the user chose. `bookmark_this_page`,
-//!   `toggle_bookmarks_bar` and `show_bookmarks_manager` in its seam become
-//!   `activate(&BookmarksMenuEntry::…)`, or the functions of the same names in
-//!   `crate::bookmarks`; `open_bookmarks_bar_item(window, index)` becomes
-//!   [`open_bookmarks_bar_item`]`(index)`.
+//! - `BOOKMARKS_AVAILABLE = true`;
+//! - `seams::BookmarkId` becomes `mercury_store::BookmarkId` (`Copy`, an `i64`);
+//! - `bookmark_this_page`, `toggle_bookmarks_bar`, `show_bookmarks_manager`,
+//!   `bookmarks_bar_items` and `open_bookmark` call the functions of the same names here.
+//!
+//! [`bookmarks_bar_items`] is called when the UI syncs, never from inside AppKit: it only reads
+//! the bar's entries as last read from the database. Items carry the bookmark's id, not its
+//! index, so a choice made after the bar changed still opens the bookmark the menu showed, or
+//! nothing if it is gone.
 
-use mercury_store::{BookmarkKind, BookmarkNode};
+#![cfg_attr(
+    not(test),
+    expect(
+        dead_code,
+        reason = "called by the menus lane's Bookmarks seam, not merged yet"
+    )
+)]
 
-use super::star::StarState;
+use mercury_store::{BookmarkId, BookmarkKind, BookmarkNode};
+use mercury_ui::MainWindow;
+use talaria_core::BrowserController;
+
 use super::with;
 
-/// One entry of the Bookmarks menu.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the menus lane's Bookmarks seam, not merged yet"
-    )
-)]
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BookmarksMenuEntry {
-    /// "Bookmark This Page…" ⌘D (Ctrl+D): enabled when the page can be bookmarked.
-    BookmarkThisPage {
-        enabled: bool,
-    },
-    /// "Show Bookmarks Bar" ⇧⌘B, checked while the bar is shown.
-    ShowBookmarksBar {
-        checked: bool,
-    },
-    /// "Bookmarks Manager" ⌥⌘B (Ctrl+Shift+O).
-    BookmarksManager,
-    Separator,
-    /// An entry of the bookmarks bar, by its index in the bar; a folder opens in the manager.
-    BarItem {
-        index: usize,
-        title: String,
-        is_folder: bool,
-    },
-}
-
-/// The menu for the star's state, the bar's visibility and the bar's entries.
-#[cfg_attr(
-    not(test),
-    expect(
-        dead_code,
-        reason = "called by the menus lane's Bookmarks seam, not merged yet"
-    )
-)]
-pub(crate) fn menu_entries(
-    star: StarState,
-    bar_shown: bool,
-    bar: &[BookmarkNode],
-) -> Vec<BookmarksMenuEntry> {
-    let mut entries = vec![
-        BookmarksMenuEntry::BookmarkThisPage {
-            enabled: star != StarState::Disabled,
-        },
-        BookmarksMenuEntry::ShowBookmarksBar { checked: bar_shown },
-        BookmarksMenuEntry::BookmarksManager,
-    ];
-    if !bar.is_empty() {
-        entries.push(BookmarksMenuEntry::Separator);
-    }
-    entries.extend(bar.iter().enumerate().map(|(index, node)| match node.kind {
-        BookmarkKind::Separator => BookmarksMenuEntry::Separator,
-        _ => BookmarksMenuEntry::BarItem {
-            index,
-            title: if node.title.is_empty() {
+/// The menu items for the bar's entries, in order: id and title. Separators are left out (the
+/// seam has no separator item); folders are included and open in the manager.
+pub(crate) fn bar_items(nodes: &[BookmarkNode]) -> Vec<(BookmarkId, String)> {
+    nodes
+        .iter()
+        .filter(|node| node.kind != BookmarkKind::Separator)
+        .map(|node| {
+            let title = if node.title.is_empty() {
                 "(untitled)".to_owned()
             } else {
                 node.title.clone()
-            },
-            is_folder: node.kind == BookmarkKind::Folder,
-        },
-    }));
-    entries
+            };
+            (node.id, title)
+        })
+        .collect()
 }
 
-/// The Bookmarks menu as it should look now.
+/// The bar entry `id`, if the bar still holds it.
+pub(crate) fn bar_entry(nodes: &[BookmarkNode], id: BookmarkId) -> Option<&BookmarkNode> {
+    nodes.iter().find(|node| node.id == id)
+}
+
+/// "Bookmark This Page…" (Cmd+D).
 #[expect(
     dead_code,
     reason = "called by the menus lane's Bookmarks seam, not merged yet"
 )]
-pub(crate) fn bookmarks_menu_entries() -> Vec<BookmarksMenuEntry> {
+pub(crate) fn bookmark_this_page(_window: &MainWindow) {
+    super::bookmark_this_page();
+}
+
+/// "Show Bookmarks Bar" (Shift+Cmd+B).
+#[expect(
+    dead_code,
+    reason = "called by the menus lane's Bookmarks seam, not merged yet"
+)]
+pub(crate) fn toggle_bookmarks_bar(_window: &MainWindow) {
+    super::toggle_bookmarks_bar();
+}
+
+/// "Bookmarks Manager" (Option+Cmd+B).
+#[expect(
+    dead_code,
+    reason = "called by the menus lane's Bookmarks seam, not merged yet"
+)]
+pub(crate) fn show_bookmarks_manager(_window: &MainWindow) {
+    super::show_bookmarks_manager();
+}
+
+/// The bar's first level, as the Bookmarks menu lists it.
+#[expect(
+    dead_code,
+    reason = "called by the menus lane's Bookmarks seam, not merged yet"
+)]
+pub(crate) fn bookmarks_bar_items(_controller: &BrowserController) -> Vec<(BookmarkId, String)> {
+    with(|bookmarks| bar_items(bookmarks.bar.borrow().nodes())).unwrap_or_default()
+}
+
+/// Opens the bar entry `id`: a bookmark in the current tab, a folder in the manager. An id the
+/// bar no longer holds is ignored.
+#[expect(
+    dead_code,
+    reason = "called by the menus lane's Bookmarks seam, not merged yet"
+)]
+pub(crate) fn open_bookmark(_window: &MainWindow, id: BookmarkId) {
     with(|bookmarks| {
-        menu_entries(
-            bookmarks.star.borrow().state(),
-            bookmarks.bar_shown.get(),
-            bookmarks.bar.borrow().nodes(),
-        )
-    })
-    .unwrap_or_default()
-}
-
-/// Runs a chosen entry.
-#[expect(
-    dead_code,
-    reason = "called by the menus lane's Bookmarks seam, not merged yet"
-)]
-pub(crate) fn activate(entry: &BookmarksMenuEntry) {
-    match entry {
-        BookmarksMenuEntry::BookmarkThisPage { .. } => super::bookmark_this_page(),
-        BookmarksMenuEntry::ShowBookmarksBar { .. } => super::toggle_bookmarks_bar(),
-        BookmarksMenuEntry::BookmarksManager => super::show_bookmarks_manager(),
-        BookmarksMenuEntry::Separator => {}
-        BookmarksMenuEntry::BarItem { index, .. } => open_bookmarks_bar_item(*index),
-    }
-}
-
-/// Opens the bar's entry at `index`: a bookmark in the current tab, a folder in the manager.
-#[expect(
-    dead_code,
-    reason = "called by the menus lane's Bookmarks seam, not merged yet"
-)]
-pub(crate) fn open_bookmarks_bar_item(index: usize) {
-    with(|bookmarks| {
-        let node = bookmarks.bar.borrow().nodes().get(index).cloned();
-        match node.map(|node| (node.id, node.kind)) {
-            Some((_, BookmarkKind::Bookmark { url })) => bookmarks.open_url(&url, false),
-            Some((id, BookmarkKind::Folder)) => super::manager::show_folder(bookmarks, id),
-            _ => {}
+        let node = bar_entry(bookmarks.bar.borrow().nodes(), id).cloned();
+        match node.map(|node| node.kind) {
+            Some(BookmarkKind::Bookmark { url }) => bookmarks.open_url(&url, false),
+            Some(BookmarkKind::Folder) => super::manager::show_folder(bookmarks, id),
+            Some(BookmarkKind::Separator) | None => {}
         }
     });
 }
 
 #[cfg(test)]
 mod tests {
-    use mercury_store::BookmarkId;
-
     use super::*;
 
-    fn node(title: &str, kind: BookmarkKind) -> BookmarkNode {
+    fn node(id: i64, title: &str, kind: BookmarkKind) -> BookmarkNode {
         BookmarkNode {
-            id: BookmarkId(1),
+            id: BookmarkId(id),
             guid: String::new(),
             parent: None,
             position: 0,
@@ -149,50 +117,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_menu_has_its_three_items_then_the_bar() {
-        let bar = [
+    fn bar() -> Vec<BookmarkNode> {
+        vec![
             node(
+                7,
                 "A",
                 BookmarkKind::Bookmark {
                     url: "https://a.test/".into(),
                 },
             ),
-            node("", BookmarkKind::Separator),
-            node("News", BookmarkKind::Folder),
-        ];
+            node(8, "", BookmarkKind::Separator),
+            node(9, "News", BookmarkKind::Folder),
+            node(10, "", BookmarkKind::Folder),
+        ]
+    }
+
+    #[test]
+    fn menu_items_carry_ids_and_leave_out_separators() {
         assert_eq!(
-            menu_entries(StarState::Unbookmarked, true, &bar),
+            bar_items(&bar()),
             vec![
-                BookmarksMenuEntry::BookmarkThisPage { enabled: true },
-                BookmarksMenuEntry::ShowBookmarksBar { checked: true },
-                BookmarksMenuEntry::BookmarksManager,
-                BookmarksMenuEntry::Separator,
-                BookmarksMenuEntry::BarItem {
-                    index: 0,
-                    title: "A".into(),
-                    is_folder: false
-                },
-                BookmarksMenuEntry::Separator,
-                BookmarksMenuEntry::BarItem {
-                    index: 2,
-                    title: "News".into(),
-                    is_folder: true
-                },
+                (BookmarkId(7), "A".to_owned()),
+                (BookmarkId(9), "News".to_owned()),
+                (BookmarkId(10), "(untitled)".to_owned()),
             ]
         );
     }
 
     #[test]
-    fn a_page_that_cannot_be_bookmarked_disables_the_first_item() {
-        let entries = menu_entries(StarState::Disabled, false, &[]);
+    fn an_id_names_the_same_entry_after_the_bar_changed() {
+        let mut changed = bar();
+        changed.remove(0);
         assert_eq!(
-            entries,
-            vec![
-                BookmarksMenuEntry::BookmarkThisPage { enabled: false },
-                BookmarksMenuEntry::ShowBookmarksBar { checked: false },
-                BookmarksMenuEntry::BookmarksManager,
-            ]
+            bar_entry(&changed, BookmarkId(9)).map(|n| n.title.as_str()),
+            Some("News")
+        );
+        assert!(
+            bar_entry(&changed, BookmarkId(7)).is_none(),
+            "gone: ignored"
         );
     }
 }

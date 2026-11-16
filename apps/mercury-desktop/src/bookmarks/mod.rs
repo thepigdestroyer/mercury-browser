@@ -12,6 +12,7 @@
 
 pub(crate) mod bar;
 pub(crate) mod file;
+pub(crate) mod import_plan;
 pub(crate) mod layout;
 pub(crate) mod manager;
 pub(crate) mod menu;
@@ -147,21 +148,24 @@ impl Bookmarks {
         if bar::affected_by(self.bar.borrow().root(), folders) {
             self.reload_bar();
         }
+        bar::folder_changed(self, folders);
         let manager = self.manager.borrow().clone();
         if let Some(manager) = manager {
-            manager.refresh();
+            manager.changed();
         }
     }
 
     fn sync_star(self: &Rc<Self>, window: &MainWindow, controller: &BrowserController) {
         let state = controller.active_state();
+        // Bookmarks never keep a user name or password; the page is looked up without them.
         let page = star::bookmarkable_url(
             state.url(),
             state.page_title(),
             matches!(state.load_state(), LoadState::Failed { .. }),
             &self.error_page_titles,
-        );
-        let lookup = self.star.borrow_mut().show_page(page);
+        )
+        .map(tree::without_credentials);
+        let lookup = self.star.borrow_mut().show_page(page.as_deref());
         self.show_star(window);
         if let Some(lookup) = lookup {
             self.look_up_star(lookup);

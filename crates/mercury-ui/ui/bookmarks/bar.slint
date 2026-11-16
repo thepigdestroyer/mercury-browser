@@ -225,6 +225,7 @@ export component BookmarksBar inherits Rectangle {
     in property <length> overflow-button-width: 28px;
     property <length> side-padding: 10px;
     property <length> menu-x;
+    out property <bool> menu-open: menu.is-open;
     callback measured(int, length);
     callback available-width-changed(length);
     // A bar button: its index and whether a new background tab is asked for.

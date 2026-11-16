@@ -10,9 +10,13 @@ use std::time::{Duration, Instant};
 use mercury_import::{ImportedNode, parse_netscape_bookmarks, write_netscape_bookmarks};
 use mercury_store::{BookmarkId, BookmarkKind, BookmarkRoot, Store, StoreError};
 
+use super::file::{FileImportResult, import_into_new_folder};
 use super::tree;
+use crate::profile_data::bookmarks::BookmarkEdit;
 use crate::profile_data::import::ImportOutcome;
+use crate::profile_data::import::{IMPORT_CHUNK, ImportProgress};
 use crate::profile_data::{ProfileData, ProfileDataError, Timing};
+use mercury_store::BookmarkImport;
 
 const NOW: i64 = 1_800_000_000_000;
 
@@ -191,6 +195,8 @@ fn a_deleted_folder_comes_back_where_it_was_with_its_contents() {
     let restored = service
         .ask(|data, reply| data.restore_bookmark(removed, reply))
         .unwrap();
+    assert!(restored.in_place);
+    let restored = restored.id;
     assert_eq!(service.titles(other), vec!["First", "Folder", "Last"]);
     assert_eq!(guid(restored), folder_guid);
     assert_eq!(service.titles(restored), vec!["Inner"]);
@@ -442,6 +448,10 @@ fn the_lanes_requests_name_the_folders_they_change() {
         .on_change(crate::profile_data::Area::Bookmarks, move |change| {
             record.borrow_mut().push(change.folders.clone());
         });
+    // A notification may come in a delivery after its write's reply: a read flushes those of
+    // the setup, which are not part of the test.
+    service.root(BookmarkRoot::Toolbar);
+    seen.borrow_mut().clear();
     let take = || std::mem::take(&mut *seen.borrow_mut());
     let star = |title: &str| {
         let title = title.to_owned();
@@ -518,4 +528,254 @@ fn fill_a_scratch_profile() {
             .add_bookmark(bar, None, title, &url, &guid(), NOW)
             .unwrap();
     }
+}
+
+fn mark(title: &str) -> BookmarkImport {
+    BookmarkImport::Bookmark {
+        title: title.to_owned(),
+        url: format!("https://{}.test/", title.replace(' ', "-")),
+        guid: crate::profile_data::new_guid().unwrap(),
+        added_at_ms: None,
+    }
+}
+
+fn import_folder(title: &str, children: Vec<BookmarkImport>) -> BookmarkImport {
+    BookmarkImport::Folder {
+        title: title.to_owned(),
+        guid: crate::profile_data::new_guid().unwrap(),
+        added_at_ms: None,
+        children,
+    }
+}
+
+fn marks(prefix: &str, count: usize) -> Vec<BookmarkImport> {
+    (0..count).map(|n| mark(&format!("{prefix} {n}"))).collect()
+}
+
+/// Runs a file import to its end; returns the result and every progress report.
+fn run_file_import(
+    service: &Service,
+    nodes: Vec<BookmarkImport>,
+) -> (FileImportResult, Vec<ImportProgress>) {
+    let progress = Rc::new(RefCell::new(Vec::new()));
+    let done = Rc::new(RefCell::new(None));
+    let (record, fill) = (Rc::clone(&progress), Rc::clone(&done));
+    import_into_new_folder(
+        &service.data,
+        "Imported 2026-11-16".to_owned(),
+        nodes,
+        move |report| record.borrow_mut().push(report),
+        move |result| *fill.borrow_mut() = Some(result),
+    );
+    service.settle(|| done.borrow().is_some());
+    let result = done.borrow_mut().take().unwrap().unwrap();
+    let progress = progress.borrow().clone();
+    (result, progress)
+}
+
+/// No chunk stored more than `IMPORT_CHUNK` nodes.
+fn assert_chunks_bounded(progress: &[ImportProgress], total: u64) {
+    let mut before = 0;
+    for report in progress.iter().map(|report| report.done).chain([total]) {
+        assert!(
+            report - before <= IMPORT_CHUNK as u64,
+            "{before} -> {report}"
+        );
+        before = report;
+    }
+}
+
+#[test]
+fn a_file_import_keeps_the_files_order_and_splits_large_folders() {
+    let service = Service::new();
+    let nodes = vec![
+        mark("a"),
+        import_folder("Big", marks("big", 1_200)),
+        mark("b"),
+        import_folder("Small", vec![mark("c"), mark("d")]),
+        import_folder(
+            "Outer",
+            vec![
+                mark("e"),
+                import_folder("Inner", marks("inner", 700)),
+                mark("f"),
+            ],
+        ),
+    ];
+    let (result, progress) = run_file_import(&service, nodes);
+    let folder = result.folder.expect("something was imported");
+    assert_eq!(result.summary.imported, 1_910);
+    assert_eq!(result.summary.total, 1_910);
+    assert_eq!(
+        service.titles(folder),
+        vec!["a", "Big", "b", "Small", "Outer"]
+    );
+    let children = |title: &str, parent| {
+        service
+            .ask(|data, reply| data.bookmark_children(parent, reply))
+            .unwrap()
+            .into_iter()
+            .find(|node| node.title == title)
+            .unwrap()
+            .id
+    };
+    let big = children("Big", folder);
+    assert_eq!(service.titles(big).len(), 1_200);
+    assert_eq!(service.titles(big)[0], "big 0");
+    let outer = children("Outer", folder);
+    assert_eq!(service.titles(outer), vec!["e", "Inner", "f"]);
+    assert_eq!(service.titles(children("Inner", outer)).len(), 700);
+    assert_chunks_bounded(&progress, 1_910 - 3);
+}
+
+#[test]
+fn one_folder_of_two_thousand_bookmarks_is_imported_in_chunks() {
+    let service = Service::new();
+    let (result, progress) =
+        run_file_import(&service, vec![import_folder("All", marks("m", 2_000))]);
+    assert_eq!(result.summary.imported, 2_001);
+    assert!(progress.len() >= 3, "{} progress reports", progress.len());
+    assert_chunks_bounded(&progress, 2_000);
+    println!(
+        "one folder of 2,000: longest chunk {:?}",
+        result.summary.longest_chunk
+    );
+}
+
+#[test]
+fn a_ten_thousand_entry_file_is_imported_in_bounded_chunks() {
+    let service = Service::new();
+    let nodes = vec![import_folder(
+        "Bookmarks bar",
+        (0..10)
+            .map(|n| import_folder(&format!("Folder {n}"), marks(&format!("f{n}"), 999)))
+            .collect(),
+    )];
+    let (result, progress) = run_file_import(&service, nodes);
+    assert_eq!(result.summary.imported, 10_001);
+    assert_chunks_bounded(&progress, 10_000 - 10);
+    println!(
+        "10,001 entries: longest chunk {:?}, {} progress reports",
+        result.summary.longest_chunk,
+        progress.len()
+    );
+}
+
+#[test]
+fn an_import_that_stores_nothing_removes_its_new_folder() {
+    let service = Service::new();
+    let other = service.root(BookmarkRoot::Other);
+    let too_long = BookmarkImport::Bookmark {
+        title: "Long".into(),
+        url: format!(
+            "https://a.test/{}",
+            "x".repeat(mercury_store::MAX_URL_BYTES)
+        ),
+        guid: crate::profile_data::new_guid().unwrap(),
+        added_at_ms: None,
+    };
+    let (result, _) = run_file_import(&service, vec![too_long]);
+    assert_eq!(result.folder, None);
+    assert_eq!(result.summary.imported, 0);
+    assert_eq!(result.summary.skipped, 1);
+    assert!(
+        service.titles(other).is_empty(),
+        "{:?}",
+        service.titles(other)
+    );
+}
+
+#[test]
+fn an_edit_is_one_request_and_one_notification() {
+    let service = Service::new();
+    let other = service.root(BookmarkRoot::Other);
+    let folder = service.folder(other, "F");
+    let a = service.bookmark(other, "A", "https://a.test/");
+    let seen = Rc::new(RefCell::new(Vec::new()));
+    let record = Rc::clone(&seen);
+    let _listener = service
+        .data
+        .on_change(crate::profile_data::Area::Bookmarks, move |change| {
+            record.borrow_mut().push(change.folders.clone());
+        });
+    // A notification may come in a delivery after its write's reply: a read flushes those of
+    // the setup, which are not part of the test.
+    service.root(BookmarkRoot::Toolbar);
+    seen.borrow_mut().clear();
+    service
+        .ask(|data, reply| {
+            data.edit_bookmark(
+                a,
+                BookmarkEdit {
+                    title: Some("Renamed".into()),
+                    url: Some("https://b.test/".into()),
+                    folder: Some(folder),
+                },
+                reply,
+            )
+        })
+        .unwrap();
+    service.settle(|| !seen.borrow().is_empty());
+    let mut hint = seen.borrow_mut().pop().unwrap().unwrap();
+    hint.sort();
+    assert_eq!(hint, vec![other, folder]);
+    assert!(seen.borrow().is_empty(), "one notification");
+    let node = service.ask(|data, reply| data.bookmark(a, reply)).unwrap();
+    assert_eq!(node.title, "Renamed");
+    assert_eq!(node.parent, Some(folder));
+    assert_eq!(
+        node.kind,
+        BookmarkKind::Bookmark {
+            url: "https://b.test/".into()
+        }
+    );
+}
+
+#[test]
+fn a_refused_url_edit_is_reported_and_the_name_is_left_alone() {
+    let service = Service::new();
+    let other = service.root(BookmarkRoot::Other);
+    let a = service.bookmark(other, "A", "https://a.test/");
+    let result = service.ask(|data, reply| {
+        data.edit_bookmark(
+            a,
+            BookmarkEdit {
+                title: Some("Renamed".into()),
+                url: Some(format!(
+                    "https://a.test/{}",
+                    "x".repeat(mercury_store::MAX_URL_BYTES)
+                )),
+                folder: None,
+            },
+            reply,
+        )
+    });
+    assert!(matches!(
+        result,
+        Err(ProfileDataError::Store(StoreError::InvalidArgument(_)))
+    ));
+    assert_eq!(service.titles(other), vec!["A"]);
+}
+
+#[test]
+fn undo_into_a_deleted_folder_fails_and_stores_nothing() {
+    let service = Service::new();
+    let other = service.root(BookmarkRoot::Other);
+    let folder = service.folder(other, "F");
+    let inner = service.bookmark(folder, "Inner", "https://inner.test/");
+    let removed = service
+        .ask(|data, reply| data.remove_bookmark_keeping_undo(inner, reply))
+        .unwrap();
+    service
+        .ask(|data, reply| data.remove_bookmark(folder, reply))
+        .unwrap();
+    let result = service.ask(|data, reply| data.restore_bookmark(removed, reply));
+    assert!(matches!(
+        result,
+        Err(ProfileDataError::Store(StoreError::NotFound))
+    ));
+    let found = service
+        .ask(|data, reply| data.bookmark_for_url("https://inner.test/".into(), reply))
+        .unwrap();
+    assert_eq!(found, None);
 }

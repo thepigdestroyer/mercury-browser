@@ -92,6 +92,67 @@ pub(crate) fn affected_by(root: Option<BookmarkId>, folders: Option<&[BookmarkId
     }
 }
 
+/// What an open popup does after the bookmarks changed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MenuUpdate {
+    Keep,
+    /// Read its folder again (a folder that is gone closes it).
+    Reload,
+    Close,
+}
+
+/// An open popup showing `levels` (innermost last), after a change to the listings of
+/// `folders` (`None`: any): a folder level reloads if it or a folder it is in changed; the "»"
+/// popup closes if the bar changed (the entries behind "»" move with the bar's layout).
+pub(crate) fn menu_update(
+    levels: &[MenuLevel],
+    bar_root: Option<BookmarkId>,
+    folders: Option<&[BookmarkId]>,
+) -> MenuUpdate {
+    let Some(folders) = folders else {
+        return match levels.last() {
+            Some(MenuLevel::Overflow) => MenuUpdate::Close,
+            Some(MenuLevel::Folder { .. }) => MenuUpdate::Reload,
+            None => MenuUpdate::Keep,
+        };
+    };
+    let changed = |id: &BookmarkId| folders.contains(id);
+    match levels.last() {
+        None => MenuUpdate::Keep,
+        Some(MenuLevel::Overflow) if bar_root.is_none_or(|root| changed(&root)) => {
+            MenuUpdate::Close
+        }
+        Some(_)
+            if bar_root.is_some_and(|root| changed(&root))
+                || levels
+                    .iter()
+                    .any(|level| matches!(level, MenuLevel::Folder { id, .. } if changed(id))) =>
+        {
+            MenuUpdate::Reload
+        }
+        Some(_) => MenuUpdate::Keep,
+    }
+}
+
+/// The bookmarks changed: an open popup follows (see [`menu_update`]).
+pub(crate) fn folder_changed(bookmarks: &Rc<Bookmarks>, folders: Option<&[BookmarkId]>) {
+    let Some(window) = bookmarks.window.upgrade() else {
+        return;
+    };
+    if !window.get_bookmarks_menu_open() {
+        return;
+    }
+    let update = {
+        let bar = bookmarks.bar.borrow();
+        menu_update(&bar.levels, bar.root, folders)
+    };
+    match update {
+        MenuUpdate::Keep => {}
+        MenuUpdate::Reload => load_menu(bookmarks, None),
+        MenuUpdate::Close => window.invoke_close_bookmarks_menu(),
+    }
+}
+
 pub(crate) struct Bar {
     root: Option<BookmarkId>,
     nodes: Vec<BookmarkNode>,
@@ -356,7 +417,13 @@ fn load_menu(bookmarks: &Rc<Bookmarks>, open_at: Option<f32>) {
                     }
                     match children {
                         Ok(children) => show_menu(bookmarks, children, open_at),
-                        Err(error) => log::warn!("a bookmark folder could not be read: {error}"),
+                        Err(error) => {
+                            // Its folder is gone (or unreadable): the popup closes.
+                            log::debug!("a bookmark folder could not be read: {error}");
+                            if let Some(window) = bookmarks.window.upgrade() {
+                                window.invoke_close_bookmarks_menu();
+                            }
+                        }
                     }
                 });
             });
@@ -446,6 +513,50 @@ mod tests {
             (row.title.as_str(), row.url.as_str(), row.kind),
             ("A", "https://a.test/", BookmarkRowKind::Bookmark)
         );
+    }
+
+    #[test]
+    fn an_open_popup_follows_changes_to_its_folders() {
+        let root = Some(BookmarkId(1));
+        let news = MenuLevel::Folder {
+            id: BookmarkId(5),
+            title: "News".into(),
+        };
+        let local = MenuLevel::Folder {
+            id: BookmarkId(6),
+            title: "Local".into(),
+        };
+        let levels = [news.clone(), local.clone()];
+        assert_eq!(
+            menu_update(&levels, root, Some(&[BookmarkId(6)])),
+            MenuUpdate::Reload
+        );
+        assert_eq!(
+            menu_update(&levels, root, Some(&[BookmarkId(5)])),
+            MenuUpdate::Reload,
+            "the folder it is in"
+        );
+        assert_eq!(
+            menu_update(&levels, root, Some(&[BookmarkId(1)])),
+            MenuUpdate::Reload,
+            "the bar: News may be gone"
+        );
+        assert_eq!(
+            menu_update(&levels, root, Some(&[BookmarkId(9)])),
+            MenuUpdate::Keep
+        );
+        assert_eq!(menu_update(&levels, root, None), MenuUpdate::Reload);
+        let overflow = [MenuLevel::Overflow];
+        assert_eq!(
+            menu_update(&overflow, root, Some(&[BookmarkId(1)])),
+            MenuUpdate::Close
+        );
+        assert_eq!(
+            menu_update(&overflow, root, Some(&[BookmarkId(9)])),
+            MenuUpdate::Keep
+        );
+        assert_eq!(menu_update(&overflow, root, None), MenuUpdate::Close);
+        assert_eq!(menu_update(&[], root, None), MenuUpdate::Keep);
     }
 
     #[test]

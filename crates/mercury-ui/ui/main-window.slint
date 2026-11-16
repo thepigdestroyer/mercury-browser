@@ -229,6 +229,7 @@ export component MainWindow inherits Window {
     in property <bool> bookmarks-bar-overflow;
     in property <[BookmarkMenuRow]> bookmarks-menu-rows;
     out property <length> bookmarks-bar-available-width: bookmarks-bar.available-width;
+    out property <bool> bookmarks-menu-open: bookmarks-bar.menu-open;
     callback bookmark-star-clicked();
     callback bookmark-popover-done();
     callback bookmark-popover-remove();

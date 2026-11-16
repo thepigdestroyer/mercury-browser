@@ -10,17 +10,47 @@
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use mercury_store::{BookmarkImport, BookmarkRoot};
+use mercury_store::{BookmarkId, BookmarkImport, BookmarkRoot};
 
+use super::import_plan::plan_import;
 use super::manager::{self, Manager};
 use super::panel;
 use super::tree;
-use crate::profile_data::import::{ImportOutcome, ImportProgress, ImportSummary};
-use crate::profile_data::{self, new_guid, now_ms};
+use crate::profile_data::bookmarks::FolderRef;
+use crate::profile_data::import::{IMPORT_CHUNK, ImportOutcome, ImportProgress, ImportSummary};
+use crate::profile_data::{self, ProfileData, ProfileDataError, new_guid, now_ms};
 
-/// Bookmark files larger than this are refused before they are read: far larger than any
-/// real export (10,000 bookmarks take about 2 MB).
-pub(crate) const MAX_FILE_BYTES: u64 = 64 * 1024 * 1024;
+/// Bookmark files larger than this are refused: about eight times the largest real export
+/// seen (10,000 bookmarks take about 2 MB).
+pub(crate) const MAX_FILE_BYTES: u64 = 16 * 1024 * 1024;
+
+/// Writes an export: to a temporary file next to `path`, then renamed over it, so a failed
+/// write never leaves half a file where the user asked for one. The file gets the usual
+/// permissions of a file the user creates (0666 less the umask), never wider.
+pub(crate) fn write_export(path: &Path, html: &str) -> std::io::Result<()> {
+    use std::io::Write as _;
+
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("the export has no file name"))?;
+    let mut temporary_name = std::ffi::OsString::from(".");
+    temporary_name.push(name);
+    temporary_name.push(format!(".mercury-{}.tmp", std::process::id()));
+    let temporary = path.with_file_name(temporary_name);
+    let written = (|| {
+        let mut file = std::fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&temporary)?;
+        file.write_all(html.as_bytes())?;
+        file.sync_all()?;
+        std::fs::rename(&temporary, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&temporary);
+    }
+    written
+}
 
 /// The folder an import from a file goes into.
 pub(crate) fn import_folder_name((year, month, day): (i32, u32, u32)) -> String {
@@ -111,18 +141,23 @@ pub(crate) fn import_summary_text(folder: &str, summary: &ImportSummary) -> Stri
 
 /// Reads and parses a bookmarks file into the store's import form, with fresh GUIDs.
 pub(crate) fn read_bookmarks_file(path: &Path) -> Result<(Vec<BookmarkImport>, u64), String> {
+    use std::io::Read as _;
+
     let name = path.display();
-    let size = std::fs::metadata(path)
-        .map_err(|error| format!("{name} could not be read: {error}"))?
-        .len();
-    if size > MAX_FILE_BYTES {
+    let unreadable = |error: std::io::Error| format!("{name} could not be read: {error}");
+    // One read, bounded: no size check that the file could outgrow before it is read.
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(unreadable)?
+        .take(MAX_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(unreadable)?;
+    if bytes.len() as u64 > MAX_FILE_BYTES {
         return Err(format!(
             "{name} is larger than {} MB, too large for a bookmarks file.",
             MAX_FILE_BYTES / 1024 / 1024
         ));
     }
-    let bytes =
-        std::fs::read(path).map_err(|error| format!("{name} could not be read: {error}"))?;
     let text = String::from_utf8_lossy(&bytes);
     let nodes = mercury_import::parse_netscape_bookmarks(&text)
         .map_err(|error| format!("{name} is not a bookmarks file: {error}"))?;
@@ -132,12 +167,105 @@ pub(crate) fn read_bookmarks_file(path: &Path) -> Result<(Vec<BookmarkImport>, u
     Ok((imports, count))
 }
 
+/// What an import into a new folder did. `summary` counts the folders created up front with
+/// what the stepwise import stored; `folder` is the new folder, or `None` if nothing was
+/// imported and it was removed again.
+#[derive(Debug)]
+pub(crate) struct FileImportResult {
+    pub(crate) summary: ImportSummary,
+    pub(crate) folder: Option<BookmarkId>,
+}
+
+/// Imports `nodes` into a new folder `name` at the end of Other Bookmarks, in chunks of at
+/// most [`IMPORT_CHUNK`] nodes whatever the file's shape (see `import_plan`), keeping the
+/// file's order. The folder is removed again if nothing was imported.
+pub(crate) fn import_into_new_folder(
+    data: &ProfileData,
+    name: String,
+    nodes: Vec<BookmarkImport>,
+    on_progress: impl Fn(ImportProgress) + 'static,
+    on_done: impl FnOnce(Result<FileImportResult, ProfileDataError>) + 'static,
+) {
+    // Each reply carries the handle for the next request (dropped once it has run, so no
+    // cycle stays behind): the flow also runs on a service that is not this run's.
+    let service = data.clone();
+    data.bookmark_root(BookmarkRoot::Other, move |root| {
+        let root = match root {
+            Ok(root) => root,
+            Err(error) => return on_done(Err(error)),
+        };
+        let next = service.clone();
+        service.add_bookmark_folder(root, None, name, move |target| {
+            let target = match target {
+                Ok(target) => target,
+                Err(error) => return on_done(Err(error)),
+            };
+            let plan = plan_import(target, nodes, IMPORT_CHUNK);
+            let (folders, places): (Vec<_>, Vec<_>) = plan.folders.into_iter().unzip();
+            let parents = folders
+                .iter()
+                .map(|folder| folder.parent)
+                .collect::<Vec<_>>();
+            let sets = plan.sets;
+            let service = next.clone();
+            next.create_folders(folders, move |created| {
+                let ids = match created {
+                    Ok(ids) => ids,
+                    Err(error) => return on_done(Err(error)),
+                };
+                let resolve = |parent: FolderRef| match parent {
+                    FolderRef::Existing(id) => Some(id),
+                    FolderRef::Created(index) => ids.get(index).copied(),
+                };
+                let sets = sets
+                    .into_iter()
+                    .filter_map(|(parent, nodes)| Some((resolve(parent)?, nodes)))
+                    .collect::<Vec<_>>();
+                let places = ids
+                    .iter()
+                    .zip(&parents)
+                    .zip(&places)
+                    .filter_map(|((id, parent), place)| Some((*id, resolve(*parent)?, *place)))
+                    .collect::<Vec<_>>();
+                let created = ids.len() as u64;
+                let after = service.clone();
+                let _job = service.import_bookmarks(sets, on_progress, move |mut summary| {
+                    summary.imported += created;
+                    summary.total += created;
+                    let finish = after.clone();
+                    after.place_folders(places, move |placed| {
+                        if let Err(error) = placed {
+                            log::warn!("imported folders could not be put in order: {error}");
+                        }
+                        if summary.imported > 0 {
+                            return on_done(Ok(FileImportResult {
+                                summary,
+                                folder: Some(target),
+                            }));
+                        }
+                        finish.remove_bookmark(target, move |removed| {
+                            let folder = match removed {
+                                Ok(()) => None,
+                                Err(error) => {
+                                    log::warn!("an empty import folder stays: {error}");
+                                    Some(target)
+                                }
+                            };
+                            on_done(Ok(FileImportResult { summary, folder }));
+                        });
+                    });
+                });
+            });
+        });
+    });
+}
+
 pub(crate) fn import_from_file(manager: &Rc<Manager>) {
     if !panel::AVAILABLE {
         manager.set_status("Importing a bookmarks file is not available on this platform yet.");
         return;
     }
-    if manager.busy.get() {
+    if manager.busy() {
         return;
     }
     panel::choose_file_to_open(
@@ -152,8 +280,7 @@ pub(crate) fn import_from_file(manager: &Rc<Manager>) {
 
 fn read_in_background(path: PathBuf) {
     if let Some(manager) = manager::current() {
-        manager.busy.set(true);
-        manager.window().set_busy(true);
+        manager.set_busy(true);
         manager.set_status(&format!("Reading {}…", path.display()));
     }
     let spawned = std::thread::Builder::new()
@@ -167,10 +294,9 @@ fn read_in_background(path: PathBuf) {
     }
 }
 
-fn finish_busy(manager: &Manager, status: &str) {
-    manager.busy.set(false);
-    manager.window().set_busy(false);
+fn finish_busy(manager: &Rc<Manager>, status: &str) {
     manager.set_status(status);
+    manager.set_busy(false);
 }
 
 fn import_read(read: Result<(Vec<BookmarkImport>, u64), String>) {
@@ -189,43 +315,34 @@ fn import_read(read: Result<(Vec<BookmarkImport>, u64), String>) {
     };
     let folder = import_folder_name(today());
     manager.set_status(&format!("Importing {} into “{folder}”…", items(count)));
-    data.bookmark_root(BookmarkRoot::Other, move |root| {
-        let (Some(manager), Some(data)) = (manager::current(), profile_data::handle()) else {
-            return;
-        };
-        let root = match root {
-            Ok(root) => root,
-            Err(error) => return finish_busy(&manager, &error.to_string()),
-        };
-        let name = folder.clone();
-        data.add_bookmark_folder(root, None, name, move |created| {
-            let (Some(manager), Some(data)) = (manager::current(), profile_data::handle()) else {
-                return;
-            };
-            let target = match created {
-                Ok(target) => target,
-                Err(error) => return finish_busy(&manager, &error.to_string()),
-            };
-            let progress_folder = folder.clone();
-            let _job = data.import_bookmarks(
-                vec![(target, imports)],
-                move |ImportProgress { done, total, .. }| {
-                    if let Some(manager) = manager::current() {
-                        manager.set_status(&format!(
-                            "Importing into “{progress_folder}”: {} of {}…",
-                            grouped(done),
-                            items(total)
-                        ));
-                    }
-                },
-                move |summary| {
-                    if let Some(manager) = manager::current() {
-                        finish_busy(&manager, &import_summary_text(&folder, &summary));
-                    }
-                },
-            );
-        });
-    });
+    let progress_folder = folder.clone();
+    import_into_new_folder(
+        &data,
+        folder.clone(),
+        imports,
+        move |ImportProgress { done, total, .. }| {
+            if let Some(manager) = manager::current() {
+                manager.set_status(&format!(
+                    "Importing into “{progress_folder}”: {} of {}…",
+                    grouped(done),
+                    items(total)
+                ));
+            }
+        },
+        move |result| {
+            if let Some(manager) = manager::current() {
+                let status = match result {
+                    Ok(result) if result.folder.is_none() => format!(
+                        "Nothing was imported. {}",
+                        import_summary_text(&folder, &result.summary)
+                    ),
+                    Ok(result) => import_summary_text(&folder, &result.summary),
+                    Err(error) => format!("The bookmarks could not be imported: {error}"),
+                };
+                finish_busy(&manager, &status);
+            }
+        },
+    );
 }
 
 pub(crate) fn export_to_file(manager: &Rc<Manager>) {
@@ -256,7 +373,7 @@ pub(crate) fn export_to_file(manager: &Rc<Manager>) {
                     .name("bookmarks file".to_owned())
                     .spawn(move || {
                         let html = mercury_import::write_netscape_bookmarks(&nodes);
-                        let status = match std::fs::write(&path, html) {
+                        let status = match write_export(&path, &html) {
                             Ok(()) => format!("Exported {} to {}.", items(count), path.display()),
                             Err(error) => {
                                 format!("{} could not be written: {error}", path.display())
@@ -290,6 +407,36 @@ mod tests {
         assert_eq!(civil_from_days(20_408), (2025, 11, 16));
         assert_eq!(civil_from_days(19_782), (2024, 2, 29));
         assert_eq!(civil_from_days(-1), (1969, 12, 31));
+    }
+
+    #[test]
+    fn an_export_replaces_the_file_and_leaves_no_temporary_file() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("bookmarks.html");
+        std::fs::write(&path, "old").unwrap();
+        write_export(&path, "<new>").unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "<new>");
+        let names = std::fs::read_dir(directory.path())
+            .unwrap()
+            .map(|entry| entry.unwrap().file_name().into_string().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(names, vec!["bookmarks.html"]);
+        let missing = directory.path().join("no such directory").join("b.html");
+        assert!(write_export(&missing, "x").is_err());
+    }
+
+    #[test]
+    fn a_file_larger_than_the_cap_is_refused_without_reading_it_all() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("big.html");
+        let file = std::fs::File::create(&path).unwrap();
+        file.set_len(MAX_FILE_BYTES + 1).unwrap();
+        assert!(
+            read_bookmarks_file(&path)
+                .unwrap_err()
+                .contains("too large")
+        );
+        assert_eq!(MAX_FILE_BYTES, 16 * 1024 * 1024);
     }
 
     #[test]
