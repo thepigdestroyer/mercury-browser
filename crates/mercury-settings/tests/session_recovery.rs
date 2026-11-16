@@ -463,3 +463,76 @@ fn the_recovery_file_bounds_each_session_on_its_own() {
         "a shared tab budget would have starved the older entries"
     );
 }
+
+/// Three crashes in a row: the list holds `five`, `ten` and `forty`, newest first.
+fn three_pending(profile: &Profile) -> Vec<SessionSnapshot> {
+    let five = session_of("five", 5);
+    profile.save(&forty(), false);
+    let _ = profile.start();
+    profile.save(&ten(), false);
+    let _ = profile.start();
+    profile.save(&five, false);
+    let recovery = profile.start().recovery;
+    assert_eq!(recovery, vec![five, ten(), forty()]);
+    recovery
+}
+
+#[test]
+fn removing_one_entry_keeps_the_others_in_order() {
+    let profile = Profile::new();
+    let pending = three_pending(&profile);
+
+    assert!(profile.store.remove_recovery(1).expect("remove"));
+
+    assert_eq!(
+        profile.recovery(),
+        Some(listed(&[pending[0].clone(), pending[2].clone()]))
+    );
+    assert_eq!(
+        profile.start().recovery,
+        vec![pending[0].clone(), pending[2].clone()]
+    );
+}
+
+#[test]
+fn removing_the_last_entry_removes_the_file() {
+    let profile = Profile::new();
+    profile.save(&forty(), false);
+    assert_eq!(profile.start().recovery, vec![forty()]);
+
+    assert!(profile.store.remove_recovery(0).expect("remove"));
+
+    assert_eq!(profile.recovery(), None);
+    assert!(!profile.path("session.recovery.json").exists());
+}
+
+#[test]
+fn removing_an_entry_that_is_not_there_changes_nothing() {
+    let profile = Profile::new();
+    let pending = three_pending(&profile);
+    let before = fs::read(profile.path("session.recovery.json")).expect("the list");
+
+    assert!(!profile.store.remove_recovery(3).expect("nothing to remove"));
+
+    assert_eq!(
+        fs::read(profile.path("session.recovery.json")).expect("the list"),
+        before
+    );
+    assert_eq!(profile.recovery(), Some(listed(&pending)));
+    let empty = Profile::new();
+    assert!(!empty.store.remove_recovery(0).expect("no file"));
+}
+
+#[test]
+fn removing_from_a_newer_recovery_file_is_refused_and_leaves_it_alone() {
+    let profile = Profile::new();
+    let slot = profile.path("session.recovery.json");
+    let newer = format!(r#"{{"format_version": {}}}"#, SESSION_FORMAT_VERSION + 1);
+    fs::write(&slot, &newer).expect("seed");
+
+    assert!(matches!(
+        profile.store.remove_recovery(0),
+        Err(SettingsError::NewerVersion { .. })
+    ));
+    assert_eq!(fs::read_to_string(&slot).expect("untouched"), newer);
+}

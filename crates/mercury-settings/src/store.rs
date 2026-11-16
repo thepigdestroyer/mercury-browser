@@ -593,6 +593,47 @@ impl SessionStore {
         }
     }
 
+    /// Removes one session from the recovery list, once the user has restored it, and keeps the
+    /// others for later. `index` is its place in [`StartupSessions::recovery`] after any earlier
+    /// removals of this run. Returns whether an entry was removed: an index past the end, or no
+    /// file, removes nothing.
+    ///
+    /// The list left is written privately and atomically; when it becomes empty the file is
+    /// removed. A recovery file from a newer version is refused ([`SettingsError::NewerVersion`])
+    /// and left alone; a damaged one is moved aside (it held nothing usable).
+    pub fn remove_recovery(&self, index: usize) -> Result<bool, SettingsError> {
+        if let Peek::Version(found) = peek(&self.recovery_path, &RECOVERY_FORMAT)?
+            && found > RECOVERY_FORMAT.current_version()
+        {
+            return Err(SettingsError::NewerVersion {
+                path: self.recovery_path.clone(),
+                found,
+                supported: RECOVERY_FORMAT.current_version(),
+            });
+        }
+        let Slot::List(mut list) = self.read_slot()? else {
+            return Ok(false);
+        };
+        if index >= list.len() {
+            return Ok(false);
+        }
+        list.remove(index);
+        if list.is_empty() {
+            return match std::fs::remove_file(&self.recovery_path) {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+                Err(error) => Err(SettingsError::io("remove", &self.recovery_path, error)),
+            };
+        }
+        write_document(
+            &self.recovery_path,
+            &RECOVERY_FORMAT,
+            None,
+            &RecoveryBody { sessions: &list },
+        )?;
+        Ok(true)
+    }
+
     /// Saves the running session. `exited_cleanly` is false while running and true only for
     /// the final save of an orderly quit (made even when nothing changed; see
     /// [`SaveThrottle`](crate::SaveThrottle)).
