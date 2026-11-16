@@ -14,6 +14,8 @@ use servo::{
     WebViewBuilder,
 };
 use talaria_core::{BrowserEvent, LoadState, PageIcon, PointerCursor, TabEvent, TabId};
+// openurl
+use talaria_core::{NavigationVerdict, navigation_verdict, refuses_local_file_load};
 use url::Url;
 
 use crate::adblocker::ContentBlocker;
@@ -354,6 +356,10 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn load_web_resource(&self, web_view: servo::WebView, load: servo::WebResourceLoad) {
+        // openurl: a web page's frames and resources never come from local files.
+        let Some(load) = refuse_local_file_load(self.tab_id, &web_view, load) else {
+            return;
+        };
         self.content_blocker
             .handle_web_resource_load(Some(&web_view), load);
     }
@@ -427,6 +433,70 @@ impl servo::WebViewDelegate for BrowserDelegate {
             self.send_browser_event(event);
         }
     }
+
+    // openurl
+    /// Navigations a page asks for (links, forms, `location`, in the main frame or a frame;
+    /// not typed addresses, which never ask). Answered at once.
+    fn request_navigation(&self, web_view: servo::WebView, request: servo::NavigationRequest) {
+        let page = web_view.url();
+        match navigation_verdict(page.as_ref(), &request.url) {
+            NavigationVerdict::Allow => request.allow(),
+            NavigationVerdict::DenyLocalFile => {
+                info!(
+                    "tab {}: refused a navigation from {} to the local file {}",
+                    self.tab_id.value(),
+                    page.as_ref()
+                        .map_or("a page that has not loaded", Url::as_str),
+                    request.url
+                );
+                request.deny();
+            }
+            NavigationVerdict::OpenExternally => {
+                let url = request.url.to_string();
+                info!(
+                    "tab {}: the engine does not load {}: links; asking whether to open it in another app",
+                    self.tab_id.value(),
+                    request.url.scheme()
+                );
+                request.deny();
+                self.send_browser_event(BrowserEvent::ExternalLinkRequested {
+                    url,
+                    page_url: page.map(String::from),
+                });
+            }
+        }
+    }
+}
+
+// openurl
+/// Answers `load` with nothing if it fetches a local file for a page that is not one (see
+/// `refuses_local_file_load`); otherwise gives it back.
+fn refuse_local_file_load(
+    tab_id: TabId,
+    web_view: &servo::WebView,
+    load: servo::WebResourceLoad,
+) -> Option<servo::WebResourceLoad> {
+    let request = load.request();
+    let page = web_view.url();
+    if !refuses_local_file_load(
+        page.as_ref(),
+        request.url.as_url(),
+        request.is_for_main_frame,
+    ) {
+        return Some(load);
+    }
+    let url = request.url.as_url().clone();
+    info!(
+        "tab {}: refused loading the local file {url} into {}",
+        tab_id.value(),
+        page.as_ref()
+            .map_or("a page that has not loaded", Url::as_str)
+    );
+    // An empty answer, the same whether the file exists or not. Not `cancel()`: a frame whose
+    // load ends in a network error never finishes, and its page never fires `load` (tried).
+    load.intercept(servo::WebResourceResponse::new(url))
+        .finish();
+    None
 }
 
 /// What a freshly built web view's own caches hold. Servo only notifies changes against these

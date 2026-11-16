@@ -4,6 +4,8 @@ use crate::address::{AddressResolutionError, resolve_address};
 use crate::browser::LoadState;
 use crate::browser::{BrowserCommand, BrowserEvent, BrowserState};
 use crate::{ColorScheme, DEFAULT_ZOOM_PERCENT, Tab, TabActivation, TabCommand, TabId};
+// openurl
+use crate::ExternalLinkRequest;
 
 #[derive(Debug)]
 pub struct BrowserController {
@@ -12,6 +14,8 @@ pub struct BrowserController {
     next_tab_id: u64,
     command_queue: VecDeque<TabCommand>,
     color_scheme: ColorScheme,
+    // openurl
+    external_link_requests: Vec<ExternalLinkRequest>,
 }
 
 impl BrowserController {
@@ -24,6 +28,7 @@ impl BrowserController {
             next_tab_id: 2,
             command_queue: VecDeque::new(),
             color_scheme: ColorScheme::default(),
+            external_link_requests: Vec::new(),
         }
     }
 
@@ -214,6 +219,9 @@ impl BrowserController {
         self.tabs.remove(index);
         self.command_queue
             .retain(|queued| queued.tab_id() != tab_id);
+        // openurl
+        self.external_link_requests
+            .retain(|request| request.tab_id != tab_id);
 
         if was_active {
             let replacement_index = index.saturating_sub(1).min(self.tabs.len() - 1);
@@ -337,12 +345,27 @@ impl BrowserController {
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
         };
+        // openurl: queued, not shown; nothing in the window changes.
+        if let BrowserEvent::ExternalLinkRequested { url, page_url } = event {
+            self.external_link_requests.push(ExternalLinkRequest {
+                tab_id,
+                url,
+                page_url,
+            });
+            return false;
+        }
 
         if event.shows_engine_ready() {
             tab.mark_engine_ready();
         }
         tab.state_mut().apply(event);
         true
+    }
+
+    // openurl
+    /// The pages' requests to open links in other apps, oldest first, each returned once.
+    pub fn take_external_link_requests(&mut self) -> Vec<ExternalLinkRequest> {
+        std::mem::take(&mut self.external_link_requests)
     }
 
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {

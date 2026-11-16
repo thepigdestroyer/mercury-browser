@@ -1,0 +1,54 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Web page linking to a file</title>
+<style>
+  body { font: 20px system-ui, sans-serif; margin: 30px; background: #eef; }
+  iframe { width: 560px; height: 140px; border: 2px solid #446; background: #fff; }
+  #status { font-weight: bold; }
+</style>
+</head>
+<body>
+<!--
+  openurl lane: an http(s) page must not reach a file: URL. Serve tests/ with
+  scripts/serve-tests.py and open
+    http://127.0.0.1:<port>/pages/openurl-file.html?target=file:///<abs>/tests/pages/openurl-file-target.html
+  A timer sets location to the target 500 ms after load (not with top=0); only=direct or
+  only=navigated tries one frame only; the first iframe is navigated to it
+  by its own script, the second one names it as its src. If the top-level navigation is refused,
+  this page stays and the status line says so. A pink "LOCAL FILE PAGE LOADED" page (whole
+  window or inside a frame) means a file: URL was reached from the web.
+-->
+<p>Web page at <span id="origin"></span></p>
+<p id="status">waiting for the timer…</p>
+<p><a id="link" href="#">link to the file</a></p>
+<p>Frame navigated by its own script:</p>
+<iframe id="navigated" src="openurl-frame.html"></iframe>
+<p>Frame whose src is the file:</p>
+<iframe id="direct"></iframe>
+<script>
+  const target = new URLSearchParams(location.search).get("target") || "file:///";
+  document.getElementById("origin").textContent = location.origin;
+  document.getElementById("link").href = target;
+  const only = new URLSearchParams(location.search).get("only");
+  if (only !== "navigated") document.getElementById("direct").src = target;
+  const navigated = document.getElementById("navigated");
+  if (only !== "direct") navigated.addEventListener("load", () => {
+    try {
+      navigated.contentWindow.postMessage(target, "*");
+    } catch (error) {}
+  }, { once: true });
+  if (new URLSearchParams(location.search).get("top") === "0") {
+    document.getElementById("status").textContent = "frames only (no top-level timer)";
+  } else setTimeout(() => {
+    document.getElementById("status").textContent = "timer fired: location = " + target;
+    location = target;
+    setTimeout(() => {
+      document.getElementById("status").textContent =
+        "still on the web page 1.5 s after location = file: (refused)";
+    }, 1500);
+  }, 500);
+</script>
+</body>
+</html>

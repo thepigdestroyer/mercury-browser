@@ -122,6 +122,14 @@ pub enum BrowserEvent {
     FullscreenChanged {
         fullscreen: bool,
     },
+    // openurl
+    /// The page asked for a URL the engine cannot load (`mailto:`, `tel:`, an app's scheme) and
+    /// the engine was refused. `page_url` is the page shown in the tab when it asked. The
+    /// controller queues it for `BrowserController::take_external_link_requests`.
+    ExternalLinkRequested {
+        url: String,
+        page_url: Option<String>,
+    },
 }
 
 impl BrowserEvent {
@@ -247,6 +255,8 @@ impl BrowserState {
             BrowserEvent::FullscreenChanged { fullscreen } => {
                 self.fullscreen = fullscreen;
             }
+            // openurl: not part of what the tab shows; see `BrowserController::handle_event`.
+            BrowserEvent::ExternalLinkRequested { .. } => {}
         }
     }
 }
