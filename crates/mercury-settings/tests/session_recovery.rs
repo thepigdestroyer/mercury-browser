@@ -478,41 +478,58 @@ fn three_pending(profile: &Profile) -> Vec<SessionSnapshot> {
 }
 
 #[test]
-fn removing_one_entry_keeps_the_others_in_order() {
+fn removing_one_session_keeps_the_others_in_order() {
     let profile = Profile::new();
     let pending = three_pending(&profile);
 
-    assert!(profile.store.remove_recovery(1).expect("remove"));
+    assert!(profile.store.remove_recovery(&ten()).expect("remove"));
 
     assert_eq!(
         profile.recovery(),
-        Some(listed(&[pending[0].clone(), pending[2].clone()]))
+        Some(listed(&[pending[0].clone(), forty()]))
     );
-    assert_eq!(
-        profile.start().recovery,
-        vec![pending[0].clone(), pending[2].clone()]
-    );
+    assert_eq!(profile.start().recovery, vec![pending[0].clone(), forty()]);
 }
 
 #[test]
-fn removing_the_last_entry_removes_the_file() {
+fn removing_the_last_session_removes_the_file() {
     let profile = Profile::new();
     profile.save(&forty(), false);
     assert_eq!(profile.start().recovery, vec![forty()]);
 
-    assert!(profile.store.remove_recovery(0).expect("remove"));
+    assert!(profile.store.remove_recovery(&forty()).expect("remove"));
 
     assert_eq!(profile.recovery(), None);
     assert!(!profile.path("session.recovery.json").exists());
 }
 
 #[test]
-fn removing_an_entry_that_is_not_there_changes_nothing() {
+fn the_session_is_found_by_its_tabs_wherever_it_now_is_in_the_file() {
+    let profile = Profile::new();
+    let pending = three_pending(&profile);
+    // The file no longer matches the list the run started with: its first entry is gone.
+    assert!(profile.store.remove_recovery(&pending[0]).expect("remove"));
+
+    // Removing by what was the start-up list's index 1 would now hit `forty`.
+    assert!(profile.store.remove_recovery(&ten()).expect("remove"));
+
+    assert_eq!(profile.recovery(), Some(listed(&[forty()])));
+}
+
+#[test]
+fn a_session_that_is_not_in_the_file_removes_nothing() {
     let profile = Profile::new();
     let pending = three_pending(&profile);
     let before = fs::read(profile.path("session.recovery.json")).expect("the list");
 
-    assert!(!profile.store.remove_recovery(3).expect("nothing to remove"));
+    // As after a start whose write of the list failed: the run offers a crash that the file
+    // does not hold.
+    assert!(
+        !profile
+            .store
+            .remove_recovery(&session_of("unlisted", 3))
+            .expect("nothing to remove")
+    );
 
     assert_eq!(
         fs::read(profile.path("session.recovery.json")).expect("the list"),
@@ -520,7 +537,22 @@ fn removing_an_entry_that_is_not_there_changes_nothing() {
     );
     assert_eq!(profile.recovery(), Some(listed(&pending)));
     let empty = Profile::new();
-    assert!(!empty.store.remove_recovery(0).expect("no file"));
+    assert!(!empty.store.remove_recovery(&forty()).expect("no file"));
+}
+
+#[test]
+fn a_session_equal_in_its_windows_is_the_one_removed() {
+    let profile = Profile::new();
+    profile.save(&forty(), false);
+    let _ = profile.start();
+    let restored = SessionSnapshot {
+        saved_at_ms: 12_345,
+        ..forty()
+    };
+
+    assert!(profile.store.remove_recovery(&restored).expect("remove"));
+
+    assert_eq!(profile.recovery(), None);
 }
 
 #[test]
@@ -531,7 +563,7 @@ fn removing_from_a_newer_recovery_file_is_refused_and_leaves_it_alone() {
     fs::write(&slot, &newer).expect("seed");
 
     assert!(matches!(
-        profile.store.remove_recovery(0),
+        profile.store.remove_recovery(&forty()),
         Err(SettingsError::NewerVersion { .. })
     ));
     assert_eq!(fs::read_to_string(&slot).expect("untouched"), newer);
