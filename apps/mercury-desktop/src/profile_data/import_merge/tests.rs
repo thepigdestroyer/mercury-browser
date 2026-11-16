@@ -458,3 +458,33 @@ fn an_empty_tree_creates_the_folder_and_plans_nothing() {
     assert!(plan.created_folder);
     assert!(plan.sets.is_empty());
 }
+
+/// How long one chunk of the comparison holds the service, on 100,000 visits over 20,000 pages
+/// against a profile that already holds them all (the most stored rows a chunk reads) and
+/// against an empty one. Run with
+/// `cargo test --release -p mercury-desktop filter_benchmark -- --ignored --nocapture`.
+#[test]
+#[ignore = "a measurement, not a check"]
+fn filter_benchmark_100k_visits() {
+    let harness = Harness::new();
+    let visits = history(100_000, 20_000);
+
+    let started = Instant::now();
+    let (fresh, _) = harness.filter(visits.clone());
+    println!(
+        "empty profile: {:?} in all, longest chunk {:?}",
+        started.elapsed(),
+        fresh.longest_chunk
+    );
+    let imported = harness.import_visits(fresh.new);
+    println!("import: longest chunk {:?}", imported.longest_chunk);
+
+    let started = Instant::now();
+    let (again, _) = harness.filter(visits);
+    assert_eq!(again.already_present, 100_000);
+    println!(
+        "everything present: {:?} in all, longest chunk {:?}",
+        started.elapsed(),
+        again.longest_chunk
+    );
+}

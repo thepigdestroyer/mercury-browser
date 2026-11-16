@@ -369,11 +369,21 @@ export component ImportWindow inherits Window {
                     text: root.summary-title;
                 }
 
-                for line in root.summary: Text {
-                    text: (line.problem ? "⚠  " : "✓  ") + line.text;
-                    font-size: 13px;
-                    color: line.problem ? root.problem-color : Palette.foreground;
-                    wrap: word-wrap;
+                // A little taller than the text asks for: the GPU renderer measures wrapped
+                // lines a few pixels short and would clip the descenders of the last one.
+                for line in root.summary: Rectangle {
+                    height: text.preferred-height + 4px;
+                    text := Text {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        text: (line.problem ? "⚠  " : "✓  ") + line.text;
+                        font-size: 13px;
+                        color: line.problem ? root.problem-color : Palette.foreground;
+                        wrap: word-wrap;
+                        vertical-alignment: top;
+                    }
                 }
 
                 Rectangle {

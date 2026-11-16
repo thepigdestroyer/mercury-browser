@@ -59,6 +59,14 @@ impl ProfileResult {
         self.kinds().any(|(_, result)| result.interrupted())
     }
 
+    /// Whether nothing could be imported because every kind failed.
+    pub(crate) fn failed(&self) -> bool {
+        self.kinds().all(|(_, result)| {
+            result.imported == 0
+                && matches!(result.end, KindEnd::Unreadable(_) | KindEnd::Failed(_))
+        })
+    }
+
     fn kinds(&self) -> impl Iterator<Item = (Kind, &KindResult)> {
         [
             self.bookmarks
@@ -139,16 +147,23 @@ pub(crate) fn summary_lines(result: &ProfileResult) -> Vec<SummaryLine> {
     let mut lines = Vec::new();
     let imported = result
         .kinds()
-        .filter(|(_, kind)| !matches!(kind.end, KindEnd::Unreadable(_)))
+        .filter(|(_, counts)| counts.imported > 0)
         .map(|(kind, counts)| kind.count(counts.imported))
         .collect::<Vec<_>>();
-    if !imported.is_empty() {
-        lines.push(SummaryLine::plain(format!(
+    let anything_present = result.kinds().any(|(_, counts)| counts.already_present > 0);
+    lines.push(match (imported.is_empty(), anything_present) {
+        (false, _) => SummaryLine::plain(format!(
             "Imported {} from {}.",
             imported.join(" and "),
             result.label
-        )));
-    }
+        )),
+        (true, true) => {
+            SummaryLine::plain(format!("Nothing new was imported from {}.", result.label))
+        }
+        (true, false) => {
+            SummaryLine::problem(format!("Nothing was imported from {}.", result.label))
+        }
+    });
     let present = result
         .kinds()
         .filter(|(_, counts)| counts.already_present > 0)
@@ -192,12 +207,6 @@ pub(crate) fn summary_lines(result: &ProfileResult) -> Vec<SummaryLine> {
                 capitalised(&kind.count(counts.imported)),
             ))),
         }
-    }
-    if lines.is_empty() {
-        lines.push(SummaryLine::plain(format!(
-            "Nothing was imported from {}.",
-            result.label
-        )));
     }
     lines
 }
@@ -323,10 +332,7 @@ mod tests {
         assert_eq!(
             texts(&result),
             vec![
-                (
-                    "Imported 0 bookmarks and 3 visits from Firefox — Default.".into(),
-                    false
-                ),
+                ("Imported 3 visits from Firefox — Default.".into(), false),
                 (
                     "12 bookmarks and 1,000 visits were already in Mercury Browser and were \
                      left out."
@@ -379,6 +385,40 @@ mod tests {
     }
 
     #[test]
+    fn an_import_that_added_nothing_says_so_first() {
+        let again = ProfileResult {
+            label: "Chrome — Work".into(),
+            bookmarks: Some(KindResult {
+                already_present: 3,
+                total: 3,
+                ..done(0)
+            }),
+            history: None,
+        };
+        assert_eq!(
+            texts(&again)[0],
+            ("Nothing new was imported from Chrome — Work.".into(), false)
+        );
+        let broken = ProfileResult {
+            label: "Chrome — Broken".into(),
+            bookmarks: Some(KindResult::unreadable("the database is damaged.".into())),
+            history: None,
+        };
+        assert_eq!(
+            texts(&broken),
+            vec![
+                ("Nothing was imported from Chrome — Broken.".into(), true),
+                (
+                    "Bookmarks could not be imported: the database is damaged.".into(),
+                    true
+                ),
+            ]
+        );
+        assert!(broken.failed());
+        assert!(!again.failed());
+    }
+
+    #[test]
     fn a_locked_profile_names_the_browser_to_quit() {
         let text = describe_error("Firefox", &ImportError::Locked(PathBuf::from("/x")));
         assert_eq!(
@@ -392,7 +432,8 @@ mod tests {
             history: Some(KindResult::unreadable(text)),
         };
         assert!(!result.interrupted(), "nothing was written");
-        assert_eq!(summary_lines(&result).len(), 2);
-        assert!(summary_lines(&result).iter().all(|line| line.problem));
+        let lines = summary_lines(&result);
+        assert_eq!(lines.len(), 3);
+        assert!(lines.iter().all(|line| line.problem));
     }
 }

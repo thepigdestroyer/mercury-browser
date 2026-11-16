@@ -242,9 +242,15 @@ impl ImportRun {
             },
             move |summary: ImportSummary| {
                 log::debug!("bookmark import: longest chunk {:?}", summary.longest_chunk);
-                let imported = bookmarks_in_first(&shape, summary.imported);
-                run.0.state.borrow_mut().bookmarks =
-                    Some(result(imported, end_of_import(&summary.outcome)));
+                // Chunks are whole top-level nodes, so the nodes dealt with (imported or
+                // refused) are a prefix of the pre-order walk. The service counts refusals in
+                // nodes; they are taken as bookmarks here (exact unless a whole folder was
+                // refused, which the conversion's own checks make unlikely).
+                let dealt_with = bookmarks_in_first(&shape, summary.imported + summary.skipped);
+                let refused = summary.skipped.min(dealt_with);
+                let mut kind = result(dealt_with - refused, end_of_import(&summary.outcome));
+                kind.skipped += refused;
+                run.0.state.borrow_mut().bookmarks = Some(kind);
                 run.history();
             },
         );
@@ -352,8 +358,9 @@ impl ImportRun {
             },
             move |summary: ImportSummary| {
                 log::debug!("visit import: longest chunk {:?}", summary.longest_chunk);
-                run.0.state.borrow_mut().history =
-                    Some(result(summary.imported, end_of_import(&summary.outcome)));
+                let mut kind = result(summary.imported, end_of_import(&summary.outcome));
+                kind.skipped += summary.skipped;
+                run.0.state.borrow_mut().history = Some(kind);
                 run.finish();
             },
         );

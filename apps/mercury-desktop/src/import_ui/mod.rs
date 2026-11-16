@@ -321,6 +321,8 @@ fn finished(result: ProfileResult) {
         window.set_summary_title(
             if result.interrupted() {
                 "Import stopped"
+            } else if result.failed() {
+                "Import failed"
             } else {
                 "Import finished"
             }

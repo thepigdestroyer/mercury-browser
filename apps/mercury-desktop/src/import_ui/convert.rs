@@ -50,8 +50,9 @@ fn convert_level(
 ) -> Result<Vec<BookmarkImport>, NoGuids> {
     let mut out = Vec::with_capacity(nodes.len());
     for node in nodes {
-        // import-ui: until the service skips refused rows itself (history lane), leave out
-        // what the store would refuse: addresses over MAX_URL_BYTES, nodes nested too deeply.
+        // Left out here what the store would refuse (addresses over MAX_URL_BYTES, nodes
+        // nested too deeply), so that the summary counts them as bookmarks; the service
+        // skips anything else it refuses and counts it in nodes.
         if depth > BOOKMARK_IMPORT_MAX_DEPTH {
             *skipped += count_nodes(&node);
             continue;
@@ -101,8 +102,8 @@ fn count_nodes(node: &ImportedNode) -> u64 {
 /// Visits as links, newest first as read.
 pub(crate) fn visits_for_store(visits: Vec<ImportedVisit>) -> Converted<Vec<ImportVisit>> {
     let before = visits.len() as u64;
-    // import-ui: until the service skips refused rows itself (history lane), leave out
-    // visits whose address the store would refuse (longer than MAX_URL_BYTES).
+    // Visits whose address the store would refuse (longer than MAX_URL_BYTES) are left out
+    // here; the service would skip them too.
     let items = visits
         .into_iter()
         .filter(|visit| visit.url.len() <= MAX_URL_BYTES)
