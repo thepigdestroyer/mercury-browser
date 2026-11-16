@@ -58,16 +58,25 @@ export component BookmarksManager inherits Window {
     min-height: 420px;
     background: Palette.background;
 
+    // The std widgets draw light when the scheme is unknown, so the lane's colours follow the
+    // scheme they actually use rather than defaulting to dark: one scheme for the whole window.
+    property <ColorScheme> widget-scheme: Palette.color-scheme == ColorScheme.dark
+        ? ColorScheme.dark
+        : ColorScheme.light;
+
     init => {
         if root.forced-color-scheme != ColorScheme.unknown {
             Palette.color-scheme = root.forced-color-scheme;
-            BookmarkColors.forced = root.forced-color-scheme;
         }
+        BookmarkColors.forced = root.widget-scheme;
     }
 
     changed forced-color-scheme => {
         Palette.color-scheme = root.forced-color-scheme;
-        BookmarkColors.forced = root.forced-color-scheme;
+    }
+
+    changed widget-scheme => {
+        BookmarkColors.forced = root.widget-scheme;
     }
 
     public function focus-list() {

@@ -21,6 +21,11 @@ export component BookmarksPreview inherits Window {
         BookmarkColors.forced = root.forced-color-scheme;
     }
 
+    changed forced-color-scheme => {
+        Palette.color-scheme = root.forced-color-scheme;
+        BookmarkColors.forced = root.forced-color-scheme;
+    }
+
     width: 760px;
     height: 520px;
     background: BookmarkColors.dark ? #0c1117 : #f4f6f8;
