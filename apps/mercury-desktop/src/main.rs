@@ -28,6 +28,7 @@ mod profile;
 mod rendering;
 mod screen_metrics;
 mod screenshot;
+mod session;
 mod shortcuts;
 mod shutdown;
 mod ui_sync;
@@ -90,6 +91,13 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     }
     let controller = Rc::new(RefCell::new(BrowserController::default()));
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
+    // session: begin the run, restore the saved tabs if asked to, and start saving
+    session::start(
+        &window,
+        &controller,
+        &profile,
+        options.window_size.is_some(),
+    );
     let web_view_focused = Rc::new(Cell::new(false));
 
     connect_servo_runtime(
@@ -129,6 +137,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             result.exit_code()
         }
     };
+    // session: the final save, marking the run as having quit in order
+    session::finish_run();
     // Nothing may capture, pump or render while the engine shuts down, and the engine must be
     // gone before the window (and the renderer whose device Servo uses) is destroyed.
     drop(screenshot_timer);

@@ -1,4 +1,5 @@
 import { Palette } from "std-widgets.slint";
+import { SessionBar } from "session/session-bar.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -201,6 +202,20 @@ export component MainWindow inherits Window {
     property <bool> new-tab-search-focused: false;
     // The window's colour scheme as Slint determined it, used when winit reports none.
     out property <ColorScheme> system-color-scheme: Palette.color-scheme;
+    // --- session ---
+    // Sessions that did not close properly, newest first, named for the chooser; while any are
+    // listed the bar under the toolbar offers to restore them.
+    in property <[string]> recovery-sessions;
+    // A one-time message about the saved session, shown in the same bar.
+    in property <string> session-notice;
+    // Whether "Restore previous session" and "Reopen closed tab" have anything to do.
+    in property <bool> can-restore-previous-session;
+    in property <bool> can-reopen-closed-tab;
+    callback restore-recovered-session(int);
+    callback dismiss-recovered-sessions();
+    callback dismiss-session-notice();
+    callback restore-previous-session();
+    // --- end session ---
 
     callback navigate(string);
     callback go-back;
@@ -455,6 +470,21 @@ export component MainWindow inherits Window {
                 width: parent.width;
                 height: 1px;
                 background: #202832;
+            }
+        }
+
+        // session: the offer to restore tabs after a crash
+        if !root.chrome-hidden && (root.recovery-sessions.length > 0 || root.session-notice != ""): SessionBar {
+            sessions: root.recovery-sessions;
+            notice: root.session-notice;
+            restore(index) => {
+                root.restore-recovered-session(index);
+            }
+            dismiss => {
+                root.dismiss-recovered-sessions();
+            }
+            dismiss-notice => {
+                root.dismiss-session-notice();
             }
         }
 

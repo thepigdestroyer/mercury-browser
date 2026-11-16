@@ -356,6 +356,10 @@ impl EngineState {
         self.event_receivers
             .retain(|tab_id, _| tab_ids.contains(tab_id));
         for tab_id in tab_ids {
+            // session: a restored tab gets its web view when it is first selected
+            if self.controller.borrow().is_load_deferred(tab_id) {
+                continue;
+            }
             let initial_url = self.controller.borrow_mut().take_initial_url(tab_id);
             let url = match plan_web_view(self.web_views.contains_key(&tab_id), initial_url) {
                 WebViewPlan::Keep => continue,

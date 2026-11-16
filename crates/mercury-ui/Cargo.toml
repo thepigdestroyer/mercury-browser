@@ -10,3 +10,8 @@ slint.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+
+# Headless renderings of components on their own (`tests/`); test builds only.
+[dev-dependencies]
+image.workspace = true
+slint = { workspace = true, features = ["renderer-software"] }

@@ -45,6 +45,17 @@ pub(crate) enum ShortcutAction {
     Quit,
     /// Escape while the active tab's page is fullscreen.
     ExitFullscreen,
+    // session
+    /// Brings back the most recently closed tab where it was.
+    ReopenClosedTab,
+    /// Opens the active tab's address again in a new tab just after it. No default shortcut.
+    // Run from the tab context menu once it exists.
+    #[allow(dead_code)]
+    DuplicateTab,
+    /// Restores the last run's tabs when they were not restored at start-up. No default shortcut.
+    // Run from the History menu once it exists.
+    #[allow(dead_code)]
+    RestorePreviousSession,
 }
 
 impl ShortcutAction {
@@ -156,6 +167,8 @@ pub(crate) fn shortcut_action(
     if primary && !alt {
         let common = match (character, shift) {
             (Some("t"), false) => Some(NewTab),
+            // session
+            (Some("t"), true) => Some(ReopenClosedTab),
             (Some("w"), false) => Some(CloseTab),
             (Some("r"), false) => Some(Reload),
             (Some("l"), false) => Some(FocusAddressBar),
@@ -324,6 +337,12 @@ fn run_shortcut(
         ShortcutAction::ExitFullscreen => controller
             .borrow_mut()
             .queue_command(BrowserCommand::ExitFullscreen),
+        // session
+        ShortcutAction::ReopenClosedTab => crate::session::reopen_closed_tab(window, controller),
+        ShortcutAction::DuplicateTab => crate::session::duplicate_tab(window, controller),
+        ShortcutAction::RestorePreviousSession => {
+            crate::session::restore_previous_session(window, controller)
+        }
     }
 }
 
@@ -520,9 +539,24 @@ mod tests {
 
     #[test]
     fn extra_modifiers_turn_a_shortcut_off() {
-        assert_eq!(mac(character("t"), CMD | SHIFT), None);
+        assert_eq!(mac(character("r"), CMD | SHIFT), None);
         assert_eq!(mac(character("t"), CMD | ALT), None);
         assert_eq!(other(character("w"), CTRL | SHIFT), None);
+    }
+
+    #[test]
+    fn reopen_closed_tab_on_macos() {
+        assert_eq!(mac(character("t"), CMD | SHIFT), Some(ReopenClosedTab));
+        // macOS may report the shifted letter.
+        assert_eq!(mac(character("T"), CMD | SHIFT), Some(ReopenClosedTab));
+        assert_eq!(mac(character("t"), CTRL | SHIFT), None);
+    }
+
+    #[test]
+    fn reopen_closed_tab_elsewhere() {
+        assert_eq!(other(character("t"), CTRL | SHIFT), Some(ReopenClosedTab));
+        assert_eq!(other(character("T"), CTRL | SHIFT), Some(ReopenClosedTab));
+        assert_eq!(other(character("t"), CTRL | SHIFT | ALT), None);
     }
 
     #[test]
@@ -568,13 +602,31 @@ mod tests {
             (ZoomReset, false),
             (Quit, false),
             (ExitFullscreen, false),
+            (ReopenClosedTab, false),
+            (DuplicateTab, false),
+            (RestorePreviousSession, false),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
-                NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
-                | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen => {}
+                NewTab
+                | CloseTab
+                | NextTab
+                | PreviousTab
+                | SelectTab(_)
+                | SelectLastTab
+                | Back
+                | Forward
+                | Reload
+                | FocusAddressBar
+                | ZoomIn
+                | ZoomOut
+                | ZoomReset
+                | Quit
+                | ExitFullscreen
+                | ReopenClosedTab
+                | DuplicateTab
+                | RestorePreviousSession => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }

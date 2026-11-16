@@ -18,6 +18,7 @@ glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
+mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-ui = { path = "../../crates/mercury-ui" }
 servo.workspace = true
 slint.workspace = true
