@@ -138,6 +138,9 @@ pub(crate) fn prepare(conn: &mut Connection) -> Result<()> {
     // With WAL, NORMAL syncs at checkpoints rather than at every commit: the file stays
     // consistent after a power loss, which can only lose the last few commits.
     conn.pragma_update(None, "synchronous", "NORMAL")?;
+    // Deleted rows are overwritten with zeros rather than left in free pages, so cleared
+    // history cannot be read back from the file.
+    conn.pragma_update(None, "secure_delete", true)?;
 
     for (index, migration) in MIGRATIONS.iter().enumerate().skip(found as usize) {
         let version = index as u32 + 1;

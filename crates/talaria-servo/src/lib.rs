@@ -11,6 +11,7 @@ mod panics;
 mod runtime;
 mod screen;
 mod session_data;
+mod site_data;
 mod web_view;
 
 pub use content_process::{
@@ -22,4 +23,5 @@ pub use opengl_context::ViewportSize;
 pub use panics::{hard_fail_in_single_process, should_panic_hook_suppress_termination};
 pub use runtime::{EventLoopWaker, NEW_TAB_URL, RuntimeOptions, ServoRuntime};
 pub use screen::ScreenMetrics;
+pub use site_data::SiteDataKinds;
 pub use web_view::ServoWebView;

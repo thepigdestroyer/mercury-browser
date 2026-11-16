@@ -192,6 +192,11 @@ impl ServoRuntime {
         Ok(ServoWebView::new(inner, frame_ready, tab_id, scale_factor))
     }
 
+    /// The engine, for the crate's helpers (history lane: `site_data`).
+    pub(crate) fn servo(&self) -> &servo::Servo {
+        &self.inner
+    }
+
     pub fn spin_event_loop(&self) {
         self.redraw_waker.acknowledge();
         self.inner.spin_event_loop();

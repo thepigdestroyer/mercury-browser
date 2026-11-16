@@ -78,6 +78,20 @@ impl Store {
             })?)
     }
 
+    /// Makes deleted rows unrecoverable from the files: merges the full-text indexes (whose
+    /// segments keep the words of deleted rows until merged), then checkpoints the write-ahead
+    /// log and truncates it. Freed pages are already zeroed (`secure_delete`). Its cost grows
+    /// with the size of the indexes; run it after clearing, not after every deletion.
+    pub fn purge_deleted(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "INSERT INTO places_fts(places_fts) VALUES ('optimize');
+             INSERT INTO bookmarks_fts(bookmarks_fts) VALUES ('optimize');",
+        )?;
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     fn init(mut conn: Connection) -> Result<Self> {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
@@ -117,6 +131,16 @@ mod tests {
             .pragma_query_value(None, "synchronous", |row| row.get(0))
             .unwrap();
         assert_eq!(synchronous, 1);
+    }
+
+    #[test]
+    fn deleted_rows_are_overwritten() {
+        let store = Store::open_in_memory().unwrap();
+        let secure: i64 = store
+            .conn
+            .pragma_query_value(None, "secure_delete", |row| row.get(0))
+            .unwrap();
+        assert_eq!(secure, 1);
     }
 
     #[test]
