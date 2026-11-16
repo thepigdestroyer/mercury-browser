@@ -3,10 +3,13 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{Receiver, RecvTimeoutError, Sender, TryRecvError};
 use std::time::{Duration, Instant};
+
+use mercury_store::ClearRange;
 
 use super::jobs::{Background, Step, Upkeep};
 use super::{
@@ -38,6 +41,8 @@ pub(super) struct Worker {
     /// When the last `History` notification went out, and the one held back since.
     history_sent: Option<Instant>,
     history_held: Option<Change>,
+    /// See `pending_clear_marker`.
+    pending_clear: Option<PathBuf>,
 }
 
 impl Worker {
@@ -48,6 +53,7 @@ impl Worker {
         wake: Wake,
         wake_pending: Arc<AtomicBool>,
         timing: Timing,
+        pending_clear: Option<PathBuf>,
     ) -> Self {
         Self {
             database,
@@ -62,10 +68,55 @@ impl Worker {
             last_upkeep: Instant::now(),
             history_sent: None,
             history_held: None,
+            pending_clear,
         }
     }
 
+    /// A "clear history on exit" that did not finish (the quit deadline cut it short) is done
+    /// now, before anything else.
+    fn finish_pending_clear(&mut self) {
+        let (Ok(database), Some(marker)) = (&mut self.database, &self.pending_clear) else {
+            return;
+        };
+        if !marker.exists() {
+            return;
+        }
+        let now = (self.clock)();
+        match database
+            .store
+            .clear_history(ClearRange::All, now)
+            .and_then(|removed| database.store.purge_deleted().map(|()| removed))
+        {
+            Ok(removed) => {
+                log::info!("cleared the history left from the last exit ({removed} visits)");
+                if let Err(error) = std::fs::remove_file(marker) {
+                    log::warn!("could not remove {}: {error}", marker.display());
+                }
+            }
+            Err(error) => {
+                log::error!("could not clear the history left from the last exit: {error}")
+            }
+        }
+    }
+
+    /// Purges deleted history from the files if any is waiting.
+    fn purge(&mut self) {
+        if let Ok(database) = &mut self.database
+            && std::mem::take(&mut database.purge_pending)
+            && let Err(error) = database.store.purge_deleted()
+        {
+            log::warn!("could not purge deleted history: {error}");
+        }
+    }
+
+    fn purge_is_due(&self) -> bool {
+        self.database
+            .as_ref()
+            .is_ok_and(|database| database.purge_pending)
+    }
+
     pub(super) fn run(mut self, messages: &Receiver<Message>) {
+        self.finish_pending_clear();
         if let Ok(database) = &mut self.database {
             let now = (self.clock)();
             match database.store.mark_unfinished_downloads_interrupted(now) {
@@ -104,6 +155,10 @@ impl Worker {
                 None => {
                     self.flush_due_titles();
                     self.flush_due_history();
+                    if self.purge_is_due() && self.last_request.elapsed() >= self.timing.purge_delay
+                    {
+                        self.purge();
+                    }
                     if !self.background.is_empty() {
                         self.step_next_job();
                     } else if self.upkeep_is_due() {
@@ -135,9 +190,13 @@ impl Worker {
             .as_ref()
             .and(self.history_sent)
             .map(|sent| sent + self.timing.history_notify_interval);
+        let purge = self
+            .purge_is_due()
+            .then(|| self.last_request + self.timing.purge_delay);
         titles
             .chain(upkeep)
             .chain(history)
+            .chain(purge)
             .min()
             .map_or(NOTHING_SCHEDULED, |at| at.saturating_duration_since(now))
     }
@@ -377,6 +436,7 @@ impl Worker {
     /// the worker then closes the database.
     fn finish(mut self, messages: &Receiver<Message>) {
         self.flush_titles();
+        self.purge();
         if let Some(change) = self.history_held.take() {
             self.deliver(Delivery::Changed(change));
         }

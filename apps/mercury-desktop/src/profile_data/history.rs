@@ -1,9 +1,13 @@
 //! Browsing history: recording what the controller decided were visits.
 
-use mercury_store::VisitTransition;
+use mercury_store::{
+    ClearRange, HistoryCursor, HistoryEntry, MAX_SUGGESTIONS, Suggestion, VisitId, VisitTransition,
+};
 use talaria_core::{BrowserController, NavigationOrigin, VisitKey, VisitUpdate};
 
-use super::{Area, Message, ProfileData, RECENT_VISITS, handle, now_ms};
+use super::{
+    Area, Message, ProfileData, ProfileDataError, RECENT_VISITS, handle, now_ms, write_private,
+};
 
 /// Hands the controller's history updates to the service, stamped with the current time. Call
 /// after applying engine events; with no service the updates are dropped.
@@ -84,5 +88,115 @@ impl ProfileData {
     /// Sets the title of the page at `url`, if it is known; debounced per URL. No reply.
     pub(super) fn set_page_title(&self, url: String, title: String) {
         self.send(Message::Title { url, title });
+    }
+
+    /// Address-bar suggestions for `input`, best first: at most `limit`, itself at most
+    /// [`MAX_SUGGESTIONS`]. Ranked as of the service's current time.
+    pub(crate) fn suggest(
+        &self,
+        input: String,
+        limit: u32,
+        reply: impl FnOnce(Result<Vec<Suggestion>, ProfileDataError>) + 'static,
+    ) {
+        let limit = limit.min(MAX_SUGGESTIONS);
+        self.request(
+            None,
+            move |db, now| db.store().suggest(&input, limit, now),
+            reply,
+        );
+    }
+
+    /// Visits, newest first: `limit` of them after `before` (from [`HistoryEntry::cursor`]),
+    /// matching `query` (words of the URL or title) if given.
+    pub(crate) fn history(
+        &self,
+        query: Option<String>,
+        before: Option<HistoryCursor>,
+        limit: u32,
+        reply: impl FnOnce(Result<Vec<HistoryEntry>, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            None,
+            move |db, _| db.store().history(query.as_deref(), before, limit),
+            reply,
+        );
+    }
+
+    /// Deletes one visit; `false` if it did not exist. The deleted rows are purged from the
+    /// files shortly after (when the service is idle).
+    pub(crate) fn delete_visit(
+        &self,
+        visit: VisitId,
+        reply: impl FnOnce(Result<bool, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            Some(Area::History),
+            move |db, now| {
+                db.purge_pending = true;
+                db.store().delete_visit(visit, now)
+            },
+            reply,
+        );
+    }
+
+    /// Deletes every visit of the site `host` (any scheme, port, and a leading `www.`) and
+    /// replies with how many; the deleted rows are purged from the files at once.
+    pub(crate) fn delete_site(
+        &self,
+        host: String,
+        reply: impl FnOnce(Result<u64, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            Some(Area::History),
+            move |db, now| {
+                let removed = db.store().delete_site(&host, now)?;
+                db.store().purge_deleted()?;
+                Ok(removed)
+            },
+            reply,
+        );
+    }
+
+    /// Deletes the visits in `range` and replies with how many; the deleted rows are purged
+    /// from the files at once.
+    pub(crate) fn clear_history(
+        &self,
+        range: ClearRange,
+        reply: impl FnOnce(Result<u64, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            Some(Area::History),
+            move |db, now| {
+                let removed = db.store().clear_history(range, now)?;
+                db.store().purge_deleted()?;
+                Ok(removed)
+            },
+            reply,
+        );
+    }
+
+    /// "Clear history on exit": writes the pending-clear marker first, then queues clearing
+    /// all history, which removes the marker when it has finished. If the quit deadline cuts
+    /// the clear short, the next start finds the marker and clears the history before
+    /// anything else. Call it before [`shut_down`](super::shut_down).
+    pub(crate) fn clear_history_on_exit(&self) {
+        let Some(marker) = self.shared.pending_clear.clone() else {
+            return;
+        };
+        if let Err(error) = write_private(&marker, b"history\n") {
+            log::error!("could not write {}: {error}", marker.display());
+        }
+        self.submit(
+            Some(Area::History),
+            "clearing the history at exit",
+            move |db, now| {
+                db.store().clear_history(ClearRange::All, now)?;
+                db.store().purge_deleted()?;
+                if let Err(error) = std::fs::remove_file(&marker) {
+                    log::warn!("could not remove {}: {error}", marker.display());
+                }
+                Ok(())
+            },
+        );
     }
 }

@@ -11,3 +11,9 @@ slint.workspace = true
 
 [build-dependencies]
 slint-build.workspace = true
+
+# history lane: `examples/render_history.rs` draws the main window headless, through Slint's
+# software renderer, and saves PNGs of the history lane's UI.
+[dev-dependencies]
+image.workspace = true
+slint = { workspace = true, features = ["renderer-software", "software-renderer-systemfonts"] }

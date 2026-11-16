@@ -7,8 +7,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use mercury_store::{
-    BookmarkImport, BookmarkKind, BookmarkRoot, DownloadState, NewDownload, Store, StoreError,
-    VisitImport, VisitTransition,
+    BookmarkImport, BookmarkKind, BookmarkRoot, ClearRange, DownloadState, NewDownload, Store,
+    StoreError, VisitImport, VisitTransition,
 };
 use talaria_core::{NavigationOrigin, VisitKey, VisitUpdate};
 
@@ -51,6 +51,7 @@ impl Harness {
         let clock = Arc::new(AtomicI64::new(NOW));
         let (wake, wakes) = mpsc::channel();
         let read_clock = Arc::clone(&clock);
+        let marker = pending_clear_marker(&path);
         let data = ProfileData::spawn(
             move || open_database(Some(path)),
             Arc::new(move || read_clock.load(Ordering::SeqCst)),
@@ -58,6 +59,7 @@ impl Harness {
                 let _sent = wake.send(());
             }),
             timing,
+            Some(marker),
         );
         Self {
             data,
@@ -727,6 +729,7 @@ fn without_a_profile_the_service_is_unavailable() {
             let _sent = wake.send(());
         }),
         Timing::default(),
+        None,
     );
     let result = Rc::new(RefCell::new(None));
     let slot = Rc::clone(&result);
@@ -1421,6 +1424,16 @@ fn import_benchmark_100k_visits() {
             "{shape}: longest of 5 upkeep chunks of {REFRESH_BATCH} pages {:.1} ms",
             longest.as_secs_f64() * 1000.0
         );
+        // Clearing everything with `secure_delete` on, then purging the indexes and the log.
+        let started = Instant::now();
+        let removed = store.clear_history(ClearRange::All, NOW).unwrap();
+        let cleared = started.elapsed();
+        store.purge_deleted().unwrap();
+        println!(
+            "{shape}: cleared {removed} visits in {:.1} ms, purged in {:.1} ms more",
+            cleared.as_secs_f64() * 1000.0,
+            (started.elapsed() - cleared).as_secs_f64() * 1000.0
+        );
     }
 }
 
@@ -1670,4 +1683,226 @@ fn a_successful_check_is_recorded() {
     assert!(recorded.trim().parse::<i64>().unwrap() > 0);
     #[cfg(unix)]
     assert_eq!(mode(&check_marker(&harness.path())), 0o600);
+}
+
+// Round 2: reading, deleting and clearing history.
+
+fn visits_at(harness: &Harness, pages: &[(&str, &str, i64)]) {
+    let updates = pages
+        .iter()
+        .enumerate()
+        .flat_map(|(key, (url, page_title, _))| {
+            [
+                visit(key as u64, url, NavigationOrigin::Typed),
+                title(url, page_title),
+            ]
+        })
+        .collect::<Vec<_>>();
+    // One call per time, so each visit gets its own.
+    for (index, (_, _, at)) in pages.iter().enumerate() {
+        harness
+            .data
+            .record_updates(updates[index * 2..index * 2 + 2].to_vec(), *at);
+    }
+    harness.sync();
+}
+
+fn listed(harness: &Harness, query: Option<&str>) -> Vec<String> {
+    harness
+        .ask(|data, reply| data.history(query.map(str::to_owned), None, 100, reply))
+        .unwrap()
+        .into_iter()
+        .map(|entry| entry.url)
+        .collect()
+}
+
+#[test]
+fn suggestions_and_history_come_from_the_service() {
+    let harness = Harness::new();
+    visits_at(
+        &harness,
+        &[
+            ("https://example.com/", "Example Domain", NOW - 2 * DAY_MS),
+            ("https://rust-lang.org/", "Rust", NOW - DAY_MS),
+            ("https://example.org/docs", "Example docs", NOW),
+        ],
+    );
+
+    let suggestions = harness
+        .ask(|data, reply| data.suggest("exa".into(), 100, reply))
+        .unwrap();
+    let mut urls = suggestions.into_iter().map(|s| s.url).collect::<Vec<_>>();
+    urls.sort();
+    assert_eq!(
+        urls,
+        vec!["https://example.com/", "https://example.org/docs"]
+    );
+
+    assert_eq!(
+        listed(&harness, None),
+        vec![
+            "https://example.org/docs",
+            "https://rust-lang.org/",
+            "https://example.com/"
+        ]
+    );
+    assert_eq!(
+        listed(&harness, Some("rust")),
+        vec!["https://rust-lang.org/"]
+    );
+
+    // Paged with the cursor.
+    let first = harness
+        .ask(|data, reply| data.history(None, None, 2, reply))
+        .unwrap();
+    let cursor = first.last().unwrap().cursor();
+    let rest = harness
+        .ask(|data, reply| data.history(None, Some(cursor), 2, reply))
+        .unwrap();
+    assert_eq!(rest.len(), 1);
+    assert_eq!(rest[0].url, "https://example.com/");
+}
+
+#[test]
+fn entries_pages_and_sites_can_be_deleted() {
+    let harness = Harness::new();
+    visits_at(
+        &harness,
+        &[
+            ("https://a.test/1", "A1", NOW - 3),
+            ("https://a.test/2", "A2", NOW - 2),
+            ("https://www.a.test/3", "A3", NOW - 1),
+            ("https://b.test/", "B", NOW),
+        ],
+    );
+    let entries = harness
+        .ask(|data, reply| data.history(None, None, 100, reply))
+        .unwrap();
+    let b = entries[0].visit_id;
+
+    assert!(
+        harness
+            .ask(|data, reply| data.delete_visit(b, reply))
+            .unwrap()
+    );
+    let a1 = entries
+        .iter()
+        .find(|entry| entry.url == "https://a.test/1")
+        .unwrap()
+        .visit_id;
+    assert!(
+        harness
+            .ask(|data, reply| data.delete_visit(a1, reply))
+            .unwrap()
+    );
+    assert_eq!(
+        harness
+            .ask(|data, reply| data.delete_site("a.test".into(), reply))
+            .unwrap(),
+        2
+    );
+    assert!(listed(&harness, None).is_empty());
+}
+
+#[test]
+fn clearing_a_range_keeps_older_visits() {
+    let harness = Harness::new();
+    visits_at(
+        &harness,
+        &[
+            ("https://old.test/", "Old", NOW - 3 * DAY_MS),
+            ("https://new.test/", "New", NOW - 1000),
+        ],
+    );
+
+    let removed = harness
+        .ask(|data, reply| {
+            data.clear_history(
+                ClearRange::Since {
+                    from_ms: NOW - DAY_MS,
+                },
+                reply,
+            )
+        })
+        .unwrap();
+
+    assert_eq!(removed, 1);
+    assert_eq!(listed(&harness, None), vec!["https://old.test/"]);
+}
+
+#[test]
+fn deleted_history_is_purged_from_the_files_when_the_service_is_idle() {
+    let timing = Timing {
+        purge_delay: Duration::from_millis(100),
+        ..Timing::default()
+    };
+    let harness = Harness::with(|_| {}, timing);
+    visits_at(
+        &harness,
+        &[("https://zanzibarqux.test/", "Zanzibarqux", NOW)],
+    );
+    let id = harness
+        .ask(|data, reply| data.history(None, None, 1, reply))
+        .unwrap()[0]
+        .visit_id;
+
+    assert!(
+        harness
+            .ask(|data, reply| data.delete_visit(id, reply))
+            .unwrap()
+    );
+
+    let wal = harness.path().with_extension("sqlite-wal");
+    wait_until("the purge", || {
+        std::fs::metadata(&wal).map_or(true, |metadata| metadata.len() == 0)
+    });
+    let bytes = std::fs::read(harness.path()).unwrap();
+    assert!(!bytes.windows(11).any(|w| w == b"zanzibarqux"));
+}
+
+#[test]
+fn clear_history_on_exit_marks_the_clear_before_it_is_done_and_unmarks_it_after() {
+    let harness = Harness::new();
+    visits_at(&harness, &[("https://a.test/", "A", NOW)]);
+    let marker = pending_clear_marker(&harness.path());
+    // Hold the service so the clear cannot run yet.
+    harness.data.request::<()>(
+        None,
+        |_, _| {
+            std::thread::sleep(Duration::from_millis(300));
+            Ok(())
+        },
+        |_| {},
+    );
+
+    harness.data.clear_history_on_exit();
+
+    assert!(
+        marker.exists(),
+        "the marker is written before the clear is queued"
+    );
+    #[cfg(unix)]
+    assert_eq!(mode(&marker), 0o600);
+    let (store, _directory) = harness.reopen();
+    assert!(!marker.exists());
+    assert!(store.history(None, None, 10).unwrap().is_empty());
+}
+
+#[test]
+fn a_clear_cut_short_at_exit_is_finished_at_the_next_start_before_anything_else() {
+    let harness = Harness::with(
+        |path| {
+            let mut store = Store::open(path).unwrap();
+            store
+                .record_visit("https://a.test/", Some("A"), VisitTransition::Link, NOW)
+                .unwrap();
+            drop(store);
+            std::fs::write(pending_clear_marker(path), b"history\n").unwrap();
+        },
+        Timing::default(),
+    );
+
+    // The first request already sees the history cleared.
+    assert!(listed(&harness, None).is_empty());
+    assert!(!pending_clear_marker(&harness.path()).exists());
 }

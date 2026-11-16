@@ -19,6 +19,7 @@ mod callbacks;
 mod cli;
 mod crash_handler;
 mod engine;
+mod history_ui;
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -123,6 +124,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
     );
+    history_ui::connect(&window, Rc::clone(&controller)); // history lane
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
 
     let screenshot_result = Rc::new(Cell::new(ScreenshotResult::Pending));

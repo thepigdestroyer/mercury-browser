@@ -29,6 +29,7 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+url.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

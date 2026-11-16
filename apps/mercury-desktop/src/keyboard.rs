@@ -38,6 +38,10 @@ pub(crate) fn connect_native_keyboard_input(
                     modifiers = changed.state();
                 }
                 WindowEvent::KeyboardInput { event, .. } => {
+                    // history lane: the suggestion list's keys come before everything else.
+                    if crate::history_ui::handle_key(&window, event) {
+                        return EventResult::PreventDefault;
+                    }
                     if handle_browser_shortcut(
                         &window,
                         &controller,

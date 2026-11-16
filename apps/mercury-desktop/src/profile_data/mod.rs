@@ -107,6 +107,9 @@ pub(crate) const UPKEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
 pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// Later titles of the same page within this time are held, and only the last is written.
 pub(crate) const TITLE_DEBOUNCE: Duration = Duration::from_secs(3);
+/// Deleted history is purged from the files (`Store::purge_deleted`) once the service has had
+/// no request for this long, and at shutdown; clearing purges at once.
+pub(crate) const PURGE_DELAY: Duration = Duration::from_secs(2);
 /// History change notifications come at most this often.
 pub(crate) const HISTORY_NOTIFY_INTERVAL: Duration = Duration::from_secs(1);
 /// `PRAGMA quick_check` runs at least this often (and after any run that did not close the
@@ -129,6 +132,7 @@ pub(crate) fn start(profile: &ActiveProfile, controller: &mut BrowserController)
         .paths
         .as_ref()
         .map(|paths| paths.places_database.clone());
+    let pending_clear = database.as_deref().map(pending_clear_marker);
     let data = ProfileData::spawn(
         move || open_database(database),
         Arc::new(now_ms),
@@ -136,6 +140,7 @@ pub(crate) fn start(profile: &ActiveProfile, controller: &mut BrowserController)
             let _queued = slint::invoke_from_event_loop(deliver_replies);
         }),
         Timing::default(),
+        pending_clear,
     );
     PROFILE_DATA.with(|current| *current.borrow_mut() = Some(data));
 }
@@ -151,6 +156,16 @@ pub(crate) fn handle() -> Option<ProfileData> {
 pub(crate) fn shut_down(deadline: Instant) {
     if let Some(data) = PROFILE_DATA.with(|current| current.borrow_mut().take()) {
         data.shut_down(deadline);
+    }
+}
+
+/// "Clear history on exit", for the quit sequence (the settings lane's
+/// `exit::clear_history_on_exit`): see [`ProfileData::clear_history_on_exit`]. Call it before
+/// [`shut_down`].
+#[expect(dead_code, reason = "called by the settings lane's exit hook")]
+pub(crate) fn clear_history_on_exit() {
+    if let Some(data) = handle() {
+        data.clear_history_on_exit();
     }
 }
 
@@ -177,6 +192,14 @@ fn open_database(path: Option<PathBuf>) -> Result<Store, String> {
         }
     }
     Store::open(&path).map_err(|error| failure(&error))
+}
+
+/// The file that says a "clear history on exit" was asked for and has not finished: the next
+/// start clears the history first.
+fn pending_clear_marker(database: &Path) -> PathBuf {
+    let mut name = database.as_os_str().to_owned();
+    name.push(".clear-pending");
+    PathBuf::from(name)
 }
 
 /// The file that records when the database was last checked.
@@ -378,6 +401,8 @@ struct Database {
     download_scans: u64,
     /// What the running job changed, with hints; collected by the worker after it.
     changes: Vec<Change>,
+    /// History was deleted and is still recoverable from the files until purged.
+    purge_pending: bool,
 }
 
 impl Database {
@@ -389,6 +414,7 @@ impl Database {
             download_misses: HashSet::new(),
             download_scans: 0,
             changes: Vec::new(),
+            purge_pending: false,
         }
     }
 
@@ -446,6 +472,7 @@ pub(crate) struct Timing {
     pub(crate) upkeep_interval: Duration,
     pub(crate) title_debounce: Duration,
     pub(crate) history_notify_interval: Duration,
+    pub(crate) purge_delay: Duration,
 }
 
 impl Default for Timing {
@@ -455,6 +482,7 @@ impl Default for Timing {
             upkeep_interval: UPKEEP_INTERVAL,
             title_debounce: TITLE_DEBOUNCE,
             history_notify_interval: HISTORY_NOTIFY_INTERVAL,
+            purge_delay: PURGE_DELAY,
         }
     }
 }
@@ -480,6 +508,8 @@ struct Shared {
     wake_pending: Arc<AtomicBool>,
     wake: Wake,
     unavailable: Arc<OnceLock<Option<Arc<str>>>>,
+    /// See `pending_clear_marker`.
+    pending_clear: Option<PathBuf>,
 }
 
 impl ProfileData {
@@ -490,8 +520,10 @@ impl ProfileData {
         clock: Clock,
         wake: Wake,
         timing: Timing,
+        pending_clear: Option<PathBuf>,
     ) -> Self {
         let (requests, messages) = mpsc::channel();
+        let worker_pending_clear = pending_clear.clone();
         let (delivery_sender, deliveries) = mpsc::channel();
         let (finished_sender, finished) = mpsc::channel();
         let wake_pending = Arc::new(AtomicBool::new(false));
@@ -517,6 +549,7 @@ impl ProfileData {
                     worker_wake,
                     worker_wake_pending,
                     timing,
+                    worker_pending_clear,
                 );
                 worker.run(&messages);
                 // Closed before `finished`: from then on a send fails and is answered at once.
@@ -544,6 +577,7 @@ impl ProfileData {
                 wake_pending,
                 wake,
                 unavailable,
+                pending_clear,
             }),
         }
     }
@@ -558,10 +592,6 @@ impl ProfileData {
     /// Calls `callback` on the UI thread after each delivery in which a write to `area`
     /// succeeded, after that delivery's replies, with what changed. Call [`handle`] inside the
     /// callback rather than capturing a [`ProfileData`].
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "called by the bookmarks and downloads work")
-    )]
     pub(crate) fn on_change(
         &self,
         area: Area,

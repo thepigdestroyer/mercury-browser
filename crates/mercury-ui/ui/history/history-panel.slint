@@ -1,0 +1,275 @@
+import { ListView } from "std-widgets.slint";
+import { HistoryColors } from "colors.slint";
+
+// One line of the history window: a day's heading, a visit, or "Show more" at the end.
+export struct HistoryRow {
+    is-day: bool,
+    is-more: bool,
+    label: string,
+    time: string,
+    title: string,
+    url: string,
+    // The host "Forget this site" deletes; empty when there is none.
+    host: string,
+    // Which visit, for the callbacks.
+    entry: int,
+}
+
+component TextButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> danger: false;
+    in property <bool> primary: false;
+    callback clicked;
+
+    height: 28px;
+    min-width: label-text.preferred-width + 20px;
+    border-radius: 6px;
+    background: root.primary
+        ? (touch.pressed ? HistoryColors.accent.darker(15%) : HistoryColors.accent)
+        : touch.pressed ? HistoryColors.selected : touch.has-hover ? HistoryColors.hover : transparent;
+
+    label-text := Text {
+        text: root.label;
+        color: root.primary
+            ? HistoryColors.on-accent
+            : root.danger ? HistoryColors.danger : HistoryColors.accent;
+        font-size: 12px;
+        font-weight: 550;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component HistoryPanel inherits FocusScope {
+    in property <[HistoryRow]> rows;
+    // Shown instead of the list: why history is unavailable, or that nothing matched.
+    in property <string> message;
+    in-out property <string> query;
+    callback search(string);
+    callback open(int, bool);
+    callback delete-entry(int);
+    callback delete-site(int);
+    callback more();
+    callback close();
+    callback clear-data();
+
+    public function focus-search() {
+        search-input.focus();
+        search-input.select-all();
+    }
+
+    key-pressed(event) => {
+        if event.text == Key.Escape {
+            root.close();
+            return accept;
+        }
+        reject
+    }
+
+    Rectangle {
+        background: HistoryColors.surface;
+
+        // Pointer input over the panel never reaches the page underneath.
+        TouchArea { }
+
+        VerticalLayout {
+            padding-left: 28px;
+            padding-right: 28px;
+            padding-top: 20px;
+            padding-bottom: 12px;
+            spacing: 14px;
+
+            HorizontalLayout {
+                spacing: 12px;
+                height: 36px;
+
+                Text {
+                    text: "History";
+                    color: HistoryColors.text;
+                    font-size: 20px;
+                    font-weight: 650;
+                    vertical-alignment: center;
+                }
+
+                Rectangle {
+                    horizontal-stretch: 1;
+                    max-width: 440px;
+                    border-radius: 8px;
+                    border-width: 1px;
+                    border-color: search-input.has-focus ? HistoryColors.accent : HistoryColors.border;
+                    background: HistoryColors.field;
+
+                    if search-input.text == "": Text {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height;
+                        text: "Search history";
+                        color: HistoryColors.dim;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                    }
+
+                    search-input := TextInput {
+                        x: 12px;
+                        width: parent.width - 24px;
+                        height: parent.height;
+                        text <=> root.query;
+                        color: HistoryColors.text;
+                        font-size: 13px;
+                        vertical-alignment: center;
+                        single-line: true;
+                        edited => {
+                            root.search(self.text);
+                        }
+                    }
+                }
+
+                Rectangle {
+                    horizontal-stretch: 0.01;
+                }
+
+                TextButton {
+                    y: 4px;
+                    label: "Clear browsing data…";
+                    clicked => {
+                        root.clear-data();
+                    }
+                }
+
+                TextButton {
+                    y: 4px;
+                    label: "Close";
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+
+            if root.message != "": Text {
+                vertical-stretch: 1;
+                text: root.message;
+                color: HistoryColors.dim;
+                font-size: 14px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if root.message == "": ListView {
+                vertical-stretch: 1;
+
+                for row in root.rows: Rectangle {
+                    height: row.is-day ? 40px : row.is-more ? 48px : 44px;
+                    border-radius: 7px;
+                    background: !row.is-day && !row.is-more && row-touch.has-hover ? HistoryColors.hover : transparent;
+
+                    if row.is-more: TextButton {
+                        x: (parent.width - self.width) / 2;
+                        y: 10px;
+                        label: "Show more";
+                        clicked => {
+                            root.more();
+                        }
+                    }
+
+                    if row.is-day: Text {
+                        x: 8px;
+                        y: parent.height - self.height - 6px;
+                        text: row.label;
+                        color: HistoryColors.text;
+                        font-size: 14px;
+                        font-weight: 650;
+                    }
+
+                    row-touch := TouchArea {
+                        enabled: !row.is-day && !row.is-more;
+                        pointer-event(event) => {
+                            if event.kind == PointerEventKind.up
+                                && event.button == PointerEventButton.middle {
+                                root.open(row.entry, true);
+                            }
+                        }
+                        clicked => {
+                            root.open(row.entry, false);
+                        }
+                    }
+
+                    if !row.is-day && !row.is-more: HorizontalLayout {
+                        padding-left: 8px;
+                        padding-right: 8px;
+                        spacing: 14px;
+
+                        Text {
+                            width: 44px;
+                            text: row.time;
+                            color: HistoryColors.dim;
+                            font-size: 12px;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            horizontal-stretch: 2;
+                            // Column widths come from the stretch alone, the same on every row.
+                            preferred-width: 0px;
+                            min-width: 0px;
+                            text: row.title;
+                            color: HistoryColors.text;
+                            font-size: 13px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        Text {
+                            horizontal-stretch: 1;
+                            preferred-width: 0px;
+                            min-width: 0px;
+                            text: row.url;
+                            color: HistoryColors.dim;
+                            font-size: 12px;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+
+                        HorizontalLayout {
+                            spacing: 4px;
+                            width: 250px;
+                            alignment: end;
+
+                            TextButton {
+                                y: 8px;
+                                label: "Open in new tab";
+                                clicked => {
+                                    root.open(row.entry, true);
+                                }
+                            }
+
+                            if row.host != "": TextButton {
+                                y: 8px;
+                                label: "Forget site";
+                                danger: true;
+                                clicked => {
+                                    root.delete-site(row.entry);
+                                }
+                            }
+
+                            TextButton {
+                                y: 8px;
+                                label: "Delete";
+                                danger: true;
+                                clicked => {
+                                    root.delete-entry(row.entry);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

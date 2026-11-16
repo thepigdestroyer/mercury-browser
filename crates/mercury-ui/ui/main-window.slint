@@ -1,4 +1,5 @@
 import { Palette } from "std-widgets.slint";
+import { ClearDataDialog, HistoryColors, HistoryPanel, HistoryRow, SuggestionList, SuggestionRow } from "history/history.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -201,6 +202,46 @@ export component MainWindow inherits Window {
     property <bool> new-tab-search-focused: false;
     // The window's colour scheme as Slint determined it, used when winit reports none.
     out property <ColorScheme> system-color-scheme: Palette.color-scheme;
+    // --- history lane ---
+    // Suggestions under the address field.
+    in property <[SuggestionRow]> suggestions;
+    in property <int> suggestion-selected: -1;
+    in property <bool> suggestions-open: false;
+    out property <bool> address-focused: address-input.has-focus;
+    callback address-edited(string);
+    callback suggestion-chosen(int);
+    // Puts `text` in the address field and selects from `start` to `end` (UTF-8 offsets).
+    public function complete-address(text: string, start: int, end: int) {
+        root.address = text;
+        address-input.set-selection-offsets(start, end);
+    }
+    // The history window.
+    in property <bool> history-open: false;
+    in property <[HistoryRow]> history-rows;
+    in property <string> history-message;
+    in-out property <string> history-query;
+    callback history-search(string);
+    callback history-open-entry(int, bool);
+    callback history-delete-entry(int);
+    callback history-delete-site(int);
+    callback history-more();
+    callback history-close();
+    // "Clear browsing data".
+    in property <bool> clear-dialog-open: false;
+    in-out property <int> clear-period: 0;
+    in-out property <bool> clear-history: true;
+    in-out property <bool> clear-cookies: false;
+    in-out property <bool> clear-cache: false;
+    in property <bool> clear-busy: false;
+    callback show-clear-dialog();
+    callback clear-confirm();
+    callback clear-cancel();
+    // The history lane's colours follow the chrome, which is dark.
+    in-out property <bool> history-dark: true;
+    changed history-dark => {
+        HistoryColors.dark = self.history-dark;
+    }
+    // --- end history lane ---
 
     callback navigate(string);
     callback go-back;
@@ -414,7 +455,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Rectangle {
+                address-box := Rectangle {
                     horizontal-stretch: 1;
                     height: 38px;
                     border-radius: 9px;
@@ -433,6 +474,9 @@ export component MainWindow inherits Window {
                         single-line: true;
                         accepted => {
                             root.navigate(self.text);
+                        }
+                        edited => {
+                            root.address-edited(self.text);
                         }
                     }
                 }
@@ -721,6 +765,75 @@ export component MainWindow inherits Window {
                     wrap: no-wrap;
                 }
             }
+        }
+    }
+
+    // history lane
+    if root.history-open: HistoryPanel {
+        x: 0px;
+        y: web-view-area.absolute-position.y;
+        width: root.width;
+        height: web-view-area.height;
+        rows: root.history-rows;
+        message: root.history-message;
+        query <=> root.history-query;
+        init => {
+            self.focus-search();
+        }
+        search(text) => {
+            root.history-search(text);
+        }
+        open(entry, new-tab) => {
+            root.history-open-entry(entry, new-tab);
+        }
+        delete-entry(entry) => {
+            root.history-delete-entry(entry);
+        }
+        delete-site(entry) => {
+            root.history-delete-site(entry);
+        }
+        more => {
+            root.history-more();
+        }
+        close => {
+            root.history-close();
+        }
+        clear-data => {
+            root.show-clear-dialog();
+        }
+    }
+
+    // history lane
+    if root.suggestions-open && address-input.has-focus && root.suggestions.length > 0: SuggestionList {
+        x: address-box.absolute-position.x;
+        y: address-box.absolute-position.y + address-box.height + 6px;
+        width: address-box.width;
+        rows: root.suggestions;
+        selected: root.suggestion-selected;
+        chosen(index) => {
+            root.suggestion-chosen(index);
+        }
+    }
+
+    // history lane
+    if root.clear-dialog-open: ClearDataDialog {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        period <=> root.clear-period;
+        history <=> root.clear-history;
+        cookies <=> root.clear-cookies;
+        cache <=> root.clear-cache;
+        busy: root.clear-busy;
+        init => {
+            self.focus();
+        }
+        confirm => {
+            root.clear-confirm();
+        }
+        cancel => {
+            root.clear-cancel();
         }
     }
 }

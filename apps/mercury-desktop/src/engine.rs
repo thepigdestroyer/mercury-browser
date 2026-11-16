@@ -691,6 +691,20 @@ pub(crate) fn dispatch_pending_commands<W: TalariaWebView>(
     Ok(controller.borrow().has_pending_commands())
 }
 
+/// Clears the engine's cookies, site data and cache as `kinds` says (history lane: "Clear
+/// browsing data"). Returns false if there is no engine, it is busy, or it did not answer.
+pub(crate) fn clear_site_data(kinds: talaria_servo::SiteDataKinds) -> bool {
+    let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
+        return false;
+    };
+    let Ok(state) = engine.state.try_borrow() else {
+        return false;
+    };
+    state
+        .as_ref()
+        .is_some_and(|state| state.runtime.clear_site_data(kinds))
+}
+
 #[cfg(test)]
 mod tests {
     use std::convert::Infallible;
