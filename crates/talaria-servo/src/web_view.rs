@@ -19,6 +19,7 @@ use url::Url;
 
 use crate::embedder_controls::EmbedderControls;
 use crate::frame_ready::FrameReadySignal;
+use crate::geolocation::{PageGeolocation, WebViewGeolocation};
 use crate::page_requests::{
     ClosesOnDrop, DocumentStartTracker, EngineRequest, Navigation, ServoPageRequest,
     arms_document_start,
@@ -40,6 +41,8 @@ pub struct ServoWebView {
     // unanswered request the engine's default.
     page_requests: ClosesOnDrop<ServoPageRequest>,
     document_start: Rc<RefCell<DocumentStartTracker>>,
+    // geolocation: told about visibility and about document starts Servo will not report.
+    geolocation: Option<Rc<WebViewGeolocation>>,
 }
 
 impl ServoWebView {
@@ -60,13 +63,27 @@ impl ServoWebView {
             controls,
             page_requests,
             document_start,
+            geolocation: None,
         }
+    }
+
+    // geolocation
+    pub(crate) fn with_page_geolocation(
+        mut self,
+        geolocation: Option<Rc<WebViewGeolocation>>,
+    ) -> Self {
+        self.geolocation = geolocation;
+        self
     }
 
     // dialogs: the navigation's document may start without a `Started` Servo reports.
     fn arm_document_start(&self, navigation: Navigation) {
         if arms_document_start(navigation, self.inner.load_status()) {
             self.document_start.borrow_mut().arm();
+            // geolocation: the document being left ends its watches now, not at a later guess.
+            if let Some(geolocation) = &self.geolocation {
+                geolocation.document_started();
+            }
         }
     }
 
@@ -95,10 +112,16 @@ impl ServoWebView {
 
     pub fn show(&self) {
         self.inner.show();
+        if let Some(geolocation) = &self.geolocation {
+            geolocation.set_visible(true); // geolocation
+        }
     }
 
     pub fn hide(&self) {
         self.inner.hide();
+        if let Some(geolocation) = &self.geolocation {
+            geolocation.set_visible(false); // geolocation
+        }
     }
 }
 

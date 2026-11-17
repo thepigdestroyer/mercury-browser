@@ -384,8 +384,6 @@ mod tests {
                 gpu_canvas: false,
                 config_dir: Some(root.join("servo")),
                 experimental_web_features: false,
-                // geolocation: a normal run uses the system's location service
-                geolocation: talaria_servo::GeolocationSetup::System,
                 ..RuntimeOptions::default()
             }
         );

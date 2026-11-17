@@ -174,13 +174,13 @@ fn authorization_step(status: CLAuthorizationStatus) -> AuthorizationStep {
     }
 }
 
-/// `kCLErrorLocationUnknown` is reported when no position is at hand yet; CoreLocation keeps
-/// trying, and a watch keeps listening, but a waiting one-shot request fails as in Chromium.
-fn location_error(is_core_location_error: bool, code: isize) -> LocationError {
-    if is_core_location_error && code == CLError::Denied.0 {
-        LocationError::PermissionDenied
-    } else {
-        LocationError::Unavailable
+/// `None` for `kCLErrorLocationUnknown`: CoreLocation has no position yet and keeps trying, so,
+/// as Apple advises, it is ignored; the page's own `timeout` decides how long to wait.
+fn location_error(is_core_location_error: bool, code: isize) -> Option<LocationError> {
+    match (is_core_location_error, code) {
+        (true, code) if code == CLError::LocationUnknown.0 => None,
+        (true, code) if code == CLError::Denied.0 => Some(LocationError::PermissionDenied),
+        _ => Some(LocationError::Unavailable),
     }
 }
 
@@ -261,7 +261,9 @@ define_class!(
             let is_core_location_error = *error.domain() == *unsafe { kCLErrorDomain };
             let code = error.code();
             info!("geolocation: CoreLocation reported error {code}");
-            state.deliver(Err(location_error(is_core_location_error, code)));
+            if let Some(error) = location_error(is_core_location_error, code) {
+                state.deliver(Err(error));
+            }
         }
 
         #[unsafe(method(locationManagerDidChangeAuthorization:))]
@@ -317,19 +319,24 @@ mod tests {
     fn only_core_locations_denied_error_is_a_permission_error() {
         assert_eq!(
             location_error(true, CLError::Denied.0),
-            LocationError::PermissionDenied
-        );
-        assert_eq!(
-            location_error(true, CLError::LocationUnknown.0),
-            LocationError::Unavailable
+            Some(LocationError::PermissionDenied)
         );
         assert_eq!(
             location_error(true, CLError::Network.0),
-            LocationError::Unavailable
+            Some(LocationError::Unavailable)
         );
         assert_eq!(
             location_error(false, CLError::Denied.0),
-            LocationError::Unavailable
+            Some(LocationError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn location_unknown_is_waited_out() {
+        assert_eq!(location_error(true, CLError::LocationUnknown.0), None);
+        assert_eq!(
+            location_error(false, CLError::LocationUnknown.0),
+            Some(LocationError::Unavailable)
         );
     }
 

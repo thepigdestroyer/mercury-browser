@@ -22,7 +22,8 @@ use crate::embedder_controls::{ControlIds, EmbedderControls};
 use crate::exit_clearing::{EngineSwitches, ExitClearing, clear_at_exit};
 use crate::frame_ready::FrameReadySignal;
 use crate::geolocation::{
-    GeolocationService, GeolocationSetup, WebViewGeolocation, WithGeolocation,
+    GeolocationService, GeolocationSetup, PageGeolocation, WithGeolocation, on_history_changed,
+    on_load_status,
 };
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
 use crate::page_defaults::page_defaults_user_content;
@@ -224,7 +225,9 @@ impl ServoRuntime {
             load_metrics: RefCell::new(PageLoadMetrics::default()),
             content_blocker: Rc::clone(&self.content_blocker),
             screen_metrics: Rc::clone(&self.screen_metrics),
-            geolocation: geolocation.clone(),
+            geolocation: geolocation
+                .clone()
+                .map(|geolocation| geolocation as Rc<dyn PageGeolocation>),
             controls: controls.clone(),
             page_requests: page_requests.shared(),
             document_start: Rc::clone(&document_start),
@@ -250,7 +253,8 @@ impl ServoRuntime {
             controls,
             page_requests,
             document_start,
-        ))
+        )
+        .with_page_geolocation(geolocation))
     }
 
     pub fn spin_event_loop(&self) {
@@ -391,8 +395,8 @@ struct BrowserDelegate {
     load_metrics: RefCell<PageLoadMetrics>,
     content_blocker: Rc<ContentBlocker>,
     screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
-    /// The web view's geolocation delegate, also given to Servo; `None` while it is off.
-    geolocation: Option<Rc<WebViewGeolocation>>,
+    /// The web view's geolocation, also Servo's delegate for it; `None` while it is off.
+    geolocation: Option<Rc<dyn PageGeolocation>>,
     // controls
     controls: EmbedderControls,
     /// Dialogs, leave prompts, sign-ins and permission prompts waiting for the user; shared with
@@ -475,6 +479,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn notify_load_status_changed(&self, _web_view: servo::WebView, status: LoadStatus) {
+        // geolocation: a new document ends the old one's requests and watches
+        on_load_status(self.geolocation.as_deref(), status);
         // dialogs: a new document; the previous one's requests and page state no longer apply.
         if self.document_start.borrow_mut().document_started(status) {
             self.send_browser_event(BrowserEvent::PageLoadStarted);
@@ -485,10 +491,6 @@ impl servo::WebViewDelegate for BrowserDelegate {
                 self.drop_controls();
                 self.load_metrics.borrow_mut().start(Instant::now());
                 info!("tab {}: page load started", self.tab_id.value());
-                // geolocation: the document being left stops its requests and watches
-                if let Some(geolocation) = &self.geolocation {
-                    geolocation.page_load_started();
-                }
             }
             LoadStatus::HeadParsed => self.record_load_milestone(LoadMilestone::HeadParsed),
             LoadStatus::Complete => self.record_load_milestone(LoadMilestone::Complete),
@@ -501,6 +503,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn notify_history_changed(&self, _web_view: servo::WebView, entries: Vec<Url>, current: usize) {
+        // geolocation: back/forward may restore a cached document without a new start
+        on_history_changed(self.geolocation.as_deref(), &entries, current);
         self.send_browser_event(history_changed_event(entries.len(), current));
     }
 
@@ -941,12 +945,13 @@ mod tests {
             GeolocationSetup::System,
             GeolocationSetup::Diagnostic(crate::GeolocationDiagnostic::Deny),
         ] {
+            let expected = setup.exposes_geolocation();
             let preferences = mercury_preferences(&RuntimeOptions {
                 geolocation: setup,
                 ..RuntimeOptions::default()
             });
 
-            assert!(preferences.dom_geolocation_enabled);
+            assert_eq!(preferences.dom_geolocation_enabled, expected);
             // Servo's own fixed test position stays off: positions come from Mercury's source.
             assert!(!preferences.dom_geolocation_test_position_enabled);
         }

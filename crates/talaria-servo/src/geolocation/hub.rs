@@ -26,6 +26,24 @@ pub(crate) trait PositionSubscriber {
     fn error(&self, error: LocationError);
 }
 
+/// A watch's key names the document (Servo: the pipeline) that started the watch.
+pub(crate) trait WatchKey: PartialEq {
+    type Document: PartialEq + Clone;
+    fn document(&self) -> Self::Document;
+}
+
+/// Why an owner's requests and watches are forgotten.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Forget {
+    /// A new document started: later watches of the documents seen so far are refused.
+    DocumentStarted,
+    /// The history moved to another entry, maybe a document from the back-forward cache, which
+    /// may watch again.
+    Traversal,
+    /// The web view closed.
+    Closed,
+}
+
 /// Whose requests these are: one per web view, so closing or navigating it forgets exactly
 /// its own requests.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,17 +58,44 @@ struct Consumer<T> {
 struct Running {
     generation: u64,
     accuracy: LocationAccuracy,
-    /// The latest position of this run, given at once to a page that asks while running.
-    /// Forgotten when the source stops.
-    last_fix: Option<LocationFix>,
+    /// The latest position of this run and the accuracy asked for when it came, given at once
+    /// to a page that asks while running for no better accuracy. Forgotten when the source stops.
+    last_fix: Option<(LocationFix, LocationAccuracy)>,
 }
 
-struct HubState<R, W, K> {
+struct HubState<R, W, K: WatchKey> {
     source: Option<Rc<dyn LocationSource>>,
     requests: Vec<Consumer<R>>,
     watches: Vec<(K, Consumer<W>)>,
     running: Option<Running>,
     next_generation: u64,
+    /// Owners whose web view is hidden: their watches neither keep the source running nor get
+    /// positions (Servo drops positions for hidden documents anyway) until it is shown.
+    hidden: Vec<OwnerId>,
+    /// Documents that started watches, per owner.
+    seen_documents: Vec<(OwnerId, K::Document)>,
+    /// Documents their owner has left for a new one: a watch of theirs arriving late is refused.
+    retired_documents: Vec<(OwnerId, K::Document)>,
+}
+
+impl<R, W, K: WatchKey> HubState<R, W, K> {
+    fn is_hidden(&self, owner: OwnerId) -> bool {
+        self.hidden.contains(&owner)
+    }
+
+    /// The latest position, if it was acquired with at least the accuracy asked for.
+    fn cached_fix(&self, high_accuracy: bool) -> Option<LocationFix> {
+        let (fix, accuracy) = self.running.as_ref()?.last_fix.as_ref()?;
+        (*accuracy >= accuracy_for(high_accuracy)).then(|| fix.clone())
+    }
+}
+
+fn accuracy_for(high_accuracy: bool) -> LocationAccuracy {
+    if high_accuracy {
+        LocationAccuracy::High
+    } else {
+        LocationAccuracy::Coarse
+    }
 }
 
 enum SourceAction {
@@ -61,7 +106,7 @@ enum SourceAction {
 
 type SourceFactory = Box<dyn Fn() -> Rc<dyn LocationSource>>;
 
-pub(crate) struct LocationHub<R, W, K> {
+pub(crate) struct LocationHub<R, W, K: WatchKey> {
     this: Weak<Self>,
     make_source: SourceFactory,
     next_owner: Cell<u64>,
@@ -72,7 +117,7 @@ impl<R, W, K> LocationHub<R, W, K>
 where
     R: PendingPosition + 'static,
     W: PositionSubscriber + 'static,
-    K: PartialEq + 'static,
+    K: WatchKey + 'static,
 {
     /// `make_source` runs once, when a page first asks for a position.
     pub(crate) fn new(make_source: impl Fn() -> Rc<dyn LocationSource> + 'static) -> Rc<Self> {
@@ -86,6 +131,9 @@ where
                 watches: Vec::new(),
                 running: None,
                 next_generation: 1,
+                hidden: Vec::new(),
+                seen_documents: Vec::new(),
+                retired_documents: Vec::new(),
             }),
         })
     }
@@ -97,7 +145,8 @@ where
     }
 
     pub(crate) fn request_position(&self, owner: OwnerId, high_accuracy: bool, request: R) {
-        if let Some(fix) = self.latest_fix() {
+        let cached = self.state.borrow().cached_fix(high_accuracy);
+        if let Some(fix) = cached {
             request.succeed(&fix);
             return;
         }
@@ -110,7 +159,28 @@ where
     }
 
     pub(crate) fn start_watch(&self, owner: OwnerId, high_accuracy: bool, key: K, watch: W) {
-        if let Some(fix) = self.latest_fix() {
+        let (refused, cached) = {
+            let mut state = self.state.borrow_mut();
+            let document = (owner, key.document());
+            if state.retired_documents.contains(&document) {
+                (true, None)
+            } else {
+                if !state.seen_documents.contains(&document) {
+                    state.seen_documents.push(document);
+                }
+                let visible = !state.is_hidden(owner);
+                (
+                    false,
+                    visible.then(|| state.cached_fix(high_accuracy)).flatten(),
+                )
+            }
+        };
+        if refused {
+            // A late watch of a document its tab has left.
+            watch.error(LocationError::Unavailable);
+            return;
+        }
+        if let Some(fix) = cached {
             watch.update(&fix);
         }
         self.state.borrow_mut().watches.push((
@@ -139,10 +209,66 @@ where
         }
     }
 
-    /// The owner's web view closed or started loading a new document.
-    pub(crate) fn forget_owner(&self, owner: OwnerId) {
+    /// A hidden web view's watches wait, without keeping the source running; shown again, they
+    /// get the latest position if there is one, and count again.
+    pub(crate) fn set_owner_visible(&self, owner: OwnerId, visible: bool) {
+        let changed = {
+            let mut state = self.state.borrow_mut();
+            let hidden = state.is_hidden(owner);
+            if visible && hidden {
+                state.hidden.retain(|hidden_owner| *hidden_owner != owner);
+            } else if !visible && !hidden {
+                state.hidden.push(owner);
+            }
+            visible == hidden
+        };
+        if !changed {
+            return;
+        }
+        if visible {
+            let state = self.state.borrow();
+            for (_, watch) in state
+                .watches
+                .iter()
+                .filter(|(_, watch)| watch.owner == owner)
+            {
+                if let Some(fix) = state.cached_fix(watch.high_accuracy) {
+                    watch.item.update(&fix);
+                }
+            }
+        }
+        self.update_source();
+    }
+
+    /// The owner's web view closed or left its document. Its watches are told (the page, if it
+    /// is still shown, learns that updates stopped and may watch again), then dropped.
+    pub(crate) fn forget_owner(&self, owner: OwnerId, reason: Forget) {
         let (requests, watches) = {
             let mut state = self.state.borrow_mut();
+            let state = &mut *state;
+            match reason {
+                Forget::DocumentStarted => {
+                    let (left, kept) = std::mem::take(&mut state.seen_documents)
+                        .into_iter()
+                        .partition::<Vec<_>, _>(|(document_owner, _)| *document_owner == owner);
+                    state.seen_documents = kept;
+                    state.retired_documents.extend(left);
+                }
+                Forget::Traversal => {
+                    state
+                        .retired_documents
+                        .retain(|(document_owner, _)| *document_owner != owner);
+                }
+                Forget::Closed => {
+                    state
+                        .retired_documents
+                        .retain(|(document_owner, _)| *document_owner != owner);
+                    state
+                        .seen_documents
+                        .retain(|(document_owner, _)| *document_owner != owner);
+                    state.hidden.retain(|hidden_owner| *hidden_owner != owner);
+                }
+            }
             let (forgotten_requests, requests) = std::mem::take(&mut state.requests)
                 .into_iter()
                 .partition::<Vec<_>, _>(|request| request.owner == owner);
@@ -156,18 +282,12 @@ where
         if requests.is_empty() && watches.is_empty() {
             return;
         }
-        // Dropped outside the borrow: an unanswered Servo request answers itself on drop.
+        // Outside the borrow: an unanswered Servo request answers itself on drop.
         drop(requests);
-        drop(watches);
+        for (_, watch) in watches {
+            watch.item.error(LocationError::Unavailable);
+        }
         self.update_source();
-    }
-
-    fn latest_fix(&self) -> Option<LocationFix> {
-        let state = self.state.borrow();
-        state
-            .running
-            .as_ref()
-            .and_then(|running| running.last_fix.clone())
     }
 
     /// Starts, retunes or stops the source to match who is waiting. The source is called
@@ -180,18 +300,20 @@ where
                 .requests
                 .iter()
                 .map(|request| request.high_accuracy)
-                .chain(state.watches.iter().map(|(_, watch)| watch.high_accuracy));
+                .chain(
+                    state
+                        .watches
+                        .iter()
+                        .filter(|(_, watch)| !state.hidden.contains(&watch.owner))
+                        .map(|(_, watch)| watch.high_accuracy),
+                );
             let mut anyone = false;
             let mut high = false;
             for high_accuracy in waiting {
                 anyone = true;
                 high |= high_accuracy;
             }
-            let accuracy = if high {
-                LocationAccuracy::High
-            } else {
-                LocationAccuracy::Coarse
-            };
+            let accuracy = accuracy_for(high);
             match (&mut state.running, anyone) {
                 (None, false) => None,
                 (Some(_), false) => {
@@ -252,7 +374,7 @@ pub(crate) struct OwnerGuard<R, W, K>
 where
     R: PendingPosition + 'static,
     W: PositionSubscriber + 'static,
-    K: PartialEq + 'static,
+    K: WatchKey + 'static,
 {
     hub: Rc<LocationHub<R, W, K>>,
     owner: OwnerId,
@@ -262,7 +384,7 @@ impl<R, W, K> OwnerGuard<R, W, K>
 where
     R: PendingPosition + 'static,
     W: PositionSubscriber + 'static,
-    K: PartialEq + 'static,
+    K: WatchKey + 'static,
 {
     pub(crate) fn new(hub: &Rc<LocationHub<R, W, K>>) -> Self {
         Self {
@@ -284,10 +406,10 @@ impl<R, W, K> Drop for OwnerGuard<R, W, K>
 where
     R: PendingPosition + 'static,
     W: PositionSubscriber + 'static,
-    K: PartialEq + 'static,
+    K: WatchKey + 'static,
 {
     fn drop(&mut self) {
-        self.hub.forget_owner(self.owner);
+        self.hub.forget_owner(self.owner, Forget::Closed);
     }
 }
 
@@ -295,7 +417,7 @@ impl<R, W, K> LocationReceiver for LocationHub<R, W, K>
 where
     R: PendingPosition + 'static,
     W: PositionSubscriber + 'static,
-    K: PartialEq + 'static,
+    K: WatchKey + 'static,
 {
     fn receive(&self, generation: u64, result: Result<LocationFix, LocationError>) {
         let requests = {
@@ -308,7 +430,7 @@ where
                 return;
             };
             if let Ok(fix) = &result {
-                running.last_fix = Some(fix.clone());
+                running.last_fix = Some((fix.clone(), running.accuracy));
             }
             std::mem::take(&mut state.requests)
         };
@@ -322,6 +444,7 @@ where
             let state = self.state.borrow();
             for (_, watch) in &state.watches {
                 match &result {
+                    Ok(_) if state.is_hidden(watch.owner) => {}
                     Ok(fix) => watch.item.update(fix),
                     Err(error) => watch.item.error(*error),
                 }
@@ -342,134 +465,9 @@ where
 
 #[cfg(test)]
 mod tests {
-    use std::cell::RefCell;
-    use std::rc::Rc;
-
     use super::*;
     use crate::geolocation::fake::{FakeLocationSource, SourceCall};
-
-    #[derive(Debug, PartialEq)]
-    enum Seen {
-        Position(&'static str, f64),
-        Error(&'static str, LocationError),
-        Dropped(&'static str),
-    }
-
-    type Log = Rc<RefCell<Vec<Seen>>>;
-
-    struct Request {
-        name: &'static str,
-        log: Log,
-        answered: bool,
-    }
-
-    impl PendingPosition for Request {
-        fn succeed(mut self, fix: &LocationFix) {
-            self.answered = true;
-            self.log
-                .borrow_mut()
-                .push(Seen::Position(self.name, fix.latitude));
-        }
-
-        fn fail(mut self, error: LocationError) {
-            self.answered = true;
-            self.log.borrow_mut().push(Seen::Error(self.name, error));
-        }
-    }
-
-    impl Drop for Request {
-        fn drop(&mut self) {
-            if !self.answered {
-                self.log.borrow_mut().push(Seen::Dropped(self.name));
-            }
-        }
-    }
-
-    struct Watch {
-        name: &'static str,
-        log: Log,
-    }
-
-    impl PositionSubscriber for Watch {
-        fn update(&self, fix: &LocationFix) {
-            self.log
-                .borrow_mut()
-                .push(Seen::Position(self.name, fix.latitude));
-        }
-
-        fn error(&self, error: LocationError) {
-            self.log.borrow_mut().push(Seen::Error(self.name, error));
-        }
-    }
-
-    impl Drop for Watch {
-        fn drop(&mut self) {
-            self.log.borrow_mut().push(Seen::Dropped(self.name));
-        }
-    }
-
-    type TestHub = LocationHub<Request, Watch, u32>;
-
-    struct Harness {
-        hub: Rc<TestHub>,
-        source: Rc<FakeLocationSource>,
-        sources_made: Rc<Cell<u32>>,
-        log: Log,
-    }
-
-    impl Harness {
-        fn new(source: FakeLocationSource) -> Self {
-            let source = Rc::new(source);
-            let sources_made = Rc::new(Cell::new(0));
-            let factory_source = Rc::clone(&source);
-            let factory_count = Rc::clone(&sources_made);
-            let hub = TestHub::new(move || {
-                factory_count.set(factory_count.get() + 1);
-                Rc::clone(&factory_source) as Rc<dyn LocationSource>
-            });
-            Self {
-                hub,
-                source,
-                sources_made,
-                log: Rc::default(),
-            }
-        }
-
-        fn silent() -> Self {
-            Self::new(FakeLocationSource::silent())
-        }
-
-        fn request(&self, name: &'static str) -> Request {
-            Request {
-                name,
-                log: Rc::clone(&self.log),
-                answered: false,
-            }
-        }
-
-        fn watch(&self, name: &'static str) -> Watch {
-            Watch {
-                name,
-                log: Rc::clone(&self.log),
-            }
-        }
-
-        fn seen(&self) -> Vec<Seen> {
-            std::mem::take(&mut self.log.borrow_mut())
-        }
-    }
-
-    fn fix(latitude: f64) -> LocationFix {
-        LocationFix {
-            latitude,
-            longitude: 2.0,
-            accuracy: 10.0,
-            altitude: None,
-            altitude_accuracy: None,
-            heading: None,
-            speed: None,
-        }
-    }
+    use crate::geolocation::test_support::{Harness, Seen, fix};
 
     use LocationAccuracy::{Coarse, High};
 
@@ -764,13 +762,14 @@ mod tests {
             .start_watch(staying, false, 2, harness.watch("staying watch"));
         harness.source.take_calls();
 
-        harness.hub.forget_owner(closing);
+        harness.hub.forget_owner(closing, Forget::Closed);
 
         assert_eq!(
             harness.seen(),
             [
                 Seen::Dropped("closing once"),
-                Seen::Dropped("closing watch")
+                Seen::Error("closing watch", LocationError::Unavailable),
+                Seen::Dropped("closing watch"),
             ]
         );
         assert!(harness.source.take_calls().is_empty());
@@ -787,9 +786,15 @@ mod tests {
             .start_watch(owner, true, 1, harness.watch("watch"));
         harness.source.take_calls();
 
-        harness.hub.forget_owner(owner);
+        harness.hub.forget_owner(owner, Forget::DocumentStarted);
 
-        assert_eq!(harness.seen(), [Seen::Dropped("watch")]);
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Error("watch", LocationError::Unavailable),
+                Seen::Dropped("watch"),
+            ]
+        );
         assert_eq!(harness.source.take_calls(), [SourceCall::Stop]);
         assert!(!harness.hub.is_running());
     }
@@ -805,7 +810,13 @@ mod tests {
 
         drop(guard);
 
-        assert_eq!(harness.seen(), [Seen::Dropped("watch")]);
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Error("watch", LocationError::Unavailable),
+                Seen::Dropped("watch"),
+            ]
+        );
         assert_eq!(harness.source.take_calls(), [SourceCall::Stop]);
     }
 
@@ -852,5 +863,201 @@ mod tests {
 
         assert!(harness.seen().is_empty());
         assert!(harness.hub.is_running());
+    }
+
+    // Review round 1
+
+    /// Watch keys in these tests: the hundreds are the document.
+    fn key(document: u32, index: u32) -> u32 {
+        document * 100 + index
+    }
+
+    #[test]
+    fn a_hidden_tabs_watches_do_not_keep_the_source_running() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, false, 1, harness.watch("watch"));
+        harness.source.take_calls();
+
+        harness.hub.set_owner_visible(owner, false);
+        assert_eq!(harness.source.take_calls(), [SourceCall::Stop]);
+        assert!(!harness.hub.is_running());
+        assert!(harness.seen().is_empty(), "the watch is kept, not ended");
+
+        harness.hub.set_owner_visible(owner, true);
+        assert_eq!(harness.source.take_calls(), [SourceCall::Start(Coarse)]);
+        harness.source.deliver(Ok(fix(8.0)));
+        assert_eq!(harness.seen(), [Seen::Position("watch", 8.0)]);
+    }
+
+    #[test]
+    fn a_hidden_tab_gets_no_positions_and_catches_up_when_shown() {
+        let harness = Harness::silent();
+        let hidden = harness.hub.new_owner();
+        let shown = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(hidden, false, 1, harness.watch("hidden"));
+        harness
+            .hub
+            .start_watch(shown, false, 2, harness.watch("shown"));
+        harness.hub.set_owner_visible(hidden, false);
+
+        harness.source.deliver(Ok(fix(1.0)));
+        assert_eq!(harness.seen(), [Seen::Position("shown", 1.0)]);
+
+        harness.hub.set_owner_visible(hidden, true);
+        assert_eq!(harness.seen(), [Seen::Position("hidden", 1.0)]);
+    }
+
+    #[test]
+    fn showing_a_visible_tab_again_changes_nothing() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, false, 1, harness.watch("watch"));
+        harness.source.deliver(Ok(fix(1.0)));
+        harness.seen();
+        harness.source.take_calls();
+
+        harness.hub.set_owner_visible(owner, true);
+
+        assert!(harness.seen().is_empty());
+        assert!(harness.source.take_calls().is_empty());
+    }
+
+    #[test]
+    fn a_hidden_tabs_one_shot_request_is_still_answered() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness.hub.set_owner_visible(owner, false);
+
+        harness
+            .hub
+            .request_position(owner, false, harness.request("once"));
+        assert_eq!(harness.source.take_calls(), [SourceCall::Start(Coarse)]);
+        harness.source.deliver(Ok(fix(2.0)));
+
+        assert_eq!(harness.seen(), [Seen::Position("once", 2.0)]);
+    }
+
+    #[test]
+    fn a_coarse_position_is_not_served_to_a_high_accuracy_request() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, false, 1, harness.watch("coarse"));
+        harness.source.deliver(Ok(fix(1.0)));
+        harness.seen();
+        harness.source.take_calls();
+
+        harness
+            .hub
+            .request_position(owner, true, harness.request("precise"));
+        harness
+            .hub
+            .start_watch(owner, true, 2, harness.watch("precise watch"));
+
+        assert!(harness.seen().is_empty());
+        assert_eq!(harness.source.take_calls(), [SourceCall::SetAccuracy(High)]);
+        harness.source.deliver(Ok(fix(2.0)));
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Position("precise", 2.0),
+                Seen::Position("coarse", 2.0),
+                Seen::Position("precise watch", 2.0),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_high_accuracy_position_is_served_to_a_coarse_request() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, true, 1, harness.watch("precise"));
+        harness.source.deliver(Ok(fix(3.0)));
+        harness.seen();
+
+        harness
+            .hub
+            .request_position(owner, false, harness.request("coarse"));
+
+        assert_eq!(harness.seen(), [Seen::Position("coarse", 3.0)]);
+    }
+
+    #[test]
+    fn watches_from_a_document_left_for_a_new_one_are_refused() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 1), harness.watch("old"));
+        harness.hub.forget_owner(owner, Forget::DocumentStarted);
+        harness.seen();
+        harness.source.take_calls();
+
+        // A late watch of the document that was left.
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 2), harness.watch("late"));
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Error("late", LocationError::Unavailable),
+                Seen::Dropped("late"),
+            ]
+        );
+        assert!(harness.source.take_calls().is_empty());
+
+        // The new document's watch is accepted.
+        harness
+            .hub
+            .start_watch(owner, false, key(2, 1), harness.watch("new"));
+        assert_eq!(harness.source.take_calls(), [SourceCall::Start(Coarse)]);
+    }
+
+    #[test]
+    fn a_left_document_is_accepted_again_after_a_traversal() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 1), harness.watch("first"));
+        harness.hub.forget_owner(owner, Forget::DocumentStarted);
+        harness.hub.forget_owner(owner, Forget::Traversal);
+        harness.seen();
+
+        // Restored from the back-forward cache, the page watches again.
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 2), harness.watch("again"));
+
+        assert!(harness.seen().is_empty());
+        assert!(harness.hub.is_running());
+    }
+
+    #[test]
+    fn retired_documents_belong_to_their_owner() {
+        let harness = Harness::silent();
+        let first = harness.hub.new_owner();
+        let second = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(first, false, key(1, 1), harness.watch("first"));
+        harness.hub.forget_owner(first, Forget::DocumentStarted);
+        harness.seen();
+
+        harness
+            .hub
+            .start_watch(second, false, key(1, 2), harness.watch("second"));
+
+        assert!(harness.seen().is_empty());
     }
 }

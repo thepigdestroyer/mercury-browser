@@ -8,8 +8,9 @@
 //! - `deny`: refuse the permission, as the user would in the prompt.
 //!
 //! Honoured only in `--screenshot` and `--background` runs. Without it, automated runs keep
-//! geolocation off, so no automated run ever reaches CoreLocation; normal runs use the
-//! system's location service behind Mercury's permission prompt.
+//! geolocation off, so no automated run ever reaches CoreLocation. Normal runs use the system's
+//! location service behind Mercury's permission prompt once `GEOLOCATION_OFFERED` is on (until
+//! the engine's same-origin frame gate lands, it is off and so is geolocation).
 
 use talaria_servo::{
     FakeLocation, FixedPosition, GeolocationDiagnostic, GeolocationSetup, LocationError,
@@ -23,28 +24,32 @@ pub(crate) fn setup_for_this_run(automated: bool) -> GeolocationSetup {
     setup_or_fallback(automated, variable.as_deref())
 }
 
+/// Printed to standard error, not logged: this runs before the logger is set up.
 fn setup_or_fallback(automated: bool, variable: Option<&str>) -> GeolocationSetup {
     match setup(automated, variable) {
         Ok(setup) => {
             if matches!(setup, GeolocationSetup::Diagnostic(_)) {
-                log::warn!(
-                    "{FAKE_GEOLOCATION_VARIABLE}: pages get a fake location in this automated run"
+                eprintln!(
+                    "mercury-browser: {FAKE_GEOLOCATION_VARIABLE}: pages get a fake location in \
+                     this automated run"
                 );
             }
             setup
         }
         Err(message) => {
-            log::warn!("{FAKE_GEOLOCATION_VARIABLE} is ignored: {message}");
+            eprintln!("mercury-browser: {FAKE_GEOLOCATION_VARIABLE} is ignored: {message}");
             fallback(automated)
         }
     }
 }
 
+/// Automated runs never use the system's location; normal runs do while Mercury offers it
+/// (`GEOLOCATION_OFFERED`: the frame gate is in the engine, and the platform has a source).
 fn fallback(automated: bool) -> GeolocationSetup {
-    if automated {
-        GeolocationSetup::Off
-    } else {
+    if !automated && talaria_core::GEOLOCATION_OFFERED {
         GeolocationSetup::System
+    } else {
+        GeolocationSetup::Off
     }
 }
 
@@ -92,6 +97,8 @@ fn parse_position(text: &str) -> Option<FixedPosition> {
 
 #[cfg(test)]
 mod tests {
+    use talaria_core::GEOLOCATION_OFFERED;
+
     use super::*;
 
     fn allow(position: (f64, f64, f64)) -> GeolocationSetup {
@@ -100,10 +107,23 @@ mod tests {
         )))
     }
 
+    fn normal_run_setup() -> GeolocationSetup {
+        if GEOLOCATION_OFFERED {
+            GeolocationSetup::System
+        } else {
+            GeolocationSetup::Off
+        }
+    }
+
     #[test]
-    fn normal_runs_use_the_system_and_automated_runs_never_do() {
-        assert_eq!(setup(false, None), Ok(GeolocationSetup::System));
+    fn normal_runs_use_the_system_only_while_it_is_offered_and_automated_runs_never_do() {
+        assert_eq!(setup(false, None), Ok(normal_run_setup()));
         assert_eq!(setup(true, None), Ok(GeolocationSetup::Off));
+    }
+
+    #[test]
+    fn normal_runs_keep_geolocation_off_until_the_frame_gate() {
+        assert_eq!(setup(false, None), Ok(GeolocationSetup::Off));
     }
 
     #[test]
@@ -112,7 +132,7 @@ mod tests {
         assert!(setup(false, Some("deny")).is_err());
         assert_eq!(
             setup_or_fallback(false, Some("allow:1,2,3")),
-            GeolocationSetup::System
+            normal_run_setup()
         );
     }
 
@@ -124,7 +144,7 @@ mod tests {
         );
         assert_eq!(
             setup_or_fallback(false, Some("allow:x")),
-            GeolocationSetup::System
+            normal_run_setup()
         );
     }
 

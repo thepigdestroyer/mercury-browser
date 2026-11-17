@@ -17,12 +17,18 @@
 mod core_location;
 mod delegate;
 mod fake;
+mod history;
 mod hub;
+#[cfg(test)]
+mod test_support;
 
 use std::fmt;
-use std::rc::{Rc, Weak};
+use std::rc::Weak;
 
-pub(crate) use delegate::{GeolocationService, WebViewGeolocation, WithGeolocation};
+pub(crate) use delegate::{
+    GeolocationService, PageGeolocation, WebViewGeolocation, WithGeolocation, on_history_changed,
+    on_load_status,
+};
 
 /// How Mercury answers `navigator.geolocation` in this run.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -40,9 +46,14 @@ pub enum GeolocationSetup {
 }
 
 impl GeolocationSetup {
-    /// Whether pages see `navigator.geolocation` (Servo's `dom_geolocation_enabled`).
+    /// Whether pages see `navigator.geolocation` (Servo's `dom_geolocation_enabled`). `System`
+    /// counts as `Off` where Mercury has no location source (every platform but macOS).
     pub fn exposes_geolocation(&self) -> bool {
-        !matches!(self, Self::Off)
+        match self {
+            Self::Off => false,
+            Self::System => SYSTEM_SOURCE_AVAILABLE,
+            Self::Diagnostic(_) => true,
+        }
     }
 }
 
@@ -154,7 +165,7 @@ pub enum LocationError {
 
 /// The accuracy a source is asked for: `High` while any page passed
 /// `enableHighAccuracy: true`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub(crate) enum LocationAccuracy {
     Coarse,
     High,
@@ -199,19 +210,14 @@ impl LocationSink {
     }
 }
 
-/// The source for `GeolocationSetup::System` on this platform. Created only when a page that
-/// holds the permission first asks for a position.
-fn system_source() -> Rc<dyn LocationSource> {
-    #[cfg(target_os = "macos")]
-    {
-        Rc::new(core_location::CoreLocationSource::new())
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        Rc::new(fake::FakeLocationSource::answering(Err(
-            LocationError::PermissionDenied,
-        )))
-    }
+/// Whether this platform has a source for `GeolocationSetup::System`.
+const SYSTEM_SOURCE_AVAILABLE: bool = cfg!(target_os = "macos");
+
+/// The source for `GeolocationSetup::System`. Created only when a page that holds the
+/// permission first asks for a position.
+#[cfg(target_os = "macos")]
+fn system_source() -> std::rc::Rc<dyn LocationSource> {
+    std::rc::Rc::new(core_location::CoreLocationSource::new())
 }
 
 #[cfg(test)]
@@ -225,8 +231,11 @@ mod tests {
     }
 
     #[test]
-    fn the_system_and_diagnostic_setups_expose_geolocation() {
-        assert!(GeolocationSetup::System.exposes_geolocation());
+    fn the_diagnostic_setups_expose_geolocation_and_the_system_one_where_there_is_a_source() {
+        assert_eq!(
+            GeolocationSetup::System.exposes_geolocation(),
+            cfg!(target_os = "macos")
+        );
         assert!(GeolocationSetup::Diagnostic(GeolocationDiagnostic::Deny).exposes_geolocation());
     }
 
