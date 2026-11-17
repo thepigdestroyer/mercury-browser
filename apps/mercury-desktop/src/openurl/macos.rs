@@ -3,11 +3,10 @@
 //! `application:openURLs:` (AppKit turns the open-documents event into that call, or into
 //! `application:openFiles:` for a delegate without it).
 //!
-//! winit 0.30's application delegate implements only `applicationDidFinishLaunching:` and
-//! `applicationWillTerminate:` (winit-0.30.13/src/platform_impl/macos/app_state.rs:47-73), so
-//! these methods are added to its class at run time, as the quit lane adds
-//! `applicationShouldTerminate:` (`macos_terminate.rs`): only methods the class does not answer
-//! already, so neither lane can replace the other's. The get-URL handler installed here receives
+//! winit 0.30's application delegate implements neither, so these methods are added to its class
+//! at run time through `macos_app_delegate::add_delegate_method`, as the terminate handler is:
+//! only methods the delegate does not answer already, and the delegate is assigned again so that
+//! AppKit sees them. The get-URL handler installed here receives
 //! the events that arrive before the event loop runs; once AppKit has finished launching, its own
 //! get-URL handler takes over and calls `application:openURLs:` (observed with events sent to
 //! this process), so both paths end in `super::deliver`, which queues the URLs until the
@@ -19,15 +18,15 @@
 use std::ffi::CStr;
 use std::panic::AssertUnwindSafe;
 
-use objc2::ffi::class_addMethod;
 use objc2::rc::Retained;
-use objc2::runtime::{AnyClass, AnyObject, Bool, Imp, Sel};
+use objc2::runtime::{AnyObject, Bool, Imp, Sel};
 use objc2::{MainThreadMarker, Message, class, msg_send, sel};
 use objc2_app_kit::NSApplication;
 use objc2_foundation::NSString;
 use url::Url;
 
 use super::external::ExternalOpener;
+use crate::macos_app_delegate::add_delegate_method;
 
 const fn four_char_code(code: &[u8; 4]) -> u32 {
     u32::from_be_bytes(*code)
@@ -56,33 +55,28 @@ type TwoObjectMethod =
 /// before the event loop runs.
 pub(crate) fn receive_urls_from_other_apps() {
     keep_command_line_arguments_from_appkit();
-    let Some(delegate) = application_delegate() else {
-        log::warn!("openurl: links from other apps are not handled: no application delegate");
-        return;
-    };
     // SAFETY: each function's signature matches its type encoding: no result, `self`, `_cmd`
-    // and two objects.
+    // and two objects; none reads the delegate's state or unwinds.
     let two =
         |method: TwoObjectMethod| unsafe { std::mem::transmute::<TwoObjectMethod, Imp>(method) };
-    add_missing_method(
-        &delegate,
-        sel!(application:openURLs:),
-        two(open_urls),
-        TWO_OBJECTS,
-    );
-    add_missing_method(
-        &delegate,
-        sel!(application:openFiles:),
-        two(open_files),
-        TWO_OBJECTS,
-    );
-    add_missing_method(
-        &delegate,
-        sel!(mercuryHandleGetURLEvent:withReplyEvent:),
-        two(handle_get_url_event),
-        TWO_OBJECTS,
-    );
-    install_get_url_handler(&delegate);
+    for (selector, imp) in [
+        (sel!(application:openURLs:), two(open_urls)),
+        (sel!(application:openFiles:), two(open_files)),
+        (
+            sel!(mercuryHandleGetURLEvent:withReplyEvent:),
+            two(handle_get_url_event),
+        ),
+    ] {
+        if let Err(error) = add_delegate_method(selector, imp, TWO_OBJECTS) {
+            log::warn!("openurl: {selector} was not added to the application delegate: {error:?}");
+        }
+    }
+    match application_delegate() {
+        Some(delegate) => install_get_url_handler(&delegate),
+        None => {
+            log::warn!("openurl: links from other apps are not handled: no application delegate")
+        }
+    }
 }
 
 /// Once the delegate answers `application:openFiles:`, AppKit hands it every command-line
@@ -112,25 +106,6 @@ fn application_delegate() -> Option<Retained<AnyObject>> {
     let delegate = NSApplication::sharedApplication(mtm).delegate()?;
     let delegate: &AnyObject = delegate.as_ref();
     Some(delegate.retain())
-}
-
-/// Adds `selector` to the delegate's class unless the delegate already answers it (winit's own
-/// methods, or another lane's): an existing method is never replaced.
-fn add_missing_method(delegate: &AnyObject, selector: Sel, imp: Imp, types: &CStr) {
-    let class: *const AnyClass = delegate.class();
-    // SAFETY: `delegate` is a live object.
-    let answers: bool = unsafe { msg_send![delegate, respondsToSelector: selector] };
-    if answers {
-        log::warn!("openurl: the application delegate already answers {selector}; left as it is");
-        return;
-    }
-    // SAFETY: `class` is a registered class; `imp` matches `types` (checked by the caller).
-    // `class_addMethod` itself refuses to replace a method the class has.
-    let added =
-        unsafe { class_addMethod(class.cast_mut(), selector, imp, types.as_ptr()) }.as_bool();
-    if !added {
-        log::warn!("openurl: could not add {selector} to the application delegate");
-    }
 }
 
 fn install_get_url_handler(delegate: &AnyObject) {

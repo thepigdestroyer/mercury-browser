@@ -40,6 +40,6 @@ pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};
 // openurl
 pub use navigation_policy::{
-    ExternalLinkRequest, ExternalOpenPrompt, NavigationVerdict, external_open_prompt,
-    navigation_verdict, page_display_name, refuses_local_file_load, remembered_origin,
+    ExternalLinkRequest, NavigationVerdict, navigation_verdict, refuses_local_file_load,
+    remembered_origin,
 };

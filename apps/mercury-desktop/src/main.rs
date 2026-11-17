@@ -106,21 +106,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     ) {
         Ok(profile) => profile,
         Err(ProfileInUse { root }) => {
-            // openurl: the running browser opens this launch's URLs.
-            if !options.urls.is_empty() {
-                match openurl::handoff::hand_over(&root, &options.urls) {
-                    Ok(count) => {
-                        eprintln!(
-                            "mercury-browser: handed {count} URL(s) to the Mercury Browser using {}",
-                            root.display()
-                        );
-                        return Ok(ExitCode::SUCCESS);
-                    }
-                    Err(error) => eprintln!(
-                        "mercury-browser: could not hand the URLs to the Mercury Browser using {}: {error}",
-                        root.display()
-                    ),
-                }
+            // openurl: the running browser opens this launch's addresses.
+            if openurl::hand_over_to_running_browser(&root, &options.urls) {
+                return Ok(ExitCode::SUCCESS);
             }
             eprintln!(
                 "mercury-browser: the profile at {} is in use by another Mercury Browser; \
@@ -140,13 +128,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     #[cfg(target_os = "macos")]
     macos_terminate::end_the_run_in_order_on_terminate_requests();
     // openurl: links and files from other apps, from here on; queued until the window exists.
-    #[cfg(target_os = "macos")]
-    openurl::macos::receive_urls_from_other_apps();
-    let diagnostic_open_events = openurl::diagnostic_open_events(options.is_automated());
-    #[cfg(target_os = "macos")]
-    if let Some((openurl::EventTime::Start, urls)) = &diagnostic_open_events {
-        openurl::macos::send_open_events_to_this_process(urls);
-    }
+    openurl::receive_from_other_apps(options.is_automated());
 
     let window = MainWindow::new()?;
     if let Some((width, height)) = options.window_size {
@@ -171,15 +153,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     settings::connect(&settings, &window, &controller);
     // openurl
     openurl::attach(&window, Rc::clone(&controller), options.is_automated());
-    let _handoff = listen_for_second_launches(&profile);
-    #[cfg(target_os = "macos")]
-    if let Some((openurl::EventTime::Running, urls)) = diagnostic_open_events {
-        slint::Timer::single_shot(std::time::Duration::from_secs(3), move || {
-            openurl::macos::send_open_events_to_this_process(&urls);
-        });
-    }
-    #[cfg(not(target_os = "macos"))]
-    let _ = diagnostic_open_events;
+    let handoff = openurl::listen_for_second_launches(&profile);
     sync_ui(&window, &controller.borrow());
     connect_ui_callbacks(
         &window,
@@ -222,6 +196,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         settings,
     });
     let run_result = shown.and_then(|()| slint::run_event_loop());
+    // openurl: no more second launches; the socket goes now (a quit signal ends the process
+    // without running destructors).
+    drop(handoff);
 
     // If the session ended (macOS log-out), the terminate handler has already ended the run
     // and AppKit exits; otherwise this ends it.
@@ -234,26 +211,6 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     run_result?;
     Ok(ExitCode::from(exit_code))
-}
-
-// openurl
-/// A profile another launch can find (not a temporary one) listens for that launch's URLs.
-fn listen_for_second_launches(
-    profile: &ActiveProfile,
-) -> Option<openurl::handoff::HandoffListener> {
-    let paths = profile.paths.as_ref().filter(|_| !profile.is_temporary())?;
-    match openurl::handoff::listen(&paths.root, |urls| {
-        openurl::deliver_from_any_thread(urls, "a second launch");
-    }) {
-        Ok(listener) => Some(listener),
-        Err(error) => {
-            log::warn!(
-                "openurl: a second launch cannot hand over URLs ({}): {error}",
-                openurl::handoff::socket_path(&paths.root).display()
-            );
-            None
-        }
-    }
 }
 
 /// Engine settings for this run: the launch options and the profile's Servo directory.

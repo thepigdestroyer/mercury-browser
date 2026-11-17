@@ -3,7 +3,8 @@
 //!
 //! Incoming URLs (Apple events on macOS, a second launch through `handoff`) are queued until the
 //! controller is attached, so that a URL that started the app is not lost, then each opens in a
-//! new tab; the last one is selected.
+//! new tab; the last one is selected. A second launch's addresses are the user's own command line
+//! and open as the first launch's would.
 
 pub(crate) mod external;
 pub(crate) mod handoff;
@@ -11,12 +12,12 @@ pub(crate) mod handoff;
 pub(crate) mod macos;
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::path::Path;
 use std::rc::Rc;
 use std::time::Instant;
 
 use mercury_ui::MainWindow;
-use talaria_core::{BrowserController, TabActivation, TabId};
+use talaria_core::{BrowserController, BrowserEvent, PendingPageRequest, TabActivation};
 use url::Url;
 
 use crate::activation::{consume_user_activation, note_user_activation};
@@ -141,9 +142,28 @@ thread_local! {
     static LINKS: RefCell<Option<Links>> = const { RefCell::new(None) };
     static AUTOMATED: Cell<bool> = const { Cell::new(false) };
     static GRANT_GESTURE: Cell<bool> = const { Cell::new(false) };
+    static RUNNING_OPEN_EVENTS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
 }
 
-/// URLs from another app or a second launch. Call on the main thread.
+/// Before the window exists (on macOS, once the backend has made winit's application delegate):
+/// starts receiving links and files from other apps, and runs the `start` diagnostics.
+pub(crate) fn receive_from_other_apps(automated: bool) {
+    #[cfg(target_os = "macos")]
+    macos::receive_urls_from_other_apps();
+    let Some((time, urls)) = diagnostic_open_events(automated) else {
+        return;
+    };
+    match time {
+        #[cfg(target_os = "macos")]
+        EventTime::Start => macos::send_open_events_to_this_process(&urls),
+        EventTime::Running => RUNNING_OPEN_EVENTS.with(|later| *later.borrow_mut() = urls),
+        #[cfg(not(target_os = "macos"))]
+        EventTime::Start => log::warn!("openurl: diagnostics: Apple events need macOS"),
+    }
+}
+
+/// URLs from another app (Apple events on macOS). Call on the main thread. Only web pages and
+/// the kinds of files a browser shows are opened (`accept_url_from_other_app`).
 pub(crate) fn deliver(urls: Vec<String>, source: &str) {
     let accepted = urls
         .into_iter()
@@ -161,13 +181,6 @@ pub(crate) fn deliver(urls: Vec<String>, source: &str) {
     log::info!("openurl: {} URL(s) from {source}", accepted.len());
     if INCOMING.with(|incoming| incoming.borrow_mut().push(accepted)) {
         schedule_opening();
-    }
-}
-
-/// From any thread: hands URLs to the main thread's `deliver`.
-pub(crate) fn deliver_from_any_thread(urls: Vec<String>, source: &'static str) {
-    if let Err(error) = slint::invoke_from_event_loop(move || deliver(urls, source)) {
-        log::warn!("openurl: could not pass URLs from {source} to the window: {error}");
     }
 }
 
@@ -199,6 +212,17 @@ pub(crate) fn attach(
         INCOMING.with(|incoming| incoming.borrow_mut().push(early));
         schedule_opening();
     }
+    let later = RUNNING_OPEN_EVENTS.with(|later| std::mem::take(&mut *later.borrow_mut()));
+    #[cfg(target_os = "macos")]
+    if !later.is_empty() {
+        let delay = std::time::Duration::from_secs(3);
+        slint::Timer::single_shot(delay, move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
+            macos::send_open_events_to_this_process(&later);
+        });
+    }
+    #[cfg(not(target_os = "macos"))]
+    drop(later);
 }
 
 /// Automated runs never open another app: their opener only records.
@@ -241,6 +265,7 @@ fn schedule_opening() {
 }
 
 fn open_pending() {
+    let _slint = crate::callback_scope::InSlintCallback::enter();
     TARGET.with(|target| {
         let target = target.borrow();
         let Some(target) = target.as_ref() else {
@@ -264,30 +289,152 @@ fn open_pending() {
     });
 }
 
-/// Called by the engine after each batch of engine events: answers the pages' requests to open
-/// links in other apps, and shows the active tab's waiting confirmation.
+// Second launches.
+
+/// The second launch's side: when the profile is held by a running Mercury Browser and the
+/// command line names addresses, hands them over. True if the running browser opened them (the
+/// launch then exits 0); false with the reason printed otherwise.
+pub(crate) fn hand_over_to_running_browser(profile_root: &Path, addresses: &[String]) -> bool {
+    if addresses.is_empty() {
+        return false;
+    }
+    match handoff::hand_over(profile_root, addresses) {
+        Ok(count) => {
+            eprintln!(
+                "mercury-browser: the Mercury Browser using {} opened {count} tab(s)",
+                profile_root.display()
+            );
+            true
+        }
+        Err(error) => {
+            eprintln!(
+                "mercury-browser: could not hand the addresses to the Mercury Browser using {}: {error}",
+                profile_root.display()
+            );
+            false
+        }
+    }
+}
+
+/// A profile another launch can find (not a temporary one) listens for that launch's addresses.
+/// Keep the result until the run ends; dropping it removes the socket.
+pub(crate) fn listen_for_second_launches(
+    profile: &crate::profile::ActiveProfile,
+) -> Option<handoff::HandoffListener> {
+    let paths = profile.paths.as_ref().filter(|_| !profile.is_temporary())?;
+    match handoff::listen(&paths.root, open_handed_over_from_any_thread) {
+        Ok(listener) => Some(listener),
+        Err(error) => {
+            log::warn!(
+                "openurl: a second launch cannot hand over addresses ({}): {error}",
+                handoff::socket_path(&paths.root).display()
+            );
+            None
+        }
+    }
+}
+
+/// How long the listening thread waits for the window to open a second launch's tabs.
+const HAND_OVER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
+/// On the listening thread: has the window open the addresses, and waits for the result, so
+/// that the second launch is told the truth.
+fn open_handed_over_from_any_thread(addresses: Vec<String>) -> Result<usize, String> {
+    let (sender, receiver) = std::sync::mpsc::channel();
+    slint::invoke_from_event_loop(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
+        open_handed_over_on_main_thread(addresses, sender);
+    })
+    .map_err(|error| format!("the window cannot be reached ({error})"))?;
+    receiver
+        .recv_timeout(HAND_OVER_TIMEOUT)
+        .map_err(|_| "the window did not answer in time".to_owned())?
+}
+
+type HandOverReply = std::sync::mpsc::Sender<Result<usize, String>>;
+
+fn open_handed_over_on_main_thread(addresses: Vec<String>, reply: HandOverReply) {
+    TARGET.with(|target| {
+        let target = target.borrow();
+        let Some(target) = target.as_ref() else {
+            let _ = reply.send(Err("the window is not ready".to_owned()));
+            return;
+        };
+        let Ok(mut controller) = target.controller.try_borrow_mut() else {
+            // Busy: try again from the event loop.
+            if let Err(error) = slint::invoke_from_event_loop(move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
+                open_handed_over_on_main_thread(addresses, reply);
+            }) {
+                log::warn!("openurl: could not retry opening a second launch's addresses: {error}");
+            }
+            return;
+        };
+        let result = open_handed_over(&mut controller, &addresses);
+        drop(controller);
+        if let Ok(count) = &result {
+            log::info!("openurl: opened {count} tab(s) for a second launch");
+            if let Some(window) = target.window.upgrade() {
+                crate::ui_sync::sync_ui(&window, &target.controller.borrow());
+                bring_to_front(&window);
+            }
+            crate::engine::request_pump();
+        }
+        let _ = reply.send(result);
+    });
+}
+
+/// A second launch's addresses are the user's own command line: everything the address bar
+/// accepts opens (as for the first launch), and nothing opens unless all of them resolve.
+pub(crate) fn open_handed_over(
+    controller: &mut BrowserController,
+    addresses: &[String],
+) -> Result<usize, String> {
+    for address in addresses {
+        controller
+            .resolve_address(address)
+            .map_err(|error| format!("'{address}': {error}"))?;
+    }
+    Ok(open_in_tabs(controller, addresses))
+}
+
+/// The user started Mercury again to open something: the window comes to the front. Automated
+/// runs never take focus.
+fn bring_to_front(window: &MainWindow) {
+    use slint::ComponentHandle;
+    use slint::winit_030::WinitWindowAccessor;
+
+    if AUTOMATED.with(Cell::get) {
+        log::info!("openurl: automated run: not bringing the window to the front");
+        return;
+    }
+    window
+        .window()
+        .with_winit_window(|winit_window| winit_window.focus_window());
+}
+
+// Links pages ask other apps to open.
+
+/// Called by the engine after each batch of engine events: checks the pages' requests to open
+/// links in other apps, and queues a confirmation in the tab for those the user is to be asked.
 pub(crate) fn handle_external_link_requests(controller: &RefCell<BrowserController>) {
-    let (requests, active_tab, addresses) = {
-        let mut controller = controller.borrow_mut();
-        let requests = controller.take_external_link_requests();
-        let addresses = controller
-            .tabs()
-            .map(|tab| (tab.id(), tab.state().url().to_owned()))
-            .collect::<HashMap<TabId, String>>();
-        (requests, controller.active_tab_id(), addresses)
-    };
+    let requests = controller.borrow_mut().take_external_link_requests();
+    if requests.is_empty() {
+        return;
+    }
+    let mut asks = Vec::new();
     LINKS.with(|links| {
         let mut links = links.borrow_mut();
         let Some(links) = links.as_mut() else {
             return;
         };
-        for request in &requests {
+        for (tab, request) in &requests {
             let now = Instant::now();
-            let gesture = consume_user_activation(request.tab_id, now);
+            let gesture = consume_user_activation(*tab, now);
             let outcome = links.request(request, gesture);
             log::info!(
                 "openurl: {}: {}",
-                external::describe(request),
+                external::describe(*tab, request),
                 describe_outcome(&outcome)
             );
             if outcome == Outcome::Refused(Refusal::NoGesture)
@@ -295,30 +442,47 @@ pub(crate) fn handle_external_link_requests(controller: &RefCell<BrowserControll
             {
                 log::info!(
                     "openurl: diagnostics: granting tab {} one user gesture",
-                    request.tab_id.value()
+                    tab.value()
                 );
-                note_user_activation(request.tab_id, now);
+                note_user_activation(*tab, now);
+            }
+            if let Outcome::Ask(ask) = outcome {
+                asks.push((*tab, ask));
             }
         }
-        links.forget_closed_tabs(|tab| addresses.contains_key(&tab));
-        match links.prompt_for(active_tab, addresses.get(&active_tab).map(String::as_str)) {
-            None => {}
-            Some(Err(refusal)) => log::info!(
-                "openurl: tab {}: {}",
-                active_tab.value(),
-                describe_outcome(&Outcome::Refused(refusal))
-            ),
-            Some(Ok(prompt)) => {
-                let answer = external::confirm_external_open(&prompt, AUTOMATED.with(Cell::get));
-                if let Some(outcome) = links.answer(active_tab, answer) {
-                    log::info!(
-                        "openurl: tab {}: {}",
-                        active_tab.value(),
-                        describe_outcome(&outcome)
-                    );
-                }
-            }
+    });
+    if asks.is_empty() {
+        return;
+    }
+    {
+        let mut controller = controller.borrow_mut();
+        for (tab, ask) in asks {
+            controller.handle_event(tab, BrowserEvent::PageRequested(ask));
         }
+    }
+    TARGET.with(|target| {
+        if let Some(window) = target.borrow().as_ref().and_then(|t| t.window.upgrade()) {
+            crate::ui_sync::sync_ui(&window, &controller.borrow());
+        }
+    });
+}
+
+/// The user answered a page request on the sheet; acts on it if it is a confirmation to open a
+/// link in another app. `accepted` is the sheet's Open button, `checked` its checkbox.
+pub(crate) fn page_request_answered(pending: &PendingPageRequest, accepted: bool, checked: bool) {
+    LINKS.with(|links| {
+        let mut links = links.borrow_mut();
+        let Some(outcome) = links
+            .as_mut()
+            .and_then(|links| links.answered(pending, accepted, checked))
+        else {
+            return;
+        };
+        log::info!(
+            "openurl: confirmation {}: {}",
+            pending.id().value(),
+            describe_outcome(&outcome)
+        );
     });
 }
 
@@ -326,13 +490,11 @@ fn describe_outcome(outcome: &Outcome) -> &'static str {
     match outcome {
         Outcome::Opened => "opened in its app",
         Outcome::OpenFailed => "the system did not open it",
-        Outcome::Asking => "asking the user",
+        Outcome::Ask(_) => "asking the user",
         Outcome::Refused(Refusal::NotExternal) => "refused: not a link for another app",
         Outcome::Refused(Refusal::NoGesture) => "refused: no user gesture in that tab",
         Outcome::Refused(Refusal::NoApp) => "refused: no app opens it",
-        Outcome::Refused(Refusal::AlreadyAsking) => "refused: the tab is already asking",
         Outcome::Refused(Refusal::Declined) => "not opened: the user declined",
-        Outcome::Refused(Refusal::Stale) => "dropped: the page that asked has gone",
     }
 }
 
@@ -444,6 +606,37 @@ mod tests {
         assert_eq!(parse_diagnostic_open_events("later https://a.test/"), None);
         assert_eq!(parse_diagnostic_open_events(""), None);
         assert_eq!(diagnostic_open_events(false), None, "never in a normal run");
+    }
+
+    #[test]
+    fn a_second_launch_opens_whatever_the_address_bar_accepts() {
+        let mut controller = BrowserController::default();
+
+        let opened = open_handed_over(
+            &mut controller,
+            &["file:///tmp/x.rs".to_owned(), "file:///tmp/".to_owned()],
+        );
+
+        assert_eq!(opened, Ok(2));
+        assert_eq!(controller.active_state().url(), "file:///tmp/");
+        assert!(
+            controller
+                .tabs()
+                .any(|tab| tab.state().url() == "file:///tmp/x.rs")
+        );
+    }
+
+    #[test]
+    fn a_second_launch_opens_nothing_unless_every_address_resolves() {
+        let mut controller = BrowserController::default();
+
+        let opened = open_handed_over(
+            &mut controller,
+            &["https://a.test/".to_owned(), "mailto:a@b.test".to_owned()],
+        );
+
+        assert!(matches!(opened, Err(reason) if reason.contains("mailto:a@b.test")));
+        assert_eq!(controller.tabs().len(), 1);
     }
 
     #[test]

@@ -124,6 +124,8 @@ pub(crate) fn connect_page_request_callbacks(
             );
             return;
         }
+        // openurl: a confirmation to open a link in another app is acted on here.
+        crate::openurl::page_request_answered(&pending, accepted, checked);
         let reply = reply_for(pending.kind(), accepted, &text, &password, checked);
         controller
             .borrow_mut()
@@ -173,6 +175,8 @@ pub(crate) fn reply_for(
         // Servo 0.8 does not say which frame asked for a permission, so a decision cannot be
         // remembered for the right site; none is offered.
         PageRequestKind::Permission(_) => reply,
+        // openurl: the checkbox is "Always allow", kept by the openurl module.
+        PageRequestKind::OpenExternally { .. } => reply,
         _ if checked => reply.blocking_further_dialogs(),
         _ => reply,
     }
@@ -283,6 +287,30 @@ pub(crate) fn page_request_view(
             decline_label: "Block".into(),
             ..PageRequestView::default()
         },
+        // openurl
+        PageRequestKind::OpenExternally {
+            url,
+            scheme,
+            app,
+            always_label,
+        } => {
+            let (heading, accept) = match app {
+                Some(app) => (format!("{site} wants to open {app}"), format!("Open {app}")),
+                None => (
+                    format!("{site} wants to open a {scheme} link in another app"),
+                    "Open".to_owned(),
+                ),
+            };
+            PageRequestView {
+                style: PageRequestStyle::Confirm,
+                heading: heading.into(),
+                message: url.as_str().into(),
+                accept_label: accept.into(),
+                decline_label: "Cancel".into(),
+                choice_label: always_label.as_deref().unwrap_or_default().into(),
+                ..PageRequestView::default()
+            }
+        }
     };
     PageRequestView {
         // Ids outside `int` cannot be answered; they would need 2^31 requests in one run.
@@ -453,6 +481,49 @@ mod tests {
         assert_eq!(view.decline_label, "Block");
         // The asking frame is unknown, so nothing is offered to remember.
         assert_eq!(view.choice_label, "");
+    }
+
+    // openurl
+    #[test]
+    fn the_confirmation_to_open_another_app_names_the_site_the_app_and_the_choice() {
+        let view = page_request_view(
+            &pending(
+                "https://example.com/contact",
+                PageRequestKind::OpenExternally {
+                    url: "mailto:a@example.com".to_owned(),
+                    scheme: "mailto".to_owned(),
+                    app: Some("Mail".to_owned()),
+                    always_label: Some("Always allow example.com to open mailto links".to_owned()),
+                },
+            ),
+            None,
+        );
+
+        assert_eq!(view.style, PageRequestStyle::Confirm);
+        assert_eq!(view.heading, "example.com wants to open Mail");
+        assert_eq!(view.message, "mailto:a@example.com");
+        assert_eq!(view.accept_label, "Open Mail");
+        assert_eq!(view.decline_label, "Cancel");
+        assert_eq!(
+            view.choice_label,
+            "Always allow example.com to open mailto links"
+        );
+        // The checkbox does not block the page's dialogs.
+        assert_eq!(
+            reply_for(
+                &PageRequestKind::OpenExternally {
+                    url: String::new(),
+                    scheme: "mailto".to_owned(),
+                    app: None,
+                    always_label: None,
+                },
+                true,
+                "",
+                "",
+                true
+            ),
+            PageRequestReply::new(PageRequestAnswer::Accept)
+        );
     }
 
     #[test]

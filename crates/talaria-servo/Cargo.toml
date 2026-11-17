@@ -10,6 +10,8 @@ adblock.workspace = true
 content-security-policy.workspace = true
 dpi.workspace = true
 euclid.workspace = true
+# openurl
+http.workspace = true
 log.workspace = true
 rustls.workspace = true
 serde_json.workspace = true

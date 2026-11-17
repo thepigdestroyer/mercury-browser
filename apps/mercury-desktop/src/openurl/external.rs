@@ -1,16 +1,22 @@
 //! Links to schemes the engine cannot load (`mailto:`, `tel:`, an app's own scheme). The engine
 //! has already been refused (`talaria-servo`'s `request_navigation`); here the link may be handed
 //! to the system's handler for the scheme, but only after a user gesture in that tab and the
-//! user's confirmation, which names the page and the app. "Always allow" lasts for the session
-//! and skips the confirmation, never the gesture.
+//! user's answer to a confirmation that names the page and the app. The confirmation is a page
+//! request (`PageRequestKind::OpenExternally`) on the dialogs lane's sheet, so it waits for its
+//! tab, goes when the page goes, and ignores input for its first half second. "Always allow"
+//! lasts for the session and skips the confirmation, never the gesture.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{HashSet, VecDeque};
 
 use talaria_core::{
-    ExternalLinkRequest, ExternalOpenPrompt, NavigationVerdict, TabId, external_open_prompt,
-    navigation_verdict, page_display_name, remembered_origin,
+    ExternalLinkRequest, NavigationVerdict, PageOrigin, PageRequest, PageRequestId,
+    PageRequestKind, PendingPageRequest, navigation_verdict, remembered_origin,
 };
 use url::Url;
+
+/// How many confirmations are remembered at once; the oldest beyond this (long since dropped
+/// with their pages) are forgotten.
+const MAX_ASKED: usize = 32;
 
 /// Opens URLs in other apps. Tests and automated runs use doubles that only record.
 pub(crate) trait ExternalOpener {
@@ -30,21 +36,14 @@ impl ExternalOpener for Box<dyn ExternalOpener> {
     }
 }
 
-/// The user's answer to the confirmation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum PromptAnswer {
-    Open { always: bool },
-    DontOpen,
-}
-
-/// What became of a request.
+/// What became of a request or an answer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum Outcome {
     Opened,
     /// The system did not open it.
     OpenFailed,
-    /// Waiting for the user's answer (shown when the tab is active).
-    Asking,
+    /// The user is to be asked with this page request.
+    Ask(PageRequest),
     Refused(Refusal),
 }
 
@@ -56,28 +55,24 @@ pub(crate) enum Refusal {
     NoGesture,
     /// No app on this system handles the scheme.
     NoApp,
-    /// The tab already has a confirmation waiting.
-    AlreadyAsking,
     /// The user said no.
     Declined,
-    /// The tab closed or moved to another page before the user answered.
-    Stale,
 }
 
-struct Waiting {
+/// A confirmation on its way to the user: the URL exactly as the page asked (the request shows
+/// a sanitised copy), and the key "always allow" is remembered under.
+struct Asked {
+    id: PageRequestId,
     url: Url,
-    page: Option<Url>,
-    /// The page's address as the tab shows it, to tell whether the tab has moved on.
-    page_address: String,
-    app: String,
+    origin: Option<String>,
 }
 
-/// The session's state: what is waiting for an answer, and what is always allowed.
+/// The session's state: what was asked, and what is always allowed.
 pub(crate) struct ExternalLinks<O> {
     opener: O,
     /// (page origin, scheme) pairs the user allowed for the session.
     always_allowed: HashSet<(String, String)>,
-    waiting: HashMap<TabId, Waiting>,
+    asked: VecDeque<Asked>,
 }
 
 impl<O: ExternalOpener> ExternalLinks<O> {
@@ -85,7 +80,7 @@ impl<O: ExternalOpener> ExternalLinks<O> {
         Self {
             opener,
             always_allowed: HashSet::new(),
-            waiting: HashMap::new(),
+            asked: VecDeque::new(),
         }
     }
 
@@ -112,66 +107,67 @@ impl<O: ExternalOpener> ExternalLinks<O> {
         let Some(app) = self.opener.app_for(&url) else {
             return Outcome::Refused(Refusal::NoApp);
         };
-        if let Some(origin) = remembered_origin(page.as_ref())
-            && self
-                .always_allowed
-                .contains(&(origin, url.scheme().to_owned()))
-        {
+        let origin = remembered_origin(page.as_ref());
+        let scheme = url.scheme().to_owned();
+        if origin.as_ref().is_some_and(|origin| {
+            self.always_allowed
+                .contains(&(origin.clone(), scheme.clone()))
+        }) {
             return self.open(&url);
         }
-        if self.waiting.contains_key(&request.tab_id) {
-            return Outcome::Refused(Refusal::AlreadyAsking);
-        }
-        self.waiting.insert(
-            request.tab_id,
-            Waiting {
-                url,
-                page,
-                page_address: shown_address(request.page_url.as_deref()),
-                app,
+        let page_url = request.page_url.clone().unwrap_or_default();
+        let always_label = origin.as_ref().map(|_| {
+            format!(
+                "Always allow {} to open {scheme} links",
+                PageOrigin::from_url(&page_url).label()
+            )
+        });
+        let ask = PageRequest {
+            id: request.id,
+            url: page_url,
+            kind: PageRequestKind::OpenExternally {
+                url: url.to_string(),
+                scheme,
+                app: Some(app),
+                always_label,
             },
-        );
-        Outcome::Asking
-    }
-
-    /// The confirmation waiting for `tab`, if the tab still shows the page that asked.
-    /// `current_address` is the address the tab shows now (`None` if the tab has closed); a
-    /// confirmation whose page has gone is dropped and returned as `Err(Stale)`.
-    pub(crate) fn prompt_for(
-        &mut self,
-        tab: TabId,
-        current_address: Option<&str>,
-    ) -> Option<Result<ExternalOpenPrompt, Refusal>> {
-        let waiting = self.waiting.get(&tab)?;
-        if current_address != Some(waiting.page_address.as_str()) {
-            self.waiting.remove(&tab);
-            return Some(Err(Refusal::Stale));
+            received_at: request.received_at,
+        };
+        if self.asked.len() == MAX_ASKED {
+            self.asked.pop_front();
         }
-        Some(Ok(external_open_prompt(
-            waiting.page.as_ref(),
-            &waiting.url,
-            Some(&waiting.app),
-        )))
+        self.asked.push_back(Asked {
+            id: request.id,
+            url,
+            origin,
+        });
+        Outcome::Ask(ask)
     }
 
-    /// Applies the user's answer to `tab`'s confirmation. Each confirmation is answered once.
-    pub(crate) fn answer(&mut self, tab: TabId, answer: PromptAnswer) -> Option<Outcome> {
-        let waiting = self.waiting.remove(&tab)?;
-        Some(match answer {
-            PromptAnswer::DontOpen => Outcome::Refused(Refusal::Declined),
-            PromptAnswer::Open { always } => {
-                if always && let Some(origin) = remembered_origin(waiting.page.as_ref()) {
-                    self.always_allowed
-                        .insert((origin, waiting.url.scheme().to_owned()));
-                }
-                self.open(&waiting.url)
-            }
-        })
-    }
-
-    /// Drops the confirmations of tabs that no longer exist.
-    pub(crate) fn forget_closed_tabs(&mut self, is_open: impl Fn(TabId) -> bool) {
-        self.waiting.retain(|tab, _| is_open(*tab));
+    /// The user answered a confirmation from the sheet: `accepted` is Open, `always` the
+    /// checkbox. Returns `None` for other requests, and for a confirmation already answered.
+    pub(crate) fn answered(
+        &mut self,
+        pending: &PendingPageRequest,
+        accepted: bool,
+        always: bool,
+    ) -> Option<Outcome> {
+        if !matches!(pending.kind(), PageRequestKind::OpenExternally { .. }) {
+            return None;
+        }
+        let index = self
+            .asked
+            .iter()
+            .position(|asked| asked.id == pending.id())?;
+        let asked = self.asked.remove(index)?;
+        if !accepted {
+            return Some(Outcome::Refused(Refusal::Declined));
+        }
+        if always && let Some(origin) = asked.origin {
+            self.always_allowed
+                .insert((origin, asked.url.scheme().to_owned()));
+        }
+        Some(self.open(&asked.url))
     }
 
     fn open(&self, url: &Url) -> Outcome {
@@ -183,63 +179,18 @@ impl<O: ExternalOpener> ExternalLinks<O> {
     }
 }
 
-/// The address a tab shows for a page: the engine's blank page shows as empty.
-fn shown_address(page_url: Option<&str>) -> String {
-    match page_url {
-        None | Some("about:blank") => String::new(),
-        Some(page_url) => page_url.to_owned(),
-    }
-}
-
 /// How a request is named in the log: the page and the scheme, never the rest of the URL (a
 /// `mailto:` address or a phone number is the user's business).
-pub(crate) fn describe(request: &ExternalLinkRequest) -> String {
-    let page = request
-        .page_url
-        .as_deref()
-        .and_then(|page| Url::parse(page).ok());
+pub(crate) fn describe(tab: talaria_core::TabId, request: &ExternalLinkRequest) -> String {
     let scheme = request
         .url
         .split_once(':')
         .map_or("?", |(scheme, _)| scheme);
     format!(
         "tab {}: {} asked to open a {scheme}: link",
-        request.tab_id.value(),
-        page_display_name(page.as_ref())
+        tab.value(),
+        PageOrigin::from_url(request.page_url.as_deref().unwrap_or_default()).label()
     )
-}
-
-/// The confirmation seam. The dialogs lane's sheet is not merged yet, so until it is, the
-/// confirmation is only written to the log, and answered here: a normal run answers "Don't
-/// open" (nothing may open without the user's confirmation), an automated run answers "Open"
-/// (its opener only records; see `RecordingOpener`), so that the whole path can be checked.
-/// Replace this function with the sheet at merge; it is the only place that answers.
-pub(crate) fn confirm_external_open(prompt: &ExternalOpenPrompt, automated: bool) -> PromptAnswer {
-    log::info!(
-        "openurl: confirmation \"{}\" ({}) [{}] [Cancel]{}",
-        prompt.message,
-        prompt
-            .detail
-            .split_once(':')
-            .map_or("", |(scheme, _)| scheme),
-        prompt.open_label,
-        prompt
-            .always_label
-            .as_ref()
-            .map_or_else(String::new, |label| format!(" [ ] {label}"))
-    );
-    if automated {
-        log::info!(
-            "openurl: automated run: answering \"{}\"",
-            prompt.open_label
-        );
-        PromptAnswer::Open { always: false }
-    } else {
-        log::warn!(
-            "openurl: no confirmation sheet yet (dialogs lane); answering \"Cancel\", nothing opens"
-        );
-        PromptAnswer::DontOpen
-    }
 }
 
 /// The opener of automated runs and of tests: asks `names` which app would open a URL, and
@@ -281,7 +232,9 @@ impl<N: Fn(&Url) -> Option<String>> ExternalOpener for RecordingOpener<N> {
 
 #[cfg(test)]
 mod tests {
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
+
+    use talaria_core::{BrowserController, BrowserEvent, TabId};
 
     use super::*;
     use crate::activation::{consume_user_activation, note_user_activation};
@@ -300,15 +253,33 @@ mod tests {
         ExternalLinks::new(RecordingOpener::new(names as Names))
     }
 
-    fn request(tab: u64, url: &str, page: &str) -> ExternalLinkRequest {
+    fn request(id: u64, url: &str, page: &str) -> ExternalLinkRequest {
         ExternalLinkRequest {
-            tab_id: TabId::new(tab),
+            id: PageRequestId::new(id),
             url: url.to_owned(),
             page_url: Some(page.to_owned()),
+            received_at: Duration::ZERO,
         }
     }
 
     const PAGE: &str = "https://example.com/contact";
+
+    /// Shows `ask` in a tab as the window would, and returns what the sheet shows.
+    fn shown(ask: PageRequest) -> PendingPageRequest {
+        let mut controller = BrowserController::default();
+        let tab = controller.active_tab_id();
+        controller.handle_event(tab, BrowserEvent::PageRequested(ask));
+        controller
+            .pending_page_request(tab)
+            .expect("the sheet shows it")
+    }
+
+    fn ask(outcome: Outcome) -> PageRequest {
+        match outcome {
+            Outcome::Ask(ask) => ask,
+            other => panic!("expected a confirmation, got {other:?}"),
+        }
+    }
 
     #[test]
     fn without_a_gesture_nothing_is_asked_or_opened() {
@@ -318,7 +289,6 @@ mod tests {
             links.request(&request(1, "mailto:a@example.com", PAGE), false),
             Outcome::Refused(Refusal::NoGesture)
         );
-        assert_eq!(links.prompt_for(TabId::new(1), Some(PAGE)), None);
         assert!(links.opener().opened().is_empty());
     }
 
@@ -331,94 +301,120 @@ mod tests {
 
         let first = consume_user_activation(tab, now);
         let second = consume_user_activation(tab, now);
+        assert!(matches!(
+            links.request(&request(1, "mailto:a@example.com", PAGE), first),
+            Outcome::Ask(_)
+        ));
         assert_eq!(
-            links.request(&request(31, "mailto:a@example.com", PAGE), first),
-            Outcome::Asking
-        );
-        assert_eq!(
-            links.request(&request(31, "tel:+15555550123", PAGE), second),
+            links.request(&request(2, "tel:+15555550123", PAGE), second),
             Outcome::Refused(Refusal::NoGesture)
         );
     }
 
     #[test]
     fn a_gesture_in_another_tab_does_not_count() {
-        let tab = TabId::new(41);
         let now = Instant::now();
         note_user_activation(TabId::new(42), now);
 
-        assert!(!consume_user_activation(tab, now));
+        assert!(!consume_user_activation(TabId::new(41), now));
     }
 
     #[test]
-    fn with_a_gesture_the_user_is_asked_and_their_yes_opens_the_link() {
+    fn the_confirmation_names_the_page_the_app_and_the_choice() {
         let mut links = links();
-        let tab = TabId::new(1);
 
+        let ask = ask(links.request(&request(5, "mailto:a@example.com", PAGE), true));
+
+        assert_eq!(ask.id, PageRequestId::new(5));
+        assert_eq!(ask.url, PAGE);
         assert_eq!(
-            links.request(&request(1, "mailto:a@example.com", PAGE), true),
-            Outcome::Asking
+            ask.kind,
+            PageRequestKind::OpenExternally {
+                url: "mailto:a@example.com".to_owned(),
+                scheme: "mailto".to_owned(),
+                app: Some("Mail".to_owned()),
+                always_label: Some("Always allow example.com to open mailto links".to_owned()),
+            }
         );
-        let prompt = links
-            .prompt_for(tab, Some(PAGE))
-            .expect("a confirmation waits")
-            .expect("the page is still shown");
-        assert_eq!(prompt.message, "example.com wants to open Mail");
-        assert_eq!(
-            links.answer(tab, PromptAnswer::Open { always: false }),
-            Some(Outcome::Opened)
-        );
+    }
+
+    #[test]
+    fn yes_opens_the_url_the_page_asked_for_once() {
+        let mut links = links();
+        let pending = shown(ask(
+            links.request(&request(5, "mailto:a@example.com", PAGE), true)
+        ));
+
+        assert_eq!(links.answered(&pending, true, false), Some(Outcome::Opened));
         assert_eq!(links.opener().opened(), vec!["mailto:a@example.com"]);
-        assert_eq!(
-            links.answer(tab, PromptAnswer::DontOpen),
-            None,
-            "answered once"
-        );
+        assert_eq!(links.answered(&pending, true, false), None, "answered once");
+        assert_eq!(links.opener().opened().len(), 1);
+    }
+
+    #[test]
+    fn the_original_url_is_opened_not_the_sanitised_copy_shown() {
+        let mut links = links();
+        let long = format!("mailto:a@example.com?body={}", "x".repeat(3_000));
+        let pending = shown(ask(links.request(&request(5, &long, PAGE), true)));
+
+        links.answered(&pending, true, false);
+
+        assert_eq!(links.opener().opened(), vec![long]);
     }
 
     #[test]
     fn no_opens_nothing() {
         let mut links = links();
-        let tab = TabId::new(1);
-        links.request(&request(1, "mailto:a@example.com", PAGE), true);
+        let pending = shown(ask(
+            links.request(&request(5, "mailto:a@example.com", PAGE), true)
+        ));
 
         assert_eq!(
-            links.answer(tab, PromptAnswer::DontOpen),
+            links.answered(&pending, false, true),
             Some(Outcome::Refused(Refusal::Declined))
         );
         assert!(links.opener().opened().is_empty());
+        assert!(matches!(
+            links.request(&request(6, "mailto:b@example.com", PAGE), true),
+            Outcome::Ask(_)
+        ));
     }
 
     #[test]
     fn always_allow_skips_the_confirmation_for_that_origin_and_scheme_only() {
         let mut links = links();
-        let tab = TabId::new(1);
-        links.request(&request(1, "mailto:a@example.com", PAGE), true);
-        links.answer(tab, PromptAnswer::Open { always: true });
+        let pending = shown(ask(
+            links.request(&request(5, "mailto:a@example.com", PAGE), true)
+        ));
+        links.answered(&pending, true, true);
 
         assert_eq!(
             links.request(
-                &request(1, "mailto:b@example.com", "https://example.com/other"),
+                &request(6, "mailto:b@example.com", "https://example.com/other"),
                 true
             ),
             Outcome::Opened
         );
         assert_eq!(
-            links.request(&request(1, "mailto:c@example.com", PAGE), false),
+            links.request(&request(7, "mailto:c@example.com", PAGE), false),
             Outcome::Refused(Refusal::NoGesture),
             "always allow never replaces the gesture"
         );
-        assert_eq!(
-            links.request(&request(2, "tel:+15555550123", PAGE), true),
-            Outcome::Asking,
+        assert!(
+            matches!(
+                links.request(&request(8, "tel:+15555550123", PAGE), true),
+                Outcome::Ask(_)
+            ),
             "another scheme still asks"
         );
-        assert_eq!(
-            links.request(
-                &request(3, "mailto:d@example.com", "https://other.test/"),
-                true
+        assert!(
+            matches!(
+                links.request(
+                    &request(9, "mailto:d@example.com", "https://other.test/"),
+                    true
+                ),
+                Outcome::Ask(_)
             ),
-            Outcome::Asking,
             "another origin still asks"
         );
         assert_eq!(
@@ -428,22 +424,22 @@ mod tests {
     }
 
     #[test]
-    fn always_allow_is_not_remembered_for_an_opaque_origin() {
+    fn always_allow_is_not_offered_for_an_opaque_origin() {
         let mut links = links();
-        let tab = TabId::new(1);
         let page = "file:///tmp/page.html";
-        links.request(&request(1, "mailto:a@example.com", page), true);
-        let prompt = links
-            .prompt_for(tab, Some(page))
-            .expect("a confirmation waits")
-            .expect("the page is still shown");
-        assert_eq!(prompt.always_label, None);
-        links.answer(tab, PromptAnswer::Open { always: true });
 
-        assert_eq!(
-            links.request(&request(1, "mailto:b@example.com", page), true),
-            Outcome::Asking
-        );
+        let ask = ask(links.request(&request(5, "mailto:a@example.com", page), true));
+        let PageRequestKind::OpenExternally { always_label, .. } = &ask.kind else {
+            panic!("not a confirmation");
+        };
+        assert_eq!(always_label, &None);
+        let pending = shown(ask);
+        links.answered(&pending, true, true);
+
+        assert!(matches!(
+            links.request(&request(6, "mailto:b@example.com", page), true),
+            Outcome::Ask(_)
+        ));
     }
 
     #[test]
@@ -454,16 +450,17 @@ mod tests {
             links.request(&request(1, "zoommtg://zoom.us/join", PAGE), true),
             Outcome::Refused(Refusal::NoApp)
         );
-        assert_eq!(links.prompt_for(TabId::new(1), Some(PAGE)), None);
     }
 
     #[test]
-    fn web_and_file_urls_are_never_handed_to_another_app() {
+    fn web_file_data_and_blocked_schemes_are_never_handed_to_another_app() {
         let mut links = links();
         for url in [
             "https://example.com/",
             "file:///etc/hosts",
             "data:,x",
+            "smb://server/share",
+            "x-apple.systempreferences:com.apple.preference.security",
             "not a url",
         ] {
             assert_eq!(
@@ -476,90 +473,28 @@ mod tests {
     }
 
     #[test]
-    fn one_confirmation_per_tab_at_a_time() {
+    fn answers_to_other_requests_are_not_ours() {
         let mut links = links();
-        links.request(&request(1, "mailto:a@example.com", PAGE), true);
+        let pending = shown(PageRequest {
+            id: PageRequestId::new(5),
+            url: PAGE.to_owned(),
+            kind: PageRequestKind::Confirm {
+                message: "Sure?".to_owned(),
+            },
+            received_at: Duration::ZERO,
+        });
 
-        assert_eq!(
-            links.request(&request(1, "tel:+15555550123", PAGE), true),
-            Outcome::Refused(Refusal::AlreadyAsking)
-        );
-        assert_eq!(
-            links.request(&request(2, "tel:+15555550123", PAGE), true),
-            Outcome::Asking
-        );
-    }
-
-    #[test]
-    fn a_confirmation_is_dropped_when_its_page_has_gone() {
-        let mut links = links();
-        let tab = TabId::new(1);
-        links.request(&request(1, "mailto:a@example.com", PAGE), true);
-
-        assert_eq!(
-            links.prompt_for(tab, Some("https://example.com/elsewhere")),
-            Some(Err(Refusal::Stale))
-        );
-        assert_eq!(links.prompt_for(tab, Some(PAGE)), None);
-        assert!(links.opener().opened().is_empty());
-    }
-
-    #[test]
-    fn a_confirmation_waits_while_its_tab_is_in_the_background() {
-        let mut links = links();
-        links.request(&request(2, "mailto:a@example.com", PAGE), true);
-
-        // The active tab (1) has nothing waiting; tab 2's confirmation is kept for later.
-        assert_eq!(links.prompt_for(TabId::new(1), Some("")), None);
-        assert!(matches!(
-            links.prompt_for(TabId::new(2), Some(PAGE)),
-            Some(Ok(_))
-        ));
-    }
-
-    #[test]
-    fn closing_the_tab_drops_its_confirmation() {
-        let mut links = links();
-        links.request(&request(2, "mailto:a@example.com", PAGE), true);
-
-        links.forget_closed_tabs(|tab| tab != TabId::new(2));
-
-        assert_eq!(links.prompt_for(TabId::new(2), Some(PAGE)), None);
-    }
-
-    #[test]
-    fn the_blank_page_is_compared_as_the_empty_address() {
-        let mut links = links();
-        links.request(&request(1, "mailto:a@example.com", "about:blank"), true);
-
-        assert!(matches!(
-            links.prompt_for(TabId::new(1), Some("")),
-            Some(Ok(_))
-        ));
+        assert_eq!(links.answered(&pending, true, true), None);
     }
 
     #[test]
     fn the_log_names_the_page_and_scheme_only() {
         assert_eq!(
-            describe(&request(3, "mailto:secret@example.com", PAGE)),
+            describe(
+                TabId::new(3),
+                &request(1, "mailto:secret@example.com", PAGE)
+            ),
             "tab 3: example.com asked to open a mailto: link"
-        );
-    }
-
-    #[test]
-    fn a_normal_run_never_opens_without_the_sheet() {
-        let prompt = external_open_prompt(
-            Some(&Url::parse(PAGE).expect("valid")),
-            &Url::parse("mailto:a@example.com").expect("valid"),
-            Some("Mail"),
-        );
-        assert_eq!(
-            confirm_external_open(&prompt, false),
-            PromptAnswer::DontOpen
-        );
-        assert_eq!(
-            confirm_external_open(&prompt, true),
-            PromptAnswer::Open { always: false }
         );
     }
 }

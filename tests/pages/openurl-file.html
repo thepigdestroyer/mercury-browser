@@ -14,14 +14,21 @@
   openurl lane: an http(s) page must not reach a file: URL. Serve tests/ with
   scripts/serve-tests.py and open
     http://127.0.0.1:<port>/pages/openurl-file.html?target=file:///<abs>/tests/pages/openurl-file-target.html
-  A timer sets location to the target 500 ms after load (not with top=0); only=direct or
-  only=navigated tries one frame only; the first iframe is navigated to it
+  A timer sets location to the target 500 ms after the load event (not with top=0; Servo
+  aborts the document before it asks whether it may navigate, so a refused navigation while the
+  page is still loading leaves it loading for ever); only=direct or
+  only=navigated tries one frame only. An image, a fetch() and a window.open() of the target
+  report their results on the page; the first iframe is navigated to it
   by its own script, the second one names it as its src. If the top-level navigation is refused,
   this page stays and the status line says so. A pink "LOCAL FILE PAGE LOADED" page (whole
   window or inside a frame) means a file: URL was reached from the web.
 -->
 <p>Web page at <span id="origin"></span></p>
 <p id="status">waiting for the timer…</p>
+<p>Image whose src is the file: <img id="image" width="40" height="40" alt="">
+  <span id="image-result">…</span></p>
+<p>fetch(file:): <span id="fetch-result">…</span></p>
+<p>window.open(file:): <span id="open-result">…</span></p>
 <p><a id="link" href="#">link to the file</a></p>
 <p>Frame navigated by its own script:</p>
 <iframe id="navigated" src="openurl-frame.html"></iframe>
@@ -32,6 +39,23 @@
   document.getElementById("origin").textContent = location.origin;
   document.getElementById("link").href = target;
   const only = new URLSearchParams(location.search).get("only");
+  const show = (id, text) => { document.getElementById(id).textContent = text; };
+  // An image of the local file (the target page itself is not an image, so a load is a leak
+  // only if it succeeds; the browser answers 403 and the image reports an error).
+  const image = document.getElementById("image");
+  image.onload = () => show("image-result", "LOADED (local file reached)");
+  image.onerror = () => show("image-result", "refused (error event)");
+  image.src = target;
+  fetch(target).then(
+    (response) => show("fetch-result", "resolved: status " + response.status + ", ok " + response.ok),
+    (error) => show("fetch-result", "rejected: " + error.name)
+  );
+  try {
+    const opened = window.open(target);
+    show("open-result", opened ? "a window object came back" : "refused (null)");
+  } catch (error) {
+    show("open-result", "threw " + error.name);
+  }
   if (only !== "navigated") document.getElementById("direct").src = target;
   const navigated = document.getElementById("navigated");
   if (only !== "direct") navigated.addEventListener("load", () => {
@@ -41,14 +65,14 @@
   }, { once: true });
   if (new URLSearchParams(location.search).get("top") === "0") {
     document.getElementById("status").textContent = "frames only (no top-level timer)";
-  } else setTimeout(() => {
+  } else addEventListener("load", () => setTimeout(() => {
     document.getElementById("status").textContent = "timer fired: location = " + target;
     location = target;
     setTimeout(() => {
       document.getElementById("status").textContent =
         "still on the web page 1.5 s after location = file: (refused)";
     }, 1500);
-  }, 500);
+  }, 500));
 </script>
 </body>
 </html>

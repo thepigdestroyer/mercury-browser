@@ -6,6 +6,8 @@ mod exit_clearing;
 mod frame_ready;
 mod load_metrics;
 mod opengl_context;
+// openurl
+mod openurl;
 mod page_defaults;
 mod page_requests;
 mod panics;

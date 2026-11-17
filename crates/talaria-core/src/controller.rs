@@ -34,7 +34,7 @@ pub struct BrowserController {
     // dialogs
     permission_decisions: Box<dyn PermissionDecisions>,
     // openurl
-    external_link_requests: Vec<ExternalLinkRequest>,
+    external_link_requests: Vec<(TabId, ExternalLinkRequest)>,
 }
 
 impl BrowserController {
@@ -256,7 +256,7 @@ impl BrowserController {
             .retain(|queued| queued.tab_id() != tab_id);
         // openurl
         self.external_link_requests
-            .retain(|request| request.tab_id != tab_id);
+            .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
 
         if was_active {
             let replacement_index = index.saturating_sub(1).min(self.tabs.len() - 1);
@@ -390,12 +390,8 @@ impl BrowserController {
             return false;
         };
         // openurl: queued, not shown; nothing in the window changes.
-        if let BrowserEvent::ExternalLinkRequested { url, page_url } = event {
-            self.external_link_requests.push(ExternalLinkRequest {
-                tab_id,
-                url,
-                page_url,
-            });
+        if let BrowserEvent::ExternalLinkRequested(request) = event {
+            self.external_link_requests.push((tab_id, request));
             return false;
         }
 
@@ -483,7 +479,7 @@ impl BrowserController {
 
     // openurl
     /// The pages' requests to open links in other apps, oldest first, each returned once.
-    pub fn take_external_link_requests(&mut self) -> Vec<ExternalLinkRequest> {
+    pub fn take_external_link_requests(&mut self) -> Vec<(TabId, ExternalLinkRequest)> {
         std::mem::take(&mut self.external_link_requests)
     }
 

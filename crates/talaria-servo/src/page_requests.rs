@@ -19,6 +19,13 @@ use talaria_core::{PagePermission, PageRequestAnswer, PageRequestId, PageRequest
 static NEXT_REQUEST_ID: AtomicU64 = AtomicU64::new(1);
 static CLOCK_EPOCH: OnceLock<Instant> = OnceLock::new();
 
+// openurl
+/// A new request id, unique for the process. Also used for requests the browser makes on a
+/// page's behalf (`PageRequestKind::OpenExternally`), which the engine does not wait on.
+pub(crate) fn new_page_request_id() -> PageRequestId {
+    PageRequestId::new(NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed))
+}
+
 /// The clock of `PageRequest::received_at`; pass it as `now` to
 /// `BrowserController::answer_page_request`.
 pub fn page_request_clock() -> Duration {
@@ -52,7 +59,7 @@ impl<R: EngineRequest> PendingEngineRequests<R> {
         if self.closed {
             return None;
         }
-        let id = PageRequestId::new(NEXT_REQUEST_ID.fetch_add(1, Ordering::Relaxed));
+        let id = new_page_request_id();
         self.requests.insert(id, request);
         Some(id)
     }

@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Page opening a data URL</title>
+<style>body { font: 20px system-ui, sans-serif; margin: 30px; background: #efe; } #status { font-weight: bold; }</style>
+</head>
+<body>
+<!--
+  openurl lane: a page may not navigate the tab to a data: URL (as in Chrome and Firefox). 500 ms
+  after its load event this page sets location to one; the page must stay, and the log says
+  "refused a navigation … to a data: URL".
+-->
+<p id="status">waiting for the timer…</p>
+<script>
+  addEventListener("load", () => setTimeout(() => {
+    document.getElementById("status").textContent = "timer fired: location = data:…";
+    location = "data:text/html,<h1 style='background:red'>DATA PAGE LOADED</h1>";
+    setTimeout(() => {
+      document.getElementById("status").textContent =
+        "still on this page 1.5 s after location = data: (refused)";
+    }, 1500);
+  }, 500));
+</script>
+</body>
+</html>

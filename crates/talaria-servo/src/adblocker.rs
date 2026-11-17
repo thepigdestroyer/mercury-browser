@@ -58,8 +58,16 @@ impl ContentBlocker {
             debug!("blocked web resource #{blocked_count}: {blocked_url}");
         }
 
-        load.intercept(WebResourceResponse::new(blocked_url))
-            .cancel();
+        if is_frame(load.request().destination) {
+            // A cancelled frame load leaves the frame without a document, and its page's `load`
+            // event never fires (tests/pages/adblock-blocked-frame.html: exit 3 before this);
+            // a blocked frame gets an empty 403 instead. Images and scripts end in a network
+            // error as before: their pages still finish loading.
+            crate::openurl::answer_forbidden(load, blocked_url);
+        } else {
+            load.intercept(WebResourceResponse::new(blocked_url))
+                .cancel();
+        }
     }
 
     fn should_block(&self, request: &WebResourceRequest, source_url: Option<&Url>) -> bool {
@@ -94,6 +102,10 @@ impl ContentBlocker {
 
         self.engine.check_network_request(&request).should_block()
     }
+}
+
+fn is_frame(destination: Destination) -> bool {
+    matches!(destination, Destination::IFrame | Destination::Frame)
 }
 
 fn resource_type(destination: Destination) -> &'static str {
@@ -182,6 +194,15 @@ mod tests {
             "GET",
             true,
         ));
+    }
+
+    #[test]
+    fn only_frames_are_answered_instead_of_cancelled() {
+        assert!(is_frame(Destination::IFrame));
+        assert!(is_frame(Destination::Frame));
+        assert!(!is_frame(Destination::Image));
+        assert!(!is_frame(Destination::Script));
+        assert!(!is_frame(Destination::Document));
     }
 
     #[test]

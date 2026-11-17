@@ -3,16 +3,32 @@
 
 use url::Url;
 
-use crate::TabId;
+use std::time::Duration;
+
+use crate::PageRequestId;
 
 /// A page's request to open a URL in another app, queued by the controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ExternalLinkRequest {
-    pub tab_id: TabId,
+    /// The id the confirmation gets if the user is asked (`PageRequestKind::OpenExternally`).
+    pub id: PageRequestId,
     pub url: String,
-    /// The page shown in the tab when it asked, if one had committed.
+    /// The tab's top-level page when it asked, if one had committed.
     pub page_url: Option<String>,
+    /// On the clock of `PageRequest::received_at`.
+    pub received_at: Duration,
 }
+
+/// Schemes never handed to another app from a page: network shares, remote screens, System
+/// Settings.
+const NEVER_EXTERNAL_SCHEMES: [&str; 6] = [
+    "smb",
+    "afp",
+    "nfs",
+    "vnc",
+    "ftp",
+    "x-apple.systempreferences",
+];
 
 /// Schemes the engine loads itself. `javascript:` URLs are evaluated by the engine before a
 /// navigation is requested, so they never arrive here as such, but they are the engine's.
@@ -34,6 +50,13 @@ pub enum NavigationVerdict {
     /// A page that is not itself a local file asked for a `file:` URL. Typed addresses and files
     /// opened from other apps never ask, so they are not affected.
     DenyLocalFile,
+    /// A page asked for a `data:` URL. Refused as Chrome and Firefox refuse top-level ones (a
+    /// phishing vector); Servo's request does not say which frame asks, so a frame navigated to
+    /// one by script is refused too. A frame's `src` and typed addresses never ask.
+    DenyData,
+    /// A scheme that is never handed to another app from a page, even after asking: network
+    /// shares and remote screens (`smb:`, `afp:`, `nfs:`, `vnc:`, `ftp:`) and System Settings.
+    DenyScheme,
     /// The engine cannot load the scheme (`mailto:`, `tel:`, an app's own scheme). The engine is
     /// refused; the system's handler for the scheme may open it, after a user gesture and the
     /// user's confirmation.
@@ -43,8 +66,14 @@ pub enum NavigationVerdict {
 /// `page` is the URL of the page shown in the tab when it asked, if one has committed.
 pub fn navigation_verdict(page: Option<&Url>, target: &Url) -> NavigationVerdict {
     let scheme = target.scheme();
+    if NEVER_EXTERNAL_SCHEMES.contains(&scheme) {
+        return NavigationVerdict::DenyScheme;
+    }
     if !ENGINE_SCHEMES.contains(&scheme) {
         return NavigationVerdict::OpenExternally;
+    }
+    if scheme == "data" {
+        return NavigationVerdict::DenyData;
     }
     if scheme == "file" && page.is_none_or(|page| page.scheme() != "file") {
         return NavigationVerdict::DenyLocalFile;
@@ -61,61 +90,14 @@ pub fn refuses_local_file_load(page: Option<&Url>, target: &Url, is_main_frame: 
     !is_main_frame && target.scheme() == "file" && page.is_none_or(|page| page.scheme() != "file")
 }
 
-/// How a page is named to the user when it asks for something: its host, or "This page" when it
-/// has none (a local file, a `data:` page).
-pub fn page_display_name(page: Option<&Url>) -> String {
-    page.and_then(Url::host_str)
-        .filter(|host| !host.is_empty())
-        .map_or_else(|| "This page".to_owned(), str::to_owned)
-}
-
 /// The key under which "always allow" is remembered for the session: the page's origin, or
 /// `None` when the origin is opaque (a local file, a `data:` page), which is never remembered.
+/// `page` is always the tab's top-level page: Servo's `NavigationRequest` carries no source
+/// frame, so a link in a frame from another site is judged, named and remembered as the
+/// top-level page's.
 pub fn remembered_origin(page: Option<&Url>) -> Option<String> {
     let origin = page?.origin();
     origin.is_tuple().then(|| origin.ascii_serialization())
-}
-
-/// The confirmation shown before a page's link opens in another app.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExternalOpenPrompt {
-    /// "example.com wants to open Mail".
-    pub message: String,
-    /// The address being opened, shown under the message.
-    pub detail: String,
-    /// The button that opens it: "Open Mail", or "Open" when the app is not known.
-    pub open_label: String,
-    /// "Always allow example.com to open mailto links", or `None` when the page's origin cannot
-    /// be remembered.
-    pub always_label: Option<String>,
-}
-
-/// `app` is the name of the app the system would use, when it is known.
-pub fn external_open_prompt(
-    page: Option<&Url>,
-    target: &Url,
-    app: Option<&str>,
-) -> ExternalOpenPrompt {
-    let page_name = page_display_name(page);
-    let scheme = target.scheme();
-    let (message, open_label) = match app {
-        Some(app) => (
-            format!("{page_name} wants to open {app}"),
-            format!("Open {app}"),
-        ),
-        None => (
-            format!("{page_name} wants to open a {scheme} link in another app"),
-            "Open".to_owned(),
-        ),
-    };
-    let always_label =
-        remembered_origin(page).map(|_| format!("Always allow {page_name} to open {scheme} links"));
-    ExternalOpenPrompt {
-        message,
-        detail: target.as_str().to_owned(),
-        open_label,
-        always_label,
-    }
 }
 
 #[cfg(test)]
@@ -132,7 +114,6 @@ mod tests {
         for target in [
             "https://example.com/next",
             "http://example.com/",
-            "data:text/html,hello",
             "blob:https://example.com/0d6b2f4e-6d3c-4a8e-9a1d-1f1f1f1f1f1f",
             "about:blank",
         ] {
@@ -155,7 +136,6 @@ mod tests {
             "zoommtg://zoom.us/join?confno=1",
             "slack://open",
             "chrome:allowcert",
-            "ftp://example.com/file",
         ] {
             assert_eq!(
                 navigation_verdict(Some(&page), &url(target)),
@@ -246,23 +226,6 @@ mod tests {
     }
 
     #[test]
-    fn pages_are_named_by_their_host() {
-        assert_eq!(
-            page_display_name(Some(&url("https://mail.example.com:8443/inbox"))),
-            "mail.example.com"
-        );
-        assert_eq!(
-            page_display_name(Some(&url("file:///tmp/a.html"))),
-            "This page"
-        );
-        assert_eq!(
-            page_display_name(Some(&url("data:text/html,x"))),
-            "This page"
-        );
-        assert_eq!(page_display_name(None), "This page");
-    }
-
-    #[test]
     fn only_tuple_origins_are_remembered() {
         assert_eq!(
             remembered_origin(Some(&url("https://example.com:8443/a?b"))),
@@ -274,34 +237,40 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_names_the_page_and_the_app() {
+    fn pages_cannot_open_data_urls() {
+        // Chrome and Firefox refuse top-level `data:` navigations a page starts; Servo does not
+        // say which frame asks, so frames navigated by their own script are refused too. A
+        // frame's `src` never asks and stays allowed.
+        for page in ["https://example.com/", "file:///tmp/a.html", "about:blank"] {
+            assert_eq!(
+                navigation_verdict(Some(&url(page)), &url("data:text/html,<p>hi")),
+                NavigationVerdict::DenyData,
+                "{page}"
+            );
+        }
         assert_eq!(
-            external_open_prompt(
-                Some(&url("https://example.com/contact")),
-                &url("mailto:someone@example.com"),
-                Some("Mail")
-            ),
-            ExternalOpenPrompt {
-                message: "example.com wants to open Mail".to_owned(),
-                detail: "mailto:someone@example.com".to_owned(),
-                open_label: "Open Mail".to_owned(),
-                always_label: Some("Always allow example.com to open mailto links".to_owned()),
-            }
+            navigation_verdict(None, &url("data:,x")),
+            NavigationVerdict::DenyData
         );
     }
 
     #[test]
-    fn the_prompt_names_the_scheme_when_the_app_is_unknown() {
-        let prompt = external_open_prompt(
-            Some(&url("file:///tmp/a.html")),
-            &url("tel:+15555550123"),
-            None,
-        );
-        assert_eq!(
-            prompt.message,
-            "This page wants to open a tel link in another app"
-        );
-        assert_eq!(prompt.open_label, "Open");
-        assert_eq!(prompt.always_label, None);
+    fn network_shares_and_system_settings_never_open_from_a_page() {
+        let page = url("https://example.com/");
+        for target in [
+            "smb://server/share",
+            "afp://server/share",
+            "nfs://server/export",
+            "vnc://server",
+            "ftp://example.com/file",
+            "x-apple.systempreferences:com.apple.preference.security",
+            "SMB://server/share",
+        ] {
+            assert_eq!(
+                navigation_verdict(Some(&page), &url(target)),
+                NavigationVerdict::DenyScheme,
+                "{target}"
+            );
+        }
     }
 }

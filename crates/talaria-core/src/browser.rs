@@ -162,12 +162,9 @@ pub enum BrowserEvent {
     },
     // openurl
     /// The page asked for a URL the engine cannot load (`mailto:`, `tel:`, an app's scheme) and
-    /// the engine was refused. `page_url` is the page shown in the tab when it asked. The
-    /// controller queues it for `BrowserController::take_external_link_requests`.
-    ExternalLinkRequested {
-        url: String,
-        page_url: Option<String>,
-    },
+    /// the engine was refused. The controller queues it for
+    /// `BrowserController::take_external_link_requests`.
+    ExternalLinkRequested(crate::ExternalLinkRequest),
     // dialogs
     /// The page asks the user something; see `page_request`.
     PageRequested(PageRequest),
@@ -352,7 +349,7 @@ impl BrowserState {
                 }
             }
             // openurl: not part of what the tab shows; see `BrowserController::handle_event`.
-            BrowserEvent::ExternalLinkRequested { .. } => {}
+            BrowserEvent::ExternalLinkRequested(_) => {}
             // dialogs: kept by the tab's page requests, not here.
             BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
         }

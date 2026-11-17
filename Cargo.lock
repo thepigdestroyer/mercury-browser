@@ -10929,6 +10929,7 @@ dependencies = [
  "content-security-policy",
  "dpi",
  "euclid",
+ "http",
  "libc",
  "log",
  "rustls",
