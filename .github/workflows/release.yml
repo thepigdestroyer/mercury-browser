@@ -260,10 +260,10 @@ jobs:
           cp README.md \
             "${output_directory}/README.md"
 
-          if [[ -f LICENSE ]]; then
-            cp LICENSE \
-              "${output_directory}/LICENSE"
-          fi
+          # The licence terms and the PolyForm Required Notice go with every
+          # copy: LICENSE and NOTICE at the top, the texts in LICENSES/.
+          cp LICENSE NOTICE THIRD-PARTY-NOTICES.md "${output_directory}/"
+          cp -R LICENSES "${output_directory}/LICENSES"
 
           tar \
             -C dist \
@@ -423,6 +423,8 @@ jobs:
           hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "${mountpoint}" "dist/${name}"
           trap 'hdiutil detach "${mountpoint}" || hdiutil detach -force "${mountpoint}"' EXIT
           test -L "${mountpoint}/Applications"
+          test -f "${mountpoint}/LICENSE"
+          test -f "${mountpoint}/NOTICE"
           scripts/ci/check-macos-bundle.sh --signature adhoc --require-media \
             "${mountpoint}/Mercury Browser.app"
 
@@ -875,6 +877,9 @@ jobs:
           mkdir -p "${mountpoint}"
           hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "${mountpoint}" "dist/${name}"
           trap 'hdiutil detach "${mountpoint}" || hdiutil detach -force "${mountpoint}"' EXIT
+          # The licence and its Required Notice, next to the app.
+          test -f "${mountpoint}/LICENSE"
+          test -f "${mountpoint}/NOTICE"
           scripts/ci/check-macos-bundle.sh --signature "${signature}" --require-media \
             "${mountpoint}/Mercury Browser.app"
 
@@ -1027,10 +1032,27 @@ jobs:
             fi
             echo "Reusing the draft release ${tag}."
           else
+            # Written above GitHub's generated notes, which gh appends.
+            notes="${RUNNER_TEMP}/release-notes.md"
+            {
+              echo "Mercury Browser is source-available, free for non-commercial use."
+              echo "Mercury's own files are under the PolyForm Noncommercial License 1.0.0; files from"
+              echo "Hermes Browser and other projects stay under the MPL-2.0. See LICENSE and NOTICE,"
+              echo "which every download carries."
+              echo
+              echo "**macOS (Apple Silicon):** \`Mercury-Browser-${VERSION}-macos-arm64.dmg\`. The app"
+              echo "is not notarised by Apple, so macOS blocks its first launch. Allow it once with"
+              echo "right-click → Open (macOS 13 and 14) or System Settings → Privacy & Security →"
+              echo "Open Anyway (every version):"
+              echo "https://thepigdestroyer.github.io/mercury-browser/user-guide/installation/"
+              echo
+              echo "**Linux x86-64:** \`mercury-browser-linux-x86_64.tar.gz\` (glibc 2.35 or newer)."
+            } > "${notes}"
             gh release create \
               "${tag}" \
               --draft \
               --verify-tag \
+              --notes-file "${notes}" \
               --generate-notes \
               --title "${tag}"
           fi

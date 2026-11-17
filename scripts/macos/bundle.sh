@@ -316,6 +316,14 @@ if [ "$MAKE_DMG" = 1 ]; then
     # ditto keeps the signature, extended attributes and symlinks intact.
     ditto "$APP" "$STAGE/$APP_NAME.app"
     ln -s /Applications "$STAGE/Applications"
+    # The licence and its Required Notice travel with every copy, next to the
+    # app; the full texts are in the app's Contents/Resources.
+    cp LICENSE "$STAGE/LICENSE"
+    if [ -f NOTICE ]; then
+        cp NOTICE "$STAGE/NOTICE"
+    else
+        say "warning: no NOTICE file; the disk image carries LICENSE only"
+    fi
 
     say "creating $DMG"
     rm -f -- "$DMG" "$DMG.sha256"

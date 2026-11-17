@@ -1,3 +1,7 @@
+# SPDX-License-Identifier: MPL-2.0
+# The build steps are taken from the Documentation job of
+# .github/workflows/ci.yml (MPL-2.0).
+#
 # Builds the MkDocs site (`make docs`, strict) and publishes it on GitHub
 # Pages, https://thepigdestroyer.github.io/mercury-browser/. The repository's
 # Pages source must be "GitHub Actions" (Settings → Pages → Build and

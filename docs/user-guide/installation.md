@@ -7,7 +7,7 @@ description: Install Mercury Browser on macOS from the disk image, or build and 
 
 ## macOS (Apple Silicon)
 
-Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `Mercury-Browser-0.2.0-macos-arm64.dmg`, attached to each release on the [GitHub Releases page](https://github.com/thepigdestroyer/mercury-browser/releases).
+Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `Mercury-Browser-0.2.0-macos-arm64.dmg`, attached to each release on the [GitHub Releases page](https://github.com/thepigdestroyer/mercury-browser/releases). Mercury is source-available, free for non-commercial use; the disk image carries its `LICENSE` and `NOTICE` next to the app.
 
 ### Install from the disk image
 

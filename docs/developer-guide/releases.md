@@ -61,7 +61,7 @@ dist/Mercury Browser.app/Contents/
   Resources/LICENSES/   the licence texts the notices refer to (LGPL-2.1, GPL-3.0, …)
   Resources/gstreamer-licenses/  each bundled library project's licence files, from the GStreamer packages
   _CodeSignature/
-dist/Mercury-Browser-0.2.0-macos-arm64.dmg         with --dmg
+dist/Mercury-Browser-0.2.0-macos-arm64.dmg         with --dmg: the app, an Applications link, LICENSE and NOTICE
 dist/Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
 ```
 
