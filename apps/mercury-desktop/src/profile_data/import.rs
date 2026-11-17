@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Bulk import from another browser, as stepwise jobs (see `jobs`): chunks of
 //! [`IMPORT_CHUNK`] visits, or of whole top-level bookmark nodes up to that many nodes, each
 //! chunk one transaction.

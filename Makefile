@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 SHELL := /bin/sh
 
 .DEFAULT_GOAL := help
@@ -92,7 +93,7 @@ help:
 		'qa' 'Run formatting, linting, and tests.' \
 		'qa-fast' 'Check formatting, lint and test the crates that need no engine.' \
 		'ci-tools' 'Download the pinned shellcheck, actionlint and cargo-deny.' \
-		'lint-scripts' 'Lint scripts/ (shellcheck, py_compile) and the workflows (actionlint).' \
+		'lint-scripts' 'Lint scripts/ (shellcheck, py_compile), the workflows (actionlint) and licence headers.' \
 		'deny' 'Check dependencies against the policy in deny.toml.' \
 		'build' 'Build the complete workspace in debug mode.' \
 		'build-release' 'Build the complete workspace in release mode.' \
@@ -250,7 +251,8 @@ lint-scripts:
 	find scripts -type f -name '*.py' -print0 | \
 		PYTHONPYCACHEPREFIX="$(abspath target)/pycache" xargs -0 "$(PYTHON)" -m py_compile && \
 	actionlint && \
-	printf '%s\n' 'scripts and workflows: no findings'
+	scripts/ci/check-license-headers.sh && \
+	printf '%s\n' 'scripts, workflows and licence headers: no findings'
 
 deny:
 	@$(CI_TOOLS_PATH); export PATH; \

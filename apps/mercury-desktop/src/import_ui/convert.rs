@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Turns what `mercury-import` read into what the profile database takes: bookmark trees with
 //! fresh GUIDs, visits as links. Runs on the reading thread.
 

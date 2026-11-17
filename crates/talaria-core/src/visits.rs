@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Which committed navigations become history visits, and how the user reached each one.
 //!
 //! The engine reports every session-history change of a tab as `PageCommitted` (a new

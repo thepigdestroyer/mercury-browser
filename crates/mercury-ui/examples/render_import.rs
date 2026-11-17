@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Renders the import window's pages to PNG files without a display, through Slint's software
 //! renderer, in the light and dark schemes and with the scheme left to the system.
 //!

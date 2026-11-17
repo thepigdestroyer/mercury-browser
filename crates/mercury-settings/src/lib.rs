@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Mercury Browser's settings and saved session.
 //!
 //! A library only: typed models with safe defaults, validation of whatever is on disk, private

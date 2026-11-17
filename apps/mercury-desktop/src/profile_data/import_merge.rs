@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! What an import from another browser adds that the profile does not already hold, and how
 //! its bookmarks are written (import-ui lane). The store keeps every visit it is given and
 //! every bookmark under a fresh GUID, so importing the same profile twice would double visit

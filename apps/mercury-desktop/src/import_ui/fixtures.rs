@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Fixture profiles of other browsers, built in a test's own temporary directory (never a real
 //! profile). The tables follow Firefox's `nsPlacesTables.h` and Chromium's `History` schema,
 //! as `mercury-import`'s own tests build them.

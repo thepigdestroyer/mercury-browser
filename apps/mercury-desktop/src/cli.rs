@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -13,6 +15,29 @@ pub(crate) struct LaunchOptions {
     // import-ui lane: diagnostics.
     pub import_from: Option<PathBuf>,
     pub import_snapshot: Option<PathBuf>,
+    pub exit_request: Option<ExitRequest>,
+}
+
+/// Diagnostics: a quit the browser requests of itself, so that quit paths can be exercised
+/// without anyone at the keyboard.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct ExitRequest {
+    /// Counted from just before the event loop starts.
+    pub after: Duration,
+    pub by: ExitBy,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ExitBy {
+    /// The window's close request, as the title bar's close button sends it.
+    CloseRequest,
+    /// `slint::quit_event_loop()`, as the quit shortcut calls it.
+    Quit,
+    /// macOS: `-[NSApplication terminate:]`, as a Quit menu item sends it.
+    Terminate,
+    /// macOS: a quit Apple event to this process whose reason is `kAEReallyLogOut`, as an
+    /// application gets when the user logs out.
+    LogOut,
 }
 
 impl Default for LaunchOptions {
@@ -27,6 +52,7 @@ impl Default for LaunchOptions {
             experimental_web_features: true,
             import_from: None,
             import_snapshot: None,
+            exit_request: None,
         }
     }
 }
@@ -50,6 +76,18 @@ pub(crate) enum CliOutcome {
     PrintAndExit { text: String, code: i32 },
 }
 
+/// `--exit-by logout` sends the browser a log-out quit event; only builds with the
+/// `quit-diagnostics` feature (never released ones) have it.
+const LOG_OUT_DIAGNOSTIC: bool = cfg!(all(target_os = "macos", feature = "quit-diagnostics"));
+
+const EXIT_BY_VALUES: &str = if LOG_OUT_DIAGNOSTIC {
+    "close-request|quit|terminate|logout"
+} else if cfg!(target_os = "macos") {
+    "close-request|quit|terminate"
+} else {
+    "close-request|quit"
+};
+
 const DEFAULT_SCREENSHOT_DELAY: Duration = Duration::from_millis(1000);
 
 const USAGE: &str = "\
@@ -68,17 +106,34 @@ Options:
                                    Leave off Servo's experimental web-platform features
                                    (servoshell's list minus the async clipboard and
                                    WebGPU, which are always off)
+                                   Both --disable options turn the feature off for this
+                                   run whatever the setting says; they cannot turn on a
+                                   feature the settings turned off
   --profile-dir <directory>        Keep cookies and site data in this directory
                                    (screenshot and background runs otherwise use a temporary one)
   --help                           Print this help and exit
   --version                        Print the version and exit
+
+Diagnostics:
+  --exit-after <milliseconds>      Request a quit from inside the browser this long after
+                                   start-up (a screenshot run then exits 1: no screenshot)
+  --exit-by close-request|quit|terminate|logout
+                                   How --exit-after quits: through the window's close
+                                   request, as the close button does; as the quit
+                                   shortcut does (default quit); on macOS only, through
+                                   the system's terminate request, as a Quit menu item
+                                   sends it (terminate); in diagnostic builds only, the
+                                   quit Apple event of a log-out, sent to this process
+                                   only (logout)
 
 Exit status:
   0  Success
   1  Failure, or a screenshot could not be saved
   2  Invalid command line
   3  The screenshot's page did not finish loading
-  4  The profile is in use by another Mercury Browser";
+  4  The profile is in use by another Mercury Browser
+  On SIGTERM, SIGINT or SIGHUP the browser quits in order and then ends by that same
+  signal (a shell reports 128 + its number: 143, 130, 129); a second one ends it at once.";
 
 // import-ui lane: diagnostic options, only in builds with the `diagnostics` feature.
 #[cfg(feature = "diagnostics")]
@@ -148,6 +203,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         expect(unused_mut, reason = "set by diagnostics")
     )]
     let mut import_snapshot = None;
+    let mut exit_after = None;
+    let mut exit_by = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -199,6 +256,27 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--import-snapshot", "<file.png>")?;
                 import_snapshot = Some(PathBuf::from(value));
             }
+            "--exit-after" => {
+                let value = option_value(&mut arguments, "--exit-after", "<milliseconds>")?;
+                let milliseconds = value.parse::<u64>().map_err(|_| {
+                    format!("invalid --exit-after '{value}': expected milliseconds")
+                })?;
+                exit_after = Some(Duration::from_millis(milliseconds));
+            }
+            "--exit-by" => {
+                let value = option_value(&mut arguments, "--exit-by", EXIT_BY_VALUES)?;
+                exit_by = Some(match value.as_str() {
+                    "close-request" => ExitBy::CloseRequest,
+                    "quit" => ExitBy::Quit,
+                    "terminate" if cfg!(target_os = "macos") => ExitBy::Terminate,
+                    "logout" if LOG_OUT_DIAGNOSTIC => ExitBy::LogOut,
+                    _ => {
+                        return Err(format!(
+                            "invalid --exit-by '{value}': expected {EXIT_BY_VALUES}"
+                        ));
+                    }
+                });
+            }
             _ if argument.starts_with("-psn_") => {}
             _ if argument.starts_with('-') => {
                 return Err(format!("unknown option '{argument}'"));
@@ -218,6 +296,14 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     if import_snapshot.is_some() && import_from.is_none() {
         return Err("--import-snapshot requires --import-from".to_owned());
     }
+    let exit_request = match (exit_after, exit_by) {
+        (Some(after), by) => Some(ExitRequest {
+            after,
+            by: by.unwrap_or(ExitBy::Quit),
+        }),
+        (None, Some(_)) => return Err("--exit-by requires --exit-after".to_owned()),
+        (None, None) => None,
+    };
 
     Ok(CliOutcome::Run(LaunchOptions {
         urls,
@@ -229,6 +315,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         experimental_web_features,
         import_from,
         import_snapshot,
+        exit_request,
     }))
 }
 
@@ -313,6 +400,7 @@ mod tests {
                 experimental_web_features: true,
                 import_from: None,
                 import_snapshot: None,
+                exit_request: None,
             })
         );
     }
@@ -568,6 +656,15 @@ mod tests {
     }
 
     #[test]
+    fn help_says_the_disable_options_win_over_the_settings() {
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+
+        assert!(text.contains("run whatever the setting says"));
+    }
+
+    #[test]
     fn profile_dir_without_a_value_is_a_usage_error() {
         assert_eq!(exit_code(&parse(&["--profile-dir"])), Some(2));
     }
@@ -596,6 +693,121 @@ mod tests {
         };
 
         assert!(text.contains("--disable-experimental-web-features"));
+    }
+
+    #[test]
+    fn exit_after_is_parsed_and_quits_by_default() {
+        let CliOutcome::Run(options) = parse(&["--background", "--exit-after", "300"]) else {
+            panic!("--exit-after with a delay should run the browser");
+        };
+
+        assert_eq!(
+            options.exit_request,
+            Some(ExitRequest {
+                after: Duration::from_millis(300),
+                by: ExitBy::Quit,
+            })
+        );
+        assert_eq!(LaunchOptions::default().exit_request, None);
+    }
+
+    #[test]
+    fn exit_by_chooses_the_close_request_or_the_quit() {
+        let exit_by = |value: &str| {
+            let CliOutcome::Run(options) = parse(&["--exit-by", value, "--exit-after", "0"]) else {
+                panic!("--exit-by {value} should run the browser");
+            };
+            options.exit_request.map(|request| request.by)
+        };
+
+        assert_eq!(exit_by("close-request"), Some(ExitBy::CloseRequest));
+        assert_eq!(exit_by("quit"), Some(ExitBy::Quit));
+    }
+
+    #[test]
+    fn exit_by_terminate_is_macos_only_and_logout_needs_a_diagnostic_build() {
+        for (value, expected, available) in [
+            ("terminate", ExitBy::Terminate, cfg!(target_os = "macos")),
+            ("logout", ExitBy::LogOut, LOG_OUT_DIAGNOSTIC),
+        ] {
+            let outcome = parse(&["--exit-after", "0", "--exit-by", value]);
+            if available {
+                let CliOutcome::Run(options) = outcome else {
+                    panic!("--exit-by {value} should run the browser on macOS");
+                };
+                assert_eq!(
+                    options.exit_request.map(|request| request.by),
+                    Some(expected)
+                );
+            } else {
+                assert_eq!(exit_code(&outcome), Some(2), "{value}");
+            }
+        }
+    }
+
+    #[test]
+    fn exit_after_works_with_a_screenshot() {
+        let CliOutcome::Run(options) = parse(&[
+            "--screenshot",
+            "out.png",
+            "--exit-after",
+            "50",
+            "--exit-by",
+            "close-request",
+        ]) else {
+            panic!("--exit-after should be accepted with --screenshot");
+        };
+
+        assert!(options.screenshot.is_some());
+        assert_eq!(
+            options.exit_request,
+            Some(ExitRequest {
+                after: Duration::from_millis(50),
+                by: ExitBy::CloseRequest,
+            })
+        );
+    }
+
+    #[test]
+    fn invalid_exit_requests_are_usage_errors() {
+        for arguments in [
+            &["--exit-after"][..],
+            &["--exit-after", "soon"],
+            &["--exit-after", "-5"],
+            &["--exit-after", "100", "--exit-by"],
+            &["--exit-after", "100", "--exit-by", "kill"],
+            &["--exit-by", "quit"],
+        ] {
+            assert_eq!(exit_code(&parse(arguments)), Some(2), "{arguments:?}");
+        }
+    }
+
+    #[test]
+    fn help_documents_how_quit_signals_end_the_browser() {
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+
+        let exit_status = text
+            .split_once("Exit status:")
+            .map(|(_, rest)| rest)
+            .expect("an exit status section");
+        assert!(exit_status.contains("SIGTERM, SIGINT or SIGHUP"));
+        assert!(exit_status.contains("ends by that same"));
+    }
+
+    #[test]
+    fn help_lists_the_exit_request_under_diagnostics() {
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+
+        let diagnostics = text
+            .split_once("Diagnostics:")
+            .map(|(_, rest)| rest)
+            .expect("a diagnostics heading");
+        assert!(diagnostics.contains("--exit-after <milliseconds>"));
+        assert!(diagnostics.contains("--exit-by close-request|quit|terminate|logout"));
     }
 
     #[test]

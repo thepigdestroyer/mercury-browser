@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::path::Path;
@@ -109,6 +110,7 @@ pub(crate) fn start_screenshot(
     let timer = Timer::default();
 
     timer.start(TimerMode::Repeated, POLL_INTERVAL, move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         let Some(window) = weak_window.upgrade() else {
             return;
         };

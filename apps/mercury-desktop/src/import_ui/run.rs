@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! One profile's import, driven on the UI thread once its files have been read: bookmarks
 //! first (find or create the folder, leave out what is already there, import the rest in
 //! chunks), then history (leave out visits already there, import the rest in chunks). Every

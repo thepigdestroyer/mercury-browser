@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::error::Error;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};

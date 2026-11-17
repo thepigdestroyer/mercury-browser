@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
@@ -45,6 +46,8 @@ pub(crate) enum ShortcutAction {
     Quit,
     /// Escape while the active tab's page is fullscreen.
     ExitFullscreen,
+    // settings-ui
+    ShowSettings,
 }
 
 impl ShortcutAction {
@@ -119,6 +122,13 @@ impl ShortcutKeys {
     pub(crate) fn clear(&mut self) {
         self.consumed.clear();
     }
+
+    // menus
+    /// The native menu bar ran an action for this key's press, which therefore never reached
+    /// the window: swallow its release as if the press had run a shortcut here.
+    pub(crate) fn claim(&mut self, key: PhysicalKey) {
+        self.consumed.insert(key);
+    }
 }
 
 /// Maps a key press to a browser shortcut. "Primary" is Cmd on macOS and Ctrl elsewhere; the
@@ -164,6 +174,8 @@ pub(crate) fn shortcut_action(
             (Some("-"), false) => Some(ZoomOut),
             (Some("0"), false) => Some(ZoomReset),
             (Some("9"), false) => Some(SelectLastTab),
+            // settings-ui
+            (Some(","), false) => Some(ShowSettings),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -259,7 +271,7 @@ pub(crate) fn handle_browser_shortcut(
     }
 }
 
-fn run_shortcut(
+pub(crate) fn run_shortcut(
     window: &MainWindow,
     controller: &RefCell<BrowserController>,
     web_view_focused: &Cell<bool>,
@@ -274,8 +286,9 @@ fn run_shortcut(
         }
         ShortcutAction::CloseTab => {
             let active_tab_id = controller.borrow().active_tab_id();
-            controller.borrow_mut().close_tab(active_tab_id);
-            sync_ui(window, &controller.borrow());
+            let outcome = controller.borrow_mut().close_tab(active_tab_id);
+            // tabs: closing the last tab quits
+            crate::tab_close::finish_closing_tab(window, &controller.borrow(), outcome);
         }
         ShortcutAction::NextTab | ShortcutAction::PreviousTab => {
             controller
@@ -324,6 +337,8 @@ fn run_shortcut(
         ShortcutAction::ExitFullscreen => controller
             .borrow_mut()
             .queue_command(BrowserCommand::ExitFullscreen),
+        // settings-ui
+        ShortcutAction::ShowSettings => window.invoke_show_settings(),
     }
 }
 
@@ -498,6 +513,14 @@ mod tests {
     }
 
     #[test]
+    fn settings_open_with_primary_comma() {
+        assert_eq!(mac(character(","), CMD), Some(ShowSettings));
+        assert_eq!(other(character(","), CTRL), Some(ShowSettings));
+        assert_eq!(mac(character(","), CTRL), None);
+        assert_eq!(mac(character(","), NONE), None);
+    }
+
+    #[test]
     fn control_w_is_not_a_shortcut_on_macos() {
         assert_eq!(mac(character("w"), CTRL), None);
         assert_eq!(mac(character("r"), CTRL), None);
@@ -568,13 +591,14 @@ mod tests {
             (ZoomReset, false),
             (Quit, false),
             (ExitFullscreen, false),
+            (ShowSettings, false),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
                 NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
                 | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen => {}
+                | ExitFullscreen | ShowSettings => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -653,6 +677,26 @@ mod tests {
             KeyDisposition::Forward
         );
         assert_eq!(keys.release(KEY_R), KeyDisposition::Forward);
+    }
+
+    // menus
+    #[test]
+    fn a_key_the_native_menu_claimed_has_its_release_swallowed() {
+        let mut keys = ShortcutKeys::default();
+
+        keys.claim(KEY_T);
+
+        assert_eq!(keys.release(KEY_T), KeyDisposition::Consume);
+        assert_eq!(keys.release(KEY_T), KeyDisposition::Forward);
+    }
+
+    #[test]
+    fn a_later_press_of_a_claimed_key_is_handled_normally() {
+        let mut keys = ShortcutKeys::default();
+        keys.claim(KEY_T);
+
+        assert_eq!(keys.press(KEY_T, false, None), KeyDisposition::Forward);
+        assert_eq!(keys.release(KEY_T), KeyDisposition::Forward);
     }
 
     #[test]

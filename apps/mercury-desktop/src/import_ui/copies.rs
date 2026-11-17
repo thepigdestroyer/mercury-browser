@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Where `mercury-import` puts its private copies of another browser's databases while it
 //! reads them: a directory of this profile's own, owner-only (0700), emptied at every start.
 //!

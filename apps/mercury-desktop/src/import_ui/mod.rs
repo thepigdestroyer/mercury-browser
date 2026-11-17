@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Importing bookmarks and history from other browsers (import-ui lane): the import window
 //! and the pipeline behind it.
 //!

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Stepwise background jobs: long work (bulk import, frecency upkeep) that the service runs one
 //! chunk at a time. Each chunk is its own transaction; between chunks every waiting request
 //! runs, and jobs take turns. A job reports progress to a UI-thread callback after each chunk

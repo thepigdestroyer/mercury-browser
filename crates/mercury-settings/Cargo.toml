@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 [package]
 name = "mercury-settings"
 publish = false
@@ -16,5 +17,4 @@ url.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-talaria-core = { path = "../talaria-core" }
 tempfile.workspace = true

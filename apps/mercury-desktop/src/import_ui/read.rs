@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Reading another browser's profile, on a background thread: `mercury-import` copies its
 //! databases into the profile's private copy area (see `copies`), reads the copies and removes
 //! them. Logs name the profile ("Firefox — Default") and the kind of error, never a path into

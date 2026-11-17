@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Reads bookmarks and history that other browsers keep, and reads and writes the Netscape
 //! bookmark file every browser can exchange.
 //!

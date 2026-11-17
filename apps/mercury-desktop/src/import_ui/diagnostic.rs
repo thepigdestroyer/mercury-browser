@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Diagnostic (`--import-from <directory>`, only in builds with the `diagnostics` feature):
 //! opens the import window, imports everything every profile found under the directory holds,
 //! prints each summary, saves a picture of the window if asked, and quits. Released builds

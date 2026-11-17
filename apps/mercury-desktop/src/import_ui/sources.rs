@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Which other browsers' profiles can be imported from, and where to look for them.
 //!
 //! Discovery only looks in the directories it is given. The platform's directories are taken

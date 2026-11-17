@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! A note in the profile directory of the imports that have not finished, one entry per source
 //! profile, so that the next time the import window opens it can offer to continue them. An
 //! entry is written when an import starts and removed when that profile's import ends without

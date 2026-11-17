@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Zephium, https://github.com/zephium-browser/Zephium, commit
 // 9026a1fffad74d6e201ef97fe8c02c1b01403cd2, crates/zephium-import/src/firefox.rs
 // (lines 118-227, 269-392), licensed under MPL-2.0: reading `profiles.ini` and profile-group
