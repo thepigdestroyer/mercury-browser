@@ -10,6 +10,8 @@ use slint::{ComponentHandle, ModelRc, PhysicalSize, SharedString, VecModel};
 
 slint::slint! {
     import { SessionBar } from "ui/session/session-bar.slint";
+    import { ChromePalette, ChromeTheme } from "ui/theme/chrome-palette.slint";
+    export { ChromePalette, ChromeTheme }
 
     export component SessionBarPreview inherits Window {
         in property <[string]> sessions;
@@ -18,7 +20,7 @@ slint::slint! {
         out property <bool> dismissed;
         width: 1000px;
         height: 260px;
-        background: #0c1117;
+        background: ChromePalette.content-background;
 
         public function open-chooser() {
             bar.open-chooser();
@@ -30,7 +32,7 @@ slint::slint! {
 
         VerticalLayout {
             alignment: start;
-            Rectangle { height: 108px; background: #11171f; }
+            Rectangle { height: 108px; background: ChromePalette.toolbar-background; }
             bar := SessionBar {
                 sessions: root.sessions;
                 notice: root.notice;
@@ -99,33 +101,43 @@ fn the_session_bar_renders_its_offer_its_chooser_and_its_notice() {
     let preview = SessionBarPreview::new().unwrap();
     preview.show().unwrap();
 
-    preview.set_sessions(labels(&["Session Alpha (1 tab)"]));
-    render(&window, "session-bar-one");
-
     // Tab reaches Restore, Return presses it; a second Tab and Space press Dismiss.
+    preview.set_sessions(labels(&["Session Alpha (1 tab)"]));
+    render(&window, "session-bar-before-keys");
     press(&window, Key::Tab);
-    render(&window, "session-bar-focused");
     press(&window, Key::Return);
     assert_eq!(preview.get_restored(), 0);
     press(&window, Key::Tab);
     press(&window, Key::Space);
     assert!(preview.get_dismissed());
 
-    preview.set_sessions(labels(&[
-        "Session Alpha (1 tab)",
-        "Session Bravo (2 tabs)",
-        "A very long page title that has to be cut short in the chooser (12 tabs)",
-    ]));
-    preview.invoke_open_chooser();
-    render(&window, "session-bar-chooser");
-    preview.invoke_click_choice(1);
-    assert_eq!(preview.get_restored(), 1);
+    // System follows the window's colour scheme, unknown here: the chrome then stays dark.
+    for (theme, name) in [
+        (ChromeTheme::Light, "light"),
+        (ChromeTheme::Dark, "dark"),
+        (ChromeTheme::System, "system"),
+    ] {
+        preview.global::<ChromePalette>().set_theme(theme);
+        preview.set_notice(SharedString::new());
+        preview.set_sessions(labels(&["Session Alpha (1 tab)"]));
+        render(&window, &format!("session-bar-one-{name}"));
 
-    preview.set_sessions(labels(&[]));
-    preview.set_notice(
-        "Your tabs won't be remembered this time: they were saved by a newer version of \
-         Mercury Browser."
-            .into(),
-    );
-    render(&window, "session-bar-notice");
+        preview.set_sessions(labels(&[
+            "Session Alpha (1 tab)",
+            "Session Bravo (2 tabs)",
+            "A very long page title that has to be cut short in the chooser (12 tabs)",
+        ]));
+        preview.invoke_open_chooser();
+        render(&window, &format!("session-bar-chooser-{name}"));
+        preview.invoke_click_choice(1);
+        assert_eq!(preview.get_restored(), 1);
+
+        preview.set_sessions(labels(&[]));
+        preview.set_notice(
+            "Your tabs won't be remembered this time: they were saved by a newer version of \
+             Mercury Browser."
+                .into(),
+        );
+        render(&window, &format!("session-bar-notice-{name}"));
+    }
 }

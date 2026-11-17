@@ -1,5 +1,6 @@
 [package]
 name = "mercury-settings"
+publish = false
 version.workspace = true
 edition.workspace = true
 license.workspace = true
@@ -15,5 +16,4 @@ url.workspace = true
 libc.workspace = true
 
 [dev-dependencies]
-talaria-core = { path = "../talaria-core" }
 tempfile.workspace = true

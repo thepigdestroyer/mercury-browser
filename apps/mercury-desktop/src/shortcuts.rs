@@ -45,6 +45,8 @@ pub(crate) enum ShortcutAction {
     Quit,
     /// Escape while the active tab's page is fullscreen.
     ExitFullscreen,
+    // settings-ui
+    ShowSettings,
     // session
     /// Brings back the most recently closed tab where it was.
     ReopenClosedTab,
@@ -181,6 +183,8 @@ pub(crate) fn shortcut_action(
             (Some("-"), false) => Some(ZoomOut),
             (Some("0"), false) => Some(ZoomReset),
             (Some("9"), false) => Some(SelectLastTab),
+            // settings-ui
+            (Some(","), false) => Some(ShowSettings),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -341,6 +345,8 @@ fn run_shortcut(
         ShortcutAction::ExitFullscreen => controller
             .borrow_mut()
             .queue_command(BrowserCommand::ExitFullscreen),
+        // settings-ui
+        ShortcutAction::ShowSettings => window.invoke_show_settings(),
         // session
         ShortcutAction::ReopenClosedTab => crate::session::reopen_closed_tab(window, controller),
         ShortcutAction::DuplicateTab => crate::session::duplicate_tab(window, controller),
@@ -521,6 +527,14 @@ mod tests {
     }
 
     #[test]
+    fn settings_open_with_primary_comma() {
+        assert_eq!(mac(character(","), CMD), Some(ShowSettings));
+        assert_eq!(other(character(","), CTRL), Some(ShowSettings));
+        assert_eq!(mac(character(","), CTRL), None);
+        assert_eq!(mac(character(","), NONE), None);
+    }
+
+    #[test]
     fn control_w_is_not_a_shortcut_on_macos() {
         assert_eq!(mac(character("w"), CTRL), None);
         assert_eq!(mac(character("r"), CTRL), None);
@@ -606,6 +620,7 @@ mod tests {
             (ZoomReset, false),
             (Quit, false),
             (ExitFullscreen, false),
+            (ShowSettings, false),
             (ReopenClosedTab, false),
             (DuplicateTab, false),
             (RestorePreviousSession, false),
@@ -628,6 +643,7 @@ mod tests {
                 | ZoomReset
                 | Quit
                 | ExitFullscreen
+                | ShowSettings
                 | ReopenClosedTab
                 | DuplicateTab
                 | RestorePreviousSession => {}

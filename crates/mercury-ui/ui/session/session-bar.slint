@@ -1,5 +1,8 @@
 // The bar under the toolbar that offers to restore tabs after Mercury Browser did not close
-// properly, or shows a one-time message about the session.
+// properly, or shows a one-time message about the session. Colours come from `ChromePalette`
+// (its information-bar role), so the bar follows the appearance setting.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 component SessionBarButton inherits Rectangle {
     in property <string> label;
@@ -16,14 +19,20 @@ component SessionBarButton inherits Rectangle {
     height: 28px;
     border-radius: 7px;
     border-width: focus.has-focus ? 2px : root.primary ? 0px : 1px;
-    border-color: focus.has-focus ? #b7e2ff : #2f3a46;
+    border-color: focus.has-focus ? ChromePalette.focus-ring : ChromePalette.field-border;
     background: root.primary
-        ? (touch.pressed ? #45a9ed : touch.has-hover ? #78caff : #62bfff)
-        : (touch.pressed ? #222d39 : touch.has-hover ? #19222c : #141b23);
+        ? (touch.pressed
+            ? ChromePalette.primary-button-background.darker(15%)
+            : touch.has-hover
+                ? ChromePalette.primary-button-background.brighter(10%)
+                : ChromePalette.primary-button-background)
+        : (touch.pressed
+            ? ChromePalette.button-pressed
+            : touch.has-hover ? ChromePalette.button-hover : ChromePalette.field-background);
 
     label-text := Text {
         text: root.label;
-        color: root.primary ? #09131c : #dbe4ee;
+        color: root.primary ? ChromePalette.primary-button-text : ChromePalette.text;
         font-size: 13px;
         font-weight: root.primary ? 600 : 500;
         horizontal-alignment: center;
@@ -62,13 +71,15 @@ component SessionChoice inherits Rectangle {
 
     height: 32px;
     border-radius: 6px;
-    background: touch.pressed ? #222d39 : touch.has-hover ? #1d2731 : transparent;
+    background: touch.pressed
+        ? ChromePalette.item-selected
+        : touch.has-hover ? ChromePalette.item-hover : transparent;
 
     Text {
         x: 10px;
         width: parent.width - 20px;
         text: root.label;
-        color: #dbe4ee;
+        color: touch.pressed ? ChromePalette.item-selected-text : ChromePalette.text;
         font-size: 13px;
         vertical-alignment: center;
         overflow: elide;
@@ -103,14 +114,14 @@ export component SessionBar inherits Rectangle {
     }
 
     height: 44px;
-    background: #16202b;
+    background: ChromePalette.info-background;
 
     Rectangle {
         x: 0px;
         y: parent.height - 1px;
         width: parent.width;
         height: 1px;
-        background: #202832;
+        background: ChromePalette.info-border;
     }
 
     HorizontalLayout {
@@ -125,7 +136,7 @@ export component SessionBar inherits Rectangle {
             text: root.sessions.length > 0
                 ? "Mercury Browser didn't close properly. Restore your tabs?"
                 : root.notice;
-            color: #edf4fa;
+            color: ChromePalette.info-text;
             font-size: 13px;
             vertical-alignment: center;
             overflow: elide;
@@ -169,10 +180,10 @@ export component SessionBar inherits Rectangle {
         Rectangle {
             border-radius: 9px;
             border-width: 1px;
-            border-color: #2f3a46;
-            background: #151d26;
+            border-color: ChromePalette.popup-border;
+            background: ChromePalette.popup-background;
             drop-shadow-blur: 12px;
-            drop-shadow-color: #00000080;
+            drop-shadow-color: ChromePalette.shadow;
 
             VerticalLayout {
                 padding: 6px;
@@ -184,7 +195,7 @@ export component SessionBar inherits Rectangle {
 
                     Text {
                         text: "Restore which session?";
-                        color: #8c99a9;
+                        color: ChromePalette.text-secondary;
                         font-size: 12px;
                         vertical-alignment: center;
                     }

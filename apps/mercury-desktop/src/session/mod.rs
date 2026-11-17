@@ -2,17 +2,18 @@
 //!
 //! This is the application side of the contract in `mercury-settings`' `lib.rs`:
 //!
-//! - `start` runs once, after the profile lock is taken: it sweeps stale temporaries (2), calls
-//!   `SessionStore::begin_run` before any session save (3), offers the recovery list whenever it
+//! - `start` runs once, after the profile lock is taken and the settings (which sweep stale
+//!   temporaries, 2) are loaded: it calls `SessionStore::begin_run` before any session save (3), offers the recovery list whenever it
 //!   is not empty (5), and restores a `last` that quit in order only when the start-up setting
 //!   asks for it, keeping it for "Restore previous session" otherwise (6).
 //! - Every change is marked; a timer writes through the throttle off the UI thread, one write at
 //!   a time, the token handed back only for a write that landed (8). See `saving::SaveState`.
 //! - Restored tabs are written before the recovery entry they came from is removed (5); the
 //!   UI thread does not wait for either.
-//! - `finish_run` / `finish_run_by(deadline)` (or `begin_final_save` then
-//!   `collect_final_save(deadline)`) queue a write with `exited_cleanly: true` behind the write
-//!   in flight, even when nothing changed, and wait for it until the deadline (9).
+//! - The quit sequence (`post_run.rs`) calls `begin_final_save`, which queues a write with
+//!   `exited_cleanly: true` behind the write in flight, even when nothing changed, and later
+//!   `collect_final_save(deadline)`, which waits for it until the shared deadline (9). Neither
+//!   runs Slint or waits on its event loop: both also run inside AppKit's terminate callback.
 //! - New-tab pages are saved as `about:newtab` (10). A `NewerVersion` refusal stops saving for
 //!   the rest of the run and tells the user once (11).
 
@@ -22,13 +23,11 @@ mod saving;
 mod screens;
 
 use std::cell::RefCell;
-use std::path::Path;
 use std::rc::Rc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use mercury_settings::{
-    SessionSnapshot, SessionStore, SettingsStore, StartupBehavior, WindowBounds, WindowSnapshot,
-    sweep_stale_temporaries,
+    SessionSnapshot, SessionStore, StartupBehavior, WindowBounds, WindowSnapshot,
 };
 use mercury_ui::MainWindow;
 use slint::winit_030::WinitWindowAccessor;
@@ -38,6 +37,7 @@ use slint::{
 use talaria_core::BrowserController;
 
 use crate::profile::ActiveProfile;
+use crate::settings::SettingsHandle;
 use crate::shortcuts::Platform;
 use crate::ui_sync::sync_ui;
 use model::{
@@ -45,10 +45,6 @@ use model::{
     place_window, plan_restore, recovery_label, reopen_index, restored_tab, saved_origin,
 };
 use saving::{Resolve, SaveState, Written};
-
-/// How long `finish_run` waits for the final save: the time quitting may take for it before
-/// the window goes and the engine's own 5 s shutdown watchdog starts (`shutdown.rs`).
-const FINAL_SAVE_BUDGET: Duration = Duration::from_secs(2);
 
 /// The session is written at most this often while it keeps changing.
 const SAVE_INTERVAL_MS: i64 = 5_000;
@@ -70,25 +66,22 @@ struct Session {
     recovery: Vec<SessionSnapshot>,
     controller: Rc<RefCell<BrowserController>>,
     window: slint::Weak<MainWindow>,
-    timer: Timer,
     final_save_begun: bool,
 }
 
-/// Begins the run: call once, after the profile is open and locked and the start-up tabs from
-/// the command line are in the controller, before the window is shown. Without a profile
+/// Begins the run: call once, after the profile is open and locked, the settings loaded, the
+/// controller prepared by them (its search builder resolves restored text entries) and the
+/// start-up tabs from the command line opened, before the window is shown. Returns the timer
+/// that saves the session, for the quit sequence to stop with the others. Without a profile
 /// directory nothing is saved or restored.
 pub(crate) fn start(
     window: &MainWindow,
     controller: &Rc<RefCell<BrowserController>>,
     profile: &ActiveProfile,
+    settings: &SettingsHandle,
     window_size_given: bool,
-) {
-    let Some(root) = profile.paths.as_ref().map(|paths| paths.root.as_path()) else {
-        return;
-    };
-    if let Err(error) = sweep_stale_temporaries(root) {
-        log::warn!("could not remove stale temporary files: {error}");
-    }
+) -> Option<Timer> {
+    let root = profile.paths.as_ref().map(|paths| paths.root.as_path())?;
     let store = SessionStore::new(root);
     // Before `begin_run`, which marks the session file as running: without a saver this run
     // could never write the final save, and every later start would report a crash.
@@ -96,14 +89,14 @@ pub(crate) fn start(
         Ok(worker) => worker,
         Err(error) => {
             log::error!("could not start the session saver; tabs will not be saved: {error}");
-            return;
+            return None;
         }
     };
     let startup = match store.begin_run() {
         Ok(startup) => startup,
         Err(error) => {
             log::error!("could not read the saved session; tabs will not be saved: {error}");
-            return;
+            return None;
         }
     };
 
@@ -117,7 +110,7 @@ pub(crate) fn start(
         .or(startup.recovery.first())
         .and_then(|session| session.windows.first());
     if let Some(last) = startup.last.as_ref().filter(|last| last.exited_cleanly) {
-        if startup_behavior(root) == StartupBehavior::RestoreSession {
+        if settings.startup_behavior() == StartupBehavior::RestoreSession {
             let plan = plan_restore(&last.snapshot, &controller.borrow(), false);
             apply_plan(controller, &mut tracker, plan);
         } else {
@@ -152,26 +145,13 @@ pub(crate) fn start(
             recovery: startup.recovery,
             controller: Rc::clone(controller),
             window: window.as_weak(),
-            timer,
             final_save_begun: false,
         });
     });
+    Some(timer)
 }
 
-/// The final save of an orderly quit, with today's budget: `finish_run_by` two seconds from
-/// now. Call once, after the event loop has ended and before the engine shuts down.
-pub(crate) fn finish_run() {
-    finish_run_by(Instant::now() + FINAL_SAVE_BUDGET);
-}
-
-/// The final save of an orderly quit, waited for until `deadline` at most:
-/// `begin_final_save` then `collect_final_save`.
-pub(crate) fn finish_run_by(deadline: Instant) {
-    begin_final_save();
-    collect_final_save(deadline);
-}
-
-/// Starts the final save: stops the periodic saves and queues the session, marked as having
+/// Starts the final save: ends the periodic saves and queues the session, marked as having
 /// quit in order — even when nothing changed — behind any write in flight. Returns at once,
 /// so the quit sequence can do other work before `collect_final_save`. Does nothing if the
 /// session was never started or the final save was already begun.
@@ -180,8 +160,9 @@ pub(crate) fn begin_final_save() {
         if session.final_save_begun {
             return;
         }
+        // The timer itself is stopped by the quit sequence with the others; it does nothing
+        // from now on.
         session.final_save_begun = true;
-        session.timer.stop();
         let now = now_ms();
         let Ok(controller) = session.controller.try_borrow() else {
             log::error!("the session could not be saved at quit: the browser state is busy");
@@ -324,6 +305,7 @@ fn connect_callbacks(window: &MainWindow, controller: &Rc<RefCell<BrowserControl
     let restore_controller = Rc::clone(controller);
     let restore_window = window.as_weak();
     window.on_restore_recovered_session(move |index| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(window) = restore_window.upgrade() {
             answer_recovery(&window, &restore_controller, usize::try_from(index).ok());
         }
@@ -332,6 +314,7 @@ fn connect_callbacks(window: &MainWindow, controller: &Rc<RefCell<BrowserControl
     let dismiss_controller = Rc::clone(controller);
     let dismiss_window = window.as_weak();
     window.on_dismiss_recovered_sessions(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(window) = dismiss_window.upgrade() {
             answer_recovery(&window, &dismiss_controller, None);
         }
@@ -340,6 +323,7 @@ fn connect_callbacks(window: &MainWindow, controller: &Rc<RefCell<BrowserControl
     let previous_controller = Rc::clone(controller);
     let previous_window = window.as_weak();
     window.on_restore_previous_session(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(window) = previous_window.upgrade() {
             restore_previous_session(&window, &previous_controller);
         }
@@ -347,6 +331,7 @@ fn connect_callbacks(window: &MainWindow, controller: &Rc<RefCell<BrowserControl
 
     let notice_window = window.as_weak();
     window.on_dismiss_session_notice(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(window) = notice_window.upgrade() {
             window.set_session_notice(SharedString::new());
         }
@@ -501,6 +486,9 @@ impl Session {
     }
 
     fn tick(&mut self) {
+        if self.final_save_begun {
+            return;
+        }
         let now = now_ms();
         if let Some(window) = self.window.upgrade() {
             self.observe_window(&window);
@@ -517,6 +505,7 @@ impl Session {
 }
 
 fn tick() {
+    let _slint = crate::callback_scope::InSlintCallback::enter();
     with_session(Session::tick);
 }
 
@@ -535,21 +524,6 @@ fn labels(sessions: &[SessionSnapshot]) -> ModelRc<SharedString> {
             .map(|session| SharedString::from(recovery_label(session)))
             .collect::<Vec<_>>(),
     ))
-}
-
-/// The start-up setting.
-///
-/// Until the settings lane's accessor is merged, this reads `settings.json` through
-/// `mercury-settings`' own `SettingsStore` and falls back to its default (`NewTab`); replace
-/// the body with a call to that accessor.
-fn startup_behavior(profile_root: &Path) -> StartupBehavior {
-    match SettingsStore::new(profile_root).load() {
-        Ok(loaded) => loaded.value().startup,
-        Err(error) => {
-            log::warn!("could not read the start-up setting: {error}");
-            StartupBehavior::default()
-        }
-    }
 }
 
 fn now_ms() -> i64 {
