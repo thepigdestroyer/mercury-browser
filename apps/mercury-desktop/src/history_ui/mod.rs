@@ -161,7 +161,8 @@ pub(crate) fn connect(
         .filter(|_| automated)
     {
         let window = window.as_weak();
-        Timer::single_shot(Duration::from_millis(1500), move || {
+        let delay = Duration::from_millis(1500);
+        Timer::single_shot(delay, move || {
             let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(window) = window.upgrade() {
                 window.invoke_focus_address_bar();

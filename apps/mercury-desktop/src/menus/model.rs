@@ -19,8 +19,6 @@ pub(crate) enum MenuCommand {
     // Seams other lanes fill in (`seams.rs`); disabled until they do.
     ReopenClosedTab,
     RestorePreviousSession,
-    ShowHistory,
-    ClearBrowsingData,
     BookmarkThisPage,
     ToggleBookmarksBar,
     ShowBookmarksManager,
@@ -467,12 +465,12 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 action("Back", key('[', CMD), Shortcut(A::Back)),
                 action("Forward", key(']', CMD), Shortcut(A::Forward)),
                 Separator,
-                // History lane: these two open its window and its dialog (see `seams.rs`).
-                action("Show All History", key('y', CMD), ShowHistory),
+                // History lane: its window and its dialog, through its shortcuts.
+                action("Show All History", key('y', CMD), Shortcut(A::ShowHistory)),
                 action(
                     "Clear Browsing Data…",
                     key(DELETE_KEY, SHIFT_CMD),
-                    ClearBrowsingData,
+                    Shortcut(A::ClearBrowsingData),
                 ),
                 Separator,
                 // Session lane.
@@ -534,8 +532,6 @@ pub(crate) const fn is_available(command: MenuCommand) -> bool {
         Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) => true,
         ReopenClosedTab => super::seams::REOPEN_CLOSED_TAB_AVAILABLE,
         RestorePreviousSession => super::seams::RESTORE_PREVIOUS_SESSION_AVAILABLE,
-        ShowHistory => super::seams::SHOW_HISTORY_AVAILABLE,
-        ClearBrowsingData => super::seams::CLEAR_BROWSING_DATA_AVAILABLE,
         BookmarkThisPage | ToggleBookmarksBar | ShowBookmarksManager | OpenBookmark(_) => {
             super::seams::BOOKMARKS_AVAILABLE
         }
@@ -1045,7 +1041,7 @@ mod tests {
         );
         assert_eq!(
             item_for_key(&key_from_appkit_characters("\u{7f}"), SHIFT_CMD, 1),
-            Some(ClearBrowsingData)
+            Some(Shortcut(ShortcutAction::ClearBrowsingData))
         );
         // AppKit reports Shift+Cmd+] as "}".
         assert_eq!(
