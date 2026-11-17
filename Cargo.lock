@@ -5362,6 +5362,7 @@ version = "0.2.0"
 dependencies = [
  "ash",
  "backtrace",
+ "block2 0.6.2",
  "dirs",
  "dpi",
  "euclid",
@@ -5369,9 +5370,11 @@ dependencies = [
  "gl_generator",
  "gleam",
  "glow",
+ "i-slint-backend-testing",
  "image",
  "libc",
  "log",
+ "mercury-settings",
  "mercury-store",
  "mercury-ui",
  "objc2 0.6.5",
@@ -5442,7 +5445,6 @@ dependencies = [
  "log",
  "serde",
  "serde_json",
- "talaria-core",
  "tempfile",
  "thiserror 2.0.21",
  "url",
@@ -5465,6 +5467,7 @@ dependencies = [
  "image",
  "slint",
  "slint-build",
+ "talaria-core",
 ]
 
 [[package]]
@@ -10935,6 +10938,7 @@ dependencies = [
  "serde_json",
  "servo",
  "talaria-core",
+ "tempfile",
  "url",
 ]
 

@@ -82,11 +82,7 @@ impl Worker {
             return;
         }
         let now = (self.clock)();
-        match database
-            .store
-            .clear_history(ClearRange::All, now)
-            .and_then(|removed| database.store.purge_deleted().map(|()| removed))
-        {
+        match database.clear_browsing_history(ClearRange::All, now) {
             Ok(removed) => {
                 log::info!("cleared the history left from the last exit ({removed} visits)");
                 if let Err(error) = std::fs::remove_file(marker) {

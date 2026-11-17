@@ -1,4 +1,4 @@
-import { HistoryColors } from "colors.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 // One row under the address field: the search row, or a page from history or bookmarks. The
 // title and the URL are each split around the part that matches what was typed.
@@ -60,11 +60,11 @@ export component SuggestionList inherits Rectangle {
     height: root.rows.length * root.row-height + 12px;
     border-radius: 10px;
     border-width: 1px;
-    border-color: HistoryColors.border;
-    background: HistoryColors.raised;
+    border-color: ChromePalette.popup-border;
+    background: ChromePalette.popup-background;
     drop-shadow-blur: 18px;
     drop-shadow-offset-y: 6px;
-    drop-shadow-color: HistoryColors.shadow;
+    drop-shadow-color: ChromePalette.shadow;
 
     VerticalLayout {
         padding: 6px;
@@ -73,8 +73,8 @@ export component SuggestionList inherits Rectangle {
             height: root.row-height;
             border-radius: 7px;
             background: index == root.selected
-                ? HistoryColors.selected
-                : touch.has-hover ? HistoryColors.hover : transparent;
+                ? ChromePalette.item-selected
+                : touch.has-hover ? ChromePalette.item-hover : transparent;
 
             HorizontalLayout {
                 padding-left: 12px;
@@ -86,7 +86,7 @@ export component SuggestionList inherits Rectangle {
 
                     if row.is-bookmark: Text {
                         text: "★";
-                        color: HistoryColors.accent;
+                        color: ChromePalette.accent;
                         font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -101,7 +101,7 @@ export component SuggestionList inherits Rectangle {
                         commands: row.is-search
                             ? "M 6 1.5 A 4.5 4.5 0 1 1 5.99 1.5 Z M 9.3 9.3 L 13 13"
                             : "M 7 1 A 6 6 0 1 1 6.99 1 Z M 7 3.6 L 7 7 L 9.4 8.4";
-                        stroke: HistoryColors.dim;
+                        stroke: ChromePalette.text-secondary;
                         stroke-width: 1.5px;
                         fill: transparent;
                     }
@@ -115,7 +115,7 @@ export component SuggestionList inherits Rectangle {
                         before: row.title-before;
                         match: row.title-match;
                         after: row.title-after;
-                        color: HistoryColors.text;
+                        color: ChromePalette.text;
                         size: 13px;
                     }
 
@@ -123,7 +123,7 @@ export component SuggestionList inherits Rectangle {
                         before: row.url-before;
                         match: row.url-match;
                         after: row.url-after;
-                        color: HistoryColors.dim;
+                        color: ChromePalette.text-secondary;
                         size: 12px;
                     }
                 }

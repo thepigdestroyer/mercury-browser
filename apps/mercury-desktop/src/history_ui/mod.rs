@@ -13,7 +13,9 @@
 //!
 //! **Diagnostic:** in an automated run (`--screenshot`, `--background`) with
 //! `MERCURY_SHOW_HISTORY=1` in the environment, the history window opens at start-up, so it can
-//! be captured without input.
+//! be captured without input; with `MERCURY_SHOW_SUGGESTIONS=<text>`, the address field takes
+//! focus and holds `<text>` as if typed 1.5 s after start-up (once the page has loaded), so the
+//! suggestion list can be captured.
 
 mod days;
 mod listing;
@@ -25,6 +27,7 @@ use std::time::Duration;
 
 use mercury_store::{HistoryEntry, Suggestion};
 use mercury_ui::{HistoryRow, MainWindow, SuggestionRow};
+use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::event::{ElementState, KeyEvent};
 use slint::winit_030::winit::keyboard::{Key, NamedKey};
 use slint::{ComponentHandle, ModelRc, SharedString, Timer, VecModel};
@@ -33,7 +36,7 @@ use talaria_core::{BrowserController, NavigationOrigin, TabActivation};
 use crate::profile_data::{self, Area, ProfileDataError};
 use crate::ui_sync::sync_ui;
 use listing::{Line, PAGE, Period, Removed};
-use suggestions::{Edit, Row, SUGGEST_DEBOUNCE_MS, SUGGESTION_ROWS, Session};
+use suggestions::{Edit, Row, SUGGEST_DEBOUNCE_MS, SUGGESTION_ROWS, SearchRow, Session};
 
 /// How long typing in the history window's search field must pause before it searches.
 const SEARCH_DEBOUNCE: Duration = Duration::from_millis(150);
@@ -49,6 +52,8 @@ struct HistoryUi {
     suggest_timer: Timer,
     list: RefCell<ListState>,
     search_timer: Timer,
+    /// A `--screenshot` or `--background` run, which never takes focus.
+    automated: bool,
 }
 
 #[derive(Default)]
@@ -92,41 +97,53 @@ pub(crate) fn connect(
         suggest_timer: Timer::default(),
         list: RefCell::default(),
         search_timer: Timer::default(),
+        automated,
     });
     UI.with(|current| *current.borrow_mut() = Some(Rc::clone(&ui)));
 
     window.on_address_edited(|text| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.address_edited(text.as_str()));
     });
     window.on_address_blurred(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.close_suggestions());
     });
     window.on_suggestion_chosen(|index| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.choose(usize::try_from(index).ok()));
     });
     window.on_history_search(|text| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.search_edited(text.as_str()));
     });
     window.on_history_more(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.load(Load::More));
     });
     window.on_history_open_entry(|entry, new_tab| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.open_entry(entry, new_tab));
     });
     window.on_history_delete_entry(|entry| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.delete_entry(entry, false));
     });
     window.on_history_delete_site(|entry| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.delete_entry(entry, true));
     });
     window.on_history_close(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.close_history());
     });
     window.on_show_clear_dialog(show_clear_dialog);
     window.on_clear_cancel(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.close_clear_dialog());
     });
     window.on_clear_confirm(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with_ui(|ui| ui.confirm_clear());
     });
 
@@ -139,6 +156,20 @@ pub(crate) fn connect(
     if automated && std::env::var_os("MERCURY_SHOW_HISTORY").is_some_and(|value| value == "1") {
         show_history();
     }
+    if let Some(text) = std::env::var("MERCURY_SHOW_SUGGESTIONS")
+        .ok()
+        .filter(|_| automated)
+    {
+        let window = window.as_weak();
+        Timer::single_shot(Duration::from_millis(1500), move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
+            if let Some(window) = window.upgrade() {
+                window.invoke_focus_address_bar();
+                window.set_address(text.as_str().into());
+                with_ui(|ui| ui.address_edited(&text));
+            }
+        });
+    }
 }
 
 /// Opens the history window (Cmd+Y), or focuses its search field if it is open.
@@ -146,8 +177,10 @@ pub(crate) fn show_history() {
     with_ui(|ui| ui.show_history());
 }
 
-/// Opens "Clear browsing data" (Cmd+Shift+Delete, and the history window's button).
+/// Opens "Clear browsing data" (Cmd+Shift+Delete, the history window's button, and the settings
+/// window's "Clear browsing data…", from which it brings the browser window forward).
 pub(crate) fn show_clear_dialog() {
+    let _slint = crate::callback_scope::InSlintCallback::enter();
     with_ui(|ui| {
         let Some(window) = ui.window.upgrade() else {
             return;
@@ -158,6 +191,11 @@ pub(crate) fn show_clear_dialog() {
         window.set_clear_cache(false);
         window.set_clear_busy(false);
         window.set_clear_dialog_open(true);
+        if !ui.automated {
+            let _focused = window
+                .window()
+                .with_winit_window(|native| native.focus_window());
+        }
         window.window().request_redraw();
     });
 }
@@ -271,6 +309,7 @@ impl HistoryUi {
             slint::TimerMode::SingleShot,
             Duration::from_millis(SUGGEST_DEBOUNCE_MS),
             move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
                 if let Some(ui) = ui.upgrade() {
                     ui.ask_for_suggestions(generation);
                 }
@@ -300,15 +339,31 @@ impl HistoryUi {
         });
     }
 
+    /// The search row for `input`: the controller's search builder makes the URL (`None` if it
+    /// cannot) and the settings name the engine.
+    fn search_row(&self, input: &str) -> Option<SearchRow> {
+        let url = self.controller.borrow().search_url(input).ok()?;
+        let engine = crate::settings::search_engine_name(input.trim())?;
+        Some(SearchRow {
+            engine,
+            url: url.into(),
+        })
+    }
+
     fn show_suggestions(&self, generation: u64, suggestions: &[Suggestion]) {
         let Some(window) = self.window.upgrade() else {
             return;
         };
         let field = window.get_address();
-        let shown = self
+        let search = self
             .suggest
-            .borrow_mut()
-            .replied(generation, suggestions, field.as_str());
+            .borrow()
+            .pending_input(generation)
+            .and_then(|input| self.search_row(&input));
+        let shown =
+            self.suggest
+                .borrow_mut()
+                .replied(generation, search, suggestions, field.as_str());
         // A stale reply: the list was closed or edited since.
         let Some(completion) = shown else {
             return;
@@ -422,6 +477,7 @@ impl HistoryUi {
         let ui = Rc::downgrade(self);
         self.search_timer
             .start(slint::TimerMode::SingleShot, SEARCH_DEBOUNCE, move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
                 if let Some(ui) = ui.upgrade() {
                     ui.load(Load::First);
                 }

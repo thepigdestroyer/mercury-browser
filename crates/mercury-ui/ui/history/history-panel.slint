@@ -1,5 +1,5 @@
 import { ListView } from "std-widgets.slint";
-import { HistoryColors } from "colors.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 // One line of the history window: a day's heading, a visit, or "Show more" at the end.
 export struct HistoryRow {
@@ -29,8 +29,8 @@ component TextButton inherits Rectangle {
     max-width: root.widest;
     border-radius: 6px;
     background: root.primary
-        ? (touch.pressed ? HistoryColors.accent.darker(15%) : HistoryColors.accent)
-        : touch.pressed ? HistoryColors.selected : touch.has-hover ? HistoryColors.hover : transparent;
+        ? (touch.pressed ? ChromePalette.primary-button-background.darker(15%) : ChromePalette.primary-button-background)
+        : touch.pressed ? ChromePalette.item-selected : touch.has-hover ? ChromePalette.item-hover : transparent;
 
     label-text := Text {
         x: 10px;
@@ -38,8 +38,8 @@ component TextButton inherits Rectangle {
         text: root.label;
         overflow: elide;
         color: root.primary
-            ? HistoryColors.on-accent
-            : root.danger ? HistoryColors.danger : HistoryColors.accent;
+            ? ChromePalette.primary-button-text
+            : root.danger ? ChromePalette.danger : ChromePalette.accent;
         font-size: 12px;
         font-weight: 550;
         horizontal-alignment: center;
@@ -81,7 +81,7 @@ export component HistoryPanel inherits FocusScope {
     }
 
     Rectangle {
-        background: HistoryColors.surface;
+        background: ChromePalette.content-background;
 
         // Pointer input over the panel never reaches the page underneath.
         TouchArea { }
@@ -99,7 +99,7 @@ export component HistoryPanel inherits FocusScope {
 
                 Text {
                     text: "History";
-                    color: HistoryColors.text;
+                    color: ChromePalette.text;
                     font-size: 20px;
                     font-weight: 650;
                     vertical-alignment: center;
@@ -110,15 +110,15 @@ export component HistoryPanel inherits FocusScope {
                     max-width: 440px;
                     border-radius: 8px;
                     border-width: 1px;
-                    border-color: search-input.has-focus ? HistoryColors.accent : HistoryColors.border;
-                    background: HistoryColors.field;
+                    border-color: search-input.has-focus ? ChromePalette.accent : ChromePalette.search-field-border;
+                    background: ChromePalette.search-field-background;
 
                     if search-input.text == "": Text {
                         x: 12px;
                         width: parent.width - 24px;
                         height: parent.height;
                         text: "Search history";
-                        color: HistoryColors.dim;
+                        color: ChromePalette.text-secondary;
                         font-size: 13px;
                         vertical-alignment: center;
                     }
@@ -128,7 +128,7 @@ export component HistoryPanel inherits FocusScope {
                         width: parent.width - 24px;
                         height: parent.height;
                         text <=> root.query;
-                        color: HistoryColors.text;
+                        color: ChromePalette.text;
                         font-size: 13px;
                         vertical-alignment: center;
                         single-line: true;
@@ -165,7 +165,7 @@ export component HistoryPanel inherits FocusScope {
             if root.message != "": Text {
                 vertical-stretch: 1;
                 text: root.message;
-                color: HistoryColors.dim;
+                color: ChromePalette.text-secondary;
                 font-size: 14px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
@@ -178,7 +178,7 @@ export component HistoryPanel inherits FocusScope {
                 for row in root.rows: Rectangle {
                     height: row.is-day ? 40px : row.is-more ? 48px : 44px;
                     border-radius: 7px;
-                    background: !row.is-day && !row.is-more && row-touch.has-hover ? HistoryColors.hover : transparent;
+                    background: !row.is-day && !row.is-more && row-touch.has-hover ? ChromePalette.item-hover : transparent;
 
                     if row.is-more: TextButton {
                         x: (parent.width - self.width) / 2;
@@ -193,7 +193,7 @@ export component HistoryPanel inherits FocusScope {
                         x: 8px;
                         y: parent.height - self.height - 6px;
                         text: row.label;
-                        color: HistoryColors.text;
+                        color: ChromePalette.text;
                         font-size: 14px;
                         font-weight: 650;
                     }
@@ -219,7 +219,7 @@ export component HistoryPanel inherits FocusScope {
                         Text {
                             width: 44px;
                             text: row.time;
-                            color: HistoryColors.dim;
+                            color: ChromePalette.text-secondary;
                             font-size: 12px;
                             vertical-alignment: center;
                         }
@@ -230,7 +230,7 @@ export component HistoryPanel inherits FocusScope {
                             preferred-width: 0px;
                             min-width: 0px;
                             text: row.title;
-                            color: HistoryColors.text;
+                            color: ChromePalette.text;
                             font-size: 13px;
                             overflow: elide;
                             vertical-alignment: center;
@@ -241,7 +241,7 @@ export component HistoryPanel inherits FocusScope {
                             preferred-width: 0px;
                             min-width: 0px;
                             text: row.url;
-                            color: HistoryColors.dim;
+                            color: ChromePalette.text-secondary;
                             font-size: 12px;
                             overflow: elide;
                             vertical-alignment: center;

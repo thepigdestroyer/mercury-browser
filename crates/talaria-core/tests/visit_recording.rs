@@ -1,3 +1,5 @@
+mod common;
+
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use talaria_core::{
@@ -106,6 +108,7 @@ fn a_typed_address_is_recorded_as_a_typed_visit_when_it_commits() {
 #[test]
 fn a_search_is_a_typed_visit_to_the_results_page() {
     let (mut controller, tab_id) = controller_with_ready_tab();
+    controller.set_search_url_builder(common::test_search());
     controller.queue_navigation("servo engine").unwrap();
     let url = controller.state().url().to_owned();
 

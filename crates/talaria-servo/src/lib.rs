@@ -1,12 +1,15 @@
 mod adblocker;
 mod content_process;
+mod embedder_controls;
 mod error;
 mod error_pages;
+mod exit_clearing;
 mod frame_ready;
 mod history_events;
 mod load_metrics;
 mod opengl_context;
 mod page_defaults;
+mod page_requests;
 mod panics;
 mod runtime;
 mod screen;
@@ -19,7 +22,9 @@ pub use content_process::{
 };
 pub use error::ServoWebViewError;
 pub use error_pages::error_page_titles;
+pub use exit_clearing::{EngineSwitches, ExitClearing};
 pub use opengl_context::ViewportSize;
+pub use page_requests::page_request_clock;
 pub use panics::{hard_fail_in_single_process, should_panic_hook_suppress_termination};
 pub use runtime::{EventLoopWaker, NEW_TAB_URL, RuntimeOptions, ServoRuntime};
 pub use screen::ScreenMetrics;

@@ -103,8 +103,6 @@ pub(crate) const REFRESH_BATCH: u32 = 1_000;
 pub(crate) const IDLE_BEFORE_UPKEEP: Duration = Duration::from_secs(60);
 /// The least time between the starts of two upkeep passes.
 pub(crate) const UPKEEP_INTERVAL: Duration = Duration::from_secs(60 * 60);
-/// How long `shut_down` waits by default; the quit sequence passes its own deadline.
-pub(crate) const SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 /// Later titles of the same page within this time are held, and only the last is written.
 pub(crate) const TITLE_DEBOUNCE: Duration = Duration::from_secs(3);
 /// Deleted history is purged from the files (`Store::purge_deleted`) once the service has had
@@ -162,7 +160,6 @@ pub(crate) fn shut_down(deadline: Instant) {
 /// "Clear history on exit", for the quit sequence (the settings lane's
 /// `exit::clear_history_on_exit`): see [`ProfileData::clear_history_on_exit`]. Call it before
 /// [`shut_down`].
-#[expect(dead_code, reason = "called by the settings lane's exit hook")]
 pub(crate) fn clear_history_on_exit() {
     if let Some(data) = handle() {
         data.clear_history_on_exit();
@@ -170,6 +167,7 @@ pub(crate) fn clear_history_on_exit() {
 }
 
 fn deliver_replies() {
+    let _slint = crate::callback_scope::InSlintCallback::enter();
     if let Some(data) = handle() {
         data.deliver_replies();
     }

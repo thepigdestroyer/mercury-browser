@@ -2,7 +2,6 @@
 //! a choice leads, and the inline completion of a host. Pure: the wiring is in `mod.rs`.
 
 use mercury_store::Suggestion;
-use talaria_core::NavigationTarget;
 use url::Url;
 
 /// How long typing must pause before the store is asked.
@@ -10,9 +9,14 @@ pub(crate) const SUGGEST_DEBOUNCE_MS: u64 = 40;
 /// Rows of history and bookmarks under the search row.
 pub(crate) const SUGGESTION_ROWS: u32 = 8;
 
-/// The search engine's name, as the search row shows it.
-// settings lane: read `SettingsHandle::default_search_engine()` here once it is merged.
-pub(crate) const SEARCH_ENGINE_NAME: &str = "DuckDuckGo";
+/// The search row: where searching for what was typed goes, and the engine's name. Built by
+/// the caller from the controller's search builder and the settings; without one (no search
+/// URL can be built for the text) the list has no search row.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct SearchRow {
+    pub(crate) engine: String,
+    pub(crate) url: String,
+}
 
 /// One row of the list, before it becomes a Slint `SuggestionRow`.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -106,24 +110,28 @@ pub(crate) fn display_url(url: &str) -> String {
     }
 }
 
-/// The rows for `input`: the search row first, then the suggestions, best first.
-pub(crate) fn rows(input: &str, suggestions: &[Suggestion]) -> Vec<Row> {
+/// The rows for `input`: the search row first (if there is one), then the suggestions, best
+/// first.
+pub(crate) fn rows(
+    input: &str,
+    search: Option<&SearchRow>,
+    suggestions: &[Suggestion],
+) -> Vec<Row> {
     let input = input.trim();
     if input.is_empty() {
         return Vec::new();
     }
-    let search = NavigationTarget::SearchQuery(input.to_owned())
-        .into_url()
-        .map(String::from)
-        .unwrap_or_default();
-    let mut rows = vec![Row {
-        is_search: true,
-        is_bookmark: false,
-        title: Emphasis::plain(&format!("Search {SEARCH_ENGINE_NAME} for “{input}”")),
-        url: Emphasis::default(),
-        target: search,
-        typed: true,
-    }];
+    let mut rows: Vec<Row> = search
+        .map(|search| Row {
+            is_search: true,
+            is_bookmark: false,
+            title: Emphasis::plain(&format!("Search {} for “{input}”", search.engine)),
+            url: Emphasis::default(),
+            target: search.url.clone(),
+            typed: true,
+        })
+        .into_iter()
+        .collect();
     rows.extend(suggestions.iter().map(|suggestion| {
         let url = display_url(&suggestion.url);
         let title = suggestion
@@ -267,17 +275,19 @@ impl Session {
 
     /// A reply for `generation`. `None` if it is stale (dropped); otherwise the list is open
     /// and this is the completion to apply, if any. `field` is what the address field holds
-    /// now: a completion is offered only if that is still exactly what was typed.
+    /// now: a completion is offered only if that is still exactly what was typed. `search` is
+    /// the search row for what was typed, if a search URL could be built.
     pub(crate) fn replied(
         &mut self,
         generation: u64,
+        search: Option<SearchRow>,
         suggestions: &[Suggestion],
         field: &str,
     ) -> Option<Option<Completion>> {
         if generation != self.generation {
             return None;
         }
-        self.rows = rows(&self.typed, suggestions);
+        self.rows = rows(&self.typed, search.as_ref(), suggestions);
         self.selected = None;
         self.open = !self.rows.is_empty();
         let completion = (self.typing && field == self.typed)
@@ -354,6 +364,14 @@ mod tests {
         }
     }
 
+    /// What the default settings' search builder makes for `text`.
+    fn ddg(text: &str) -> Option<SearchRow> {
+        Some(SearchRow {
+            engine: "DuckDuckGo".into(),
+            url: format!("https://duckduckgo.com/?q={text}"),
+        })
+    }
+
     fn typed(url: &str) -> Suggestion {
         Suggestion {
             typed: true,
@@ -404,6 +422,7 @@ mod tests {
     fn the_search_row_comes_first_then_the_suggestions() {
         let rows = rows(
             " exa ",
+            ddg("exa").as_ref(),
             &[
                 suggestion("https://example.com/", Some("Example Domain"), true),
                 suggestion("https://www.examine.test/page", None, false),
@@ -412,10 +431,7 @@ mod tests {
 
         assert_eq!(rows.len(), 3);
         assert!(rows[0].is_search);
-        assert_eq!(
-            rows[0].title.before,
-            format!("Search {SEARCH_ENGINE_NAME} for “exa”")
-        );
+        assert_eq!(rows[0].title.before, "Search DuckDuckGo for “exa”");
         assert!(rows[0].target.starts_with("https://duckduckgo.com/?q=exa"));
         assert!(rows[1].is_bookmark);
         assert_eq!(rows[1].title.matched, "Exa");
@@ -428,14 +444,40 @@ mod tests {
     }
 
     #[test]
-    fn a_search_that_looks_like_an_address_still_searches() {
-        let rows = rows("example.com", &[]);
-        assert_eq!(rows[0].target, "https://duckduckgo.com/?q=example.com");
+    fn without_a_search_url_there_is_no_search_row() {
+        let rows = rows(
+            "exa",
+            None,
+            &[suggestion("https://example.com/", None, false)],
+        );
+
+        assert_eq!(rows.len(), 1);
+        assert!(!rows[0].is_search);
+        assert!(super::rows("exa", None, &[]).is_empty());
+    }
+
+    #[test]
+    fn the_search_row_names_the_engine_it_goes_to() {
+        let search = SearchRow {
+            engine: "Startpage".into(),
+            url: "https://www.startpage.com/do/search?q=exa".into(),
+        };
+        let rows = rows("exa", Some(&search), &[]);
+
+        assert_eq!(rows[0].title.before, "Search Startpage for “exa”");
+        assert_eq!(rows[0].target, search.url);
     }
 
     #[test]
     fn nothing_typed_shows_nothing() {
-        assert!(rows("   ", &[suggestion("https://a.test/", None, false)]).is_empty());
+        assert!(
+            rows(
+                "   ",
+                ddg("").as_ref(),
+                &[suggestion("https://a.test/", None, false)]
+            )
+            .is_empty()
+        );
     }
 
     #[test]
@@ -523,6 +565,7 @@ mod tests {
         let generation = ask(&mut session, "exa");
         session.replied(
             generation,
+            ddg("exa"),
             &[
                 suggestion("https://example.com/", None, false),
                 suggestion("https://example.org/", None, true),
@@ -592,7 +635,12 @@ mod tests {
         let mut session = Session::default();
         let generation = ask(&mut session, "exa");
 
-        let shown = session.replied(generation, &[typed("https://example.com/")], "exa");
+        let shown = session.replied(
+            generation,
+            ddg("exa"),
+            &[typed("https://example.com/")],
+            "exa",
+        );
 
         assert_eq!(
             shown,
@@ -612,9 +660,9 @@ mod tests {
         let first = ask(&mut session, "ex");
         let second = ask(&mut session, "exa");
 
-        assert_eq!(session.replied(first, &[], "exa"), None);
+        assert_eq!(session.replied(first, ddg("exa"), &[], "exa"), None);
         assert!(!session.is_open());
-        assert!(session.replied(second, &[], "exa").is_some());
+        assert!(session.replied(second, ddg("exa"), &[], "exa").is_some());
     }
 
     #[test]
@@ -624,7 +672,12 @@ mod tests {
 
         session.close();
         assert_eq!(
-            session.replied(generation, &[typed("https://example.com/")], "exa"),
+            session.replied(
+                generation,
+                ddg("exa"),
+                &[typed("https://example.com/")],
+                "exa"
+            ),
             None
         );
 
@@ -642,7 +695,7 @@ mod tests {
 
         assert_eq!(session.accept(), None);
 
-        assert_eq!(session.replied(generation, &[], "exa"), None);
+        assert_eq!(session.replied(generation, ddg("exa"), &[], "exa"), None);
         assert!(!session.is_open());
         assert_eq!(session.pending_input(generation), None);
     }
@@ -651,7 +704,12 @@ mod tests {
     fn return_opens_the_selected_row_and_closes_the_list() {
         let mut session = Session::default();
         let generation = ask(&mut session, "exa");
-        session.replied(generation, &[typed("https://example.com/")], "example.com");
+        session.replied(
+            generation,
+            ddg("exa"),
+            &[typed("https://example.com/")],
+            "example.com",
+        );
 
         session.move_selection(true);
         session.move_selection(true);
@@ -670,27 +728,30 @@ mod tests {
         let generation = ask(&mut session, "exa");
         // The field changed since (a page event replaced it).
         assert_eq!(
-            session.replied(generation, &suggestions, "other"),
+            session.replied(generation, ddg("exa"), &suggestions, "other"),
             Some(None)
         );
 
         let generation = ask(&mut session, "exam");
         assert!(
             session
-                .replied(generation, &suggestions, "exam")
+                .replied(generation, ddg("exam"), &suggestions, "exam")
                 .unwrap()
                 .is_some()
         );
         // Deleting back to "exa" does not complete again.
         let generation = ask(&mut session, "exa");
-        assert_eq!(session.replied(generation, &suggestions, "exa"), Some(None));
+        assert_eq!(
+            session.replied(generation, ddg("exa"), &suggestions, "exa"),
+            Some(None)
+        );
     }
 
     #[test]
     fn clearing_the_field_closes_the_list() {
         let mut session = Session::default();
         let generation = ask(&mut session, "exa");
-        session.replied(generation, &[], "exa");
+        session.replied(generation, ddg("exa"), &[], "exa");
 
         assert_eq!(session.edited("  "), Edit::Close);
         assert!(!session.is_open());

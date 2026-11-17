@@ -2,7 +2,7 @@ mod common;
 
 use common::NOW;
 use mercury_store::{
-    DownloadRecord, DownloadRecordId, DownloadState, NewDownload, Store, StoreError,
+    ClearRange, DownloadRecord, DownloadRecordId, DownloadState, NewDownload, Store, StoreError,
 };
 
 fn new(guid: &str, started_at_ms: i64) -> NewDownload<'_> {
@@ -209,6 +209,38 @@ fn removing_and_clearing() {
     assert_eq!(store.clear_finished_downloads().unwrap(), 2);
     let ids: Vec<DownloadRecordId> = store.downloads(10).unwrap().iter().map(|d| d.id).collect();
     assert_eq!(ids, [running]);
+}
+
+// history lane
+#[test]
+fn clearing_browsing_history_removes_finished_records_in_the_range() {
+    const HOUR: i64 = 3_600_000;
+    let mut store = Store::open_in_memory().unwrap();
+    let old = store.insert_download(&new("old", NOW - 2 * HOUR)).unwrap();
+    let recent = store.insert_download(&new("recent", NOW)).unwrap();
+    let cancelled = store.insert_download(&new("cancelled", NOW)).unwrap();
+    let running = store.insert_download(&new("running", NOW)).unwrap();
+    for id in [old, recent] {
+        store
+            .finish_download(id, DownloadState::Complete, None, NOW)
+            .unwrap();
+    }
+    store
+        .finish_download(cancelled, DownloadState::Cancelled, None, NOW)
+        .unwrap();
+
+    let since = ClearRange::Since {
+        from_ms: NOW - HOUR,
+    };
+    assert_eq!(store.clear_downloads(since).unwrap(), 2);
+    let mut ids: Vec<DownloadRecordId> =
+        store.downloads(10).unwrap().iter().map(|d| d.id).collect();
+    ids.sort();
+    assert_eq!(ids, [old, running]);
+
+    assert_eq!(store.clear_downloads(ClearRange::All).unwrap(), 1);
+    let ids: Vec<DownloadRecordId> = store.downloads(10).unwrap().iter().map(|d| d.id).collect();
+    assert_eq!(ids, [running], "a running download keeps its record");
 }
 
 // ---- state transitions ----

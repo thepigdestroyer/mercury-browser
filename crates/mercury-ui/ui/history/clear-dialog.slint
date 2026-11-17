@@ -1,4 +1,4 @@
-import { HistoryColors } from "colors.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 component Choice inherits Rectangle {
     in property <string> label;
@@ -9,7 +9,7 @@ component Choice inherits Rectangle {
 
     height: 32px;
     border-radius: 6px;
-    background: touch.has-hover ? HistoryColors.hover : transparent;
+    background: touch.has-hover ? ChromePalette.item-hover : transparent;
 
     HorizontalLayout {
         padding-left: 8px;
@@ -21,12 +21,12 @@ component Choice inherits Rectangle {
             height: 16px;
             border-radius: root.round ? 8px : 4px;
             border-width: root.checked ? 0px : 1.5px;
-            border-color: HistoryColors.dim;
-            background: root.checked ? HistoryColors.accent : transparent;
+            border-color: ChromePalette.text-secondary;
+            background: root.checked ? ChromePalette.primary-button-background : transparent;
 
             if root.checked: Text {
                 text: root.round ? "●" : "✓";
-                color: HistoryColors.on-accent;
+                color: ChromePalette.primary-button-text;
                 font-size: root.round ? 7px : 11px;
                 font-weight: 700;
                 horizontal-alignment: center;
@@ -36,7 +36,7 @@ component Choice inherits Rectangle {
 
         Text {
             text: root.label;
-            color: HistoryColors.text;
+            color: ChromePalette.text;
             font-size: 13px;
             vertical-alignment: center;
         }
@@ -59,15 +59,15 @@ component DialogButton inherits Rectangle {
     min-width: label-text.preferred-width + 28px;
     border-radius: 7px;
     border-width: root.primary ? 0px : 1px;
-    border-color: HistoryColors.border;
+    border-color: ChromePalette.popup-border;
     opacity: root.enabled ? 1 : 0.45;
     background: root.primary
-        ? (touch.pressed ? HistoryColors.danger.darker(15%) : HistoryColors.danger)
-        : touch.has-hover && root.enabled ? HistoryColors.hover : transparent;
+        ? (touch.pressed ? ChromePalette.danger.darker(15%) : ChromePalette.danger)
+        : touch.has-hover && root.enabled ? ChromePalette.item-hover : transparent;
 
     label-text := Text {
         text: root.label;
-        color: root.primary ? HistoryColors.on-accent : HistoryColors.text;
+        color: root.primary ? ChromePalette.primary-button-text : ChromePalette.text;
         font-size: 13px;
         font-weight: 600;
         horizontal-alignment: center;
@@ -110,7 +110,7 @@ export component ClearDataDialog inherits FocusScope {
     }
 
     Rectangle {
-        background: HistoryColors.scrim;
+        background: ChromePalette.scrim;
 
         // Clicks outside the dialog do nothing; they never reach the page.
         TouchArea { }
@@ -122,11 +122,11 @@ export component ClearDataDialog inherits FocusScope {
             y: Math.max(16px, (parent.height - self.height) / 3);
             border-radius: 12px;
             border-width: 1px;
-            border-color: HistoryColors.border;
-            background: HistoryColors.raised;
+            border-color: ChromePalette.popup-border;
+            background: ChromePalette.sheet-background;
             drop-shadow-blur: 24px;
             drop-shadow-offset-y: 8px;
-            drop-shadow-color: HistoryColors.shadow-strong;
+            drop-shadow-color: ChromePalette.shadow;
 
             TouchArea { }
 
@@ -136,14 +136,14 @@ export component ClearDataDialog inherits FocusScope {
 
                 Text {
                     text: "Clear browsing data";
-                    color: HistoryColors.text;
+                    color: ChromePalette.text;
                     font-size: 17px;
                     font-weight: 650;
                 }
 
                 Text {
                     text: "Time range";
-                    color: HistoryColors.dim;
+                    color: ChromePalette.text-secondary;
                     font-size: 12px;
                     font-weight: 600;
                 }
@@ -163,16 +163,27 @@ export component ClearDataDialog inherits FocusScope {
 
                 Text {
                     text: "What to clear";
-                    color: HistoryColors.dim;
+                    color: ChromePalette.text-secondary;
                     font-size: 12px;
                     font-weight: 600;
                 }
 
                 Choice {
-                    label: "Browsing history";
+                    label: "Browsing and download history";
                     checked: root.history;
                     toggled => {
                         root.history = !root.history;
+                    }
+                }
+
+                HorizontalLayout {
+                    padding-left: 34px;
+
+                    Text {
+                        text: "The pages you visited and the list of your downloads. Downloaded files are kept, and downloads still running stay in the list.";
+                        color: ChromePalette.text-secondary;
+                        font-size: 12px;
+                        wrap: word-wrap;
                     }
                 }
 
@@ -194,7 +205,7 @@ export component ClearDataDialog inherits FocusScope {
 
                 if (root.cookies || root.cache) && root.period != 3: Text {
                     text: "Cookies, site data and cached files are cleared for all time: the engine cannot clear them by date.";
-                    color: HistoryColors.dim;
+                    color: ChromePalette.text-secondary;
                     font-size: 12px;
                     wrap: word-wrap;
                 }

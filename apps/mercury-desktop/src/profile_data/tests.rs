@@ -1386,6 +1386,84 @@ fn download_changes_name_the_record_and_progress_notifies_nothing() {
     assert_eq!(changes.borrow()[0].downloads, Some(vec![guid]));
 }
 
+// history lane: "Clear browsing history" takes the download records with it.
+
+/// Inserts a download started at `started_at_ms`, finished as `state` unless that is
+/// `InProgress`.
+fn download_in(harness: &Harness, guid: &str, started_at_ms: i64, state: DownloadState) {
+    let start = DownloadStart {
+        started_at_ms,
+        ..download(guid)
+    };
+    harness
+        .ask(|data, reply| data.insert_download(start, reply))
+        .unwrap();
+    if state != DownloadState::InProgress {
+        harness
+            .ask(|data, reply| data.finish_download(guid.into(), state, None, reply))
+            .unwrap();
+    }
+}
+
+fn download_guids(harness: &Harness) -> Vec<String> {
+    let mut guids: Vec<String> = harness
+        .ask(|data, reply| data.downloads(10, reply))
+        .unwrap()
+        .into_iter()
+        .map(|record| record.guid)
+        .collect();
+    guids.sort();
+    guids
+}
+
+#[test]
+fn clearing_history_removes_the_download_records_in_its_range_but_not_running_ones() {
+    let harness = Harness::new();
+    download_in(&harness, "a-old", NOW - 2 * DAY_MS, DownloadState::Complete);
+    download_in(&harness, "b-recent", NOW, DownloadState::Complete);
+    download_in(&harness, "c-failed", NOW, DownloadState::Interrupted);
+    download_in(&harness, "d-running", NOW, DownloadState::InProgress);
+    visits_at(&harness, &[("https://a.test/", "A", NOW)]);
+    let changes = listen(&harness, Area::Downloads);
+
+    harness
+        .ask(|data, reply| {
+            data.clear_history(
+                ClearRange::Since {
+                    from_ms: NOW - DAY_MS,
+                },
+                reply,
+            )
+        })
+        .unwrap();
+
+    assert_eq!(download_guids(&harness), ["a-old", "d-running"]);
+    harness.settle(|| !changes.borrow().is_empty());
+    assert_eq!(changes.borrow()[0].downloads, None);
+    // The running download's record still takes its updates.
+    harness
+        .ask(|data, reply| {
+            data.finish_download("d-running".into(), DownloadState::Complete, None, reply)
+        })
+        .unwrap();
+
+    harness
+        .ask(|data, reply| data.clear_history(ClearRange::All, reply))
+        .unwrap();
+    assert!(download_guids(&harness).is_empty());
+}
+
+#[test]
+fn clearing_history_on_exit_removes_the_download_records_too() {
+    let harness = Harness::new();
+    download_in(&harness, "done", NOW, DownloadState::Complete);
+
+    harness.data.clear_history_on_exit();
+
+    let (store, _directory) = harness.reopen();
+    assert!(store.downloads(10).unwrap().is_empty());
+}
+
 #[test]
 fn history_notifications_are_coalesced() {
     let timing = Timing {

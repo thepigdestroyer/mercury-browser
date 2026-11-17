@@ -1,6 +1,7 @@
 //! Draws the main window headless through Slint's software renderer, with the history lane's
-//! UI open on sample data, and saves PNGs in both colour sets: the suggestion list, the history
-//! window and the "Clear browsing data" dialog.
+//! UI open on sample data, and saves PNGs of the suggestion list, the history window and the
+//! "Clear browsing data" dialog with the chrome theme set to Light, Dark and System. (System
+//! follows the window's colour scheme, which is unknown headless, so it draws dark.)
 //!
 //! `cargo run --release -p mercury-ui --example render_history -- <output directory>`
 
@@ -8,7 +9,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use mercury_ui::{BrowserTab, HistoryRow, MainWindow, SuggestionRow};
+use mercury_ui::{BrowserTab, ChromePalette, ChromeTheme, HistoryRow, MainWindow, SuggestionRow};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
 use slint::{ComponentHandle, ModelRc, PhysicalSize, Rgb8Pixel, SharedPixelBuffer, VecModel};
@@ -198,8 +199,12 @@ fn main() -> Result<(), Box<dyn Error>> {
 
     let window = MainWindow::new()?;
     sample(&window);
-    for (theme, dark) in [("dark", true), ("light", false)] {
-        window.set_history_dark(dark);
+    for (theme, chrome_theme) in [
+        ("dark", ChromeTheme::Dark),
+        ("light", ChromeTheme::Light),
+        ("system", ChromeTheme::System),
+    ] {
+        window.global::<ChromePalette>().set_theme(chrome_theme);
 
         window.set_history_open(false);
         window.set_clear_dialog_open(false);

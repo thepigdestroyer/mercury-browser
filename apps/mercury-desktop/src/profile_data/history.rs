@@ -6,8 +6,28 @@ use mercury_store::{
 use talaria_core::{BrowserController, NavigationOrigin, VisitKey, VisitUpdate};
 
 use super::{
-    Area, Message, ProfileData, ProfileDataError, RECENT_VISITS, handle, now_ms, write_private,
+    Area, Change, Database, Message, ProfileData, ProfileDataError, RECENT_VISITS, handle, now_ms,
+    write_private,
 };
+
+impl Database {
+    /// "Clear browsing history": the visits in `range` and the download records in it that are
+    /// not in progress, purged from the files at once. Returns how many visits went.
+    pub(super) fn clear_browsing_history(
+        &mut self,
+        range: ClearRange,
+        now: i64,
+    ) -> mercury_store::Result<u64> {
+        let removed = self.store.clear_history(range, now)?;
+        let downloads = self.store.clear_downloads(range)?;
+        if downloads > 0 {
+            self.download_ids.clear();
+            self.changed(Change::any(Area::Downloads));
+        }
+        self.store.purge_deleted()?;
+        Ok(removed)
+    }
+}
 
 /// Hands the controller's history updates to the service, stamped with the current time. Call
 /// after applying engine events; with no service the updates are dropped.
@@ -157,8 +177,8 @@ impl ProfileData {
         );
     }
 
-    /// Deletes the visits in `range` and replies with how many; the deleted rows are purged
-    /// from the files at once.
+    /// Deletes the visits in `range`, and the download records in it that are not in progress,
+    /// and replies with how many visits; the deleted rows are purged from the files at once.
     pub(crate) fn clear_history(
         &self,
         range: ClearRange,
@@ -166,17 +186,13 @@ impl ProfileData {
     ) {
         self.request(
             Some(Area::History),
-            move |db, now| {
-                let removed = db.store().clear_history(range, now)?;
-                db.store().purge_deleted()?;
-                Ok(removed)
-            },
+            move |db, now| db.clear_browsing_history(range, now),
             reply,
         );
     }
 
     /// "Clear history on exit": writes the pending-clear marker first, then queues clearing
-    /// all history, which removes the marker when it has finished. If the quit deadline cuts
+    /// all history (download records included, as `clear_history`), which removes the marker when it has finished. If the quit deadline cuts
     /// the clear short, the next start finds the marker and clears the history before
     /// anything else. Call it before [`shut_down`](super::shut_down).
     pub(crate) fn clear_history_on_exit(&self) {
@@ -190,8 +206,7 @@ impl ProfileData {
             Some(Area::History),
             "clearing the history at exit",
             move |db, now| {
-                db.store().clear_history(ClearRange::All, now)?;
-                db.store().purge_deleted()?;
+                db.clear_browsing_history(ClearRange::All, now)?;
                 if let Err(error) = std::fs::remove_file(&marker) {
                     log::warn!("could not remove {}: {error}", marker.display());
                 }
