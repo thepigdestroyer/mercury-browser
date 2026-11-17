@@ -220,6 +220,14 @@ mod gst {
                         ));
                     }
                 };
+                // The marker scripts/macos/test-capture.sh looks for: the engine opened a device.
+                eprintln!(
+                    "mercury-browser: fake media devices: the engine opened the fake {}",
+                    match self.kind.get() {
+                        Some(Kind::Camera) => "camera",
+                        _ => "microphone",
+                    }
+                );
                 let builder = builder.property("is-live", true);
                 let builder = match name {
                     Some(name) => builder.name(name),

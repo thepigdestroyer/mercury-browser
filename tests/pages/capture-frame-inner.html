@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>frame</title>
+<!-- Loaded by capture-frame.html; never attaches a track to any output. -->
+<p>Frame asking for the camera.</p>
+<script>
+  (async () => {
+    let state = "unknown";
+    try {
+      state = (await navigator.permissions.query({ name: "camera" })).state;
+    } catch (error) {
+      state = "error " + error.name;
+    }
+    let result;
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+      result = "ok";
+      stream.getTracks().forEach((track) => track.stop());
+    } catch (error) {
+      result = error.name;
+    }
+    parent.postMessage(`permission=${state}; getUserMedia=${result}`, "*");
+  })();
+</script>

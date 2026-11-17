@@ -1,0 +1,24 @@
+<!doctype html>
+<meta charset="utf-8">
+<title>CAPTURE pending</title>
+<!--
+  Camera and microphone from a frame (media-capture lane). ?frame=cross loads the frame from
+  "localhost" (another origin than this page's 127.0.0.1); ?frame=same from this page's own origin.
+  The frame reports getUserMedia's result and the camera permission state; the verdict is in the
+  title, as in capture.html.
+-->
+<style>body { font: 14px system-ui, sans-serif; margin: 16px; } iframe { width: 420px; height: 140px; }</style>
+<h1>Camera and microphone in a frame</h1>
+<pre id="out">waiting</pre>
+<script>
+  const which = new URLSearchParams(location.search).get("frame") || "cross";
+  const host = which === "cross" ? "localhost" : "127.0.0.1";
+  const frame = document.createElement("iframe");
+  frame.src = `http://${host}:${location.port}/pages/capture-frame-inner.html`;
+  document.body.appendChild(frame);
+  window.addEventListener("message", (event) => {
+    const text = `frame=${which}; ${event.data}`;
+    document.getElementById("out").textContent = text;
+    document.title = "CAPTURE " + text;
+  });
+</script>

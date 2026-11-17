@@ -84,10 +84,18 @@
     const second = sample(video, canvas);
     note("frames", `colours=${first.colours},${second.colours} moving=${first.sum !== second.sum}`);
 
+    const framesOk = first.colours > 1 && first.sum !== second.sum;
+    const params = new URLSearchParams(location.search);
+    // ?then=<url>: leave the page with the devices still open (the engine must release them).
+    if (params.has("then")) {
+      note("verdict", framesOk ? "PASS-LEAVING" : "FAIL");
+      await delay(300);
+      location.href = params.get("then");
+      return;
+    }
     videoTrack.stop();
     audioTrack.stop();
     note("stopped", `${videoTrack.readyState},${audioTrack.readyState}`);
-    const framesOk = first.colours > 1 && first.sum !== second.sum;
     note("verdict", framesOk ? "PASS" : "FAIL");
   }
   run().catch((error) => note("verdict", "exception " + error));
