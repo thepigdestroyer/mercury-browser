@@ -63,6 +63,65 @@ const PUSHES = /\bgit\b[^;&|\n]*\bpush\b/
 const CI_TOOLS = path.join(HOME, "Library", "Caches", "mercury-browser", "ci-tools")
 const KEPT_IN_CACHE = new Set(["gstreamer", "ci-tools"])
 
+// A build is "light" when every cargo invocation in it names its packages (-p/--package) and none of
+// them, through workspace dependencies including dev-dependencies, depends on Servo. Light builds take
+// minutes and use their own slot pool, so they never queue behind a Servo build.
+const CARGO_INVOCATION = /\bcargo\s+(?:\+\S+\s+)?(?:build|b|test|t|clippy|check|c|run|r|doc|bench|nextest)\b([^;&|\n]*)/g
+const HEAVY_DEPENDENCY = /^\s*(servo[\w-]*|talaria-servo|mercury-desktop)\s*[=.]/m
+
+function crateManifests(root: string): Map<string, string> {
+  const manifests = new Map<string, string>()
+  for (const group of ["crates", "apps", "tools"]) {
+    let names: string[] = []
+    try {
+      names = fs.readdirSync(path.join(root, group))
+    } catch {
+      continue
+    }
+    for (const name of names) {
+      const manifest = path.join(root, group, name, "Cargo.toml")
+      try {
+        const text = fs.readFileSync(manifest, "utf8")
+        const declared = /^\s*name\s*=\s*"([^"]+)"/m.exec(text)?.[1] ?? name
+        manifests.set(declared, text)
+      } catch {
+        // not a crate
+      }
+    }
+  }
+  return manifests
+}
+
+function needsServo(pkg: string, manifests: Map<string, string>, seen = new Set<string>()): boolean {
+  if (seen.has(pkg)) return false
+  seen.add(pkg)
+  const text = manifests.get(pkg)
+  if (text === undefined) return true
+  if (HEAVY_DEPENDENCY.test(text)) return true
+  for (const other of manifests.keys()) {
+    if (other !== pkg && new RegExp(`^\\s*${other.replace(/[-]/g, "[-]")}\\s*[=.]`, "m").test(text)) {
+      if (needsServo(other, manifests, seen)) return true
+    }
+  }
+  return false
+}
+
+function isLightBuild(command: string, worktrees: string[], cwd: string | undefined): boolean {
+  if (/\bmake\b/.test(command) || /bundle\.sh/.test(command) || runsBuildScript(command, cwd)) return false
+  const root = worktrees.find((wt) => wt !== REPO) ?? owningWorktree(cwd) ?? REPO
+  const manifests = crateManifests(root)
+  let invocations = 0
+  for (const match of command.matchAll(CARGO_INVOCATION)) {
+    invocations++
+    const args = match[1] ?? ""
+    if (/--workspace|--all(?![\w-])|--manifest-path/.test(args)) return false
+    const packages = [...args.matchAll(/(?:^|\s)(?:-p|--package)(?:\s+|=)([A-Za-z0-9_-]+)/g)].map((m) => m[1])
+    if (packages.length === 0) return false
+    if (packages.some((pkg) => needsServo(pkg, manifests))) return false
+  }
+  return invocations > 0
+}
+
 function runsBuildScript(command: string, cwd: string | undefined): boolean {
   for (const match of command.matchAll(RUNS_SCRIPT)) {
     const file = path.resolve(cwd ?? REPO, match[1].replace(/^~(?=\/)/, HOME).replace(/^\$HOME(?=\/)/, HOME))
@@ -117,12 +176,16 @@ function worktreesOf(command: string, cwd: string | undefined): string[] {
 
 function slotHolders(): Set<string> {
   const holders = new Set<string>()
-  const slots = path.join(STATE, "slots")
+  for (const pool of ["slots", "light-slots"]) addHolders(path.join(STATE, pool), holders)
+  return holders
+}
+
+function addHolders(slots: string, holders: Set<string>) {
   let entries: string[] = []
   try {
     entries = fs.readdirSync(slots)
   } catch {
-    return holders
+    return
   }
   for (const entry of entries) {
     try {
@@ -133,7 +196,6 @@ function slotHolders(): Set<string> {
       // a slot being claimed, or one whose process has gone: build-slot.sh reclaims it
     }
   }
-  return holders
 }
 
 function processesMention(text: string): boolean {
@@ -302,8 +364,10 @@ export default {
       event.env.MERCURY_GUARDED_SHELL = event.shell || "/bin/zsh"
       event.env.MERCURY_GUARDED_WORKTREE = worktrees.join(" ")
       event.env.MERCURY_GUARD_STATE = STATE
+      const pool = isLightBuild(command, worktrees, event.cwd) ? "light" : "heavy"
+      event.env.MERCURY_SLOT_POOL = pool
       event.command = `/bin/bash ${shellQuote(SLOT_SCRIPT)}`
-      log(`build in ${worktrees.join(" ") || event.cwd}: ${command.slice(0, 160).replaceAll("\n", " ")}`)
+      log(`${pool} build in ${worktrees.join(" ") || event.cwd}: ${command.slice(0, 160).replaceAll("\n", " ")}`)
     })
 
     await ctx.tool.hook("execute.before", (event: any) => {

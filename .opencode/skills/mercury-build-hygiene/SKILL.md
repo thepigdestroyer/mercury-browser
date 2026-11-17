@@ -51,7 +51,9 @@ Spend them carefully.
   `mercury-passwords`, `mercury-downloads`, `mercury-import` (and any new crate without `servo` or
   `talaria-servo` in its dependencies) build and test in minutes. Iterate there freely:
   `cargo test --release -p talaria-core -p mercury-ui …`. Put logic in these crates where you can, so it
-  can be tested without Servo.
+  can be tested without Servo. Name the packages with `-p`: such builds go to a separate pool of four
+  light slots and never wait behind a Servo build (a command that also builds a Servo crate, uses `make`,
+  `--workspace` or no `-p` counts as heavy).
 - **Only `talaria-servo` and `apps/mercury-desktop` need Servo.** Finish all of the round's edits first,
   then build once: `cargo check --release -p mercury-desktop --all-targets --all-features` catches compile
   errors; then the narrow tests you need. Run the full `make` gates and the screenshot runs **once per

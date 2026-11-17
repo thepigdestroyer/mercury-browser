@@ -12,11 +12,19 @@ state_dir="${MERCURY_GUARD_STATE:?MERCURY_GUARD_STATE is not set}"
 command="${MERCURY_GUARDED_COMMAND:?MERCURY_GUARDED_COMMAND is not set}"
 run_shell="${MERCURY_GUARDED_SHELL:-/bin/zsh}"
 worktrees="${MERCURY_GUARDED_WORKTREE:-}"
-slots="${MERCURY_BUILD_SLOTS:-3}"
-min_free_gb="${MERCURY_MIN_FREE_GB:-40}"
+# Two pools: "heavy" builds compile Servo; "light" builds touch only crates that don't depend on it
+# (minutes, a few hundred MB), so they never queue behind a heavy one.
+pool="${MERCURY_SLOT_POOL:-heavy}"
+if [ "$pool" = light ]; then
+    slots="${MERCURY_LIGHT_SLOTS:-4}"
+    min_free_gb="${MERCURY_LIGHT_MIN_FREE_GB:-10}"
+    slot_root="$state_dir/light-slots"
+else
+    slots="${MERCURY_BUILD_SLOTS:-3}"
+    min_free_gb="${MERCURY_MIN_FREE_GB:-40}"
+    slot_root="$state_dir/slots"
+fi
 wait_minutes="${MERCURY_SLOT_WAIT_MINUTES:-360}"
-
-slot_root="$state_dir/slots"
 mkdir -p "$slot_root"
 
 say() { printf 'mercury-disk-guard: %s\n' "$*" >&2; }
