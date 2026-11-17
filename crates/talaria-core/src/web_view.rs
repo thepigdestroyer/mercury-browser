@@ -27,7 +27,11 @@ pub trait WebView {
     fn pointer_left(&mut self) -> Result<(), Self::Error>;
     // media session
     fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error>;
-    fn media_session_action(&mut self, action: MediaSessionAction) -> Result<(), Self::Error>;
+    fn media_session_action(
+        &mut self,
+        action: MediaSessionAction,
+        through_engine: bool,
+    ) -> Result<(), Self::Error>;
     fn probe_media(&mut self) -> Result<(), Self::Error>;
 }
 
@@ -63,7 +67,10 @@ where
         BrowserCommand::PointerLeft => web_view.pointer_left(),
         // media session
         BrowserCommand::SetAudioMuted { muted } => web_view.set_audio_muted(muted),
-        BrowserCommand::MediaSessionAction(action) => web_view.media_session_action(action),
+        BrowserCommand::MediaSessionAction {
+            action,
+            through_engine,
+        } => web_view.media_session_action(action, through_engine),
         BrowserCommand::ProbeMedia => web_view.probe_media(),
     }
 }

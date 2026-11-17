@@ -1,4 +1,5 @@
 use std::cell::Cell;
+use std::rc::Rc;
 use std::sync::mpsc::Sender;
 
 use dpi::PhysicalSize;
@@ -21,7 +22,8 @@ use url::Url;
 use crate::frame_ready::FrameReadySignal;
 // media session
 use crate::media_session::{
-    ActionRoute, EngineMediaSession, mute_script, probe_from_js, probe_script, route_action,
+    ActionRoute, arms_document_start, mute_script, origin_of, probe_from_js, probe_script,
+    route_action,
 };
 use crate::{ServoWebViewError, ViewportSize};
 
@@ -34,7 +36,7 @@ pub struct ServoWebView {
     // media session
     /// Where script results (the media probe) are reported; `None` until `with_media_session`.
     browser_event_sender: Option<Sender<TabEvent>>,
-    engine_media_session: EngineMediaSession,
+    document_start_armed: Rc<Cell<bool>>,
 }
 
 impl ServoWebView {
@@ -51,7 +53,7 @@ impl ServoWebView {
             scale_factor: Cell::new(scale_factor),
             // media session
             browser_event_sender: None,
-            engine_media_session: EngineMediaSession::default(),
+            document_start_armed: Rc::default(),
         }
     }
 
@@ -59,11 +61,23 @@ impl ServoWebView {
     pub(crate) fn with_media_session(
         mut self,
         browser_event_sender: Sender<TabEvent>,
-        engine_media_session: EngineMediaSession,
+        document_start_armed: Rc<Cell<bool>>,
     ) -> Self {
         self.browser_event_sender = Some(browser_event_sender);
-        self.engine_media_session = engine_media_session;
+        self.document_start_armed = document_start_armed;
         self
+    }
+
+    /// Before Mercury navigates the web view: see `document_started`.
+    fn arm_document_start(&self, reload: bool) {
+        if arms_document_start(reload, self.inner.load_status()) {
+            self.document_start_armed.set(true);
+        }
+    }
+
+    /// The helper's name is derived from the origin of the page the script will run in.
+    fn origin(&self) -> String {
+        origin_of(self.inner.url().as_ref())
     }
 
     fn run_script(&self, script: String, what: &'static str) {
@@ -118,21 +132,29 @@ impl TalariaWebView for ServoWebView {
 
     fn navigate(&mut self, url: &str) -> Result<(), Self::Error> {
         let url = Url::parse(url)?;
+        // media session
+        self.arm_document_start(false);
         self.inner.load(url);
         Ok(())
     }
 
     fn go_back(&mut self) -> Result<(), Self::Error> {
+        // media session
+        self.arm_document_start(false);
         let _traversal_id = self.inner.go_back(1);
         Ok(())
     }
 
     fn go_forward(&mut self) -> Result<(), Self::Error> {
+        // media session
+        self.arm_document_start(false);
         let _traversal_id = self.inner.go_forward(1);
         Ok(())
     }
 
     fn reload(&mut self) -> Result<(), Self::Error> {
+        // media session
+        self.arm_document_start(true);
         self.inner.reload();
         Ok(())
     }
@@ -246,17 +268,20 @@ impl TalariaWebView for ServoWebView {
 
     // media session
     fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error> {
-        self.run_script(mute_script(muted), "mute");
+        self.run_script(mute_script(muted, &self.origin()), "mute");
         Ok(())
     }
 
-    fn media_session_action(&mut self, action: MediaSessionAction) -> Result<(), Self::Error> {
-        let owns_engine_session = self.engine_media_session.get() == Some(self.tab_id);
-        match route_action(action, owns_engine_session) {
+    fn media_session_action(
+        &mut self,
+        action: MediaSessionAction,
+        through_engine: bool,
+    ) -> Result<(), Self::Error> {
+        match route_action(action, through_engine, &self.origin()) {
             ActionRoute::Engine(action) => self.inner.notify_media_session_action_event(action),
             ActionRoute::Script(script) => self.run_script(script, "media key"),
             ActionRoute::Drop => log::info!(
-                "tab {}: {action:?} dropped: Servo's media session belongs to another tab",
+                "tab {}: {action:?} dropped: Servo's media session may be another tab's",
                 self.tab_id.value()
             ),
         }
@@ -267,7 +292,7 @@ impl TalariaWebView for ServoWebView {
         let tab_id = self.tab_id;
         let sender = self.browser_event_sender.clone();
         self.inner
-            .evaluate_javascript(probe_script(), move |result| match result {
+            .evaluate_javascript(probe_script(&self.origin()), move |result| match result {
                 Ok(value) => {
                     if let (Some(probe), Some(sender)) = (probe_from_js(&value), sender) {
                         let _send_result =

@@ -783,6 +783,7 @@ mod tests {
         fn media_session_action(
             &mut self,
             _action: talaria_core::MediaSessionAction,
+            _through_engine: bool,
         ) -> Result<(), Self::Error> {
             Ok(())
         }

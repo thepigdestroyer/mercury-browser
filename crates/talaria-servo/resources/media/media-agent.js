@@ -50,17 +50,27 @@
       const media = new Set();
       let frames = 0;
       const visit = (root) => {
-        for (const element of root.querySelectorAll("*")) {
+        for (const element of root.querySelectorAll("audio, video, iframe, frame, object, embed")) {
           if (element instanceof HTMLMediaElement) media.add(element);
-          else if (FRAMES.has(element.localName)) frames++;
-          if (element.shadowRoot) visit(element.shadowRoot);
+          else frames++;
+        }
+        // Only shadow hosts need a closer look.
+        const walker = document.createTreeWalker(root, NodeFilter.SHOW_ELEMENT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          if (node.shadowRoot) visit(node.shadowRoot);
         }
       };
       visit(document);
+      // Elements that played; references to collected ones are dropped.
+      let kept = 0;
       for (const reference of played) {
         const element = reference.deref();
-        if (element) media.add(element);
+        if (element) {
+          media.add(element);
+          played[kept++] = reference;
+        }
       }
+      played.length = kept;
       return { media: Array.from(media), frames };
     }
 

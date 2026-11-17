@@ -137,6 +137,16 @@ impl MediaState {
                 .is_none_or(|probe| probe.playing == 0 || probe.audible > 0 || probe.unseen)
     }
 
+    /// Playing, with a probe that heard it: an audible element, or nothing playing in sight
+    /// (the sound is in a frame or elsewhere out of reach). Unlike `is_audible`, frames alone
+    /// are no evidence, so a muted background video never takes the media keys.
+    pub fn has_audible_evidence(&self) -> bool {
+        self.is_playing()
+            && self
+                .probe
+                .is_some_and(|probe| probe.audible > 0 || probe.playing == 0)
+    }
+
     pub fn plays_fullscreen_video(&self) -> bool {
         self.is_playing() && self.probe.is_some_and(|probe| probe.fullscreen_video)
     }

@@ -105,7 +105,7 @@ anything the page un-muted.
   created before the mute, closed shadow roots and the first moments of media that starts as a
   page opens are not muted.
 - The page can notice: it receives `volumechange` events, sees `muted` set on its elements, and
-  sees a helper property with a random name on its window (and a wrapped `AudioContext` and
+  sees a helper property on its window, whose name is random for each run and different for every site, so sites cannot use it to recognise each other (and a wrapped `AudioContext` and
   `HTMLMediaElement.prototype.play`), which a script could use to tell that Mercury looked or muted.
 
 ## Media keys and Now Playing (macOS)
@@ -113,14 +113,15 @@ anything the page un-muted.
 The tab that most recently started playing sound appears in Control Centre's Now Playing. It shows
 the page's title, artist and album, cut to 256 characters and cleaned of control characters. It
 also always names the page's site: as the artist when the page gives none, otherwise after the
-album. The play/pause key (and AirPods controls) acts on that tab. Next and previous are only
-offered while Servo's media session belongs to that tab, and reach pages that handle them through
-the Media Session API.
+album. The play/pause key (and AirPods controls) acts on that tab. Servo has one media session
+for all tabs, so while another tab also plays, play and pause are done inside the page and next and
+previous are not offered; when that tab plays alone, they go through Servo and reach pages that
+handle them through the Media Session API.
 
 The tab stays in Now Playing while paused, so play resumes it. It is removed when the tab stops,
 goes to another page, is muted or is closed. A tab that pauses and plays again within a second (as
 pages with several media elements do) does not take Now Playing back from another tab. Muted tabs
-and silent background videos never take the media keys.
+and silent background videos (even beside a frame) never take the media keys.
 
 While the active tab plays a video in fullscreen, Mercury keeps the display from going to sleep;
 pausing, leaving fullscreen, switching tabs or quitting lets it sleep again.

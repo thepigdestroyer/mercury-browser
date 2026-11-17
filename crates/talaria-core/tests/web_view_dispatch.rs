@@ -40,7 +40,7 @@ enum FakeCall {
     },
     // media session
     SetAudioMuted(bool),
-    MediaSessionAction(MediaSessionAction),
+    MediaSessionAction(MediaSessionAction, bool),
     ProbeMedia,
 }
 
@@ -154,8 +154,12 @@ impl WebView for FakeWebView {
         self.record(FakeCall::SetAudioMuted(muted))
     }
 
-    fn media_session_action(&mut self, action: MediaSessionAction) -> Result<(), Self::Error> {
-        self.record(FakeCall::MediaSessionAction(action))
+    fn media_session_action(
+        &mut self,
+        action: MediaSessionAction,
+        through_engine: bool,
+    ) -> Result<(), Self::Error> {
+        self.record(FakeCall::MediaSessionAction(action, through_engine))
     }
 
     fn probe_media(&mut self) -> Result<(), Self::Error> {
@@ -416,8 +420,14 @@ fn media_session_commands_reach_the_web_view() {
     for command in [
         BrowserCommand::SetAudioMuted { muted: true },
         BrowserCommand::SetAudioMuted { muted: false },
-        BrowserCommand::MediaSessionAction(MediaSessionAction::Pause),
-        BrowserCommand::MediaSessionAction(MediaSessionAction::NextTrack),
+        BrowserCommand::MediaSessionAction {
+            action: MediaSessionAction::Pause,
+            through_engine: false,
+        },
+        BrowserCommand::MediaSessionAction {
+            action: MediaSessionAction::NextTrack,
+            through_engine: true,
+        },
         BrowserCommand::ProbeMedia,
     ] {
         assert_eq!(dispatch_command(&mut web_view, command), Ok(()));
@@ -428,8 +438,8 @@ fn media_session_commands_reach_the_web_view() {
         vec![
             FakeCall::SetAudioMuted(true),
             FakeCall::SetAudioMuted(false),
-            FakeCall::MediaSessionAction(MediaSessionAction::Pause),
-            FakeCall::MediaSessionAction(MediaSessionAction::NextTrack),
+            FakeCall::MediaSessionAction(MediaSessionAction::Pause, false),
+            FakeCall::MediaSessionAction(MediaSessionAction::NextTrack, true),
             FakeCall::ProbeMedia,
         ]
     );

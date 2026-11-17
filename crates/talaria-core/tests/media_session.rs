@@ -147,6 +147,7 @@ fn the_none_state_forgets_the_session() {
 fn playing_loaded_page() -> BrowserState {
     let mut state = BrowserState::default();
     state.apply(loading());
+    state.apply(BrowserEvent::DocumentStarted);
     state.apply(commit("https://a.test/"));
     state.apply(loaded());
     state.apply(playing());
@@ -157,53 +158,61 @@ fn playing_loaded_page() -> BrowserState {
 }
 
 #[test]
-fn a_new_document_starts_without_media_once_it_commits() {
+fn a_new_document_starts_without_media() {
+    // Servo's `Started` comes from the new top-level document as it is initialised; a reload
+    // sends no address change at all.
     let mut state = playing_loaded_page();
 
     state.apply(loading());
-    assert!(
-        state.media().is_playing(),
-        "the old document plays until the new one commits"
-    );
-    state.apply(commit("https://b.test/"));
+    state.apply(BrowserEvent::DocumentStarted);
 
     assert_eq!(state.media(), &MediaState::default());
 }
 
 #[test]
-fn a_navigation_that_never_commits_keeps_the_media() {
-    // A download, a 204 or a cancelled `beforeunload`: loading starts and ends, no commit.
+fn load_states_and_address_changes_alone_keep_the_media() {
+    // `HeadParsed` also arrives when a page inserts a `<body>`; address changes without a new
+    // document are `pushState` or a fragment. Neither may let a page hide its sound.
     let mut state = playing_loaded_page();
 
     state.apply(loading());
     state.apply(loaded());
-    state.apply(commit("https://a.test/#later"));
+    state.apply(commit("https://a.test/next-track"));
+    state.apply(commit("https://a.test/next-track#t=10"));
 
     assert!(state.media().is_playing());
     assert_eq!(state.media().metadata(), Some(&metadata("Song")));
 }
 
 #[test]
-fn a_same_document_address_change_keeps_the_media() {
-    let mut state = playing_loaded_page();
+fn media_the_new_document_starts_is_kept() {
+    let mut state = BrowserState::default();
+    state.apply(loading());
+    state.apply(BrowserEvent::DocumentStarted);
+    state.apply(playing());
 
-    state.apply(commit("https://a.test/next-track"));
+    state.apply(loading());
+    state.apply(commit("https://a.test/"));
+    state.apply(loaded());
 
     assert!(state.media().is_playing());
 }
 
 #[test]
-fn head_parsed_does_not_forget_media_the_new_document_started() {
-    let mut state = BrowserState::default();
-    state.apply(loading());
-    state.apply(commit("https://a.test/"));
-    state.apply(playing());
+fn a_muted_tab_is_muted_again_when_a_document_starts() {
+    let (mut controller, tab_id) = ready_controller();
+    controller.toggle_audio_muted(tab_id);
+    drain(&mut controller);
 
-    // Servo reports `HeadParsed` as a second `Loading`.
-    state.apply(loading());
-    state.apply(loaded());
+    controller.handle_event(tab_id, BrowserEvent::DocumentStarted);
 
-    assert!(state.media().is_playing());
+    assert_eq!(
+        drain(&mut controller),
+        vec![TabCommand::new(
+            tab_id,
+            BrowserCommand::SetAudioMuted { muted: true }
+        )]
+    );
 }
 
 #[test]
@@ -456,4 +465,33 @@ fn an_unmuted_tab_is_not_muted_by_a_probe() {
     controller.handle_event(tab_id, probe(1, 1, false));
 
     assert!(drain(&mut controller).is_empty());
+}
+
+#[test]
+fn only_positive_evidence_of_sound_counts_for_the_media_keys() {
+    let mut state = BrowserState::default();
+    state.apply(playing());
+    assert!(!state.media().has_audible_evidence(), "not probed yet");
+
+    // A muted autoplay video next to a frame: the speaker shows, the media keys stay away.
+    state.apply(BrowserEvent::MediaProbed {
+        probe: MediaProbe {
+            playing: 1,
+            audible: 0,
+            unseen: true,
+            fullscreen_video: false,
+        },
+    });
+    assert!(state.media().is_audible());
+    assert!(!state.media().has_audible_evidence());
+
+    state.apply(probe(1, 1, false));
+    assert!(state.media().has_audible_evidence());
+
+    // Servo says it plays and the page shows nothing playing: the sound is out of sight.
+    state.apply(probe(0, 0, false));
+    assert!(state.media().has_audible_evidence());
+
+    state.apply(paused());
+    assert!(!state.media().has_audible_evidence());
 }

@@ -131,7 +131,19 @@ impl NowPlayingPolicy {
             return self.published.take().map(|_| NowPlayingChange::Clear);
         };
 
-        let info = now_playing_info(tab_id, state, engine_session == Some(tab_id));
+        // Servo keeps one media session for all web views, moved by every event a page sends
+        // (position reports included, ten a second while playing), and sends actions there. It
+        // is known to be this tab's only when this tab alone plays, or nobody plays and this tab
+        // sent the last event.
+        let others_play = controller
+            .tabs()
+            .any(|tab| tab.id() != tab_id && tab.state().media().is_playing());
+        let owns_engine_session = if state.media().is_playing() {
+            !others_play
+        } else {
+            !others_play && engine_session == Some(tab_id)
+        };
+        let info = now_playing_info(tab_id, state, owns_engine_session);
         let sought = match (self.last_position, info.elapsed) {
             (Some((last_tab_id, last)), Some(elapsed)) if last_tab_id == tab_id => {
                 (elapsed - last).abs() > SEEK_JUMP_SECONDS
@@ -155,6 +167,11 @@ impl NowPlayingPolicy {
         self.published.as_ref().map(|info| info.tab_id)
     }
 
+    /// Whether actions for the published tab can go through Servo's media session.
+    pub(crate) fn through_engine(&self) -> bool {
+        self.published.as_ref().is_some_and(|info| info.can_skip)
+    }
+
     /// Where a remote command goes: always the tab shown in Now Playing.
     pub(crate) fn action_for(&self, command: RemoteCommand) -> Option<(TabId, MediaSessionAction)> {
         let info = self.published.as_ref()?;
@@ -171,12 +188,13 @@ impl NowPlayingPolicy {
     }
 }
 
-/// Playing in a tab the user has not muted, and a probe has been made and did not show all of
-/// it muted. A muted autoplaying background video (on a page without frames) therefore never
-/// takes the media keys, and neither does a muted tab whose page un-muted itself.
+/// Playing in a tab the user has not muted, with positive evidence of sound (see
+/// `MediaState::has_audible_evidence`). A muted autoplaying background video therefore never
+/// takes the media keys, even beside a frame, and neither does a muted tab whose page un-muted
+/// itself.
 fn plays_audibly(state: &BrowserState) -> bool {
     let media = state.media();
-    !state.is_audio_muted() && media.probe().is_some() && media.is_audible()
+    !state.is_audio_muted() && media.has_audible_evidence()
 }
 
 /// Page text for Control Centre: no control characters or bidirectional overrides, at most
@@ -188,7 +206,14 @@ pub(crate) fn clean_text(text: &str) -> String {
             !character.is_control()
                 && !matches!(
                     character,
-                    '\u{061C}' | '\u{200E}' | '\u{200F}' | '\u{202A}'..='\u{202E}' | '\u{2066}'..='\u{2069}'
+                    // Bidirectional marks and overrides, line and paragraph separators, and
+                    // zero-width characters.
+                    '\u{061C}'
+                        | '\u{200B}'..='\u{200F}'
+                        | '\u{2028}'..='\u{202E}'
+                        | '\u{2060}'
+                        | '\u{2066}'..='\u{2069}'
+                        | '\u{FEFF}'
                 )
         })
         .collect::<String>();
@@ -421,7 +446,8 @@ mod tests {
                 duration: Some(240.0),
                 elapsed: Some(12.0),
                 playback_rate: 1.0,
-                can_skip: false,
+                // It plays alone.
+                can_skip: true,
             }
         );
         assert_eq!(policy.owner(), Some(first));
@@ -480,9 +506,11 @@ mod tests {
         assert_eq!(update(&mut policy, &controller), None);
         assert_eq!(policy.owner(), Some(second));
 
-        // Starting again after a pause makes it the most recent.
+        // Starting again after a pause makes it the most recent. While it is paused the
+        // second tab plays alone, so Servo's session is now known to be the second tab's.
         playback(&mut controller, first, MediaPlaybackState::Paused);
-        assert_eq!(update(&mut policy, &controller), None);
+        let info = published(update(&mut policy, &controller));
+        assert_eq!((info.tab_id, info.can_skip), (second, true));
         playback(&mut controller, first, MediaPlaybackState::Playing);
         assert_eq!(published(update(&mut policy, &controller)).tab_id, first);
     }
@@ -548,9 +576,9 @@ mod tests {
         assert_eq!(
             update(&mut policy, &controller),
             None,
-            "not before the commit"
+            "a load alone keeps it"
         );
-        page(&mut controller, first, "https://c.test/", "Next page");
+        event(&mut controller, first, BrowserEvent::DocumentStarted);
         assert_eq!(
             update(&mut policy, &controller),
             Some(NowPlayingChange::Clear)
@@ -591,14 +619,11 @@ mod tests {
             policy.action_for(RemoteCommand::TogglePlayPause),
             Some((second, MediaSessionAction::Pause))
         );
-        assert_eq!(
-            policy.action_for(RemoteCommand::NextTrack),
-            Some((second, MediaSessionAction::NextTrack))
-        );
-        assert_eq!(
-            policy.action_for(RemoteCommand::PreviousTrack),
-            Some((second, MediaSessionAction::PreviousTrack))
-        );
+        // Both tabs play, so Servo's single session may be either's: play and pause go to the
+        // published tab by script, next and previous cannot reach it.
+        assert!(!policy.through_engine());
+        assert_eq!(policy.action_for(RemoteCommand::NextTrack), None);
+        assert_eq!(policy.action_for(RemoteCommand::PreviousTrack), None);
         assert_eq!(
             policy.action_for(RemoteCommand::Play),
             Some((second, MediaSessionAction::Play))
@@ -659,7 +684,8 @@ mod tests {
             &mut controller,
             first,
             MediaMetadata {
-                title: "Evil\u{202E}gnos\u{0}\u{1b}[31m\u{85}title\n".to_owned(),
+                title: "Evil\u{202E}gnos\u{0}\u{1b}[31m\u{85}ti\u{200B}t\u{2028}l\u{2029}e\u{FEFF}\u{2060}\u{200C}\u{200D}\n"
+                    .to_owned(),
                 artist: String::new(),
                 album: "y".repeat(400),
             },
@@ -758,26 +784,84 @@ mod tests {
     }
 
     #[test]
-    fn next_and_previous_need_servos_media_session_on_the_published_tab() {
+    fn servos_session_is_used_only_when_the_published_tab_alone_plays() {
         let (mut controller, first, second) = two_tabs();
         let mut policy = NowPlayingPolicy::default();
-        start_audible(&mut controller, first);
         let now = Instant::now();
+        start_audible(&mut controller, first);
 
+        // Alone in playing: Servo's session follows it within one position report.
+        let info = published(policy.update(&controller, Some(second), now));
+        assert!(info.can_skip);
+        assert!(policy.through_engine());
+        assert_eq!(
+            policy.action_for(RemoteCommand::NextTrack),
+            Some((first, MediaSessionAction::NextTrack))
+        );
+
+        // A muted background video starts in the other tab: no longer alone.
+        playback(&mut controller, second, MediaPlaybackState::Playing);
         let info = published(policy.update(&controller, Some(second), now));
         assert!(!info.can_skip);
+        assert!(!policy.through_engine());
         assert_eq!(policy.action_for(RemoteCommand::NextTrack), None);
-        assert_eq!(policy.action_for(RemoteCommand::PreviousTrack), None);
         assert_eq!(
             policy.action_for(RemoteCommand::TogglePlayPause),
             Some((first, MediaSessionAction::Pause))
         );
 
-        let info = published(policy.update(&controller, Some(first), now));
-        assert!(info.can_skip);
-        assert_eq!(
-            policy.action_for(RemoteCommand::NextTrack),
-            Some((first, MediaSessionAction::NextTrack))
+        // Nobody plays: the session is the published tab's only if it sent the last event.
+        playback(&mut controller, second, MediaPlaybackState::Paused);
+        playback(&mut controller, first, MediaPlaybackState::Paused);
+        assert!(!published(policy.update(&controller, Some(second), now)).can_skip);
+        assert!(published(policy.update(&controller, Some(first), now)).can_skip);
+    }
+
+    #[test]
+    fn two_playing_tabs_are_not_republished_as_servos_session_moves() {
+        let (mut controller, first, second) = two_tabs();
+        let mut policy = NowPlayingPolicy::default();
+        let start = Instant::now();
+        start_audible(&mut controller, first);
+        policy.update(&controller, Some(first), start);
+        start_audible(&mut controller, second);
+        position(&mut controller, second, 0.0);
+        assert!(matches!(
+            policy.update(&controller, Some(second), start + Duration::from_secs(2)),
+            Some(NowPlayingChange::Publish(_))
+        ));
+
+        // Ten position reports a second from each tab move Servo's session back and forth.
+        let mut republished = 0;
+        for step in 1..=50_u32 {
+            let tab_id = if step % 2 == 0 { first } else { second };
+            position(&mut controller, tab_id, f64::from(step) / 10.0);
+            let at = start + Duration::from_secs(2) + Duration::from_millis(u64::from(step) * 100);
+            if policy.update(&controller, Some(tab_id), at).is_some() {
+                republished += 1;
+            }
+        }
+        assert_eq!(republished, 0);
+    }
+
+    #[test]
+    fn a_muted_video_beside_a_frame_does_not_take_now_playing() {
+        let (mut controller, first, _) = two_tabs();
+        let mut policy = NowPlayingPolicy::default();
+        playback(&mut controller, first, MediaPlaybackState::Playing);
+        event(
+            &mut controller,
+            first,
+            BrowserEvent::MediaProbed {
+                probe: MediaProbe {
+                    playing: 1,
+                    audible: 0,
+                    unseen: true,
+                    fullscreen_video: false,
+                },
+            },
         );
+
+        assert_eq!(update(&mut policy, &controller), None);
     }
 }

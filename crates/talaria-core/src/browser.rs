@@ -78,7 +78,13 @@ pub enum BrowserCommand {
     SetAudioMuted {
         muted: bool,
     },
-    MediaSessionAction(MediaSessionAction),
+    /// `through_engine`: Servo's single media session is known to be this tab's, so the action
+    /// goes through Servo (page handlers, next/previous); otherwise play and pause are done from
+    /// script and other actions are dropped.
+    MediaSessionAction {
+        action: MediaSessionAction,
+        through_engine: bool,
+    },
     /// Looks into the page's document; the engine answers with `BrowserEvent::MediaProbed`.
     ProbeMedia,
 }
@@ -148,6 +154,9 @@ pub enum BrowserEvent {
     MediaProbed {
         probe: MediaProbe,
     },
+    /// A new top-level document was created in the tab: the previous one, and its media, are
+    /// gone. Unlike `LoadStateChanged`, a page cannot send this for its own document.
+    DocumentStarted,
 }
 
 impl BrowserEvent {
@@ -176,8 +185,6 @@ pub struct BrowserState {
     media: MediaState,
     /// The user's choice; kept across navigations in the tab.
     audio_muted: bool,
-    /// A load started; the next address change commits a new document.
-    document_pending: bool,
 }
 
 impl Default for BrowserState {
@@ -196,7 +203,6 @@ impl Default for BrowserState {
             // media session
             media: MediaState::default(),
             audio_muted: false,
-            document_pending: false,
         }
     }
 }
@@ -260,25 +266,19 @@ impl BrowserState {
     /// The tab's web view is about to be replaced by a new one.
     pub(crate) fn forget_media(&mut self) {
         self.media = MediaState::default();
-        self.document_pending = false;
     }
-    /// Media belongs to a document. The old document keeps playing while a new one loads, and
-    /// a load that never commits (a download, a 204, a cancelled `beforeunload`) leaves it in
-    /// place; only the address change that commits the new document after a load started
-    /// (Servo reports `Started` as `Loading`, then the history change) replaces it. An address
-    /// change without a load is the same document (`pushState`, a fragment). A failed or crashed
-    /// page plays nothing.
+    /// Media belongs to a document: it is forgotten when a new document starts, and when the
+    /// page fails or crashes. Load states and address changes alone keep it (a page can send
+    /// `HeadParsed` by inserting a `<body>`; `pushState` changes the address).
     fn forget_media_of_a_replaced_document(&mut self, event: &BrowserEvent) {
-        match event {
-            BrowserEvent::LoadStateChanged {
-                state: LoadState::Loading,
-            } if self.load_state != LoadState::Loading => self.document_pending = true,
-            BrowserEvent::LoadStateChanged {
-                state: LoadState::Failed { .. },
-            } => self.forget_media(),
-            BrowserEvent::LoadStateChanged { .. } => self.document_pending = false,
-            BrowserEvent::AddressChanged { .. } if self.document_pending => self.forget_media(),
-            _ => {}
+        if matches!(
+            event,
+            BrowserEvent::DocumentStarted
+                | BrowserEvent::LoadStateChanged {
+                    state: LoadState::Failed { .. }
+                }
+        ) {
+            self.forget_media();
         }
     }
 
@@ -334,6 +334,7 @@ impl BrowserState {
             BrowserEvent::MediaMetadataChanged { metadata } => self.media.set_metadata(metadata),
             BrowserEvent::MediaPositionChanged { position } => self.media.set_position(position),
             BrowserEvent::MediaProbed { probe } => self.media.set_probe(probe),
+            BrowserEvent::DocumentStarted => {}
         }
     }
 }

@@ -90,7 +90,22 @@
       detached.pause();
     }
 
-    run()
+    // ?reload: play, then reload the page once; the reloaded page plays nothing, so the tab must
+    // lose its speaker (checks that a reload counts as a new document).
+    async function reloadOnce() {
+      if (sessionStorage.getItem("media-session-reloaded")) {
+        line("reloaded; this document plays nothing (the tab should show no speaker)", null);
+        return;
+      }
+      const tone = silentElement(document.getElementById("tone"));
+      await tone.play();
+      await wait(1500);
+      line("playing before the reload: " + !tone.paused, !tone.paused);
+      sessionStorage.setItem("media-session-reloaded", "1");
+      location.reload();
+    }
+
+    (new URLSearchParams(location.search).has("reload") ? reloadOnce() : run())
       .catch((error) => line("unexpected: " + error.message, false))
       .finally(() => { line("DONE", null); finished = true; });
   </script>

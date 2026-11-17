@@ -395,6 +395,7 @@ fn reaches_a_new_document(event: &BrowserEvent) -> bool {
     matches!(
         event,
         BrowserEvent::AddressChanged { .. }
+            | BrowserEvent::DocumentStarted
             | BrowserEvent::LoadStateChanged {
                 state: LoadState::Loaded
             }

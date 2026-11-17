@@ -95,7 +95,13 @@ impl MediaSessionHub {
             "media key {command:?}: {action:?} to tab {}",
             tab_id.value()
         );
-        controller.queue_command_for(tab_id, BrowserCommand::MediaSessionAction(action))
+        controller.queue_command_for(
+            tab_id,
+            BrowserCommand::MediaSessionAction {
+                action,
+                through_engine: self.now_playing.through_engine(),
+            },
+        )
     }
 
     /// Releases everything held for the system; the browser is quitting.
@@ -275,9 +281,9 @@ impl NowPlayingCenter for LoggingNowPlaying {
         // The page's own text, cut short, only at debug level.
         log::debug!(
             "now playing (not published to the system): {:?} by {:?} on {:?}",
-            talaria_servo_loggable(&info.title),
-            talaria_servo_loggable(&info.artist),
-            talaria_servo_loggable(&info.album)
+            log_excerpt(&info.title),
+            log_excerpt(&info.artist),
+            log_excerpt(&info.album)
         );
     }
 
@@ -287,7 +293,7 @@ impl NowPlayingCenter for LoggingNowPlaying {
 }
 
 /// One line, at most 64 characters (the text is already free of controls).
-fn talaria_servo_loggable(text: &str) -> String {
+fn log_excerpt(text: &str) -> String {
     let mut line = text.chars().take(64).collect::<String>();
     if text.chars().count() > 64 {
         line.push('…');
@@ -441,7 +447,10 @@ mod tests {
             drain(&mut controller),
             [TabCommand::new(
                 tab_id,
-                BrowserCommand::MediaSessionAction(MediaSessionAction::Pause)
+                BrowserCommand::MediaSessionAction {
+                    action: MediaSessionAction::Pause,
+                    through_engine: true,
+                }
             )]
         );
     }
@@ -557,6 +566,7 @@ mod tests {
                 state: talaria_core::LoadState::Loading,
             },
         );
+        controller.handle_event(tab_id, BrowserEvent::DocumentStarted);
         hub.update(&mut controller, None, start);
         ready(&mut controller, tab_id, "second");
         controller.handle_event(
@@ -570,6 +580,7 @@ mod tests {
         assert_eq!(
             drain(&mut controller),
             [
+                mute.clone(),
                 mute.clone(),
                 mute,
                 TabCommand::new(tab_id, BrowserCommand::ProbeMedia),
