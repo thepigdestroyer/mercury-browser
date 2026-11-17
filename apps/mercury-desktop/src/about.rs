@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The "About Mercury Browser" window. It holds the `AboutSlint` widget that the Slint
 //! Royalty-free License 2.0 requires (§2(a)), and is reached from the application menu and
 //! from the browser menu.

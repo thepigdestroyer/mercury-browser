@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Obtain the official GStreamer framework packages for macOS without sudo.
 #
 #   scripts/macos/gstreamer.sh fetch    download and verify the two .pkg files

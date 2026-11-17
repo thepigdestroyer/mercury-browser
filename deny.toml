@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 # Adapted from Zervo, https://github.com/Goddv/Zervo, commit 86cb7126,
 # deny.toml, MPL-2.0.
 #
@@ -78,9 +79,11 @@ allow-registry = ["https://github.com/rust-lang/crates.io-index"]
 allow-git = []
 
 [licenses]
-# Mercury Browser is MPL-2.0. This is the list of licences the dependency
-# graph actually needs, each permissive and compatible with shipping under
-# MPL-2.0; anything new is a decision for a person, not for this file.
+# Mercury Browser's own files are under PolyForm-Noncommercial-1.0.0 or MPL-2.0
+# (see LICENSE); its crates are never published, so they are not checked here.
+# This is the list of licences the dependency graph actually needs, each
+# permissive and compatible with shipping as part of Mercury; anything new is a
+# decision for a person, not for this file.
 # No copyleft licence (GPL, LGPL, AGPL) is allowed globally: crates that offer
 # one as an alternative (`r-efi`: "MIT OR Apache-2.0 OR LGPL-2.1-or-later")
 # pass on their permissive terms. Every entry, with the crates that need it,
@@ -105,6 +108,8 @@ allow = [
     "Zlib",
 ]
 confidence-threshold = 0.9
+# Mercury's own workspace crates (all `publish = false`) carry Mercury's licences, not dependency licences.
+private = { ignore = true }
 # A licence on the list that nothing needs any more should come off it; it
 # warns rather than fails, so removing a dependency does not need a policy edit.
 unused-allowed-license = "warn"

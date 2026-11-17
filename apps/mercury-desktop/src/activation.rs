@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // User activation per tab (tabs lane).
 //
 // Servo 0.8.0 does not tell the embedder whether a page request follows a user gesture: it

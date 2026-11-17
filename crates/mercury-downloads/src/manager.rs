@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The public face of the crate: requests, events, and the manager that runs transfers.
 
 use std::collections::{HashMap, HashSet};

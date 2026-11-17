@@ -7,7 +7,7 @@
   <img src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-0a47b3" alt="Platform: macOS on Apple Silicon">
   <img src="https://img.shields.io/badge/engine-Servo%200.8-5cb8ff" alt="Engine: Servo 0.8">
   <img src="https://img.shields.io/badge/status-preview-orange" alt="Status: preview">
-  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MPL--2.0-brightgreen" alt="License: MPL-2.0"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%20%2B%20MPL--2.0-blue" alt="License: PolyForm Noncommercial 1.0.0 and MPL-2.0"></a>
 </p>
 
 <p align="center">
@@ -232,18 +232,25 @@ make qa
 
 If a page breaks, try it in Servo's own `servoshell` first. If it breaks there too, the fix belongs in Servo.
 
+Contributions are accepted under the terms in [CONTRIBUTING.md](CONTRIBUTING.md). They come in under the licence of the files they change, and you agree that I can also offer your contribution under a commercial licence.
+
 The `.opencode/` folder holds project tooling for the AI coding agents used in development: a disk guard that limits how many builds run at once and deletes build output after every round, plus the skill that tells the agents how to work with it.
 
 ## Origins
 
 Mercury was originally forked from [Hermes Browser](https://github.com/KaykCaputo/hermes-browser) by Kayk Caputo, a Linux-first browser shell around Servo 0.7. Thanks to Kayk for the starting point. The first tab model, the bridge to Servo and the Slint window all began in Hermes, and Hermes's 38 commits are the first of more than 300 on the `mercury` branch.
 
-Everything since has been Mercury's own work. It moved to a new platform (macOS on Apple Silicon) and a newer engine (Servo 0.8, with its own patches), and it gained new crates for history, bookmarks, settings, passwords, downloads and import, along with most of the features listed above. Much of the inherited code was rewritten along the way. The interface that still resembles Hermes is next. Mercury keeps the MPL-2.0 licence Hermes used.
+Everything since has been Mercury's own work. It moved to a new platform (macOS on Apple Silicon) and a newer engine (Servo 0.8, with its own patches), and it gained new crates for history, bookmarks, settings, passwords, downloads and import, along with most of the features listed above. Much of the inherited code was rewritten along the way. The interface that still resembles Hermes is next. The files that came from Hermes keep the MPL-2.0 licence Hermes used; see [License](#license).
 
 ## License
 
-Mercury Browser is open source: its source code and project assets are available under the [Mozilla Public License 2.0](LICENSE). Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors; see [NOTICE](NOTICE). The parts that came from Hermes Browser stay under the same licence with Kayk Caputo's copyright.
+Mercury Browser is source-available, and free for non-commercial use. Read it, fork it, change it and share your changes for personal use, study, research, hobby projects, or use by a charity, school, public research body or government. Making money from it, or using it in or for a commercial product or service, needs a commercial licence from me: open an issue to ask.
 
-The MPL-2.0 allows commercial use and combination with code under other licenses while requiring modifications to MPL-covered files to remain available under the same license. Third-party dependencies and bundled filter lists remain subject to their respective licenses and notices.
+Two licences cover the code, and every file says which one applies in an `SPDX-License-Identifier` line at the top (files that can't hold a comment are listed in [`REUSE.toml`](REUSE.toml)):
+
+- **[PolyForm Noncommercial 1.0.0](LICENSES/PolyForm-Noncommercial-1.0.0.md)** for everything written for Mercury. Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors.
+- **[Mozilla Public License 2.0](LICENSES/MPL-2.0.txt)** for the files that came from Hermes Browser or contain code from it (Copyright © 2026 Kayk Caputo), for files adapted from other MPL-2.0 projects such as Servo, and for Mercury's changes to those files.
+
+[LICENSE](LICENSE) explains the split and [NOTICE](NOTICE) has the copyright notice. Versions published before 17 November 2026 were released entirely under the MPL-2.0 and stay available under it. Third-party dependencies, vendored code in `third_party/` and the bundled filter lists keep their own licences and notices.
 
 The frame bridges in `apps/mercury-desktop/src/rendering/` follow Slint's Servo example, and the macOS bridge adapts its `metal.rs` (https://github.com/slint-ui/slint, tag `v1.17.1`, MIT, © SixtyFPS GmbH); see [THIRD-PARTY-NOTICES.md](THIRD-PARTY-NOTICES.md) and [LICENSES/MIT-slint-examples.txt](LICENSES/MIT-slint-examples.txt).

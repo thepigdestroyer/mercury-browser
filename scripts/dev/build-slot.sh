@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Runs one shell command while holding one of Mercury's build slots, so that only a few builds run
 # on the development Mac at once and none starts without enough free disk space.
 #
@@ -6,6 +8,10 @@
 # (cargo build/test/clippy/check/run, make lint/test/build-release/...). The command arrives in
 # MERCURY_GUARDED_COMMAND and runs unchanged under MERCURY_GUARDED_SHELL; its exit status is ours.
 # See .opencode/skills/mercury-build-hygiene/SKILL.md.
+# Everything runs inside main(), and the file is only ever replaced (written elsewhere, then moved
+# over), never edited in place: bash reads a running script lazily, so an in-place edit would break
+# every build already waiting in it.
+main() {
 set -uo pipefail
 
 state_dir="${MERCURY_GUARD_STATE:?MERCURY_GUARD_STATE is not set}"
@@ -94,6 +100,7 @@ while :; do
     sleep 15
 done
 
+    # shellcheck disable=SC2329 # invoked by the EXIT trap below
 release() {
     local wt
     rm -rf "$slot"
@@ -118,3 +125,7 @@ if [ -z "${CARGO_BUILD_JOBS:-}" ]; then
 fi
 
 "$run_shell" -c "$command"
+}
+
+main "$@"
+exit $?

@@ -2,10 +2,12 @@
 
 This file records the projects that Mercury Browser's source code is derived from or copies code
 from, together with their licences. Mercury began as a fork of Hermes Browser, listed first; the
-files that came from Hermes do not carry individual source headers. Every file that contains code
-copied or adapted from any other project names that source at the top and has a matching entry
-here. Vendored dependencies under `third_party/` keep their own licence files. Mercury's own
-copyright notice is in `NOTICE`.
+files that came from Hermes, or contain code from it, carry an `SPDX-License-Identifier: MPL-2.0`
+header. Every file that contains code copied or adapted from any other project names that source
+at the top, has a matching entry here, and stays under the MPL-2.0 (with the upstream licence of
+the adapted portions noted where it differs). Vendored dependencies under `third_party/` keep their
+own licence files. Mercury's own licences are explained in `LICENSE`, and its copyright notice is
+in `NOTICE`.
 
 - Hermes Browser — https://github.com/KaykCaputo/hermes-browser — MPL-2.0, Copyright © 2026 Kayk Caputo — Mercury began as a fork of this project at Hermes commit `a41f18e`; the parts of Mercury derived from it remain under the MPL-2.0.
 - Servo `servo-canvas` 0.8.0 — https://github.com/servo/servo, commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`, path `components/canvas` — MPL-2.0 — vendored in `third_party/servo-canvas` with a small fix to its GPU (vello) backend; see `third_party/servo-canvas/MERCURY.md`.
