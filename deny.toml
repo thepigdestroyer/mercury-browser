@@ -162,7 +162,8 @@ allow = ["LicenseRef-Slint-Royalty-free-2.0"]
 
 # Only in mercury-ui's dev graph, not part of the application: Slint's software renderer, which
 # `examples/render_settings.rs` (the settings window), `examples/render_controls.rs` (the
-# page-control popups) and `tests/page_request_render.rs` (the dialog components), and the history lane's
+# page-control popups), `tests/page_request_render.rs` (the dialog components),
+# `tests/render_menus.rs` (the browser menu and the About window), and the history lane's
 # `examples/render_history.rs` and `tests/suggestion_click.rs`, use to render without a display.
 [[licenses.exceptions]]
 crate = "i-slint-renderer-software"
