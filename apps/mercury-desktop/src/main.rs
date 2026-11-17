@@ -15,6 +15,7 @@ use talaria_core::{BrowserController, TabActivation};
 use talaria_servo::{RuntimeOptions, record_browser_process_id, run_content_process_if_requested};
 use ui_sync::sync_ui;
 
+mod about;
 // activation (tabs lane)
 mod activation;
 mod callback_scope;
@@ -34,6 +35,7 @@ mod macos_terminate;
 mod media_buffers;
 #[cfg(target_os = "macos")]
 mod media_isolation;
+mod menus;
 mod page_requests; // dialogs
 mod panic_hook;
 #[cfg(target_os = "macos")]
@@ -49,6 +51,8 @@ mod settings;
 mod shortcuts;
 mod shutdown;
 mod signals;
+#[cfg(target_os = "macos")]
+mod system_proxy;
 mod ui_sync;
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -148,12 +152,21 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
         // settings-ui: blocking and what to clear are known before the engine starts.
-        settings::with_privacy(runtime_options(&options, &profile), &settings),
+        settings::with_privacy(
+            with_system_proxy(runtime_options(&options, &profile)),
+            &settings,
+        ),
     )?;
     // settings-ui
     settings::connect(&settings, &window, &controller);
     sync_ui(&window, &controller.borrow());
     connect_ui_callbacks(
+        &window,
+        Rc::clone(&controller),
+        Rc::clone(&web_view_focused),
+    );
+    // menus lane: the macOS menu bar and the browser menu.
+    menus::connect(
         &window,
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
@@ -209,14 +222,29 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     Ok(ExitCode::from(exit_code))
 }
 
-/// Engine settings for this run: the launch options and the profile's Servo directory.
+/// Engine settings for this run: the launch options, and the profile's Servo and HTTP cache
+/// directories.
 fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeOptions {
     RuntimeOptions {
         gpu_canvas: options.gpu_canvas,
         config_dir: profile.servo_config_dir(),
         experimental_web_features: options.experimental_web_features,
+        http_disk_cache_dir: profile.http_cache_dir(),
         // settings-ui: filled in by `settings::with_privacy`.
         ..RuntimeOptions::default()
+    }
+}
+
+/// Adds the system's proxy settings (macOS). Elsewhere Servo reads the proxy environment
+/// variables itself, which also win on macOS.
+fn with_system_proxy(runtime_options: RuntimeOptions) -> RuntimeOptions {
+    #[cfg(target_os = "macos")]
+    let system_proxy = system_proxy::read_system_proxy();
+    #[cfg(not(target_os = "macos"))]
+    let system_proxy = None;
+    RuntimeOptions {
+        system_proxy,
+        ..runtime_options
     }
 }
 
@@ -391,6 +419,7 @@ mod tests {
                 gpu_canvas: false,
                 config_dir: Some(root.join("servo")),
                 experimental_web_features: false,
+                http_disk_cache_dir: Some(root.join("http-cache")),
                 ..RuntimeOptions::default()
             }
         );

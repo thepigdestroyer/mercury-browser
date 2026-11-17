@@ -205,6 +205,27 @@ pub(crate) fn observe(window: &MainWindow, controller: &BrowserController) {
     }
 }
 
+/// Whether "Reopen closed tab" has a tab to bring back (for the menus).
+pub(crate) fn can_reopen_closed_tab() -> bool {
+    peek_session(|session| session.tracker.has_closed_tabs())
+}
+
+/// Whether "Restore previous session" has a session to restore (for the menus).
+pub(crate) fn can_restore_previous_session() -> bool {
+    peek_session(|session| session.previous.is_some())
+}
+
+/// Reads the session, if there is one and it is not in use further up the stack.
+fn peek_session(f: impl FnOnce(&Session) -> bool) -> bool {
+    SESSION.with(|session| {
+        session
+            .try_borrow()
+            .ok()
+            .and_then(|session| session.as_ref().map(f))
+            .unwrap_or(false)
+    })
+}
+
 /// "Reopen closed tab": the most recently closed tab, back at its old place, selected.
 pub(crate) fn reopen_closed_tab(window: &MainWindow, controller: &RefCell<BrowserController>) {
     let reopened = with_session(|session| {
