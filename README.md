@@ -242,7 +242,7 @@ Everything since has been Mercury's own work. It moved to a new platform (macOS 
 
 ## License
 
-Mercury Browser's source code and project assets are available under the [Mozilla Public License 2.0](LICENSE).
+Mercury Browser is open source: its source code and project assets are available under the [Mozilla Public License 2.0](LICENSE). Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors; see [NOTICE](NOTICE). The parts that came from Hermes Browser stay under the same licence with Kayk Caputo's copyright.
 
 The MPL-2.0 allows commercial use and combination with code under other licenses while requiring modifications to MPL-covered files to remain available under the same license. Third-party dependencies and bundled filter lists remain subject to their respective licenses and notices.
 

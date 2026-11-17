@@ -1,12 +1,13 @@
 # Third-party notices
 
 This file records the projects that Mercury Browser's source code is derived from or copies code
-from, together with their licences. The whole codebase derives from Hermes Browser, the upstream
-base listed first; its files do not carry individual source headers. Every file that contains code
+from, together with their licences. Mercury began as a fork of Hermes Browser, listed first; the
+files that came from Hermes do not carry individual source headers. Every file that contains code
 copied or adapted from any other project names that source at the top and has a matching entry
-here. Vendored dependencies under `third_party/` keep their own licence files.
+here. Vendored dependencies under `third_party/` keep their own licence files. Mercury's own
+copyright notice is in `NOTICE`.
 
-- Hermes Browser — https://github.com/KaykCaputo/hermes-browser — MPL-2.0 — Mercury Browser is derived from this project at commit `a41f18e`.
+- Hermes Browser — https://github.com/KaykCaputo/hermes-browser — MPL-2.0, Copyright © 2026 Kayk Caputo — Mercury began as a fork of this project at Hermes commit `a41f18e`; the parts of Mercury derived from it remain under the MPL-2.0.
 - Servo `servo-canvas` 0.8.0 — https://github.com/servo/servo, commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`, path `components/canvas` — MPL-2.0 — vendored in `third_party/servo-canvas` with a small fix to its GPU (vello) backend; see `third_party/servo-canvas/MERCURY.md`.
 - Servo `python/servo/gstreamer.py` — https://github.com/servo/servo, tag `v0.8.0` (commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), functions `package_gstreamer_dylibs` and `load_plugin_libraries_from_text_file` — Apache-2.0 OR MIT, Copyright 2013 The Servo Project Developers — adapted as `scripts/macos/collect-gstreamer.sh`.
 - Servo `ports/servoshell/build.rs` — https://github.com/servo/servo, tag `v0.8.0` — MPL-2.0 — the macOS `@executable_path/lib/` rpath in `apps/mercury-desktop/build.rs`.

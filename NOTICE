@@ -1,0 +1,14 @@
+Mercury Browser
+Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors.
+
+Mercury Browser is free and open-source software, licensed under the Mozilla Public License 2.0
+(see LICENSE). You may use, study, modify and redistribute it, including as part of your own projects;
+files covered by the MPL-2.0 that you modify must stay available under the same licence.
+
+Mercury began as a fork of Hermes Browser (https://github.com/KaykCaputo/hermes-browser),
+Copyright © 2026 Kayk Caputo, also licensed under the MPL-2.0. Portions of Mercury's code are derived
+from Hermes and remain under the MPL-2.0 with their original notices; Mercury is otherwise developed as
+its own project.
+
+Third-party code, vendored dependencies and bundled data keep their own licences and notices; see
+THIRD-PARTY-NOTICES.md and the LICENSES directory.
