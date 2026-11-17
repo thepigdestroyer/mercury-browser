@@ -54,7 +54,7 @@
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors. Licensed under MPL-2.0.</string>
+	<string>Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors. Portions © 2026 Kayk Caputo (Hermes Browser).</string>
 	<!-- Lets macOS list Mercury Browser as a web browser for http and https links. -->
 	<key>CFBundleURLTypes</key>
 	<array>

@@ -12,8 +12,10 @@ use slint::ComponentHandle;
 use crate::menus::{self, Document, MenuCommand};
 
 /// The line `Info.plist` carries as `NSHumanReadableCopyright` (checked by a test).
-pub(crate) const COPYRIGHT_LINE: &str =
-    "Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors. Licensed under MPL-2.0.";
+pub(crate) const COPYRIGHT_LINE: &str = "Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors. Portions © 2026 Kayk Caputo (Hermes Browser).";
+/// The licence terms in one line, as `LICENSE` and `NOTICE` give them.
+pub(crate) const LICENCE_LINE: &str = "Source-available: free for non-commercial use \
+    (PolyForm Noncommercial 1.0.0; MPL-2.0 for parts from Hermes and Servo).";
 /// Mercury's origin, as `NOTICE` records it.
 pub(crate) const CREDIT_LINE: &str = "Began as a fork of Hermes Browser by Kayk Caputo.";
 /// Servo is pinned to exactly this version in the workspace `Cargo.toml` (checked by a test).
@@ -97,6 +99,7 @@ fn create() -> Result<AboutWindow, slint::PlatformError> {
     about.set_engine_line(ENGINE_LINE.into());
     about.set_media_line(media_line(option_env!("MERCURY_GSTREAMER_VERSION")).into());
     about.set_copyright_line(COPYRIGHT_LINE.into());
+    about.set_licence_line(LICENCE_LINE.into());
     about.set_credit_line(CREDIT_LINE.into());
     about.on_open_link(|link| {
         let _slint = crate::callback_scope::InSlintCallback::enter();
@@ -140,6 +143,11 @@ mod tests {
         assert!(notice.contains("Mercury began as a fork of Hermes Browser"));
         assert!(notice.contains("Kayk Caputo"));
         assert!(CREDIT_LINE.contains("Hermes Browser by Kayk Caputo"));
+        assert!(COPYRIGHT_LINE.ends_with("Portions © 2026 Kayk Caputo (Hermes Browser)."));
+        assert!(notice.contains("PolyForm Noncommercial License 1.0.0"));
+        assert!(LICENCE_LINE.contains("PolyForm Noncommercial 1.0.0"));
+        assert!(LICENCE_LINE.contains("MPL-2.0"));
+        assert!(!COPYRIGHT_LINE.contains("Licensed under"));
     }
 
     #[test]

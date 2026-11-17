@@ -9,7 +9,7 @@ Mercury opens with a new tab. Its search field and the address bar at the top bo
 
 ![Mercury's new tab page in Dark mode, with a search field in the middle](../screenshots/mercury-new-tab.png)
 
-To open a particular page at start-up, give its address on the command line; each address opens in its own tab and the first is shown:
+To open a particular page at start-up, give its address on the command line; each address opens in its own tab:
 
 ```bash
 "/Applications/Mercury Browser.app/Contents/MacOS/mercury-browser" https://servo.org/

@@ -192,6 +192,12 @@ check "the bundle carries LICENSE, NOTICE and THIRD-PARTY-NOTICES.md" \
 check "every notice file exists in the repository" "" "$(missing_notice_files "$PWD")"
 check "NOTICE names Mercury's copyright holder" yes \
     "$(grep -q '^Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors\.$' NOTICE && echo yes || echo no)"
+check "NOTICE carries the PolyForm Required Notice line" yes \
+    "$(grep -q '^Required Notice: ' NOTICE && echo yes || echo no)"
+check "both licence texts are in LICENSES/" yes \
+    "$([ -f LICENSES/PolyForm-Noncommercial-1.0.0.md ] && [ -f LICENSES/MPL-2.0.txt ] && echo yes || echo no)"
+check "bundle.sh copies LICENSES/ into Contents/Resources" yes \
+    "$(grep -q '^ditto LICENSES "\$RES_DIR/LICENSES"$' scripts/macos/bundle.sh && echo yes || echo no)"
 check "a directory without them is reported" "LICENSE NOTICE THIRD-PARTY-NOTICES.md " \
     "$(missing_notice_files "$PWD/scripts" | tr '\n' ' ')"
 check "bundle.sh copies the notice files from that list" yes \
@@ -202,6 +208,11 @@ if [ -n "${MERCURY_TEST_BUNDLE:-}" ]; then
         "$(missing_notice_files "$MERCURY_TEST_BUNDLE/Contents/Resources")"
     check "the bundled NOTICE is the repository's" yes \
         "$(cmp -s NOTICE "$MERCURY_TEST_BUNDLE/Contents/Resources/NOTICE" && echo yes || echo no)"
+    check "the bundled LICENSE is the repository's" yes \
+        "$(cmp -s LICENSE "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSE" && echo yes || echo no)"
+    check "the licence texts are in the bundle's LICENSES/" yes \
+        "$(cmp -s LICENSES/PolyForm-Noncommercial-1.0.0.md "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSES/PolyForm-Noncommercial-1.0.0.md" &&
+            cmp -s LICENSES/MPL-2.0.txt "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSES/MPL-2.0.txt" && echo yes || echo no)"
 fi
 
 # ── No bundle without its media libraries ─────────────────────────────────

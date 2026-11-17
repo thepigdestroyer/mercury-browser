@@ -33,6 +33,8 @@ export component AboutWindow inherits Window {
     // Empty when the GStreamer version was not recorded at build time.
     in property <string> media-line;
     in property <string> copyright-line;
+    // The licence terms in one line. Empty for none.
+    in property <string> licence-line;
     // Where Mercury came from (the credit `NOTICE` gives).
     in property <string> credit-line;
     // The appearance setting, mirrored so that a change can be seen here.
@@ -60,7 +62,7 @@ export component AboutWindow inherits Window {
     title: "About Mercury Browser";
     icon: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
     width: 380px;
-    height: 390px;
+    height: 420px;
     background: ChromePalette.window-background;
     forward-focus: key-scope;
 
@@ -137,6 +139,14 @@ export component AboutWindow inherits Window {
                 wrap: word-wrap;
             }
 
+            if root.licence-line != "": Text {
+                text: root.licence-line;
+                color: ChromePalette.text-secondary;
+                font-size: 11px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
             if root.credit-line != "": Text {
                 text: root.credit-line;
                 color: ChromePalette.text-secondary;
@@ -151,7 +161,7 @@ export component AboutWindow inherits Window {
                 padding-top: 2px;
 
                 LinkText {
-                    text: "Licence (MPL-2.0)";
+                    text: "Licence";
                     clicked => {
                         root.open-link(AboutLink.licence);
                     }

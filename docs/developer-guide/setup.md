@@ -54,7 +54,7 @@ cargo test --release -p talaria-core -p mercury-ui
 
 | Option | What it does |
 | --- | --- |
-| `[URL…]` | Opens each URL in its own tab; the first is shown |
+| `[URL…]` | Opens each URL in its own tab |
 | `--screenshot <file.png>` | Saves a PNG of the window once the page has loaded, then exits. Never takes focus |
 | `--screenshot-delay <ms>` | Waits this long after the page has loaded (default 1000) |
 | `--window-size <W>x<H>` | Sets the window's logical size, for example `1280x800` |
