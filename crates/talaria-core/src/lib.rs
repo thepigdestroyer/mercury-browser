@@ -17,10 +17,11 @@ pub use address::{
 };
 pub use browser::{
     BrowserCommand, BrowserEvent, BrowserState, LoadState, PointerButton, PointerButtonAction,
+    display_origin, placeholder_title,
 };
 // media-capture
 pub use capture::CaptureAccess;
-pub use controller::BrowserController;
+pub use controller::{BrowserController, CloseTabOutcome};
 pub use controls::{
     ContextMenuAction, ContextMenuEntry, ControlAnswer, ControlId, ControlRect, ControlRequest,
     Rgb, SelectEntry, SelectOption,
