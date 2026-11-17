@@ -29,8 +29,10 @@ pub(crate) const MAX_ADDRESS_BYTES: usize = 8 * 1024;
 const MAX_REPLY_BYTES: u64 = 1024;
 /// How long the running browser waits for a second launch's message.
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
-/// How long the second launch waits for the answer, which comes once the tabs are open.
-const REPLY_TIMEOUT: Duration = Duration::from_secs(15);
+/// How long the second launch waits for the answer, which comes once the tabs are open: longer
+/// than the running browser ever waits for its window (`HAND_OVER_TIMEOUT` and
+/// `HAND_OVER_FINISH_TIMEOUT` in `openurl`, 10 s each), so it always hears the answer.
+pub(crate) const REPLY_TIMEOUT: Duration = Duration::from_secs(25);
 /// A browser that has just locked the profile may not be listening yet.
 const CONNECT_ATTEMPTS: u32 = 10;
 const CONNECT_RETRY_DELAY: Duration = Duration::from_millis(200);

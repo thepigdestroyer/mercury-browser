@@ -58,11 +58,12 @@ impl ContentBlocker {
             debug!("blocked web resource #{blocked_count}: {blocked_url}");
         }
 
-        if is_frame(load.request().destination) {
-            // A cancelled frame load leaves the frame without a document, and its page's `load`
-            // event never fires (tests/pages/adblock-blocked-frame.html: exit 3 before this);
-            // a blocked frame gets an empty 403 instead. Images and scripts end in a network
-            // error as before: their pages still finish loading.
+        if is_document(load.request().destination) {
+            // A cancelled document load (a frame by `src`, a frame navigated by script or a
+            // link, which Servo fetches as `Document`) leaves the frame without a document, and
+            // its page's `load` event never fires (tests/pages/adblock-blocked-frame.html: exit 3
+            // before this); every blocked document gets an empty 403 instead. Images and scripts
+            // end in a network error as before: their pages still finish loading.
             crate::openurl::answer_forbidden(load, blocked_url);
         } else {
             load.intercept(WebResourceResponse::new(blocked_url))
@@ -104,8 +105,11 @@ impl ContentBlocker {
     }
 }
 
-fn is_frame(destination: Destination) -> bool {
-    matches!(destination, Destination::IFrame | Destination::Frame)
+fn is_document(destination: Destination) -> bool {
+    matches!(
+        destination,
+        Destination::Document | Destination::IFrame | Destination::Frame
+    )
 }
 
 fn resource_type(destination: Destination) -> &'static str {
@@ -197,12 +201,14 @@ mod tests {
     }
 
     #[test]
-    fn only_frames_are_answered_instead_of_cancelled() {
-        assert!(is_frame(Destination::IFrame));
-        assert!(is_frame(Destination::Frame));
-        assert!(!is_frame(Destination::Image));
-        assert!(!is_frame(Destination::Script));
-        assert!(!is_frame(Destination::Document));
+    fn every_document_load_is_answered_instead_of_cancelled() {
+        // Frames by `src`, frames navigated by script or a link (`Document`), and main frames.
+        assert!(is_document(Destination::IFrame));
+        assert!(is_document(Destination::Frame));
+        assert!(is_document(Destination::Document));
+        assert!(!is_document(Destination::Image));
+        assert!(!is_document(Destination::Script));
+        assert!(!is_document(Destination::Style));
     }
 
     #[test]

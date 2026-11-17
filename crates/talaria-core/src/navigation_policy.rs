@@ -19,15 +19,24 @@ pub struct ExternalLinkRequest {
     pub received_at: Duration,
 }
 
-/// Schemes never handed to another app from a page: network shares, remote screens, System
-/// Settings.
-const NEVER_EXTERNAL_SCHEMES: [&str; 6] = [
+/// Schemes never handed to another app from a page, even after asking: network shares and file
+/// transfer (`smb:`, `cifs:`, `afp:`, `nfs:`, `ftp:`, `sftp:`), remote shells and screens
+/// (`ssh:`, `telnet:`, `vnc:`), System Settings, manual and help pages that can run commands or
+/// open system UI (`x-man-page:`, `help:`), and app installation (`itms-services:`).
+const NEVER_EXTERNAL_SCHEMES: [&str; 13] = [
     "smb",
+    "cifs",
     "afp",
     "nfs",
-    "vnc",
     "ftp",
+    "sftp",
+    "ssh",
+    "telnet",
+    "vnc",
     "x-apple.systempreferences",
+    "x-man-page",
+    "help",
+    "itms-services",
 ];
 
 /// Schemes the engine loads itself. `javascript:` URLs are evaluated by the engine before a
@@ -54,8 +63,8 @@ pub enum NavigationVerdict {
     /// phishing vector); Servo's request does not say which frame asks, so a frame navigated to
     /// one by script is refused too. A frame's `src` and typed addresses never ask.
     DenyData,
-    /// A scheme that is never handed to another app from a page, even after asking: network
-    /// shares and remote screens (`smb:`, `afp:`, `nfs:`, `vnc:`, `ftp:`) and System Settings.
+    /// A scheme that is never handed to another app from a page, even after asking (see
+    /// `NEVER_EXTERNAL_SCHEMES`).
     DenyScheme,
     /// The engine cannot load the scheme (`mailto:`, `tel:`, an app's own scheme). The engine is
     /// refused; the system's handler for the scheme may open it, after a user gesture and the
@@ -265,6 +274,13 @@ mod tests {
             "ftp://example.com/file",
             "x-apple.systempreferences:com.apple.preference.security",
             "SMB://server/share",
+            "cifs://server/share",
+            "sftp://server/file",
+            "ssh://server",
+            "telnet://server",
+            "x-man-page://ls",
+            "help:anchor=x",
+            "itms-services://?action=download-manifest&url=https://example.com/a.plist",
         ] {
             assert_eq!(
                 navigation_verdict(Some(&page), &url(target)),

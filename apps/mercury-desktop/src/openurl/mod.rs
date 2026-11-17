@@ -10,6 +10,7 @@ pub(crate) mod external;
 pub(crate) mod handoff;
 #[cfg(target_os = "macos")]
 pub(crate) mod macos;
+mod ticket;
 
 use std::cell::{Cell, RefCell};
 use std::path::Path;
@@ -334,26 +335,42 @@ pub(crate) fn listen_for_second_launches(
     }
 }
 
-/// How long the listening thread waits for the window to open a second launch's tabs.
+/// How long the listening thread waits for the window to start opening a second launch's tabs;
+/// after that it gives up, and the window opens nothing (`HandOverTicket`).
 const HAND_OVER_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+/// How long it then waits for a window that did start opening them; opening a few tabs is quick.
+const HAND_OVER_FINISH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// On the listening thread: has the window open the addresses, and waits for the result, so
 /// that the second launch is told the truth.
 fn open_handed_over_from_any_thread(addresses: Vec<String>) -> Result<usize, String> {
     let (sender, receiver) = std::sync::mpsc::channel();
+    let ticket = ticket::HandOverTicket::default();
+    let window_ticket = ticket.clone();
     slint::invoke_from_event_loop(move || {
         let _slint = crate::callback_scope::InSlintCallback::enter();
-        open_handed_over_on_main_thread(addresses, sender);
+        open_handed_over_on_main_thread(addresses, window_ticket, sender);
     })
     .map_err(|error| format!("the window cannot be reached ({error})"))?;
-    receiver
-        .recv_timeout(HAND_OVER_TIMEOUT)
-        .map_err(|_| "the window did not answer in time".to_owned())?
+    match receiver.recv_timeout(HAND_OVER_TIMEOUT) {
+        Ok(result) => result,
+        Err(_) if ticket.abandon() => {
+            Err("the window did not answer in time; nothing was opened".to_owned())
+        }
+        // The window started opening them just now: its answer follows.
+        Err(_) => receiver
+            .recv_timeout(HAND_OVER_FINISH_TIMEOUT)
+            .map_err(|_| "the window started opening them but did not finish in time".to_owned())?,
+    }
 }
 
 type HandOverReply = std::sync::mpsc::Sender<Result<usize, String>>;
 
-fn open_handed_over_on_main_thread(addresses: Vec<String>, reply: HandOverReply) {
+fn open_handed_over_on_main_thread(
+    addresses: Vec<String>,
+    ticket: ticket::HandOverTicket,
+    reply: HandOverReply,
+) {
     TARGET.with(|target| {
         let target = target.borrow();
         let Some(target) = target.as_ref() else {
@@ -364,12 +381,16 @@ fn open_handed_over_on_main_thread(addresses: Vec<String>, reply: HandOverReply)
             // Busy: try again from the event loop.
             if let Err(error) = slint::invoke_from_event_loop(move || {
                 let _slint = crate::callback_scope::InSlintCallback::enter();
-                open_handed_over_on_main_thread(addresses, reply);
+                open_handed_over_on_main_thread(addresses, ticket, reply);
             }) {
                 log::warn!("openurl: could not retry opening a second launch's addresses: {error}");
             }
             return;
         };
+        if !ticket.claim_for_opening() {
+            log::warn!("openurl: a second launch's addresses came too late; not opening them");
+            return;
+        }
         let result = open_handed_over(&mut controller, &addresses);
         drop(controller);
         if let Ok(count) = &result {
@@ -398,8 +419,8 @@ pub(crate) fn open_handed_over(
     Ok(open_in_tabs(controller, addresses))
 }
 
-/// The user started Mercury again to open something: the window comes to the front. Automated
-/// runs never take focus.
+/// The user started Mercury again to open something: the window comes to the front, shown and
+/// out of the Dock first if it was hidden or minimised. Automated runs never take focus.
 fn bring_to_front(window: &MainWindow) {
     use slint::ComponentHandle;
     use slint::winit_030::WinitWindowAccessor;
@@ -408,9 +429,37 @@ fn bring_to_front(window: &MainWindow) {
         log::info!("openurl: automated run: not bringing the window to the front");
         return;
     }
-    window
-        .window()
-        .with_winit_window(|winit_window| winit_window.focus_window());
+    window.window().with_winit_window(|winit_window| {
+        for step in steps_to_front(winit_window.is_minimized(), winit_window.is_visible()) {
+            match step {
+                FrontStep::Show => winit_window.set_visible(true),
+                FrontStep::Unminimize => winit_window.set_minimized(false),
+                FrontStep::Focus => winit_window.focus_window(),
+            }
+        }
+    });
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum FrontStep {
+    Show,
+    Unminimize,
+    Focus,
+}
+
+/// `minimized` and `visible` as winit reports them (`None`: not known on this platform). A
+/// window that may be hidden or minimised is shown and restored before it is focused; focusing
+/// alone leaves a minimised window in the Dock.
+fn steps_to_front(minimized: Option<bool>, visible: Option<bool>) -> Vec<FrontStep> {
+    let mut steps = Vec::new();
+    if visible != Some(true) {
+        steps.push(FrontStep::Show);
+    }
+    if minimized != Some(false) {
+        steps.push(FrontStep::Unminimize);
+    }
+    steps.push(FrontStep::Focus);
+    steps
 }
 
 // Links pages ask other apps to open.
@@ -637,6 +686,31 @@ mod tests {
 
         assert!(matches!(opened, Err(reason) if reason.contains("mailto:a@b.test")));
         assert_eq!(controller.tabs().len(), 1);
+    }
+
+    #[test]
+    fn the_second_launch_waits_longer_than_the_running_browser_does() {
+        assert!(handoff::REPLY_TIMEOUT > HAND_OVER_TIMEOUT + HAND_OVER_FINISH_TIMEOUT);
+    }
+
+    #[test]
+    fn a_hidden_or_minimised_window_is_restored_before_it_is_focused() {
+        assert_eq!(
+            steps_to_front(Some(false), Some(true)),
+            vec![FrontStep::Focus]
+        );
+        assert_eq!(
+            steps_to_front(Some(true), Some(true)),
+            vec![FrontStep::Unminimize, FrontStep::Focus]
+        );
+        assert_eq!(
+            steps_to_front(Some(false), Some(false)),
+            vec![FrontStep::Show, FrontStep::Focus]
+        );
+        assert_eq!(
+            steps_to_front(None, None),
+            vec![FrontStep::Show, FrontStep::Unminimize, FrontStep::Focus]
+        );
     }
 
     #[test]

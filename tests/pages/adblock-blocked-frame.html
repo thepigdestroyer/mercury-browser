@@ -13,7 +13,11 @@
 <!--
   A page whose ad-network resources the content blocker refuses. Its `load` event must still
   fire: a blocked frame used to leave the page loading for ever (a screenshot run exits 3).
-  ?only=frame|image|script loads one kind only (default: all three).
+  ?only=frame|image|script loads one kind only (default: those three). ?only=navigated is a
+  frame whose own script sets location to the blocked URL before the parent has loaded. Servo
+  fetches that as a `Document` and reports every `Document` fetch as the main frame's, which the
+  content blocker exempts: today that frame is not blocked and really loads from the ad network,
+  so it is opt-in.
 -->
 <p id="status">waiting for the page's load event…</p>
 <p id="kinds"></p>
@@ -27,6 +31,13 @@
     frame.src = "https://googleads.g.doubleclick.net/pagead/id";
     slot.append(frame);
     kinds.push("frame");
+  }
+  if (only === "navigated") {
+    const navigated = document.createElement("iframe");
+    navigated.srcdoc =
+      "<script>location = 'https://googleads.g.doubleclick.net/pagead/id?navigated=1';<\/script>";
+    slot.append(navigated);
+    kinds.push("navigated frame");
   }
   if (!only || only === "image") {
     const image = document.createElement("img");
