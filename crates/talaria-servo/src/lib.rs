@@ -1,4 +1,5 @@
 mod adblocker;
+mod clipboard;
 mod content_process;
 mod document_starts;
 mod embedder_controls;
@@ -19,6 +20,7 @@ mod screen;
 mod session_data;
 mod web_view;
 
+pub use clipboard::{ActivationUse, UserActivationCheck};
 pub use content_process::{
     ContentProcessArgumentError, record_browser_process_id, run_content_process_if_requested,
 };

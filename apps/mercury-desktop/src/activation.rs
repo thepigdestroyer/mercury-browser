@@ -37,6 +37,12 @@ pub(crate) fn consume_user_activation(tab: TabId, now: Instant) -> bool {
     ACTIVATIONS.with(|activations| activations.borrow_mut().consume(tab, now))
 }
 
+/// True if the tab had an activation within ACTIVATION_WINDOW; it is not used up (clipboard
+/// lane: a page's clipboard write, which browsers allow during an activation without using it).
+pub(crate) fn has_user_activation(tab: TabId, now: Instant) -> bool {
+    ACTIVATIONS.with(|activations| activations.borrow().is_active(tab, now))
+}
+
 /// Drops a closed tab's entry.
 pub(crate) fn forget_tab(tab: TabId) {
     ACTIVATIONS.with(|activations| activations.borrow_mut().forget(tab));
@@ -95,6 +101,13 @@ impl Activations {
             .is_some_and(|activated| now.saturating_duration_since(activated) < ACTIVATION_WINDOW)
     }
 
+    // clipboard
+    pub(crate) fn is_active(&self, tab: TabId, now: Instant) -> bool {
+        self.0
+            .get(&tab)
+            .is_some_and(|activated| now.saturating_duration_since(*activated) < ACTIVATION_WINDOW)
+    }
+
     pub(crate) fn forget(&mut self, tab: TabId) {
         self.0.remove(&tab);
     }
@@ -133,6 +146,27 @@ mod tests {
 
         assert!(!activations.consume(TabId::new(2), now));
         assert!(activations.consume(TAB, now));
+    }
+
+    // clipboard
+    #[test]
+    fn looking_at_an_activation_keeps_it_until_it_expires() {
+        let mut activations = Activations::default();
+        let now = Instant::now();
+        assert!(!activations.is_active(TAB, now));
+        activations.note(TAB, now);
+
+        assert!(activations.is_active(TAB, now + Duration::from_millis(999)));
+        assert!(activations.is_active(TAB, now + Duration::from_millis(999)));
+        assert!(!activations.is_active(TAB, now + ACTIVATION_WINDOW));
+        assert!(!activations.is_active(TabId::new(2), now));
+        assert!(activations.consume(TAB, now));
+        assert!(!activations.is_active(TAB, now));
+
+        let tab = TabId::new(4243);
+        note_user_activation(tab, now);
+        assert!(has_user_activation(tab, now));
+        assert!(consume_user_activation(tab, now));
     }
 
     #[test]

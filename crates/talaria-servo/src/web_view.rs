@@ -16,8 +16,10 @@ use talaria_core::{
     WebView as TalariaWebView,
 };
 use talaria_core::{PageRequestAnswer, PageRequestId};
+use talaria_core::{clipboard_shortcut, context_menu_clipboard_command};
 use url::Url;
 
+use crate::clipboard::TabClipboard;
 use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::EmbedderControls;
 use crate::frame_ready::FrameReadySignal;
@@ -42,6 +44,8 @@ pub struct ServoWebView {
     document_start: Rc<DocumentStarts>,
     // tabs
     page_feedback: Rc<PageFeedback>,
+    // clipboard: the user's Cut, Copy and Paste in this tab's page
+    clipboard: TabClipboard,
 }
 
 /// What a tab's web view shares with its delegate.
@@ -51,6 +55,7 @@ pub(crate) struct TabParts {
     pub(crate) page_requests: ClosesOnDrop<ServoPageRequest>,
     pub(crate) document_start: Rc<DocumentStarts>,
     pub(crate) page_feedback: Rc<PageFeedback>,
+    pub(crate) clipboard: TabClipboard, // clipboard
 }
 
 impl ServoWebView {
@@ -66,6 +71,7 @@ impl ServoWebView {
             page_requests,
             document_start,
             page_feedback,
+            clipboard,
         } = parts;
         Self {
             inner,
@@ -76,6 +82,7 @@ impl ServoWebView {
             page_requests,
             document_start,
             page_feedback,
+            clipboard,
         }
     }
 
@@ -221,6 +228,10 @@ impl TalariaWebView for ServoWebView {
     }
 
     fn keyboard_input(&mut self, event: KeyboardInput) -> Result<(), Self::Error> {
+        // clipboard: Servo performs Cut, Copy and Paste for these keys itself.
+        if let Some(command) = clipboard_shortcut(&event, cfg!(target_os = "macos")) {
+            self.clipboard.user_command(command);
+        }
         let keyboard_event = ServoKeyboardEvent::new_without_event(
             servo_key_state(event.state),
             event
@@ -284,6 +295,12 @@ impl TalariaWebView for ServoWebView {
 
     // controls
     fn answer_control(&mut self, id: ControlId, answer: ControlAnswer) -> Result<(), Self::Error> {
+        // clipboard: a context-menu copy or paste is the user's.
+        if let ControlAnswer::ContextMenu(action) = &answer
+            && let Some(command) = context_menu_clipboard_command(*action)
+        {
+            self.clipboard.user_command(command);
+        }
         self.controls.answer(id, answer);
         Ok(())
     }
@@ -315,6 +332,7 @@ impl TalariaWebView for ServoWebView {
 
     // menus
     fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error> {
+        self.clipboard.user_command(command); // clipboard
         let _event_id = self
             .inner
             .notify_input_event(InputEvent::EditingAction(servo_clipboard_action(command)));

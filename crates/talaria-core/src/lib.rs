@@ -1,5 +1,6 @@
 mod address;
 mod browser;
+mod clipboard;
 mod controller;
 mod controls;
 mod cursor;
@@ -16,6 +17,10 @@ pub use address::{
 pub use browser::{
     BrowserCommand, BrowserEvent, BrowserState, LoadState, PointerButton, PointerButtonAction,
     display_origin, placeholder_title,
+};
+pub use clipboard::{
+    ClipboardGate, ClipboardReadDecision, MemoryPasteboard, Pasteboard,
+    USER_CLIPBOARD_ACTION_WINDOW, clipboard_shortcut, context_menu_clipboard_command,
 };
 pub use controller::{BrowserController, CloseTabOutcome};
 pub use controls::{

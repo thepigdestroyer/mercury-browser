@@ -37,6 +37,8 @@ pub(crate) struct PageTabs {
     pub(crate) screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
     pub(crate) user_content: Rc<servo::UserContentManager>,
     pub(crate) after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
+    // clipboard: the clipboard and activation check every tab's delegate uses.
+    pub(crate) clipboard: Rc<crate::clipboard::ClipboardAccess>,
 }
 
 impl PageTabs {

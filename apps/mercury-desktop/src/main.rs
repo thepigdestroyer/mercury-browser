@@ -20,6 +20,7 @@ mod about;
 mod activation;
 mod callback_scope;
 mod callbacks;
+mod clipboard;
 mod cli;
 // controls
 mod controls;
@@ -143,6 +144,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     settings::prepare_controller(&settings, &mut controller.borrow_mut(), &options.urls);
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
     let web_view_focused = Rc::new(Cell::new(false));
+    // clipboard: automated runs never touch the system clipboard
+    clipboard::configure(options.is_automated());
 
     connect_servo_runtime(
         &window,

@@ -843,7 +843,7 @@ fn credentials_never_appear_in_debug_output() {
 
 // Review round 1
 
-const EVERY_PERMISSION: [PagePermission; 13] = [
+const EVERY_PERMISSION: [PagePermission; 14] = [
     PagePermission::Geolocation,
     PagePermission::Notifications,
     PagePermission::Push,
@@ -857,6 +857,8 @@ const EVERY_PERMISSION: [PagePermission; 13] = [
     PagePermission::PersistentStorage,
     PagePermission::ScreenWakeLock,
     PagePermission::Gamepad,
+    // clipboard
+    PagePermission::ClipboardRead,
 ];
 
 #[test]
@@ -866,7 +868,11 @@ fn only_persistent_storage_is_asked_and_every_other_permission_is_denied_without
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
-        if feature == PagePermission::PersistentStorage {
+        // clipboard: reading the clipboard is asked too.
+        if matches!(
+            feature,
+            PagePermission::PersistentStorage | PagePermission::ClipboardRead
+        ) {
             assert!(feature.is_promptable());
             assert_eq!(pending_id(&controller, tab_id), Some(id), "{feature:?}");
             assert!(drain(&mut controller).is_empty(), "{feature:?}");

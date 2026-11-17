@@ -27,6 +27,9 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+# clipboard lane: the system clipboard pages use in a normal run (already in the build through
+# Servo's default `clipboard` feature, with the same features).
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash.workspace = true

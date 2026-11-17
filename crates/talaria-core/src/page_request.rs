@@ -63,6 +63,10 @@ pub enum PagePermission {
     PersistentStorage,
     ScreenWakeLock,
     Gamepad,
+    // clipboard
+    /// Reading text from the clipboard (`navigator.clipboard.readText()`); asked by Mercury itself,
+    /// not by Servo, see `ClipboardGate`.
+    ClipboardRead,
 }
 
 impl PagePermission {
@@ -74,9 +78,11 @@ impl PagePermission {
     /// - geolocation and screen wake lock: their engine preferences (`dom_geolocation_enabled`,
     ///   `dom_wakelock_enabled`) are off. Add them here when they are turned on.
     ///
+    /// Clipboard reading is asked as well (clipboard lane); Servo never asks for it itself.
+    ///
     /// A page can still name any of these in `navigator.permissions.request()`.
     pub const fn is_promptable(self) -> bool {
-        matches!(self, Self::PersistentStorage)
+        matches!(self, Self::PersistentStorage | Self::ClipboardRead)
     }
 
     /// Completes "<site> wants to …".
@@ -95,6 +101,8 @@ impl PagePermission {
             Self::PersistentStorage => "store data permanently on this device",
             Self::ScreenWakeLock => "keep your screen on",
             Self::Gamepad => "use your game controllers",
+            // clipboard
+            Self::ClipboardRead => "see text you copied",
         }
     }
 }
@@ -923,6 +931,10 @@ mod tests {
         assert_eq!(
             PagePermission::Geolocation.description(),
             "know your location"
+        );
+        assert_eq!(
+            PagePermission::ClipboardRead.description(),
+            "see text you copied"
         );
     }
 }

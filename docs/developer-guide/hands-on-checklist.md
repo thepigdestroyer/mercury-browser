@@ -69,6 +69,19 @@ Open `controls.html`.
 5. **Right-click** a link: "Open link in new tab" opens it in a background tab; "Copy link address"
    copies it. Control-click does the same. Right-click an image: open and copy its address.
 
+## Clipboard
+
+Open `clipboard.html`.
+
+1. On load the page reports `readText resolved with ""`: it could not read the clipboard without a
+   click, whatever you had copied.
+2. Click **Copy**: paste in another app; you get "Mercury copy button".
+3. Click **Read the clipboard**: a bubble asks whether "127.0.0.1:8765 wants to see text you copied".
+   Block: the page reads `""`. Click again and Allow: it reads what you copied.
+4. Select some page text, Edit → Copy (and Cmd+C); paste it into the text box with Cmd+V and with
+   Edit → Paste, and with the context menu's Paste: no prompt appears for any of these.
+5. Copy text in another app, reload the page, wait: no prompt, and step 1 again.
+
 ## Quitting
 
 1. Close the window, Cmd+Q, and Dock → right-click → Quit: each time Mercury quits within a second or two.

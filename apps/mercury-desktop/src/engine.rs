@@ -139,6 +139,8 @@ pub(crate) fn connect_servo_runtime(
         runtime.set_new_tab_allocator(new_tab_allocator);
         // activation (tabs lane): a new document does not inherit the last one's activation
         runtime.set_document_started_listener(crate::page_tabs::document_started_listener());
+        // clipboard
+        crate::clipboard::connect(runtime);
     }
     ENGINE.with(|current| *current.borrow_mut() = Rc::downgrade(&engine));
     schedule_graphics_bootstrap(Rc::downgrade(&engine), GRAPHICS_BOOTSTRAP_DELAY);

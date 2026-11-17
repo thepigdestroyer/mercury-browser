@@ -18,6 +18,7 @@ use talaria_core::{PageRequest, PageRequestKind};
 use url::Url;
 
 use crate::adblocker::ContentBlocker;
+use crate::clipboard::{ClipboardRead, TabClipboard, UserActivationCheck};
 use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::{ControlIds, EmbedderControls};
 use crate::exit_clearing::{EngineSwitches, ExitClearing, clear_at_exit};
@@ -85,8 +86,8 @@ pub struct RuntimeOptions {
     /// Where Servo keeps cookies, HSTS, HTTP authentication and site storage. `None` keeps
     /// nothing across runs.
     pub config_dir: Option<PathBuf>,
-    /// Turn on servoshell's experimental web-platform features, except the async clipboard and
-    /// WebGPU (see `EXCLUDED_EXPERIMENTAL_PREFS`).
+    /// Turn on servoshell's experimental web-platform features, except WebGPU (see
+    /// `EXCLUDED_EXPERIMENTAL_PREFS`); the async clipboard is on either way.
     pub experimental_web_features: bool,
     // settings
     /// Block ads and trackers from the start; changed later through `ServoRuntime::switches`.
@@ -208,6 +209,7 @@ impl ServoRuntime {
             screen_metrics: Rc::clone(&screen_metrics),
             user_content: Rc::clone(&user_content),
             after_engine_cleanup: after_engine_cleanup.clone(),
+            clipboard: Rc::default(), // clipboard
         });
 
         Self {
@@ -248,6 +250,7 @@ impl ServoRuntime {
         let inner = WebViewBuilder::new(&self.inner, rendering_context)
             .url(initial_url)
             .hidpi_scale_factor(Scale::new(scale_factor))
+            .clipboard_delegate(Rc::clone(&delegate) as Rc<dyn servo::ClipboardDelegate>) // clipboard
             .delegate(delegate)
             .user_content_manager(Rc::clone(&self.user_content))
             .build();
@@ -288,6 +291,19 @@ impl ServoRuntime {
     /// its tab's events arrive on.
     pub fn take_adopted_web_views(&self) -> Vec<AdoptedWebView> {
         self.page_tabs.adopted.take()
+    }
+
+    // clipboard
+    /// The clipboard pages read and write; a `MemoryPasteboard` until this is called. Automated
+    /// runs and tests must never install the system clipboard.
+    pub fn set_pasteboard(&self, pasteboard: Rc<dyn talaria_core::Pasteboard>) {
+        self.page_tabs.clipboard.set_pasteboard(pasteboard);
+    }
+
+    /// Tells whether a tab has a recent user activation; without it no page may write to the
+    /// clipboard or ask to read it, except for the Cut, Copy and Paste the user chooses.
+    pub fn set_user_activation_check(&self, check: UserActivationCheck) {
+        self.page_tabs.clipboard.set_user_activation_check(check);
     }
 }
 
@@ -345,12 +361,12 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
             preferences.set_value(name, PrefValue::Bool(true));
         }
     }
-    // Always off: in Servo 0.8.0 `navigator.clipboard.readText()`/`writeText()` skip the
-    // permission and user-activation checks (`dom/clipboard/clipboard.rs`, the "check clipboard
-    // read permission" step is a TODO), and with no `ClipboardDelegate` installed Servo's default
-    // one reads and writes the system clipboard. Any secure page or iframe could read copied
-    // passwords on load. Re-enable only with a delegate that answers after a user gesture.
-    preferences.dom_async_clipboard_enabled = false;
+    // clipboard: always on, also without the experimental features. Servo 0.8.0 checks neither
+    // permission nor user activation for `navigator.clipboard` (`dom/clipboard/clipboard.rs`, the
+    // "check clipboard read permission" step is a TODO); every web view's `ClipboardDelegate`
+    // (`crate::clipboard`) does: writes need a user gesture, reads a gesture and the user's
+    // permission.
+    preferences.dom_async_clipboard_enabled = true;
     // Always off while Mercury does not build Servo's `webgpu` cargo feature: the preference alone
     // exposes `GPUCanvasContext` and other WebGPU names over unimplemented stubs, which makes
     // feature detection report WebGPU that is not there.
@@ -453,7 +469,7 @@ const EXPERIMENTAL_PREFS: &[&str] = &[
 
 /// Entries of `EXPERIMENTAL_PREFS` that Mercury leaves off; the reasons are given where they
 /// are pinned in `mercury_preferences`.
-const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &["dom_async_clipboard_enabled", "dom_webgpu_enabled"];
+const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &["dom_webgpu_enabled"];
 
 /// Servo's user agent already names the Firefox release it matches, but carries a `Servo/x.y`
 /// token where Firefox has `Gecko/20100101`; some sites refuse to serve unrecognised browsers.
@@ -491,6 +507,8 @@ struct BrowserDelegate {
     /// The tab's one document-start signal (dialogs, tabs); shared with the tab's `ServoWebView`,
     /// which arms it when it navigates.
     document_start: Rc<DocumentStarts>,
+    // clipboard: shared with the tab's `ServoWebView`, which notes the user's commands.
+    clipboard: TabClipboard,
 }
 
 /// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
@@ -510,6 +528,7 @@ fn new_tab_delegate(
             Rc::clone(&shared.document_started_listener),
         ),
         page_feedback,
+        clipboard: TabClipboard::new(tab_id, Rc::clone(&shared.clipboard)),
     };
     let delegate = Rc::new(BrowserDelegate {
         tab_id,
@@ -523,6 +542,7 @@ fn new_tab_delegate(
         controls: parts.controls.clone(),
         page_requests: parts.page_requests.shared(),
         document_start: Rc::clone(&parts.document_start),
+        clipboard: parts.clipboard.clone(),
     });
     (delegate, parts)
 }
@@ -619,6 +639,7 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // synchronously, before any script of the new document runs.
         if self.document_start.load_status_changed(status) {
             self.send_browser_event(BrowserEvent::PageLoadStarted);
+            self.clipboard.document_started(); // clipboard
         }
         match status {
             LoadStatus::Started => {
@@ -702,6 +723,7 @@ impl servo::WebViewDelegate for BrowserDelegate {
         let inner = request
             .builder(parent.rendering_context())
             .hidpi_scale_factor(scale_factor)
+            .clipboard_delegate(Rc::clone(&delegate) as Rc<dyn servo::ClipboardDelegate>) // clipboard
             .delegate(delegate)
             .user_content_manager(Rc::clone(&page_tabs.user_content))
             .build();
@@ -819,6 +841,47 @@ impl BrowserDelegate {
             kind,
             received_at: crate::page_request_clock(),
         }));
+    }
+}
+
+// clipboard: every request Servo sends for this tab's pages, from the user's Cut, Copy and Paste
+// as well as from `navigator.clipboard`; see `crate::clipboard`.
+impl servo::ClipboardDelegate for BrowserDelegate {
+    fn clear(&self, _web_view: servo::WebView) {
+        if !self.clipboard.clear() {
+            info!(
+                "tab {}: refused a page's clipboard clear without a user gesture",
+                self.tab_id.value()
+            );
+        }
+    }
+
+    fn get_text(&self, web_view: servo::WebView, request: servo::StringRequest) {
+        match self.clipboard.read(request) {
+            ClipboardRead::Text(text) => log::debug!(
+                "tab {}: pasted {} characters",
+                self.tab_id.value(),
+                text.chars().count()
+            ),
+            ClipboardRead::AskPermission(request) => self.forward_page_request(
+                web_view.url(),
+                PageRequestKind::Permission(talaria_core::PagePermission::ClipboardRead),
+                ServoPageRequest::ClipboardRead(request),
+            ),
+            ClipboardRead::Refused => info!(
+                "tab {}: refused a page's clipboard read without a user gesture",
+                self.tab_id.value()
+            ),
+        }
+    }
+
+    fn set_text(&self, _web_view: servo::WebView, new_contents: String) {
+        if !self.clipboard.write_text(&new_contents) {
+            info!(
+                "tab {}: refused a page's clipboard write without a user gesture",
+                self.tab_id.value()
+            );
+        }
     }
 }
 
@@ -1055,23 +1118,23 @@ mod tests {
         assert_eq!(EXPERIMENTAL_PREFS.len(), 18);
         assert_eq!(
             EXCLUDED_EXPERIMENTAL_PREFS,
-            &["dom_async_clipboard_enabled", "dom_webgpu_enabled"]
+            &["dom_webgpu_enabled"]
         );
         let enabled = EXPERIMENTAL_PREFS
             .iter()
             .filter(|name| !EXCLUDED_EXPERIMENTAL_PREFS.contains(name))
             .collect::<Vec<_>>();
-        assert_eq!(enabled.len(), 16);
+        assert_eq!(enabled.len(), 17);
         for name in enabled {
             assert_eq!(preferences.get_value(name), PrefValue::Bool(true), "{name}");
         }
     }
 
     #[test]
-    fn async_clipboard_stays_disabled() {
+    fn async_clipboard_is_on_behind_mercurys_clipboard_delegate() {
         for enabled in [true, false] {
             assert!(
-                !preferences_with_experimental_web_features(enabled).dom_async_clipboard_enabled
+                preferences_with_experimental_web_features(enabled).dom_async_clipboard_enabled
             );
         }
     }
