@@ -122,6 +122,8 @@ pub(crate) fn open_in_tabs(controller: &mut BrowserController, urls: &[String]) 
         } else {
             TabActivation::Background
         };
+        // downloads: these URLs come from other apps or a second launch and count as typed by
+        // the user; call `note_typed_navigation` for each tab opened here when downloads-ui lands.
         match controller.open_tab_with(Some(url), activation) {
             Ok(_) => opened += 1,
             Err(error) => log::warn!("openurl: could not open {url}: {error}"),
