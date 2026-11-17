@@ -157,13 +157,17 @@ impl GStreamerMediaStream {
             MediaStreamType::Video => {
                 let vp8enc = gstreamer::ElementFactory::make("vp8enc")
                     .property("deadline", 1i64)
-                    .property("error-resilient", "default")
+                    // Mercury: `error-resilient` is a flags property (GstVPXEncErFlags) in the
+                    // GStreamer Mercury bundles; setting it from a string panicked the script
+                    // thread as soon as a camera stream was shown in a <video>.
+                    .property_from_str("error-resilient", "default")
                     .property("cpu-used", -16i32)
                     .property("lag-in-frames", 0i32)
                     .build()?;
 
                 let rtpvp8pay = gstreamer::ElementFactory::make("rtpvp8pay")
-                    .property("picture-id-mode", "15-bit")
+                    // Mercury: an enum (GstVP8RTPPayMode), set from its nick; see above.
+                    .property_from_str("picture-id-mode", "15-bit")
                     .property("mtu", 1200u32)
                     .build()?;
                 let queue2 = gstreamer::ElementFactory::make("queue").build()?;

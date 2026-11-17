@@ -94,6 +94,10 @@ with these changes.
 - **Upstream:** `document.rs:3608-3625`.
 - **Drop when:** Servo implements Permissions Policy and reports the asking frame.
 
+### 7. (in servo-media-gstreamer) Showing a capture stream no longer crashes the tab
+
+See `third_party/servo-media-gstreamer/MERCURY.md`, change 3.
+
 ## Warnings
 
 Cargo does not cap lints for path dependencies, so compiling this crate in

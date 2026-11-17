@@ -21,3 +21,9 @@ It is part of the media-capture patch described in
 2. **`media_capture.rs`:** a fixed number for a fractional constraint was
    written to a caps field literally named `"name"` instead of the field
    (`frameRate`, `aspectRatio`). Upstream line 68.
+3. **`media_stream.rs`:** `vp8enc`'s `error-resilient` (flags) and `rtpvp8pay`'s
+   `picture-id-mode` (enum) are set from their nicks (`property_from_str`)
+   instead of from a string value. Upstream lines 144 and 150; in the
+   GStreamer Mercury bundles (1.28) both are typed properties, and setting
+   them from a string panicked the script thread (a crashed tab) as soon as a
+   capture stream was shown in a `<video>`. Found by the fake-device runs.
