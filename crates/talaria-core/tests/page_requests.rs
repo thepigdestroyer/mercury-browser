@@ -1,10 +1,10 @@
 use std::time::Duration;
 
 use talaria_core::{
-    BrowserCommand, BrowserController, BrowserEvent, GEOLOCATION_OFFERED, HttpCredentials,
-    KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, LoadState, PagePermission,
-    PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind, PageRequestReply,
-    PermissionDecision, PermissionDecisions, PointerButton, PointerButtonAction,
+    BrowserCommand, BrowserController, BrowserEvent, CloseTabOutcome, GEOLOCATION_OFFERED,
+    HttpCredentials, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, LoadState,
+    PagePermission, PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind,
+    PageRequestReply, PermissionDecision, PermissionDecisions, PointerButton, PointerButtonAction,
     SessionPermissionDecisions, TabCommand, TabId,
 };
 
@@ -264,7 +264,7 @@ fn closing_a_tab_forgets_its_requests_and_their_queued_answers() {
         Duration::ZERO,
     ));
 
-    assert!(controller.close_tab(first_tab));
+    assert_eq!(controller.close_tab(first_tab), CloseTabOutcome::Closed);
 
     // The engine drops the closed tab's web view, which drops request 2 with its default.
     assert_eq!(pending_id(&controller, first_tab), None);

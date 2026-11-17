@@ -1,9 +1,9 @@
 use std::cell::{Cell, RefCell};
 use std::path::PathBuf;
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::mpsc::Sender;
+use std::sync::mpsc::{self, Sender};
 use std::time::Instant;
 
 use euclid::Scale;
@@ -18,6 +18,7 @@ use talaria_core::{PageRequest, PageRequestKind};
 use url::Url;
 
 use crate::adblocker::ContentBlocker;
+use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::{ControlIds, EmbedderControls};
 use crate::exit_clearing::{EngineSwitches, ExitClearing, clear_at_exit};
 use crate::frame_ready::FrameReadySignal;
@@ -25,16 +26,20 @@ use crate::geolocation::{
     GeolocationService, GeolocationSetup, PageGeolocation, WithGeolocation, on_history_changed,
     on_load_status,
 };
+use crate::http_disk_cache::{CacheCheck, http_disk_cache_database, repair_http_disk_cache};
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
 use crate::page_defaults::page_defaults_user_content;
+use crate::page_feedback::{DOCUMENT_TITLE_SCRIPT, PageFeedback, reads_title_at};
 use crate::page_requests::{
-    ClosesOnDrop, DocumentStartTracker, PendingEngineRequests, ServoPageRequest, page_permission,
-    simple_dialog_kind,
+    ClosesOnDrop, PendingEngineRequests, ServoPageRequest, page_permission, simple_dialog_kind,
 };
+use crate::page_tabs::{AdoptedWebView, DocumentStartedListener, NewTabAllocator, PageTabs};
+use crate::proxy::SystemProxySettings;
 use crate::screen::ScreenMetrics;
 use crate::session_data::{
     AfterEngineCleanup, HandleThenCleanup, clean_up_before_engine_start, end_session_cookies,
 };
+use crate::web_view::TabParts;
 use crate::{ServoWebView, ServoWebViewError};
 
 type WakeCallback = dyn Fn() + Send + Sync + 'static;
@@ -87,14 +92,20 @@ pub struct RuntimeOptions {
     /// Turn on servoshell's experimental web-platform features, except the async clipboard and
     /// WebGPU (see `EXCLUDED_EXPERIMENTAL_PREFS`).
     pub experimental_web_features: bool,
-    /// Whether pages get `navigator.geolocation`, and where positions come from.
-    pub geolocation: GeolocationSetup,
     // settings
     /// Block ads and trackers from the start; changed later through `ServoRuntime::switches`.
     pub block_ads_and_trackers: bool,
     /// What to clear at quit; also cleared before the engine starts, in case the last quit
     /// never got to it. Changed later through `ServoRuntime::switches`.
     pub clear_on_exit: ExitClearing,
+    /// The system's proxy settings, read at start; used unless the proxy environment
+    /// variables are set. Servo builds its HTTP clients once, so a change applies at the
+    /// next start.
+    pub system_proxy: Option<SystemProxySettings>,
+    /// Where Servo keeps its HTTP disk cache. `None` keeps the cache in memory only.
+    pub http_disk_cache_dir: Option<PathBuf>,
+    /// Whether pages get `navigator.geolocation`, and where positions come from.
+    pub geolocation: GeolocationSetup,
 }
 
 impl Default for RuntimeOptions {
@@ -103,9 +114,11 @@ impl Default for RuntimeOptions {
             gpu_canvas: true,
             config_dir: None,
             experimental_web_features: true,
-            geolocation: GeolocationSetup::Off,
             block_ads_and_trackers: true,
             clear_on_exit: ExitClearing::default(),
+            system_proxy: None,
+            http_disk_cache_dir: None,
+            geolocation: GeolocationSetup::Off,
         }
     }
 }
@@ -113,19 +126,17 @@ impl Default for RuntimeOptions {
 pub struct ServoRuntime {
     inner: servo::Servo,
     redraw_waker: EventLoopWaker,
-    content_blocker: Rc<ContentBlocker>,
     screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
-    // controls
-    control_ids: ControlIds,
     /// The user-origin style sheet every web view shares. Servo's `UserContentManager` holds a
     /// handle to Servo of its own, so this field must stay before `after_engine_cleanup`.
     user_content: Rc<servo::UserContentManager>,
+    /// Tabs opened by pages; it holds a handle to Servo too, so it stays before
+    /// `after_engine_cleanup`.
+    page_tabs: Rc<PageTabs>,
     /// Declared after `inner` and `user_content`, the two fields that hold a handle to Servo,
     /// so it is dropped after the last of them. Every web view holds a clone too, released
     /// after its own handle; see `AfterEngineCleanup`.
     after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
-    /// `None` while geolocation is off.
-    geolocation: Option<Rc<GeolocationService>>,
     /// Content blocking and what to clear at quit, shared with the browser.
     switches: EngineSwitches,
 }
@@ -143,8 +154,17 @@ impl ServoRuntime {
         // them belong to an earlier session that was not ended (killed, or cut short by the
         // shutdown watchdog); remove them from the files before Servo can load them.
         if let Some(config_dir) = &runtime_options.config_dir {
-            clean_up_before_engine_start(config_dir, runtime_options.clear_on_exit);
+            clean_up_before_engine_start(
+                config_dir,
+                runtime_options.http_disk_cache_dir.as_deref(),
+                runtime_options.clear_on_exit,
+            );
         }
+        // Servo panics at start on some damaged caches; nothing has the file open yet.
+        let cache_check = runtime_options
+            .http_disk_cache_dir
+            .as_deref()
+            .map(repair_http_disk_cache);
         let options = mercury_options(runtime_options.config_dir.clone());
         let multiprocess_enabled = options.multiprocess;
         let sandbox_enabled = options.sandbox;
@@ -154,10 +174,18 @@ impl ServoRuntime {
             .event_loop_waker(Box::new(event_loop_waker))
             .build();
         inner.setup_logging();
+        log_proxy_settings(runtime_options.system_proxy.as_ref());
+        if let Some(CacheCheck::Removed(reason)) = cache_check {
+            log::warn!("removed the HTTP disk cache, which the engine could not use: {reason}");
+        }
         let after_engine_cleanup = runtime_options.config_dir.clone().map(|config_dir| {
             // Session cookies saved by a run that did not end them (it was killed) end now.
             end_session_cookies(&inner);
-            Rc::new(AfterEngineCleanup::new(config_dir, switches.clone()))
+            Rc::new(AfterEngineCleanup::new(
+                config_dir,
+                runtime_options.http_disk_cache_dir.clone(),
+                switches.clone(),
+            ))
         });
         if multiprocess_enabled {
             info!(
@@ -176,17 +204,27 @@ impl ServoRuntime {
             content_blocker: Rc::clone(&content_blocker),
         }));
         let user_content = page_defaults_user_content(&inner);
-        let geolocation = GeolocationService::for_setup(&runtime_options.geolocation);
+        let screen_metrics = Rc::default();
+        // tabs opened by pages
+        let page_tabs = Rc::new(PageTabs {
+            adopted: RefCell::default(),
+            allocator: RefCell::default(),
+            document_started_listener: Rc::default(),
+            control_ids: ControlIds::default(),
+            content_blocker,
+            screen_metrics: Rc::clone(&screen_metrics),
+            user_content: Rc::clone(&user_content),
+            after_engine_cleanup: after_engine_cleanup.clone(),
+            geolocation: GeolocationService::for_setup(&runtime_options.geolocation),
+        });
 
         Self {
             inner,
             redraw_waker,
-            content_blocker,
-            screen_metrics: Rc::default(),
-            control_ids: ControlIds::default(),
+            screen_metrics,
             user_content,
+            page_tabs,
             after_engine_cleanup,
-            geolocation,
             switches,
         }
     }
@@ -213,32 +251,14 @@ impl ServoRuntime {
         browser_event_sender: Sender<TabEvent>,
     ) -> Result<ServoWebView, ServoWebViewError> {
         let initial_url = Url::parse(initial_url)?;
-        let frame_ready = FrameReadySignal::default();
-        let geolocation = self.geolocation.as_ref().map(GeolocationService::web_view);
-        let controls = EmbedderControls::new(self.control_ids.clone());
-        let page_requests = ClosesOnDrop::new(PendingEngineRequests::default());
-        let document_start = Rc::new(RefCell::new(DocumentStartTracker::default()));
-        let delegate = Rc::new(BrowserDelegate {
-            tab_id,
-            browser_event_sender: browser_event_sender.clone(),
-            frame_ready: frame_ready.clone(),
-            load_metrics: RefCell::new(PageLoadMetrics::default()),
-            content_blocker: Rc::clone(&self.content_blocker),
-            screen_metrics: Rc::clone(&self.screen_metrics),
-            geolocation: geolocation
-                .clone()
-                .map(|geolocation| geolocation as Rc<dyn PageGeolocation>),
-            controls: controls.clone(),
-            page_requests: page_requests.shared(),
-            document_start: Rc::clone(&document_start),
-        });
+        let (delegate, parts) = new_tab_delegate(&self.page_tabs, tab_id, &browser_event_sender);
 
         let inner = WebViewBuilder::new(&self.inner, rendering_context)
             .url(initial_url)
             .hidpi_scale_factor(Scale::new(scale_factor))
             .delegate(delegate)
             .user_content_manager(Rc::clone(&self.user_content))
-            .with_geolocation(geolocation.as_ref())
+            .with_geolocation(parts.geolocation.as_ref())
             .build();
 
         for event in new_web_view_feedback(inner.cursor(), inner.status_text()) {
@@ -247,19 +267,36 @@ impl ServoRuntime {
         info!("created Servo WebView for tab {}", tab_id.value());
         Ok(ServoWebView::new(
             HandleThenCleanup::new(inner, self.after_engine_cleanup.clone()),
-            frame_ready,
             tab_id,
             scale_factor,
-            controls,
-            page_requests,
-            document_start,
-        )
-        .with_page_geolocation(geolocation))
+            parts,
+        ))
     }
 
     pub fn spin_event_loop(&self) {
         self.redraw_waker.acknowledge();
         self.inner.spin_event_loop();
+    }
+
+    // tabs opened by pages
+    /// Lets pages open tabs (`window.open`, `target=_blank`). Without an allocator, or when it
+    /// returns None, such requests are refused.
+    pub fn set_new_tab_allocator(&self, allocator: NewTabAllocator) {
+        self.page_tabs.allocator.replace(Some(allocator));
+    }
+
+    /// Called synchronously, inside `spin_event_loop`, when a tab starts loading a new document
+    /// (Servo's `LoadStatus::Started`, which comes before any of the document's scripts run).
+    pub fn set_document_started_listener(&self, listener: DocumentStartedListener) {
+        self.page_tabs
+            .document_started_listener
+            .replace(Some(listener));
+    }
+
+    /// Web views created by pages since the last call, in creation order, each with the channel
+    /// its tab's events arrive on.
+    pub fn take_adopted_web_views(&self) -> Vec<AdoptedWebView> {
+        self.page_tabs.adopted.take()
     }
 }
 
@@ -267,6 +304,8 @@ impl Drop for ServoRuntime {
     /// Clears what the user asked to have cleared at exit, then ends the session cookies,
     /// while Servo still runs, before it saves its files.
     fn drop(&mut self) {
+        // Web views opened by pages and never taken close while Servo still runs.
+        drop(self.page_tabs.adopted.take());
         let clearing = self.switches.clear_on_exit();
         if clearing.clears_anything() {
             clear_at_exit(&self.inner, clearing);
@@ -325,19 +364,76 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
     // exposes `GPUCanvasContext` and other WebGPU names over unimplemented stubs, which makes
     // feature detection report WebGPU that is not there.
     preferences.dom_webgpu_enabled = false;
-    // Off unless geolocation is set up: positions then come from Mercury's own source, and
-    // Servo asks for the "geolocation" permission before every first request of a page.
-    preferences.dom_geolocation_enabled = runtime_options.geolocation.exposes_geolocation();
     // Always off: in Servo 0.8.0 `getUserMedia` opens the camera and microphone without asking
     // the embedder for permission (`mediadevices.rs`), so WebRTC must stay disabled until
     // Mercury can gate device access itself.
     preferences.dom_webrtc_enabled = false;
+    // Off unless geolocation is set up: positions then come from Mercury's own source, and
+    // Servo asks for the "geolocation" permission before every first request of a page.
+    preferences.dom_geolocation_enabled = runtime_options.geolocation.exposes_geolocation();
     // controls: always off. With it on, a page can call `selectFiles()` on a file input and have
     // Servo accept the paths it names without any file panel (`htmlinputelement.rs`); it exists
     // for Servo's own tests.
     preferences.dom_testing_html_input_element_select_files_enabled = false;
     preferences.user_agent = firefox_compatible_user_agent(&preferences.user_agent);
+    apply_system_proxy(&mut preferences, runtime_options.system_proxy.as_ref());
+    // Servo's size limit (`network_http_disk_cache_size`, 100 MB) is kept.
+    if let Some(database) = runtime_options
+        .http_disk_cache_dir
+        .as_deref()
+        .map(http_disk_cache_database)
+        .and_then(|database| database.to_str().map(str::to_owned))
+    {
+        preferences.network_http_disk_cache = database;
+    }
     preferences
+}
+
+/// Servo's `Preferences::default` has already read the `http_proxy`, `https_proxy` and
+/// `no_proxy` environment variables (and their upper-case forms); if any was set, those win
+/// and the system settings are not used, as in command-line tools.
+fn apply_system_proxy(preferences: &mut Preferences, system: Option<&SystemProxySettings>) {
+    let from_environment = !preferences.network_http_proxy_uri.is_empty()
+        || !preferences.network_https_proxy_uri.is_empty()
+        || !preferences.network_http_no_proxy.is_empty();
+    let Some(system) = system else {
+        return;
+    };
+    if from_environment {
+        return;
+    }
+    let proxy = system.preferences();
+    preferences.network_http_proxy_uri = proxy.http_uri;
+    preferences.network_https_proxy_uri = proxy.https_uri;
+    preferences.network_http_no_proxy = proxy.no_proxy;
+}
+
+/// Once, at start: which proxies are used (in the log), and what of the system settings is not
+/// (a warning that is always shown).
+fn log_proxy_settings(system: Option<&SystemProxySettings>) {
+    let preferences = servo::prefs::get();
+    for (scheme, uri) in [
+        ("http", &preferences.network_http_proxy_uri),
+        ("https", &preferences.network_https_proxy_uri),
+    ] {
+        if !uri.is_empty() {
+            // The address may carry credentials (from the environment); log the host only.
+            let host = Url::parse(uri)
+                .ok()
+                .and_then(|url| url.host_str().map(str::to_owned))
+                .unwrap_or_else(|| "(unparsed)".to_owned());
+            info!("{scheme} requests go through the proxy at {host}");
+        }
+    }
+    // A warning on standard error, always shown: Servo's logger prints only errors unless
+    // `RUST_LOG` asks for more, and someone whose network needs a PAC file must be able to see
+    // why pages do not load.
+    for message in system
+        .map(SystemProxySettings::unsupported)
+        .unwrap_or_default()
+    {
+        eprintln!("mercury-browser: warning: {message}");
+    }
 }
 
 // From Servo's servoshell, https://github.com/servo/servo, tag `v0.8.0` (commit
@@ -395,15 +491,65 @@ struct BrowserDelegate {
     load_metrics: RefCell<PageLoadMetrics>,
     content_blocker: Rc<ContentBlocker>,
     screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
-    /// The web view's geolocation, also Servo's delegate for it; `None` while it is off.
-    geolocation: Option<Rc<dyn PageGeolocation>>,
+    /// Weak: queued web views hold their delegates, which must not keep the queue alive.
+    page_tabs: Weak<PageTabs>,
+    /// Title and icon kept right across documents; see `PageFeedback`.
+    page_feedback: Rc<PageFeedback>,
     // controls
     controls: EmbedderControls,
     /// Dialogs, leave prompts, sign-ins and permission prompts waiting for the user; shared with
     /// the tab's `ServoWebView`, which answers them.
     page_requests: Rc<RefCell<PendingEngineRequests<ServoPageRequest>>>,
-    /// Shared with the tab's `ServoWebView`, which arms it when it navigates.
-    document_start: Rc<RefCell<DocumentStartTracker>>,
+    /// The tab's one document-start signal (dialogs, tabs); shared with the tab's `ServoWebView`,
+    /// which arms it when it navigates.
+    document_start: Rc<DocumentStarts>,
+    /// The tab's geolocation, also Servo's delegate for it; `None` while it is off.
+    geolocation: Option<Rc<dyn PageGeolocation>>,
+}
+
+/// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
+fn new_tab_delegate(
+    shared: &Rc<PageTabs>,
+    tab_id: TabId,
+    browser_event_sender: &Sender<TabEvent>,
+) -> (Rc<BrowserDelegate>, TabParts) {
+    let page_feedback = PageFeedback::new(tab_id, browser_event_sender.clone());
+    // geolocation: one per tab, shared by Servo, the delegate, `DocumentStarts` and the web view
+    let geolocation = shared
+        .geolocation
+        .as_ref()
+        .map(GeolocationService::web_view);
+    let page_geolocation = geolocation
+        .clone()
+        .map(|geolocation| geolocation as Rc<dyn PageGeolocation>);
+    let parts = TabParts {
+        frame_ready: FrameReadySignal::default(),
+        controls: EmbedderControls::new(shared.control_ids.clone()),
+        page_requests: ClosesOnDrop::new(PendingEngineRequests::default()),
+        document_start: DocumentStarts::new(
+            tab_id,
+            Rc::clone(&page_feedback),
+            Rc::clone(&shared.document_started_listener),
+            page_geolocation.clone(),
+        ),
+        page_feedback,
+        geolocation,
+    };
+    let delegate = Rc::new(BrowserDelegate {
+        tab_id,
+        browser_event_sender: browser_event_sender.clone(),
+        frame_ready: parts.frame_ready.clone(),
+        load_metrics: RefCell::new(PageLoadMetrics::default()),
+        content_blocker: Rc::clone(&shared.content_blocker),
+        screen_metrics: Rc::clone(&shared.screen_metrics),
+        page_tabs: Rc::downgrade(shared),
+        page_feedback: Rc::clone(&parts.page_feedback),
+        controls: parts.controls.clone(),
+        page_requests: parts.page_requests.shared(),
+        document_start: Rc::clone(&parts.document_start),
+        geolocation: page_geolocation,
+    });
+    (delegate, parts)
 }
 
 impl BrowserDelegate {
@@ -411,6 +557,14 @@ impl BrowserDelegate {
         let _send_result = self
             .browser_event_sender
             .send(TabEvent::new(self.tab_id, event));
+    }
+
+    // tabs
+    /// Reads `document.title` and sends it, unless the document or address changed meanwhile.
+    fn read_document_title(&self, web_view: &servo::WebView) {
+        self.page_feedback.request_title(|callback| {
+            web_view.evaluate_javascript(DOCUMENT_TITLE_SCRIPT, callback);
+        });
     }
 
     // controls
@@ -449,7 +603,7 @@ impl servo::WebViewDelegate for BrowserDelegate {
             .handle_web_resource_load(Some(&web_view), load);
     }
 
-    fn notify_url_changed(&self, _web_view: servo::WebView, url: Url) {
+    fn notify_url_changed(&self, web_view: servo::WebView, url: Url) {
         // dialogs: user info is left out; after a sign-in it holds the password.
         log::debug!(
             "tab {}: address changed to {}",
@@ -459,6 +613,10 @@ impl servo::WebViewDelegate for BrowserDelegate {
         self.send_browser_event(BrowserEvent::AddressChanged {
             url: display_url(&url),
         });
+        // tabs: a same-document navigation keeps the document's title and icon
+        if self.page_feedback.address_changed(web_view.load_status()) {
+            self.read_document_title(&web_view);
+        }
     }
 
     fn notify_page_title_changed(&self, _web_view: servo::WebView, title: Option<String>) {
@@ -474,15 +632,19 @@ impl servo::WebViewDelegate for BrowserDelegate {
                 favicon.data(),
             )
         });
+        // tabs: remembered for same-document navigations
+        self.page_feedback.icon_changed(icon.clone());
 
         self.send_browser_event(BrowserEvent::PageIconChanged { icon });
     }
 
-    fn notify_load_status_changed(&self, _web_view: servo::WebView, status: LoadStatus) {
-        // geolocation: a new document ends the old one's requests and watches
+    fn notify_load_status_changed(&self, web_view: servo::WebView, status: LoadStatus) {
+        // geolocation: a reported start ends the old document's requests and parks its watches
         on_load_status(self.geolocation.as_deref(), status);
         // dialogs: a new document; the previous one's requests and page state no longer apply.
-        if self.document_start.borrow_mut().document_started(status) {
+        // tabs: the same signal resets the title and icon and forgets the tab's activation,
+        // synchronously, before any script of the new document runs.
+        if self.document_start.load_status_changed(status) {
             self.send_browser_event(BrowserEvent::PageLoadStarted);
         }
         match status {
@@ -500,6 +662,14 @@ impl servo::WebViewDelegate for BrowserDelegate {
         self.send_browser_event(BrowserEvent::LoadStateChanged {
             state: load_state_from_servo(status),
         });
+        // tabs: the icon again after a load, and the title, which Servo only notifies when it
+        // differs from its cached one
+        if status == LoadStatus::Complete {
+            self.page_feedback.load_completed();
+        }
+        if reads_title_at(status) {
+            self.read_document_title(&web_view);
+        }
     }
 
     fn notify_history_changed(&self, _web_view: servo::WebView, entries: Vec<Url>, current: usize) {
@@ -535,6 +705,67 @@ impl servo::WebViewDelegate for BrowserDelegate {
         for event in crash_feedback(reason, web_view.cursor(), web_view.status_text()) {
             self.send_browser_event(event);
         }
+    }
+
+    // tabs opened and closed by pages
+    /// Must be answered here: the constellation and the opener's script thread wait for it.
+    fn request_create_new(&self, parent: servo::WebView, request: servo::CreateNewWebViewRequest) {
+        let Some(page_tabs) = self.page_tabs.upgrade() else {
+            return;
+        };
+        let Some(allocator) = page_tabs.allocator() else {
+            info!(
+                "tab {}: refused a page's new tab: no allocator",
+                self.tab_id.value()
+            );
+            return;
+        };
+        let Some(tab_id) = allocator(self.tab_id) else {
+            info!("tab {}: refused a page's new tab", self.tab_id.value());
+            return;
+        };
+
+        let (browser_event_sender, event_receiver) = mpsc::channel::<TabEvent>();
+        let (delegate, parts) = new_tab_delegate(&page_tabs, tab_id, &browser_event_sender);
+        let scale_factor = parent.hidpi_scale_factor();
+        let inner = request
+            .builder(parent.rendering_context())
+            .hidpi_scale_factor(scale_factor)
+            .delegate(delegate)
+            .user_content_manager(Rc::clone(&page_tabs.user_content))
+            .with_geolocation(parts.geolocation.as_ref())
+            .build();
+        // Servo creates auxiliary web views visible, and all tabs share one rendering context:
+        // the engine shows whichever tab becomes active.
+        inner.hide();
+        // geolocation: hidden here without `ServoWebView::hide`, so told directly
+        if let Some(geolocation) = &parts.geolocation {
+            geolocation.set_visible(false);
+        }
+
+        for event in new_web_view_feedback(inner.cursor(), inner.status_text()) {
+            let _send_result = browser_event_sender.send(TabEvent::new(tab_id, event));
+        }
+        info!(
+            "tab {}: page opened tab {}",
+            self.tab_id.value(),
+            tab_id.value()
+        );
+        let web_view = ServoWebView::new(
+            HandleThenCleanup::new(inner, page_tabs.after_engine_cleanup.clone()),
+            tab_id,
+            scale_factor.get(),
+            parts,
+        );
+        page_tabs
+            .adopted
+            .borrow_mut()
+            .push((tab_id, web_view, event_receiver));
+    }
+
+    fn notify_closed(&self, _web_view: servo::WebView) {
+        info!("tab {}: the page closed its tab", self.tab_id.value());
+        self.send_browser_event(BrowserEvent::CloseRequested);
     }
 
     // controls, dialogs: simple dialogs are page requests; every other kind is a control.
@@ -928,6 +1159,108 @@ mod tests {
         for enabled in [true, false] {
             assert!(!preferences_with_experimental_web_features(enabled).dom_webrtc_enabled);
         }
+    }
+
+    use crate::proxy::ProxyServer;
+
+    fn proxy_preferences(preferences: &Preferences) -> [&str; 3] {
+        [
+            &preferences.network_http_proxy_uri,
+            &preferences.network_https_proxy_uri,
+            &preferences.network_http_no_proxy,
+        ]
+    }
+
+    fn preferences_without_environment_proxies() -> Preferences {
+        let mut preferences = Preferences::default();
+        preferences.network_http_proxy_uri.clear();
+        preferences.network_https_proxy_uri.clear();
+        preferences.network_http_no_proxy.clear();
+        preferences
+    }
+
+    fn system_proxy() -> SystemProxySettings {
+        SystemProxySettings {
+            http: Some(ProxyServer::new("proxy.example", Some(3128))),
+            exceptions: vec!["*.local".to_owned()],
+            ..SystemProxySettings::default()
+        }
+    }
+
+    #[test]
+    fn the_system_proxy_fills_servos_proxy_preferences() {
+        let mut preferences = preferences_without_environment_proxies();
+
+        apply_system_proxy(&mut preferences, Some(&system_proxy()));
+
+        assert_eq!(
+            proxy_preferences(&preferences),
+            [
+                "http://proxy.example:3128",
+                "",
+                "localhost,127.0.0.0/8,::1,.local"
+            ]
+        );
+    }
+
+    #[test]
+    fn without_system_proxy_settings_the_preferences_are_unchanged() {
+        let mut preferences = preferences_without_environment_proxies();
+
+        apply_system_proxy(&mut preferences, None);
+        apply_system_proxy(&mut preferences, Some(&SystemProxySettings::default()));
+
+        assert_eq!(proxy_preferences(&preferences), ["", "", ""]);
+    }
+
+    #[test]
+    fn proxy_environment_variables_win_over_the_system_proxy() {
+        // Servo's `Preferences::default` reads `http_proxy`, `https_proxy` and `no_proxy`.
+        for (index, value) in [
+            "http://env.example:1",
+            "http://env.example:2",
+            "env.example",
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut preferences = preferences_without_environment_proxies();
+            match index {
+                0 => preferences.network_http_proxy_uri = value.to_owned(),
+                1 => preferences.network_https_proxy_uri = value.to_owned(),
+                _ => preferences.network_http_no_proxy = value.to_owned(),
+            }
+            let before = proxy_preferences(&preferences).map(str::to_owned);
+
+            apply_system_proxy(&mut preferences, Some(&system_proxy()));
+
+            assert_eq!(proxy_preferences(&preferences).map(str::to_owned), before);
+        }
+    }
+
+    #[test]
+    fn the_http_cache_stays_in_memory_without_a_cache_directory() {
+        let preferences = mercury_preferences(&RuntimeOptions::default());
+
+        assert_eq!(preferences.network_http_disk_cache, "");
+    }
+
+    #[test]
+    fn the_http_disk_cache_is_a_database_in_the_cache_directory() {
+        let preferences = mercury_preferences(&RuntimeOptions {
+            http_disk_cache_dir: Some(PathBuf::from("/profile/http-cache")),
+            ..RuntimeOptions::default()
+        });
+
+        assert_eq!(
+            preferences.network_http_disk_cache,
+            "/profile/http-cache/cache.sqlite3"
+        );
+        assert_eq!(
+            preferences.network_http_disk_cache_size,
+            Preferences::default().network_http_disk_cache_size
+        );
+        assert_eq!(preferences.network_http_disk_cache_size, 100 * 1024 * 1024);
     }
 
     // geolocation

@@ -7,6 +7,10 @@ export { SearchEngineRow, SettingsWindow } from "settings/settings-window.slint"
 import { PageRequestSheet, PageRequestStyle, PageRequestView, PermissionPrompt } from "dialogs/page-requests.slint";
 // controls
 import { ColorPicker, ContextMenuPopup, ContextMenuRow, PopupBackdrop, SelectPopup, SelectPopupRow } from "controls/controls.slint";
+import { PopUpBlockedIndicator } from "tabs/pop-up-blocked.slint";
+// menus
+import { AddressBarEdit, BrowserMenu, BrowserMenuCommand, BrowserMenuEntry } from "menus/browser-menu.slint";
+export { AboutLink, AboutWindow } from "about/about-window.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -383,6 +387,20 @@ export component MainWindow inherits Window {
         );
     }
 
+    // --- tabs ---
+    out property <bool> address-has-focus: address-input.has-focus;
+    // The active tab's committed address; Escape in the address field restores it.
+    in property <string> committed-address: "";
+
+    public function reset-address(text: string) {
+        root.address = text;
+    }
+
+    // The origin whose pop-up was blocked in the active tab; empty hides the indicator.
+    in property <string> pop-up-blocked-origin: "";
+    callback allow-pop-ups();
+    callback dismiss-pop-up-blocked();
+    // --- end tabs ---
     // --- dialogs ---
     // The active tab's oldest unanswered page request (style none when there is none).
     in property <PageRequestView> page-request;
@@ -390,6 +408,42 @@ export component MainWindow inherits Window {
     // to show more dialogs" or "... to ask again").
     callback page-request-answered(int, bool, string, string, bool);
     // --- end dialogs ---
+
+    // --- menus ---
+    // The browser menu's items above and below its zoom row (built in apps/mercury-desktop/src/menus).
+    in property <[BrowserMenuEntry]> browser-menu-top-entries;
+    in property <[BrowserMenuEntry]> browser-menu-bottom-entries;
+    out property <bool> address-bar-focused: address-input.has-focus;
+    callback browser-menu-activated(BrowserMenuCommand);
+    // The address bar gained or lost keyboard focus: the Edit menu's enabled items change.
+    callback address-bar-focus-changed(bool);
+    changed address-bar-focused => {
+        root.address-bar-focus-changed(self.address-bar-focused);
+    }
+
+    public function show-browser-menu() {
+        browser-menu.show();
+    }
+
+    public function edit-address-bar(command: AddressBarEdit) {
+        if !address-input.has-focus {
+            return;
+        }
+        if command == AddressBarEdit.undo {
+            address-input.undo();
+        } else if command == AddressBarEdit.redo {
+            address-input.redo();
+        } else if command == AddressBarEdit.cut {
+            address-input.cut();
+        } else if command == AddressBarEdit.copy {
+            address-input.copy();
+        } else if command == AddressBarEdit.paste {
+            address-input.paste();
+        } else if command == AddressBarEdit.select-all {
+            address-input.select-all();
+        }
+    }
+    // --- end menus ---
 
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
@@ -428,7 +482,7 @@ export component MainWindow inherits Window {
                         for tab[index] in root.tabs: BrowserTabButton {
                             width: 184px;
                             tab: tab;
-                            closable: root.tabs.length > 1;
+                            closable: true;
 
                             selected => {
                                 root.select-tab(index);
@@ -513,8 +567,42 @@ export component MainWindow inherits Window {
                         vertical-alignment: center;
                         single-line: true;
                         accepted => {
+                            // tabs: the page takes focus, so the field shows the committed URL
+                            web-view-focus.focus();
+                            if self.has-focus {
+                                self.clear-focus();
+                            }
                             root.navigate(self.text);
                         }
+                        // tabs: Escape drops the draft and returns focus to the page
+                        key-pressed(event) => {
+                            if event.text != Key.Escape {
+                                return reject;
+                            }
+                            // An input method's composition handles its own Escape.
+                            if self.preedit-text != "" {
+                                return reject;
+                            }
+                            // history lane: close the suggestion list here first, and accept.
+                            root.reset-address(root.committed-address);
+                            if root.web-view-visible {
+                                web-view-focus.focus();
+                            } else {
+                                self.clear-focus();
+                            }
+                            accept
+                        }
+                    }
+                }
+
+                // tabs: a page's pop-up was blocked
+                if root.pop-up-blocked-origin != "": PopUpBlockedIndicator {
+                    origin: root.pop-up-blocked-origin;
+                    allow => {
+                        root.allow-pop-ups();
+                    }
+                    dismiss => {
+                        root.dismiss-pop-up-blocked();
                     }
                 }
 
@@ -525,8 +613,26 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                 }
 
-                ChromeButton {
+                browser-menu-button := ChromeButton {
                     label: "⋮";
+                    clicked => { root.show-browser-menu(); }
+
+                    // menus: the browser menu, below the button, right edges aligned. A child of the
+                    // button, not placed with `absolute-position`: in Slint 1.17.1 that counts an
+                    // element's offset twice when the element has a property lowered to an injected
+                    // parent, such as ChromeButton's `opacity` (the `Opacity` parent takes the
+                    // geometry: lower_property_to_element.rs:85, object_tree.rs:3441-3446).
+                    // Measured: x 1700 for a button at 850.
+                    browser-menu := BrowserMenu {
+                        x: browser-menu-button.width - self.width;
+                        y: browser-menu-button.height + 4px;
+                        top-entries: root.browser-menu-top-entries;
+                        bottom-entries: root.browser-menu-bottom-entries;
+                        zoom-percent: root.zoom-percent;
+                        activated(command) => {
+                            root.browser-menu-activated(command);
+                        }
+                    }
                 }
             }
 
@@ -901,5 +1007,11 @@ export component MainWindow inherits Window {
         row-hovered(index) => {
             root.controls-row-hovered(index);
         }
+    }
+
+    // menus: keeps Slint's default macOS menu bar out; Mercury installs its own native menu.
+    MenuBar {
+        visible: false;
+        Menu { }
     }
 }
