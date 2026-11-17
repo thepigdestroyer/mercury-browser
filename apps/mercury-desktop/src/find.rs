@@ -123,6 +123,7 @@ pub(crate) fn watch_for_answers() {
         watch
             .timer
             .start(TimerMode::Repeated, ANSWER_POLL_INTERVAL, move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
                 let (tab_id, awaited) = {
                     let controller = controller.borrow();
                     (
@@ -227,6 +228,7 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
     let edited_window = window.as_weak();
     let edited_debounce = Rc::clone(&debounce);
     window.on_find_edited(move |text| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         let tab_id = {
             let mut controller = edited_controller.borrow_mut();
             controller.set_find_query(text.as_str());
@@ -238,6 +240,7 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
         let controller = Rc::clone(&edited_controller);
         let window = edited_window.clone();
         edited_debounce.start(TimerMode::SingleShot, TYPING_DEBOUNCE, move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             run_due_search(&controller, tab_id, &window);
         });
     });
@@ -255,6 +258,7 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
     let next_window = window.as_weak();
     let next_debounce = Rc::clone(&debounce);
     window.on_find_next(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         next_debounce.stop();
         step_from_bar(&next_controller, &next_window, true);
     });
@@ -263,6 +267,7 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
     let previous_window = window.as_weak();
     let previous_debounce = Rc::clone(&debounce);
     window.on_find_previous(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         previous_debounce.stop();
         step_from_bar(&previous_controller, &previous_window, false);
     });
@@ -271,6 +276,7 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
     let case_window = window.as_weak();
     let case_debounce = Rc::clone(&debounce);
     window.on_find_toggle_match_case(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         case_debounce.stop();
         case_controller.borrow_mut().toggle_find_match_case();
         refresh(&case_controller, &case_window);
@@ -278,6 +284,7 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
 
     let close_window = window.as_weak();
     window.on_find_close(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         debounce.stop();
         controller.borrow_mut().close_find();
         refresh(&controller, &close_window);
@@ -335,6 +342,7 @@ pub(crate) fn start_find_diagnostic(
     let mut reported = false;
     let mut steps_left = diagnostic.steps;
     timer.start(TimerMode::Repeated, DIAGNOSTIC_POLL_INTERVAL, move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if reported {
             return;
         }

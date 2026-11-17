@@ -204,7 +204,7 @@ fn run_command(
         MenuCommand::ToggleBookmarksBar => seams::toggle_bookmarks_bar(window),
         MenuCommand::ShowBookmarksManager => seams::show_bookmarks_manager(window),
         MenuCommand::OpenBookmark(id) => seams::open_bookmark(window, id),
-        MenuCommand::Find | MenuCommand::Stop => {}
+        MenuCommand::Stop => {}
     }
 }
 

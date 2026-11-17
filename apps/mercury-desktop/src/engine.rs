@@ -153,6 +153,8 @@ pub(crate) fn with_runtime(work: impl FnOnce(&ServoRuntime)) -> bool {
 /// If Servo has not finished shutting down within `ENGINE_SHUTDOWN_TIMEOUT`, the process exits
 /// with `exit_code_if_stuck` rather than hang.
 pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
+    // find: how long the engine takes to shut down (`RUST_LOG=mercury_browser::engine=debug`).
+    let started = std::time::Instant::now();
     // Queued re-pumps and Servo's waker reach the engine only through this; from now on they
     // find nothing.
     let Some(engine) = ENGINE.with(|current| current.replace(Weak::new()).upgrade()) else {
@@ -172,6 +174,11 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
         }
     }
     state.shut_down(window.as_ref(), exit_code_if_stuck);
+    // `shut_down` returns right after the watchdog is disarmed.
+    log::debug!(
+        "engine shut down in {} ms",
+        started.elapsed().as_millis()
+    );
 }
 
 /// Whether the engine's state is borrowed right now (a pump or a render is running).

@@ -12,6 +12,9 @@ use slint::{ComponentHandle, LogicalPosition, PhysicalSize, SharedString};
 
 slint::slint! {
     import { FindBar } from "../ui/find/find-bar.slint";
+    import { ChromePalette, ChromeTheme } from "../ui/theme/chrome-palette.slint";
+
+    export { ChromePalette, ChromeTheme }
 
     // A stand-in for the browser window: toolbar, the find bar, then a white page.
     export component Harness inherits Window {
@@ -33,12 +36,12 @@ slint::slint! {
 
         width: 900px;
         height: 200px;
-        background: #0b0f14;
+        background: ChromePalette.window-background;
 
         VerticalLayout {
             Rectangle {
                 height: 60px;
-                background: #11171f;
+                background: ChromePalette.toolbar-background;
             }
 
             bar := FindBar {
@@ -255,4 +258,25 @@ fn the_find_bar_renders_and_answers_keys_and_clicks() {
         "a hidden bar's field cannot be focused"
     );
     fixture.save("find-bar-hidden");
+
+    // The bar in each chrome theme. System follows the window's colour scheme, which is unknown
+    // here, so the chrome stays dark.
+    harness.set_shown(true);
+    for (theme, name) in [
+        (ChromeTheme::System, "system"),
+        (ChromeTheme::Light, "light"),
+        (ChromeTheme::Dark, "dark"),
+    ] {
+        harness.global::<ChromePalette>().set_theme(theme);
+        harness.set_query("needle".into());
+        harness.set_status("3 of 7".into());
+        harness.set_no_matches(false);
+        harness.set_match_case(true);
+        fixture.save(&format!("find-bar-{name}-count"));
+        harness.set_query("absent".into());
+        harness.set_status("No matches".into());
+        harness.set_no_matches(true);
+        harness.set_match_case(false);
+        fixture.save(&format!("find-bar-{name}-no-matches"));
+    }
 }
