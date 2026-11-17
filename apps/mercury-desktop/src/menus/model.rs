@@ -844,7 +844,6 @@ mod tests {
             vec![
                 ("Hide Mercury Browser", "⌘H".to_owned()),
                 ("Hide Others", "⌥⌘H".to_owned()),
-                ("Reopen Closed Tab", "⇧⌘T".to_owned()),
                 ("Find…", "⌘F".to_owned()),
                 ("Enter Full Screen", "⌃⌘F".to_owned()),
                 ("Show All History", "⌘Y".to_owned()),
