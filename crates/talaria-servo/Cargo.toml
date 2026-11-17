@@ -38,3 +38,6 @@ gstreamer = "0.25"
 
 [build-dependencies]
 adblock.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
