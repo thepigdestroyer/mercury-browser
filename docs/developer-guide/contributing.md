@@ -7,6 +7,10 @@ description: Prepare focused, reviewable contributions to Mercury Browser.
 
 Good Mercury contributions make one behavior easier to understand, test, or trust. Browser work can spread across UI, platform, engine, graphics, media, and networking quickly, so a narrow change is a real advantage.
 
+## Contributor terms and licence headers
+
+Mercury is source-available. Read [`CONTRIBUTING.md`](https://github.com/thepigdestroyer/mercury-browser/blob/mercury/CONTRIBUTING.md) in the repository before you send a change: it sets out the terms your contribution comes under and the licence header every new file needs. `scripts/ci/check-license-headers.sh` checks the headers.
+
 ## Before writing code
 
 - Search existing issues and recent commits.

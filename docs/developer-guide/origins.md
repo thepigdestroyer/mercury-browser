@@ -35,8 +35,10 @@ The windows still look much like Hermes's. A complete redesign of the interface,
 
 ## Licence and copyright
 
-Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors. The licence terms are in the repository's `LICENSE` file, and `NOTICE` records Mercury's copyright and its origin. The parts that came from Hermes Browser remain under the Mozilla Public License 2.0, the licence Hermes used, with Kayk Caputo's copyright.
+Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors. Portions © 2026 Kayk Caputo (Hermes Browser).
 
-The app carries the same information: **About Mercury Browser** shows the copyright line and "Began as a fork of Hermes Browser by Kayk Caputo.", and the app bundle includes `LICENSE`, `NOTICE` and `THIRD-PARTY-NOTICES.md` in `Contents/Resources`.
+Mercury is source-available: free for any non-commercial use. The files written for Mercury are under the PolyForm Noncommercial License 1.0.0. The files that came from Hermes Browser, files adapted from other projects such as Servo, and the application icon, which is drawn from the Hermes logo, stay under the Mozilla Public License 2.0, the licence Hermes used. Versions published before the change remain available under the MPL-2.0. The repository's `LICENSE` explains the split, `LICENSES/` holds both texts, and `NOTICE` records the copyright, the required notice and Mercury's origin.
+
+The app carries the same information: **About Mercury Browser** shows the copyright and licence lines and "Began as a fork of Hermes Browser by Kayk Caputo.", and the app bundle includes `LICENSE`, `LICENSES/`, `NOTICE` and `THIRD-PARTY-NOTICES.md` in `Contents/Resources`.
 
 Code that Mercury copies or adapts from other projects (Slint's Servo example, Servo, Zervo, Tauri and others) is credited in a header in each file and in `THIRD-PARTY-NOTICES.md`, with the licence texts in `LICENSES/`.

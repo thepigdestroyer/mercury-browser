@@ -102,7 +102,7 @@ scripts/ci/check-colors-screenshot.py /tmp/colors.png
   Review both whenever Servo is upgraded.
 - **Bans.** Several versions of one crate are allowed (the engine's graph needs them). A `*` version requirement is reported. The intended level for that is "deny". It warns for now, because cargo-deny counts the workspace's own `path` dependencies as wildcards in any crate that is not marked `publish = false`, and no crate is marked yet. `publish = false` is added to every crate, and the level switched to "deny", when the parallel lanes are merged.
 - **Sources.** Only crates.io. Git dependencies and other registries are refused. The vendored crates in `third_party/` are path dependencies and need no exception.
-- **Licences.** An explicit allow-list of what the graph needs. No copyleft licence is on it. A crate that offers a copyleft licence as one alternative among permissive ones passes on its permissive terms. A licence that is not on the list fails the check until someone decides about it.
+- **Licences.** cargo-deny skips Mercury's own unpublished crates (`private = { ignore = true }`); `scripts/ci/check-license-headers.sh` checks the licences of Mercury's own files instead. For everything else there is an explicit allow-list of what the graph needs. No copyleft licence is on it. A crate that offers a copyleft licence as one alternative among permissive ones passes on its permissive terms. A licence that is not on the list fails the check until someone decides about it.
 
 | Licence | Needed by, for example |
 | --- | --- |
@@ -115,7 +115,7 @@ scripts/ci/check-colors-screenshot.py /tmp/colors.png
 | CDLA-Permissive-2.0 | `webpki-roots`, `webpki-root-certs` (Mozilla's CA certificate data) |
 | ISC | `aws-lc-rs`, `rustls-webpki`, `libloading` |
 | MIT | `aho-corasick` and about 200 others |
-| MPL-2.0 | Servo's crates, `adblock`, `cssparser`, `mozjs`, and Mercury itself |
+| MPL-2.0 | Servo's crates, `adblock`, `cssparser`, `mozjs` |
 | NCSA | `libfuzzer-sys` (via `rav1e` ← `ravif` ← `image` ← Slint's compiler) |
 | Unicode-3.0 | the `icu_*` crates |
 | Zlib | `foldhash`, `slotmap` |
