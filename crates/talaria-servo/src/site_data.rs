@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Clearing what the engine keeps for sites, for "Clear browsing data": cookies, web storage
 //! (`localStorage`, `sessionStorage`) and the HTTP cache.
 //!

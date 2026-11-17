@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Draws the main window headless through Slint's software renderer, with the history lane's
 //! UI open on sample data, and saves PNGs of the suggestion list, the history window and the
 //! "Clear browsing data" dialog with the chrome theme set to Light, Dark and System. (System

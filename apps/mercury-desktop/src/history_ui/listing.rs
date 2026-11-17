@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The history window's list: visits newest first, grouped under a heading per local day, and
 //! the time ranges of the clear dialog. Pure: the wiring is in `mod.rs`.
 

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Deleting history so that it does not linger: whole sites, and the purge that leaves no copy
 //! of a deleted row in free pages, the full-text index or the write-ahead log.
 

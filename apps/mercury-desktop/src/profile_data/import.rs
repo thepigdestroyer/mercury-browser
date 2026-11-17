@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Bulk import of visits from another browser, as a stepwise job (see `jobs`): chunks of
 //! [`IMPORT_CHUNK`] visits, each one transaction. Bookmarks are imported by the bookmarks and
 //! import work's own stepwise jobs on `Store::import_bookmark_sets`.

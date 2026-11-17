@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The address bar's suggestion list: what it shows for an input, which row is selected, where
 //! a choice leads, and the inline completion of a host. Pure: the wiring is in `mod.rs`.
 

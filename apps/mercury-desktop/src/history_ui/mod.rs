@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The history lane's user interface: suggestions under the address field, the history window
 //! (Cmd+Y) and the "Clear browsing data" dialog (Cmd+Shift+Delete). Everything goes through the
 //! profile data service; nothing typed or listed leaves the local database.
