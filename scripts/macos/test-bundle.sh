@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Checks the parts of scripts/macos/bundle.sh that can be tested without a
 # build or a signing identity: the identity checks, which entitlement file each
 # identity gets and what the files grant, and the helpers in lib.sh that parse

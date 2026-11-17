@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // The macOS rpath below is adapted from Servo (https://github.com/servo/servo, tag v0.8.0,
 // ports/servoshell/build.rs), MPL-2.0.
 

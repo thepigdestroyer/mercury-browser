@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::process::ExitCode;
@@ -39,6 +40,8 @@ mod media_isolation;
 mod menus;
 mod page_requests; // dialogs
 mod panic_hook;
+// tabs opened and closed by pages
+mod page_tabs;
 #[cfg(target_os = "macos")]
 mod platform_macos;
 mod post_run;
@@ -51,9 +54,13 @@ mod screenshot;
 mod settings;
 mod shortcuts;
 mod shutdown;
+// tabs
+mod tab_close;
+// tabs
 mod signals;
 #[cfg(target_os = "macos")]
 mod system_proxy;
+mod tab_switch_frame;
 mod ui_sync;
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
@@ -160,6 +167,17 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     history_ui::connect(&window, Rc::clone(&controller), options.is_automated()); // history lane
+    // tabs: the "Pop-up blocked" indicator
+    page_tabs::connect_pop_up_indicator(&window, &controller);
+    // tabs: MERCURY_ALLOW_POP_UPS only counts in automated runs
+    page_tabs::configure_pop_up_blocking(options.is_automated(), {
+        let settings = Rc::downgrade(&settings);
+        move || {
+            settings
+                .upgrade()
+                .is_none_or(|settings| settings.block_popups())
+        }
+    });
     // menus lane: the macOS menu bar and the browser menu.
     menus::connect(
         &window,

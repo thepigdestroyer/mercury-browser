@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Requests a page makes that wait for the user: JavaScript dialogs, the "leave this page?"
 //! prompt, HTTP sign-in and permission prompts.
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 /// Everything that can go wrong in this crate.
 ///
 /// No variant ever carries a password, a user name, a realm, a Keychain account string or a

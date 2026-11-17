@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Runs one shell command while holding one of Mercury's build slots, so that only a few builds run
 # on the development Mac at once and none starts without enough free disk space.
 #
@@ -6,17 +8,29 @@
 # (cargo build/test/clippy/check/run, make lint/test/build-release/...). The command arrives in
 # MERCURY_GUARDED_COMMAND and runs unchanged under MERCURY_GUARDED_SHELL; its exit status is ours.
 # See .opencode/skills/mercury-build-hygiene/SKILL.md.
+# Everything runs inside main(), and the file is only ever replaced (written elsewhere, then moved
+# over), never edited in place: bash reads a running script lazily, so an in-place edit would break
+# every build already waiting in it.
+main() {
 set -uo pipefail
 
 state_dir="${MERCURY_GUARD_STATE:?MERCURY_GUARD_STATE is not set}"
 command="${MERCURY_GUARDED_COMMAND:?MERCURY_GUARDED_COMMAND is not set}"
 run_shell="${MERCURY_GUARDED_SHELL:-/bin/zsh}"
 worktrees="${MERCURY_GUARDED_WORKTREE:-}"
-slots="${MERCURY_BUILD_SLOTS:-5}"
-min_free_gb="${MERCURY_MIN_FREE_GB:-40}"
+# Two pools: "heavy" builds compile Servo; "light" builds touch only crates that don't depend on it
+# (minutes, a few hundred MB), so they never queue behind a heavy one.
+pool="${MERCURY_SLOT_POOL:-heavy}"
+if [ "$pool" = light ]; then
+    slots="${MERCURY_LIGHT_SLOTS:-4}"
+    min_free_gb="${MERCURY_LIGHT_MIN_FREE_GB:-10}"
+    slot_root="$state_dir/light-slots"
+else
+    slots="${MERCURY_BUILD_SLOTS:-3}"
+    min_free_gb="${MERCURY_MIN_FREE_GB:-40}"
+    slot_root="$state_dir/slots"
+fi
 wait_minutes="${MERCURY_SLOT_WAIT_MINUTES:-360}"
-
-slot_root="$state_dir/slots"
 mkdir -p "$slot_root"
 
 say() { printf 'mercury-disk-guard: %s\n' "$*" >&2; }
@@ -86,6 +100,7 @@ while :; do
     sleep 15
 done
 
+    # shellcheck disable=SC2329 # invoked by the EXIT trap below
 release() {
     local wt
     rm -rf "$slot"
@@ -110,3 +125,7 @@ if [ -z "${CARGO_BUILD_JOBS:-}" ]; then
 fi
 
 "$run_shell" -c "$command"
+}
+
+main "$@"
+exit $?

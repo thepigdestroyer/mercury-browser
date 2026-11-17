@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! What the browser's settings can change in the controller: the search used for address-bar
 //! input that is not an address, the default page zoom, and a colour scheme forced over the
 //! system's.
