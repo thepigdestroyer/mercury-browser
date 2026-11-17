@@ -3,12 +3,26 @@
 //!
 //! Generic over the request, watch and watch-key types so the rules can be tested without
 //! Servo, whose `PositionRequest` and `PositionWatch` only Servo can construct.
+//!
+//! Watches belong to a document (the key's pipeline) and to the history entry that was current
+//! when they started. A watch only counts, and only gets positions, while its web view is shown
+//! and it is not parked. A watch is parked when its document is left (a new document starts,
+//! or a back/forward traversal moves to another entry); it resumes when a traversal comes back
+//! to its entry (a page restored from the back-forward cache), and goes when its entry changes
+//! or Servo stops it (its pipeline exited).
+//!
+//! One-shot requests are not tied to a document: Servo's `PositionRequest` carries no pipeline,
+//! so a late one from a document just left cannot be told apart and refused. That is
+//! acceptable: it can only make the source run until one position arrives, which Servo then
+//! drops (the document is no longer fully active), and the document was allowed the location.
+//! A tab's waiting one-shots are dropped when it starts a new document or closes.
 
 use std::cell::{Cell, RefCell};
 use std::rc::{Rc, Weak};
 
 use log::info;
 
+use super::history::HistoryChange;
 use super::{
     LocationAccuracy, LocationError, LocationFix, LocationReceiver, LocationSink, LocationSource,
 };
@@ -32,15 +46,16 @@ pub(crate) trait WatchKey: PartialEq {
     fn document(&self) -> Self::Document;
 }
 
+/// How many documents the hub remembers as seen, and as retired, at most (the oldest go first).
+const MAX_REMEMBERED_DOCUMENTS: usize = 64;
+
 /// Why an owner's requests and watches are forgotten.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Forget {
-    /// A new document started: later watches of the documents seen so far are refused.
+    /// A new document starts: its one-shot requests are dropped, its watches parked, and a
+    /// later watch of the documents seen so far is refused.
     DocumentStarted,
-    /// The history moved to another entry, maybe a document from the back-forward cache, which
-    /// may watch again.
-    Traversal,
-    /// The web view closed.
+    /// The web view closed: everything is dropped.
     Closed,
 }
 
@@ -55,24 +70,38 @@ struct Consumer<T> {
     item: T,
 }
 
+struct WatchEntry<K, W> {
+    key: K,
+    consumer: Consumer<W>,
+    /// The history entry current when the watch started.
+    entry: usize,
+    parked: bool,
+}
+
 struct Running {
     generation: u64,
+    /// What the source is asked for now.
     accuracy: LocationAccuracy,
-    /// The latest position of this run and the accuracy asked for when it came, given at once
-    /// to a page that asks while running for no better accuracy. Forgotten when the source stops.
+    /// What the next position is taken to have: after the source is asked for more accuracy,
+    /// the first position may predate that, so it still counts as the earlier accuracy.
+    next_fix_accuracy: LocationAccuracy,
+    /// The latest position of this run and its accuracy, given at once to a page that asks
+    /// while running for no better accuracy. Forgotten when the source stops.
     last_fix: Option<(LocationFix, LocationAccuracy)>,
 }
 
 struct HubState<R, W, K: WatchKey> {
     source: Option<Rc<dyn LocationSource>>,
     requests: Vec<Consumer<R>>,
-    watches: Vec<(K, Consumer<W>)>,
+    watches: Vec<WatchEntry<K, W>>,
     running: Option<Running>,
     next_generation: u64,
     /// Owners whose web view is hidden: their watches neither keep the source running nor get
     /// positions (Servo drops positions for hidden documents anyway) until it is shown.
     hidden: Vec<OwnerId>,
-    /// Documents that started watches, per owner.
+    /// Each owner's current history entry.
+    current_entries: Vec<(OwnerId, usize)>,
+    /// Documents with watches, per owner.
     seen_documents: Vec<(OwnerId, K::Document)>,
     /// Documents their owner has left for a new one: a watch of theirs arriving late is refused.
     retired_documents: Vec<(OwnerId, K::Document)>,
@@ -83,11 +112,51 @@ impl<R, W, K: WatchKey> HubState<R, W, K> {
         self.hidden.contains(&owner)
     }
 
-    /// The latest position, if it was acquired with at least the accuracy asked for.
+    fn counts(&self, watch: &WatchEntry<K, W>) -> bool {
+        !watch.parked && !self.is_hidden(watch.consumer.owner)
+    }
+
+    fn current_entry(&self, owner: OwnerId) -> usize {
+        self.current_entries
+            .iter()
+            .find(|(entry_owner, _)| *entry_owner == owner)
+            .map_or(0, |(_, entry)| *entry)
+    }
+
+    fn set_current_entry(&mut self, owner: OwnerId, entry: usize) {
+        self.current_entries
+            .retain(|(entry_owner, _)| *entry_owner != owner);
+        self.current_entries.push((owner, entry));
+    }
+
+    /// The latest position, if it is at least as accurate as asked for.
     fn cached_fix(&self, high_accuracy: bool) -> Option<LocationFix> {
         let (fix, accuracy) = self.running.as_ref()?.last_fix.as_ref()?;
         (*accuracy >= accuracy_for(high_accuracy)).then(|| fix.clone())
     }
+
+    /// Forgets a document once none of its watches is left.
+    fn forget_document_if_unwatched(&mut self, owner: OwnerId, document: &K::Document) {
+        let watched = self
+            .watches
+            .iter()
+            .any(|watch| watch.consumer.owner == owner && watch.key.document() == *document);
+        if !watched {
+            self.seen_documents
+                .retain(|(seen_owner, seen)| !(*seen_owner == owner && seen == document));
+        }
+    }
+}
+
+/// Keeps at most `MAX_REMEMBERED_DOCUMENTS`, dropping the oldest.
+fn remember<T: PartialEq>(documents: &mut Vec<T>, document: T) {
+    if documents.contains(&document) {
+        return;
+    }
+    if documents.len() >= MAX_REMEMBERED_DOCUMENTS {
+        documents.remove(0);
+    }
+    documents.push(document);
 }
 
 fn accuracy_for(high_accuracy: bool) -> LocationAccuracy {
@@ -132,6 +201,7 @@ where
                 running: None,
                 next_generation: 1,
                 hidden: Vec::new(),
+                current_entries: Vec::new(),
                 seen_documents: Vec::new(),
                 retired_documents: Vec::new(),
             }),
@@ -165,9 +235,7 @@ where
             if state.retired_documents.contains(&document) {
                 (true, None)
             } else {
-                if !state.seen_documents.contains(&document) {
-                    state.seen_documents.push(document);
-                }
+                remember(&mut state.seen_documents, document);
                 let visible = !state.is_hidden(owner);
                 (
                     false,
@@ -183,25 +251,33 @@ where
         if let Some(fix) = cached {
             watch.update(&fix);
         }
-        self.state.borrow_mut().watches.push((
-            key,
-            Consumer {
-                owner,
-                high_accuracy,
-                item: watch,
-            },
-        ));
+        {
+            let mut state = self.state.borrow_mut();
+            let entry = state.current_entry(owner);
+            state.watches.push(WatchEntry {
+                key,
+                consumer: Consumer {
+                    owner,
+                    high_accuracy,
+                    item: watch,
+                },
+                entry,
+                parked: false,
+            });
+        }
         self.update_source();
     }
 
+    /// The page cleared the watch, or Servo stopped it (its pipeline exited).
     pub(crate) fn stop_watch(&self, key: &K) {
         let removed = {
             let mut state = self.state.borrow_mut();
-            let index = state
-                .watches
-                .iter()
-                .position(|(watch_key, _)| watch_key == key);
-            index.map(|index| state.watches.remove(index))
+            let index = state.watches.iter().position(|watch| watch.key == *key);
+            let removed = index.map(|index| state.watches.remove(index));
+            if let Some(watch) = &removed {
+                state.forget_document_if_unwatched(watch.consumer.owner, &watch.key.document());
+            }
+            removed
         };
         if removed.is_some() {
             drop(removed);
@@ -226,38 +302,112 @@ where
             return;
         }
         if visible {
-            let state = self.state.borrow();
-            for (_, watch) in state
-                .watches
-                .iter()
-                .filter(|(_, watch)| watch.owner == owner)
-            {
-                if let Some(fix) = state.cached_fix(watch.high_accuracy) {
-                    watch.item.update(&fix);
-                }
-            }
+            self.catch_up(owner);
         }
         self.update_source();
     }
 
-    /// The owner's web view closed or left its document. Its watches are told (the page, if it
-    /// is still shown, learns that updates stopped and may watch again), then dropped.
+    /// Gives the owner's counting watches the latest position, if there is one.
+    fn catch_up(&self, owner: OwnerId) {
+        let state = self.state.borrow();
+        for watch in state
+            .watches
+            .iter()
+            .filter(|watch| watch.consumer.owner == owner && state.counts(watch))
+        {
+            if let Some(fix) = state.cached_fix(watch.consumer.high_accuracy) {
+                watch.consumer.item.update(&fix);
+            }
+        }
+    }
+
+    /// Servo's history moved (`HistoryRule`). A traversal parks the owner's watches started at
+    /// other entries, telling them, and resumes those started at the new one; it also accepts
+    /// watches of documents left earlier again, since one of them may be the page restored. A
+    /// change of entries drops the parked watches whose entry changed.
+    pub(crate) fn history_changed(&self, owner: OwnerId, change: HistoryChange) {
+        let mut told = Vec::new();
+        let dropped = {
+            let mut state = self.state.borrow_mut();
+            let state = &mut *state;
+            match change {
+                HistoryChange::None => return,
+                HistoryChange::Traversal { to } => {
+                    state.set_current_entry(owner, to);
+                    state
+                        .retired_documents
+                        .retain(|(document_owner, _)| *document_owner != owner);
+                    for (index, watch) in state.watches.iter_mut().enumerate() {
+                        if watch.consumer.owner != owner {
+                            continue;
+                        }
+                        let parked = watch.entry != to;
+                        if parked && !watch.parked {
+                            told.push(index);
+                        }
+                        watch.parked = parked;
+                    }
+                    Vec::new()
+                }
+                HistoryChange::Entries { current, changed } => {
+                    state.set_current_entry(owner, current);
+                    let (dropped, kept) = std::mem::take(&mut state.watches)
+                        .into_iter()
+                        .partition::<Vec<_>, _>(|watch| {
+                            watch.consumer.owner == owner
+                                && watch.parked
+                                && changed.contains(&watch.entry)
+                        });
+                    state.watches = kept;
+                    for watch in &dropped {
+                        state.forget_document_if_unwatched(owner, &watch.key.document());
+                    }
+                    dropped
+                }
+            }
+        };
+        drop(dropped);
+        {
+            let state = self.state.borrow();
+            for index in told {
+                state.watches[index]
+                    .consumer
+                    .item
+                    .error(LocationError::Unavailable);
+            }
+        }
+        self.catch_up(owner);
+        self.update_source();
+    }
+
+    /// The owner's web view starts a new document, or closes. Waiting one-shot requests are
+    /// dropped. A new document parks the watches (the page left may come back from the
+    /// back-forward cache) and tells them; closing drops them.
     pub(crate) fn forget_owner(&self, owner: OwnerId, reason: Forget) {
+        let mut told = Vec::new();
         let (requests, watches) = {
             let mut state = self.state.borrow_mut();
             let state = &mut *state;
-            match reason {
+            let (forgotten_requests, requests) = std::mem::take(&mut state.requests)
+                .into_iter()
+                .partition::<Vec<_>, _>(|request| request.owner == owner);
+            state.requests = requests;
+            let forgotten_watches = match reason {
                 Forget::DocumentStarted => {
                     let (left, kept) = std::mem::take(&mut state.seen_documents)
                         .into_iter()
                         .partition::<Vec<_>, _>(|(document_owner, _)| *document_owner == owner);
                     state.seen_documents = kept;
-                    state.retired_documents.extend(left);
-                }
-                Forget::Traversal => {
-                    state
-                        .retired_documents
-                        .retain(|(document_owner, _)| *document_owner != owner);
+                    for document in left {
+                        remember(&mut state.retired_documents, document);
+                    }
+                    for (index, watch) in state.watches.iter_mut().enumerate() {
+                        if watch.consumer.owner == owner && !watch.parked {
+                            watch.parked = true;
+                            told.push(index);
+                        }
+                    }
+                    Vec::new()
                 }
                 Forget::Closed => {
                     state
@@ -267,25 +417,33 @@ where
                         .seen_documents
                         .retain(|(document_owner, _)| *document_owner != owner);
                     state.hidden.retain(|hidden_owner| *hidden_owner != owner);
+                    state
+                        .current_entries
+                        .retain(|(entry_owner, _)| *entry_owner != owner);
+                    let (forgotten, watches) = std::mem::take(&mut state.watches)
+                        .into_iter()
+                        .partition::<Vec<_>, _>(|watch| watch.consumer.owner == owner);
+                    state.watches = watches;
+                    forgotten
                 }
-            }
-            let (forgotten_requests, requests) = std::mem::take(&mut state.requests)
-                .into_iter()
-                .partition::<Vec<_>, _>(|request| request.owner == owner);
-            state.requests = requests;
-            let (forgotten_watches, watches) = std::mem::take(&mut state.watches)
-                .into_iter()
-                .partition::<Vec<_>, _>(|(_, watch)| watch.owner == owner);
-            state.watches = watches;
+            };
             (forgotten_requests, forgotten_watches)
         };
-        if requests.is_empty() && watches.is_empty() {
-            return;
-        }
         // Outside the borrow: an unanswered Servo request answers itself on drop.
         drop(requests);
-        for (_, watch) in watches {
-            watch.item.error(LocationError::Unavailable);
+        for watch in watches {
+            if !watch.parked {
+                watch.consumer.item.error(LocationError::Unavailable);
+            }
+        }
+        {
+            let state = self.state.borrow();
+            for index in told {
+                state.watches[index]
+                    .consumer
+                    .item
+                    .error(LocationError::Unavailable);
+            }
         }
         self.update_source();
     }
@@ -304,8 +462,8 @@ where
                     state
                         .watches
                         .iter()
-                        .filter(|(_, watch)| !state.hidden.contains(&watch.owner))
-                        .map(|(_, watch)| watch.high_accuracy),
+                        .filter(|watch| state.counts(watch))
+                        .map(|watch| watch.consumer.high_accuracy),
                 );
             let mut anyone = false;
             let mut high = false;
@@ -326,6 +484,7 @@ where
                     state.running = Some(Running {
                         generation,
                         accuracy,
+                        next_fix_accuracy: accuracy,
                         last_fix: None,
                     });
                     let source = state
@@ -336,6 +495,9 @@ where
                 }
                 (Some(running), true) if running.accuracy != accuracy => {
                     running.accuracy = accuracy;
+                    // Asked for less: positions are at least that good at once. Asked for
+                    // more: the next one may still be the earlier kind (see `next_fix_accuracy`).
+                    running.next_fix_accuracy = running.next_fix_accuracy.min(accuracy);
                     state
                         .source
                         .clone()
@@ -360,6 +522,12 @@ where
                 source.stop();
             }
         }
+    }
+
+    #[cfg(test)]
+    fn remembered_documents(&self) -> (usize, usize) {
+        let state = self.state.borrow();
+        (state.seen_documents.len(), state.retired_documents.len())
     }
 
     #[cfg(test)]
@@ -429,10 +597,19 @@ where
             else {
                 return;
             };
+            let fix_accuracy = running.next_fix_accuracy;
+            running.next_fix_accuracy = running.accuracy;
             if let Ok(fix) = &result {
-                running.last_fix = Some((fix.clone(), running.accuracy));
+                running.last_fix = Some((fix.clone(), fix_accuracy));
             }
-            std::mem::take(&mut state.requests)
+            // A position answers the requests it is accurate enough for; an error answers all.
+            let (answered, waiting) = std::mem::take(&mut state.requests)
+                .into_iter()
+                .partition::<Vec<_>, _>(|request| {
+                    result.is_err() || fix_accuracy >= accuracy_for(request.high_accuracy)
+                });
+            state.requests = waiting;
+            answered
         };
         for request in requests {
             match &result {
@@ -442,11 +619,12 @@ where
         }
         let ended_watches = {
             let state = self.state.borrow();
-            for (_, watch) in &state.watches {
+            for watch in &state.watches {
                 match &result {
-                    Ok(_) if state.is_hidden(watch.owner) => {}
-                    Ok(fix) => watch.item.update(fix),
-                    Err(error) => watch.item.error(*error),
+                    Ok(_) if !state.counts(watch) => {}
+                    Ok(fix) => watch.consumer.item.update(fix),
+                    Err(_) if watch.parked => {}
+                    Err(error) => watch.consumer.item.error(*error),
                 }
             }
             drop(state);
@@ -467,6 +645,7 @@ where
 mod tests {
     use super::*;
     use crate::geolocation::fake::{FakeLocationSource, SourceCall};
+    use crate::geolocation::history::HistoryChange;
     use crate::geolocation::test_support::{Harness, Seen, fix};
 
     use LocationAccuracy::{Coarse, High};
@@ -778,7 +957,7 @@ mod tests {
     }
 
     #[test]
-    fn forgetting_the_last_owner_stops_the_source() {
+    fn a_new_document_parks_the_old_ones_watches_and_stops_the_source() {
         let harness = Harness::silent();
         let owner = harness.hub.new_owner();
         harness
@@ -790,10 +969,7 @@ mod tests {
 
         assert_eq!(
             harness.seen(),
-            [
-                Seen::Error("watch", LocationError::Unavailable),
-                Seen::Dropped("watch"),
-            ]
+            [Seen::Error("watch", LocationError::Unavailable)]
         );
         assert_eq!(harness.source.take_calls(), [SourceCall::Stop]);
         assert!(!harness.hub.is_running());
@@ -964,13 +1140,22 @@ mod tests {
 
         assert!(harness.seen().is_empty());
         assert_eq!(harness.source.take_calls(), [SourceCall::SetAccuracy(High)]);
+        // This one may have been acquired before the source was asked for more accuracy.
         harness.source.deliver(Ok(fix(2.0)));
         assert_eq!(
             harness.seen(),
             [
-                Seen::Position("precise", 2.0),
                 Seen::Position("coarse", 2.0),
                 Seen::Position("precise watch", 2.0),
+            ]
+        );
+        harness.source.deliver(Ok(fix(3.0)));
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Position("precise", 3.0),
+                Seen::Position("coarse", 3.0),
+                Seen::Position("precise watch", 3.0),
             ]
         );
     }
@@ -1031,7 +1216,9 @@ mod tests {
             .hub
             .start_watch(owner, false, key(1, 1), harness.watch("first"));
         harness.hub.forget_owner(owner, Forget::DocumentStarted);
-        harness.hub.forget_owner(owner, Forget::Traversal);
+        harness
+            .hub
+            .history_changed(owner, HistoryChange::Traversal { to: 0 });
         harness.seen();
 
         // Restored from the back-forward cache, the page watches again.
@@ -1059,5 +1246,235 @@ mod tests {
             .start_watch(second, false, key(1, 2), harness.watch("second"));
 
         assert!(harness.seen().is_empty());
+    }
+
+    // Review round 2
+
+    fn entries(current: usize, changed: &[usize]) -> HistoryChange {
+        HistoryChange::Entries {
+            current,
+            changed: changed.to_vec(),
+        }
+    }
+
+    #[test]
+    fn back_and_forward_park_and_resume_each_entrys_watches() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness.hub.history_changed(owner, entries(0, &[]));
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 1), harness.watch("a"));
+        // A link to b: a's document is left (it stays in the back-forward cache).
+        harness.hub.forget_owner(owner, Forget::DocumentStarted);
+        harness.hub.history_changed(owner, entries(1, &[]));
+        harness
+            .hub
+            .start_watch(owner, false, key(2, 1), harness.watch("b"));
+        harness.seen();
+        harness.source.take_calls();
+
+        // Back to a.
+        harness
+            .hub
+            .history_changed(owner, HistoryChange::Traversal { to: 0 });
+        assert_eq!(
+            harness.seen(),
+            [Seen::Error("b", LocationError::Unavailable)]
+        );
+        assert!(harness.hub.is_running(), "a's watch counts again");
+        harness.source.deliver(Ok(fix(1.0)));
+        assert_eq!(harness.seen(), [Seen::Position("a", 1.0)]);
+
+        // Forward to b.
+        harness
+            .hub
+            .history_changed(owner, HistoryChange::Traversal { to: 1 });
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Error("a", LocationError::Unavailable),
+                Seen::Position("b", 1.0),
+            ]
+        );
+        assert!(harness.source.take_calls().is_empty());
+    }
+
+    #[test]
+    fn a_traversal_away_from_the_only_watch_stops_the_source() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness.hub.history_changed(owner, entries(1, &[]));
+        harness
+            .hub
+            .start_watch(owner, false, key(2, 1), harness.watch("b"));
+        harness.source.take_calls();
+
+        harness
+            .hub
+            .history_changed(owner, HistoryChange::Traversal { to: 0 });
+
+        assert_eq!(
+            harness.seen(),
+            [Seen::Error("b", LocationError::Unavailable)]
+        );
+        assert_eq!(harness.source.take_calls(), [SourceCall::Stop]);
+    }
+
+    #[test]
+    fn an_iframe_navigation_leaves_the_pages_watches_alone() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness.hub.history_changed(owner, entries(0, &[]));
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 1), harness.watch("page"));
+        harness.source.take_calls();
+
+        harness.hub.history_changed(owner, entries(1, &[]));
+        harness.source.deliver(Ok(fix(4.0)));
+
+        assert_eq!(harness.seen(), [Seen::Position("page", 4.0)]);
+        assert!(harness.source.take_calls().is_empty());
+    }
+
+    #[test]
+    fn parked_watches_at_entries_that_changed_are_dropped() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness.hub.history_changed(owner, entries(1, &[]));
+        harness
+            .hub
+            .start_watch(owner, false, key(2, 1), harness.watch("b"));
+        harness
+            .hub
+            .history_changed(owner, HistoryChange::Traversal { to: 0 });
+        harness.seen();
+
+        // From the first entry, a link: the forward entry is replaced.
+        harness.hub.history_changed(owner, entries(1, &[1]));
+
+        assert_eq!(harness.seen(), [Seen::Dropped("b")]);
+        harness
+            .hub
+            .history_changed(owner, HistoryChange::Traversal { to: 1 });
+        assert!(!harness.hub.is_running());
+    }
+
+    #[test]
+    fn stopping_a_parked_watch_removes_it() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 1), harness.watch("a"));
+        harness.hub.forget_owner(owner, Forget::DocumentStarted);
+        harness.seen();
+
+        // Servo: the cached page's pipeline exited.
+        harness.hub.stop_watch(&key(1, 1));
+        assert_eq!(harness.seen(), [Seen::Dropped("a")]);
+        harness
+            .hub
+            .history_changed(owner, HistoryChange::Traversal { to: 0 });
+        assert!(!harness.hub.is_running());
+    }
+
+    #[test]
+    fn a_history_change_before_the_new_documents_start_keeps_the_old_one_retired() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness.hub.history_changed(owner, entries(0, &[]));
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 1), harness.watch("a"));
+        // An armed navigation retires a at once ...
+        harness.hub.forget_owner(owner, Forget::DocumentStarted);
+        // ... Servo reports the history before the new document's start ...
+        harness.hub.history_changed(owner, entries(1, &[]));
+        harness.hub.forget_owner(owner, Forget::DocumentStarted);
+        harness.seen();
+
+        // ... and a late watch of a is still refused.
+        harness
+            .hub
+            .start_watch(owner, false, key(1, 2), harness.watch("late"));
+
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Error("late", LocationError::Unavailable),
+                Seen::Dropped("late"),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_position_arriving_right_after_asking_for_high_accuracy_is_not_cached_as_high() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .start_watch(owner, false, 1, harness.watch("coarse"));
+        harness
+            .hub
+            .request_position(owner, true, harness.request("first"));
+        harness.source.deliver(Ok(fix(2.0)));
+        harness.seen();
+
+        harness
+            .hub
+            .request_position(owner, true, harness.request("second"));
+        assert!(harness.seen().is_empty(), "not served from the cache");
+        harness.source.deliver(Ok(fix(3.0)));
+        assert_eq!(
+            harness.seen(),
+            [
+                Seen::Position("first", 3.0),
+                Seen::Position("second", 3.0),
+                Seen::Position("coarse", 3.0),
+            ]
+        );
+
+        harness
+            .hub
+            .request_position(owner, true, harness.request("third"));
+        assert_eq!(harness.seen(), [Seen::Position("third", 3.0)]);
+    }
+
+    #[test]
+    fn a_source_started_for_high_accuracy_serves_high_accuracy_at_once() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        harness
+            .hub
+            .request_position(owner, true, harness.request("precise"));
+
+        harness.source.deliver(Ok(fix(1.0)));
+
+        assert_eq!(harness.seen(), [Seen::Position("precise", 1.0)]);
+    }
+
+    #[test]
+    fn the_documents_remembered_are_bounded() {
+        let harness = Harness::silent();
+        let owner = harness.hub.new_owner();
+        for document in 1..=200 {
+            harness
+                .hub
+                .start_watch(owner, false, key(document, 1), harness.watch("w"));
+            harness.hub.stop_watch(&key(document, 1));
+        }
+        assert_eq!(harness.hub.remembered_documents(), (0, 0));
+
+        for document in 1..=200 {
+            harness
+                .hub
+                .start_watch(owner, false, key(document, 1), harness.watch("w"));
+            harness.hub.forget_owner(owner, Forget::DocumentStarted);
+        }
+        let (seen, retired) = harness.hub.remembered_documents();
+        assert!(seen <= MAX_REMEMBERED_DOCUMENTS, "{seen}");
+        assert!(retired <= MAX_REMEMBERED_DOCUMENTS, "{retired}");
     }
 }

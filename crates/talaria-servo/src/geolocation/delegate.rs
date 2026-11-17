@@ -113,11 +113,11 @@ where
 /// What the web view's `BrowserDelegate` and `ServoWebView` tell geolocation.
 pub(crate) trait PageGeolocation {
     /// A new top-level document starts (or is about to, when Servo will not report it): the
-    /// document left ends its requests and watches, and its late watches are refused. (Servo
-    /// ends them itself only when that document's pipeline exits, which a page kept in the
-    /// back-forward cache does not.)
+    /// document left drops its waiting one-shot requests and parks its watches (it may come
+    /// back from the back-forward cache), and its late watches are refused. Servo itself ends
+    /// them only when that document's pipeline exits.
     fn document_started(&self);
-    /// Servo's history notification; see `HistoryRule`.
+    /// Servo's history notification; see `HistoryRule` and `LocationHub::history_changed`.
     fn history_changed(&self, entries: &[Url], current: usize);
     /// In a diagnostic run, answers Servo's geolocation permission request and returns `None`;
     /// otherwise hands the request back.
@@ -134,19 +134,14 @@ where
     K: WatchKey + 'static,
 {
     fn document_started(&self) {
-        self.history.borrow_mut().document_started();
         self.owner
             .hub()
             .forget_owner(self.owner.owner(), Forget::DocumentStarted);
     }
 
     fn history_changed(&self, entries: &[Url], current: usize) {
-        let forget = self.history.borrow_mut().history_changed(entries, current);
-        if forget {
-            self.owner
-                .hub()
-                .forget_owner(self.owner.owner(), Forget::Traversal);
-        }
+        let change = self.history.borrow_mut().history_changed(entries, current);
+        self.owner.hub().history_changed(self.owner.owner(), change);
     }
 
     fn answer_permission_in_diagnostic(
@@ -324,6 +319,8 @@ mod tests {
             FakeLocation::Position(FixedPosition::new(1.0, 2.0, 3.0).expect("valid")),
         ));
 
+        // `System` has a service only where there is a location source.
+        #[cfg(target_os = "macos")]
         assert_eq!(permission(GeolocationSetup::System), None);
         assert_eq!(permission(allow), Some(true));
         assert_eq!(
@@ -430,7 +427,6 @@ mod tests {
             harness.seen(),
             [
                 Seen::Error("old", LocationError::Unavailable),
-                Seen::Dropped("old"),
                 Seen::Error("late", LocationError::Unavailable),
                 Seen::Dropped("late"),
             ]
@@ -438,7 +434,7 @@ mod tests {
     }
 
     #[test]
-    fn going_back_to_a_cached_page_ends_the_watches_and_stops_the_source() {
+    fn going_back_parks_the_watches_and_forward_resumes_them() {
         let harness = Harness::silent();
         let page = page(&harness.hub);
         page.document_started();
@@ -454,12 +450,22 @@ mod tests {
 
         assert_eq!(
             harness.seen(),
-            [
-                Seen::Error("b", LocationError::Unavailable),
-                Seen::Dropped("b")
-            ]
+            [Seen::Error("b", LocationError::Unavailable)]
         );
         assert_eq!(harness.source.take_calls(), [SourceCall::Stop]);
+
+        page.history_changed(&urls(&["a", "b"]), 1);
+        assert_eq!(
+            harness.source.take_calls(),
+            [SourceCall::Start(
+                crate::geolocation::LocationAccuracy::Coarse
+            )]
+        );
+
+        // An iframe navigation adds an entry and leaves the watch alone.
+        page.history_changed(&urls(&["a", "b", "b"]), 2);
+        harness.source.deliver(Ok(fix(5.0)));
+        assert_eq!(harness.seen(), [Seen::Position("b", 5.0)]);
     }
 
     #[test]
