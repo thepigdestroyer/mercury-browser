@@ -264,9 +264,9 @@ impl ServoRuntime {
             controls,
             page_requests,
             document_start,
-            // find
-            browser_event_sender,
-        ))
+        )
+        // find
+        .with_find_answers(browser_event_sender))
     }
 
     pub fn spin_event_loop(&self) {

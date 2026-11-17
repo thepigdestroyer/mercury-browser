@@ -14,8 +14,7 @@ use servo::{
 use talaria_core::{
     BrowserEvent, ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId,
     EndFindRequest, FindRequest, ImeInput, KeyLocation, KeyState, KeyboardInput, PointerButton,
-    PointerButtonAction, TabEvent, TabId,
-    WebView as TalariaWebView,
+    PointerButtonAction, TabEvent, TabId, WebView as TalariaWebView,
 };
 use talaria_core::{PageRequestAnswer, PageRequestId};
 use url::Url;
@@ -44,8 +43,8 @@ pub struct ServoWebView {
     // unanswered request the engine's default.
     page_requests: ClosesOnDrop<ServoPageRequest>,
     document_start: Rc<RefCell<DocumentStartTracker>>,
-    // find: answers to the find script arrive as the tab's events
-    browser_event_sender: Sender<TabEvent>,
+    // find: answers to the find script arrive as the tab's events (see `with_find_answers`)
+    browser_event_sender: Option<Sender<TabEvent>>,
 }
 
 impl ServoWebView {
@@ -57,7 +56,6 @@ impl ServoWebView {
         controls: EmbedderControls,
         page_requests: ClosesOnDrop<ServoPageRequest>,
         document_start: Rc<RefCell<DocumentStartTracker>>,
-        browser_event_sender: Sender<TabEvent>,
     ) -> Self {
         Self {
             inner,
@@ -67,8 +65,14 @@ impl ServoWebView {
             controls,
             page_requests,
             document_start,
-            browser_event_sender,
+            browser_event_sender: None,
         }
+    }
+
+    // find: where the find script's answers go, as events of this web view's tab.
+    pub(crate) fn with_find_answers(mut self, browser_event_sender: Sender<TabEvent>) -> Self {
+        self.browser_event_sender = Some(browser_event_sender);
+        self
     }
 
     // dialogs: the navigation's document may start without a `Started` Servo reports.
@@ -87,7 +91,9 @@ impl ServoWebView {
         ) -> Option<BrowserEvent>
         + 'static,
     ) {
-        let sender = self.browser_event_sender.clone();
+        let Some(sender) = self.browser_event_sender.clone() else {
+            return;
+        };
         let tab_id = self.tab_id;
         self.inner.evaluate_javascript(script, move |result| {
             if let Some(event) = answer(result) {

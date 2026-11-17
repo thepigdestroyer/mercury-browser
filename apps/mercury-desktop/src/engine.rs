@@ -175,10 +175,7 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
     }
     state.shut_down(window.as_ref(), exit_code_if_stuck);
     // `shut_down` returns right after the watchdog is disarmed.
-    log::debug!(
-        "engine shut down in {} ms",
-        started.elapsed().as_millis()
-    );
+    log::debug!("engine shut down in {} ms", started.elapsed().as_millis());
 }
 
 /// Whether the engine's state is borrowed right now (a pump or a render is running).

@@ -440,7 +440,11 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 // find: the find bar (find in page runs as a script in the page).
                 action("Find…", key('f', CMD), Shortcut(A::Find)),
                 action("Find Next", key('g', CMD), Shortcut(A::FindNext)),
-                action("Find Previous", key('g', SHIFT_CMD), Shortcut(A::FindPrevious)),
+                action(
+                    "Find Previous",
+                    key('g', SHIFT_CMD),
+                    Shortcut(A::FindPrevious),
+                ),
             ],
         },
         Menu {
@@ -855,16 +859,29 @@ mod tests {
             .iter()
             .filter_map(|item| match *item {
                 MenuItem::Action {
-                    title, key, command, ..
-                } if title.starts_with("Find") => Some((title, key.map(|key| key.mac_label()), command)),
+                    title,
+                    key,
+                    command,
+                    ..
+                } if title.starts_with("Find") => {
+                    Some((title, key.map(|key| key.mac_label()), command))
+                }
                 _ => None,
             })
             .collect::<Vec<_>>();
         assert_eq!(
             find_items,
             vec![
-                ("Find…", Some("⌘F".to_owned()), MenuCommand::Shortcut(ShortcutAction::Find)),
-                ("Find Next", Some("⌘G".to_owned()), MenuCommand::Shortcut(ShortcutAction::FindNext)),
+                (
+                    "Find…",
+                    Some("⌘F".to_owned()),
+                    MenuCommand::Shortcut(ShortcutAction::Find)
+                ),
+                (
+                    "Find Next",
+                    Some("⌘G".to_owned()),
+                    MenuCommand::Shortcut(ShortcutAction::FindNext)
+                ),
                 (
                     "Find Previous",
                     Some("⇧⌘G".to_owned()),
@@ -874,7 +891,10 @@ mod tests {
         );
         let snapshot = MenuSnapshot::default();
         for (_, _, command) in find_items {
-            assert!(is_enabled(command, &snapshot, EditTarget::None), "{command:?}");
+            assert!(
+                is_enabled(command, &snapshot, EditTarget::None),
+                "{command:?}"
+            );
         }
     }
 
