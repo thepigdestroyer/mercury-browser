@@ -10,7 +10,7 @@ Mercury is a lightweight browser written in **Rust**, with its interface in **Sl
 - No new Python, Node, Ruby or other scripting-language code anywhere in the repository: not in the browser, and not in build, test or CI tooling. Write tools in Rust (a binary in a workspace crate) or, when it is a few lines of glue, POSIX shell.
 - JavaScript is allowed only where it must run inside a web page through Servo, such as the find-in-page and media helper scripts. Keep these scripts small and test them from Rust where possible.
 - Code vendored unchanged from upstream (for example Servo's own Python bindings generator in `third_party/servo-script-bindings`) stays as upstream wrote it.
-- The few existing Python helpers (`scripts/serve-tests.py`, `scripts/ci/check-colors-screenshot.py` and two inline `python3` snippets in `scripts/macos/`) are being replaced with Rust. Do not extend them.
+- The development tools are Rust, in `crates/mercury-devtools`: the test page server (`scripts/serve-tests.sh`) and the screenshot checker. `scripts/serve-tests.py` is kept only until the lanes in progress have moved to `scripts/serve-tests.sh`, then deleted. The inline `python3` in `scripts/ci/light-crates.sh` and `scripts/ci/github-env.sh` is still to be replaced. Do not extend any of them.
 
 ## Builds and disk space
 

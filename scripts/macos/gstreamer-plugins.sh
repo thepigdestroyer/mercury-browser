@@ -67,11 +67,9 @@ servo_manifest() {
     if command -v jq >/dev/null 2>&1; then
         jq -r '.packages[] | select(.name == "servo") | .manifest_path' <<<"$metadata"
     else
-        python3 -c '
-import json, sys
-for package in json.load(sys.stdin)["packages"]:
-    if package["name"] == "servo":
-        print(package["manifest_path"])' <<<"$metadata"
+        # jq ships with macOS 15 and later; before that, the workspace's own reader.
+        (cd "$REPOSITORY" && cargo run --locked --release --quiet -p mercury-devtools \
+            --bin package-manifest -- servo) <<<"$metadata"
     fi
 }
 

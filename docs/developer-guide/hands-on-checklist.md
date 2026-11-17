@@ -17,7 +17,7 @@ being merged; their sections are added as they land.
 ```sh
 make app-macos                       # builds the app (signed ad hoc) into dist/
 open "dist/Mercury Browser.app"      # a normal launch, with your own Mercury profile
-python3 scripts/serve-tests.py --port 8765 &   # the repository's test pages, for some steps below
+scripts/serve-tests.sh --port 8765 &   # the repository's test pages, for some steps below
 ```
 
 The test pages are then at `http://127.0.0.1:8765/pages/<name>.html`. Stop the server with

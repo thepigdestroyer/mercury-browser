@@ -385,7 +385,9 @@ jobs:
             --screenshot dist/smoke/colors.png \
             --window-size 900x700 \
             "file://${GITHUB_WORKSPACE}/tests/pages/colors.html"
-          scripts/ci/check-colors-screenshot.py dist/smoke/colors.png
+          # The checker is Rust (crates/mercury-devtools) and builds in seconds.
+          cargo run --locked --release --package mercury-devtools \
+            --bin check-colors-screenshot -- dist/smoke/colors.png
 
       - name: Upload the screenshot
         # Whether the smoke test passed or failed, if it ran.
@@ -452,8 +454,8 @@ jobs:
           find scripts -type f -name '*.sh' -print0 | xargs -0 shellcheck -x
 
       - name: Byte-compile the Python scripts
-        # A syntax error in the screenshot checker would otherwise surface
-        # only in the macOS job, hours in.
+        # Only scripts/serve-tests.py is left, kept until the lanes in progress
+        # have moved to scripts/serve-tests.sh (Rust); then this step goes too.
         shell: bash
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache

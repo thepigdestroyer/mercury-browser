@@ -49,13 +49,13 @@ ffmpeg -hide_banner -loglevel error -y -f lavfi -i "sine=frequency=441:sample_ra
 
 The page keeps every element muted with volume 0 and checks Web Audio with an
 `OfflineAudioContext`, so it never makes a sound. Serve `tests/` over HTTP on the loopback
-interface with `scripts/serve-tests.py`: it picks a free port, prints it, answers `Range` requests
-as real media servers do (python's own `http.server` does not), and stops when the shell that
-started it exits.
+interface with `scripts/serve-tests.sh`, which builds and runs the Rust server in
+`crates/mercury-devtools`: it picks a free port, prints it, answers `Range` requests as real media
+servers do, and stops when the shell that started it exits.
 
 ```sh
-python3 scripts/serve-tests.py >serve.port &
-sleep 1; port="$(head -n 1 serve.port)"
+scripts/serve-tests.sh >serve.port &   # builds the Rust server the first time
+until [ -s serve.port ]; do sleep 0.2; done; port="$(head -n 1 serve.port)"
 ./target/release/mercury-browser --screenshot media.png --window-size 1100x1300 \
   --screenshot-delay 30000 "http://127.0.0.1:$port/pages/media.html"
 kill %1; rm serve.port

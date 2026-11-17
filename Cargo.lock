@@ -5392,6 +5392,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-devtools"
+version = "0.2.0"
+dependencies = [
+ "libc",
+ "miniz_oxide 0.8.9",
+ "percent-encoding",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "mercury-downloads"
 version = "0.2.0"
 dependencies = [
