@@ -50,7 +50,8 @@ pub enum LoadError {
 /// Reads and checks the bundled manifest.
 pub fn read_manifest(bundled_dir: &Path) -> Result<Manifest, LoadError> {
     let path = bundled_dir.join(MANIFEST_FILE);
-    let unreadable = |reason: String| LoadError::ManifestUnreadable(path.display().to_string(), reason);
+    let unreadable =
+        |reason: String| LoadError::ManifestUnreadable(path.display().to_string(), reason);
     let metadata = std::fs::metadata(&path).map_err(|error| unreadable(error.to_string()))?;
     if metadata.len() > MAX_MANIFEST_BYTES {
         return Err(unreadable("it is too large".to_owned()));
@@ -189,7 +190,10 @@ pub(crate) mod tests {
                 )
             })
             .collect::<Vec<_>>();
-        let text = format!(r#"{{"format_version": 1, "lists": [{}]}}"#, entries.join(","));
+        let text = format!(
+            r#"{{"format_version": 1, "lists": [{}]}}"#,
+            entries.join(",")
+        );
         std::fs::write(directory.join(MANIFEST_FILE), text).unwrap();
         read_manifest(directory).unwrap()
     }
@@ -219,7 +223,10 @@ pub(crate) mod tests {
         let directory = tempfile::tempdir().unwrap();
         let manifest = bundle(
             &directory.path().join("bundled"),
-            &[("ads", "||ads.example^\n"), ("trackers", "||trackers.example^\n")],
+            &[
+                ("ads", "||ads.example^\n"),
+                ("trackers", "||trackers.example^\n"),
+            ],
         );
         let cache = Cache::open(&directory.path().join("cache")).unwrap();
         (directory, manifest, cache)
@@ -232,7 +239,10 @@ pub(crate) mod tests {
         let lists = choose_lists(&manifest, &directory.path().join("bundled"), None);
 
         assert_eq!(
-            lists.iter().map(|list| (list.entry.id.as_str(), list.origin)).collect::<Vec<_>>(),
+            lists
+                .iter()
+                .map(|list| (list.entry.id.as_str(), list.origin))
+                .collect::<Vec<_>>(),
             [("ads", Origin::Bundled), ("trackers", Origin::Bundled)]
         );
         assert_eq!(lists[0].text, "||ads.example^\n");
@@ -245,10 +255,19 @@ pub(crate) mod tests {
         let mut state = CacheState::default();
         state.lists.insert(
             "ads".to_owned(),
-            updated(&cache, "ads", "||ads.example^\n||more-ads.example^\n", SNAPSHOT + 10),
+            updated(
+                &cache,
+                "ads",
+                "||ads.example^\n||more-ads.example^\n",
+                SNAPSHOT + 10,
+            ),
         );
 
-        let lists = choose_lists(&manifest, &directory.path().join("bundled"), Some((&cache, &state)));
+        let lists = choose_lists(
+            &manifest,
+            &directory.path().join("bundled"),
+            Some((&cache, &state)),
+        );
 
         assert_eq!(lists[0].origin, Origin::Updated);
         assert_eq!(lists[0].version.as_deref(), Some("v2"));
@@ -261,11 +280,16 @@ pub(crate) mod tests {
     fn an_update_older_than_the_bundled_snapshot_is_not_used() {
         let (directory, manifest, cache) = setup();
         let mut state = CacheState::default();
-        state
-            .lists
-            .insert("ads".to_owned(), updated(&cache, "ads", "||old.example^\n", SNAPSHOT - 10));
+        state.lists.insert(
+            "ads".to_owned(),
+            updated(&cache, "ads", "||old.example^\n", SNAPSHOT - 10),
+        );
 
-        let lists = choose_lists(&manifest, &directory.path().join("bundled"), Some((&cache, &state)));
+        let lists = choose_lists(
+            &manifest,
+            &directory.path().join("bundled"),
+            Some((&cache, &state)),
+        );
 
         assert_eq!(lists[0].origin, Origin::Bundled);
     }
@@ -278,7 +302,11 @@ pub(crate) mod tests {
         list.source_url = "https://elsewhere.example/ads.txt".to_owned();
         state.lists.insert("ads".to_owned(), list);
 
-        let lists = choose_lists(&manifest, &directory.path().join("bundled"), Some((&cache, &state)));
+        let lists = choose_lists(
+            &manifest,
+            &directory.path().join("bundled"),
+            Some((&cache, &state)),
+        );
 
         assert_eq!(lists[0].origin, Origin::Bundled);
     }
@@ -287,11 +315,20 @@ pub(crate) mod tests {
     fn a_damaged_update_falls_back_to_the_bundled_copy() {
         let (directory, manifest, cache) = setup();
         let mut state = CacheState::default();
-        let list = updated(&cache, "ads", "||ads.example^\n||new.example^\n", SNAPSHOT + 10);
+        let list = updated(
+            &cache,
+            "ads",
+            "||ads.example^\n||new.example^\n",
+            SNAPSHOT + 10,
+        );
         std::fs::write(cache.directory().join(&list.file), "||ads.exa").unwrap();
         state.lists.insert("ads".to_owned(), list);
 
-        let lists = choose_lists(&manifest, &directory.path().join("bundled"), Some((&cache, &state)));
+        let lists = choose_lists(
+            &manifest,
+            &directory.path().join("bundled"),
+            Some((&cache, &state)),
+        );
 
         assert_eq!(lists[0].origin, Origin::Bundled);
         assert_eq!(lists[0].text, "||ads.example^\n");
@@ -305,7 +342,10 @@ pub(crate) mod tests {
         let lists = choose_lists(&manifest, &directory.path().join("bundled"), None);
 
         assert_eq!(
-            lists.iter().map(|list| list.entry.id.as_str()).collect::<Vec<_>>(),
+            lists
+                .iter()
+                .map(|list| list.entry.id.as_str())
+                .collect::<Vec<_>>(),
             ["trackers"]
         );
     }
@@ -318,7 +358,10 @@ pub(crate) mod tests {
             Err(LoadError::ManifestUnreadable(..))
         ));
         std::fs::write(directory.path().join(MANIFEST_FILE), "{").unwrap();
-        assert!(matches!(read_manifest(directory.path()), Err(LoadError::Manifest(_))));
+        assert!(matches!(
+            read_manifest(directory.path()),
+            Err(LoadError::Manifest(_))
+        ));
     }
 
     #[test]
@@ -342,10 +385,15 @@ pub(crate) mod tests {
         let bundled = choose_lists(&manifest, &directory.path().join("bundled"), None);
         let again = choose_lists(&manifest, &directory.path().join("bundled"), None);
         let mut state = CacheState::default();
-        state
-            .lists
-            .insert("ads".to_owned(), updated(&cache, "ads", "||x.example^\n", SNAPSHOT + 1));
-        let changed = choose_lists(&manifest, &directory.path().join("bundled"), Some((&cache, &state)));
+        state.lists.insert(
+            "ads".to_owned(),
+            updated(&cache, "ads", "||x.example^\n", SNAPSHOT + 1),
+        );
+        let changed = choose_lists(
+            &manifest,
+            &directory.path().join("bundled"),
+            Some((&cache, &state)),
+        );
 
         assert_eq!(engine_key(&bundled), engine_key(&again));
         assert_ne!(engine_key(&bundled), engine_key(&changed));
@@ -369,7 +417,10 @@ pub(crate) mod tests {
         let second = engine_for(&lists, Some((&cache, &mut state)));
 
         assert!(blocks(&first, "https://ads.example/a.js"));
-        assert_eq!(second, other, "read back from the cache, not compiled again");
+        assert_eq!(
+            second, other,
+            "read back from the cache, not compiled again"
+        );
     }
 
     #[test]
@@ -393,7 +444,11 @@ pub(crate) mod tests {
         let lists = choose_lists(&manifest, &directory.path().join("bundled"), None);
         let key = engine_key(&lists);
         let mut state = CacheState {
-            engine: Some(cache.write_engine(&key, b"intact but not an engine").unwrap()),
+            engine: Some(
+                cache
+                    .write_engine(&key, b"intact but not an engine")
+                    .unwrap(),
+            ),
             ..CacheState::default()
         };
 

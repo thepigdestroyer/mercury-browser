@@ -53,7 +53,9 @@ pub struct ListEntry {
 pub enum ManifestError {
     #[error("the manifest is not valid JSON of the expected shape: {0}")]
     Syntax(String),
-    #[error("the manifest has format version {0}; this version of Mercury Browser reads {MANIFEST_FORMAT_VERSION}")]
+    #[error(
+        "the manifest has format version {0}; this version of Mercury Browser reads {MANIFEST_FORMAT_VERSION}"
+    )]
     FormatVersion(u32),
     #[error("the manifest names no lists")]
     NoLists,
@@ -230,7 +232,11 @@ mod tests {
                   "date": "2026-11-15T20:46:51Z", "sha256": "{HASH}"}},
                 {}
             ]}}"#,
-            entry("brave-unbreak", "brave-unbreak.txt", "https://example.org/u.txt")
+            entry(
+                "brave-unbreak",
+                "brave-unbreak.txt",
+                "https://example.org/u.txt"
+            )
         );
 
         let manifest = parse_manifest(&text).expect("a valid manifest");
@@ -254,8 +260,8 @@ mod tests {
 
     #[test]
     fn the_bundled_manifest_is_valid_and_matches_its_files() {
-        let directory =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../talaria-servo/resources/adblock");
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../talaria-servo/resources/adblock");
         let text = std::fs::read_to_string(directory.join(MANIFEST_FILE)).expect("the manifest");
         let manifest = parse_manifest(&text).expect("a valid manifest");
 
@@ -290,7 +296,13 @@ mod tests {
             Err(ManifestError::NoLists)
         );
         let many = (0..=MAX_LISTS)
-            .map(|index| entry(&format!("l{index}"), &format!("l{index}.txt"), "https://a.test/"))
+            .map(|index| {
+                entry(
+                    &format!("l{index}"),
+                    &format!("l{index}.txt"),
+                    "https://a.test/",
+                )
+            })
             .collect::<Vec<_>>();
         assert_eq!(
             parse_manifest(&manifest(&many)),
@@ -332,9 +344,19 @@ mod tests {
     #[test]
     fn ids_and_files_must_be_unique() {
         let ok = "https://example.org/list.txt";
-        assert!(problem(&manifest(&[entry("a", "a.txt", ok), entry("a", "b.txt", ok)])).contains("id"));
         assert!(
-            problem(&manifest(&[entry("a", "a.txt", ok), entry("b", "a.txt", ok)])).contains("file")
+            problem(&manifest(&[
+                entry("a", "a.txt", ok),
+                entry("a", "b.txt", ok)
+            ]))
+            .contains("id")
+        );
+        assert!(
+            problem(&manifest(&[
+                entry("a", "a.txt", ok),
+                entry("b", "a.txt", ok)
+            ]))
+            .contains("file")
         );
     }
 }

@@ -25,5 +25,12 @@ three Brave lists carry no licence line; they are published from brave/adblock-l
 MPL-2.0. The licence texts are in `LICENSES/` and `LICENSE` at the repository root; sources and
 attribution are recorded in `THIRD-PARTY-NOTICES.md` under "Bundled data".
 
-The build script compiles network rules only into an adblock-rust binary snapshot, so startup does
-not need to parse the text lists or contact a remote server.
+`manifest.json` names each list with its publisher URL (the URL the Brave mirror fetches it from:
+the mirror's artifact name is the MD5 of that URL), licence, version or date and SHA-256. The files
+are data, never compiled into the program: `scripts/filter-lists.py install` checks them against the
+manifest and copies them beside the executable (`Contents/Resources/filter-lists/` in the macOS
+bundle, `filter-lists/` in the Linux archive and in `target/<profile>/` after `make build-release`).
+At start-up `crates/mercury-filter-lists` builds the network-rule engine off the UI thread from the
+newest valid copy of each list (this one, or an update in the profile's `filter-lists/` cache) and
+caches it compiled; it fetches updates from the publisher URLs at most once a day. Cosmetic
+(element-hiding) rules are not used.

@@ -83,7 +83,9 @@ impl ContentBlocker {
                     }
                 }
                 Err(error) => {
-                    log::warn!("the filter-list engine could not be loaded ({error:?}); keeping the previous one");
+                    log::warn!(
+                        "the filter-list engine could not be loaded ({error:?}); keeping the previous one"
+                    );
                 }
             }
         }
@@ -202,8 +204,7 @@ mod tests {
 
     /// The bundled lists, compiled the way the filter-list service compiles them.
     fn bundled_engine() -> Vec<u8> {
-        let directory =
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/adblock");
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/adblock");
         let mut filter_set = FilterSet::new(false);
         for file in [
             "ublock-filters.txt",
@@ -283,7 +284,9 @@ mod tests {
     fn only_the_newest_offered_engine_is_taken() {
         let blocker = ContentBlocker::new(EngineSwitches::default());
         blocker.engine_slot().offer(compiled(&["||ads.example^"]));
-        blocker.engine_slot().offer(compiled(&["||trackers.example^"]));
+        blocker
+            .engine_slot()
+            .offer(compiled(&["||trackers.example^"]));
 
         assert!(!blocks(&blocker, "https://ads.example/a.js"));
         assert!(blocks(&blocker, "https://trackers.example/t.js"));

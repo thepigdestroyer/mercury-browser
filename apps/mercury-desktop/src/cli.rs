@@ -240,8 +240,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
             }
             // blocklists
             "--filter-list-server" => {
-                let value =
-                    option_value(&mut arguments, "--filter-list-server", "<loopback URL>")?;
+                let value = option_value(&mut arguments, "--filter-list-server", "<loopback URL>")?;
                 let url = url::Url::parse(&value)
                     .ok()
                     .filter(|url| mercury_filter_lists::fetch::Sources::local_server(url).is_some())

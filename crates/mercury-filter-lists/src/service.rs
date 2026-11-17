@@ -225,7 +225,10 @@ impl Worker {
             });
             let command = match wait {
                 Some(wait) => self.commands.recv_timeout(wait),
-                None => self.commands.recv().map_err(|_| RecvTimeoutError::Disconnected),
+                None => self
+                    .commands
+                    .recv()
+                    .map_err(|_| RecvTimeoutError::Disconnected),
             };
             match command {
                 Ok(Command::CheckNow) => self.check(&mut loaded),
@@ -326,12 +329,18 @@ impl Worker {
         let started = Instant::now();
         let bytes = engine_for(
             &lists,
-            loaded.cache.as_ref().map(|cache| (cache, &mut loaded.state)),
+            loaded
+                .cache
+                .as_ref()
+                .map(|cache| (cache, &mut loaded.state)),
         );
         log::info!(
             "filter lists: engine ready from {} lists ({} updated) in {} ms",
             lists.len(),
-            lists.iter().filter(|list| list.origin == Origin::Updated).count(),
+            lists
+                .iter()
+                .filter(|list| list.origin == Origin::Updated)
+                .count(),
             started.elapsed().as_millis()
         );
         (self.on_event)(ServiceEvent::Engine(bytes));
@@ -363,7 +372,11 @@ impl Worker {
             return;
         };
         if loaded.fetcher.is_none() {
-            match Fetcher::new(sources.clone(), self.config.timeouts, self.canceller.clone()) {
+            match Fetcher::new(
+                sources.clone(),
+                self.config.timeouts,
+                self.canceller.clone(),
+            ) {
                 Ok(fetcher) => loaded.fetcher = Some(fetcher),
                 Err(error) => {
                     log::warn!("filter lists: cannot start the updater: {error}");
@@ -382,7 +395,10 @@ impl Worker {
         self.status.checking = true;
         self.status.last_check = Some(now);
         self.emit_status();
-        log::info!("filter lists: checking {} lists for updates", loaded.lists.len());
+        log::info!(
+            "filter lists: checking {} lists for updates",
+            loaded.lists.len()
+        );
 
         let report = check_lists(
             fetcher,
@@ -447,6 +463,7 @@ mod tests {
     use super::*;
     use crate::engine::tests::{SNAPSHOT, blocks, bundle};
     use crate::test_server::{Reply, TestServer};
+    use std::path::Path;
     use std::sync::{Arc, Mutex};
 
     const ADS: &str = "||ads.example^\n||ads2.example^\n";
@@ -473,10 +490,15 @@ mod tests {
     }
 
     fn last_status(events: &Mutex<Vec<ServiceEvent>>) -> Option<Status> {
-        events.lock().unwrap().iter().rev().find_map(|event| match event {
-            ServiceEvent::Status(status) => Some(status.clone()),
-            ServiceEvent::Engine(_) => None,
-        })
+        events
+            .lock()
+            .unwrap()
+            .iter()
+            .rev()
+            .find_map(|event| match event {
+                ServiceEvent::Status(status) => Some(status.clone()),
+                ServiceEvent::Engine(_) => None,
+            })
     }
 
     fn wait_until(what: &str, condition: impl Fn() -> bool) {
@@ -495,16 +517,16 @@ mod tests {
         (directory, bundled, cache)
     }
 
-    fn off(bundled: &PathBuf, cache: &PathBuf) -> ServiceConfig {
+    fn off(bundled: &Path, cache: &Path) -> ServiceConfig {
         ServiceConfig {
-            bundled_dir: Some(bundled.clone()),
-            cache_dir: Some(cache.clone()),
+            bundled_dir: Some(bundled.to_path_buf()),
+            cache_dir: Some(cache.to_path_buf()),
             updates: Updates::Off("automated run".to_owned()),
             timeouts: Timeouts::default(),
         }
     }
 
-    fn local(server: &TestServer, bundled: &PathBuf, cache: &PathBuf) -> ServiceConfig {
+    fn local(server: &TestServer, bundled: &Path, cache: &Path) -> ServiceConfig {
         ServiceConfig {
             updates: Updates::On {
                 sources: Sources::local_server(&server.url("/lists/")).unwrap(),
@@ -523,7 +545,9 @@ mod tests {
 
         let mut service = FilterListService::start(off(&bundled, &cache), sink).unwrap();
         wait_until("the engine", || !engines(&events).is_empty());
-        wait_until("the status", || last_status(&events).is_some_and(|s| !s.lists.is_empty()));
+        wait_until("the status", || {
+            last_status(&events).is_some_and(|s| !s.lists.is_empty())
+        });
         assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
 
         assert!(blocks(&engines(&events)[0], "https://ads.example/a.js"));
@@ -533,7 +557,10 @@ mod tests {
         assert_eq!(status.lists[0].date, SNAPSHOT);
         assert_eq!(status.updates_unavailable.as_deref(), Some("automated run"));
         assert_eq!(status.problem, None);
-        assert!(cache.join("state.json").exists(), "the compiled engine is cached");
+        assert!(
+            cache.join("state.json").exists(),
+            "the compiled engine is cached"
+        );
     }
 
     #[test]
@@ -566,11 +593,11 @@ mod tests {
         });
         let (events, sink) = collect();
 
-        let mut service =
-            FilterListService::start(local(&server, &bundled, &cache), sink).unwrap();
+        let mut service = FilterListService::start(local(&server, &bundled, &cache), sink).unwrap();
         wait_until("the updated engine", || engines(&events).len() >= 2);
         wait_until("the check to end", || {
-            last_status(&events).is_some_and(|status| !status.checking && status.last_success.is_some())
+            last_status(&events)
+                .is_some_and(|status| !status.checking && status.last_success.is_some())
         });
         assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
 
@@ -587,8 +614,15 @@ mod tests {
         let mut service = FilterListService::start(off(&bundled, &cache), sink).unwrap();
         wait_until("the engine", || !self::engines(&events).is_empty());
         assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
-        assert!(blocks(&self::engines(&events)[0], "https://update-test.example/x.js"));
-        assert_eq!(server.requests().len(), 2, "the second run contacted nothing");
+        assert!(blocks(
+            &self::engines(&events)[0],
+            "https://update-test.example/x.js"
+        ));
+        assert_eq!(
+            server.requests().len(),
+            2,
+            "the second run contacted nothing"
+        );
     }
 
     #[test]
@@ -597,10 +631,10 @@ mod tests {
         let server = TestServer::start(|_| Reply::status(503));
         let (events, sink) = collect();
 
-        let mut service =
-            FilterListService::start(local(&server, &bundled, &cache), sink).unwrap();
+        let mut service = FilterListService::start(local(&server, &bundled, &cache), sink).unwrap();
         wait_until("the check to end", || {
-            last_status(&events).is_some_and(|status| !status.checking && status.last_check.is_some())
+            last_status(&events)
+                .is_some_and(|status| !status.checking && status.last_check.is_some())
         });
         assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
 
@@ -629,8 +663,7 @@ mod tests {
         let (_directory, bundled, cache) = setup();
         let server = TestServer::start(|_| Reply::ok(ADS).delayed(Duration::from_secs(10)));
         let (events, sink) = collect();
-        let mut service =
-            FilterListService::start(local(&server, &bundled, &cache), sink).unwrap();
+        let mut service = FilterListService::start(local(&server, &bundled, &cache), sink).unwrap();
         wait_until("the download to start", || !server.requests().is_empty());
 
         let started = Instant::now();

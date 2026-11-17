@@ -666,4 +666,3 @@ mod tests {
         assert!(window.get_filter_lists_can_update());
     }
 }
-

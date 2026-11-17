@@ -132,9 +132,7 @@ impl Cache {
             }
         };
         state.lists.retain(|id, list| {
-            is_safe_id(id)
-                && is_sha256_hex(&list.sha256)
-                && is_cache_file_name(&list.file, ".txt")
+            is_safe_id(id) && is_sha256_hex(&list.sha256) && is_cache_file_name(&list.file, ".txt")
         });
         if let Some(engine) = &state.engine
             && !(is_sha256_hex(&engine.sha256) && is_cache_file_name(&engine.file, ".dat"))
@@ -184,7 +182,10 @@ impl Cache {
         }
         let bytes = read_bounded(&self.directory.join(&engine.file), MAX_ENGINE_BYTES)?;
         if sha256_hex(&bytes) != engine.sha256 {
-            log::warn!("filter lists: the compiled engine {} is damaged", engine.file);
+            log::warn!(
+                "filter lists: the compiled engine {} is damaged",
+                engine.file
+            );
             return None;
         }
         Some(bytes)
@@ -306,7 +307,10 @@ mod tests {
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt as _;
-            let mode = std::fs::metadata(cache.directory()).unwrap().permissions().mode();
+            let mode = std::fs::metadata(cache.directory())
+                .unwrap()
+                .permissions()
+                .mode();
             assert_eq!(mode & 0o077, 0);
         }
     }
@@ -321,7 +325,9 @@ mod tests {
             last_success: Some(11),
             ..CacheState::default()
         };
-        state.lists.insert("easylist".to_owned(), cached(&cache, "easylist", "||a^\n"));
+        state
+            .lists
+            .insert("easylist".to_owned(), cached(&cache, "easylist", "||a^\n"));
         cache.save_state(&state).expect("saved");
 
         assert_eq!(cache.load_state(), state);
@@ -330,7 +336,12 @@ mod tests {
     #[test]
     fn damaged_state_reads_as_empty() {
         let (_directory, cache) = cache();
-        for damage in [&b"{not json"[..], b"", b"\xff\xfe", br#"{"format_version": 99}"#] {
+        for damage in [
+            &b"{not json"[..],
+            b"",
+            b"\xff\xfe",
+            br#"{"format_version": 99}"#,
+        ] {
             std::fs::write(cache.directory().join(STATE_FILE), damage).unwrap();
             assert_eq!(cache.load_state(), CacheState::default(), "{damage:?}");
         }
@@ -383,10 +394,15 @@ mod tests {
     #[test]
     fn the_engine_is_read_back_only_for_its_key_and_while_intact() {
         let (_directory, cache) = cache();
-        let mut state = CacheState::default();
-        state.engine = Some(cache.write_engine("key-a", b"compiled").expect("written"));
+        let state = CacheState {
+            engine: Some(cache.write_engine("key-a", b"compiled").expect("written")),
+            ..CacheState::default()
+        };
 
-        assert_eq!(cache.read_engine(&state, "key-a").as_deref(), Some(&b"compiled"[..]));
+        assert_eq!(
+            cache.read_engine(&state, "key-a").as_deref(),
+            Some(&b"compiled"[..])
+        );
         assert_eq!(cache.read_engine(&state, "key-b"), None);
 
         let file = state.engine.as_ref().unwrap().file.clone();

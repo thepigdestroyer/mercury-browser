@@ -47,7 +47,9 @@ pub(crate) fn start(
         .ok()
         .and_then(|executable| find_bundled_dir(&executable));
     if bundled_dir.is_none() {
-        log::error!("filter lists: no {BUNDLED_DIRECTORY_NAME} directory with a manifest was found");
+        log::error!(
+            "filter lists: no {BUNDLED_DIRECTORY_NAME} directory with a manifest was found"
+        );
     }
     let config = ServiceConfig {
         bundled_dir,
@@ -55,10 +57,7 @@ pub(crate) fn start(
             .paths
             .as_ref()
             .map(|paths| paths.root.join(CACHE_DIRECTORY_NAME)),
-        updates: updates_for(
-            options,
-            settings.settings().privacy.update_filter_lists,
-        ),
+        updates: updates_for(options, settings.settings().privacy.update_filter_lists),
         timeouts: Timeouts::default(),
     };
     let started = FilterListService::start(config, move |event| match event {
@@ -70,7 +69,9 @@ pub(crate) fn start(
     match started {
         Ok(service) => SERVICE.with(|current| *current.borrow_mut() = Some(service)),
         Err(error) => {
-            log::error!("filter lists: could not start ({error}); ad and tracker blocking stays off");
+            log::error!(
+                "filter lists: could not start ({error}); ad and tracker blocking stays off"
+            );
             return;
         }
     }
@@ -180,7 +181,11 @@ pub(crate) fn bundled_dir_candidates(executable: &Path) -> Vec<PathBuf> {
 fn find_bundled_dir(executable: &Path) -> Option<PathBuf> {
     bundled_dir_candidates(executable)
         .into_iter()
-        .find(|candidate| candidate.join(mercury_filter_lists::MANIFEST_FILE).is_file())
+        .find(|candidate| {
+            candidate
+                .join(mercury_filter_lists::MANIFEST_FILE)
+                .is_file()
+        })
 }
 
 /// What the settings window shows: a status line and one line per list.
@@ -205,7 +210,11 @@ pub(crate) fn settings_view(status: &Status, format_time: impl Fn(u64) -> String
             } else {
                 "included with Mercury Browser"
             };
-            format!("{}: {version}from {} ({origin})", list.name, format_time(list.date))
+            format!(
+                "{}: {version}from {} ({origin})",
+                list.name,
+                format_time(list.date)
+            )
         })
         .collect();
     if let Some(problem) = &status.problem {
@@ -284,7 +293,13 @@ fn local_parts(seconds: u64) -> (u64, u64, u64, u64, u64) {
 
 fn utc_parts(seconds: u64) -> (u64, u64, u64, u64, u64) {
     let (year, month, day) = mercury_filter_lists::timestamp::civil_from_days(seconds / 86_400);
-    (year, month, day, seconds % 86_400 / 3600, seconds % 3600 / 60)
+    (
+        year,
+        month,
+        day,
+        seconds % 86_400 / 3600,
+        seconds % 3600 / 60,
+    )
 }
 
 #[cfg(test)]
@@ -334,7 +349,10 @@ mod tests {
         };
         assert!(matches!(sources, Sources::LocalServer(_)));
         assert!(check_at_start);
-        assert!(!automatic, "a diagnostic run checks once, then never on its own");
+        assert!(
+            !automatic,
+            "a diagnostic run checks once, then never on its own"
+        );
     }
 
     #[test]
@@ -385,7 +403,11 @@ mod tests {
         std::fs::create_dir_all(directory.path().join("bin/filter-lists")).unwrap();
         assert_eq!(find_bundled_dir(&executable), None);
 
-        std::fs::write(directory.path().join("bin/filter-lists/manifest.json"), "{}").unwrap();
+        std::fs::write(
+            directory.path().join("bin/filter-lists/manifest.json"),
+            "{}",
+        )
+        .unwrap();
         assert_eq!(
             find_bundled_dir(&executable),
             Some(directory.path().join("bin/filter-lists"))
@@ -407,7 +429,9 @@ mod tests {
         assert_eq!(
             view.lists,
             [
-                format!("EasyList: version 202611152034, from t{NOV_17_0800_UTC} (included with Mercury Browser)"),
+                format!(
+                    "EasyList: version 202611152034, from t{NOV_17_0800_UTC} (included with Mercury Browser)"
+                ),
                 format!("uBlock filters: from t{NOV_17_0800_UTC} (updated)"),
             ]
         );

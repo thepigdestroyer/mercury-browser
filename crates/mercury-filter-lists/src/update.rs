@@ -118,10 +118,12 @@ fn check_one(
         .filter(|cached| cached.source_url == entry.source_url.as_str())
         .filter(|cached| cache.read_list(cached).is_some())
         .cloned();
-    let validators = cached.as_ref().map_or_else(Validators::default, |cached| Validators {
-        etag: cached.etag.clone(),
-        last_modified: cached.last_modified.clone(),
-    });
+    let validators = cached
+        .as_ref()
+        .map_or_else(Validators::default, |cached| Validators {
+            etag: cached.etag.clone(),
+            last_modified: cached.last_modified.clone(),
+        });
     match fetcher.fetch(&url, &validators) {
         Err(error) => ListOutcome::Failed(error),
         Ok(Fetched::NotModified) => {
@@ -260,7 +262,10 @@ mod tests {
         let setup = Setup::new();
         let changed = format!("! Version: 202611170800\n{ADS}||new-ad.example^\n");
         let files = files(vec![
-            ("/lists/ads.txt", Reply::ok(changed.clone()).header("ETag", "\"v3\"")),
+            (
+                "/lists/ads.txt",
+                Reply::ok(changed.clone()).header("ETag", "\"v3\""),
+            ),
             ("/lists/trackers.txt", Reply::ok(TRACKERS)),
         ]);
         let server = server(&files);
@@ -318,33 +323,59 @@ mod tests {
         let setup = Setup::new();
         let changed = format!("{ADS}||new-ad.example^\n");
         let files = files(vec![
-            ("/lists/ads.txt", Reply::ok(changed).header("ETag", "\"v3\"")),
+            (
+                "/lists/ads.txt",
+                Reply::ok(changed).header("ETag", "\"v3\""),
+            ),
             ("/lists/trackers.txt", Reply::ok(TRACKERS)),
         ]);
         let server = server(&files);
         let mut state = CacheState::default();
         let fetcher = fetcher(&server);
         let lists = setup.lists(&state);
-        check_lists(&fetcher, &NetworkRules, &lists, &setup.cache, &mut state, SNAPSHOT + 100);
+        check_lists(
+            &fetcher,
+            &NetworkRules,
+            &lists,
+            &setup.cache,
+            &mut state,
+            SNAPSHOT + 100,
+        );
         files.lock().unwrap()[0].1 = Reply::status(304);
         let lists = setup.lists(&state);
 
-        let report =
-            check_lists(&fetcher, &NetworkRules, &lists, &setup.cache, &mut state, SNAPSHOT + 200);
+        let report = check_lists(
+            &fetcher,
+            &NetworkRules,
+            &lists,
+            &setup.cache,
+            &mut state,
+            SNAPSHOT + 200,
+        );
 
         assert!(!report.changed);
         assert_eq!(report.outcomes[0].1, ListOutcome::Unchanged);
         assert_eq!(state.lists["ads"].current_as_of, SNAPSHOT + 200);
         let requests = server.requests();
-        let last_ads = requests.iter().rev().find(|r| r.path == "/lists/ads.txt").unwrap();
-        assert_eq!(last_ads.headers.get("if-none-match").map(String::as_str), Some("\"v3\""));
+        let last_ads = requests
+            .iter()
+            .rev()
+            .find(|r| r.path == "/lists/ads.txt")
+            .unwrap();
+        assert_eq!(
+            last_ads.headers.get("if-none-match").map(String::as_str),
+            Some("\"v3\"")
+        );
     }
 
     #[test]
     fn a_truncated_download_is_refused_and_the_copy_in_use_stays() {
         let setup = Setup::new();
         let files = files(vec![
-            ("/lists/ads.txt", Reply::ok("||ads.example^\n".repeat(0) + "! cut\n")),
+            (
+                "/lists/ads.txt",
+                Reply::ok("||ads.example^\n".repeat(0) + "! cut\n"),
+            ),
             ("/lists/trackers.txt", Reply::ok(TRACKERS)),
         ]);
         let server = server(&files);
@@ -390,7 +421,10 @@ mod tests {
             SNAPSHOT + 100,
         );
 
-        assert_eq!(report.outcomes[0].1, ListOutcome::Failed(FetchError::Status(404)));
+        assert_eq!(
+            report.outcomes[0].1,
+            ListOutcome::Failed(FetchError::Status(404))
+        );
         assert_eq!(report.outcomes[1].1, ListOutcome::Updated);
         assert!(report.changed);
         assert!(report.problem(&lists).unwrap().contains("404"));
@@ -401,23 +435,47 @@ mod tests {
         let setup = Setup::new();
         let changed = format!("{ADS}||new-ad.example^\n");
         let files = files(vec![
-            ("/lists/ads.txt", Reply::ok(changed).header("ETag", "\"v3\"")),
+            (
+                "/lists/ads.txt",
+                Reply::ok(changed).header("ETag", "\"v3\""),
+            ),
             ("/lists/trackers.txt", Reply::ok(TRACKERS)),
         ]);
         let server = server(&files);
         let fetcher = fetcher(&server);
         let mut state = CacheState::default();
         let lists = setup.lists(&state);
-        check_lists(&fetcher, &NetworkRules, &lists, &setup.cache, &mut state, SNAPSHOT + 100);
-        std::fs::write(setup.cache.directory().join(&state.lists["ads"].file), "dam").unwrap();
+        check_lists(
+            &fetcher,
+            &NetworkRules,
+            &lists,
+            &setup.cache,
+            &mut state,
+            SNAPSHOT + 100,
+        );
+        std::fs::write(
+            setup.cache.directory().join(&state.lists["ads"].file),
+            "dam",
+        )
+        .unwrap();
         let lists = setup.lists(&state);
         assert_eq!(lists[0].origin, Origin::Bundled);
 
-        let report =
-            check_lists(&fetcher, &NetworkRules, &lists, &setup.cache, &mut state, SNAPSHOT + 200);
+        let report = check_lists(
+            &fetcher,
+            &NetworkRules,
+            &lists,
+            &setup.cache,
+            &mut state,
+            SNAPSHOT + 200,
+        );
 
         let requests = server.requests();
-        let last_ads = requests.iter().rev().find(|r| r.path == "/lists/ads.txt").unwrap();
+        let last_ads = requests
+            .iter()
+            .rev()
+            .find(|r| r.path == "/lists/ads.txt")
+            .unwrap();
         assert!(!last_ads.headers.contains_key("if-none-match"));
         assert_eq!(report.outcomes[0].1, ListOutcome::Updated);
         assert_eq!(setup.lists(&state)[0].origin, Origin::Updated);
@@ -433,7 +491,10 @@ mod tests {
         }
         let setup = Setup::new();
         let files = files(vec![
-            ("/lists/ads.txt", Reply::ok("# hosts\nads.example\nads2.example\n")),
+            (
+                "/lists/ads.txt",
+                Reply::ok("# hosts\nads.example\nads2.example\n"),
+            ),
             ("/lists/trackers.txt", Reply::ok("t.example\n")),
         ]);
         let server = server(&files);

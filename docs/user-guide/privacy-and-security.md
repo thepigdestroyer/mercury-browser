@@ -9,7 +9,11 @@ Mercury has useful privacy foundations, but it does not yet have the process iso
 
 ## Content blocking
 
-Mercury compiles a snapshot of Brave's default network filter lists into the browser. Requests matching known advertising and tracking rules are cancelled before their resources load.
+Mercury blocks requests that match the network rules of six filter lists: EasyList, EasyPrivacy, uBlock filters and three Brave lists, the same lists Brave uses by default. Matching requests are cancelled before their resources load. Element-hiding (cosmetic) rules are not used.
+
+The lists ship with Mercury as separate files, not inside the program. At start-up Mercury prepares them in the background; until that is done (usually a fraction of a second) nothing is blocked, so the very first page of a session may load a few trackers.
+
+**Updates.** With **Settings → Privacy and security → Update filter lists automatically** on (the default), Mercury asks each list's publisher for a newer version about a minute after start-up and then at most once a day: easylist.to for EasyList and EasyPrivacy, GitHub for the uBlock and Brave lists. Only the lists are downloaded, nothing about you is sent beyond an ordinary web request, and an unchanged list costs no download. A download that is damaged, looks like a web page, or has fewer than half the rules of the list in use is ignored, so a failed update never turns blocking off. **Update now** checks at once; the section shows when the lists were last updated and each list's version. Updated lists are kept in your profile.
 
 Top-level page navigations are not blocked. Mercury does not yet have an interstitial that could explain a blocked main document, so cancelling one would produce an unexplained blank tab.
 

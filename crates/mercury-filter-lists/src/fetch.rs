@@ -87,7 +87,10 @@ pub enum Fetched {
     /// 304: the copy we have is current.
     NotModified,
     /// 200 with the list.
-    Body { bytes: Vec<u8>, validators: Validators },
+    Body {
+        bytes: Vec<u8>,
+        validators: Validators,
+    },
 }
 
 /// Why a download failed.
@@ -145,7 +148,11 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
-    pub fn new(sources: Sources, timeouts: Timeouts, canceller: Canceller) -> std::io::Result<Self> {
+    pub fn new(
+        sources: Sources,
+        timeouts: Timeouts,
+        canceller: Canceller,
+    ) -> std::io::Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()?;
@@ -289,7 +296,10 @@ mod tests {
             "http://[::1]:8080/",
             "http://localhost:9/",
         ] {
-            assert!(Sources::local_server(&Url::parse(base).unwrap()).is_some(), "{base}");
+            assert!(
+                Sources::local_server(&Url::parse(base).unwrap()).is_some(),
+                "{base}"
+            );
         }
         for base in [
             "http://192.168.1.2/",
@@ -297,10 +307,13 @@ mod tests {
             "https://easylist.to/",
             "file:///tmp/",
         ] {
-            assert!(Sources::local_server(&Url::parse(base).unwrap()).is_none(), "{base}");
+            assert!(
+                Sources::local_server(&Url::parse(base).unwrap()).is_none(),
+                "{base}"
+            );
         }
-        let local = Sources::local_server(&Url::parse("http://127.0.0.1:8080/lists/").unwrap())
-            .unwrap();
+        let local =
+            Sources::local_server(&Url::parse("http://127.0.0.1:8080/lists/").unwrap()).unwrap();
         let publisher = Url::parse("https://easylist.to/easylist/easylist.txt").unwrap();
         assert_eq!(
             local.url_for(&publisher, "easylist.txt").unwrap().as_str(),

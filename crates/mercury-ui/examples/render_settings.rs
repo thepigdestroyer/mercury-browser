@@ -116,6 +116,20 @@ fn sample_settings_window() -> Result<SettingsWindow, Box<dyn Error>> {
     window.set_theme_index(0);
     window.set_show_bookmarks_bar(true);
     window.set_block_ads_and_trackers(true);
+    // blocklists
+    window.set_update_filter_lists(true);
+    window.set_filter_lists_status(
+        "Last updated 17 Nov 2026, 09:12. The last check, 18 Nov 2026, 09:15, failed for \
+         EasyList: network error: connection refused."
+            .into(),
+    );
+    window.set_filter_lists(strings(&[
+        "uBlock filters: from 17 Nov 2026, 09:12 (updated)",
+        "EasyList: version 202611170805, from 17 Nov 2026, 09:12 (updated)",
+        "EasyPrivacy: version 202611152034, from 15 Nov 2026, 21:46 (included with Mercury Browser)",
+        "Brave Firstparty specific filters: from 15 Nov 2026, 21:46 (included with Mercury Browser)",
+    ]));
+    window.set_filter_lists_can_update(true);
     window.set_block_popups(true);
     window.set_clear_cookies_on_exit(true);
     window.set_offer_to_save_passwords(true);

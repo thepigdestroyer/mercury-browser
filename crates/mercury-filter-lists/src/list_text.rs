@@ -42,7 +42,9 @@ pub fn summarize(text: &str) -> ListSummary {
 /// The network rules Mercury would load from `text`.
 pub fn count_network_rules(text: &str) -> usize {
     text.trim_start_matches('\u{feff}')
-        .lines().filter(|line| is_network_rule(line)).count()
+        .lines()
+        .filter(|line| is_network_rule(line))
+        .count()
 }
 
 /// `! Version: …`, or else a `! Last modified: …` that is not a template placeholder, in the
@@ -92,7 +94,9 @@ pub fn check_text(bytes: &[u8]) -> Result<String, Rejection> {
         .get(..start.len().min(16))
         .unwrap_or_default()
         .to_ascii_lowercase();
-    if lowered.starts_with("<!doctype") || lowered.starts_with("<html") || lowered.starts_with("<?xml")
+    if lowered.starts_with("<!doctype")
+        || lowered.starts_with("<html")
+        || lowered.starts_with("<?xml")
     {
         return Err(Rejection::LooksLikeHtml);
     }
@@ -152,11 +156,16 @@ mod tests {
     #[test]
     fn the_version_falls_back_to_a_real_last_modified_date() {
         assert_eq!(
-            summarize("! Title: X\n! Last modified: 15 Nov 2026 20:34 UTC\n").version.as_deref(),
+            summarize("! Title: X\n! Last modified: 15 Nov 2026 20:34 UTC\n")
+                .version
+                .as_deref(),
             Some("15 Nov 2026 20:34 UTC")
         );
         // uBlock's unexpanded placeholder is not a date.
-        assert_eq!(summarize("! Title: X\n! Last modified: %timestamp%\n").version, None);
+        assert_eq!(
+            summarize("! Title: X\n! Last modified: %timestamp%\n").version,
+            None
+        );
         assert_eq!(summarize("! Title: Brave Specific\n").version, None);
     }
 
@@ -202,14 +211,20 @@ mod tests {
     #[test]
     fn web_pages_binary_data_and_huge_files_are_refused() {
         assert_eq!(
-            check_download(b"<!DOCTYPE html><html><body>Sign in to Wi-Fi</body></html>", 0),
+            check_download(
+                b"<!DOCTYPE html><html><body>Sign in to Wi-Fi</body></html>",
+                0
+            ),
             Err(Rejection::LooksLikeHtml)
         );
         assert_eq!(
             check_download(b"\n\n  <html>\n", 0),
             Err(Rejection::LooksLikeHtml)
         );
-        assert_eq!(check_download(&[0xff, 0xfe, 0x00], 0), Err(Rejection::NotText));
+        assert_eq!(
+            check_download(&[0xff, 0xfe, 0x00], 0),
+            Err(Rejection::NotText)
+        );
         let huge = vec![b'!'; MAX_LIST_BYTES + 1];
         assert_eq!(check_download(&huge, 0), Err(Rejection::TooLarge));
     }
