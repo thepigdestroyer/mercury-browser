@@ -767,3 +767,24 @@ test("a page that wraps RegExp and Reflect.apply sees the query, as the header s
     assert.ok(seen.includes("needle"), "the page's RegExp received the query");
     assert.ok(seen.includes("apply"), "the page's Reflect.apply was called");
 });
+
+test("rounds make progress inside one long block of inline content", () => {
+    // One <div> of 300 inline spans of 56,000 characters: more than one explicit round reads.
+    const div = h("div");
+    const text = "filler ".repeat(8000);
+    for (let i = 0; i < 300; i++) {
+        div.append(h("span", text));
+    }
+    div.append(h("span", "the needle at the very end"));
+    const start = h("p", "start here");
+    const document = page(start, div);
+    select(document, start.firstChild, 0);
+    const press = { thorough: true };
+
+    assert.equal(find(document, "needle", "here", press), "ok;0;-1;1;0");
+    assert.equal(
+        find(document, "needle", "here", press),
+        "ok;1;-1;1;1",
+        "the second round goes on from the caret, not from the start of the block"
+    );
+});

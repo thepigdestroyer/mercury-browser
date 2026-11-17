@@ -45,6 +45,8 @@
     var LARGE_TEXT = 65536;
     // About one line: a match this far above the bottom of the view counts as on screen.
     var LINE_HEIGHT = 24;
+    // How far the walk's start moves back over inline content before the selection.
+    var MAX_INLINE_STEPS = 64;
     // A tall element's text children are added up for the scroll estimate only up to this many.
     var MAX_TEXT_CHILDREN = 10000;
     // Between blocks: never part of a match, so matches stay inside one block of text.
@@ -241,8 +243,10 @@
 
         // Where the walk starts: the node holding the selection, else the element at the top of the
         // view, else the root. Moved up out of shadow trees, slotted content and skipped elements,
-        // so that the path to the root is plain light DOM, then to the start of the nearest block,
-        // so that a match running across the start point is still one piece of text.
+        // so that the path to the root is plain light DOM, then back over the inline content just
+        // before it (at most MAX_INLINE_STEPS siblings and ancestors, never past a block), so that a
+        // match running across the start point is still one piece of text. Not to the start of the
+        // block itself: a caret left inside a long block must let the next round go further.
         function startNode(anchorNode) {
             var start = anchorNode;
             if (start === null && elementFromPoint !== null) {
@@ -278,12 +282,30 @@
                 }
                 start = moved;
             }
-            for (var block = start; block !== root; block = apply(parentNode, block, [])) {
-                if (apply(nodeType, block, []) === 1 && classify(apply(localName, block, [])) === KIND_BLOCK) {
-                    return block;
+            var node = start;
+            for (var steps = 0; steps < MAX_INLINE_STEPS && node !== root; steps++) {
+                if (isBlock(node)) {
+                    break;
                 }
+                var previous = apply(previousSibling, node, []);
+                if (previous !== null) {
+                    if (isBlock(previous)) {
+                        break;
+                    }
+                    node = previous;
+                    continue;
+                }
+                var parent = apply(parentNode, node, []);
+                if (parent === null || parent === root || apply(nodeType, parent, []) !== 1 || isBlock(parent)) {
+                    break;
+                }
+                node = parent;
             }
-            return root;
+            return node;
+        }
+
+        function isBlock(node) {
+            return apply(nodeType, node, []) === 1 && classify(apply(localName, node, [])) === KIND_BLOCK;
         }
 
         // The ancestors of `start`, from the root down to `start`.
