@@ -32,14 +32,21 @@
     "use strict";
 
     var TYPING_LIMITS = { nodes: 200000, milliseconds: 50, characters: 2000000 };
-    var THOROUGH_LIMITS = { nodes: 2000000, milliseconds: 400, characters: 16000000 };
+    // An explicit search runs in rounds of at most this long; the browser sends further rounds
+    // itself when one finds nothing (see `CONTINUATION_ROUNDS` in talaria-core), giving the page's
+    // thread a break between them.
+    var THOROUGH_LIMITS = { nodes: 2000000, milliseconds: 200, characters: 16000000 };
+    // Positions kept at each end of the matches found; all matches are counted, up to MAX_COUNT.
     var MAX_MATCHES = 1000;
+    var MAX_COUNT = 1000000;
     var MAX_SELECTION_TEXT = 256;
     var MAX_PATH_DEPTH = 256;
     // Text nodes at least this long are checked for being rendered before they are read.
     var LARGE_TEXT = 65536;
     // About one line: a match this far above the bottom of the view counts as on screen.
     var LINE_HEIGHT = 24;
+    // A tall element's text children are added up for the scroll estimate only up to this many.
+    var MAX_TEXT_CHILDREN = 10000;
     // Between blocks: never part of a match, so matches stay inside one block of text.
     var BLOCK_SEPARATOR = "\u0000";
 
@@ -87,6 +94,8 @@
         var nodeType = required(doc, "nodeType", true);
         var firstChild = required(doc, "firstChild", true);
         var nextSibling = required(doc, "nextSibling", true);
+        var previousSibling = required(doc, "previousSibling", true);
+        var lastChild = required(doc, "lastChild", true);
         var parentNode = required(doc, "parentNode", true);
         var documentElement = required(doc, "documentElement", true);
         var createRange = required(doc, "createRange", false);
@@ -193,10 +202,20 @@
                 return "end;0";
             }
             var whole = new RegExpConstructor("^" + pattern(request.query) + "$", flags());
-            if (apply(regExpExec, whole, [selectedText()]) === null) {
+            var matchSelected = apply(regExpExec, whole, [selectedText()]) !== null;
+            // The caret an explicit search left where it stopped is a collapsed selection.
+            var range = currentRange();
+            var caret = request.caretLeft === true && range !== null &&
+                apply(startContainer, range, []) === apply(endContainer, range, []) &&
+                apply(startOffset, range, []) === apply(endOffset, range, []);
+            if (!matchSelected && !caret) {
                 return "end;0";
             }
             if (typeof request.restore !== "string") {
+                if (caret) {
+                    apply(removeAllRanges, selection, []);
+                    return "end;1";
+                }
                 return "end;0";
             }
             var parts = splitOnce(request.restore, "|");
@@ -208,11 +227,11 @@
             if (start === null || finish === null) {
                 return "end;0";
             }
-            var range = apply(createRange, doc, []);
-            apply(setStart, range, [start.node, start.offset]);
-            apply(setEnd, range, [finish.node, finish.offset]);
+            var restored = apply(createRange, doc, []);
+            apply(setStart, restored, [start.node, start.offset]);
+            apply(setEnd, restored, [finish.node, finish.offset]);
             apply(removeAllRanges, selection, []);
-            apply(addRange, selection, [range]);
+            apply(addRange, selection, [restored]);
             return "end;1";
         }
 
@@ -220,40 +239,10 @@
             return now() - startedAt > limits.milliseconds;
         }
 
-        // The children the walk visits: an open shadow root's instead of the host's light children,
-        // a slot's assigned nodes (or its own children when nothing is assigned).
-        function walkChildren(item, type, name, list) {
-            var count = 0;
-            var source = item;
-            if (type === 1) {
-                var shadow = shadowRoot === null ? null : apply(shadowRoot, item, []);
-                if (shadow !== null && shadow !== undefined) {
-                    source = shadow;
-                } else if (name === "slot") {
-                    var assignedNodes = lookup(item, "assignedNodes", false);
-                    var assigned = assignedNodes === null
-                        ? null
-                        : apply(assignedNodes, item, [dictionary("flatten", true)]);
-                    if (assigned !== null && assigned.length > 0) {
-                        for (var a = 0; a < assigned.length && count <= limits.nodes; a++) {
-                            list[count++] = assigned[a];
-                        }
-                        return count;
-                    }
-                }
-            }
-            for (var child = apply(firstChild, source, []); child !== null; child = apply(nextSibling, child, [])) {
-                list[count++] = child;
-                if (count > limits.nodes) {
-                    break;
-                }
-            }
-            return count;
-        }
-
         // Where the walk starts: the node holding the selection, else the element at the top of the
-        // view, else the root. Moved up out of shadow trees and slotted content, so that the path to
-        // the root is plain light DOM.
+        // view, else the root. Moved up out of shadow trees, slotted content and skipped elements,
+        // so that the path to the root is plain light DOM, then to the start of the nearest block,
+        // so that a match running across the start point is still one piece of text.
         function startNode(anchorNode) {
             var start = anchorNode;
             if (start === null && elementFromPoint !== null) {
@@ -285,9 +274,14 @@
                     }
                 }
                 if (moved === null) {
-                    return start;
+                    break;
                 }
                 start = moved;
+            }
+            for (var block = start; block !== root; block = apply(parentNode, block, [])) {
+                if (apply(nodeType, block, []) === 1 && classify(apply(localName, block, [])) === KIND_BLOCK) {
+                    return block;
+                }
             }
             return root;
         }
@@ -319,49 +313,69 @@
             var truncated = false;
             var visited = 0;
             var characters = 0;
-            var blockEnd = {};
-            var children = [];
+            // What each stack entry is: a node to handle, a block's end, or a cursor (a node and the
+            // siblings after it, forward, or before it, backward; or a position in a slot's list),
+            // so that siblings are reached one at a time and never listed up front. Kept apart from
+            // the entries, so nothing the page defines on its nodes is read to tell them apart.
+            var ITEM_NODE = 0;
+            var ITEM_BLOCK_END = 1;
+            var ITEM_CURSOR = 2;
+            var ITEM_LIST = 3;
             // The last node the forward walk handled, and the offset just after what it read.
             var lastNode = null;
             var lastOffset = 0;
 
             // One walk: forward from `start` to the end of the document, or backward from just
             // before `start` to its beginning. Records text nodes (with the part read) and block
-            // separators, in walk order.
+            // separators, in walk order. Every node it touches counts against the limits.
             function walk(forward) {
                 var entries = [];
                 var entryCount = 0;
                 var stack = [];
+                var kinds = [];
+                var indices = [];
                 var top = 0;
+                var step = forward ? nextSibling : previousSibling;
+                function push(kind, value, index) {
+                    stack[top] = value;
+                    kinds[top] = kind;
+                    indices[top] = index;
+                    top++;
+                }
                 for (var level = 0; level + 1 < path.length; level++) {
-                    var ancestor = path[level];
-                    if (classify(apply(localName, ancestor, [])) === KIND_BLOCK) {
-                        stack[top++] = blockEnd;
+                    if (classify(apply(localName, path[level], [])) === KIND_BLOCK) {
+                        push(ITEM_BLOCK_END, null, 0);
                     }
-                    var siblingCount = walkChildren(ancestor, 1, "", children);
-                    var position = 0;
-                    while (position < siblingCount && children[position] !== path[level + 1]) {
-                        position++;
-                    }
-                    if (forward) {
-                        for (var after = siblingCount - 1; after > position; after--) {
-                            stack[top++] = children[after];
-                        }
-                    } else {
-                        for (var before = 0; before < position; before++) {
-                            stack[top++] = children[before];
-                        }
+                    var sibling = apply(step, path[level + 1], []);
+                    if (sibling !== null) {
+                        push(ITEM_CURSOR, sibling, 0);
                     }
                 }
                 if (forward) {
-                    stack[top++] = start;
+                    push(ITEM_NODE, start, 0);
                 }
                 while (top > 0) {
-                    var item = stack[--top];
+                    top--;
+                    var item = stack[top];
+                    var itemKind = kinds[top];
+                    var itemIndex = indices[top];
                     stack[top] = undefined;
-                    if (item === blockEnd) {
+                    if (itemKind === ITEM_BLOCK_END) {
                         entries[entryCount++] = null;
                         continue;
+                    }
+                    if (itemKind === ITEM_CURSOR) {
+                        var next = apply(step, item, []);
+                        if (next !== null) {
+                            push(ITEM_CURSOR, next, 0);
+                        }
+                    } else if (itemKind === ITEM_LIST) {
+                        var list = item;
+                        item = list[itemIndex];
+                        var following = itemIndex + (forward ? 1 : -1);
+                        if (following >= 0 && following < list.length) {
+                            push(ITEM_LIST, list, following);
+                        }
                     }
                     visited++;
                     if (visited > limits.nodes || ((visited & 1023) === 0 && overTime())) {
@@ -421,23 +435,36 @@
                         entries[entryCount++] = "\n";
                         continue;
                     }
-                    var childCount = walkChildren(item, 1, name, children);
-                    // Shadow roots and slots are bounded like blocks, so a match never spans two
-                    // trees (a Range cannot).
-                    if (kind === KIND_BLOCK || childCount > 0 && (name === "slot" ||
-                        (shadowRoot !== null && apply(shadowRoot, item, []) !== null))) {
-                        entries[entryCount++] = null;
-                        stack[top++] = blockEnd;
-                    }
-                    if (forward) {
-                        while (childCount > 0) {
-                            stack[top++] = children[--childCount];
-                            children[childCount] = undefined;
+                    // An open shadow root is walked instead of the host's light children; a slot
+                    // stands for its assigned nodes (or its own children when nothing is assigned).
+                    // Both are bounded like blocks, so a match never spans two trees (a Range
+                    // cannot).
+                    var source = item;
+                    var assigned = null;
+                    var shadow = shadowRoot === null ? null : apply(shadowRoot, item, []);
+                    if (shadow !== null && shadow !== undefined) {
+                        source = shadow;
+                        kind = KIND_BLOCK;
+                    } else if (name === "slot") {
+                        var assignedNodes = lookup(item, "assignedNodes", false);
+                        assigned = assignedNodes === null
+                            ? null
+                            : apply(assignedNodes, item, [dictionary("flatten", true)]);
+                        if (assigned !== null && assigned.length === 0) {
+                            assigned = null;
                         }
+                        kind = KIND_BLOCK;
+                    }
+                    if (kind === KIND_BLOCK) {
+                        entries[entryCount++] = null;
+                        push(ITEM_BLOCK_END, null, 0);
+                    }
+                    if (assigned !== null) {
+                        push(ITEM_LIST, assigned, forward ? 0 : assigned.length - 1);
                     } else {
-                        for (var c = 0; c < childCount; c++) {
-                            stack[top++] = children[c];
-                            children[c] = undefined;
+                        var child = apply(forward ? firstChild : lastChild, source, []);
+                        if (child !== null) {
+                            push(ITEM_CURSOR, child, 0);
                         }
                     }
                 }
@@ -489,11 +516,17 @@
                 }
             }
 
-            // The matches, skipping those in elements that are not rendered.
+            // The matches, skipping those in elements that are not rendered. All are counted (up to
+            // MAX_COUNT, within the time limit); the positions of the first MAX_MATCHES and of the
+            // last MAX_MATCHES are kept, which is all that choosing the current match needs.
             var expression = new RegExpConstructor(pattern(request.query), "g" + flags());
-            var matchStarts = [];
-            var matchEnds = [];
+            var headStarts = [];
+            var headEnds = [];
+            var tailStarts = [];
+            var tailEnds = [];
+            var tailNext = 0;
             var count = 0;
+            var forwardMatches = 0;
             var visibility = [];
             for (var iteration = 1; ; iteration++) {
                 if ((iteration & 63) === 0 && overTime()) {
@@ -520,20 +553,30 @@
                 if (!visibility[startIndex]) {
                     continue;
                 }
-                if (count === MAX_MATCHES) {
+                if (count === MAX_COUNT) {
                     truncated = true;
                     break;
                 }
-                matchStarts[count] = matchStart;
-                matchEnds[count] = matchStart + matchLength;
+                if (count < MAX_MATCHES) {
+                    headStarts[count] = matchStart;
+                    headEnds[count] = matchStart + matchLength;
+                } else {
+                    tailStarts[tailNext] = matchStart;
+                    tailEnds[tailNext] = matchStart + matchLength;
+                    tailNext = tailNext + 1 === MAX_MATCHES ? 0 : tailNext + 1;
+                }
+                if (matchStart < backwardStart) {
+                    forwardMatches++;
+                }
                 count++;
             }
 
             if (count === 0) {
-                if (truncated) {
-                    // Nothing found before a limit: leave a caret where the walk stopped (the end of
-                    // what the forward walk read, else the top of the document, which the backward
-                    // walk did not reach), so the next search goes on from there.
+                if (truncated && request.thorough === true) {
+                    // An explicit search that found nothing before a limit leaves a caret where the
+                    // walk stopped (the end of what the forward walk read, else the top of the
+                    // document, which the backward walk did not reach), so the next search goes on
+                    // from there. Searches made while typing leave the page's selection alone.
                     try {
                         var caret = apply(createRange, doc, []);
                         var caretNode = forwardCut && lastNode !== null ? lastNode : root;
@@ -549,12 +592,26 @@
                 return "ok;0;-1;" + (truncated ? 1 : 0) + ";0";
             }
 
+            // The kept start and end of match `index` (in the order found), or -1 if not kept.
+            var tailKept = count > MAX_MATCHES ? smaller(count - MAX_MATCHES, MAX_MATCHES) : 0;
+            var firstTail = count - tailKept;
+            function kept(index) {
+                return index < MAX_MATCHES || index >= firstTail;
+            }
+            function ringIndex(index) {
+                return count - MAX_MATCHES <= MAX_MATCHES
+                    ? index - MAX_MATCHES
+                    : (tailNext + index - firstTail) % MAX_MATCHES;
+            }
+            function startOf(index) {
+                return index < MAX_MATCHES ? headStarts[index] : tailStarts[ringIndex(index)];
+            }
+            function endOf(index) {
+                return index < MAX_MATCHES ? headEnds[index] : tailEnds[ringIndex(index)];
+            }
+
             // Matches from the forward walk come first; those from the backward walk come before
             // them in the document.
-            var forwardMatches = 0;
-            while (forwardMatches < count && matchStarts[forwardMatches] < backwardStart) {
-                forwardMatches++;
-            }
             var backwardMatches = count - forwardMatches;
             function documentIndex(index) {
                 return index >= forwardMatches ? index - forwardMatches : index + backwardMatches;
@@ -565,19 +622,22 @@
 
             var repeat = typeof request.repeat === "number" && request.repeat >= 1 ? request.repeat : 1;
             var current = chooseMatch(request.step, typeof request.current === "number" ? request.current : -1);
+            if (!kept(current)) {
+                current = MAX_MATCHES - 1;
+            }
             var selected = 0;
             try {
-                var first = nodeAt(starts, nodeCount, matchStarts[current]);
-                var last = nodeAt(starts, nodeCount, matchEnds[current] - 1);
+                var first = nodeAt(starts, nodeCount, startOf(current));
+                var last = nodeAt(starts, nodeCount, endOf(current) - 1);
                 var range = apply(createRange, doc, []);
                 // A match can begin or end on the line break of a `<br>`, which is in no text node.
-                var startOffsetInNode = bases[first] + smaller(matchStarts[current] - starts[first], spans[first]);
+                var startOffsetInNode = bases[first] + smaller(startOf(current) - starts[first], spans[first]);
                 apply(setStart, range, [nodes[first], startOffsetInNode]);
-                apply(setEnd, range, [nodes[last], bases[last] + smaller(matchEnds[current] - starts[last], spans[last])]);
+                apply(setEnd, range, [nodes[last], bases[last] + smaller(endOf(current) - starts[last], spans[last])]);
                 apply(removeAllRanges, selection, []);
                 apply(addRange, selection, [range]);
                 selected = 1;
-                reveal(nodes[first], startOffsetInNode, lengths[first]);
+                reveal(nodes[first], startOffsetInNode);
             } catch (error) {
                 // The count stands; only selecting or scrolling failed.
             }
@@ -589,13 +649,13 @@
                 var rank;
                 if (anchor >= 0) {
                     var before = 0;
-                    while (before < count && matchStarts[before] < anchor) {
+                    while (before < count && before < MAX_MATCHES && headStarts[before] < anchor) {
                         before++;
                     }
                     if (step === "previous") {
                         rank = count - repeat;
                     } else {
-                        var at = before < count && matchStarts[before] === anchor;
+                        var at = before < count && before < MAX_MATCHES && headStarts[before] === anchor;
                         rank = step === "next" ? (at ? 1 : 0) + repeat - 1 : 0;
                     }
                     return (((rank % count) + count) % count + before) % count;
@@ -617,18 +677,19 @@
             // document order, which is close enough to top-to-bottom for a binary search).
             function firstInView() {
                 var low = 0;
-                var high = forwardMatches;
+                var limit = smaller(forwardMatches, MAX_MATCHES);
+                var high = limit;
                 while (low < high) {
                     var middle = (low + high) >> 1;
-                    var index = nodeAt(starts, nodeCount, matchStarts[middle]);
-                    var estimate = matchPosition(nodes[index], bases[index] + matchStarts[middle] - starts[index], lengths[index]);
+                    var index = nodeAt(starts, nodeCount, headStarts[middle]);
+                    var estimate = matchPosition(nodes[index], bases[index] + headStarts[middle] - starts[index]);
                     if (estimate === null || estimate.bottom > 0) {
                         high = middle;
                     } else {
                         low = middle + 1;
                     }
                 }
-                return low < forwardMatches ? low : 0;
+                return low < limit ? low : 0;
             }
         }
 
@@ -675,25 +736,49 @@
         }
 
         // The match's estimated place in the view. In an element taller than the view (a long
-        // `<pre>`, a `text/plain` page) the match is placed in proportion to its offset in its
-        // text node, as Servo 0.8.0 cannot measure a range.
-        function matchPosition(textNode, offset, length) {
+        // `<pre>`, a `text/plain` page) the match is placed in proportion to its offset in the
+        // element's text (its text children, summed), as Servo 0.8.0 cannot measure a range.
+        function matchPosition(textNode, offset) {
             var element = apply(parentNode, textNode, []);
             if (element === null || apply(nodeType, element, []) !== 1) {
                 return null;
             }
             var rect = apply(getBoundingClientRect, element, []);
             var height = apply(clientHeight, root, []);
-            if (rect.height <= height || length === 0) {
+            if (rect.height <= height) {
                 return { element: element, rect: rect, tall: false, top: rect.top, bottom: rect.bottom };
             }
-            var top = rect.top + (offset / length) * rect.height;
+            var before = 0;
+            var total = 0;
+            var seen = false;
+            var children = 0;
+            for (var child = apply(firstChild, element, []); child !== null; child = apply(nextSibling, child, [])) {
+                if (++children > MAX_TEXT_CHILDREN) {
+                    // Too many to add up: the text node alone.
+                    total = apply(textLength, textNode, []);
+                    before = offset;
+                    break;
+                }
+                if (apply(nodeType, child, []) !== 3) {
+                    continue;
+                }
+                var childLength = apply(textLength, child, []);
+                if (child === textNode) {
+                    before = total + offset;
+                    seen = true;
+                }
+                total += childLength;
+            }
+            if (total === 0 || (!seen && children <= MAX_TEXT_CHILDREN)) {
+                return { element: element, rect: rect, tall: false, top: rect.top, bottom: rect.bottom };
+            }
+            var top = rect.top + (before / total) * rect.height;
             return { element: element, rect: rect, tall: true, top: top, bottom: top + LINE_HEIGHT };
         }
 
         // Brings the match into view, unless it is already on screen.
-        function reveal(textNode, offset, length) {
-            var place = matchPosition(textNode, offset, length);
+        function reveal(textNode, offset) {
+            var place = matchPosition(textNode, offset);
             if (place === null) {
                 return;
             }

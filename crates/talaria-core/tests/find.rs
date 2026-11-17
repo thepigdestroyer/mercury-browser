@@ -485,6 +485,7 @@ fn closing_restores_the_saved_selection_and_ignores_late_results() {
             query: "x".to_owned(),
             match_case: false,
             restore_selection: Some("0.1:0|0.1:0".to_owned()),
+            caret_left: false,
         })]
     );
     controller.handle_event(
@@ -877,4 +878,156 @@ fn open_and_search_after_open(controller: &mut BrowserController, tab_id: TabId)
         panic!("the query is searched");
     };
     id
+}
+
+fn cut_short_with_nothing() -> FindOutcome {
+    FindOutcome::Matches(FindMatches {
+        count: 0,
+        current: None,
+        truncated: true,
+    })
+}
+
+#[test]
+fn a_step_merged_into_a_waiting_typed_search_takes_the_larger_budget() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    controller.set_find_query("xy");
+    controller.run_due_find();
+    controller.find_next();
+
+    answer(&mut controller, tab_id, first, matches(1, Some(0)));
+
+    assert_eq!(
+        drain(&mut controller),
+        vec![explicit(first + 1, "xy", FindStep::Here, Some(0))]
+    );
+}
+
+#[test]
+fn a_second_loading_state_does_not_clear_again() {
+    let (mut controller, tab_id) = ready_controller();
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::LoadStateChanged {
+            state: talaria_core::LoadState::Loading,
+        },
+    );
+    let id = open_and_search(&mut controller, tab_id, "x");
+    answer(&mut controller, tab_id, id, matches(2, Some(0)));
+
+    // Servo reports `Started` and then `HeadParsed`, both `Loading`.
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::LoadStateChanged {
+            state: talaria_core::LoadState::Loading,
+        },
+    );
+
+    assert_eq!(
+        controller.active_state().find().status(),
+        &FindStatus::Matches(FindMatches {
+            count: 2,
+            current: Some(0),
+            truncated: false,
+        })
+    );
+}
+
+#[test]
+fn an_explicit_search_cut_short_with_nothing_found_goes_on_by_itself() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    answer(&mut controller, tab_id, first, matches(1, Some(0)));
+    controller.find_next();
+    let mut id = first + 1;
+    assert_eq!(
+        drain(&mut controller),
+        vec![explicit(id, "x", FindStep::Next, Some(0))]
+    );
+
+    // Four more rounds, then it stops: five in all.
+    for _ in 0..4 {
+        answer(&mut controller, tab_id, id, cut_short_with_nothing());
+        id += 1;
+        assert_eq!(
+            drain(&mut controller),
+            vec![explicit(id, "x", FindStep::Here, None)],
+            "continues from where the last round stopped"
+        );
+    }
+    answer(&mut controller, tab_id, id, cut_short_with_nothing());
+    assert_eq!(drain(&mut controller), vec![]);
+    assert_eq!(
+        controller.active_state().find().status(),
+        &cut_short_status()
+    );
+}
+
+fn cut_short_status() -> FindStatus {
+    FindStatus::Matches(FindMatches {
+        count: 0,
+        current: None,
+        truncated: true,
+    })
+}
+
+#[test]
+fn typing_never_continues_by_itself_and_a_find_ends_the_rounds() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+
+    answer(&mut controller, tab_id, first, cut_short_with_nothing());
+    assert_eq!(
+        drain(&mut controller),
+        vec![],
+        "typing searches do not go on"
+    );
+
+    controller.find_next();
+    let [BrowserCommand::Find(FindRequest { id, .. })] = drain(&mut controller)[..] else {
+        panic!("Return searches");
+    };
+    answer(&mut controller, tab_id, id, matches(3, None));
+    assert_eq!(drain(&mut controller), vec![], "a match ends the rounds");
+}
+
+#[test]
+fn a_press_during_the_rounds_replaces_them() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    answer(&mut controller, tab_id, first, matches(1, Some(0)));
+    controller.find_next();
+    answer(&mut controller, tab_id, first + 1, cut_short_with_nothing());
+    drain(&mut controller);
+
+    controller.find_previous();
+    answer(&mut controller, tab_id, first + 2, cut_short_with_nothing());
+
+    assert_eq!(
+        drain(&mut controller),
+        vec![explicit(first + 3, "x", FindStep::Previous, None)]
+    );
+}
+
+#[test]
+fn closing_after_a_caret_was_left_says_so() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    answer(&mut controller, tab_id, first, matches(1, Some(0)));
+    controller.find_next();
+    answer(&mut controller, tab_id, first + 1, cut_short_with_nothing());
+    drain(&mut controller);
+
+    controller.close_find();
+
+    assert_eq!(
+        drain(&mut controller),
+        vec![BrowserCommand::EndFind(EndFindRequest {
+            query: "x".to_owned(),
+            match_case: false,
+            restore_selection: None,
+            caret_left: true,
+        })]
+    );
 }

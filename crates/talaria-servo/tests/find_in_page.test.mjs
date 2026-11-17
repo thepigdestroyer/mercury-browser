@@ -21,12 +21,16 @@ class FakeNode {
     get firstChild() {
         return this._children[0] ?? null;
     }
+    get lastChild() {
+        return this._children[this._children.length - 1] ?? null;
+    }
     get nextSibling() {
-        if (this._parent === null) {
-            return null;
-        }
-        const siblings = this._parent._children;
-        return siblings[siblings.indexOf(this) + 1] ?? null;
+        calls.nextSibling++;
+        return this._parent === null ? null : this._parent._children[this._index + 1] ?? null;
+    }
+    get previousSibling() {
+        calls.previousSibling++;
+        return this._parent === null ? null : this._parent._children[this._index - 1] ?? null;
     }
     get parentNode() {
         return this._parent;
@@ -35,6 +39,7 @@ class FakeNode {
         for (const child of children) {
             const node = typeof child === "string" ? new FakeText(child) : child;
             node._parent = this;
+            node._index = this._children.length;
             this._children.push(node);
         }
         return this;
@@ -60,6 +65,8 @@ class FakeCharacterData extends FakeNode {
 
 // The lengths of the text nodes whose whole `data` the script read.
 let dataReads = [];
+// How often the sibling accessors were called.
+const calls = { nextSibling: 0, previousSibling: 0 };
 
 class FakeText extends FakeCharacterData {}
 
@@ -194,7 +201,10 @@ class FakeSelection {
             if (!inside) {
                 continue;
             }
-            if (node === range.endContainer) {
+            if (node === range.endContainer && node === range.startContainer && range.startOffset === range.endOffset) {
+            return "";
+        }
+        if (node === range.endContainer) {
                 return text + node._data.slice(start, range.endOffset);
             }
             text += node._data.slice(start);
@@ -426,10 +436,11 @@ test("open shadow roots and slotted content are searched once", () => {
     assert.equal(find(document, "needle"), "ok;2;0;0;1");
 });
 
-test("the count stops at its limit and says so", () => {
+test("past the positions it keeps, the search still counts and knows where it is", () => {
     const document = page(h("p", "x ".repeat(1500)));
 
-    assert.equal(find(document, "x"), "ok;1000;-1;1;1", "the position is unknown when cut short");
+    assert.equal(find(document, "x"), "ok;1500;0;0;1", "1,000 positions are kept; all are counted");
+    assert.equal(find(document, "x", "previous"), "ok;1500;1499;0;1", "the last one is reachable");
 });
 
 test("a page that breaks selecting still gets a count", () => {
@@ -634,19 +645,125 @@ test("text in the shadow root of a hidden host is not counted", () => {
     assert.equal(find(document, "needle"), "ok;1;0;0;1");
 });
 
-test("a search cut short with nothing found continues from where it stopped next time", () => {
+test("an explicit search cut short with nothing found continues from where it stopped next time", () => {
+    // 330 paragraphs of 56,000 characters: more than the 16,000,000 one explicit round reads.
+    const start = h("p", "start here");
+    const body = [start];
+    const text = "filler ".repeat(8000);
+    for (let i = 0; i < 330; i++) {
+        body.push(h("p", text));
+    }
+    body.push(h("p", "the needle at the very end"));
+    const document = page(...body);
+    select(document, start.firstChild, 0);
+    const press = { thorough: true };
+
+    assert.equal(find(document, "needle", "here", press), "ok;0;-1;1;0", "the first round runs out of room");
+    const caret = document.getSelection().getRangeAt(0);
+    assert.notEqual(caret.startContainer, start.firstChild, "a caret marks where it stopped");
+
+    assert.equal(find(document, "needle", "here", press), "ok;1;-1;1;1", "the next round goes on from there");
+    assert.equal(selected(document), "needle");
+});
+
+test("setting up the walk does not run through every sibling of the start", () => {
+    const container = h("div");
+    for (let i = 0; i < 300000; i++) {
+        container.append(h("p", "a"));
+    }
+    const last = h("p", "the needle");
+    container.append(last);
+    const document = page(container);
+    select(document, last.firstChild, 0);
+    calls.nextSibling = 0;
+
+    assert.equal(find(document, "needle"), "ok;1;-1;1;1", "found; the far side is cut");
+    assert.ok(calls.nextSibling < 1000, `nextSibling was read ${calls.nextSibling} times`);
+});
+
+test("a match that runs across the start point is found", () => {
+    const bold = h("b", "dle");
+    const document = page(h("p", "a nee", bold, " here"));
+    select(document, bold.firstChild, 1);
+
+    assert.equal(find(document, "needle"), "ok;1;0;0;1");
+    assert.equal(selected(document), "needle");
+});
+
+test("only an explicit search leaves a caret where it stopped", () => {
     const filler = [];
     for (let i = 0; i < 40; i++) {
         filler.push(h("p", "filler ".repeat(8000)));
     }
     const start = h("p", "start here");
     const document = page(start, ...filler, h("p", "the needle at the end"));
-    select(document, start.firstChild, 0);
+    select(document, start.firstChild, 2, 5);
 
-    assert.equal(find(document, "needle"), "ok;0;-1;1;0", "the first press runs out of room");
-    const caret = document.getSelection().getRangeAt(0);
-    assert.notEqual(caret.startContainer, start.firstChild, "a caret marks where it stopped");
+    assert.equal(find(document, "needle"), "ok;0;-1;1;0");
+    assert.equal(selected(document), "art", "typing left the page's selection alone");
 
-    assert.equal(find(document, "needle"), "ok;1;-1;1;1", "the next press goes on from there");
-    assert.equal(selected(document), "needle");
+    assert.equal(find(document, "needle", "here", { thorough: true }).startsWith("ok;"), true);
+});
+
+test("closing after a caret puts the page's own selection back", () => {
+    const start = h("p", "keep this");
+    const filler = [];
+    for (let i = 0; i < 40; i++) {
+        filler.push(h("p", "filler ".repeat(60000)));
+    }
+    const document = page(start, ...filler, h("p", "needle"));
+    select(document, start.firstChild, 0, 4);
+    assert.equal(find(document, "needle", "here", { thorough: true }), "ok;0;-1;1;0");
+    assert.equal(selected(document), "", "a caret replaced the selection");
+
+    const end = { mode: "end", query: "needle", matchCase: false, restore: "1.0.0:0|1.0.0:4", caretLeft: true, step: "here", current: -1 };
+    assert.equal(run(document, end), "end;1");
+    assert.equal(selected(document), "keep");
+
+    select(document, start.firstChild, 0, 0);
+    assert.equal(
+        run(document, { ...end, restore: null }),
+        "end;1",
+    );
+    assert.equal(document.getSelection().rangeCount, 0, "with nothing to restore, the caret goes");
+});
+
+test("in a tall element the place is estimated from the offset in the whole element", () => {
+    const pre = h("pre", { top: -4000, height: 10000 }, "a".repeat(5000), "b".repeat(4000) + " needle " + "c".repeat(992));
+    const document = page(pre);
+    const window = fakeWindow();
+
+    assert.equal(find(document, "needle", "here", { window, thorough: true }), "ok;1;0;0;1");
+    const offset = 5000 + 4001;
+    const expected = -4000 + (offset / 10000) * 10000 - 300;
+    assert.ok(window.scrolledBy !== null && Math.abs(window.scrolledBy[1] - expected) < 1,
+        `scrolled by ${window.scrolledBy?.[1]}, expected ${expected}`);
+});
+
+test("a page that wraps RegExp and Reflect.apply sees the query, as the header says", () => {
+    const document = page(h("p", "needle"));
+    const prepare = `
+        globalThis.seen = [];
+        const OriginalRegExp = RegExp;
+        globalThis.RegExp = function (source, flags) {
+            seen.push(String(source));
+            return new OriginalRegExp(source, flags);
+        };
+        globalThis.RegExp.prototype = OriginalRegExp.prototype;
+        const originalApply = Reflect.apply;
+        Reflect.apply = function (target, self, args) {
+            seen.push("apply");
+            return originalApply(target, self, args);
+        };
+    `;
+    const context = vm.createContext({ document, window: fakeWindow(), performance: { now: () => 0 } });
+    vm.runInContext(prepare, context);
+    const answer = vm.runInContext(`(${script})(${JSON.stringify({
+        mode: "find", query: "needle", matchCase: false, step: "here", repeat: 1, thorough: false, current: -1, restore: null,
+    })})`, context);
+
+    assert.equal(answer, "ok;1;0;0;1", "pass-through wrappers do not change the answer");
+    const seen = vm.runInContext("seen", context);
+    assert.ok(seen.includes("needle"), "the page's RegExp received the query");
+    assert.ok(seen.includes("apply"), "the page's Reflect.apply was called");
 });

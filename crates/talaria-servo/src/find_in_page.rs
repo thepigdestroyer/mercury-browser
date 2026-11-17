@@ -10,8 +10,8 @@ use talaria_core::{
 };
 
 const SCRIPT: &str = include_str!("find_in_page.js");
-/// `MAX_MATCHES` in the script.
-const MAX_MATCHES: usize = 1000;
+/// `MAX_COUNT` in the script: the most matches it counts.
+const MAX_COUNT: usize = 1_000_000;
 /// `MAX_SELECTION_TEXT` in the script, in UTF-16 units; a `char` is at least one.
 const MAX_SELECTION_CHARS: usize = 256;
 const MAX_SAVED_SELECTION_LENGTH: usize = 4096;
@@ -26,6 +26,7 @@ pub(crate) fn begin_script() -> String {
         "thorough": false,
         "current": -1,
         "restore": null,
+        "caretLeft": false,
     }))
 }
 
@@ -43,6 +44,7 @@ pub(crate) fn find_script(request: &FindRequest) -> String {
         "thorough": request.thorough,
         "current": request.current.map_or(-1, |current| current as i64),
         "restore": null,
+        "caretLeft": false,
     }))
 }
 
@@ -56,6 +58,7 @@ pub(crate) fn end_script(request: &EndFindRequest) -> String {
         "thorough": false,
         "current": -1,
         "restore": request.restore_selection,
+        "caretLeft": request.caret_left,
     }))
 }
 
@@ -122,7 +125,7 @@ fn parse_matches(answer: &str) -> Option<FindMatches> {
     let current = fields.next()?;
     let truncated = parse_flag(fields.next()?)?;
     let _selected = parse_flag(fields.next()?)?;
-    if fields.next().is_some() || count > MAX_MATCHES {
+    if fields.next().is_some() || count > MAX_COUNT {
         return None;
     }
     let current = match (count, current) {
@@ -192,6 +195,11 @@ mod tests {
 
     #[test]
     fn answers_with_matches_are_parsed() {
+        assert_eq!(
+            parse_find_answer("ok;1500;1499;0;1"),
+            matches(1500, Some(1499), false),
+            "counts past the kept positions keep their place"
+        );
         assert_eq!(parse_find_answer("ok;7;2;0;1"), matches(7, Some(2), false));
         assert_eq!(
             parse_find_answer("ok;1000;-1;1;0"),
@@ -216,7 +224,7 @@ mod tests {
             "ok;3;-1;0;1",
             "ok;3;5;1;1",
             "ok;0;0;0;0",
-            "ok;1001;0;1;1",
+            "ok;1000001;0;1;1",
             "ok;2;1;2;1",
             "ok;2;1;0;1;extra",
             "ok;-2;0;0;0",
@@ -310,6 +318,7 @@ mod tests {
                 "thorough": true,
                 "current": 4,
                 "restore": null,
+                "caretLeft": false,
             })
         );
     }
@@ -321,14 +330,16 @@ mod tests {
             query: "x".to_owned(),
             match_case: false,
             restore_selection: Some("1:0|1:2".to_owned()),
+            caret_left: true,
         });
         assert!(end.contains(r#""mode":"end""#));
         assert!(end.contains(r#""restore":"1:0|1:2""#));
+        assert!(end.contains(r#""caretLeft":true"#));
     }
 
     #[test]
     fn the_limits_here_match_the_script() {
-        assert!(SCRIPT.contains(&format!("var MAX_MATCHES = {MAX_MATCHES};")));
+        assert!(SCRIPT.contains(&format!("var MAX_COUNT = {MAX_COUNT};")));
         assert!(SCRIPT.contains(&format!("var MAX_SELECTION_TEXT = {MAX_SELECTION_CHARS};")));
     }
 }

@@ -43,6 +43,16 @@ fn has_no_matches(status: &FindStatus) -> bool {
     matches!(status, FindStatus::Matches(matches) if matches.count == 0 && !matches.truncated)
 }
 
+/// What the overdue timer does after a look at the active tab.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum WatchStep {
+    /// Nothing is awaited: the timer stops until the next search.
+    Stop,
+    Wait,
+    /// This search has gone unanswered for `ANSWER_WAIT`.
+    Overdue(TabId, u64),
+}
+
 /// Notices a search the page has not answered for `ANSWER_WAIT`.
 #[derive(Debug, Default)]
 pub(crate) struct OverdueWatch {
@@ -51,34 +61,94 @@ pub(crate) struct OverdueWatch {
 }
 
 impl OverdueWatch {
-    /// `awaited` is the active tab's unanswered search. Returns it once it is overdue.
-    pub(crate) fn poll(
-        &mut self,
-        tab_id: TabId,
-        awaited: Option<u64>,
-        now: Instant,
-    ) -> Option<(TabId, u64)> {
+    /// `awaited` is the active tab's unanswered search.
+    pub(crate) fn poll(&mut self, tab_id: TabId, awaited: Option<u64>, now: Instant) -> WatchStep {
         let Some(request_id) = awaited else {
             self.waiting = None;
-            return None;
+            return WatchStep::Stop;
         };
         match self.waiting {
             Some((waiting_tab, waiting_id, since))
                 if waiting_tab == tab_id && waiting_id == request_id =>
             {
                 if self.reported || now.saturating_duration_since(since) < ANSWER_WAIT {
-                    return None;
+                    return WatchStep::Wait;
                 }
                 self.reported = true;
-                Some((tab_id, request_id))
+                WatchStep::Overdue(tab_id, request_id)
             }
             _ => {
                 self.waiting = Some((tab_id, request_id, now));
                 self.reported = false;
-                None
+                WatchStep::Wait
             }
         }
     }
+}
+
+thread_local! {
+    /// The overdue timer runs only while a search is awaited.
+    static ANSWER_WATCH: RefCell<Option<AnswerWatch>> = const { RefCell::new(None) };
+}
+
+struct AnswerWatch {
+    timer: Rc<Timer>,
+    controller: Rc<RefCell<BrowserController>>,
+    window: slint::Weak<MainWindow>,
+}
+
+/// Starts the overdue timer if a search is awaited and it is not running. Called after every find
+/// command is queued; answers that queue the next search arrive while it runs.
+pub(crate) fn watch_for_answers() {
+    ANSWER_WATCH.with(|watch| {
+        let watch = watch.borrow();
+        let Some(watch) = watch.as_ref() else {
+            return;
+        };
+        if watch.timer.running()
+            || watch
+                .controller
+                .borrow()
+                .active_state()
+                .find()
+                .awaited_search()
+                .is_none()
+        {
+            return;
+        }
+        let controller = Rc::clone(&watch.controller);
+        let window = watch.window.clone();
+        let timer = Rc::downgrade(&watch.timer);
+        let mut overdue = OverdueWatch::default();
+        watch
+            .timer
+            .start(TimerMode::Repeated, ANSWER_POLL_INTERVAL, move || {
+                let (tab_id, awaited) = {
+                    let controller = controller.borrow();
+                    (
+                        controller.active_tab_id(),
+                        controller.active_state().find().awaited_search(),
+                    )
+                };
+                match overdue.poll(tab_id, awaited, Instant::now()) {
+                    WatchStep::Wait => {}
+                    WatchStep::Stop => {
+                        if let Some(timer) = timer.upgrade() {
+                            timer.stop();
+                        }
+                    }
+                    WatchStep::Overdue(tab_id, request_id) => {
+                        controller
+                            .borrow_mut()
+                            .find_answer_overdue(tab_id, request_id);
+                        if let Some(window) = window.upgrade() {
+                            sync_find_bar(&window, controller.borrow().active_state());
+                            window.window().request_redraw();
+                        }
+                    }
+                }
+            });
+    });
 }
 
 /// Cmd+G / Cmd+Shift+G with nothing to search for behave like Cmd+F.
@@ -126,6 +196,7 @@ pub(crate) fn open_find_bar(
     sync_find_bar(window, controller.borrow().active_state());
     window.invoke_find_focus_field();
     crate::engine::request_pump();
+    watch_for_answers();
 }
 
 /// Cmd+G / Cmd+Shift+G. Focus stays where it is.
@@ -146,6 +217,7 @@ pub(crate) fn step_find(
     }
     sync_find_bar(window, controller.borrow().active_state());
     crate::engine::request_pump();
+    watch_for_answers();
 }
 
 pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<BrowserController>>) {
@@ -171,27 +243,12 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
     });
 
     // A page that does not answer is reported; nothing more is sent to it until it does.
-    let overdue_timer = Timer::default();
-    let overdue_controller = Rc::clone(&controller);
-    let overdue_window = window.as_weak();
-    let mut watch = OverdueWatch::default();
-    overdue_timer.start(TimerMode::Repeated, ANSWER_POLL_INTERVAL, move || {
-        let (tab_id, awaited) = {
-            let controller = overdue_controller.borrow();
-            (
-                controller.active_tab_id(),
-                controller.active_state().find().awaited_search(),
-            )
-        };
-        if let Some((tab_id, request_id)) = watch.poll(tab_id, awaited, Instant::now()) {
-            overdue_controller
-                .borrow_mut()
-                .find_answer_overdue(tab_id, request_id);
-            if let Some(window) = overdue_window.upgrade() {
-                sync_find_bar(&window, overdue_controller.borrow().active_state());
-                window.window().request_redraw();
-            }
-        }
+    ANSWER_WATCH.with(|watch| {
+        *watch.borrow_mut() = Some(AnswerWatch {
+            timer: Rc::new(Timer::default()),
+            controller: Rc::clone(&controller),
+            window: window.as_weak(),
+        });
     });
 
     let next_controller = Rc::clone(&controller);
@@ -221,8 +278,6 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
 
     let close_window = window.as_weak();
     window.on_find_close(move || {
-        // Keeps the overdue timer alive as long as the window's callbacks.
-        let _overdue_timer = &overdue_timer;
         debounce.stop();
         controller.borrow_mut().close_find();
         refresh(&controller, &close_window);
@@ -262,6 +317,7 @@ fn refresh(controller: &RefCell<BrowserController>, window: &slint::Weak<MainWin
         window.window().request_redraw();
     }
     crate::engine::request_pump();
+    watch_for_answers();
 }
 
 #[cfg(feature = "diagnostics")]
@@ -297,6 +353,7 @@ pub(crate) fn start_find_diagnostic(
             sync_find_bar(&window, controller.borrow().active_state());
             window.window().request_redraw();
             crate::engine::request_pump();
+            watch_for_answers();
             return;
         }
         if controller
@@ -312,6 +369,7 @@ pub(crate) fn start_find_diagnostic(
             press_diagnostic_step(&mut controller.borrow_mut(), &mut steps_left);
             sync_find_bar(&window, controller.borrow().active_state());
             crate::engine::request_pump();
+            watch_for_answers();
             return;
         }
         let controller = controller.borrow();
@@ -429,18 +487,18 @@ mod tests {
         let start = Instant::now();
         let mut watch = OverdueWatch::default();
 
-        assert_eq!(watch.poll(tab, Some(4), start), None);
+        assert_eq!(watch.poll(tab, Some(4), start), WatchStep::Wait);
         assert_eq!(
             watch.poll(tab, Some(4), start + Duration::from_millis(1999)),
-            None
+            WatchStep::Wait
         );
         assert_eq!(
             watch.poll(tab, Some(4), start + ANSWER_WAIT),
-            Some((tab, 4))
+            WatchStep::Overdue(tab, 4)
         );
         assert_eq!(
             watch.poll(tab, Some(4), start + ANSWER_WAIT * 2),
-            None,
+            WatchStep::Wait,
             "reported once"
         );
     }
@@ -453,23 +511,29 @@ mod tests {
 
         assert_eq!(
             watch.poll(TabId::new(1), Some(5), start + ANSWER_WAIT),
-            None
+            WatchStep::Wait
         );
         assert_eq!(
             watch.poll(TabId::new(2), Some(5), start + ANSWER_WAIT),
-            None
-        );
-        assert_eq!(
-            watch.poll(TabId::new(2), None, start + ANSWER_WAIT * 3),
-            None
+            WatchStep::Wait
         );
         assert_eq!(
             watch.poll(TabId::new(2), Some(5), start + ANSWER_WAIT * 3),
-            None
+            WatchStep::Overdue(TabId::new(2), 5)
         );
+    }
+
+    #[test]
+    fn the_watch_stops_when_nothing_is_awaited() {
+        let start = Instant::now();
+        let mut watch = OverdueWatch::default();
+        watch.poll(TabId::new(1), Some(4), start);
+
+        assert_eq!(watch.poll(TabId::new(1), None, start), WatchStep::Stop);
         assert_eq!(
-            watch.poll(TabId::new(2), Some(5), start + ANSWER_WAIT * 4),
-            Some((TabId::new(2), 5))
+            watch.poll(TabId::new(1), Some(4), start + ANSWER_WAIT),
+            WatchStep::Wait,
+            "a later wait starts afresh"
         );
     }
 

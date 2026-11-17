@@ -41,6 +41,9 @@ pub struct EndFindRequest {
     /// The page's selection from before the bar opened, as the script saved it; it is put back if
     /// the page still has the current match selected.
     pub restore_selection: Option<String>,
+    /// The last search found nothing before its limit and left a caret where it stopped; the
+    /// script treats a collapsed selection as that caret and puts the page's selection back.
+    pub caret_left: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -91,6 +94,10 @@ impl FindStatus {
     }
 }
 
+/// An explicit search that finds nothing before its limit is continued from where it stopped,
+/// this many times more (so `1 + CONTINUATION_ROUNDS` script runs of at most 200 ms each).
+pub const CONTINUATION_ROUNDS: u8 = 4;
+
 /// A search waiting for the page to answer the one before it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum PendingSearch {
@@ -112,7 +119,12 @@ pub struct FindState {
     next_request_id: u64,
     /// At most one search is in the page at a time; later ones wait in `pending`.
     awaited_search: Option<u64>,
+    /// Whether the awaited search was explicit (and so may leave a caret and be continued).
+    awaited_thorough: bool,
     awaited_selection: Option<u64>,
+    /// Automatic continuations sent since the user's last search.
+    continuation_rounds: u8,
+    caret_left: bool,
     pending: Option<PendingSearch>,
     /// The query or page changed since the last search, so the next one starts `Here`.
     search_due: bool,
@@ -243,11 +255,13 @@ impl FindState {
         self.status = FindStatus::Idle;
         self.forget_answers();
         let restore_selection = self.saved_selection.take();
+        let caret_left = std::mem::take(&mut self.caret_left);
         std::mem::take(&mut self.searched_since_open).then(|| {
             BrowserCommand::EndFind(EndFindRequest {
                 query: self.query.clone(),
                 match_case: self.match_case,
                 restore_selection,
+                caret_left,
             })
         })
     }
@@ -257,6 +271,16 @@ impl FindState {
             return;
         }
         self.awaited_search = None;
+        let nothing_found_yet = matches!(
+            outcome,
+            FindOutcome::Matches(FindMatches {
+                count: 0,
+                truncated: true,
+                ..
+            })
+        );
+        // Only explicit searches leave a caret (the script decides the same way).
+        self.caret_left = self.awaited_thorough && nothing_found_yet;
         self.status = match outcome {
             FindOutcome::Matches(matches) => FindStatus::Matches(matches),
             FindOutcome::Failed => FindStatus::Failed,
@@ -271,6 +295,14 @@ impl FindState {
                 };
                 let repeat = u32::try_from(count.unsigned_abs()).unwrap_or(u32::MAX);
                 self.search(step, repeat, true)
+            }
+            None if self.caret_left && self.continuation_rounds < CONTINUATION_ROUNDS => {
+                // Go on from the caret by ourselves, giving the page's thread a break between
+                // rounds, instead of making the user press Return again.
+                let rounds = self.continuation_rounds + 1;
+                let command = self.search(FindStep::Here, 1, true);
+                self.continuation_rounds = rounds;
+                command
             }
             None => None,
         };
@@ -312,6 +344,7 @@ impl FindState {
     pub(crate) fn page_changed(&mut self) {
         self.status = FindStatus::Idle;
         self.forget_answers();
+        self.caret_left = false;
         self.saved_selection = None;
         self.search_due = true;
         self.query_from_other_page = !self.query.is_empty();
@@ -335,10 +368,11 @@ impl FindState {
         if self.awaited_search.is_some() {
             let steps = i64::from(repeat);
             self.pending = match (self.pending, step) {
+                // A waiting new query stays `Here`, with the larger budget of the two.
+                (Some(PendingSearch::Here { thorough: waiting }), _) => Some(PendingSearch::Here {
+                    thorough: waiting || thorough,
+                }),
                 (_, FindStep::Here) => Some(PendingSearch::Here { thorough }),
-                (Some(PendingSearch::Here { thorough }), _) => {
-                    Some(PendingSearch::Here { thorough })
-                }
                 (Some(PendingSearch::Steps { count }), FindStep::Next) => {
                     Some(PendingSearch::Steps {
                         count: count + steps,
@@ -359,6 +393,9 @@ impl FindState {
         }
         let id = self.next_id();
         self.awaited_search = Some(id);
+        self.awaited_thorough = thorough;
+        // A continuation sets the count again after this.
+        self.continuation_rounds = 0;
         self.searched_since_open = true;
         Some(BrowserCommand::Find(FindRequest {
             id,

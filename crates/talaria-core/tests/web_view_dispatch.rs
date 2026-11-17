@@ -425,6 +425,7 @@ fn find_commands_reach_the_web_view() {
         query: "needle".to_owned(),
         match_case: true,
         restore_selection: None,
+        caret_left: true,
     };
 
     for command in [

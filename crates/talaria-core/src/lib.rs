@@ -16,8 +16,8 @@ pub use browser::{
 pub use controller::BrowserController;
 pub use cursor::{ColorScheme, PointerCursor};
 pub use find::{
-    EndFindRequest, FindMatches, FindOutcome, FindRequest, FindSelection, FindState, FindStatus,
-    FindStep,
+    CONTINUATION_ROUNDS, EndFindRequest, FindMatches, FindOutcome, FindRequest, FindSelection,
+    FindState, FindStatus, FindStep,
 };
 pub use input::{
     CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers,
