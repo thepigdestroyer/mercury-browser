@@ -7,14 +7,14 @@ description: Install Mercury Browser on macOS from the disk image, or build and 
 
 ## macOS (Apple Silicon)
 
-Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `mercury-browser-0.2.0-macos-arm64.dmg`.
+Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `Mercury-Browser-0.2.0-macos-arm64.dmg`, attached to each release on the [GitHub Releases page](https://github.com/thepigdestroyer/mercury-browser/releases).
 
 ### Install from the disk image
 
-1. Optionally, check the download against the `.sha256` file published next to it:
+1. Download `Mercury-Browser-<version>-macos-arm64.dmg` and, optionally, the `.sha256` file next to it from the release. Check the download against it:
 
     ```bash
-    shasum -a 256 -c mercury-browser-0.2.0-macos-arm64.dmg.sha256
+    shasum -a 256 -c Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
     ```
 
 2. Double-click the `.dmg` to open it.
@@ -23,14 +23,25 @@ Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ven
 
 ### The first launch: allowing Mercury past Gatekeeper
 
-Current Mercury builds are not signed with an Apple Developer ID or notarised by Apple; they carry only an "ad-hoc" signature. macOS marks everything downloaded from the internet, and Gatekeeper blocks a marked app that Apple has not checked. The first time you open Mercury Browser, macOS refuses and offers only **Done** or **Move to Trash**. Choose **Done**, then allow it once:
+**Mercury is not notarised.** The project has no Apple Developer ID yet, so the app is signed only ad hoc and Apple has never checked it. macOS marks everything downloaded from the internet, and Gatekeeper blocks a marked app that Apple has not checked. The first time you open Mercury Browser, macOS refuses (it says Apple could not verify that "Mercury Browser" is free of malware) and offers only **Done** or **Move to Trash**. Choose **Done**, then allow it once in one of these two ways.
 
-1. Open **System Settings** and choose **Privacy & Security**.
-2. Scroll down to the **Security** section. It shows a line saying that "Mercury Browser" was blocked to protect your Mac.
-3. Click **Open Anyway** and confirm with your password or Touch ID.
-4. Open Mercury Browser again and click **Open** in the dialog that follows.
+**Right-click → Open** (macOS 13 Ventura and 14 Sonoma only):
 
-macOS remembers the choice; later launches open normally. The button only appears for about an hour after the blocked attempt, so try opening the app again if it is missing.
+1. In the **Applications** folder, hold Control and click **Mercury Browser** (or right-click it).
+2. Choose **Open** from the menu.
+3. Click **Open** in the dialog that follows.
+
+From macOS 15 Sequoia on, this route no longer offers **Open**; use System Settings instead.
+
+**System Settings → Privacy & Security → Open Anyway** (every supported macOS):
+
+1. Try to open Mercury Browser once and choose **Done** when macOS refuses.
+2. Open **System Settings** and choose **Privacy & Security**.
+3. Scroll down to the **Security** section. It shows a line saying that "Mercury Browser" was blocked to protect your Mac.
+4. Click **Open Anyway** and confirm with your password or Touch ID.
+5. Open Mercury Browser again and click **Open Anyway** (or **Open**) in the dialog that follows.
+
+macOS remembers the choice; later launches open normally. The **Open Anyway** button only appears for about an hour after the blocked attempt, so try opening the app again if it is missing. Each new version you download has to be allowed again.
 
 If macOS instead reports that the app "is damaged and can't be opened", it has blocked it without offering **Open Anyway**. The app is not damaged. If you trust where you downloaded it from, remove the download mark in Terminal and open it again:
 

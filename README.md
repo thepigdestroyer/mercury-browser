@@ -126,7 +126,8 @@ pie showData title Work packages, 17 November 2026
 | A completely redesigned, highly customisable interface | 🗓️ Planned | Replaces the look inherited from Hermes |
 | Accessibility of Mercury's own windows | 🗓️ Planned | |
 | Phishing protection, search suggestions, password breach checks, translation, update checks | 🗓️ Planned | Waiting for decisions on providers and keys |
-| macOS releases from CI, signed and notarised | 🗓️ Planned | Needs an Apple Developer ID |
+| macOS disk image built and published by CI, signed ad hoc | ✅ Done | |
+| macOS releases signed with a Developer ID and notarised | 🗓️ Planned | Needs an Apple Developer ID |
 
 ## Problems and limits
 
@@ -145,7 +146,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 **From where Mercury is right now**
 
 - There's no Apple Developer ID yet. Hence the ad hoc signature, the warning on first launch, and no automatic updates.
-- The release workflow only publishes a Linux x86-64 archive; on a Mac, `make app-macos` builds the app.
+- Releases carry an ad-hoc signed macOS disk image and a Linux x86-64 archive. Neither is notarised or auto-updating.
 - Building is heavy. A cold build compiles the whole of Servo and wants 15–20 GB free while it runs.
 - Saved logins sit in the Keychain but don't get filled into pages. That needs engine hooks, which are on the patch list.
 
@@ -156,12 +157,22 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 - A ground-up redesign of the interface, with themes, layouts and a toolbar you arrange yourself.
 - Accessibility for Mercury's own windows.
 - The outside services in the table above, once providers and keys are settled.
-- macOS release builds in CI. Signing comes once there's a Developer ID.
+- Developer ID signing and notarisation of the macOS release, once there's a Developer ID.
 - Finally, merging `mercury` into `master`.
 
 ## Quick start
 
-### macOS (Apple Silicon)
+### Download for macOS (Apple Silicon)
+
+1. Download `Mercury-Browser-<version>-macos-arm64.dmg` from the [latest release](https://github.com/thepigdestroyer/mercury-browser/releases/latest). It needs an M1 or later and macOS 13 Ventura or later.
+2. Open the disk image and drag **Mercury Browser** onto **Applications**.
+3. Open it the first time. The app is signed ad hoc and **not notarised by Apple**, so macOS blocks the first launch; choose **Done**, then allow it once:
+   - on macOS 13 or 14: Control-click (or right-click) Mercury Browser in Applications, choose **Open**, then **Open** again;
+   - on any version, including macOS 15 and later where right-click → Open no longer works: **System Settings → Privacy & Security**, scroll to **Security**, click **Open Anyway**, confirm, and open the app again.
+
+The full steps, and what to do if macOS says the app is damaged, are in [Install Mercury](docs/user-guide/installation.md#the-first-launch-allowing-mercury-past-gatekeeper).
+
+### Build on macOS (Apple Silicon)
 
 You'll need the Xcode command-line tools and [rustup](https://rustup.rs/). The Rust version is pinned in `rust-toolchain.toml` and installs itself on the first build.
 

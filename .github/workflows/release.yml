@@ -391,6 +391,53 @@ jobs:
       - name: Build the release executable
         run: cargo build --locked --release --package mercury-desktop
 
+      - name: Stop XProtect
+        # XProtect scans a freshly written disk image and can make hdiutil
+        # fail; Servo's own macOS CI stops it the same way.
+        run: sudo pkill -9 XProtect || true
+
+      # An ad-hoc bundle and disk image from the repository's own targets, kept
+      # on every run (a manual run from a branch included). make finds the
+      # executable already built and only assembles, signs ad hoc and packages.
+      # A tag publishes the signing job's disk image instead.
+      - name: Package Mercury Browser.app and its disk image (ad hoc)
+        run: make package-macos
+
+      - name: Check the bundle script helpers
+        run: make test-bundle-macos
+
+      - name: Check the bundle
+        run: scripts/ci/check-macos-bundle.sh --signature adhoc --require-media "dist/Mercury Browser.app"
+
+      - name: Check the disk image
+        shell: bash
+        env:
+          VERSION: ${{ needs.version.outputs.version }}
+        run: |
+          set -euo pipefail
+
+          name="Mercury-Browser-${VERSION}-macos-arm64.dmg"
+          (cd dist && shasum -a 256 -c "${name}.sha256")
+          mountpoint="${RUNNER_TEMP}/mercury-dmg"
+          mkdir -p "${mountpoint}"
+          hdiutil attach -readonly -nobrowse -noautoopen -mountpoint "${mountpoint}" "dist/${name}"
+          trap 'hdiutil detach "${mountpoint}" || hdiutil detach -force "${mountpoint}"' EXIT
+          test -L "${mountpoint}/Applications"
+          scripts/ci/check-macos-bundle.sh --signature adhoc --require-media \
+            "${mountpoint}/Mercury Browser.app"
+
+      - name: Upload the ad-hoc disk image
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # Not named mercury-browser-*: the publishing job takes those, and a
+          # tag publishes the signing job's image.
+          name: adhoc-macos-arm64-dmg
+          path: |
+            dist/Mercury-Browser-${{ needs.version.outputs.version }}-macos-arm64.dmg
+            dist/Mercury-Browser-${{ needs.version.outputs.version }}-macos-arm64.dmg.sha256
+          if-no-files-found: error
+          retention-days: 14
+
       - name: Record the executable's digest
         id: digest
         shell: bash
@@ -727,7 +774,7 @@ jobs:
             --identity "${identity}" \
             --dmg
 
-          dmg="dist/mercury-browser-${VERSION}-macos-arm64.dmg"
+          dmg="dist/Mercury-Browser-${VERSION}-macos-arm64.dmg"
           test -f "${dmg}"
           test -f "${dmg}.sha256"
 
@@ -758,7 +805,7 @@ jobs:
           key="${RUNNER_TEMP}/mercury-notary-key.p8"
           trap 'rm -f -- "${key}"' EXIT
           printf '%s\n' "${APPLE_API_KEY}" > "${key}"
-          xcrun notarytool submit "dist/mercury-browser-${VERSION}-macos-arm64.dmg" \
+          xcrun notarytool submit "dist/Mercury-Browser-${VERSION}-macos-arm64.dmg" \
             --key "${key}" \
             --key-id "${APPLE_API_KEY_ID}" \
             --issuer "${APPLE_API_ISSUER}" \
@@ -772,7 +819,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          xcrun notarytool submit "dist/mercury-browser-${VERSION}-macos-arm64.dmg" \
+          xcrun notarytool submit "dist/Mercury-Browser-${VERSION}-macos-arm64.dmg" \
             --keychain-profile mercury-notary \
             --keychain "${MERCURY_SIGNING_KEYCHAIN}" \
             --wait
@@ -797,7 +844,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          name="mercury-browser-${VERSION}-macos-arm64.dmg"
+          name="Mercury-Browser-${VERSION}-macos-arm64.dmg"
           xcrun stapler staple "dist/${name}"
           # Stapling changes the file, so its checksum is written again.
           (cd dist && shasum -a 256 "${name}" > "${name}.sha256")
@@ -811,7 +858,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          name="mercury-browser-${VERSION}-macos-arm64.dmg"
+          name="Mercury-Browser-${VERSION}-macos-arm64.dmg"
           (cd dist && shasum -a 256 -c "${name}.sha256")
           if [ "${SIGN}" = true ]; then
             signature=developer-id
@@ -844,7 +891,7 @@ jobs:
           {
             echo "### macOS disk image"
             echo
-            echo "\`mercury-browser-${VERSION}-macos-arm64.dmg\`"
+            echo "\`Mercury-Browser-${VERSION}-macos-arm64.dmg\`"
             echo
             if [ "${SIGN}" != true ]; then
               echo "**Ad-hoc signature.** The release environment has no Developer ID secrets"
@@ -864,8 +911,8 @@ jobs:
         with:
           name: mercury-browser-macos-arm64
           path: |
-            dist/mercury-browser-${{ needs.version.outputs.version }}-macos-arm64.dmg
-            dist/mercury-browser-${{ needs.version.outputs.version }}-macos-arm64.dmg.sha256
+            dist/Mercury-Browser-${{ needs.version.outputs.version }}-macos-arm64.dmg
+            dist/Mercury-Browser-${{ needs.version.outputs.version }}-macos-arm64.dmg.sha256
           if-no-files-found: error
           retention-days: 14
 
@@ -920,7 +967,7 @@ jobs:
           set -euo pipefail
 
           linux="mercury-browser-linux-x86_64.tar.gz"
-          macos="mercury-browser-${VERSION}-macos-arm64.dmg"
+          macos="Mercury-Browser-${VERSION}-macos-arm64.dmg"
           cd dist
 
           # Exactly these four files, nothing else.

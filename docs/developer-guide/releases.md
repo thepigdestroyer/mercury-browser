@@ -1,11 +1,11 @@
 ---
 title: Releases
-description: Build and publish the Mercury Browser Linux preview archive and the macOS application and disk image.
+description: Build and publish the Mercury Browser macOS disk image and Linux preview archive, and deploy the documentation site.
 ---
 
 # Releases
 
-Mercury publishes a Linux preview archive from an Ubuntu 22.04 GitHub-hosted runner. It is a portable test artifact, not a signed installer. On macOS (Apple Silicon) the same version is packaged as `Mercury Browser.app` inside a disk image; see [Package for macOS](#package-for-macos).
+Each GitHub Release carries a macOS (Apple Silicon) disk image holding `Mercury Browser.app`, built on a GitHub-hosted Apple Silicon runner and signed ad hoc (see [Package for macOS](#package-for-macos)), and a Linux preview archive built on Ubuntu 22.04, a portable test artifact rather than a signed installer.
 
 ## Build a Linux package locally
 
@@ -61,8 +61,8 @@ dist/Mercury Browser.app/Contents/
   Resources/LICENSES/   the licence texts the notices refer to (LGPL-2.1, GPL-3.0, …)
   Resources/gstreamer-licenses/  each bundled library project's licence files, from the GStreamer packages
   _CodeSignature/
-dist/mercury-browser-0.2.0-macos-arm64.dmg         with --dmg
-dist/mercury-browser-0.2.0-macos-arm64.dmg.sha256
+dist/Mercury-Browser-0.2.0-macos-arm64.dmg         with --dmg
+dist/Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
 ```
 
 The version comes from `[workspace.package]` in `Cargo.toml` and `LSMinimumSystemVersion` from `MACOSX_DEPLOYMENT_TARGET` in `.cargo/config.toml`. The script refuses a binary that is not arm64 or that was linked for a different minimum macOS version than the configuration says.
@@ -134,14 +134,14 @@ make package-macos MERCURY_SIGN_IDENTITY="Developer ID Application: NAME (TEAMID
 The bundle then carries the Developer ID signature, the hardened runtime, the entitlements and a secure timestamp, which is what notarisation requires. Submit the disk image and staple the ticket to it (credentials are stored once with `xcrun notarytool store-credentials mercury-notary`):
 
 ```bash
-xcrun notarytool submit dist/mercury-browser-0.2.0-macos-arm64.dmg --keychain-profile mercury-notary --wait
-xcrun stapler staple dist/mercury-browser-0.2.0-macos-arm64.dmg
+xcrun notarytool submit dist/Mercury-Browser-0.2.0-macos-arm64.dmg --keychain-profile mercury-notary --wait
+xcrun stapler staple dist/Mercury-Browser-0.2.0-macos-arm64.dmg
 ```
 
 Stapling changes the disk image, so write the checksum again afterwards:
 
 ```bash
-(cd dist && shasum -a 256 mercury-browser-0.2.0-macos-arm64.dmg > mercury-browser-0.2.0-macos-arm64.dmg.sha256)
+(cd dist && shasum -a 256 Mercury-Browser-0.2.0-macos-arm64.dmg > Mercury-Browser-0.2.0-macos-arm64.dmg.sha256)
 ```
 
 Notarisation has not been run for Mercury yet; current macOS builds are ad hoc.
@@ -160,11 +160,13 @@ It compiles `scripts/macos/render-icon.swift`, which draws the logo onto a round
 
 The Linux quality job installs the same native GStreamer families used by development, verifies required plugins, runs formatting and Clippy, and executes workspace and media tests.
 
-The release workflow builds on Ubuntu 22.04 to preserve the glibc 2.35 compatibility baseline. Windows release packaging remains deferred until the native build and GStreamer runtime can be validated together.
+The release workflow (`.github/workflows/release.yml`) builds the Linux archive on Ubuntu 22.04 to preserve the glibc 2.35 compatibility baseline, and the macOS disk image on a GitHub-hosted Apple Silicon runner (`macos-26`). Windows release packaging remains deferred until the native build and GStreamer runtime can be validated together. Each job is described in [Continuous integration](continuous-integration.md#releaseyml-tags-v-manual-runs).
+
+The macOS build job uses the same steps as a local build: it frees disk space, installs the pinned toolchain, restores the cached GStreamer packages (only the `.pkg` files, about 0.9 GB, keyed on `scripts/macos/gstreamer.sh`, as in CI), then runs `make gstreamer-macos`, the release build, `make package-macos` and `make test-bundle-macos`, checks the bundle and the mounted disk image with `scripts/ci/check-macos-bundle.sh --signature adhoc --require-media`, and uploads the ad-hoc `Mercury-Browser-<version>-macos-arm64.dmg` and its `.sha256` to the run as the artefact `adhoc-macos-arm64-dmg`. For a tag, the signing job then rebuilds the bundle from the same executable on a fresh runner (with a Developer ID if the `release` environment has one, otherwise ad hoc again) and that disk image is the one published.
 
 ## Publish a tagged release
 
-Version tags trigger GitHub Release publication:
+A tag `v<version>` triggers GitHub Release publication. The tag must equal `[workspace.package] version` in `Cargo.toml`; the first job of the workflow fails otherwise, before anything builds.
 
 ```bash
 git tag v0.2.0
@@ -175,9 +177,26 @@ Before pushing a tag:
 
 1. Run `make qa`.
 2. Run `make docs`.
-3. Test the optimized browser on Linux.
-4. Test direct media playback when the release changes GStreamer or graphics code.
-5. Confirm the version and expected artifact names.
+3. Run `make package-macos` and `make test-bundle-macos` on an Apple Silicon Mac, and check the disk image mounts and holds the app (`hdiutil attach -readonly -nobrowse -mountpoint <dir> dist/Mercury-Browser-<version>-macos-arm64.dmg`, then `hdiutil detach <dir>`).
+4. Test the optimized browser on Linux.
+5. Test direct media playback when the release changes GStreamer or graphics code.
+6. Confirm the version and expected artifact names.
 
-Manual workflow runs keep the Linux archive as an Actions artifact without publishing a GitHub Release.
+The release gets these files:
+
+```text
+mercury-browser-linux-x86_64.tar.gz
+mercury-browser-linux-x86_64.tar.gz.sha256
+Mercury-Browser-0.2.0-macos-arm64.dmg
+Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
+SHA256SUMS
+```
+
+The signing job runs in the `release` environment, so if the owner has set required reviewers there, the release waits for an approval in the run's page. Without Developer ID secrets the disk image is signed ad hoc and not notarised; the job summary says so, and [Install Mercury](../user-guide/installation.md#the-first-launch-allowing-mercury-past-gatekeeper) tells users how to open it the first time.
+
+Manual workflow runs (`workflow_dispatch`) publish nothing. They keep the Linux archive (`mercury-browser-linux-x86_64`), the ad-hoc macOS disk image (`adhoc-macos-arm64-dmg`) and the unsigned executable as Actions artefacts for 14 days.
+
+## Documentation site
+
+`.github/workflows/pages.yml` builds this site with `make docs` (MkDocs in strict mode) and deploys it to GitHub Pages, <https://thepigdestroyer.github.io/mercury-browser/>, with `actions/upload-pages-artifact` and `actions/deploy-pages`. It runs on pushes to `master` that change `docs/`, `mkdocs.yml` or the workflow itself, and on manual runs. Only the deploying job gets `pages: write` and `id-token: write`. The repository's **Settings → Pages → Build and deployment → Source** must be set to **GitHub Actions** once; until then the deployment fails.
 

@@ -28,7 +28,7 @@
 #                              $MERCURY_GSTREAMER_PREFIX). Required: the
 #                              executable cannot start without its media
 #                              libraries, so no bundle is built without them
-#   --dmg                      also build mercury-browser-<version>-macos-arm64.dmg
+#   --dmg                      also build Mercury-Browser-<version>-macos-arm64.dmg
 #                              and its .sha256
 #   --print-entitlements       print the entitlements file the identity would
 #                              be signed with, and exit without building
@@ -308,7 +308,7 @@ say "built $APP"
 
 # ── Disk image ────────────────────────────────────────────────────────────
 if [ "$MAKE_DMG" = 1 ]; then
-    DMG_NAME="mercury-browser-$VERSION-macos-arm64.dmg"
+    DMG_NAME="Mercury-Browser-$VERSION-macos-arm64.dmg"
     DMG="$OUT/$DMG_NAME"
     rm -rf -- "$STAGE"
     mkdir -p "$STAGE"

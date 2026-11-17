@@ -36,11 +36,11 @@ Superseded runs on the same branch or pull request are cancelled. Tags run only 
 | --- | --- | --- | --- |
 | Check the version | `ubuntu-24.04` | reads `[workspace.package] version` from `Cargo.toml`; on a tag, fails unless the tag is `v<version>` | 1 minute |
 | Linux x86-64 | `ubuntu-22.04` | `make qa`, the release build, the glibc 2.35 check, `mercury-browser-linux-x86_64.tar.gz` and its `.sha256` | 90–120 minutes (limit 120) |
-| macOS Apple Silicon (build) | `macos-26` | GStreamer set-up and the release build, with no secrets and no environment; hands the unsigned executable to the next job and records its SHA-256 as a job output | 2–3 hours (limit 240 minutes) |
-| macOS Apple Silicon (sign and package) | `macos-26` | in the `release` environment, only for `v*` tags, on a fresh runner with no build step: the executable checked against the recorded digest, GStreamer downloaded afresh, Servo's plugin lists from the pinned crate, `scripts/macos/bundle.sh` (Developer ID when the secrets exist, otherwise ad hoc), the bundle checks, notarisation and stapling when the notarisation secrets exist, the checks again on the mounted disk image; uploads `mercury-browser-<version>-macos-arm64.dmg` and its `.sha256` | 15–30 minutes, plus Apple's notarisation time (limit 90) |
+| macOS Apple Silicon (build) | `macos-26` | GStreamer set-up (`make gstreamer-macos`, the `.pkg` files cached as in CI), the release build, `make package-macos` and `make test-bundle-macos`, the bundle checks on `dist/Mercury Browser.app` and on the mounted disk image, with no secrets and no environment; uploads the ad-hoc `Mercury-Browser-<version>-macos-arm64.dmg` and its `.sha256` (artefact `adhoc-macos-arm64-dmg`), hands the unsigned executable to the next job and records its SHA-256 as a job output | 2–3 hours (limit 240 minutes) |
+| macOS Apple Silicon (sign and package) | `macos-26` | in the `release` environment, only for `v*` tags, on a fresh runner with no build step: the executable checked against the recorded digest, GStreamer downloaded afresh, Servo's plugin lists from the pinned crate, `scripts/macos/bundle.sh` (Developer ID when the secrets exist, otherwise ad hoc), the bundle checks, notarisation and stapling when the notarisation secrets exist, the checks again on the mounted disk image; uploads `Mercury-Browser-<version>-macos-arm64.dmg` and its `.sha256` | 15–30 minutes, plus Apple's notarisation time (limit 90) |
 | Publish GitHub Release | `ubuntu-24.04` | only for a push of a `v*` tag: verifies every `.sha256`, writes `SHA256SUMS`, attests build provenance for the files it lists, creates a draft release, uploads every file, then publishes it. An already published release is refused, not changed. | 3 minutes |
 
-A manual run (`workflow_dispatch`) builds and uploads the artefacts to the run and publishes nothing. From a branch, the signing job is skipped (it runs only for `v*` tags, which the `release` environment also enforces), so a manual run from a branch produces the Linux archive and the unsigned macOS executable only. The build to use from a branch is the ad-hoc `.app` that CI's macOS job uploads on every run.
+A manual run (`workflow_dispatch`) builds and uploads the artefacts to the run and publishes nothing. From a branch, the signing job is skipped (it runs only for `v*` tags, which the `release` environment also enforces), so a manual run from a branch produces the Linux archive, the build job's ad-hoc disk image and the unsigned macOS executable. A tag publishes the signing job's disk image, not the build job's: the build job's copy is for testing a run, and the publishing job takes only artefacts named `mercury-browser-*`.
 
 The macOS release is split in two because the build runs the build scripts and procedural macros of about 1,100 crates. They run on a runner that never holds a signing secret. The signing job takes in nothing that the build job or a third party could write, except the executable itself. That file is checked against the digest the build job recorded, and is only copied and signed, never run. In particular:
 
@@ -52,10 +52,19 @@ What prevents a rebuild there is that the job has no step that builds. The Rust 
 
 **The limit of all this:** a compromised build can still have *its own output* signed and notarised, because signing what the build produced is the point of the job. What the design does is keep the credentials themselves (the private key, the notarisation key or password) out of the build's reach, so they cannot be stolen or used for anything else.
 
+### `pages.yml` (pushes to `master` that change the documentation, manual runs)
+
+| Job | Runner | What it does | Expected time |
+| --- | --- | --- | --- |
+| Build the site | `ubuntu-24.04` | `make docs` (MkDocs in strict mode, into `target/mkdocs`), then `actions/upload-pages-artifact` | 2 minutes |
+| Deploy to GitHub Pages | `ubuntu-24.04` | `actions/deploy-pages` into the `github-pages` environment; the only job with `pages: write` and `id-token: write` | 1 minute |
+
+It runs for pushes to `master` that touch `docs/`, `mkdocs.yml` or `pages.yml`, so the site follows the default branch, which is what the README links to. Deployments queue rather than cancel each other. The repository setting it needs, once: **Settings → Pages → Build and deployment → Source: GitHub Actions**. Until that is set, the deploy job fails; the build job still checks the site.
+
 ### Supply-chain rules for the workflows
 
 - Every action is pinned to a full commit SHA with its version in a comment, for example `actions/checkout@3d3c42e… # v7.0.1`. Dependabot (`.github/dependabot.yml`) proposes updates weekly, all actions in one pull request.
-- The workflows' token is read-only (`contents: read`). Only the publishing job gets `contents: write`, `id-token: write` and `attestations: write`, which publishing and `actions/attest` need.
+- The workflows' token is read-only (`contents: read`). Only the publishing job gets `contents: write`, `id-token: write` and `attestations: write`, which publishing and `actions/attest` need, and only the Pages deploy job gets `pages: write` and `id-token: write`.
 - No workflow uses `pull_request_target`. Event data that a contributor controls is never written into a `run:` script; values reach scripts through `env:`.
 - `ci.yml` uses no secrets, so pull requests, including those from forks, never see one. Only the macOS signing job reads secrets, from the `release` environment, and only in the steps that need them; no step that runs cargo has any.
 - `scripts/ci/github-env.sh` passes exactly the variables `scripts/macos/gstreamer.sh env` sets (`MERCURY_GSTREAMER_PREFIX`, `PKG_CONFIG`, `PKG_CONFIG_LIBDIR`, a `PATH` prefix, and the unsetting of `PKG_CONFIG_PATH`) to later steps, and refuses anything else.
@@ -173,7 +182,7 @@ Nothing in these workflows has run on GitHub yet. On the first push, watch the j
    - whether the runner can render at all in the smoke test (it needs a window server and a GPU);
    - the tests finding GStreamer through `DYLD_FALLBACK_LIBRARY_PATH`;
    - the 330-minute limit.
-5. **The release workflow.** Its first run is the first real release, because the tag must equal `v<version>` and a manual run from a branch skips the signing job. That is safe enough: nothing is published until both platforms have built, signed and passed their checks, and the release stays a draft until every file is uploaded. A failure leaves at most a draft, which can be deleted with the tag before trying again. Check, in order:
+5. **The release workflow.** A manual run from a branch already exercises the macOS build job's packaging (`make package-macos`, the bundle and disk-image checks), so run one before the first tag. The first tagged run is still the first real release, because the tag must equal `v<version>` and a manual run from a branch skips the signing job. That is safe enough: nothing is published until both platforms have built, signed and passed their checks, and the release stays a draft until every file is uploaded. A failure leaves at most a draft, which can be deleted with the tag before trying again. Check, in order:
    - the environment's approval;
    - the signing job's `PATH` (the "Confirm that no build tool is reachable" step);
    - the executable matching the build's digest;
