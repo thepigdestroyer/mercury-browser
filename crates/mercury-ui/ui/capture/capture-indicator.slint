@@ -1,0 +1,228 @@
+// Camera and microphone (media-capture lane): the marks of a page that may use them, and the
+// bubble that names the site and offers Stop.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { RequestButton } from "../dialogs/page-request-parts.slint";
+
+// What the active tab's page may use. Prepared by the browser.
+export struct CaptureView {
+    camera: bool,
+    microphone: bool,
+    // "<site> can use your camera and microphone", empty when the page may use neither.
+    heading: string,
+}
+
+// A camera drawn in `color`.
+component CameraGlyph inherits Rectangle {
+    in property <color> glyph-color;
+
+    width: 14px;
+    height: 10px;
+
+    Rectangle {
+        x: 0px;
+        y: 1px;
+        width: 9px;
+        height: 8px;
+        border-radius: 2px;
+        background: root.glyph-color;
+    }
+
+    Path {
+        x: 9px;
+        y: 1px;
+        width: 5px;
+        height: 8px;
+        fill: root.glyph-color;
+        commands: "M 0 3 L 5 0 L 5 8 L 0 5 Z";
+    }
+}
+
+// A microphone drawn in `color`.
+component MicrophoneGlyph inherits Rectangle {
+    in property <color> glyph-color;
+
+    width: 10px;
+    height: 13px;
+
+    Rectangle {
+        x: 2.5px;
+        y: 0px;
+        width: 5px;
+        height: 8px;
+        border-radius: 2.5px;
+        background: root.glyph-color;
+    }
+
+    Path {
+        x: 0px;
+        y: 4px;
+        width: 10px;
+        height: 9px;
+        stroke: root.glyph-color;
+        stroke-width: 1.4px;
+        commands: "M 0.7 0 C 0.7 6 9.3 6 9.3 0 M 5 5 L 5 9";
+    }
+}
+
+// The red mark on a tab whose page may use the camera or the microphone.
+export component CaptureTabMark inherits Rectangle {
+    in property <bool> camera;
+    in property <bool> microphone;
+
+    width: 20px;
+    height: 16px;
+    border-radius: 8px;
+    background: ChromePalette.capture-indicator;
+    accessible-role: image;
+    accessible-label: root.camera && root.microphone
+        ? "Using your camera and microphone"
+        : root.camera ? "Using your camera" : "Using your microphone";
+
+    if root.camera: CameraGlyph {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        glyph-color: ChromePalette.capture-indicator-glyph;
+    }
+
+    if !root.camera: MicrophoneGlyph {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        glyph-color: ChromePalette.capture-indicator-glyph;
+    }
+}
+
+// The button beside the address bar; a click opens the bubble.
+export component CaptureButton inherits Rectangle {
+    in property <CaptureView> capture;
+    callback clicked;
+
+    width: (root.capture.camera && root.capture.microphone ? 52px : 34px);
+    height: 28px;
+    border-radius: 14px;
+    background: touch.pressed
+        ? ChromePalette.capture-indicator.darker(15%)
+        : touch.has-hover ? ChromePalette.capture-indicator.brighter(10%) : ChromePalette.capture-indicator;
+    accessible-role: button;
+    accessible-label: root.capture.heading;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    HorizontalLayout {
+        alignment: center;
+        spacing: 6px;
+
+        if root.capture.camera: VerticalLayout {
+            alignment: center;
+
+            CameraGlyph {
+                glyph-color: ChromePalette.capture-indicator-glyph;
+            }
+        }
+
+        if root.capture.microphone: VerticalLayout {
+            alignment: center;
+
+            MicrophoneGlyph {
+                glyph-color: ChromePalette.capture-indicator-glyph;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// The bubble under the button: who may use what, and Stop. Like the permission prompt it never
+// takes keyboard focus and is answered with the mouse; a click outside closes it.
+export component CaptureBubble inherits Rectangle {
+    in property <CaptureView> capture;
+    // Where the bubble's arrow points, relative to this element's parent.
+    in property <length> anchor-x: 0px;
+    callback stop();
+    callback closed();
+
+    // Clicks beside the bubble close it.
+    TouchArea {
+        clicked => {
+            root.closed();
+        }
+    }
+
+    bubble := Rectangle {
+        x: Math.max(8px, Math.min(root.anchor-x - 26px, root.width - self.width - 8px));
+        // The arrow overlaps the toolbar's bottom edge, which a page cannot draw over.
+        y: -4px;
+        width: Math.min(root.width - 16px, 360px);
+        height: layout.preferred-height + 8px;
+
+        Path {
+            x: Math.max(12px, root.anchor-x - bubble.x - 8px);
+            y: 0px;
+            width: 16px;
+            height: 9px;
+            fill: ChromePalette.popup-background;
+            stroke: ChromePalette.popup-border;
+            stroke-width: 1px;
+            commands: "M 0 9 L 8 0 L 16 9";
+        }
+
+        Rectangle {
+            y: 8px;
+            height: parent.height - 8px;
+            background: ChromePalette.popup-background;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+            border-radius: 10px;
+            drop-shadow-blur: 20px;
+            drop-shadow-color: ChromePalette.shadow;
+            drop-shadow-offset-y: 4px;
+
+            TouchArea { }
+
+            layout := VerticalLayout {
+                padding: 16px;
+                spacing: 10px;
+
+                Text {
+                    text: root.capture.heading;
+                    color: ChromePalette.text;
+                    font-size: 14px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: "Stop takes the access away and reloads the page. It will have to ask again.";
+                    color: ChromePalette.text-secondary;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+
+                    RequestButton {
+                        label: "Close";
+                        clicked => {
+                            root.closed();
+                        }
+                    }
+
+                    RequestButton {
+                        label: "Stop";
+                        primary: true;
+                        clicked => {
+                            root.stop();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

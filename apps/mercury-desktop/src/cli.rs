@@ -15,6 +15,18 @@ pub(crate) struct LaunchOptions {
     /// camera and microphone. Allowed only beside a `lib` directory without the plugins that
     /// can open real ones (checked in `main`).
     pub fake_media_devices: bool,
+    /// media-capture: `--answer-permission-prompts allow|deny` (fake-device runs only).
+    pub answer_permission_prompts: Option<PromptAnswer>,
+    /// media-capture: `--fake-system-denies-capture` (fake-device runs only): behave as if macOS
+    /// refused Mercury the camera and the microphone.
+    pub fake_system_denies_capture: bool,
+}
+
+/// media-capture: the answer `--answer-permission-prompts` gives every permission prompt.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PromptAnswer {
+    Allow,
+    Deny,
 }
 
 /// Diagnostics: a quit the browser requests of itself, so that quit paths can be exercised
@@ -51,6 +63,8 @@ impl Default for LaunchOptions {
             experimental_web_features: true,
             exit_request: None,
             fake_media_devices: false,
+            answer_permission_prompts: None,
+            fake_system_denies_capture: false,
         }
     }
 }
@@ -172,6 +186,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut exit_after = None;
     let mut exit_by = None;
     let mut fake_media_devices = false;
+    let mut answer_permission_prompts = None;
+    let mut fake_system_denies_capture = false;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -211,6 +227,26 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
             "--disable-experimental-web-features" => experimental_web_features = false,
             // media-capture: a diagnostic, deliberately not in USAGE.
             "--fake-media-devices" => fake_media_devices = true,
+            // media-capture: diagnostics, deliberately not in USAGE.
+            "--answer-permission-prompts" => {
+                let value = option_value(
+                    &mut arguments,
+                    "--answer-permission-prompts",
+                    "<none|allow|deny>",
+                )?;
+                answer_permission_prompts = match value.as_str() {
+                    "none" => None,
+                    "allow" => Some(PromptAnswer::Allow),
+                    "deny" => Some(PromptAnswer::Deny),
+                    _ => {
+                        return Err(format!(
+                            "invalid --answer-permission-prompts '{value}': expected none, allow \
+                             or deny"
+                        ));
+                    }
+                };
+            }
+            "--fake-system-denies-capture" => fake_system_denies_capture = true,
             "--profile-dir" => {
                 let value = option_value(&mut arguments, "--profile-dir", "<directory>")?;
                 profile_dir = Some(PathBuf::from(value));
@@ -263,6 +299,12 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     if fake_media_devices && screenshot.is_none() && !background {
         return Err("--fake-media-devices requires --screenshot or --background".to_owned());
     }
+    if answer_permission_prompts.is_some() && !fake_media_devices {
+        return Err("--answer-permission-prompts requires --fake-media-devices".to_owned());
+    }
+    if fake_system_denies_capture && !fake_media_devices {
+        return Err("--fake-system-denies-capture requires --fake-media-devices".to_owned());
+    }
 
     Ok(CliOutcome::Run(LaunchOptions {
         urls,
@@ -274,6 +316,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         experimental_web_features,
         exit_request,
         fake_media_devices,
+        answer_permission_prompts,
+        fake_system_denies_capture,
     }))
 }
 
@@ -358,6 +402,8 @@ mod tests {
                 experimental_web_features: true,
                 exit_request: None,
                 fake_media_devices: false,
+                answer_permission_prompts: None,
+                fake_system_denies_capture: false,
             })
         );
     }
@@ -812,5 +858,81 @@ mod tests {
     #[test]
     fn fake_media_devices_are_not_in_the_help() {
         assert!(!USAGE.contains("--fake-media-devices"));
+    }
+
+    // media-capture
+    #[test]
+    fn permission_prompts_can_be_answered_in_fake_device_runs() {
+        for (value, expected) in [
+            ("allow", Some(PromptAnswer::Allow)),
+            ("deny", Some(PromptAnswer::Deny)),
+            ("none", None),
+        ] {
+            let CliOutcome::Run(options) = parse(&[
+                "--screenshot",
+                "out.png",
+                "--fake-media-devices",
+                "--answer-permission-prompts",
+                value,
+            ]) else {
+                panic!("{value} should be accepted");
+            };
+            assert_eq!(options.answer_permission_prompts, expected, "{value}");
+        }
+        assert_eq!(LaunchOptions::default().answer_permission_prompts, None);
+    }
+
+    // media-capture
+    #[test]
+    fn answering_permission_prompts_needs_fake_devices_and_a_known_answer() {
+        let outcome = parse(&[
+            "--screenshot",
+            "out.png",
+            "--answer-permission-prompts",
+            "allow",
+        ]);
+        let CliOutcome::PrintAndExit { text, code } = outcome else {
+            panic!("refused");
+        };
+        assert_eq!(code, 2);
+        assert!(
+            text.contains("--answer-permission-prompts requires --fake-media-devices"),
+            "{text}"
+        );
+        assert_eq!(
+            exit_code(&parse(&[
+                "--screenshot",
+                "out.png",
+                "--fake-media-devices",
+                "--answer-permission-prompts",
+                "maybe",
+            ])),
+            Some(2)
+        );
+    }
+
+    // media-capture
+    #[test]
+    fn a_refusing_system_can_be_simulated_in_fake_device_runs() {
+        let CliOutcome::Run(options) = parse(&[
+            "--background",
+            "--fake-media-devices",
+            "--fake-system-denies-capture",
+        ]) else {
+            panic!("accepted");
+        };
+        assert!(options.fake_system_denies_capture);
+        assert!(!LaunchOptions::default().fake_system_denies_capture);
+        assert_eq!(
+            exit_code(&parse(&["--background", "--fake-system-denies-capture"])),
+            Some(2)
+        );
+    }
+
+    // media-capture: diagnostics, not listed in the help.
+    #[test]
+    fn capture_diagnostics_are_not_in_the_help() {
+        assert!(!USAGE.contains("--answer-permission-prompts"));
+        assert!(!USAGE.contains("--fake-system-denies-capture"));
     }
 }

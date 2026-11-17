@@ -33,7 +33,6 @@ mod macos_app_delegate;
 mod macos_terminate;
 #[cfg(target_os = "macos")]
 mod media_buffers;
-#[cfg(target_os = "macos")]
 mod media_capture;
 #[cfg(target_os = "macos")]
 mod media_isolation;
@@ -111,6 +110,14 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         eprintln!("mercury-browser: --fake-media-devices is available on macOS only");
         return Ok(ExitCode::from(2));
     }
+    // media-capture: only an interactive run asks macOS whether Mercury may use the devices.
+    media_capture::set_system_access_source(if options.fake_system_denies_capture {
+        media_capture::SystemAccessSource::SimulateDenied
+    } else if options.is_automated() {
+        media_capture::SystemAccessSource::AssumeAllowed
+    } else {
+        media_capture::SystemAccessSource::Query
+    });
 
     use_automatic_gpu_selection();
     // Dropped last, after the engine has saved its data: a temporary profile is deleted then.
@@ -169,6 +176,12 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
     // controls
     controls::connect_controls(&window, Rc::clone(&controller));
+    // media-capture
+    media_capture::connect_capture_callbacks(
+        &window,
+        Rc::clone(&controller),
+        options.answer_permission_prompts,
+    );
     quit::quit_when_the_window_is_closed(&window);
 
     let mut timers = Vec::new();

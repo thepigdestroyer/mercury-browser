@@ -87,4 +87,12 @@ export global ChromePalette {
     // The line naming the page above a select list or colour picker.
     out property <color> page-popup-caption: root.dark ? #a2a2a8 : #6e6e73;
     // --- end controls ---
+
+    // --- media-capture ---
+    // The mark of a page that may use the camera or microphone: on its tab and beside the
+    // address bar. Red, as other browsers and macOS's own indicators use for recording.
+    out property <color> capture-indicator: root.dark ? #ff5f57 : #d93025;
+    // A glyph drawn on `capture-indicator`.
+    out property <color> capture-indicator-glyph: #ffffff;
+    // --- end media-capture ---
 }

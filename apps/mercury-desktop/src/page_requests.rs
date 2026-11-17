@@ -124,7 +124,22 @@ pub(crate) fn connect_page_request_callbacks(
             );
             return;
         }
-        let reply = reply_for(pending.kind(), accepted, &text, &password, checked);
+        // media-capture: camera and microphone prompts have their own replies.
+        let capture = crate::media_capture::capture_reply(
+            &pending,
+            accepted,
+            checked,
+            crate::media_capture::system_access,
+        );
+        let reply = match capture {
+            Some((reply, privacy_pane)) => {
+                if let Some(permission) = privacy_pane {
+                    crate::media_capture::open_privacy_settings(permission);
+                }
+                reply
+            }
+            None => reply_for(pending.kind(), accepted, &text, &password, checked),
+        };
         controller
             .borrow_mut()
             .answer_page_request(tab_id, id, reply, now);
@@ -275,6 +290,15 @@ pub(crate) fn page_request_view(
                 decline_label: "Cancel".into(),
                 ..PageRequestView::default()
             }
+        }
+        // media-capture: camera and microphone prompts.
+        PageRequestKind::Permission(_)
+            if let Some(view) = crate::media_capture::permission_view(
+                pending,
+                crate::media_capture::system_access,
+            ) =>
+        {
+            view
         }
         PageRequestKind::Permission(permission) => PageRequestView {
             style: PageRequestStyle::Permission,

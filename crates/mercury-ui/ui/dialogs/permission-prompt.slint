@@ -2,17 +2,23 @@
 // The page stays visible and usable beneath it.
 
 import { ChromePalette } from "../theme/chrome-palette.slint";
-import { PageRequestView, RequestButton } from "page-request-parts.slint";
+import { PageRequestView, RequestButton, RequestCheckBox } from "page-request-parts.slint";
 
 export component PermissionPrompt inherits Rectangle {
     in property <PageRequestView> request;
     // Where the address bar starts, relative to this element's parent.
     in property <length> anchor-x: 0px;
-    // accepted: Allow.
-    callback answered(/* id */ int, /* accepted */ bool);
+    // accepted: Allow. checked: the choice under the heading (media-capture: "Remember for this
+    // site until you quit"), false when none is offered.
+    callback answered(/* id */ int, /* accepted */ bool, /* checked */ bool);
+    // media-capture: the choice starts unticked for every request.
+    property <bool> checked: false;
+    changed request => {
+        root.checked = false;
+    }
 
     function answer(accepted: bool) {
-        root.answered(root.request.id, accepted);
+        root.answered(root.request.id, accepted, root.request.choice-label != "" && root.checked);
     }
 
     // Fills the content area without taking input; only the bubble does. The bubble is not
@@ -61,6 +67,20 @@ export component PermissionPrompt inherits Rectangle {
                     font-size: 14px;
                     font-weight: 600;
                     wrap: word-wrap;
+                }
+
+                // media-capture: why the browser cannot allow it (the system refuses).
+                if root.request.message != "": Text {
+                    text: root.request.message;
+                    color: ChromePalette.text-secondary;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                // media-capture: "Remember for this site until you quit".
+                if root.request.choice-label != "": RequestCheckBox {
+                    label: root.request.choice-label;
+                    checked <=> root.checked;
                 }
 
                 HorizontalLayout {

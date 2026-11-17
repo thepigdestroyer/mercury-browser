@@ -1,4 +1,4 @@
-//! Camera and microphone: the `--fake-media-devices` diagnostic (media-capture lane).
+//! The `--fake-media-devices` diagnostic (media-capture lane).
 
 use talaria_servo::{FAKE_MEDIA_DEVICES_VARIABLE, executable_lib_dir, fake_media_devices_problem};
 
