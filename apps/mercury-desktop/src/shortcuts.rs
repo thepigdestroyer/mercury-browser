@@ -47,6 +47,12 @@ pub(crate) enum ShortcutAction {
     ExitFullscreen,
     // settings-ui
     ShowSettings,
+    // tabs-plus
+    /// Opens tab search.
+    SearchTabs,
+    /// Moves the active tab one place left or right within its group.
+    MoveTabLeft,
+    MoveTabRight,
 }
 
 impl ShortcutAction {
@@ -175,6 +181,8 @@ pub(crate) fn shortcut_action(
             (Some("9"), false) => Some(SelectLastTab),
             // settings-ui
             (Some(","), false) => Some(ShowSettings),
+            // tabs-plus
+            (Some("a"), true) => Some(SearchTabs),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -194,6 +202,9 @@ pub(crate) fn shortcut_action(
             (Platform::MacOs, Key::Named(NamedKey::ArrowRight), _, false) => Some(Forward),
             (Platform::Other, Key::Named(NamedKey::PageDown), _, false) => Some(NextTab),
             (Platform::Other, Key::Named(NamedKey::PageUp), _, false) => Some(PreviousTab),
+            // tabs-plus
+            (Platform::Other, Key::Named(NamedKey::PageUp), _, true) => Some(MoveTabLeft),
+            (Platform::Other, Key::Named(NamedKey::PageDown), _, true) => Some(MoveTabRight),
             _ => None,
         };
     }
@@ -285,6 +296,15 @@ pub(crate) fn run_shortcut(
         }
         ShortcutAction::CloseTab => {
             let active_tab_id = controller.borrow().active_tab_id();
+            // tabs-plus: Cmd+W never closes a pinned tab
+            if crate::tab_strip::step_off_pinned_tab(
+                window,
+                controller,
+                web_view_focused,
+                active_tab_id,
+            ) {
+                return;
+            }
             let outcome = controller.borrow_mut().close_tab(active_tab_id);
             // tabs: closing the last tab quits
             crate::tab_close::finish_closing_tab(window, &controller.borrow(), outcome);
@@ -338,10 +358,26 @@ pub(crate) fn run_shortcut(
             .queue_command(BrowserCommand::ExitFullscreen),
         // settings-ui
         ShortcutAction::ShowSettings => window.invoke_show_settings(),
+        // tabs-plus
+        ShortcutAction::SearchTabs => crate::tab_strip::show_tab_search(window),
+        ShortcutAction::MoveTabLeft | ShortcutAction::MoveTabRight => {
+            let delta = if action == ShortcutAction::MoveTabLeft {
+                -1
+            } else {
+                1
+            };
+            let active_tab_id = controller.borrow().active_tab_id();
+            if controller.borrow_mut().move_tab_by(active_tab_id, delta) {
+                sync_ui(window, &controller.borrow());
+            }
+        }
     }
 }
 
-fn unfocus_web_view(controller: &RefCell<BrowserController>, web_view_focused: &Cell<bool>) {
+pub(crate) fn unfocus_web_view(
+    controller: &RefCell<BrowserController>,
+    web_view_focused: &Cell<bool>,
+) {
     if web_view_focused.replace(false) {
         controller
             .borrow_mut()
@@ -591,13 +627,16 @@ mod tests {
             (Quit, false),
             (ExitFullscreen, false),
             (ShowSettings, false),
+            (SearchTabs, false),
+            (MoveTabLeft, false),
+            (MoveTabRight, false),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
                 NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
                 | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen | ShowSettings => {}
+                | ExitFullscreen | ShowSettings | SearchTabs | MoveTabLeft | MoveTabRight => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -706,6 +745,29 @@ mod tests {
         keys.clear();
 
         assert_eq!(keys.release(KEY_R), KeyDisposition::Forward);
+    }
+
+    // tabs-plus
+    #[test]
+    fn shift_primary_a_searches_tabs() {
+        assert_eq!(mac(character("a"), CMD | SHIFT), Some(SearchTabs));
+        assert_eq!(mac(character("A"), CMD | SHIFT), Some(SearchTabs));
+        assert_eq!(other(character("A"), CTRL | SHIFT), Some(SearchTabs));
+        // Cmd+A stays Select All.
+        assert_eq!(mac(character("a"), CMD), None);
+    }
+
+    #[test]
+    fn control_shift_page_keys_move_the_tab_elsewhere() {
+        assert_eq!(
+            other(named(NamedKey::PageUp), CTRL | SHIFT),
+            Some(MoveTabLeft)
+        );
+        assert_eq!(
+            other(named(NamedKey::PageDown), CTRL | SHIFT),
+            Some(MoveTabRight)
+        );
+        assert_eq!(mac(named(NamedKey::PageUp), CMD | SHIFT), None);
     }
 
     #[test]

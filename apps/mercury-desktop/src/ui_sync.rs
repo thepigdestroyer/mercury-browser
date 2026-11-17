@@ -1,7 +1,7 @@
 use std::cell::Cell;
 
-use mercury_ui::{BrowserTab, MainWindow, WebViewCursor, WebViewPointerButton};
-use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use mercury_ui::{MainWindow, WebViewCursor, WebViewPointerButton};
+use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 use talaria_core::{BrowserController, LoadState, PageIcon, PointerButton, PointerCursor, TabId};
 
 thread_local! {
@@ -81,33 +81,8 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
             .into(),
     );
 
-    let active_tab_id = controller.active_tab_id();
-    let mut active_tab_index = 0;
-    let tabs = controller
-        .tabs()
-        .enumerate()
-        .map(|(index, tab)| {
-            let state = tab.state();
-            if tab.id() == active_tab_id {
-                active_tab_index = index;
-            }
-            let (icon, has_icon) = match state.page_icon() {
-                Some(icon) => (slint_image_from_page_icon(icon), true),
-                None => (Image::default(), false),
-            };
-
-            BrowserTab {
-                title: state.page_title().into(),
-                icon,
-                has_icon,
-                active: tab.id() == active_tab_id,
-                loading: matches!(state.load_state(), LoadState::Loading),
-            }
-        })
-        .collect::<Vec<_>>();
-    window.set_tabs(ModelRc::new(VecModel::from(tabs)));
-    window.set_active_tab_index(i32::try_from(active_tab_index).unwrap_or(i32::MAX));
-    window.invoke_reveal_active_tab();
+    // tabs-plus: the strip's rows are updated in place (pinned tabs, ids, addresses)
+    crate::tab_strip::sync(window, controller);
 
     // settings-ui: the new-tab hint names the chosen search engine.
     let new_tab_hint = crate::settings::new_tab_hint(&window.get_search_engine_name());

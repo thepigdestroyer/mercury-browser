@@ -57,6 +57,7 @@ mod tab_close;
 mod signals;
 #[cfg(target_os = "macos")]
 mod system_proxy;
+mod tab_strip; // tabs-plus
 mod tab_switch_frame;
 mod ui_sync;
 
@@ -182,6 +183,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
     // controls
     controls::connect_controls(&window, Rc::clone(&controller));
+    tab_strip::connect(&window, Rc::clone(&controller)); // tabs-plus
     quit::quit_when_the_window_is_closed(&window);
 
     let mut timers = Vec::new();

@@ -116,6 +116,13 @@ pub(crate) fn sync(controller: &BrowserController) {
             .position(|tab| tab.id() == active_tab_id)
             .unwrap_or(0),
         bookmarks_bar: seams::bookmarks_bar_items(controller),
+        // tabs-plus
+        active_tab_pinned: controller
+            .tabs()
+            .any(|tab| tab.id() == active_tab_id && tab.is_pinned()),
+        can_close_other_tabs: controller
+            .tabs()
+            .any(|tab| tab.id() != active_tab_id && !tab.is_pinned()),
     };
     STATE.with(|menu_state| {
         if *menu_state.snapshot.borrow() != snapshot {
@@ -205,6 +212,10 @@ fn run_command(
         MenuCommand::ShowBookmarksManager => seams::show_bookmarks_manager(window),
         MenuCommand::OpenBookmark(id) => seams::open_bookmark(window, id),
         MenuCommand::Find | MenuCommand::Stop => {}
+        // tabs-plus
+        MenuCommand::TabStrip(command) => {
+            crate::tab_strip::run_strip_command(window, controller, command);
+        }
     }
 }
 

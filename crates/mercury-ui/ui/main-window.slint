@@ -11,6 +11,11 @@ import { PopUpBlockedIndicator } from "tabs/pop-up-blocked.slint";
 // menus
 import { AddressBarEdit, BrowserMenu, BrowserMenuCommand, BrowserMenuEntry } from "menus/browser-menu.slint";
 export { AboutLink, AboutWindow } from "about/about-window.slint";
+// tabs-plus
+import { BrowserTab, TabMenuCommand, TabPreview, TabStrip } from "tabs/tab-strip.slint";
+export { BrowserTab, TabMenuCommand, TabMenuEntry } from "tabs/tab-strip.slint";
+import { TabSearchPopup, TabSearchRow } from "tabs/tab-search.slint";
+export { TabSearchRow } from "tabs/tab-search.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -51,14 +56,6 @@ export enum WebViewCursor {
     nwse-resize,
 }
 
-export struct BrowserTab {
-    title: string,
-    icon: image,
-    has-icon: bool,
-    active: bool,
-    loading: bool,
-}
-
 component ChromeButton inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
@@ -85,104 +82,6 @@ component ChromeButton inherits Rectangle {
         enabled: root.enabled;
         clicked => {
             root.clicked();
-        }
-    }
-}
-
-component TabIcon inherits Rectangle {
-    in property <image> source;
-
-    width: 18px;
-    background: transparent;
-
-    Image {
-        y: (parent.height - self.height) / 2;
-        width: 18px;
-        height: 18px;
-        source: root.source;
-        image-fit: contain;
-    }
-}
-
-component BrowserTabButton inherits Rectangle {
-    in property <BrowserTab> tab;
-    in property <bool> closable;
-    callback selected;
-    callback closed;
-
-    min-width: 112px;
-    max-width: 248px;
-    horizontal-stretch: 1;
-    border-radius: 8px;
-    background: root.tab.active
-        ? ChromePalette.tab-active
-        : tab-touch.has-hover ? ChromePalette.tab-hover : transparent;
-
-    if root.tab.active: Rectangle {
-        x: 14px;
-        y: parent.height - 2px;
-        width: parent.width - 28px;
-        height: 2px;
-        background: ChromePalette.accent;
-    }
-
-    tab-touch := TouchArea {
-        clicked => {
-            root.selected();
-        }
-    }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 8px;
-        spacing: 8px;
-
-        if root.tab.has-icon: TabIcon {
-            source: root.tab.icon;
-        }
-
-        if !root.tab.has-icon: TabIcon {
-            source: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
-        }
-
-        Text {
-            horizontal-stretch: 1;
-            text: root.tab.title;
-            color: root.tab.active ? ChromePalette.text : ChromePalette.tab-title-inactive;
-            font-size: 13px;
-            font-weight: root.tab.active ? 550 : 450;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-
-        if root.tab.loading: Rectangle {
-            width: 6px;
-            height: 6px;
-            border-radius: 3px;
-            background: ChromePalette.accent;
-        }
-
-        if root.closable: Rectangle {
-            width: 22px;
-            height: 22px;
-            border-radius: 6px;
-            background: close-touch.pressed
-                ? ChromePalette.tab-close-pressed
-                : close-touch.has-hover ? ChromePalette.tab-close-hover : transparent;
-
-            Text {
-                text: "×";
-                color: close-touch.has-hover ? ChromePalette.text : ChromePalette.tab-close-label;
-                font-size: 15px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            close-touch := TouchArea {
-                clicked => {
-                    root.closed();
-                }
-            }
         }
     }
 }
@@ -378,13 +277,8 @@ export component MainWindow inherits Window {
     }
 
     public function reveal-active-tab() {
-        tab-strip.viewport-x = Math.min(
-            0px,
-            Math.max(
-                tab-strip.width - tab-strip.viewport-width,
-                -root.active-tab-index * 190px,
-            ),
-        );
+        // tabs-plus: the strip scrolls just enough to show the active tab
+        tab-strip.reveal(root.active-tab-index);
     }
 
     // --- tabs ---
@@ -445,6 +339,28 @@ export component MainWindow inherits Window {
     }
     // --- end menus ---
 
+    // --- tabs-plus ---
+    // How many of `tabs` are pinned; they come first.
+    in property <int> pinned-tab-count: 0;
+    // Tab search: the rows matching the query, set by the application.
+    in property <[TabSearchRow]> tab-search-rows;
+    in-out property <string> tab-search-query;
+    // The tab with this id goes to this index in the strip, pinned or not (a drag ended).
+    callback move-tab(int, int, bool);
+    // A command from a tab's menu, for the tab with this id.
+    callback tab-menu-activated(int, TabMenuCommand);
+    // The tab search query changed (also called with "" when it opens).
+    callback tab-search-edited(string);
+    // A tab was chosen in tab search: its id.
+    callback tab-search-chosen(int);
+
+    public function show-tab-search() {
+        root.tab-search-query = "";
+        root.tab-search-edited("");
+        tab-search.show();
+    }
+    // --- end tabs-plus ---
+
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
     preferred-width: 1180px;
@@ -470,28 +386,25 @@ export component MainWindow inherits Window {
                 padding-bottom: 3px;
                 spacing: 8px;
 
-                tab-strip := Flickable {
+                // tabs-plus: pinned tabs, dragging, the tab menu and the "all tabs" button
+                tab-strip := TabStrip {
                     horizontal-stretch: 1;
-                    viewport-width: Math.max(self.width, root.tabs.length * 190px);
-                    viewport-height: self.height;
-
-                    HorizontalLayout {
-                        width: tab-strip.viewport-width;
-                        spacing: 6px;
-
-                        for tab[index] in root.tabs: BrowserTabButton {
-                            width: 184px;
-                            tab: tab;
-                            closable: true;
-
-                            selected => {
-                                root.select-tab(index);
-                            }
-
-                            closed => {
-                                root.close-tab(index);
-                            }
-                        }
+                    tabs: root.tabs;
+                    pinned-count: root.pinned-tab-count;
+                    select-tab(index) => {
+                        root.select-tab(index);
+                    }
+                    close-tab(index) => {
+                        root.close-tab(index);
+                    }
+                    move-tab(id, index, pinned) => {
+                        root.move-tab(id, index, pinned);
+                    }
+                    tab-menu-activated(id, command) => {
+                        root.tab-menu-activated(id, command);
+                    }
+                    show-all-tabs => {
+                        root.show-tab-search();
                     }
                 }
 
@@ -1006,6 +919,28 @@ export component MainWindow inherits Window {
         }
         row-hovered(index) => {
             root.controls-row-hovered(index);
+        }
+    }
+
+    // tabs-plus: the hover preview of a tab, below the strip
+    if !root.chrome-hidden && tab-strip.preview-index >= 0 && tab-strip.preview-index < root.tabs.length: TabPreview {
+        x: clamp(tab-strip.absolute-position.x + tab-strip.preview-x, 8px, Math.max(8px, root.width - self.width - 8px));
+        y: tab-strip.absolute-position.y + tab-strip.height + 4px;
+        title: root.tabs[tab-strip.preview-index].title;
+        url: root.tabs[tab-strip.preview-index].url;
+    }
+
+    // tabs-plus: tab search
+    tab-search := TabSearchPopup {
+        x: (root.width - self.width) / 2;
+        y: 52px;
+        rows: root.tab-search-rows;
+        query <=> root.tab-search-query;
+        query-edited(text) => {
+            root.tab-search-edited(text);
+        }
+        chosen(id) => {
+            root.tab-search-chosen(id);
         }
     }
 
