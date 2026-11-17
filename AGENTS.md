@@ -22,6 +22,11 @@ Mercury's own files are under the PolyForm Noncommercial License 1.0.0; files fr
 - When moving or splitting a file, the new files keep the original's licence.
 - Call Mercury "source-available", never "open source". `scripts/ci/check-license-headers.sh` (run by `make lint-scripts` and CI) fails when a file has no licence.
 
+## GitHub and the Mac
+
+- Never create a GitHub repository. Code lives in `thepigdestroyer/mercury-browser`: `mercury`, `master` and one `lane/<name>` branch per lane of work in progress. Notes, snapshots and finished lane branches go to the private `thepigdestroyer/mercury-browser-archive`.
+- Nothing stays on the Mac that is not on GitHub, and nothing stays on the Mac once it is on GitHub and no longer needed. A finished lane's scratch, worktree and local branch are deleted after it merges.
+
 ## Builds and disk space
 
 Load the project skill `mercury-build-hygiene` before you build, test, run the browser or create files. The disk guard plugin in `.opencode/plugins/` enforces it: build output is deleted after every round, and work is safe only once it is pushed to GitHub.
