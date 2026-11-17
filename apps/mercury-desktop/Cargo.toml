@@ -19,6 +19,7 @@ glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
+mercury-filter-lists = { path = "../../crates/mercury-filter-lists" }
 mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-ui = { path = "../../crates/mercury-ui" }
 servo.workspace = true
@@ -27,6 +28,7 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash.workspace = true

@@ -30,8 +30,5 @@ libc.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 servo = { workspace = true, features = ["media-gstreamer"] }
 
-[build-dependencies]
-adblock.workspace = true
-
 [dev-dependencies]
 tempfile.workspace = true

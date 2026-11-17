@@ -11,6 +11,9 @@ pub(crate) struct LaunchOptions {
     pub profile_dir: Option<PathBuf>,
     pub experimental_web_features: bool,
     pub exit_request: Option<ExitRequest>,
+    // blocklists
+    /// Diagnostics: fetch filter-list updates from this loopback server at start-up.
+    pub filter_list_server: Option<url::Url>,
 }
 
 /// Diagnostics: a quit the browser requests of itself, so that quit paths can be exercised
@@ -46,6 +49,7 @@ impl Default for LaunchOptions {
             profile_dir: None,
             experimental_web_features: true,
             exit_request: None,
+            filter_list_server: None,
         }
     }
 }
@@ -118,6 +122,11 @@ Diagnostics:
                                    sends it (terminate); in diagnostic builds only, the
                                    quit Apple event of a log-out, sent to this process
                                    only (logout)
+  --filter-list-server <http://127.0.0.1:port/path/>
+                                   Check for filter-list updates once at start-up, from
+                                   <path><list file> on this loopback server only, also in
+                                   screenshot and background runs (which otherwise never
+                                   update); the publishers are not contacted
 
 Exit status:
   0  Success
@@ -166,6 +175,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut experimental_web_features = true;
     let mut exit_after = None;
     let mut exit_by = None;
+    let mut filter_list_server = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -228,6 +238,21 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                     }
                 });
             }
+            // blocklists
+            "--filter-list-server" => {
+                let value =
+                    option_value(&mut arguments, "--filter-list-server", "<loopback URL>")?;
+                let url = url::Url::parse(&value)
+                    .ok()
+                    .filter(|url| mercury_filter_lists::fetch::Sources::local_server(url).is_some())
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid --filter-list-server '{value}': expected an http URL on \
+                             127.0.0.1, [::1] or localhost"
+                        )
+                    })?;
+                filter_list_server = Some(url);
+            }
             _ if argument.starts_with("-psn_") => {}
             _ if argument.starts_with('-') => {
                 return Err(format!("unknown option '{argument}'"));
@@ -262,6 +287,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         profile_dir,
         experimental_web_features,
         exit_request,
+        filter_list_server,
     }))
 }
 
@@ -345,6 +371,7 @@ mod tests {
                 profile_dir: None,
                 experimental_web_features: true,
                 exit_request: None,
+                filter_list_server: None,
             })
         );
     }
@@ -763,5 +790,43 @@ mod tests {
                 ..LaunchOptions::default()
             })
         );
+    }
+
+    // blocklists
+    #[test]
+    fn filter_list_server_must_be_a_loopback_url() {
+        let CliOutcome::Run(options) = parse(&[
+            "--filter-list-server",
+            "http://127.0.0.1:8765/filter-lists/",
+            "--background",
+        ]) else {
+            panic!("a run");
+        };
+        assert_eq!(
+            options.filter_list_server.map(String::from).as_deref(),
+            Some("http://127.0.0.1:8765/filter-lists/")
+        );
+        for refused in [
+            "https://easylist.to/easylist/",
+            "http://192.168.0.2/",
+            "not a url",
+        ] {
+            assert_eq!(
+                exit_code(&parse(&["--filter-list-server", refused])),
+                Some(2),
+                "{refused}"
+            );
+        }
+        assert_eq!(exit_code(&parse(&["--filter-list-server"])), Some(2));
+    }
+
+    // blocklists
+    #[test]
+    fn help_lists_the_filter_list_server_under_diagnostics() {
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("help");
+        };
+        let diagnostics = text.split("Diagnostics:").nth(1).expect("a section");
+        assert!(diagnostics.contains("--filter-list-server"));
     }
 }

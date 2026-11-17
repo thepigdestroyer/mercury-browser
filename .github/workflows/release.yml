@@ -265,6 +265,10 @@ jobs:
               "${output_directory}/LICENSE"
           fi
 
+          # The ad and tracker filter lists, read by the browser at start-up.
+          python3 scripts/filter-lists.py install \
+            "${output_directory}/filter-lists"
+
           tar \
             -C dist \
             -czf "${archive}" \

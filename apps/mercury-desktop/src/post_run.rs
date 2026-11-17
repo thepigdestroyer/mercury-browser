@@ -217,7 +217,8 @@ impl EndOfRun for Steps {
     fn shut_down_profile_data(&mut self, deadline: Instant) {
         // Slot (history): closes the history database, waiting for its queued work.
         // crate::profile_data::shut_down(deadline);
-        let _ = deadline;
+        // blocklists: stops the filter-list updater before the profile can be removed.
+        crate::filter_lists::shut_down(deadline);
     }
 
     fn collect_saves(&mut self, deadline: Instant) {

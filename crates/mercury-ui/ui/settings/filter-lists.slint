@@ -1,0 +1,60 @@
+import { Button, CheckBox, Palette } from "std-widgets.slint";
+
+// blocklists: "Update filter lists automatically", "Update now", the last update and each
+// list's version, in the privacy section of the settings window.
+export component FilterListsGroup inherits VerticalLayout {
+    in-out property <bool> update-automatically;
+    // The last update, a check in progress, or why updates are not available.
+    in property <string> status;
+    // One line per list: its name, version and where the copy came from.
+    in property <[string]> lists;
+    in property <bool> can-update;
+    callback toggled(bool);
+    callback update-now();
+
+    spacing: 8px;
+
+    CheckBox {
+        text: "Update filter lists automatically";
+        checked <=> root.update-automatically;
+        toggled => {
+            root.toggled(self.checked);
+        }
+    }
+
+    Text {
+        text: "Once a day, Mercury Browser asks the lists' publishers (EasyList, uBlock Origin and Brave) for newer versions.";
+        font-size: 12px;
+        color: Palette.foreground.with-alpha(0.62);
+        wrap: word-wrap;
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: start;
+
+        Button {
+            text: "Update now";
+            enabled: root.can-update;
+            clicked => {
+                root.update-now();
+            }
+        }
+
+        Text {
+            text: root.status;
+            font-size: 12px;
+            color: Palette.foreground;
+            vertical-alignment: center;
+            wrap: word-wrap;
+            horizontal-stretch: 1;
+        }
+    }
+
+    for line in root.lists: Text {
+        text: line;
+        font-size: 12px;
+        color: Palette.foreground.with-alpha(0.62);
+        wrap: word-wrap;
+    }
+}

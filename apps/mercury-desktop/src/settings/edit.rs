@@ -66,6 +66,8 @@ pub(crate) fn apply_toggle(settings: &mut Settings, name: &str, on: bool) -> boo
         "show-home-button" => &mut settings.appearance.show_home_button,
         "show-bookmarks-bar" => &mut settings.appearance.show_bookmarks_bar,
         "block-ads-and-trackers" => &mut settings.privacy.block_ads_and_trackers,
+        // blocklists
+        "update-filter-lists" => &mut settings.privacy.update_filter_lists,
         "block-popups" => &mut settings.privacy.block_popups,
         "clear-history-on-exit" => &mut settings.privacy.clear_on_exit.history,
         "clear-cookies-on-exit" => &mut settings.privacy.clear_on_exit.cookies,
@@ -311,6 +313,8 @@ mod tests {
             ("block-ads-and-trackers", |s| {
                 s.privacy.block_ads_and_trackers
             }),
+            // blocklists
+            ("update-filter-lists", |s| s.privacy.update_filter_lists),
             ("block-popups", |s| s.privacy.block_popups),
             ("clear-history-on-exit", |s| s.privacy.clear_on_exit.history),
             ("clear-cookies-on-exit", |s| s.privacy.clear_on_exit.cookies),

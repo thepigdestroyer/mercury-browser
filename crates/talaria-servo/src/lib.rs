@@ -14,6 +14,7 @@ mod screen;
 mod session_data;
 mod web_view;
 
+pub use adblocker::FilterEngineSlot;
 pub use content_process::{
     ContentProcessArgumentError, record_browser_process_id, run_content_process_if_requested,
 };

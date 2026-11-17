@@ -189,6 +189,8 @@ printf 'APPL????' >"$APP/Contents/PkgInfo"
 cp "$RESOURCES_SRC/AppIcon.icns" "$RES_DIR/AppIcon.icns"
 cp LICENSE THIRD-PARTY-NOTICES.md "$RES_DIR/"
 ditto LICENSES "$RES_DIR/LICENSES"
+# The ad and tracker filter lists: data files the browser reads at start-up (blocklists).
+python3 scripts/filter-lists.py install "$RES_DIR/filter-lists" >&2 || die "the filter lists do not match their manifest"
 
 # ── Media libraries ───────────────────────────────────────────────────────
 # Servo looks for its GStreamer libraries and plugins in <executable dir>/lib.

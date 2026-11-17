@@ -24,6 +24,8 @@
 #   - `codesign --verify --deep --strict` passes and the hardened runtime is on;
 #   - the signature is the kind asked for, and the entitlements are exactly the
 #     set scripts/macos/bundle.sh uses for it (the ad-hoc set for ad hoc);
+#   - Contents/Resources/filter-lists matches its manifest and the executable
+#     carries no filter-list text;
 #   - scripts/macos/test-bundle.sh passes.
 #
 # With --require-media, also:
@@ -346,6 +348,29 @@ if [ "$REQUIRE_MEDIA" = 1 ]; then
     done
     if [ "$outside" = 0 ]; then
         pass "every Mach-O file loads only system libraries and libraries in Contents/MacOS/lib"
+    fi
+fi
+
+# ── Filter lists (blocklists) ─────────────────────────────────────────────
+# Data files beside the program, not compiled into it.
+LISTS="$APP/Contents/Resources/filter-lists"
+if python3 "$REPO/scripts/filter-lists.py" check "$LISTS" >"$TMP" 2>&1; then
+    pass "Contents/Resources/filter-lists matches its manifest"
+else
+    fail "Contents/Resources/filter-lists: $(tr '\n' ' ' <"$TMP")"
+fi
+if [ -n "$EXECUTABLE" ] && [ -f "$APP/Contents/MacOS/$EXECUTABLE" ]; then
+    # Rule fragments a compiled-in engine carried (the lists' own text is never compiled in).
+    embedded=""
+    for fragment in "advanced-ads-" "scorecardresearch" "Brave Firstparty specific filters"; do
+        if LC_ALL=C grep -q -a -F -- "$fragment" "$APP/Contents/MacOS/$EXECUTABLE"; then
+            embedded="$embedded '$fragment'"
+        fi
+    done
+    if [ -z "$embedded" ]; then
+        pass "$EXECUTABLE contains no filter-list text"
+    else
+        fail "$EXECUTABLE contains filter-list text:$embedded"
     fi
 fi
 

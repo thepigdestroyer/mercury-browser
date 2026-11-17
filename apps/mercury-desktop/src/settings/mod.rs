@@ -382,6 +382,14 @@ pub(crate) fn main_window_closing() {
     }
 }
 
+// blocklists
+/// The filter-list service reported a new status: show it if the settings window is open.
+pub(crate) fn filter_lists_changed() {
+    if let Some(handle) = HANDLE.with(|current| current.borrow().upgrade()) {
+        window::refresh(&handle);
+    }
+}
+
 /// The system appearance changed: under "Follow the system" the settings window follows it.
 pub(crate) fn system_theme_changed() {
     // After Slint has handled the same event, so that the browser window reports the new scheme.

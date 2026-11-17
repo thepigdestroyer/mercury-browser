@@ -130,6 +130,9 @@ pub(crate) fn fill(window: &SettingsWindow, settings: &Settings, save_problem: O
     window.set_show_bookmarks_bar(settings.appearance.show_bookmarks_bar);
 
     window.set_block_ads_and_trackers(settings.privacy.block_ads_and_trackers);
+    // blocklists
+    window.set_update_filter_lists(settings.privacy.update_filter_lists);
+    crate::filter_lists::fill_settings_window(window);
     window.set_block_popups(settings.privacy.block_popups);
     window.set_https_only(settings.privacy.https_only);
     window.set_clear_history_on_exit(settings.privacy.clear_on_exit.history);
@@ -383,6 +386,12 @@ fn connect(window: &SettingsWindow, handle: Weak<SettingsHandle>) {
 
     window.on_clear_browsing_data(clear_browsing_data);
 
+    // blocklists
+    window.on_update_filter_lists_now(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
+        crate::filter_lists::update_now();
+    });
+
     let close_handle = handle;
     window.on_close_settings(move || {
         let _slint = crate::callback_scope::InSlintCallback::enter();
@@ -630,4 +639,31 @@ mod tests {
 
         assert_eq!(theme(&window), mercury_ui::ChromeTheme::Dark);
     }
+
+    // blocklists
+    #[test]
+    fn the_filter_list_switch_follows_the_setting_and_the_status_is_shown() {
+        init_slint();
+        let handle = SettingsHandle::start(None);
+        let window = open(&handle);
+        element(&window, "Privacy and security").invoke_accessible_default_action();
+
+        element(&window, "Update filter lists automatically")
+            .mock_single_click(PointerEventButton::Left);
+        assert!(!handle.settings().privacy.update_filter_lists);
+
+        handle.update(|settings| settings.privacy.update_filter_lists = true);
+        assert_eq!(
+            element(&window, "Update filter lists automatically").accessible_checked(),
+            Some(true)
+        );
+        // No service runs in this test: nothing is known yet, and "Update now" is offered.
+        assert!(
+            window
+                .get_filter_lists_status()
+                .starts_with("Not updated yet")
+        );
+        assert!(window.get_filter_lists_can_update());
+    }
 }
+

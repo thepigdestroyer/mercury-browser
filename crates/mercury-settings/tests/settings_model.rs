@@ -25,6 +25,7 @@ const DEFAULT_FILE: &str = r#"{
   },
   "privacy": {
     "block_ads_and_trackers": true,
+    "update_filter_lists": true,
     "https_only": false,
     "block_popups": true,
     "global_privacy_control": true,
@@ -70,6 +71,7 @@ fn the_defaults_are_the_documented_ones() {
     assert!(settings.appearance.show_bookmarks_bar);
     assert!(!settings.appearance.show_home_button);
     assert!(settings.privacy.block_ads_and_trackers);
+    assert!(settings.privacy.update_filter_lists);
     assert!(!settings.privacy.https_only);
     assert!(settings.privacy.block_popups);
     assert!(settings.privacy.global_privacy_control);

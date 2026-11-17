@@ -24,6 +24,7 @@ mod cli;
 mod controls;
 mod crash_handler;
 mod engine;
+mod filter_lists; // blocklists
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -141,6 +142,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         // settings-ui: blocking and what to clear are known before the engine starts.
         settings::with_privacy(runtime_options(&options, &profile), &settings),
     )?;
+    // blocklists: builds the content blocker's engine off the UI thread and updates the lists.
+    filter_lists::start(&options, &profile, &settings);
     // settings-ui
     settings::connect(&settings, &window, &controller);
     sync_ui(&window, &controller.borrow());
