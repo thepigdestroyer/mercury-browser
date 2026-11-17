@@ -37,6 +37,8 @@ pub struct Tab {
     opened_by_page: bool,
     // dialogs
     page_requests: PageRequests,
+    // tabs-plus
+    pinned: bool,
 }
 
 impl Tab {
@@ -48,6 +50,7 @@ impl Tab {
             engine_ready: false,
             opened_by_page: false,
             page_requests: PageRequests::default(),
+            pinned: false,
         }
     }
 
@@ -130,6 +133,16 @@ impl Tab {
 
     pub(crate) fn page_requests_mut(&mut self) -> &mut PageRequests {
         &mut self.page_requests
+    }
+
+    // tabs-plus
+    /// True for a pinned tab. Pinned tabs always come first in the strip.
+    pub const fn is_pinned(&self) -> bool {
+        self.pinned
+    }
+
+    pub(crate) fn set_pinned(&mut self, pinned: bool) {
+        self.pinned = pinned;
     }
 }
 
