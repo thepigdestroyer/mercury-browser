@@ -36,4 +36,6 @@ servo = { workspace = true, features = ["media-gstreamer"] }
 adblock.workspace = true
 
 [dev-dependencies]
+# find: runs the find-in-page script's tests in a JavaScript engine written in Rust.
+boa_engine.workspace = true
 tempfile.workspace = true

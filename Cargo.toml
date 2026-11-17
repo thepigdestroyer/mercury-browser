@@ -19,6 +19,8 @@ edition = "2024"
 license = "MPL-2.0"
 
 [workspace.dependencies]
+# find: tests only (talaria-servo's dev-dependency), for the find-in-page script.
+boa_engine = { version = "0.22", default-features = false }
 adblock = "=0.13.5"
 ash = "0.38"
 backtrace = "0.3.77"
