@@ -10,11 +10,13 @@ pub(crate) struct LaunchOptions {
     pub gpu_canvas: bool,
     pub profile_dir: Option<PathBuf>,
     pub experimental_web_features: bool,
-    // find
+    // find: diagnostics build only
+    #[cfg(feature = "diagnostics")]
     pub find: Option<FindDiagnostic>,
 }
 
 /// `--find`: a diagnostic that opens the find bar once the first page has loaded.
+#[cfg(feature = "diagnostics")]
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) struct FindDiagnostic {
     /// Searched as if typed; empty opens the bar as Cmd+F does (the page's selection, if any).
@@ -33,6 +35,7 @@ impl Default for LaunchOptions {
             gpu_canvas: true,
             profile_dir: None,
             experimental_web_features: true,
+            #[cfg(feature = "diagnostics")]
             find: None,
         }
     }
@@ -77,10 +80,6 @@ Options:
                                    WebGPU, which are always off)
   --profile-dir <directory>        Keep cookies and site data in this directory
                                    (screenshot and background runs otherwise use a temporary one)
-  --find <text>                    Diagnostic: once the page has loaded, open the find bar and
-                                   search for <text> (empty: use the page's selection) and
-                                   print the result
-  --find-steps <n>                 Diagnostic: then press Next n times (Previous if negative)
   --help                           Print this help and exit
   --version                        Print the version and exit
 
@@ -91,6 +90,21 @@ Exit status:
   3  The screenshot's page did not finish loading
   4  The profile is in use by another Mercury Browser";
 
+// find: diagnostic options, only in builds with the `diagnostics` feature.
+#[cfg(feature = "diagnostics")]
+const DIAGNOSTIC_USAGE: &str = "
+
+Diagnostic options (this build has the `diagnostics` feature):
+  --find <text>                    Once the page has loaded, open the find bar, search for
+                                   <text> (empty: use the page's selection) and print the result
+  --find-steps <n>                 Then press Next n times (Previous if negative)";
+#[cfg(not(feature = "diagnostics"))]
+const DIAGNOSTIC_USAGE: &str = "";
+
+fn usage() -> String {
+    format!("{USAGE}{DIAGNOSTIC_USAGE}")
+}
+
 /// `--profile-dir` and `--screenshot` need paths that are valid UTF-8; anything else would be
 /// silently altered by the conversion to `String`. Returns the usage error to print, if any.
 pub(crate) fn reject_non_utf8_paths(arguments: &[std::ffi::OsString]) -> Option<CliOutcome> {
@@ -99,9 +113,10 @@ pub(crate) fn reject_non_utf8_paths(arguments: &[std::ffi::OsString]) -> Option<
     })?;
     Some(CliOutcome::PrintAndExit {
         text: format!(
-            "mercury-browser: the {} path '{}' is not valid UTF-8; choose another path\n\n{USAGE}",
+            "mercury-browser: the {} path '{}' is not valid UTF-8; choose another path\n\n{}",
             pair[0].to_string_lossy(),
-            pair[1].to_string_lossy()
+            pair[1].to_string_lossy(),
+            usage()
         ),
         code: 2,
     })
@@ -112,7 +127,7 @@ pub(crate) fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Cl
     match parse_launch_options(arguments.into_iter()) {
         Ok(outcome) => outcome,
         Err(message) => CliOutcome::PrintAndExit {
-            text: format!("mercury-browser: {message}\n\n{USAGE}"),
+            text: format!("mercury-browser: {message}\n\n{}", usage()),
             code: 2,
         },
     }
@@ -127,14 +142,16 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut gpu_canvas = true;
     let mut profile_dir = None;
     let mut experimental_web_features = true;
+    #[cfg(feature = "diagnostics")]
     let mut find_query = None;
+    #[cfg(feature = "diagnostics")]
     let mut find_steps = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
             "--help" => {
                 return Ok(CliOutcome::PrintAndExit {
-                    text: USAGE.to_owned(),
+                    text: usage(),
                     code: 0,
                 });
             }
@@ -170,7 +187,9 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--profile-dir", "<directory>")?;
                 profile_dir = Some(PathBuf::from(value));
             }
+            #[cfg(feature = "diagnostics")]
             "--find" => find_query = Some(option_value(&mut arguments, "--find", "<text>")?),
+            #[cfg(feature = "diagnostics")]
             "--find-steps" => {
                 let value = option_value(&mut arguments, "--find-steps", "<n>")?;
                 find_steps = Some(value.parse::<i32>().map_err(|_| {
@@ -194,6 +213,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, None) => None,
     };
 
+    #[cfg(feature = "diagnostics")]
     let find = match (find_query, find_steps) {
         (Some(query), steps) => Some(FindDiagnostic {
             query,
@@ -211,6 +231,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         gpu_canvas,
         profile_dir,
         experimental_web_features,
+        #[cfg(feature = "diagnostics")]
         find,
     }))
 }
@@ -294,6 +315,7 @@ mod tests {
                 gpu_canvas: true,
                 profile_dir: None,
                 experimental_web_features: true,
+                #[cfg(feature = "diagnostics")]
                 find: None,
             })
         );
@@ -592,6 +614,18 @@ mod tests {
     }
 
     // find
+    #[cfg(not(feature = "diagnostics"))]
+    #[test]
+    fn without_the_diagnostics_feature_find_is_unknown() {
+        assert_eq!(exit_code(&parse(&["--find", "needle"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--find-steps", "1"])), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(!text.contains("--find"));
+    }
+
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn the_find_diagnostic_takes_a_query_and_optional_steps() {
         let CliOutcome::Run(options) = parse(&["--find", "needle", "--find-steps", "-2"]) else {
@@ -617,6 +651,7 @@ mod tests {
         );
     }
 
+    #[cfg(feature = "diagnostics")]
     #[test]
     fn find_steps_need_find_and_a_number() {
         assert_eq!(exit_code(&parse(&["--find-steps", "2"])), Some(2));

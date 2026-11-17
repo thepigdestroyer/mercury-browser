@@ -3,39 +3,82 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mercury_ui::MainWindow;
 use slint::{ComponentHandle, Timer, TimerMode};
-use talaria_core::{
-    BrowserCommand, BrowserController, BrowserState, FindState, FindStatus, LoadState, TabId,
-};
+#[cfg(feature = "diagnostics")]
+use talaria_core::LoadState;
+use talaria_core::{BrowserCommand, BrowserController, BrowserState, FindState, FindStatus, TabId};
 
+#[cfg(feature = "diagnostics")]
 use crate::cli::FindDiagnostic;
 
 /// How long typing pauses before the query is searched. Return searches at once.
 pub(crate) const TYPING_DEBOUNCE: Duration = Duration::from_millis(150);
+/// How long the page may take to answer a search before the bar says it is not responding.
+pub(crate) const ANSWER_WAIT: Duration = Duration::from_secs(2);
+const ANSWER_POLL_INTERVAL: Duration = Duration::from_millis(250);
+#[cfg(feature = "diagnostics")]
 const DIAGNOSTIC_POLL_INTERVAL: Duration = Duration::from_millis(50);
 
-/// What the bar shows next to the field.
-pub(crate) fn status_text(status: &FindStatus) -> String {
+/// What the bar shows next to the field. A search cut short at its limit knows only a lower
+/// bound on the count and not the match's position.
+pub(crate) fn status_text(status: &FindStatus, query_from_other_page: bool) -> String {
     match status {
+        FindStatus::Idle if query_from_other_page => "Press Return to search".to_owned(),
         FindStatus::Idle => String::new(),
-        FindStatus::Matches(matches) => match matches.current {
-            None => "No matches".to_owned(),
-            Some(current) => format!(
-                "{} of {}{}",
-                current + 1,
-                matches.count,
-                if matches.truncated { "+" } else { "" }
-            ),
+        FindStatus::Matches(matches) => match (matches.count, matches.current, matches.truncated) {
+            (0, _, false) => "No matches".to_owned(),
+            (0, _, true) => "No matches so far".to_owned(),
+            (count, Some(current), false) => format!("{} of {count}", current + 1),
+            (count, _, _) => format!("{count}+ matches"),
         },
         FindStatus::Failed => "Search failed".to_owned(),
+        FindStatus::NotResponding => "Page not responding".to_owned(),
     }
 }
 
 fn has_no_matches(status: &FindStatus) -> bool {
-    matches!(status, FindStatus::Matches(matches) if matches.count == 0)
+    matches!(status, FindStatus::Matches(matches) if matches.count == 0 && !matches.truncated)
+}
+
+/// Notices a search the page has not answered for `ANSWER_WAIT`.
+#[derive(Debug, Default)]
+pub(crate) struct OverdueWatch {
+    waiting: Option<(TabId, u64, Instant)>,
+    reported: bool,
+}
+
+impl OverdueWatch {
+    /// `awaited` is the active tab's unanswered search. Returns it once it is overdue.
+    pub(crate) fn poll(
+        &mut self,
+        tab_id: TabId,
+        awaited: Option<u64>,
+        now: Instant,
+    ) -> Option<(TabId, u64)> {
+        let Some(request_id) = awaited else {
+            self.waiting = None;
+            return None;
+        };
+        match self.waiting {
+            Some((waiting_tab, waiting_id, since))
+                if waiting_tab == tab_id && waiting_id == request_id =>
+            {
+                if self.reported || now.saturating_duration_since(since) < ANSWER_WAIT {
+                    return None;
+                }
+                self.reported = true;
+                Some((tab_id, request_id))
+            }
+            _ => {
+                self.waiting = Some((tab_id, request_id, now));
+                self.reported = false;
+                None
+            }
+        }
+    }
 }
 
 /// Cmd+G / Cmd+Shift+G with nothing to search for behave like Cmd+F.
@@ -54,7 +97,16 @@ pub(crate) fn sync_find_bar(window: &MainWindow, state: &BrowserState) {
             window.invoke_find_select_all();
         }
     }
-    window.set_find_status(status_text(find.status()).into());
+    let status = status_text(find.status(), find.is_query_from_other_page());
+    if find.is_query_from_other_page()
+        && window.get_find_status().as_str() != status
+        && window.get_find_field_focused()
+    {
+        // The page changed under a focused bar: the kept query is shown selected, so typing
+        // replaces it and Return searches the new page.
+        window.invoke_find_select_all();
+    }
+    window.set_find_status(status.into());
     window.set_find_no_matches(has_no_matches(find.status()));
     window.set_find_match_case(find.match_case());
 }
@@ -118,6 +170,30 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
         });
     });
 
+    // A page that does not answer is reported; nothing more is sent to it until it does.
+    let overdue_timer = Timer::default();
+    let overdue_controller = Rc::clone(&controller);
+    let overdue_window = window.as_weak();
+    let mut watch = OverdueWatch::default();
+    overdue_timer.start(TimerMode::Repeated, ANSWER_POLL_INTERVAL, move || {
+        let (tab_id, awaited) = {
+            let controller = overdue_controller.borrow();
+            (
+                controller.active_tab_id(),
+                controller.active_state().find().awaited_search(),
+            )
+        };
+        if let Some((tab_id, request_id)) = watch.poll(tab_id, awaited, Instant::now()) {
+            overdue_controller
+                .borrow_mut()
+                .find_answer_overdue(tab_id, request_id);
+            if let Some(window) = overdue_window.upgrade() {
+                sync_find_bar(&window, overdue_controller.borrow().active_state());
+                window.window().request_redraw();
+            }
+        }
+    });
+
     let next_controller = Rc::clone(&controller);
     let next_window = window.as_weak();
     let next_debounce = Rc::clone(&debounce);
@@ -145,6 +221,8 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
 
     let close_window = window.as_weak();
     window.on_find_close(move || {
+        // Keeps the overdue timer alive as long as the window's callbacks.
+        let _overdue_timer = &overdue_timer;
         debounce.stop();
         controller.borrow_mut().close_find();
         refresh(&controller, &close_window);
@@ -186,6 +264,7 @@ fn refresh(controller: &RefCell<BrowserController>, window: &slint::Weak<MainWin
     crate::engine::request_pump();
 }
 
+#[cfg(feature = "diagnostics")]
 /// `--find`: once the active page has loaded, opens the bar (without taking focus), searches the
 /// query (an empty one uses the page's selection, as Cmd+F does), presses Next or Previous
 /// `steps` times at once, and prints what the bar shows when the last answer has arrived.
@@ -198,6 +277,7 @@ pub(crate) fn start_find_diagnostic(
     let timer = Timer::default();
     let mut started = false;
     let mut reported = false;
+    let mut steps_left = diagnostic.steps;
     timer.start(TimerMode::Repeated, DIAGNOSTIC_POLL_INTERVAL, move || {
         if reported {
             return;
@@ -213,15 +293,30 @@ pub(crate) fn start_find_diagnostic(
                 return;
             }
             started = true;
-            run_diagnostic_steps(&mut controller.borrow_mut(), &diagnostic);
+            start_diagnostic_search(&mut controller.borrow_mut(), &diagnostic);
             sync_find_bar(&window, controller.borrow().active_state());
             window.window().request_redraw();
             crate::engine::request_pump();
             return;
         }
+        if controller
+            .borrow()
+            .active_state()
+            .find()
+            .is_awaiting_answer()
+        {
+            return;
+        }
+        // One press per answer, as a person pressing Return again would.
+        if steps_left != 0 {
+            press_diagnostic_step(&mut controller.borrow_mut(), &mut steps_left);
+            sync_find_bar(&window, controller.borrow().active_state());
+            crate::engine::request_pump();
+            return;
+        }
         let controller = controller.borrow();
         let find = controller.active_state().find();
-        if find.status() != &FindStatus::Idle && !find.is_awaiting_answer() {
+        if find.status() != &FindStatus::Idle {
             eprintln!(
                 "mercury-browser: find diagnostic: \"{}\"{} {}",
                 find.query(),
@@ -230,7 +325,7 @@ pub(crate) fn start_find_diagnostic(
                 } else {
                     ""
                 },
-                status_text(find.status())
+                status_text(find.status(), find.is_query_from_other_page())
             );
             reported = true;
         }
@@ -238,24 +333,34 @@ pub(crate) fn start_find_diagnostic(
     timer
 }
 
-fn run_diagnostic_steps(controller: &mut BrowserController, diagnostic: &FindDiagnostic) {
+#[cfg(feature = "diagnostics")]
+fn start_diagnostic_search(controller: &mut BrowserController, diagnostic: &FindDiagnostic) {
     controller.open_find();
     if !diagnostic.query.is_empty() {
+        // As if typed, then Return pressed: an explicit search.
         controller.set_find_query(&diagnostic.query);
-        controller.run_due_find();
+        controller.find_next();
     }
-    for _ in 0..diagnostic.steps.unsigned_abs() {
-        if diagnostic.steps > 0 {
-            controller.find_next();
-        } else {
-            controller.find_previous();
-        }
+}
+
+#[cfg(feature = "diagnostics")]
+fn press_diagnostic_step(controller: &mut BrowserController, steps_left: &mut i32) {
+    if *steps_left > 0 {
+        controller.find_next();
+        *steps_left -= 1;
+    } else if *steps_left < 0 {
+        controller.find_previous();
+        *steps_left += 1;
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use talaria_core::{BrowserEvent, FindMatches, FindRequest, FindStep, TabCommand};
+    use std::time::Instant;
+
+    use talaria_core::FindMatches;
+    #[cfg(feature = "diagnostics")]
+    use talaria_core::{BrowserEvent, FindRequest, FindStep, TabCommand};
 
     use super::*;
 
@@ -269,16 +374,41 @@ mod tests {
 
     #[test]
     fn the_status_says_which_match_of_how_many() {
-        assert_eq!(status_text(&FindStatus::Idle), "");
-        assert_eq!(status_text(&matches(7, Some(2), false)), "3 of 7");
-        assert_eq!(status_text(&matches(1000, Some(0), true)), "1 of 1000+");
-        assert_eq!(status_text(&matches(0, None, false)), "No matches");
-        assert_eq!(status_text(&FindStatus::Failed), "Search failed");
+        assert_eq!(status_text(&FindStatus::Idle, false), "");
+        assert_eq!(status_text(&matches(7, Some(2), false), false), "3 of 7");
+        assert_eq!(status_text(&matches(0, None, false), false), "No matches");
+        assert_eq!(status_text(&FindStatus::Failed, false), "Search failed");
     }
 
     #[test]
-    fn only_an_answer_with_no_matches_marks_the_field() {
+    fn a_search_cut_short_gives_a_lower_bound_and_no_position() {
+        assert_eq!(
+            status_text(&matches(1000, None, true), false),
+            "1000+ matches"
+        );
+        assert_eq!(status_text(&matches(1, None, true), false), "1+ matches");
+        assert_eq!(
+            status_text(&matches(0, None, true), false),
+            "No matches so far"
+        );
+    }
+
+    #[test]
+    fn a_stuck_page_and_a_query_from_another_page_are_said_plainly() {
+        assert_eq!(
+            status_text(&FindStatus::NotResponding, false),
+            "Page not responding"
+        );
+        assert_eq!(
+            status_text(&FindStatus::Idle, true),
+            "Press Return to search"
+        );
+    }
+
+    #[test]
+    fn only_a_complete_answer_with_no_matches_marks_the_field() {
         assert!(has_no_matches(&matches(0, None, false)));
+        assert!(!has_no_matches(&matches(0, None, true)));
         assert!(!has_no_matches(&matches(2, Some(0), false)));
         assert!(!has_no_matches(&FindStatus::Idle));
         assert!(!has_no_matches(&FindStatus::Failed));
@@ -294,7 +424,58 @@ mod tests {
     }
 
     #[test]
-    fn the_diagnostic_searches_then_steps_at_once() {
+    fn an_answer_missing_for_the_whole_wait_is_overdue_once() {
+        let tab = TabId::new(1);
+        let start = Instant::now();
+        let mut watch = OverdueWatch::default();
+
+        assert_eq!(watch.poll(tab, Some(4), start), None);
+        assert_eq!(
+            watch.poll(tab, Some(4), start + Duration::from_millis(1999)),
+            None
+        );
+        assert_eq!(
+            watch.poll(tab, Some(4), start + ANSWER_WAIT),
+            Some((tab, 4))
+        );
+        assert_eq!(
+            watch.poll(tab, Some(4), start + ANSWER_WAIT * 2),
+            None,
+            "reported once"
+        );
+    }
+
+    #[test]
+    fn a_new_request_or_tab_restarts_the_wait() {
+        let start = Instant::now();
+        let mut watch = OverdueWatch::default();
+        watch.poll(TabId::new(1), Some(4), start);
+
+        assert_eq!(
+            watch.poll(TabId::new(1), Some(5), start + ANSWER_WAIT),
+            None
+        );
+        assert_eq!(
+            watch.poll(TabId::new(2), Some(5), start + ANSWER_WAIT),
+            None
+        );
+        assert_eq!(
+            watch.poll(TabId::new(2), None, start + ANSWER_WAIT * 3),
+            None
+        );
+        assert_eq!(
+            watch.poll(TabId::new(2), Some(5), start + ANSWER_WAIT * 3),
+            None
+        );
+        assert_eq!(
+            watch.poll(TabId::new(2), Some(5), start + ANSWER_WAIT * 4),
+            Some((TabId::new(2), 5))
+        );
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn the_diagnostic_searches_then_waits_to_step() {
         let mut controller = BrowserController::default();
         let tab_id = controller.active_tab_id();
         controller.handle_event(
@@ -304,7 +485,7 @@ mod tests {
             },
         );
 
-        run_diagnostic_steps(
+        start_diagnostic_search(
             &mut controller,
             &FindDiagnostic {
                 query: "x".to_owned(),
@@ -323,14 +504,16 @@ mod tests {
                 other => panic!("unexpected {other:?}"),
             })
             .collect::<Vec<_>>();
-        assert_eq!(
-            steps,
-            vec![
-                None,
-                Some(FindStep::Here),
-                Some(FindStep::Previous),
-                Some(FindStep::Previous)
-            ]
+        assert_eq!(steps, vec![None, Some(FindStep::Here)]);
+        assert!(
+            controller.active_state().find().is_awaiting_answer(),
+            "the steps wait for the first answer"
         );
+
+        let mut steps_left = -2;
+        press_diagnostic_step(&mut controller, &mut steps_left);
+        press_diagnostic_step(&mut controller, &mut steps_left);
+        press_diagnostic_step(&mut controller, &mut steps_left);
+        assert_eq!(steps_left, 0, "one press per call, and none past the count");
     }
 }

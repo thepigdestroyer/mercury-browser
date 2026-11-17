@@ -125,6 +125,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
     // find
     find::connect_find_bar(&window, Rc::clone(&controller));
+    #[cfg(feature = "diagnostics")]
     let find_diagnostic = options
         .find
         .map(|diagnostic| find::start_find_diagnostic(&window, Rc::clone(&controller), diagnostic));
@@ -155,6 +156,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // Nothing may capture, pump or render while the engine shuts down, and the engine must be
     // gone before the window (and the renderer whose device Servo uses) is destroyed.
     drop(screenshot_timer);
+    #[cfg(feature = "diagnostics")]
     drop(find_diagnostic);
     shut_down_engine(exit_code);
     drop(window);

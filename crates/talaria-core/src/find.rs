@@ -23,6 +23,12 @@ pub struct FindRequest {
     pub query: String,
     pub match_case: bool,
     pub step: FindStep,
+    /// How many matches `Next` or `Previous` moves (presses made while the page was still
+    /// answering an earlier search); 1 for `Here`.
+    pub repeat: u32,
+    /// An explicit action (Return, a button, a shortcut) rather than typing: the script may spend
+    /// more time on it.
+    pub thorough: bool,
     /// The current match as last reported, for when the page's selection no longer marks it.
     pub current: Option<usize>,
 }
@@ -40,7 +46,8 @@ pub struct EndFindRequest {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct FindMatches {
     pub count: usize,
-    /// Zero-based; `None` when there are no matches.
+    /// Zero-based position in the document; `None` when there are no matches, or when the search
+    /// stopped at its limit, which leaves the position unknown.
     pub current: Option<usize>,
     /// The search stopped at its limit, so there may be more matches than `count`.
     pub truncated: bool,
@@ -66,20 +73,34 @@ pub struct FindSelection {
 /// What the bar shows next to the field.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum FindStatus {
-    /// Nothing searched for the current query and page yet.
+    /// Nothing searched for the current page yet.
     #[default]
     Idle,
     Matches(FindMatches),
     Failed,
+    /// The page has not answered the last search in time.
+    NotResponding,
 }
 
 impl FindStatus {
     fn current(&self) -> Option<usize> {
         match self {
             Self::Matches(matches) => matches.current,
-            Self::Idle | Self::Failed => None,
+            Self::Idle | Self::Failed | Self::NotResponding => None,
         }
     }
+}
+
+/// A search waiting for the page to answer the one before it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum PendingSearch {
+    Here {
+        thorough: bool,
+    },
+    /// Positive: Next that many times; negative: Previous.
+    Steps {
+        count: i64,
+    },
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -89,12 +110,16 @@ pub struct FindState {
     match_case: bool,
     status: FindStatus,
     next_request_id: u64,
+    /// At most one search is in the page at a time; later ones wait in `pending`.
     awaited_search: Option<u64>,
     awaited_selection: Option<u64>,
+    pending: Option<PendingSearch>,
     /// The query or page changed since the last search, so the next one starts `Here`.
     search_due: bool,
-    /// Set when a selection read asks for a search; the controller queues it.
-    search_requested: bool,
+    /// The query was typed on another document: it is shown, but only searched on request.
+    query_from_other_page: bool,
+    /// A search to queue now (after an answer or a selection read); the controller takes it.
+    follow_up: Option<FindRequest>,
     edited_since_open: bool,
     searched_since_open: bool,
     saved_selection: Option<String>,
@@ -117,9 +142,19 @@ impl FindState {
         &self.status
     }
 
-    /// Whether an answer from the page is still expected.
+    /// Whether an answer from the page is still expected, or a search waits to be sent.
     pub const fn is_awaiting_answer(&self) -> bool {
-        self.awaited_search.is_some() || self.awaited_selection.is_some()
+        self.awaited_search.is_some() || self.awaited_selection.is_some() || self.pending.is_some()
+    }
+
+    /// The search the page has not answered yet.
+    pub const fn awaited_search(&self) -> Option<u64> {
+        self.awaited_search
+    }
+
+    /// The query was carried over from another document and is not searched until the user asks.
+    pub const fn is_query_from_other_page(&self) -> bool {
+        self.query_from_other_page
     }
 
     /// Opens the bar and asks the page for its selection. `None` if it was already open.
@@ -144,30 +179,31 @@ impl FindState {
         true
     }
 
+    /// The user edited the field. The last status stays until the new query is answered.
     pub(crate) fn set_query(&mut self, query: &str) {
         self.edited_since_open = true;
+        self.query_from_other_page = false;
         if self.query == query {
             return;
         }
         self.query = query.to_owned();
-        self.status = FindStatus::Idle;
-        self.awaited_search = None;
+        if self.query.is_empty() {
+            self.status = FindStatus::Idle;
+        }
         self.search_due = true;
     }
 
-    /// The search a debounce timer or a selection read is waiting for, if any.
+    /// The search a debounce timer or a selection read is waiting for, if any. A query from
+    /// another document is never searched automatically.
     pub(crate) fn due_search(&mut self) -> Option<BrowserCommand> {
-        if !self.open || !self.search_due {
+        if !self.open || !self.search_due || self.query_from_other_page {
             return None;
         }
-        self.search(FindStep::Here)
+        self.search(FindStep::Here, 1, false)
     }
 
-    pub(crate) fn take_requested_search(&mut self) -> Option<BrowserCommand> {
-        if !std::mem::take(&mut self.search_requested) {
-            return None;
-        }
-        self.due_search()
+    pub(crate) fn take_follow_up(&mut self) -> Option<BrowserCommand> {
+        self.follow_up.take().map(BrowserCommand::Find)
     }
 
     /// Next or previous match; a query not searched yet is searched `Here` first. Reopens a
@@ -177,26 +213,26 @@ impl FindState {
             return None;
         }
         self.reopen();
+        self.query_from_other_page = false;
         if self.search_due {
-            return self.search(FindStep::Here);
+            return self.search(FindStep::Here, 1, true);
         }
-        self.search(if forward {
+        let step = if forward {
             FindStep::Next
         } else {
             FindStep::Previous
-        })
+        };
+        self.search(step, 1, true)
     }
 
     pub(crate) fn toggle_match_case(&mut self) -> Option<BrowserCommand> {
         self.match_case = !self.match_case;
-        let current = self.status.current();
-        self.status = FindStatus::Idle;
+        self.query_from_other_page = false;
         self.search_due = true;
-        let mut command = self.due_search();
-        if let Some(BrowserCommand::Find(request)) = &mut command {
-            request.current = current;
+        if !self.open {
+            return None;
         }
-        command
+        self.search(FindStep::Here, 1, true)
     }
 
     pub(crate) fn close(&mut self) -> Option<BrowserCommand> {
@@ -205,9 +241,7 @@ impl FindState {
         }
         self.open = false;
         self.status = FindStatus::Idle;
-        self.awaited_search = None;
-        self.awaited_selection = None;
-        self.search_requested = false;
+        self.forget_answers();
         let restore_selection = self.saved_selection.take();
         std::mem::take(&mut self.searched_since_open).then(|| {
             BrowserCommand::EndFind(EndFindRequest {
@@ -227,6 +261,20 @@ impl FindState {
             FindOutcome::Matches(matches) => FindStatus::Matches(matches),
             FindOutcome::Failed => FindStatus::Failed,
         };
+        let follow_up = match self.pending.take() {
+            Some(PendingSearch::Here { thorough }) => self.search(FindStep::Here, 1, thorough),
+            Some(PendingSearch::Steps { count }) => {
+                let step = if count > 0 {
+                    FindStep::Next
+                } else {
+                    FindStep::Previous
+                };
+                let repeat = u32::try_from(count.unsigned_abs()).unwrap_or(u32::MAX);
+                self.search(step, repeat, true)
+            }
+            None => None,
+        };
+        self.follow_up = find_request(follow_up);
     }
 
     pub(crate) fn apply_selection(&mut self, request_id: u64, selection: Option<FindSelection>) {
@@ -242,35 +290,83 @@ impl FindState {
             return;
         }
         if !text.is_empty() && text != self.query {
+            // Text from this page: no longer a query from another document.
             self.query = text;
-            self.status = FindStatus::Idle;
+            self.query_from_other_page = false;
         }
         self.search_due = true;
-        self.search_requested = true;
+        let follow_up = self.due_search();
+        self.follow_up = find_request(follow_up);
     }
 
-    /// The tab shows another document: its matches are gone.
+    /// The page has not answered `request_id` in time. Nothing more is sent to it until it
+    /// answers; the bar says so.
+    pub(crate) fn answer_overdue(&mut self, request_id: u64) {
+        if self.awaited_search == Some(request_id) {
+            self.status = FindStatus::NotResponding;
+        }
+    }
+
+    /// The tab shows another document, or reloads: its matches are gone, and a query typed on
+    /// the old document is not sent to the new one until the user asks.
     pub(crate) fn page_changed(&mut self) {
         self.status = FindStatus::Idle;
-        self.awaited_search = None;
+        self.forget_answers();
         self.saved_selection = None;
         self.search_due = true;
+        self.query_from_other_page = !self.query.is_empty();
     }
 
-    fn search(&mut self, step: FindStep) -> Option<BrowserCommand> {
+    fn forget_answers(&mut self) {
+        self.awaited_search = None;
+        self.awaited_selection = None;
+        self.pending = None;
+        self.follow_up = None;
+    }
+
+    /// Sends a search, or, while the page is still answering one, merges it into the pending
+    /// search: steps add up; a new query (`Here`) replaces steps.
+    fn search(&mut self, step: FindStep, repeat: u32, thorough: bool) -> Option<BrowserCommand> {
         if self.query.is_empty() {
             self.search_due = false;
             return None;
         }
+        self.search_due = false;
+        if self.awaited_search.is_some() {
+            let steps = i64::from(repeat);
+            self.pending = match (self.pending, step) {
+                (_, FindStep::Here) => Some(PendingSearch::Here { thorough }),
+                (Some(PendingSearch::Here { thorough }), _) => {
+                    Some(PendingSearch::Here { thorough })
+                }
+                (Some(PendingSearch::Steps { count }), FindStep::Next) => {
+                    Some(PendingSearch::Steps {
+                        count: count + steps,
+                    })
+                }
+                (Some(PendingSearch::Steps { count }), FindStep::Previous) => {
+                    Some(PendingSearch::Steps {
+                        count: count - steps,
+                    })
+                }
+                (None, FindStep::Next) => Some(PendingSearch::Steps { count: steps }),
+                (None, FindStep::Previous) => Some(PendingSearch::Steps { count: -steps }),
+            };
+            if self.pending == Some(PendingSearch::Steps { count: 0 }) {
+                self.pending = None;
+            }
+            return None;
+        }
         let id = self.next_id();
         self.awaited_search = Some(id);
-        self.search_due = false;
         self.searched_since_open = true;
         Some(BrowserCommand::Find(FindRequest {
             id,
             query: self.query.clone(),
             match_case: self.match_case,
             step,
+            repeat,
+            thorough,
             current: self.status.current(),
         }))
     }
@@ -278,6 +374,13 @@ impl FindState {
     fn next_id(&mut self) -> u64 {
         self.next_request_id += 1;
         self.next_request_id
+    }
+}
+
+fn find_request(command: Option<BrowserCommand>) -> Option<FindRequest> {
+    match command {
+        Some(BrowserCommand::Find(request)) => Some(request),
+        _ => None,
     }
 }
 

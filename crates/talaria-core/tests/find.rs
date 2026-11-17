@@ -29,14 +29,55 @@ fn matches(count: usize, current: Option<usize>) -> FindOutcome {
     })
 }
 
+/// A search started by typing, the debounce or a selection read.
 fn search(id: u64, query: &str, step: FindStep, current: Option<usize>) -> BrowserCommand {
     BrowserCommand::Find(FindRequest {
         id,
         query: query.to_owned(),
         match_case: false,
         step,
+        repeat: 1,
+        thorough: false,
         current,
     })
+}
+
+/// A search started by Return, a button or a shortcut.
+fn explicit(id: u64, query: &str, step: FindStep, current: Option<usize>) -> BrowserCommand {
+    explicit_repeat(id, query, step, 1, current)
+}
+
+fn explicit_repeat(
+    id: u64,
+    query: &str,
+    step: FindStep,
+    repeat: u32,
+    current: Option<usize>,
+) -> BrowserCommand {
+    BrowserCommand::Find(FindRequest {
+        id,
+        query: query.to_owned(),
+        match_case: false,
+        step,
+        repeat,
+        thorough: true,
+        current,
+    })
+}
+
+fn answer(
+    controller: &mut BrowserController,
+    tab_id: TabId,
+    request_id: u64,
+    outcome: FindOutcome,
+) {
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::FindResult {
+            request_id,
+            outcome,
+        },
+    );
 }
 
 /// Opens the bar, answers the selection read with no selection, and types `query`.
@@ -168,7 +209,8 @@ fn a_selection_read_after_the_user_typed_does_not_replace_the_query() {
 #[test]
 fn typing_is_searched_only_when_the_debounce_fires() {
     let (mut controller, tab_id) = ready_controller();
-    open_and_search(&mut controller, tab_id, "ne");
+    let id = open_and_search(&mut controller, tab_id, "ne");
+    answer(&mut controller, tab_id, id, matches(1, Some(0)));
 
     controller.set_find_query("nee");
     controller.set_find_query("need");
@@ -178,7 +220,7 @@ fn typing_is_searched_only_when_the_debounce_fires() {
     controller.run_due_find();
     assert_eq!(
         drain(&mut controller),
-        vec![search(3, "need", FindStep::Here, None)]
+        vec![search(3, "need", FindStep::Here, Some(0))]
     );
 }
 
@@ -195,14 +237,15 @@ fn next_and_previous_step_from_the_current_match() {
     );
 
     controller.find_next();
-    controller.find_previous();
-
     assert_eq!(
         drain(&mut controller),
-        vec![
-            search(3, "x", FindStep::Next, Some(2)),
-            search(4, "x", FindStep::Previous, Some(2)),
-        ]
+        vec![explicit(3, "x", FindStep::Next, Some(2))]
+    );
+    answer(&mut controller, tab_id, 3, matches(7, Some(3)));
+    controller.find_previous();
+    assert_eq!(
+        drain(&mut controller),
+        vec![explicit(4, "x", FindStep::Previous, Some(3))]
     );
 }
 
@@ -212,39 +255,26 @@ fn return_before_the_debounce_searches_the_new_query_from_here() {
     open_and_search(&mut controller, tab_id, "a");
     controller.set_find_query("ab");
 
+    answer(&mut controller, tab_id, 2, matches(2, Some(0)));
     controller.find_next();
 
     assert_eq!(
         drain(&mut controller),
-        vec![search(3, "ab", FindStep::Here, None)]
+        vec![explicit(3, "ab", FindStep::Here, Some(0))]
     );
     controller.run_due_find();
     assert_eq!(drain(&mut controller), vec![], "nothing left to debounce");
 }
 
 #[test]
-fn only_the_latest_result_is_shown() {
+fn answers_to_older_requests_are_ignored() {
     let (mut controller, tab_id) = ready_controller();
     let first = open_and_search(&mut controller, tab_id, "x");
-    controller.find_next();
-    drain(&mut controller);
 
-    controller.handle_event(
-        tab_id,
-        BrowserEvent::FindResult {
-            request_id: first,
-            outcome: matches(7, Some(0)),
-        },
-    );
+    answer(&mut controller, tab_id, first + 7, matches(7, Some(0)));
     assert_eq!(controller.active_state().find().status(), &FindStatus::Idle);
 
-    controller.handle_event(
-        tab_id,
-        BrowserEvent::FindResult {
-            request_id: first + 1,
-            outcome: matches(7, Some(1)),
-        },
-    );
+    answer(&mut controller, tab_id, first, matches(7, Some(1)));
     assert_eq!(
         controller.active_state().find().status(),
         &FindStatus::Matches(FindMatches {
@@ -256,7 +286,109 @@ fn only_the_latest_result_is_shown() {
 }
 
 #[test]
-fn a_new_query_clears_the_count() {
+fn one_search_at_a_time_and_presses_meanwhile_add_up() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+
+    controller.find_next();
+    controller.find_next();
+    controller.find_next();
+    controller.find_previous();
+    assert_eq!(
+        drain(&mut controller),
+        vec![],
+        "the page is still answering"
+    );
+    assert!(controller.active_state().find().is_awaiting_answer());
+
+    answer(&mut controller, tab_id, first, matches(7, Some(0)));
+    assert_eq!(
+        drain(&mut controller),
+        vec![explicit_repeat(first + 1, "x", FindStep::Next, 2, Some(0))]
+    );
+}
+
+#[test]
+fn presses_that_cancel_out_send_nothing() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    controller.find_next();
+    controller.find_previous();
+
+    answer(&mut controller, tab_id, first, matches(7, Some(0)));
+
+    assert_eq!(drain(&mut controller), vec![]);
+    assert!(!controller.active_state().find().is_awaiting_answer());
+}
+
+#[test]
+fn a_query_typed_meanwhile_is_searched_after_the_answer() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    controller.find_next();
+    controller.set_find_query("xy");
+    controller.run_due_find();
+    assert_eq!(drain(&mut controller), vec![]);
+
+    answer(&mut controller, tab_id, first, matches(7, Some(0)));
+
+    assert_eq!(
+        drain(&mut controller),
+        vec![search(first + 1, "xy", FindStep::Here, Some(0))]
+    );
+}
+
+#[test]
+fn a_page_that_does_not_answer_is_reported_and_gets_nothing_more() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    assert_eq!(
+        controller.active_state().find().awaited_search(),
+        Some(first)
+    );
+
+    controller.find_answer_overdue(tab_id, first + 1);
+    assert_eq!(controller.active_state().find().status(), &FindStatus::Idle);
+    controller.find_answer_overdue(tab_id, first);
+    assert_eq!(
+        controller.active_state().find().status(),
+        &FindStatus::NotResponding
+    );
+
+    controller.find_next();
+    controller.set_find_query("xy");
+    controller.run_due_find();
+    assert_eq!(
+        drain(&mut controller),
+        vec![],
+        "nothing is queued behind a stuck search"
+    );
+
+    answer(&mut controller, tab_id, first, matches(1, Some(0)));
+    assert_eq!(
+        drain(&mut controller),
+        vec![search(first + 1, "xy", FindStep::Here, Some(0))]
+    );
+}
+
+#[test]
+fn closing_drops_a_stuck_search_so_reopening_works() {
+    let (mut controller, tab_id) = ready_controller();
+    let first = open_and_search(&mut controller, tab_id, "x");
+    controller.find_answer_overdue(tab_id, first);
+    controller.close_find();
+    drain(&mut controller);
+
+    controller.find_next();
+
+    assert_eq!(
+        drain(&mut controller),
+        vec![explicit(first + 1, "x", FindStep::Next, None)]
+    );
+}
+
+#[test]
+fn a_new_query_keeps_the_last_status_until_it_is_answered() {
     let (mut controller, tab_id) = ready_controller();
     let id = open_and_search(&mut controller, tab_id, "x");
     controller.handle_event(
@@ -269,7 +401,14 @@ fn a_new_query_clears_the_count() {
 
     controller.set_find_query("xy");
 
-    assert_eq!(controller.active_state().find().status(), &FindStatus::Idle);
+    assert_eq!(
+        controller.active_state().find().status(),
+        &FindStatus::Matches(FindMatches {
+            count: 3,
+            current: Some(0),
+            truncated: false,
+        })
+    );
 }
 
 #[test]
@@ -300,7 +439,11 @@ fn toggling_match_case_searches_again_from_here() {
     controller.toggle_find_match_case();
 
     assert!(controller.active_state().find().match_case());
-    assert_eq!(controller.active_state().find().status(), &FindStatus::Idle);
+    assert_ne!(
+        controller.active_state().find().status(),
+        &FindStatus::Idle,
+        "no flicker"
+    );
     assert_eq!(
         drain(&mut controller),
         vec![BrowserCommand::Find(FindRequest {
@@ -308,6 +451,8 @@ fn toggling_match_case_searches_again_from_here() {
             query: "X".to_owned(),
             match_case: true,
             step: FindStep::Here,
+            repeat: 1,
+            thorough: true,
             current: Some(1),
         })]
     );
@@ -397,12 +542,153 @@ fn navigating_clears_the_count_but_keeps_the_query() {
     assert!(find.is_open());
     assert_eq!(find.query(), "x");
     assert_eq!(find.status(), &FindStatus::Idle);
+    assert!(find.is_query_from_other_page());
     controller.find_next();
     assert_eq!(
         drain(&mut controller),
-        vec![search(id + 1, "x", FindStep::Here, None)],
-        "the next step searches the new page from the top"
+        vec![explicit(id + 1, "x", FindStep::Here, None)],
+        "Return searches the new page"
     );
+    assert!(!controller.active_state().find().is_query_from_other_page());
+}
+
+#[test]
+fn an_old_query_is_never_sent_to_a_new_document_by_itself() {
+    let (mut controller, tab_id) = ready_controller();
+    open_and_search(&mut controller, tab_id, "secret");
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::AddressChanged {
+            url: "https://other.test/".to_owned(),
+        },
+    );
+
+    // The debounce firing late, and closing and reopening the bar with no selection.
+    controller.run_due_find();
+    controller.close_find();
+    controller.open_find();
+    let commands = drain(&mut controller);
+    let request_id = commands
+        .iter()
+        .find_map(|command| match command {
+            BrowserCommand::BeginFind { request_id } => Some(*request_id),
+            _ => None,
+        })
+        .expect("reopening reads the selection");
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::FindSelectionRead {
+            request_id,
+            selection: None,
+        },
+    );
+
+    assert!(
+        drain(&mut controller)
+            .iter()
+            .all(|command| !matches!(command, BrowserCommand::Find(_))),
+        "the old query is not searched"
+    );
+    let find = controller.active_state().find();
+    assert_eq!(find.query(), "secret", "it is shown, for the user to send");
+    assert!(find.is_query_from_other_page());
+
+    // Typing makes it the user's query for this page again.
+    controller.set_find_query("secrets");
+    controller.run_due_find();
+    assert_eq!(drain(&mut controller).len(), 1);
+}
+
+#[test]
+fn a_selection_on_the_new_page_is_searched() {
+    let (mut controller, tab_id) = ready_controller();
+    open_and_search(&mut controller, tab_id, "old");
+    controller.close_find();
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::AddressChanged {
+            url: "https://other.test/".to_owned(),
+        },
+    );
+    drain(&mut controller);
+
+    controller.open_find();
+    let [BrowserCommand::BeginFind { request_id }] = drain(&mut controller)[..] else {
+        panic!("opening reads the selection");
+    };
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::FindSelectionRead {
+            request_id,
+            selection: Some(FindSelection {
+                text: "fresh".to_owned(),
+                saved: None,
+            }),
+        },
+    );
+
+    assert_eq!(
+        drain(&mut controller),
+        vec![search(request_id + 1, "fresh", FindStep::Here, None)]
+    );
+}
+
+#[test]
+fn a_reload_clears_the_count_and_drops_pending_answers() {
+    let (mut controller, tab_id) = ready_controller();
+    let id = open_and_search(&mut controller, tab_id, "x");
+    answer(&mut controller, tab_id, id, matches(3, Some(0)));
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::LoadStateChanged {
+            state: talaria_core::LoadState::Loaded,
+        },
+    );
+    controller.find_next();
+    drain(&mut controller);
+
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::LoadStateChanged {
+            state: talaria_core::LoadState::Loading,
+        },
+    );
+
+    let find = controller.active_state().find();
+    assert_eq!(find.status(), &FindStatus::Idle);
+    assert!(!find.is_awaiting_answer());
+    answer(&mut controller, tab_id, id + 1, matches(3, Some(1)));
+    assert_eq!(controller.active_state().find().status(), &FindStatus::Idle);
+}
+
+#[test]
+fn navigating_forgets_a_pending_selection_read() {
+    let (mut controller, tab_id) = ready_controller();
+    controller.open_find();
+    let [BrowserCommand::BeginFind { request_id }] = drain(&mut controller)[..] else {
+        panic!("opening reads the selection");
+    };
+
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::AddressChanged {
+            url: "https://other.test/".to_owned(),
+        },
+    );
+    assert!(!controller.active_state().find().is_awaiting_answer());
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::FindSelectionRead {
+            request_id,
+            selection: Some(FindSelection {
+                text: "from the old page".to_owned(),
+                saved: Some("1:0|1:1".to_owned()),
+            }),
+        },
+    );
+
+    assert_eq!(controller.active_state().find().query(), "");
+    assert_eq!(drain(&mut controller), vec![]);
 }
 
 #[test]
@@ -542,7 +828,7 @@ fn stepping_with_a_closed_bar_reopens_it_without_reading_the_selection() {
     assert!(controller.active_state().find().is_open());
     assert_eq!(
         drain(&mut controller),
-        vec![search(id + 1, "x", FindStep::Next, None)]
+        vec![explicit(id + 1, "x", FindStep::Next, None)]
     );
 }
 

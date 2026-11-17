@@ -47,9 +47,19 @@ class FakeCharacterData extends FakeNode {
         this._data = data;
     }
     get data() {
+        dataReads.push(this._data.length);
         return this._data;
     }
+    get length() {
+        return this._data.length;
+    }
+    substringData(offset, count) {
+        return this._data.slice(offset, offset + count);
+    }
 }
+
+// The lengths of the text nodes whose whole `data` the script read.
+let dataReads = [];
 
 class FakeText extends FakeCharacterData {}
 
@@ -60,6 +70,8 @@ class FakeElement extends FakeNode {
         this._attributes = options.attributes ?? {};
         this._rendered = options.rendered ?? true;
         this._top = options.top ?? 0;
+        this._height = options.height ?? 20;
+        this._display = options.display ?? "block";
         this._shadow = null;
         this.scrolledWith = null;
     }
@@ -78,7 +90,7 @@ class FakeElement extends FakeNode {
         return { length: 1 };
     }
     getBoundingClientRect() {
-        return { top: this._top, bottom: this._top + 20, left: 0, right: 100 };
+        return { top: this._top, bottom: this._top + this._height, height: this._height, left: 0, right: 100 };
     }
     scrollIntoView(options) {
         this.scrolledWith = { block: options.block, inline: options.inline };
@@ -93,8 +105,18 @@ class FakeElement extends FakeNode {
         return this._shadow;
     }
     attachShadow(...children) {
-        this._shadow = new FakeNode(11).append(...children);
+        this._shadow = new FakeShadowRoot(this).append(...children);
         return this;
+    }
+}
+
+class FakeShadowRoot extends FakeNode {
+    constructor(host) {
+        super(11);
+        this._host = host;
+    }
+    get host() {
+        return this._host;
     }
 }
 
@@ -208,6 +230,21 @@ class FakeDocument extends FakeNode {
     getSelection() {
         return this._selection;
     }
+    elementFromPoint() {
+        return this._atTop ?? null;
+    }
+}
+
+function fakeWindow() {
+    return {
+        scrolledBy: null,
+        getComputedStyle(element) {
+            return { getPropertyValue: (name) => (name === "display" ? element._display : "") };
+        },
+        scrollBy(x, y) {
+            this.scrolledBy = [x, y];
+        },
+    };
 }
 
 function h(name, options, ...children) {
@@ -224,8 +261,8 @@ function page(...bodyChildren) {
     return document;
 }
 
-function run(document, request, prepare) {
-    const context = vm.createContext({ document, performance: { now: () => 0 } });
+function run(document, request, prepare, clock = () => 0, window = fakeWindow()) {
+    const context = vm.createContext({ document, window, performance: { now: clock } });
     if (prepare !== undefined) {
         vm.runInContext(prepare, context);
     }
@@ -241,9 +278,19 @@ function find(document, query, step = "here", options = {}) {
         query,
         matchCase: options.matchCase ?? false,
         step,
+        repeat: options.repeat ?? 1,
+        thorough: options.thorough ?? false,
         current: options.current ?? -1,
         restore: null,
-    }, options.prepare);
+    }, options.prepare, options.clock, options.window);
+}
+
+function select(document, node, start, end = start) {
+    const range = document.createRange();
+    range.setStart(node, start);
+    range.setEnd(node, end);
+    document.getSelection().removeAllRanges();
+    document.getSelection().addRange(range);
 }
 
 function selected(document) {
@@ -382,7 +429,7 @@ test("open shadow roots and slotted content are searched once", () => {
 test("the count stops at its limit and says so", () => {
     const document = page(h("p", "x ".repeat(1500)));
 
-    assert.equal(find(document, "x"), "ok;1000;0;1;1");
+    assert.equal(find(document, "x"), "ok;1000;-1;1;1", "the position is unknown when cut short");
 });
 
 test("a page that breaks selecting still gets a count", () => {
@@ -478,5 +525,128 @@ test("closing rejects a saved position that no longer exists", () => {
         run(document, { mode: "end", query: "needle", matchCase: false, restore: "9.9.9:0|9.9.9:1", step: "here", current: -1 }),
         "end;0",
     );
+    assert.equal(selected(document), "needle");
+});
+
+test("several presses at once move that many matches", () => {
+    const document = page(h("p", "x1 x2 x3 x4"));
+
+    assert.equal(find(document, "x"), "ok;4;0;0;1");
+    assert.equal(find(document, "x", "next", { repeat: 2 }), "ok;4;2;0;1");
+    assert.equal(find(document, "x", "previous", { repeat: 3 }), "ok;4;3;0;1");
+});
+
+test("previous with no selection goes to the match just above the view", () => {
+    const top = h("p", "x2");
+    const document = page(h("p", "x1"), top, h("p", "x3"));
+    document._atTop = top;
+
+    assert.equal(find(document, "x", "previous"), "ok;3;0;0;1");
+    document.getSelection().removeAllRanges();
+    assert.equal(find(document, "x"), "ok;3;1;0;1", "a new search starts at the top of the view");
+});
+
+test("a match on screen inside an element taller than the view is not scrolled to", () => {
+    // A text/plain page: one <pre> 10,000 px tall, scrolled so that 4,000..4,600 is in view.
+    const lines = [];
+    for (let i = 0; i < 1000; i++) {
+        lines.push(i === 410 || i === 900 ? "the needle line" : "filler line");
+    }
+    const pre = h("pre", { top: -4000, height: 10000 }, lines.join("\n"));
+    const document = page(pre);
+    const window = fakeWindow();
+    const text = pre.firstChild;
+    select(document, text, text.data.indexOf("needle"), text.data.indexOf("needle") + 6);
+
+    assert.equal(find(document, "needle", "here", { window }), "ok;2;0;0;1");
+    assert.equal(window.scrolledBy, null, "the selected match is already on screen");
+    assert.equal(pre.scrolledWith, null, "no jump to the middle of the element");
+
+    assert.equal(find(document, "needle", "next", { window }), "ok;2;1;0;1");
+    const offset = text.data.lastIndexOf("needle");
+    const expected = -4000 + (offset / text.data.length) * 10000 - 300;
+    assert.equal(window.scrolledBy[0], 0);
+    assert.ok(Math.abs(window.scrolledBy[1] - expected) < 1, `scrolled by ${window.scrolledBy[1]}, expected ${expected}`);
+});
+
+test("the time limit also stops a run of matches that are not rendered", () => {
+    // 30,000 matches in an element that is not rendered, each needing no new rendering check.
+    const document = page(h("div", { rendered: false }, "x ".repeat(30000)), h("p", "x"));
+    let ticks = 0;
+    const clock = () => ticks++;
+
+    assert.equal(find(document, "x", "here", { clock }), "ok;0;-1;1;0");
+});
+
+test("a long text node that is not rendered is skipped without being read", () => {
+    const hidden = "needle ".repeat(20000);
+    const document = page(h("div", { rendered: false }, hidden), h("p", "needle"));
+    dataReads = [];
+
+    assert.equal(find(document, "needle"), "ok;1;0;0;1");
+    assert.ok(!dataReads.includes(hidden.length), "the hidden text was not read");
+});
+
+test("the limit cuts the side of the page farthest from the selection", () => {
+    const filler = [];
+    for (let i = 0; i < 40; i++) {
+        filler.push(h("p", "filler ".repeat(8000)));
+    }
+    const last = h("p", "the last needle");
+    const document = page(h("p", "the first needle"), ...filler, last);
+
+    // Typing, with the selection at the end: the end is searched, the far beginning is cut.
+    select(document, last.firstChild, 4);
+    assert.equal(find(document, "needle"), "ok;1;-1;1;1");
+    assert.equal(selected(document), "needle");
+    assert.equal(document.getSelection().getRangeAt(0).startContainer, last.firstChild);
+
+    // Return gets a larger allowance and reaches both.
+    select(document, last.firstChild, 4);
+    assert.equal(find(document, "needle", "here", { thorough: true }), "ok;2;1;0;1");
+});
+
+test("a huge text node is read in part around the selection", () => {
+    const big = "a".repeat(3000000) + " needle " + "b".repeat(3000000);
+    const pre = h("pre", { height: 100000 }, big);
+    const document = page(pre);
+    select(document, pre.firstChild, 3000001);
+    dataReads = [];
+
+    assert.equal(find(document, "needle"), "ok;1;-1;1;1");
+    assert.equal(selected(document), "needle");
+    assert.ok(!dataReads.includes(big.length), "the node was not read whole");
+});
+
+test("text directly inside display: contents counts as rendered", () => {
+    const document = page(h("div", h("span", { rendered: false, display: "contents" }, "needle")));
+
+    assert.equal(find(document, "needle"), "ok;1;0;0;1");
+});
+
+test("text in the shadow root of a hidden host is not counted", () => {
+    const host = h("div", { rendered: false });
+    host.attachShadow("needle in a hidden host");
+    const shown = h("div");
+    shown.attachShadow("needle in a shown host");
+    const document = page(host, shown);
+
+    assert.equal(find(document, "needle"), "ok;1;0;0;1");
+});
+
+test("a search cut short with nothing found continues from where it stopped next time", () => {
+    const filler = [];
+    for (let i = 0; i < 40; i++) {
+        filler.push(h("p", "filler ".repeat(8000)));
+    }
+    const start = h("p", "start here");
+    const document = page(start, ...filler, h("p", "the needle at the end"));
+    select(document, start.firstChild, 0);
+
+    assert.equal(find(document, "needle"), "ok;0;-1;1;0", "the first press runs out of room");
+    const caret = document.getSelection().getRangeAt(0);
+    assert.notEqual(caret.startContainer, start.firstChild, "a caret marks where it stopped");
+
+    assert.equal(find(document, "needle"), "ok;1;-1;1;1", "the next press goes on from there");
     assert.equal(selected(document), "needle");
 });

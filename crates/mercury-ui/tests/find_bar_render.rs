@@ -248,5 +248,11 @@ fn the_find_bar_renders_and_answers_keys_and_clicks() {
     assert!(!harness.get_field_focused());
     fixture.key("x");
     assert_eq!(fixture.take_calls(), Vec::<String>::new());
+    harness.invoke_focus_field();
+    fixture.settle();
+    assert!(
+        !harness.get_field_focused(),
+        "a hidden bar's field cannot be focused"
+    );
     fixture.save("find-bar-hidden");
 }

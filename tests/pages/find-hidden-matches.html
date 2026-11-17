@@ -1,0 +1,27 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find: a million hidden matches</title>
+<style>body { font: 18px/1.5 sans-serif; margin: 24px; } .hidden { display: none; }</style>
+</head>
+<body>
+<p>About a million matches that are not rendered, then one that is.</p>
+<div class="hidden" id="one-node"></div>
+<div class="hidden" id="many-nodes"></div>
+<p>The rendered one: <b>x</b>.</p>
+<script>
+  // 500,000 matches in one long text node (skipped unread: it is not rendered), and 510,000 in
+  // 17 text nodes short enough to be read and matched.
+  document.getElementById("one-node").textContent = "x ".repeat(500000);
+  const many = document.getElementById("many-nodes");
+  for (let i = 0; i < 17; i++) {
+    const p = document.createElement("p");
+    p.textContent = "x ".repeat(30000);
+    many.appendChild(p);
+  }
+</script>
+<!-- Expected with `--find x` (Return): a bounded answer in well under a second; "1 of 1" if
+     the matching finishes within the limit, else "No matches so far". -->
+</body>
+</html>

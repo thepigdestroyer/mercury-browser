@@ -417,6 +417,8 @@ fn find_commands_reach_the_web_view() {
         query: "needle".to_owned(),
         match_case: true,
         step: FindStep::Previous,
+        repeat: 2,
+        thorough: true,
         current: Some(3),
     };
     let end = EndFindRequest {

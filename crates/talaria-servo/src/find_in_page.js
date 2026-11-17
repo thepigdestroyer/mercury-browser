@@ -3,25 +3,43 @@
 // world (there is no isolated world). The file is one expression, a function that `find_in_page.rs`
 // calls with a single request object; it answers with a short string.
 //
-// The page can see this script and its effects, and can interfere with it. The script therefore:
-// - reads every built-in it uses once, at the start of each call, from the prototypes of real
-//   objects (not from globals such as `window.Range`), and calls only those;
-// - keeps no state between calls and leaves no globals behind (the page's selection marks the
-//   current match);
-// - never evaluates text that came from the page, and answers with primitives only.
-// A page that replaced those built-ins before the call can still make find fail or report wrong
-// counts on that page. It cannot reach Mercury through this: the answer is parsed strictly.
+// The page can see this script and its effects, and can interfere with it.
+// - The page can always learn the query: the script selects the match in the page's own document,
+//   and the page can read its selection. It can also observe the query directly: `Reflect`,
+//   `Object`, `RegExp` and `performance` are read from the page's globals at the start of each
+//   call (there is no realm-safe source for them short of creating a new realm, such as an
+//   iframe, which the page would see too), and the query is given to `RegExp`. A page that
+//   replaced `RegExp` beforehand receives the query.
+// - The DOM built-ins (node, element, range and selection accessors and methods) are read once per
+//   call from the prototype chains of real objects (`document`, its root element, a new text node,
+//   a new range, the selection), never from globals such as `window.Range`, and are called only
+//   through the saved `Reflect.apply`. Dictionaries passed to the engine have no prototype.
+// - The script keeps no state between calls and leaves no globals behind (the page's selection
+//   marks the current match), never evaluates text that came from the page, and answers with
+//   primitives only.
+// A page that replaced built-ins before the call can therefore make find fail, report wrong
+// counts, or see the query, on that page. It cannot reach Mercury through this: the answer is parsed
+// strictly.
 //
-// Limits: at most MAX_NODES nodes are visited and the walk stops after TIME_BUDGET_MS; at most
-// MAX_MATCHES matches are counted. Either limit marks the answer as truncated.
+// Work is bounded per call. A search started by typing gets TYPING_LIMITS, an explicit one (Return,
+// a button, a shortcut) THOROUGH_LIMITS: a number of nodes, a time (checked in the walk and in the
+// matching), and a number of characters of text (a longer text node is read in part, around the
+// selection if it holds the selection). At most MAX_MATCHES matches are counted. The walk starts at
+// the selection (or the top of the view) and goes forward to the end of the document, then backward
+// from the start point to the beginning, so a limit cuts the parts farthest from the user. Hitting a
+// limit marks the answer as truncated, and the position of the current match is then unknown.
 (function (request) {
     "use strict";
 
-    var MAX_NODES = 200000;
+    var TYPING_LIMITS = { nodes: 200000, milliseconds: 50, characters: 2000000 };
+    var THOROUGH_LIMITS = { nodes: 2000000, milliseconds: 400, characters: 16000000 };
     var MAX_MATCHES = 1000;
-    var TIME_BUDGET_MS = 100;
     var MAX_SELECTION_TEXT = 256;
     var MAX_PATH_DEPTH = 256;
+    // Text nodes at least this long are checked for being rendered before they are read.
+    var LARGE_TEXT = 65536;
+    // About one line: a match this far above the bottom of the view counts as on screen.
+    var LINE_HEIGHT = 24;
     // Between blocks: never part of a match, so matches stay inside one block of text.
     var BLOCK_SEPARATOR = "\u0000";
 
@@ -107,6 +125,12 @@
         var removeAllRanges = required(selection, "removeAllRanges", false);
         var addRange = required(selection, "addRange", false);
         var selectionToString = required(selection, "toString", false);
+        var textLength = required(apply(createTextNode, doc, [""]), "length", true);
+        var substringData = required(apply(createTextNode, doc, [""]), "substringData", false);
+        var elementFromPoint = lookup(doc, "elementFromPoint", false);
+        var getComputedStyle = lookup(window, "getComputedStyle", false);
+        var scrollBy = lookup(window, "scrollBy", false);
+        var limits = request.thorough === true ? THOROUGH_LIMITS : TYPING_LIMITS;
 
         var startedAt = now();
 
@@ -192,6 +216,97 @@
             return "end;1";
         }
 
+        function overTime() {
+            return now() - startedAt > limits.milliseconds;
+        }
+
+        // The children the walk visits: an open shadow root's instead of the host's light children,
+        // a slot's assigned nodes (or its own children when nothing is assigned).
+        function walkChildren(item, type, name, list) {
+            var count = 0;
+            var source = item;
+            if (type === 1) {
+                var shadow = shadowRoot === null ? null : apply(shadowRoot, item, []);
+                if (shadow !== null && shadow !== undefined) {
+                    source = shadow;
+                } else if (name === "slot") {
+                    var assignedNodes = lookup(item, "assignedNodes", false);
+                    var assigned = assignedNodes === null
+                        ? null
+                        : apply(assignedNodes, item, [dictionary("flatten", true)]);
+                    if (assigned !== null && assigned.length > 0) {
+                        for (var a = 0; a < assigned.length && count <= limits.nodes; a++) {
+                            list[count++] = assigned[a];
+                        }
+                        return count;
+                    }
+                }
+            }
+            for (var child = apply(firstChild, source, []); child !== null; child = apply(nextSibling, child, [])) {
+                list[count++] = child;
+                if (count > limits.nodes) {
+                    break;
+                }
+            }
+            return count;
+        }
+
+        // Where the walk starts: the node holding the selection, else the element at the top of the
+        // view, else the root. Moved up out of shadow trees and slotted content, so that the path to
+        // the root is plain light DOM.
+        function startNode(anchorNode) {
+            var start = anchorNode;
+            if (start === null && elementFromPoint !== null) {
+                start = apply(elementFromPoint, doc, [apply(clientWidth, root, []) / 2, 1]);
+            }
+            if (start === null || start === undefined) {
+                return root;
+            }
+            for (var attempt = 0; attempt < MAX_PATH_DEPTH; attempt++) {
+                var moved = null;
+                var depth = 0;
+                for (var node = start; node !== root; node = apply(parentNode, node, [])) {
+                    if (node === null || depth++ > MAX_PATH_DEPTH) {
+                        return root;
+                    }
+                    var type = apply(nodeType, node, []);
+                    if (type === 11) {
+                        moved = hostOf(node);
+                        if (moved === null) {
+                            return root;
+                        }
+                    } else if (node !== start && type === 1 && (
+                        (shadowRoot !== null && apply(shadowRoot, node, []) !== null) ||
+                        classify(apply(localName, node, [])) === KIND_SKIP ||
+                        apply(hasAttribute, node, ["hidden"]))) {
+                        // Light content of a shadow host, or inside a skipped element: start at the
+                        // outermost such element, which the walk then handles as usual.
+                        moved = node;
+                    }
+                }
+                if (moved === null) {
+                    return start;
+                }
+                start = moved;
+            }
+            return root;
+        }
+
+        // The ancestors of `start`, from the root down to `start`.
+        function pathTo(start) {
+            var reversed = [];
+            var count = 0;
+            for (var node = start; node !== root; node = apply(parentNode, node, [])) {
+                reversed[count++] = node;
+            }
+            reversed[count++] = root;
+            var path = [];
+            for (var i = 0; i < count; i++) {
+                path[i] = reversed[count - 1 - i];
+            }
+            return path;
+        }
+
         function find() {
             if (typeof request.query !== "string" || request.query.length === 0) {
                 return "ok;0;-1;0;0";
@@ -199,99 +314,178 @@
             var anchorRange = currentRange();
             var anchorNode = anchorRange === null ? null : apply(startContainer, anchorRange, []);
             var anchorOffset = anchorRange === null ? 0 : apply(startOffset, anchorRange, []);
-            var anchor = -1;
-
-            // The text of the document as one string, with each text node's start in it.
-            var text = "";
-            var nodes = [];
-            var starts = [];
-            var lengths = [];
-            var nodeCount = 0;
+            var start = startNode(anchorNode);
+            var path = pathTo(start);
             var truncated = false;
             var visited = 0;
+            var characters = 0;
             var blockEnd = {};
-            var stack = [root];
-            var top = 1;
             var children = [];
+            // The last node the forward walk handled, and the offset just after what it read.
+            var lastNode = null;
+            var lastOffset = 0;
 
-            while (top > 0) {
-                var item = stack[--top];
-                stack[top] = undefined;
-                if (item === blockEnd) {
-                    text += BLOCK_SEPARATOR;
-                    continue;
-                }
-                visited++;
-                if (visited > MAX_NODES || ((visited & 1023) === 0 && now() - startedAt > TIME_BUDGET_MS)) {
-                    truncated = true;
-                    break;
-                }
-                var type = apply(nodeType, item, []);
-                if (type === 3) {
-                    var data = apply(textData, item, []);
-                    if (item === anchorNode) {
-                        anchor = text.length + anchorOffset;
+            // One walk: forward from `start` to the end of the document, or backward from just
+            // before `start` to its beginning. Records text nodes (with the part read) and block
+            // separators, in walk order.
+            function walk(forward) {
+                var entries = [];
+                var entryCount = 0;
+                var stack = [];
+                var top = 0;
+                for (var level = 0; level + 1 < path.length; level++) {
+                    var ancestor = path[level];
+                    if (classify(apply(localName, ancestor, [])) === KIND_BLOCK) {
+                        stack[top++] = blockEnd;
                     }
-                    if (data.length > 0) {
-                        nodes[nodeCount] = item;
-                        starts[nodeCount] = text.length;
-                        lengths[nodeCount] = data.length;
-                        nodeCount++;
-                        text += data;
+                    var siblingCount = walkChildren(ancestor, 1, "", children);
+                    var position = 0;
+                    while (position < siblingCount && children[position] !== path[level + 1]) {
+                        position++;
                     }
-                    continue;
+                    if (forward) {
+                        for (var after = siblingCount - 1; after > position; after--) {
+                            stack[top++] = children[after];
+                        }
+                    } else {
+                        for (var before = 0; before < position; before++) {
+                            stack[top++] = children[before];
+                        }
+                    }
                 }
-                if (type !== 1 && type !== 11) {
-                    continue;
+                if (forward) {
+                    stack[top++] = start;
                 }
-                var kind = KIND_INLINE;
-                var source = item;
-                var assigned = null;
-                if (type === 1) {
+                while (top > 0) {
+                    var item = stack[--top];
+                    stack[top] = undefined;
+                    if (item === blockEnd) {
+                        entries[entryCount++] = null;
+                        continue;
+                    }
+                    visited++;
+                    if (visited > limits.nodes || ((visited & 1023) === 0 && overTime())) {
+                        truncated = true;
+                        break;
+                    }
+                    var type = apply(nodeType, item, []);
+                    if (type === 3) {
+                        var length = apply(textLength, item, []);
+                        if (length === 0) {
+                            continue;
+                        }
+                        if (length >= LARGE_TEXT && !isRendered(item)) {
+                            continue;
+                        }
+                        var room = limits.characters - characters;
+                        var base = 0;
+                        var data;
+                        if (length <= room) {
+                            data = apply(textData, item, []);
+                        } else {
+                            // Read only part of a text node too long for what is left: around the
+                            // selection, else the part nearest the start point.
+                            truncated = true;
+                            if (item === anchorNode) {
+                                base = anchorOffset - (room >> 1);
+                                base = base < 0 ? 0 : base > length - room ? length - room : base;
+                            } else if (!forward) {
+                                base = length - room;
+                            }
+                            data = room > 0 ? apply(substringData, item, [base, room]) : "";
+                        }
+                        characters += data.length;
+                        entries[entryCount++] = { node: item, base: base, data: data, length: length };
+                        if (forward) {
+                            lastNode = item;
+                            lastOffset = base + data.length;
+                        }
+                        if (truncated) {
+                            break;
+                        }
+                        continue;
+                    }
+                    if (type !== 1) {
+                        continue;
+                    }
                     var name = apply(localName, item, []);
-                    kind = classify(name);
+                    var kind = classify(name);
+                    if (forward) {
+                        lastNode = item;
+                        lastOffset = 0;
+                    }
                     if (kind === KIND_SKIP || apply(hasAttribute, item, ["hidden"])) {
                         continue;
                     }
                     if (kind === KIND_BREAK) {
-                        text += "\n";
+                        entries[entryCount++] = "\n";
                         continue;
                     }
-                    // Open shadow roots are searched in place of the light children they render;
-                    // slots stand for the nodes assigned to them. Both are bounded like blocks, so a
-                    // match never spans two trees (a Range cannot).
-                    var shadow = shadowRoot === null ? null : apply(shadowRoot, item, []);
-                    if (shadow !== null && shadow !== undefined) {
-                        source = shadow;
-                        kind = KIND_BLOCK;
-                    } else if (name === "slot") {
-                        var assignedNodes = lookup(item, "assignedNodes", false);
-                        if (assignedNodes !== null) {
-                            assigned = apply(assignedNodes, item, [dictionary("flatten", true)]);
+                    var childCount = walkChildren(item, 1, name, children);
+                    // Shadow roots and slots are bounded like blocks, so a match never spans two
+                    // trees (a Range cannot).
+                    if (kind === KIND_BLOCK || childCount > 0 && (name === "slot" ||
+                        (shadowRoot !== null && apply(shadowRoot, item, []) !== null))) {
+                        entries[entryCount++] = null;
+                        stack[top++] = blockEnd;
+                    }
+                    if (forward) {
+                        while (childCount > 0) {
+                            stack[top++] = children[--childCount];
+                            children[childCount] = undefined;
                         }
-                        kind = KIND_BLOCK;
+                    } else {
+                        for (var c = 0; c < childCount; c++) {
+                            stack[top++] = children[c];
+                            children[c] = undefined;
+                        }
                     }
                 }
-                if (kind === KIND_BLOCK) {
+                return { list: entries, count: entryCount };
+            }
+
+            // The text as one string in document order from `start` (the forward walk), then a
+            // separator, then the beginning of the document up to `start` (the backward walk,
+            // reversed). `starts[i]` is where text node `i` begins in it.
+            var text = "";
+            var nodes = [];
+            var starts = [];
+            var bases = [];
+            var lengths = [];
+            var spans = [];
+            var nodeCount = 0;
+            var anchor = -1;
+
+            function append(entry) {
+                if (entry === null) {
                     text += BLOCK_SEPARATOR;
-                    stack[top++] = blockEnd;
-                }
-                var childCount = 0;
-                if (assigned !== null && assigned.length > 0) {
-                    for (var a = 0; a < assigned.length && a < MAX_NODES; a++) {
-                        children[childCount++] = assigned[a];
-                    }
+                } else if (typeof entry === "string") {
+                    text += entry;
                 } else {
-                    for (var child = apply(firstChild, source, []); child !== null; child = apply(nextSibling, child, [])) {
-                        children[childCount++] = child;
-                        if (childCount > MAX_NODES) {
-                            break;
-                        }
+                    if (entry.node === anchorNode && anchorOffset >= entry.base) {
+                        anchor = text.length + anchorOffset - entry.base;
                     }
+                    nodes[nodeCount] = entry.node;
+                    starts[nodeCount] = text.length;
+                    bases[nodeCount] = entry.base;
+                    lengths[nodeCount] = entry.length;
+                    spans[nodeCount] = entry.data.length;
+                    nodeCount++;
+                    text += entry.data;
                 }
-                while (childCount > 0) {
-                    stack[top++] = children[--childCount];
-                    children[childCount] = undefined;
+            }
+
+            var forwardEntries = walk(true);
+            var forwardCut = truncated;
+            for (var f = 0; f < forwardEntries.count; f++) {
+                append(forwardEntries.list[f]);
+            }
+            text += BLOCK_SEPARATOR;
+            var backwardStart = text.length;
+            if (!truncated) {
+                var backwardEntries = walk(false);
+                for (var b = backwardEntries.count - 1; b >= 0; b--) {
+                    append(backwardEntries.list[b]);
                 }
             }
 
@@ -301,7 +495,11 @@
             var matchEnds = [];
             var count = 0;
             var visibility = [];
-            for (;;) {
+            for (var iteration = 1; ; iteration++) {
+                if ((iteration & 63) === 0 && overTime()) {
+                    truncated = true;
+                    break;
+                }
                 var found = apply(regExpExec, expression, [text]);
                 if (found === null) {
                     break;
@@ -312,11 +510,17 @@
                     expression.lastIndex = matchStart + 1;
                     continue;
                 }
-                var startNode = nodeAt(starts, nodeCount, matchStart);
-                if (startNode < 0 || !isRendered(startNode)) {
+                var startIndex = nodeAt(starts, nodeCount, matchStart);
+                if (startIndex < 0) {
                     continue;
                 }
-                if (count === MAX_MATCHES || ((count & 63) === 63 && now() - startedAt > TIME_BUDGET_MS)) {
+                if (visibility[startIndex] === undefined) {
+                    visibility[startIndex] = isRendered(nodes[startIndex]);
+                }
+                if (!visibility[startIndex]) {
+                    continue;
+                }
+                if (count === MAX_MATCHES) {
                     truncated = true;
                     break;
                 }
@@ -325,103 +529,191 @@
                 count++;
             }
 
-            function isRendered(index) {
-                if (visibility[index] === undefined) {
-                    var parent = apply(parentNode, nodes[index], []);
-                    visibility[index] =
-                        parent === null || apply(nodeType, parent, []) !== 1 ||
-                        apply(getClientRects, parent, []).length > 0;
-                }
-                return visibility[index];
-            }
-
             if (count === 0) {
+                if (truncated) {
+                    // Nothing found before a limit: leave a caret where the walk stopped (the end of
+                    // what the forward walk read, else the top of the document, which the backward
+                    // walk did not reach), so the next search goes on from there.
+                    try {
+                        var caret = apply(createRange, doc, []);
+                        var caretNode = forwardCut && lastNode !== null ? lastNode : root;
+                        var caretOffset = forwardCut && lastNode !== null ? lastOffset : 0;
+                        apply(setStart, caret, [caretNode, caretOffset]);
+                        apply(setEnd, caret, [caretNode, caretOffset]);
+                        apply(removeAllRanges, selection, []);
+                        apply(addRange, selection, [caret]);
+                    } catch (error) {
+                        // Only the continuation is lost.
+                    }
+                }
                 return "ok;0;-1;" + (truncated ? 1 : 0) + ";0";
             }
 
-            var current = chooseMatch(request.step, anchor, typeof request.current === "number" ? request.current : -1);
+            // Matches from the forward walk come first; those from the backward walk come before
+            // them in the document.
+            var forwardMatches = 0;
+            while (forwardMatches < count && matchStarts[forwardMatches] < backwardStart) {
+                forwardMatches++;
+            }
+            var backwardMatches = count - forwardMatches;
+            function documentIndex(index) {
+                return index >= forwardMatches ? index - forwardMatches : index + backwardMatches;
+            }
+            function fromDocumentIndex(position) {
+                return position < backwardMatches ? position + forwardMatches : position - backwardMatches;
+            }
+
+            var repeat = typeof request.repeat === "number" && request.repeat >= 1 ? request.repeat : 1;
+            var current = chooseMatch(request.step, typeof request.current === "number" ? request.current : -1);
             var selected = 0;
             try {
                 var first = nodeAt(starts, nodeCount, matchStarts[current]);
                 var last = nodeAt(starts, nodeCount, matchEnds[current] - 1);
                 var range = apply(createRange, doc, []);
                 // A match can begin or end on the line break of a `<br>`, which is in no text node.
-                apply(setStart, range, [nodes[first], smaller(matchStarts[current] - starts[first], lengths[first])]);
-                apply(setEnd, range, [nodes[last], smaller(matchEnds[current] - starts[last], lengths[last])]);
+                var startOffsetInNode = bases[first] + smaller(matchStarts[current] - starts[first], spans[first]);
+                apply(setStart, range, [nodes[first], startOffsetInNode]);
+                apply(setEnd, range, [nodes[last], bases[last] + smaller(matchEnds[current] - starts[last], spans[last])]);
                 apply(removeAllRanges, selection, []);
                 apply(addRange, selection, [range]);
                 selected = 1;
-                reveal(nodes[first]);
+                reveal(nodes[first], startOffsetInNode, lengths[first]);
             } catch (error) {
                 // The count stands; only selecting or scrolling failed.
             }
-            return "ok;" + count + ";" + current + ";" + (truncated ? 1 : 0) + ";" + selected;
+            var position = truncated ? -1 : documentIndex(current);
+            return "ok;" + count + ";" + position + ";" + (truncated ? 1 : 0) + ";" + selected;
 
-            function chooseMatch(step, anchorAt, previous) {
-                var index;
-                if (anchorAt >= 0) {
+            // In cyclic order from the anchor: the matches after it, then the ones before it.
+            function chooseMatch(step, previous) {
+                var rank;
+                if (anchor >= 0) {
+                    var before = 0;
+                    while (before < count && matchStarts[before] < anchor) {
+                        before++;
+                    }
                     if (step === "previous") {
-                        for (index = count - 1; index >= 0 && matchStarts[index] >= anchorAt; index--) {}
-                        return index >= 0 ? index : count - 1;
+                        rank = count - repeat;
+                    } else {
+                        var at = before < count && matchStarts[before] === anchor;
+                        rank = step === "next" ? (at ? 1 : 0) + repeat - 1 : 0;
                     }
-                    for (index = 0; index < count; index++) {
-                        if (step === "next" ? matchStarts[index] > anchorAt : matchStarts[index] >= anchorAt) {
-                            return index;
-                        }
-                    }
-                    return 0;
+                    return (((rank % count) + count) % count + before) % count;
                 }
-                if (previous >= 0) {
-                    if (step === "next") {
-                        return (previous + 1) % count;
-                    }
-                    if (step === "previous") {
-                        return (previous + count - 1) % count;
-                    }
-                    return previous < count ? previous : count - 1;
+                if (previous >= 0 && !truncated) {
+                    var target = step === "next" ? previous + repeat
+                        : step === "previous" ? previous - repeat
+                        : previous < count ? previous : count - 1;
+                    return fromDocumentIndex(((target % count) + count) % count);
                 }
                 if (step === "previous") {
-                    return count - 1;
+                    return ((count - repeat) % count + count) % count;
                 }
-                return firstInView();
+                rank = firstInView() + (step === "next" ? repeat - 1 : 0);
+                return rank % count;
             }
 
-            // The first match whose element is not above the viewport (matches are in document
-            // order, which is close enough to top-to-bottom for a binary search).
+            // The first match of the forward walk that is not above the view (matches there are in
+            // document order, which is close enough to top-to-bottom for a binary search).
             function firstInView() {
                 var low = 0;
-                var high = count;
+                var high = forwardMatches;
                 while (low < high) {
                     var middle = (low + high) >> 1;
-                    var node = nodes[nodeAt(starts, nodeCount, matchStarts[middle])];
-                    var parent = apply(parentNode, node, []);
-                    var below = true;
-                    if (parent !== null && apply(nodeType, parent, []) === 1) {
-                        below = apply(getBoundingClientRect, parent, []).bottom > 0;
-                    }
-                    if (below) {
+                    var index = nodeAt(starts, nodeCount, matchStarts[middle]);
+                    var estimate = matchPosition(nodes[index], bases[index] + matchStarts[middle] - starts[index], lengths[index]);
+                    if (estimate === null || estimate.bottom > 0) {
                         high = middle;
                     } else {
                         low = middle + 1;
                     }
                 }
-                return low < count ? low : 0;
+                return low < forwardMatches ? low : 0;
             }
         }
 
-        // Scrolls the match's element to the middle of the view, unless it is already in view.
-        function reveal(textNode) {
+        // Whether the text node is rendered: its parent element has boxes; an element with
+        // `display: contents` has none of its own, so its parent decides; text directly in a shadow
+        // root goes by the host.
+        function isRendered(textNode) {
+            var parent = apply(parentNode, textNode, []);
+            for (var depth = 0; depth < 64; depth++) {
+                if (parent === null) {
+                    return true;
+                }
+                var type = apply(nodeType, parent, []);
+                if (type === 11) {
+                    parent = hostOf(parent);
+                    continue;
+                }
+                if (type !== 1) {
+                    return true;
+                }
+                if (apply(getClientRects, parent, []).length > 0) {
+                    return true;
+                }
+                if (displayOf(parent) !== "contents") {
+                    return false;
+                }
+                parent = apply(parentNode, parent, []);
+            }
+            return true;
+        }
+
+        function hostOf(shadow) {
+            var host = lookup(shadow, "host", true);
+            return host === null ? null : apply(host, shadow, []);
+        }
+
+        function displayOf(element) {
+            if (getComputedStyle === null) {
+                return "";
+            }
+            var style = apply(getComputedStyle, window, [element]);
+            var getPropertyValue = style === null ? null : lookup(style, "getPropertyValue", false);
+            return getPropertyValue === null ? "" : apply(getPropertyValue, style, ["display"]);
+        }
+
+        // The match's estimated place in the view. In an element taller than the view (a long
+        // `<pre>`, a `text/plain` page) the match is placed in proportion to its offset in its
+        // text node, as Servo 0.8.0 cannot measure a range.
+        function matchPosition(textNode, offset, length) {
             var element = apply(parentNode, textNode, []);
             if (element === null || apply(nodeType, element, []) !== 1) {
-                return;
+                return null;
             }
             var rect = apply(getBoundingClientRect, element, []);
             var height = apply(clientHeight, root, []);
-            var width = apply(clientWidth, root, []);
-            if (rect.top >= 0 && rect.bottom <= height && rect.left >= 0 && rect.right <= width) {
+            if (rect.height <= height || length === 0) {
+                return { element: element, rect: rect, tall: false, top: rect.top, bottom: rect.bottom };
+            }
+            var top = rect.top + (offset / length) * rect.height;
+            return { element: element, rect: rect, tall: true, top: top, bottom: top + LINE_HEIGHT };
+        }
+
+        // Brings the match into view, unless it is already on screen.
+        function reveal(textNode, offset, length) {
+            var place = matchPosition(textNode, offset, length);
+            if (place === null) {
                 return;
             }
-            apply(scrollIntoView, element, [dictionary("block", "center", "inline", "nearest")]);
+            var height = apply(clientHeight, root, []);
+            var width = apply(clientWidth, root, []);
+            var rect = place.rect;
+            if (!place.tall) {
+                if (rect.top >= 0 && rect.bottom <= height && rect.left >= 0 && rect.right <= width) {
+                    return;
+                }
+                apply(scrollIntoView, place.element, [dictionary("block", "center", "inline", "nearest")]);
+                return;
+            }
+            // A tall element: scroll only if the estimated place is off screen, and then to it.
+            if (rect.top < height && rect.bottom > 0 && place.top >= 0 && place.bottom <= height) {
+                return;
+            }
+            if (scrollBy !== null) {
+                apply(scrollBy, window, [0, place.top - height / 2]);
+            }
         }
 
         // "1.0.3:5": child indices from the root element, then an offset.

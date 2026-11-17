@@ -342,8 +342,8 @@ impl BrowserController {
             tab.mark_engine_ready();
         }
         tab.state_mut().apply(event);
-        // find: a selection read can ask for a search
-        if let Some(command) = tab.state_mut().find_mut().take_requested_search() {
+        // find: an answer or a selection read can ask for the next search
+        if let Some(command) = tab.state_mut().find_mut().take_follow_up() {
             self.queue_command_for(tab_id, command);
         }
         true
@@ -383,6 +383,13 @@ impl BrowserController {
     pub fn toggle_find_match_case(&mut self) {
         let command = self.active_find_mut().toggle_match_case();
         self.queue_find_command(command);
+    }
+
+    /// The page has not answered find request `request_id` in time (a desktop timer decides).
+    pub fn find_answer_overdue(&mut self, tab_id: TabId, request_id: u64) {
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.state_mut().find_mut().answer_overdue(request_id);
+        }
     }
 
     pub fn close_find(&mut self) {

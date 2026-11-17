@@ -270,6 +270,10 @@ impl BrowserState {
                     // find
                     self.find.page_changed();
                 }
+                // find: a load starting (a reload too) replaces the document
+                if state == LoadState::Loading && self.load_state != LoadState::Loading {
+                    self.find.page_changed();
+                }
                 self.load_state = state;
             }
             BrowserEvent::HistoryChanged {

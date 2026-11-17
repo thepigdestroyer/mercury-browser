@@ -76,9 +76,12 @@ export component FindBar inherits Rectangle {
     callback close();
     callback toggle-match-case();
 
+    // Does nothing while the bar is hidden, so an invisible field never takes the keys.
     public function focus-field() {
-        field.focus();
-        field.select-all();
+        if root.shown {
+            field.focus();
+            field.select-all();
+        }
     }
 
     public function select-all() {

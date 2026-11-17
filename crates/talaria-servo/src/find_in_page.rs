@@ -22,6 +22,8 @@ pub(crate) fn begin_script() -> String {
         "query": "",
         "matchCase": false,
         "step": "here",
+        "repeat": 1,
+        "thorough": false,
         "current": -1,
         "restore": null,
     }))
@@ -37,6 +39,8 @@ pub(crate) fn find_script(request: &FindRequest) -> String {
             FindStep::Next => "next",
             FindStep::Previous => "previous",
         },
+        "repeat": request.repeat,
+        "thorough": request.thorough,
         "current": request.current.map_or(-1, |current| current as i64),
         "restore": null,
     }))
@@ -48,6 +52,8 @@ pub(crate) fn end_script(request: &EndFindRequest) -> String {
         "query": request.query,
         "matchCase": request.match_case,
         "step": "here",
+        "repeat": 1,
+        "thorough": false,
         "current": -1,
         "restore": request.restore_selection,
     }))
@@ -101,7 +107,8 @@ fn evaluation_error_kind(error: &JavaScriptEvaluationError) -> &'static str {
     }
 }
 
-/// `ok;<count>;<current or -1>;<truncated 0|1>;<selected 0|1>`.
+/// `ok;<count>;<current or -1>;<truncated 0|1>;<selected 0|1>`. The current match's position is
+/// -1 when there are no matches, or when the search was cut short (truncated).
 fn parse_find_answer(answer: &str) -> FindOutcome {
     parse_matches(answer).map_or(FindOutcome::Failed, FindOutcome::Matches)
 }
@@ -121,6 +128,8 @@ fn parse_matches(answer: &str) -> Option<FindMatches> {
     let current = match (count, current) {
         (0, "-1") => None,
         (0, _) => return None,
+        (_, "-1") if truncated => None,
+        (_, _) if truncated => return None,
         (_, current) => Some(
             current
                 .parse::<usize>()
@@ -185,10 +194,16 @@ mod tests {
     fn answers_with_matches_are_parsed() {
         assert_eq!(parse_find_answer("ok;7;2;0;1"), matches(7, Some(2), false));
         assert_eq!(
-            parse_find_answer("ok;1000;999;1;0"),
-            matches(1000, Some(999), true)
+            parse_find_answer("ok;1000;-1;1;0"),
+            matches(1000, None, true)
         );
         assert_eq!(parse_find_answer("ok;0;-1;0;0"), matches(0, None, false));
+        assert_eq!(parse_find_answer("ok;0;-1;1;0"), matches(0, None, true));
+        assert_eq!(
+            parse_find_answer("ok;12;-1;1;1"),
+            matches(12, None, true),
+            "a search cut short does not know the match's position"
+        );
     }
 
     #[test]
@@ -199,6 +214,7 @@ mod tests {
             "ok",
             "ok;3;3;0;1",
             "ok;3;-1;0;1",
+            "ok;3;5;1;1",
             "ok;0;0;0;0",
             "ok;1001;0;1;1",
             "ok;2;1;2;1",
@@ -272,6 +288,8 @@ mod tests {
             query: "\"); alert(1); (\"\u{2028}".to_owned(),
             match_case: true,
             step: FindStep::Previous,
+            repeat: 3,
+            thorough: true,
             current: Some(4),
         });
 
@@ -288,6 +306,8 @@ mod tests {
                 "query": "\"); alert(1); (\"\u{2028}",
                 "matchCase": true,
                 "step": "previous",
+                "repeat": 3,
+                "thorough": true,
                 "current": 4,
                 "restore": null,
             })
