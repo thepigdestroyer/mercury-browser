@@ -617,10 +617,10 @@ fn a_remembered_permission_decision_answers_later_requests_from_the_site() {
     receive(
         &mut controller,
         tab_id,
-        permission(4, PAGE, PagePermission::Geolocation),
+        permission(4, PAGE, PagePermission::Notifications),
     );
 
-    // Request 4 is for geolocation, which is denied without a prompt anyway.
+    // Request 4 is for notifications, which are denied without a prompt anyway.
     assert_eq!(
         drain(&mut controller),
         vec![
@@ -859,13 +859,17 @@ const EVERY_PERMISSION: [PagePermission; 13] = [
 ];
 
 #[test]
-fn only_persistent_storage_is_asked_and_every_other_permission_is_denied_without_asking() {
+fn persistent_storage_and_geolocation_are_asked_and_every_other_permission_is_denied_without_asking()
+ {
     for (index, feature) in EVERY_PERMISSION.into_iter().enumerate() {
         let (mut controller, tab_id) = ready_controller();
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
-        if feature == PagePermission::PersistentStorage {
+        if matches!(
+            feature,
+            PagePermission::PersistentStorage | PagePermission::Geolocation
+        ) {
             assert!(feature.is_promptable());
             assert_eq!(pending_id(&controller, tab_id), Some(id), "{feature:?}");
             assert!(drain(&mut controller).is_empty(), "{feature:?}");

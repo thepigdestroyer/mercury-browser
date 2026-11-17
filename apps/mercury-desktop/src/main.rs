@@ -206,7 +206,7 @@ fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeO
         gpu_canvas: options.gpu_canvas,
         config_dir: profile.servo_config_dir(),
         experimental_web_features: options.experimental_web_features,
-        // geolocation: off, except MERCURY_FAKE_GEOLOCATION in automated runs
+        // geolocation: the system's in normal runs; off or MERCURY_FAKE_GEOLOCATION when automated
         geolocation: geolocation::setup_for_this_run(options.is_automated()),
         // settings-ui: filled in by `settings::with_privacy`.
         ..RuntimeOptions::default()
@@ -384,6 +384,8 @@ mod tests {
                 gpu_canvas: false,
                 config_dir: Some(root.join("servo")),
                 experimental_web_features: false,
+                // geolocation: a normal run uses the system's location service
+                geolocation: talaria_servo::GeolocationSetup::System,
                 ..RuntimeOptions::default()
             }
         );

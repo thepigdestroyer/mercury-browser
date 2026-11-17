@@ -67,16 +67,17 @@ pub enum PagePermission {
 
 impl PagePermission {
     /// Whether the user is asked. Everything else is denied without a prompt, including any
-    /// variant added later. Only persistent storage does something in Mercury today:
+    /// variant added later. Only persistent storage and geolocation do something in Mercury
+    /// today (geolocation only in normal runs; automated runs keep it off):
     /// - notifications, push, background sync: no notification or service-worker UI yet;
     /// - camera, microphone, speaker, device info: WebRTC and `getUserMedia` are off;
     /// - MIDI, Bluetooth, gamepad: no device support is built or exposed;
-    /// - geolocation and screen wake lock: their engine preferences (`dom_geolocation_enabled`,
-    ///   `dom_wakelock_enabled`) are off. Add them here when they are turned on.
+    /// - screen wake lock: its engine preference (`dom_wakelock_enabled`) is off. Add it here
+    ///   when it is turned on.
     ///
     /// A page can still name any of these in `navigator.permissions.request()`.
     pub const fn is_promptable(self) -> bool {
-        matches!(self, Self::PersistentStorage)
+        matches!(self, Self::PersistentStorage | Self::Geolocation)
     }
 
     /// Completes "<site> wants to …".

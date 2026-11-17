@@ -7,7 +7,9 @@
 //!   reports that error, as macOS refusing access, a failed fix or a time-out would.
 //! - `deny`: refuse the permission, as the user would in the prompt.
 //!
-//! Honoured only in `--screenshot` and `--background` runs. Otherwise geolocation stays off.
+//! Honoured only in `--screenshot` and `--background` runs. Without it, automated runs keep
+//! geolocation off, so no automated run ever reaches CoreLocation; normal runs use the
+//! system's location service behind Mercury's permission prompt.
 
 use talaria_servo::{
     FakeLocation, FixedPosition, GeolocationDiagnostic, GeolocationSetup, LocationError,
@@ -18,9 +20,13 @@ const FAKE_GEOLOCATION_VARIABLE: &str = "MERCURY_FAKE_GEOLOCATION";
 /// This run's geolocation setup, from the environment.
 pub(crate) fn setup_for_this_run(automated: bool) -> GeolocationSetup {
     let variable = std::env::var(FAKE_GEOLOCATION_VARIABLE).ok();
-    match setup(automated, variable.as_deref()) {
+    setup_or_fallback(automated, variable.as_deref())
+}
+
+fn setup_or_fallback(automated: bool, variable: Option<&str>) -> GeolocationSetup {
+    match setup(automated, variable) {
         Ok(setup) => {
-            if setup != GeolocationSetup::Off {
+            if matches!(setup, GeolocationSetup::Diagnostic(_)) {
                 log::warn!(
                     "{FAKE_GEOLOCATION_VARIABLE}: pages get a fake location in this automated run"
                 );
@@ -29,16 +35,22 @@ pub(crate) fn setup_for_this_run(automated: bool) -> GeolocationSetup {
         }
         Err(message) => {
             log::warn!("{FAKE_GEOLOCATION_VARIABLE} is ignored: {message}");
-            GeolocationSetup::Off
+            fallback(automated)
         }
     }
 }
 
-/// Geolocation stays off until the permission prompt can ask about it (see the report of the
-/// geolocation lane for what to change when it does).
+fn fallback(automated: bool) -> GeolocationSetup {
+    if automated {
+        GeolocationSetup::Off
+    } else {
+        GeolocationSetup::System
+    }
+}
+
 fn setup(automated: bool, variable: Option<&str>) -> Result<GeolocationSetup, String> {
     let Some(variable) = variable else {
-        return Ok(GeolocationSetup::Off);
+        return Ok(fallback(automated));
     };
     if !automated {
         return Err("only --screenshot and --background runs use it".to_owned());
@@ -89,15 +101,31 @@ mod tests {
     }
 
     #[test]
-    fn without_the_variable_geolocation_is_off() {
+    fn normal_runs_use_the_system_and_automated_runs_never_do() {
+        assert_eq!(setup(false, None), Ok(GeolocationSetup::System));
         assert_eq!(setup(true, None), Ok(GeolocationSetup::Off));
-        assert_eq!(setup(false, None), Ok(GeolocationSetup::Off));
     }
 
     #[test]
     fn the_variable_counts_only_in_automated_runs() {
         assert!(setup(false, Some("allow:1,2,3")).is_err());
         assert!(setup(false, Some("deny")).is_err());
+        assert_eq!(
+            setup_or_fallback(false, Some("allow:1,2,3")),
+            GeolocationSetup::System
+        );
+    }
+
+    #[test]
+    fn a_malformed_variable_leaves_automated_runs_off() {
+        assert_eq!(
+            setup_or_fallback(true, Some("allow:x")),
+            GeolocationSetup::Off
+        );
+        assert_eq!(
+            setup_or_fallback(false, Some("allow:x")),
+            GeolocationSetup::System
+        );
     }
 
     #[test]
