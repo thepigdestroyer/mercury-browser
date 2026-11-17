@@ -594,6 +594,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
         self.send_browser_event(BrowserEvent::AddressChanged {
             url: display_url(&url),
         });
+        // history
+        self.page_feedback.set_address(display_url(&url));
         // tabs: a same-document navigation keeps the document's title and icon
         if self.page_feedback.address_changed(web_view.load_status()) {
             self.read_document_title(&web_view);
