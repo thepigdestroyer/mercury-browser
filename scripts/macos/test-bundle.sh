@@ -18,6 +18,8 @@ STRICT="$RESOURCES/entitlements.plist"
 ADHOC="$RESOURCES/entitlements-adhoc.plist"
 JIT="com.apple.security.cs.allow-jit=<true/> com.apple.security.cs.allow-unsigned-executable-memory=<true/>"
 NO_VALIDATION="com.apple.security.cs.disable-library-validation=<true/>"
+LOCATION="com.apple.security.personal-information.location=<true/>"
+LOCATION_WORDING="Websites you allow can ask for your location."
 failures=0
 
 check() {
@@ -74,9 +76,17 @@ check "--identity without a value is refused" "bundle: error: --identity needs a
     "$(code=0; output="$(scripts/macos/bundle.sh --identity 2>&1)" || code=$?; printf '%s (exit %s)' "$output" "$code")"
 
 # ── What the entitlement files grant ──────────────────────────────────────
-check "strict entitlements grant only the JIT keys" "$JIT " "$(plist_grants "$STRICT" | tr '\n' ' ')"
-check "ad-hoc entitlements add only library validation" "$JIT $NO_VALIDATION " \
+check "strict entitlements grant only the JIT keys and location" "$JIT $LOCATION " \
+    "$(plist_grants "$STRICT" | tr '\n' ' ')"
+check "ad-hoc entitlements add only library validation" "$JIT $NO_VALIDATION $LOCATION " \
     "$(plist_grants "$ADHOC" | tr '\n' ' ')"
+
+# ── Location usage strings ────────────────────────────────────────────────
+# macOS shows one of these in its prompt; without them it refuses location access.
+usage_string() { plutil -extract "$1" raw -o - -- "$RESOURCES/Info.plist.in" 2>/dev/null || echo missing; }
+check "Info.plist explains location access" "$LOCATION_WORDING" "$(usage_string NSLocationUsageDescription)"
+check "Info.plist explains when-in-use location access" "$LOCATION_WORDING" \
+    "$(usage_string NSLocationWhenInUseUsageDescription)"
 
 # ── Entitlements read back after signing ──────────────────────────────────
 # The single-line form `codesign -d --entitlements - --xml` prints.
@@ -86,8 +96,8 @@ readback() {
     for key in "$@"; do printf '<key>%s</key><true/>' "$key"; done
     printf '</dict></plist>\n'
 }
-ADHOC_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation)"
-STRICT_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory)"
+ADHOC_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation com.apple.security.personal-information.location)"
+STRICT_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.personal-information.location)"
 check "read-back ad-hoc entitlements match the ad-hoc file" ok \
     "$(status entitlements_match "$ADHOC" <<<"$ADHOC_READBACK")"
 check "read-back strict entitlements match the strict file" ok \
@@ -97,6 +107,8 @@ check "ad-hoc entitlements on a strict build are a mismatch" fails \
 check "strict entitlements on an ad-hoc build are a mismatch" fails \
     "$(status entitlements_match "$ADHOC" <<<"$STRICT_READBACK")"
 check "no entitlements at all are a mismatch" fails "$(status entitlements_match "$ADHOC" <<<"")"
+check "a signature without the location entitlement is a mismatch" fails \
+    "$(status entitlements_match "$STRICT" <<<"$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory)")"
 check "a key granted as false is a mismatch" fails \
     "$(status entitlements_match "$STRICT" <<<"${STRICT_READBACK/<true\/><\/dict>/<false/></dict>}")"
 

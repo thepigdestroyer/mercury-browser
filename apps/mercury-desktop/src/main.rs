@@ -19,6 +19,7 @@ mod callbacks;
 mod cli;
 mod crash_handler;
 mod engine;
+mod geolocation;
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -162,6 +163,8 @@ fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeO
         gpu_canvas: options.gpu_canvas,
         config_dir: profile.servo_config_dir(),
         experimental_web_features: options.experimental_web_features,
+        // geolocation: off, except MERCURY_FAKE_GEOLOCATION in automated runs
+        geolocation: geolocation::setup_for_this_run(options.is_automated()),
     }
 }
 
@@ -336,6 +339,7 @@ mod tests {
                 gpu_canvas: false,
                 config_dir: Some(root.join("servo")),
                 experimental_web_features: false,
+                geolocation: talaria_servo::GeolocationSetup::Off,
             }
         );
     }

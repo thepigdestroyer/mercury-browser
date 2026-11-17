@@ -18,6 +18,9 @@ use url::Url;
 
 use crate::adblocker::ContentBlocker;
 use crate::frame_ready::FrameReadySignal;
+use crate::geolocation::{
+    GeolocationService, GeolocationSetup, WebViewGeolocation, WithGeolocation,
+};
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
 use crate::page_defaults::page_defaults_user_content;
 use crate::screen::ScreenMetrics;
@@ -74,6 +77,8 @@ pub struct RuntimeOptions {
     /// Turn on servoshell's experimental web-platform features, except the async clipboard and
     /// WebGPU (see `EXCLUDED_EXPERIMENTAL_PREFS`).
     pub experimental_web_features: bool,
+    /// Whether pages get `navigator.geolocation`, and where positions come from.
+    pub geolocation: GeolocationSetup,
 }
 
 impl Default for RuntimeOptions {
@@ -82,6 +87,7 @@ impl Default for RuntimeOptions {
             gpu_canvas: true,
             config_dir: None,
             experimental_web_features: true,
+            geolocation: GeolocationSetup::Off,
         }
     }
 }
@@ -98,6 +104,8 @@ pub struct ServoRuntime {
     /// so it is dropped after the last of them. Every web view's delegate holds a clone too;
     /// see `AfterEngineCleanup`.
     after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
+    /// `None` while geolocation is off.
+    geolocation: Option<Rc<GeolocationService>>,
 }
 
 impl ServoRuntime {
@@ -142,6 +150,7 @@ impl ServoRuntime {
             content_blocker: Rc::clone(&content_blocker),
         }));
         let user_content = page_defaults_user_content(&inner);
+        let geolocation = GeolocationService::for_setup(&runtime_options.geolocation);
 
         Self {
             inner,
@@ -150,6 +159,7 @@ impl ServoRuntime {
             screen_metrics: Rc::default(),
             user_content,
             after_engine_cleanup,
+            geolocation,
         }
     }
 
@@ -168,6 +178,7 @@ impl ServoRuntime {
     ) -> Result<ServoWebView, ServoWebViewError> {
         let initial_url = Url::parse(initial_url)?;
         let frame_ready = FrameReadySignal::default();
+        let geolocation = self.geolocation.as_ref().map(GeolocationService::web_view);
         let delegate = Rc::new(BrowserDelegate {
             tab_id,
             browser_event_sender: browser_event_sender.clone(),
@@ -175,6 +186,7 @@ impl ServoRuntime {
             load_metrics: RefCell::new(PageLoadMetrics::default()),
             content_blocker: Rc::clone(&self.content_blocker),
             screen_metrics: Rc::clone(&self.screen_metrics),
+            geolocation: geolocation.clone(),
             _after_engine_cleanup: self.after_engine_cleanup.clone(),
         });
 
@@ -183,6 +195,7 @@ impl ServoRuntime {
             .hidpi_scale_factor(Scale::new(scale_factor))
             .delegate(delegate)
             .user_content_manager(Rc::clone(&self.user_content))
+            .with_geolocation(geolocation.as_ref())
             .build();
 
         for event in new_web_view_feedback(inner.cursor(), inner.status_text()) {
@@ -255,6 +268,9 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
     // exposes `GPUCanvasContext` and other WebGPU names over unimplemented stubs, which makes
     // feature detection report WebGPU that is not there.
     preferences.dom_webgpu_enabled = false;
+    // Off unless geolocation is set up: positions then come from Mercury's own source, and
+    // Servo asks for the "geolocation" permission before every first request of a page.
+    preferences.dom_geolocation_enabled = runtime_options.geolocation.exposes_geolocation();
     // Always off: in Servo 0.8.0 `getUserMedia` opens the camera and microphone without asking
     // the embedder for permission (`mediadevices.rs`), so WebRTC must stay disabled until
     // Mercury can gate device access itself.
@@ -318,6 +334,8 @@ struct BrowserDelegate {
     load_metrics: RefCell<PageLoadMetrics>,
     content_blocker: Rc<ContentBlocker>,
     screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
+    /// The web view's geolocation delegate, also given to Servo; `None` while it is off.
+    geolocation: Option<Rc<WebViewGeolocation>>,
     /// Servo's `WebView` drops its handle to Servo before its delegate, so this goes after it.
     _after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
 }
@@ -386,6 +404,10 @@ impl servo::WebViewDelegate for BrowserDelegate {
             LoadStatus::Started => {
                 self.load_metrics.borrow_mut().start(Instant::now());
                 info!("tab {}: page load started", self.tab_id.value());
+                // geolocation: the document being left stops its requests and watches
+                if let Some(geolocation) = &self.geolocation {
+                    geolocation.page_load_started();
+                }
             }
             LoadStatus::HeadParsed => self.record_load_milestone(LoadMilestone::HeadParsed),
             LoadStatus::Complete => self.record_load_milestone(LoadMilestone::Complete),
@@ -426,6 +448,16 @@ impl servo::WebViewDelegate for BrowserDelegate {
         for event in crash_feedback(reason, web_view.cursor(), web_view.status_text()) {
             self.send_browser_event(event);
         }
+    }
+
+    // geolocation
+    /// Only a diagnostic run answers here (`GeolocationSetup::Diagnostic`); otherwise the
+    /// request is dropped, which Servo answers with "deny".
+    fn request_permission(&self, _web_view: servo::WebView, request: servo::PermissionRequest) {
+        let _unanswered = match &self.geolocation {
+            Some(geolocation) => geolocation.answer_permission_in_diagnostic(request),
+            None => Some(request),
+        };
     }
 }
 
@@ -713,6 +745,32 @@ mod tests {
     fn webrtc_stays_disabled() {
         for enabled in [true, false] {
             assert!(!preferences_with_experimental_web_features(enabled).dom_webrtc_enabled);
+        }
+    }
+
+    // geolocation
+    #[test]
+    fn geolocation_is_off_by_default() {
+        assert_eq!(RuntimeOptions::default().geolocation, GeolocationSetup::Off);
+        for enabled in [true, false] {
+            assert!(!preferences_with_experimental_web_features(enabled).dom_geolocation_enabled);
+        }
+    }
+
+    #[test]
+    fn geolocation_setups_that_answer_pages_turn_the_preference_on() {
+        for setup in [
+            GeolocationSetup::System,
+            GeolocationSetup::Diagnostic(crate::GeolocationDiagnostic::Deny),
+        ] {
+            let preferences = mercury_preferences(&RuntimeOptions {
+                geolocation: setup,
+                ..RuntimeOptions::default()
+            });
+
+            assert!(preferences.dom_geolocation_enabled);
+            // Servo's own fixed test position stays off: positions come from Mercury's source.
+            assert!(!preferences.dom_geolocation_test_position_enabled);
         }
     }
 
