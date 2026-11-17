@@ -24,7 +24,8 @@
 #   - `codesign --verify --deep --strict` passes and the hardened runtime is on;
 #   - the signature is the kind asked for, and the entitlements are exactly the
 #     set scripts/macos/bundle.sh uses for it (the ad-hoc set for ad hoc);
-#   - scripts/macos/test-bundle.sh passes.
+#   - scripts/macos/test-bundle.sh passes, including its checks of the notice
+#     files (LICENSE, NOTICE, THIRD-PARTY-NOTICES.md) in this bundle.
 #
 # With --require-media, also:
 #   - Contents/MacOS/lib/ holds libgstreamer-1.0.0.dylib and every plugin
@@ -350,7 +351,8 @@ if [ "$REQUIRE_MEDIA" = 1 ]; then
 fi
 
 # ── The bundle script's own checks ────────────────────────────────────────
-if "$REPO/scripts/macos/test-bundle.sh" >"$TMP" 2>&1; then
+# Given the bundle, it also checks the notice files in Contents/Resources.
+if MERCURY_TEST_BUNDLE="$(cd "$APP" && pwd)" "$REPO/scripts/macos/test-bundle.sh" >"$TMP" 2>&1; then
     pass "scripts/macos/test-bundle.sh"
 else
     fail "scripts/macos/test-bundle.sh:"

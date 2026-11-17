@@ -187,7 +187,11 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null || die "Info.plist does not v
 printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 cp "$RESOURCES_SRC/AppIcon.icns" "$RES_DIR/AppIcon.icns"
-cp LICENSE THIRD-PARTY-NOTICES.md "$RES_DIR/"
+while IFS= read -r notice; do
+    cp "$notice" "$RES_DIR/"
+done < <(bundled_notice_files)
+missing="$(missing_notice_files "$RES_DIR")"
+[ -z "$missing" ] || die "notice files missing from $RES_DIR: $(tr '\n' ' ' <<<"$missing")"
 ditto LICENSES "$RES_DIR/LICENSES"
 
 # ── Media libraries ───────────────────────────────────────────────────────

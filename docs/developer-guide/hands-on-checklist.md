@@ -8,9 +8,9 @@ Automated checks cannot click, press keys, log out or use real devices, so these
 a person can see. Each step says what should happen. Note anything that differs (with a screenshot if
 you can) and the commit you tried (`git log --oneline -1`).
 
-This list covers what is on the `mercury` branch. Menus, tabs opened by pages, session restore,
-history, bookmarks, downloads, find in page, links from other apps, camera and microphone are still
-being merged; their sections are added as they land.
+This list covers what is on the `mercury` branch. Session restore, history, bookmarks, importing,
+downloads, find in page, links from other apps, the tab audio indicator, camera and microphone are
+still being merged; their sections are added as they land.
 
 ## Before you start
 
@@ -68,6 +68,26 @@ Open `controls.html`.
    should open.
 5. **Right-click** a link: "Open link in new tab" opens it in a background tab; "Copy link address"
    copies it. Control-click does the same. Right-click an image: open and copy its address.
+
+## Menus and the About window
+
+1. Open each menu in the menu bar. Every item shows its shortcut; Find…, Stop, Reopen Closed Tab,
+   the History items after Forward and the Bookmarks menu are greyed out.
+2. With three tabs open, the Window menu lists them; choosing one switches to it.
+3. Press each shortcut once with the page focused, then with the address bar focused: each runs
+   exactly once (for example ⌘T opens one tab, not two).
+4. **Mercury Browser → About Mercury Browser**: the version, Servo 0.8.0, the GStreamer version, the
+   copyright line and "Began as a fork of Hermes Browser by Kayk Caputo." Both links open in a tab.
+5. The ⋮ menu: the arrow keys move through it, Return chooses, Escape closes it.
+
+## Tabs opened by pages and pop-ups
+
+1. `opener.html`: its `window.open` from a timer, 300 ms after load, is blocked and the toolbar shows
+   **Pop-up blocked** naming `127.0.0.1:8765`; the page says "window.open returned null." Clicking
+   the page's link opens `opened.html` in a new tab.
+2. Choose **Allow pop-ups from 127.0.0.1:8765**, then open `two-pop-ups.html`: both pop-ups open,
+   and the blue one is shown under its own address.
+3. `opener.html?close`, after allowing pop-ups: the opened page closes its own tab again.
 
 ## Quitting
 

@@ -1,87 +1,72 @@
 ---
 title: Development Setup
-description: Prepare a local Mercury Browser development environment on Linux, macOS or Windows.
+description: Prepare a Mercury Browser development environment on macOS (Apple Silicon), build and run it, and build this documentation.
 ---
 
 # Development setup
 
-Linux is the primary development environment because it exercises the full Servo, Vulkan/WGPU composition, GStreamer, and packaging path.
+Mercury is developed on macOS with Apple silicon, and that is where its full path (Metal rendering, the bundled GStreamer, the app bundle, the menu bar) is exercised. Linux builds too; see [Linux](#linux) at the end.
 
-## Clone and prepare the repository
+## What you need
+
+- A Mac with Apple silicon and macOS 13 or later.
+- The Xcode command-line tools (`xcode-select --install`). Full Xcode is not needed.
+- [rustup](https://rustup.rs/). The Rust version is pinned in `rust-toolchain.toml` and installs itself on the first build.
+- Python 3.11 or later, or `uv`, on `PATH` (Homebrew's `/opt/homebrew/bin` is enough). Servo's own build scripts need it; Mercury has no Python code of its own.
+- Free disk space: a cold build compiles all of Servo and needs 15–20 GB while it runs, plus about 5 GB for the unpacked GStreamer.
+
+## Clone and prepare
 
 ```bash
 git clone https://github.com/thepigdestroyer/mercury-browser.git
 cd mercury-browser
-make install-linux-deps
-make setup
+git checkout mercury
+make setup     # on macOS: fetches and unpacks GStreamer, checks the tools, adds rustfmt and Clippy, fetches the crates
 ```
 
-`make setup` uses the current stable Rust toolchain, installs formatting and lint components, and fetches dependencies with `--locked`.
-
-## Check your tools
-
-```bash
-make doctor
-```
-
-The command reports the active Rust toolchain and verifies that Cargo, Rust, and rustup are available.
-
-Servo also builds native code. On Linux, Mercury expects Clang, CMake, a C/C++ toolchain, Fontconfig, X11 development libraries, and the GStreamer development stack installed by `make install-linux-deps`.
+`make setup` runs `make gstreamer-macos` and `make doctor` first, then installs the `rustfmt` and `clippy` components and fetches the locked dependencies with `--locked`. `make doctor` alone reports the Rust toolchain and checks the GStreamer copy.
 
 ## Build and run
 
 ```bash
-make build
-make run-debug
+make run              # build the optimised browser and start it
+make app-macos        # build dist/Mercury Browser.app (signed ad hoc)
+make build-release    # build the whole workspace in release mode
 ```
 
-Pass application arguments through `ARGS` and adjust logging through `RUST_LOG`:
+Pass arguments to the browser through `ARGS`, and change logging through `RUST_LOG`:
 
 ```bash
-make run-debug ARGS="--example-option" RUST_LOG="talaria_servo=debug,servo=info"
+make run ARGS="https://servo.org/" RUST_LOG="talaria_servo=debug,servo=info"
 ```
 
-Use the default optimized runtime when investigating timing or media behavior:
+`make run-release` is an alias for `make run`. `make run-debug` builds the development profile, which keeps debug information for Mercury's code; use it for debugging, not for judging speed or media.
+
+Build, lint and test in release mode, so that one set of compiled Servo artefacts serves all three: pass `CARGO_FLAGS=--release` to `make check`, `make lint` and `make test`, and use `--release` for any `cargo` command you run by hand. Crates that don't depend on Servo (`talaria-core`, `mercury-ui`, `mercury-settings`, `mercury-store`, `mercury-passwords`, `mercury-downloads`, `mercury-import`) build and test in minutes on their own:
 
 ```bash
-make run
+cargo test --release -p talaria-core -p mercury-ui
 ```
 
-`make run-release` is retained as an alias for `make run`. The development profile still optimizes
-major Servo, WebRender, Vello, and ad-blocking crates while retaining useful debug information for
-Mercury code, but it is intended for diagnosis rather than performance evaluation.
+## Command-line options
 
-## Build the documentation
+`mercury-browser --help` lists them. The ones used most in development:
 
-Create a Python virtual environment so the documentation toolchain does not affect system packages:
+| Option | What it does |
+| --- | --- |
+| `[URL…]` | Opens each URL in its own tab; the first is shown |
+| `--screenshot <file.png>` | Saves a PNG of the window once the page has loaded, then exits. Never takes focus |
+| `--screenshot-delay <ms>` | Waits this long after the page has loaded (default 1000) |
+| `--window-size <W>x<H>` | Sets the window's logical size, for example `1280x800` |
+| `--background` | Starts without taking focus, for automated runs |
+| `--profile-dir <directory>` | Uses this profile. Screenshot and background runs otherwise use a temporary profile that is removed at exit |
+| `--disable-gpu-canvas` | Draws 2D canvases on the CPU |
+| `--disable-experimental-web-features` | Leaves Servo's experimental web-platform features off |
+| `--exit-after <ms>`, `--exit-by …` | Diagnostics: quit from inside the browser, as the close button, the quit shortcut or the Quit menu item would ([Testing](testing.md#quit-paths)) |
 
-=== "Linux/macOS"
+Exit statuses: 0 success, 1 failure (or a screenshot that couldn't be saved), 2 a wrong command line, 3 the screenshot's page didn't finish loading, 4 the profile is in use by another Mercury. On `SIGTERM`, `SIGINT` or `SIGHUP` the browser quits in order and then ends by that signal.
 
-    ```bash
-    python3 -m venv .venv-docs
-    source .venv-docs/bin/activate
-    python -m pip install -r docs/requirements.txt
-    ```
-
-=== "Windows (PowerShell)"
-
-    ```powershell
-    py -m venv .venv-docs
-    .venv-docs\Scripts\Activate.ps1
-    python -m pip install -r docs/requirements.txt
-    ```
-
-Preview the site with live reload:
-
-```bash
-make docs-serve
-```
-
-Build it with strict link and navigation checks:
-
-```bash
-make docs
-```
+A `--screenshot` or `--background` run never touches your own profile. A normal launch uses `~/Library/Application Support/Mercury Browser/Default`; a directory is accepted as a profile only if it is new, empty, or contains the marker file `.mercury-browser-profile`.
 
 ## macOS media set-up (GStreamer)
 
@@ -160,13 +145,42 @@ Notes:
 - `tests/pages/media.html` checks playback without making a sound; serve it with
   `scripts/serve-tests.py` (a loopback server that honours `Range`); see `tests/media/README.md`.
 
-## Windows prerequisites
+## Build the documentation
 
-Use 64-bit Windows 10 or 11 with:
+This site is built with MkDocs and the Material theme, an existing external tool. Install it in a virtual environment so it stays out of the system's Python:
 
-- The `x86_64-pc-windows-msvc` Rust toolchain
-- Visual Studio 2022 Build Tools with MSVC v143
-- Windows SDK 10.0.19041.0 or newer
-- C++ ATL for the v143 x64 toolchain
+```bash
+python3 -m venv .venv-docs
+source .venv-docs/bin/activate
+python -m pip install -r docs/requirements.txt
+```
 
-Current Windows builds do not bundle native GStreamer, so they do not exercise the complete Linux media path.
+Then:
+
+```bash
+make docs-serve   # preview with live reload
+make docs         # build into target/mkdocs with strict checks
+```
+
+`make docs` runs MkDocs in strict mode: a broken link, a page missing from the navigation or a configuration warning fails the build. `docs/superpowers/` holds design notes and plans and is excluded from the site.
+
+Screenshots in `docs/screenshots/` are taken from a release build with `--screenshot`, for example:
+
+```bash
+"dist/Mercury Browser.app/Contents/MacOS/mercury-browser" --screenshot docs/screenshots/mercury-servo.png \
+    --window-size 1280x800 --screenshot-delay 3000 https://servo.org/
+```
+
+## Linux
+
+Linux builds from source and CI tests it, but it gets less attention than macOS. On Debian or Ubuntu:
+
+```bash
+make install-linux-deps   # the packages CI uses (needs sudo)
+make setup
+make run
+```
+
+On Linux, Mercury draws Servo's frames through Vulkan, so Slint's Vulkan WGPU backend is needed, and media uses the system's GStreamer. Linux-only code (`#[cfg(target_os = "linux")]`) can't be compiled on a Mac; CI's Linux job checks it.
+
+Windows is not built at the moment.

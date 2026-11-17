@@ -1,6 +1,6 @@
 ---
 title: Mercury Browser Documentation
-description: Learn how to use, build, test, and contribute to Mercury Browser.
+description: How to install, use, build, test and contribute to Mercury Browser, a desktop web browser written in Rust on the Servo engine.
 hide:
   - navigation
   - toc
@@ -14,113 +14,121 @@ hide:
       <img src="assets/mercury-browser.svg" alt="" aria-hidden="true">
       <span>Mercury Browser</span>
     </div>
-    <h1>A focused browser, built on a different engine.</h1>
-    <p class="mercury-hero__lead">Mercury pairs Servo's independent web engine with a lightweight native Rust interface. Explore the browser today, or help shape the path toward a faster and more open web.</p>
+    <h1>A desktop browser in Rust, on the Servo engine.</h1>
+    <p class="mercury-hero__lead">Servo renders the pages and Slint draws the windows, menus and dialogs around them. Mercury is built for macOS on Apple Silicon first. It is a preview: try it and work on it, but don't use it for anything sensitive yet.</p>
     <div class="mercury-actions">
-      <a href="user-guide/installation/" class="md-button md-button--primary">Get started</a>
+      <a href="user-guide/installation/" class="md-button md-button--primary">Install Mercury</a>
       <a href="developer-guide/" class="md-button">Developer guide</a>
     </div>
   </div>
   <div class="mercury-hero__visual">
-    <img src="screenshots/hermes-new-tab.png" alt="Mercury Browser new tab page" loading="eager">
+    <img src="screenshots/mercury-new-tab.png" alt="Mercury Browser's new tab page in Dark mode" loading="eager">
   </div>
 </section>
 
 <div class="mercury-proof">
   <div class="mercury-proof__item">
-    <strong>Rust from interface to engine</strong>
-    <span>Memory-safe foundations across the browser stack</span>
+    <strong>Servo 0.8</strong>
+    <span>The published engine, with a few small patches in third_party/</span>
   </div>
   <div class="mercury-proof__item">
-    <strong>Independent rendering</strong>
-    <span>Powered by Servo, WebRender, and Vello</span>
+    <strong>macOS on Apple Silicon</strong>
+    <span>Metal rendering, a native menu bar, macOS file panels</span>
   </div>
   <div class="mercury-proof__item">
-    <strong>Native Linux media</strong>
-    <span>Audio and video through GStreamer</span>
+    <strong>GStreamer 1.28</strong>
+    <span>Audio and video, bundled inside the app</span>
   </div>
 </div>
 
 <section class="mercury-section">
   <div class="mercury-section__intro">
-    <p class="mercury-eyebrow">One project, two paths</p>
-    <h2>Find the documentation written for you.</h2>
-    <p>You should not need to understand Servo internals to run Mercury, and you should not need to search user tutorials for architectural decisions. Both guides live in one searchable site while staying focused on their audience.</p>
+    <p class="mercury-eyebrow">Two guides</p>
+    <h2>Using Mercury, or working on it.</h2>
+    <p>The user guide covers installing and using the browser and what it can't do yet. The developer guide covers building it, how the code is laid out, and how changes are tested.</p>
   </div>
 
   <div class="mercury-audience-grid">
     <article class="mercury-card">
       <span class="mercury-card__number">USER GUIDE</span>
-      <h3>Browse with clear expectations</h3>
-      <p>Install Mercury, learn its tabs and shortcuts, set up Linux media, and understand today's privacy and compatibility boundaries.</p>
-      <a href="user-guide/">Explore the User Guide →</a>
+      <h3>Install and browse</h3>
+      <p>Install Mercury, use tabs, search and shortcuts, play media, read what Mercury blocks and stores, and fix common problems.</p>
+      <a href="user-guide/">Open the user guide →</a>
     </article>
     <article class="mercury-card">
       <span class="mercury-card__number">DEVELOPER GUIDE</span>
-      <h3>Understand the browser as a system</h3>
-      <p>Follow commands and frames through the codebase, work safely around Servo, test changes, and maintain the project's focused patches.</p>
-      <a href="developer-guide/">Explore the Developer Guide →</a>
+      <h3>Build and change it</h3>
+      <p>Set up a build, follow commands and frames through the crates, run the checks, and keep the Servo patches small.</p>
+      <a href="developer-guide/">Open the developer guide →</a>
     </article>
   </div>
 </section>
 
 <section class="mercury-section">
   <div class="mercury-section__intro">
-    <p class="mercury-eyebrow">Built with purpose</p>
-    <h2>A small browser shell with serious foundations.</h2>
+    <p class="mercury-eyebrow">On the mercury branch today</p>
+    <h2>What works now.</h2>
   </div>
 
   <div class="mercury-feature-grid">
     <article class="mercury-card">
       <span class="mercury-card__number">01</span>
-      <h3>Servo-powered browsing</h3>
-      <p>Modern web content runs through an embeddable engine written for parallelism and memory safety.</p>
+      <h3>Pages and tabs</h3>
+      <p>GPU compositing through Metal, GPU 2D canvas and WebGL. Tabs, pages that open tabs, pop-up blocking, zoom and page full screen.</p>
     </article>
     <article class="mercury-card">
       <span class="mercury-card__number">02</span>
-      <h3>Native desktop experience</h3>
-      <p>Slint, winit, and WGPU provide responsive tabs, navigation, keyboard input, and IME composition.</p>
+      <h3>Address bar and search</h3>
+      <p>Seven search engines, DuckDuckGo by default, with keywords such as <code>@wikipedia</code>. You can add your own engines in Settings.</p>
     </article>
     <article class="mercury-card">
       <span class="mercury-card__number">03</span>
-      <h3>Blocking before load</h3>
-      <p>Brave's default filter snapshot stops known advertising and tracking subresources at the network boundary.</p>
+      <h3>Native macOS parts</h3>
+      <p>A menu bar, an About window, the macOS file panel, a right-click menu, drop-down lists and a colour picker. Pickers open only after a click.</p>
     </article>
     <article class="mercury-card">
       <span class="mercury-card__number">04</span>
-      <h3>Linux multimedia</h3>
-      <p>Servo's GStreamer backend handles supported HTML audio, video, Web Audio, and WebRTC pipelines.</p>
+      <h3>Dialogs and prompts</h3>
+      <p>Page alerts, confirmations, text prompts, HTTP sign-in and permission prompts. None of them take the keyboard away from you.</p>
     </article>
     <article class="mercury-card">
       <span class="mercury-card__number">05</span>
-      <h3>Engine-neutral core</h3>
-      <p>Talaria keeps tabs, state, commands, and navigation policy testable without starting a browser engine.</p>
+      <h3>Blocking and privacy</h3>
+      <p>Ads and trackers blocked at the network level with EasyList, EasyPrivacy, uBlock Origin and Brave lists. Choose what is cleared when Mercury quits.</p>
     </article>
     <article class="mercury-card">
       <span class="mercury-card__number">06</span>
-      <h3>Honest engineering</h3>
-      <p>Known limits are documented directly, including site compatibility and the current lack of OS sandboxing.</p>
+      <h3>Audio and video</h3>
+      <p>MP4 (H.264, AAC), WebM (VP9, Opus), MP3 and WAV, decoded by the GStreamer copy inside the app. Sites that stream through Media Source Extensions may not play.</p>
     </article>
   </div>
 </section>
 
 <section class="mercury-showcase">
-  <img src="screenshots/hermes-servo.png" alt="The Servo website rendered in a multi-tab Mercury window" loading="lazy">
+  <img src="screenshots/mercury-servo.png" alt="servo.org open in Mercury Browser, with two more tabs" loading="lazy">
   <div class="mercury-showcase__copy">
-    <p class="mercury-eyebrow">A real browser, in progress</p>
-    <h2>Native chrome. Independent web engine.</h2>
-    <p>Every tab owns a Servo WebView. Mercury routes native input into the engine and brings page titles, favicons, history, loading state, and rendered frames back into a focused desktop experience.</p>
-    <a href="developer-guide/architecture/">See how the layers fit together →</a>
+    <p class="mercury-eyebrow">How it fits together</p>
+    <h2>One Servo web view per tab.</h2>
+    <p>The browser logic in <code>talaria-core</code> knows nothing about Servo. <code>talaria-servo</code> connects it to the engine, and the app draws Servo's frames inside its Slint window through Metal.</p>
+    <a href="developer-guide/architecture/">Read the architecture →</a>
+  </div>
+</section>
+
+<section class="mercury-section">
+  <div class="mercury-section__intro">
+    <p class="mercury-eyebrow">Origins</p>
+    <h2>Where Mercury came from.</h2>
+    <p>Mercury began as a fork of <a href="https://github.com/KaykCaputo/hermes-browser">Hermes Browser</a> by Kayk Caputo, a Linux-first browser shell around Servo 0.7. Some Hermes code is still here, credited and under its original MPL-2.0 licence. Most of Mercury has since been rewritten or added, and the interface it inherited is due to be replaced by a complete redesign. <a href="developer-guide/origins/">Origins and credits</a> has the details.</p>
   </div>
 </section>
 
 <aside class="mercury-preview">
   <img class="mercury-preview__mark" src="assets/mercury-browser.svg" alt="Mercury Browser logo">
   <div>
-    <h2>Mercury is an engineering preview.</h2>
-    <p>Web content runs in isolated content processes without operating-system sandbox restrictions. Use known sites and non-sensitive data while that security boundary is hardened.</p>
+    <h2>Mercury is a preview.</h2>
+    <p>Pages run in separate Servo content processes, but the operating system does not sandbox those processes yet. The app is signed ad hoc, not with an Apple Developer ID. Use known sites and data you don't mind losing.</p>
   </div>
-  <a href="user-guide/privacy-and-security/">Read the security model →</a>
+  <a href="user-guide/privacy-and-security/">Read about privacy and security →</a>
 </aside>
 
 </div>

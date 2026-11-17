@@ -13,15 +13,23 @@ Mercury uses small deterministic tests for browser policy and adapter translatio
 make qa
 ```
 
-This runs formatting checks, Clippy with warnings denied, workspace tests, and the vendored `gaol` shared-memory regression test.
+This runs formatting checks, Clippy with warnings denied, workspace tests, and the vendored `gaol` shared-memory regression test. Use release mode, as everywhere in the project, so the three share one Servo build:
+
+```bash
+make qa CARGO_FLAGS=--release
+```
 
 Run stages separately while iterating:
 
 ```bash
 make fmt-check
-make lint
-make test
+make lint CARGO_FLAGS=--release
+make test CARGO_FLAGS=--release
 ```
+
+`make qa-fast` checks formatting and runs Clippy and the tests for the crates that need no engine; they take minutes rather than a Servo build. Name the crates yourself for a narrower run, for example `cargo test --release -p talaria-core -p mercury-ui`.
+
+Before a change is merged, all of these must pass with no warnings: `cargo fmt --all -- --check`, `cargo clippy --release --workspace --all-targets -- -D warnings`, `cargo test --release --workspace` and `cargo build --release -p mercury-desktop`. Logic is written test first: the failing test, then the code that makes it pass.
 
 ## Type-check all targets and features
 
@@ -37,12 +45,14 @@ This checks the complete workspace with all targets and features. It is useful a
 
 Core tests use fake WebViews to cover:
 
-- URL and search classification
+- URL and search classification, and search URLs built from the settings
 - Browser state transitions
 - Tab creation, selection, cycling, and closure
 - Command routing by `TabId`
 - High-frequency input coalescing
 - Engine-neutral WebView dispatch
+- Page requests: dialogs, sign-in, permission prompts, and the permissions refused without one
+- Form controls that pages request, and zoom
 
 Prefer adding a core test when the behavior can be expressed without Servo.
 
@@ -52,7 +62,11 @@ Adapter tests cover mappings between Talaria and Servo types, favicon conversion
 
 ### Desktop composition
 
-Desktop tests exercise event routing, bounded command dispatch, shortcuts, key conversion, and IME composition ownership without opening the full application where possible.
+Desktop tests exercise event routing, bounded command dispatch, shortcuts, key conversion, IME composition ownership, settings, profiles and the quit sequence without opening the full application where possible.
+
+### The interface
+
+`crates/mercury-ui/tests/page_request_render.rs` and `render_menus.rs` render Mercury's Slint components with Slint's software renderer, so they can be checked without a window. The examples in `crates/mercury-ui/examples/` (`render_settings`, `render_controls`, `render_tabs`) render the settings window, the page controls and the tab strip to PNGs for review.
 
 ### Menus and the About window
 
@@ -66,13 +80,21 @@ Each Mercury-specific upstream regression needs a focused test close to the patc
 
 ## Manual browser checks
 
-Before merging a rendering or media change, verify at least:
+Automated runs on the shared development Mac never synthesise keyboard or mouse input and never take focus. They use `--screenshot`, which captures the window once the page has loaded and exits, or `--background`:
 
-1. The new-tab page paints.
-2. A simple HTTPS page loads, paints, and updates its title.
-3. Back, forward, reload, tabs, keyboard input, and scrolling work.
-4. A direct MP4 or WebM resource plays on Linux when media code changed.
-5. Closing the browser does not leave a repeated broken-pipe error loop.
+```bash
+target/release/mercury-browser --screenshot /tmp/js.png --window-size 1000x800 \
+    "file://$PWD/tests/pages/js.html"
+```
+
+Before merging a rendering or media change, check at least:
+
+1. The new tab page paints.
+2. A simple HTTPS page loads, paints and updates its title.
+3. The relevant pages in `tests/pages/` (for example `colors.html`, `canvas-readback.html`, `media.html`) show the expected result. Serve the media pages with `python3 scripts/serve-tests.py`, which supports `Range` requests, rather than from `file://`.
+4. Quitting leaves no `mercury-browser` process behind and no repeated broken-pipe errors in the log.
+
+What only a person can try (clicking, typing, logging out, real devices) is in the [hands-on checklist](hands-on-checklist.md).
 
 ### Quit paths
 

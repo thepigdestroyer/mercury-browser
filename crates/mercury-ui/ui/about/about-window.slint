@@ -31,6 +31,8 @@ export component AboutWindow inherits Window {
     // Empty when the GStreamer version was not recorded at build time.
     in property <string> media-line;
     in property <string> copyright-line;
+    // Where Mercury came from (the credit `NOTICE` gives).
+    in property <string> credit-line;
     // The appearance setting, mirrored so that a change can be seen here.
     property <ChromeTheme> chrome-theme: ChromePalette.theme;
     callback open-link(AboutLink);
@@ -56,7 +58,7 @@ export component AboutWindow inherits Window {
     title: "About Mercury Browser";
     icon: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
     width: 380px;
-    height: 370px;
+    height: 390px;
     background: ChromePalette.window-background;
     forward-focus: key-scope;
 
@@ -127,6 +129,14 @@ export component AboutWindow inherits Window {
 
             Text {
                 text: root.copyright-line;
+                color: ChromePalette.text-secondary;
+                font-size: 11px;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            if root.credit-line != "": Text {
+                text: root.credit-line;
                 color: ChromePalette.text-secondary;
                 font-size: 11px;
                 horizontal-alignment: center;

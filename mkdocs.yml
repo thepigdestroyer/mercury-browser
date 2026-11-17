@@ -6,7 +6,7 @@ copyright: Copyright Â© 2026 Mrinal Joshi and the Mercury Browser contributors Â
 
 repo_name: thepigdestroyer/mercury-browser
 repo_url: https://github.com/thepigdestroyer/mercury-browser
-edit_uri: edit/master/docs/
+edit_uri: edit/mercury/docs/
 
 docs_dir: docs
 site_dir: target/mkdocs
@@ -77,6 +77,7 @@ nav:
       - Vendored patches: developer-guide/vendored-patches.md
       - Releases: developer-guide/releases.md
       - Contributing: developer-guide/contributing.md
+      - Origins and credits: developer-guide/origins.md
 
 markdown_extensions:
   - admonition

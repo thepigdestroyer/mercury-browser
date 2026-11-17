@@ -22,6 +22,20 @@ entitlements_for_identity() {
     fi
 }
 
+# The notice files every bundle carries in Contents/Resources, one per line:
+# the licence, Mercury's copyright and origin notice, and the third-party notices.
+bundled_notice_files() {
+    printf '%s\n' LICENSE NOTICE THIRD-PARTY-NOTICES.md
+}
+
+# Prints, one per line, the notice files missing from the directory $1.
+missing_notice_files() {
+    local file
+    while IFS= read -r file; do
+        [ -f "$1/$file" ] || printf '%s\n' "$file"
+    done < <(bundled_notice_files)
+}
+
 # Prints why an identity is unusable, or nothing if it is "-" or plausibly a
 # certificate name or SHA-1 hash. Odd values are refused rather than passed to
 # codesign: " - " and "-x" are almost certainly typos for "-", and they would

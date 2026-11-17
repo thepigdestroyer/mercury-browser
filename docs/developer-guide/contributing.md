@@ -14,6 +14,7 @@ Good Mercury contributions make one behavior easier to understand, test, or trus
 - Decide which layer owns the policy.
 - For website failures, compare the pinned Servo `servoshell` when possible.
 - For a dependency patch, read [Vendored patches](vendored-patches.md) first.
+- Write product code and tools in Rust and Slint only; see [the rules that apply everywhere](index.md#rules-that-apply-everywhere).
 
 ## Keep boundaries intact
 
@@ -33,22 +34,22 @@ Use manual website testing as additional evidence, not as a replacement for a de
 ## Run the checks
 
 ```bash
-make qa
+make qa CARGO_FLAGS=--release
 make docs
 ```
 
-If the change affects runtime rendering or media, also run the optimized browser and record what you tested.
+If the change affects rendering, media or anything a person sees, also run the release build (with `--screenshot` for automated runs) and record what you tested. Changes under `scripts/` or `.github/workflows/` also need `make lint-scripts`, and dependency changes `make deny`.
 
 ## Commit style
 
 The project uses short Conventional Commit-style subjects in English:
 
 ```text
-feat(servo): add native ad and tracker blocking
-fix(servo): restore Linux rendering and media support
-perf(desktop): enable async loading and GPU acceleration
-ci: add Linux checks and runtime dependencies
-docs: add user and developer guides
+feat(core): initial tab URLs, engine-ready command gating and file URLs
+fix(desktop): keep Servo running when the window is covered
+feat: use the system proxy and keep an HTTP disk cache in the profile
+refactor(desktop): split main.rs into focused modules
+docs: add a hands-on checklist
 ```
 
 Choose the smallest useful scope, keep the subject lowercase after the colon, and explain surprising tradeoffs in the commit body or code comments.
@@ -64,4 +65,4 @@ A useful pull request describes:
 - Known limitations left intentionally unresolved
 - Any upstream issue or patch that should eventually replace local code
 
-Honest limits are welcome. Mercury is an engineering preview, and clear evidence is more valuable than broad compatibility claims.
+Honest limits are welcome. Mercury is a preview, and clear evidence is worth more than broad compatibility claims.

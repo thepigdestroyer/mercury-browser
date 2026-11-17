@@ -157,18 +157,19 @@ fn render_about(theme: ChromeTheme, name: &str) -> ([u8; 3], [u8; 3]) {
     about.set_engine_line("Servo 0.8.0 web engine".into());
     about.set_media_line("GStreamer 1.28.9 media framework".into());
     about.set_copyright_line(
-        "Copyright © 2026 Kayk Caputo and Mercury Browser contributors. Licensed under MPL-2.0."
+        "Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors. Licensed under MPL-2.0."
             .into(),
     );
+    about.set_credit_line("Began as a fork of Hermes Browser by Kayk Caputo.".into());
     // A software window has no size until it is given one; this is the size the window declares.
-    about.window().set_size(LogicalSize::new(380.0, 370.0));
+    about.window().set_size(LogicalSize::new(380.0, 390.0));
     about.show().expect("the About window can be shown");
     let pixels = about
         .window()
         .take_snapshot()
         .expect("the About window renders");
     save(&pixels, &format!("about-{name}.png"));
-    assert_eq!(about.window().size(), PhysicalSize::new(380, 370));
+    assert_eq!(about.window().size(), PhysicalSize::new(380, 390));
     about.hide().expect("the About window can be hidden");
     (
         pixel(&pixels, 4, 4),
