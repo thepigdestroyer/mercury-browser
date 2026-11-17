@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The geolocation diagnostic: `MERCURY_FAKE_GEOLOCATION` turns `navigator.geolocation` on
 //! with a fake location source and answers the page's permission request, so automated runs
 //! can check the whole path without a prompt and without the Mac's real location.

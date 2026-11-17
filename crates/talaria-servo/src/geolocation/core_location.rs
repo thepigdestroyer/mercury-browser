@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Positions from CoreLocation (`CLLocationManager`), on the main thread as CoreLocation
 //! requires: the manager is created there, and its delegate's callbacks arrive on the main
 //! run loop, which Slint's event loop runs.

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! What a history notification means for a web view's watches.
 //!
 //! Servo's history is the joint session history: an iframe's navigation adds an entry too (with

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! A location source that never touches the operating system: for tests, for the diagnostic
 //! run (`GeolocationSetup::Diagnostic`), and as the "no location service" source on platforms
 //! without one.

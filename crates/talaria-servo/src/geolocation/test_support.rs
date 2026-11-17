@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Fakes shared by the geolocation tests: recording one-shot requests and watches, and a hub
 //! over them with a fake source.
 
