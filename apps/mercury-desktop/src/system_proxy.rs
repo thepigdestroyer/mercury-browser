@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Reads the macOS proxy settings (System Settings > Network > Details > Proxies) once at
 //! start. Read-only: `SCDynamicStoreCopyProxies` needs no permission and changes nothing.
 

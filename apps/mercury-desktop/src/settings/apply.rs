@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! What each setting does to the browser, as pure functions where possible: the controller
 //! (search, default zoom, the colour scheme pages see), the engine's switches and the launch
 //! options.

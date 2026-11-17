@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Runs one shell command while holding one of Mercury's build slots, so that only a few builds run
 # on the development Mac at once and none starts without enough free disk space.
 #

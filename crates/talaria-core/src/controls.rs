@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Form controls and menus the engine asks the browser to show: `<select>` popups, colour and
 //! file pickers, the page context menu and the input-method area. Each request carries an id;
 //! the browser answers it exactly once, or drops it, which gives the engine's default answer.

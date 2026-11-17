@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // Mercury disk guard: keeps Mercury's build output off the development Mac between rounds of work.
 //
 // Loaded automatically for OpenCode sessions located in this repository (.opencode/plugins/). It

@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 # Build output. The disk guard (.opencode/plugins/) deletes it after every round of work.
 /target/
 /dist/

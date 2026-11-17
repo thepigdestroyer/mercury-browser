@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 # The macOS job and the lint, policy and fast jobs are adapted from Zervo,
 # https://github.com/Goddv/Zervo, commit 86cb7126, .github/workflows/check.yml
 # and .github/workflows/macos.yml, MPL-2.0.
@@ -450,6 +451,12 @@ jobs:
 
           shellcheck --version
           find scripts -type f -name '*.sh' -print0 | xargs -0 shellcheck -x
+
+      - name: Licence headers
+        # Every file names its licence (PolyForm Noncommercial or MPL-2.0) in an
+        # SPDX header or in REUSE.toml; see LICENSE.
+        shell: bash
+        run: scripts/ci/check-license-headers.sh
 
       - name: Byte-compile the Python scripts
         # A syntax error in the screenshot checker would otherwise surface

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Popups for page controls: `<select>` lists, the colour picker, the file panel, the page
 //! context menu, and placing the input-method window at the caret.
 //!

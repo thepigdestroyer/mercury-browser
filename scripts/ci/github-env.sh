@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Run `scripts/macos/gstreamer.sh env` (or another command printing the same
 # `export` lines) and hand the variables it sets to the later steps of a
 # GitHub Actions job.

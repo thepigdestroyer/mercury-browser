@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Adapted from Zervo, https://github.com/Goddv/Zervo, commit 86cb7126,
 # .github/workflows/macos.yml lines 183-222 ("Check the bundle"), MPL-2.0.
 #

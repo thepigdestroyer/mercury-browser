@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What the menus contain and who owns each key: the macOS menu bar and the browser menu are
 //! both built from this table, and the tests check it against `shortcuts.rs`.
 
