@@ -42,6 +42,25 @@ whatever you do. Follow the rules below so that it never deletes something you s
   which every build needs (about 1 GB); only its installer packages are deleted once unpacked. **Scratch files** in `$TMPDIR/opencode/lanes/` are deleted after 24 hours.
 - Everything it does is logged in `~/mercury-browser/.superpowers/disk-guard/guard.log`.
 
+## Build budget: get many fixes out of one build
+
+Servo builds are the bottleneck: a cold one takes 20–60 minutes, and only three can run at once.
+Spend them carefully.
+
+- **Most crates don't need Servo.** `talaria-core`, `mercury-ui`, `mercury-store`, `mercury-settings`,
+  `mercury-passwords`, `mercury-downloads`, `mercury-import` (and any new crate without `servo` or
+  `talaria-servo` in its dependencies) build and test in minutes. Iterate there freely:
+  `cargo test --release -p talaria-core -p mercury-ui …`. Put logic in these crates where you can, so it
+  can be tested without Servo.
+- **Only `talaria-servo` and `apps/mercury-desktop` need Servo.** Finish all of the round's edits first,
+  then build once: `cargo check --release -p mercury-desktop --all-targets --all-features` catches compile
+  errors; then the narrow tests you need. Run the full `make` gates and the screenshot runs **once per
+  round**, at the end, in a single command.
+- **Merge rounds don't run full gates.** When you merge `mercury` into an approved lane, check that it
+  compiles and that your narrow tests pass, push, and reply. The lead verifies several approved lanes
+  together in one integration build (a merge train) and sends back anything that fails.
+- **Review rounds batch everything.** Fix all findings, merge `mercury` if asked, and verify once.
+
 ## Rules for you
 
 1. **Push before your turn ends.** Commit your work on your lane branch and run
