@@ -58,9 +58,18 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     // tabs: keep what the user is typing unless the active tab changed.
     let tab_changed = SYNCED_TAB.with(|synced| synced.tab_changed(controller.active_tab_id()));
     window.set_committed_address(state.url().into());
-    if let Some(address) =
-        address_bar_update(state.url(), window.get_address_has_focus(), tab_changed)
-    {
+    // tabs-plus: a draft the user typed survives syncs until Return, Escape or a tab switch
+    let (text, synced) = (window.get_address(), window.get_synced_address());
+    let draft = AddressField {
+        text: &text,
+        synced: &synced,
+    };
+    if let Some(address) = address_bar_update(
+        state.url(),
+        window.get_address_has_focus(),
+        tab_changed,
+        &draft,
+    ) {
         window.invoke_reset_address(address.into());
     }
     // tabs: a tab opened by a page never shows the new-tab page
@@ -128,13 +137,31 @@ fn active_page_area(controller: &BrowserController) -> PageArea {
     )
 }
 
-/// What the address field should show. `None` means leave the user's text alone.
+/// The address field's text, and what the application last wrote into it (`synced-address`).
+pub(crate) struct AddressField<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) synced: &'a str,
+}
+
+impl AddressField<'_> {
+    /// The user typed something that is neither what was last synced nor the committed address.
+    fn is_draft(&self, committed: &str) -> bool {
+        self.text != self.synced && self.text != committed
+    }
+}
+
+/// What the address field should show. `None` means leave the user's text alone: while the
+/// field has focus, or while it holds a draft (until Return, Escape or a tab switch).
 pub(crate) fn address_bar_update(
     committed: &str,
     field_has_focus: bool,
     tab_changed: bool,
+    field: &AddressField<'_>,
 ) -> Option<String> {
-    (tab_changed || !field_has_focus).then(|| committed.to_owned())
+    if tab_changed {
+        return Some(committed.to_owned());
+    }
+    (!field_has_focus && !field.is_draft(committed)).then(|| committed.to_owned())
 }
 
 fn single_line(text: &str) -> String {
@@ -248,26 +275,79 @@ mod tests {
         assert_eq!(web_view_cursor(PointerCursor::None), WebViewCursor::None);
     }
 
+    /// A field holding what was last synced: no draft.
+    const IDLE: AddressField<'static> = AddressField {
+        text: "https://old.test/",
+        synced: "https://old.test/",
+    };
+
+    // tabs-plus
+    #[test]
+    fn a_draft_survives_syncs_after_the_field_loses_focus() {
+        let draft = AddressField {
+            text: "rust slint",
+            synced: "https://a.test/",
+        };
+        // The page commits a new address while the user's text waits (focus elsewhere).
+        assert_eq!(
+            address_bar_update("https://a.test/next", false, false, &draft),
+            None
+        );
+        // A tab switch replaces it.
+        assert_eq!(
+            address_bar_update("https://b.test/", false, true, &draft),
+            Some("https://b.test/".to_owned())
+        );
+    }
+
+    #[test]
+    fn after_return_or_escape_the_field_follows_the_page_again() {
+        // Return: the accepted text is what was last synced.
+        let accepted = AddressField {
+            text: "rust slint",
+            synced: "rust slint",
+        };
+        assert_eq!(
+            address_bar_update("https://search.test/?q=rust+slint", false, false, &accepted),
+            Some("https://search.test/?q=rust+slint".to_owned())
+        );
+        // Escape: the field shows the committed address.
+        let restored = AddressField {
+            text: "https://a.test/",
+            synced: "https://old.test/",
+        };
+        assert_eq!(
+            address_bar_update("https://a.test/", false, false, &restored),
+            Some("https://a.test/".to_owned())
+        );
+    }
+
     #[test]
     fn address_is_written_when_the_field_is_idle() {
         assert_eq!(
-            address_bar_update("https://a.test/", false, false),
+            address_bar_update("https://a.test/", false, false, &IDLE),
             Some("https://a.test/".to_owned())
         );
     }
 
     #[test]
     fn address_is_left_alone_while_the_user_is_typing() {
-        assert_eq!(address_bar_update("https://a.test/", true, false), None);
+        assert_eq!(
+            address_bar_update("https://a.test/", true, false, &IDLE),
+            None
+        );
     }
 
     #[test]
     fn tab_change_overrides_typing() {
         assert_eq!(
-            address_bar_update("https://b.test/", true, true),
+            address_bar_update("https://b.test/", true, true, &IDLE),
             Some("https://b.test/".to_owned())
         );
-        assert_eq!(address_bar_update("", false, true), Some(String::new()));
+        assert_eq!(
+            address_bar_update("", false, true, &IDLE),
+            Some(String::new())
+        );
     }
 
     #[test]
@@ -282,7 +362,7 @@ mod tests {
 
         assert!(!tab_changed);
         assert_eq!(
-            address_bar_update("https://pop.test/", true, tab_changed),
+            address_bar_update("https://pop.test/", true, tab_changed, &IDLE),
             None
         );
         // A switch the user makes afterwards replaces the draft as usual.

@@ -288,6 +288,7 @@ export component MainWindow inherits Window {
 
     public function reset-address(text: string) {
         root.address = text;
+        root.synced-address = text; // tabs-plus: not a draft
     }
 
     // The origin whose pop-up was blocked in the active tab; empty hides the indicator.
@@ -340,6 +341,9 @@ export component MainWindow inherits Window {
     // --- end menus ---
 
     // --- tabs-plus ---
+    // What the application last wrote into the address field (or the text the user accepted
+    // with Return): the field holds a draft of the user's while its text differs from this.
+    out property <string> synced-address;
     // How many of `tabs` are pinned; they come first.
     in property <int> pinned-tab-count: 0;
     // Tab search: the rows matching the query, set by the application.
@@ -485,6 +489,7 @@ export component MainWindow inherits Window {
                             if self.has-focus {
                                 self.clear-focus();
                             }
+                            root.synced-address = self.text; // tabs-plus: the draft is accepted
                             root.navigate(self.text);
                         }
                         // tabs: Escape drops the draft and returns focus to the page
