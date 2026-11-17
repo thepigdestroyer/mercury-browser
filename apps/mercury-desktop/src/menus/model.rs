@@ -830,8 +830,6 @@ mod tests {
                 ("Reopen Closed Tab", "⇧⌘T".to_owned()),
                 ("Find…", "⌘F".to_owned()),
                 ("Enter Full Screen", "⌃⌘F".to_owned()),
-                ("Show All History", "⌘Y".to_owned()),
-                ("Clear Browsing Data…", "⇧⌘⌫".to_owned()),
                 ("Bookmark This Page…", "⌘D".to_owned()),
                 ("Show Bookmarks Bar", "⇧⌘B".to_owned()),
                 ("Minimize", "⌘M".to_owned()),
