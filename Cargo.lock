@@ -5422,6 +5422,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-password-manager"
+version = "0.2.0"
+dependencies = [
+ "mercury-passwords",
+ "security-framework",
+ "tempfile",
+ "thiserror 2.0.21",
+ "url",
+ "zeroize",
+]
+
+[[package]]
 name = "mercury-passwords"
 version = "0.2.0"
 dependencies = [

@@ -4,6 +4,8 @@ use talaria_core::{
     PointerButtonAction, WebView, dispatch_command,
 };
 use talaria_core::{PageRequestAnswer, PageRequestId};
+// passwords
+use talaria_core::LoginFill;
 
 #[derive(Debug, PartialEq)]
 enum FakeCall {
@@ -44,6 +46,8 @@ enum FakeCall {
     AnswerPageRequest(PageRequestId, PageRequestAnswer),
     // menus
     Clipboard(ClipboardCommand),
+    // passwords
+    FillLogin(LoginFill),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -167,6 +171,11 @@ impl WebView for FakeWebView {
     // menus
     fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error> {
         self.record(FakeCall::Clipboard(command))
+    }
+
+    // passwords
+    fn fill_login(&mut self, fill: LoginFill) -> Result<(), Self::Error> {
+        self.record(FakeCall::FillLogin(fill))
     }
 }
 
@@ -474,4 +483,20 @@ fn clipboard_commands_reach_the_page_editing() {
         assert_eq!(result, Ok(()));
         assert_eq!(web_view.calls, vec![FakeCall::Clipboard(command)]);
     }
+}
+
+// passwords
+#[test]
+fn a_login_fill_reaches_the_web_view_unchanged() {
+    let mut web_view = FakeWebView::default();
+    let fill = LoginFill::new(
+        "https://example.com".to_owned(),
+        "alice".to_owned(),
+        "fake-pw".to_owned(),
+    );
+
+    let result = dispatch_command(&mut web_view, BrowserCommand::FillLogin(fill.clone()));
+
+    assert_eq!(result, Ok(()));
+    assert_eq!(web_view.calls, vec![FakeCall::FillLogin(fill)]);
 }

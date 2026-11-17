@@ -4,6 +4,7 @@ members = [
     "apps/mercury-desktop",
     "crates/mercury-downloads",
     "crates/mercury-import",
+    "crates/mercury-password-manager",
     "crates/mercury-passwords",
     "crates/mercury-settings",
     "crates/mercury-store",

@@ -66,12 +66,13 @@ thread_local! {
 
 /// The password manager's seam: credentials saved for a site's sign-in, used to fill the sheet
 /// in. `origin` is the serialised origin (`https://example.com`); `realm` is the sign-in realm,
-/// which Servo 0.8 does not report, so it is always `None` for now. Nothing is saved yet.
+/// which Servo 0.8 does not report, so it is always `None` for now.
 pub(crate) fn saved_http_credentials(
-    _origin: &str,
-    _realm: Option<&str>,
+    id: PageRequestId,
+    origin: &str,
+    realm: Option<&str>,
 ) -> Option<HttpCredentials> {
-    None
+    crate::passwords::saved_http_credentials(id, origin, realm) // passwords-ui
 }
 
 /// Shows the active tab's oldest unanswered request, or nothing.
@@ -89,10 +90,25 @@ pub(crate) fn sync_page_request(window: &MainWindow, controller: &BrowserControl
                 PageRequestKind::Authentication { .. } => pending
                     .origin()
                     .key()
-                    .and_then(|origin| saved_http_credentials(origin, None)),
+                    .and_then(|origin| saved_http_credentials(pending.id(), origin, None)),
                 _ => None,
             };
-            page_request_view(&pending, saved.as_ref())
+            let view = page_request_view(&pending, saved.as_ref());
+            // passwords-ui: the sign-in sheet offers to save what is typed.
+            match pending.kind() {
+                PageRequestKind::Authentication { for_proxy }
+                    if crate::passwords::offers_to_save_sign_in(
+                        pending.origin().key(),
+                        *for_proxy,
+                    ) =>
+                {
+                    PageRequestView {
+                        choice_label: crate::passwords::SAVE_SIGN_IN_CHOICE.into(),
+                        ..view
+                    }
+                }
+                _ => view,
+            }
         })
         .unwrap_or_default();
     if window.get_page_request() != view {
@@ -125,6 +141,14 @@ pub(crate) fn connect_page_request_callbacks(
             return;
         }
         let reply = reply_for(pending.kind(), accepted, &text, &password, checked);
+        // passwords-ui: "save" chosen on a sign-in; saved once the sign-in has worked.
+        if accepted
+            && checked
+            && matches!(pending.kind(), PageRequestKind::Authentication { .. })
+            && let Some(origin) = pending.origin().key()
+        {
+            crate::passwords::sign_in_sent(tab_id, origin, &text, &password);
+        }
         controller
             .borrow_mut()
             .answer_page_request(tab_id, id, reply, now);
@@ -173,6 +197,8 @@ pub(crate) fn reply_for(
         // Servo 0.8 does not say which frame asked for a permission, so a decision cannot be
         // remembered for the right site; none is offered.
         PageRequestKind::Permission(_) => reply,
+        // passwords-ui: a sign-in's choice is "save the password", not a block.
+        PageRequestKind::Authentication { .. } => reply,
         _ if checked => reply.blocking_further_dialogs(),
         _ => reply,
     }
@@ -430,8 +456,30 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_saved_for_sign_ins_yet() {
-        assert_eq!(saved_http_credentials("https://example.com", None), None);
+    fn nothing_is_filled_into_a_sign_in_without_a_saved_login() {
+        crate::passwords::tests::install_fakes();
+        assert_eq!(
+            saved_http_credentials(PageRequestId::new(1), "https://example.com", None),
+            None
+        );
+    }
+
+    // passwords-ui
+    #[test]
+    fn a_sign_ins_choice_saves_rather_than_blocks() {
+        assert_eq!(
+            reply_for(
+                &PageRequestKind::Authentication { for_proxy: false },
+                true,
+                "alice",
+                "pw",
+                true
+            ),
+            PageRequestReply::new(PageRequestAnswer::Credentials(HttpCredentials::new(
+                "alice".to_owned(),
+                "pw".to_owned()
+            )))
+        );
     }
 
     #[test]

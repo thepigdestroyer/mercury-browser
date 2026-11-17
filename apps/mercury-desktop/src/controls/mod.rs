@@ -34,7 +34,9 @@ use talaria_core::{
 };
 
 use self::color::{ColorKey, ColorModel, SWATCHES, from_hue_lightness, hue_lightness};
-use self::context_menu::{MenuCommand, MenuKey, MenuModel, MenuOutcome, MenuRow, build_menu};
+use self::context_menu::{
+    MenuCommand, MenuKey, MenuModel, MenuOutcome, MenuRow, build_menu, with_login_chooser,
+};
 use self::geometry::{Rect, element_in_window, place_at_point, place_beside};
 use self::select::{SelectKey, SelectModel, SelectRow};
 use crate::activation::consume_user_activation;
@@ -310,7 +312,15 @@ impl Controls {
                 Some((id, request)) => {
                     let origin = page_origin(state.url());
                     window.set_controls_origin(caption(&origin).into());
-                    open_popup(window, request, tab_id, id, state.url(), &origin)
+                    open_popup(
+                        window,
+                        request,
+                        tab_id,
+                        id,
+                        state.url(),
+                        &origin,
+                        state.password_field_menu(), // passwords-ui
+                    )
                 }
             };
             show_popup(window, &current.popup, page, zoom, true);
@@ -345,6 +355,7 @@ impl Controls {
         }
         state.taken_keys.take(event.physical_key);
         let mut closing = None;
+        let mut fill_login = None; // passwords-ui
         match &mut state.popup {
             Popup::Select { model, rows, .. } => {
                 if let Some(key) = select_key(&event.logical_key) {
@@ -369,10 +380,15 @@ impl Controls {
             Popup::Menu { model, .. } => {
                 if let Some(key) = menu_key(&event.logical_key) {
                     match model.key(key) {
-                        MenuOutcome::Close(command) => closing = Some(menu_answer(command)),
+                        MenuOutcome::Close(command) => {
+                            fill_login = login_to_fill(command.as_ref()); // passwords-ui
+                            closing = Some(menu_answer(command));
+                        }
                         MenuOutcome::Stay => {
                             window.set_controls_highlighted(highlighted(model.highlighted()))
                         }
+                        // passwords-ui
+                        MenuOutcome::Replaced => menu_rows_replaced(&window, model),
                     }
                 }
             }
@@ -382,6 +398,13 @@ impl Controls {
         if let Some((answer, new_tab)) = closing {
             self.finish(answer, new_tab);
         }
+        // passwords-ui: after the engine's menu was answered
+        if let Some(index) = fill_login {
+            crate::passwords::fill_chosen(&self.controller, index);
+            if let Some(window) = self.window.upgrade() {
+                window.window().request_redraw();
+            }
+        }
         true
     }
 
@@ -390,6 +413,7 @@ impl Controls {
             return;
         };
         let mut state = self.state.borrow_mut();
+        let mut fill_login = None; // passwords-ui
         let closing = match &mut state.popup {
             Popup::Select { model, rows, .. } => match model.click(row) {
                 Outcome::Close(answer) => Some((answer, None)),
@@ -399,14 +423,29 @@ impl Controls {
                 }
             },
             Popup::Menu { model, .. } => match model.click(row) {
-                MenuOutcome::Close(command) => Some(menu_answer(command)),
+                MenuOutcome::Close(command) => {
+                    fill_login = login_to_fill(command.as_ref()); // passwords-ui
+                    Some(menu_answer(command))
+                }
                 MenuOutcome::Stay => None,
+                // passwords-ui
+                MenuOutcome::Replaced => {
+                    menu_rows_replaced(&window, model);
+                    None
+                }
             },
             _ => None,
         };
         drop(state);
         if let Some((answer, new_tab)) = closing {
             self.finish(answer, new_tab);
+        }
+        // passwords-ui: after the engine's menu was answered
+        if let Some(index) = fill_login {
+            crate::passwords::fill_chosen(&self.controller, index);
+            if let Some(window) = self.window.upgrade() {
+                window.window().request_redraw();
+            }
         }
     }
 
@@ -584,6 +623,7 @@ fn open_popup(
     id: ControlId,
     page_url: &str,
     _origin: &str,
+    password_field: Option<ControlId>,
 ) -> Popup {
     match request {
         ControlRequest::Select {
@@ -622,30 +662,19 @@ fn open_popup(
             link_url,
             image_url,
         } => {
-            let model = MenuModel::new(build_menu(
+            let mut model = MenuModel::new(build_menu(
                 entries,
                 link_url.as_deref(),
                 image_url.as_deref(),
                 page_url,
             ));
-            window.set_controls_menu_rows(ModelRc::new(VecModel::from(
-                model
-                    .rows()
-                    .iter()
-                    .map(|row| match row {
-                        MenuRow::Item { label, enabled, .. } => ContextMenuRow {
-                            label: label.into(),
-                            enabled: *enabled,
-                            separator: false,
-                        },
-                        MenuRow::Separator => ContextMenuRow {
-                            label: Default::default(),
-                            enabled: false,
-                            separator: true,
-                        },
-                    })
-                    .collect::<Vec<_>>(),
-            )));
+            // passwords-ui: "Fill login…" over the focused password field
+            if let Some(fill) = password_field
+                .and_then(|field| crate::passwords::fill_menu(tab_id, field, page_url))
+            {
+                model = with_login_chooser(model, &fill.heading, &fill.usernames);
+            }
+            set_menu_rows(window, &model);
             window.set_controls_highlighted(-1);
             Popup::Menu {
                 model,
@@ -671,6 +700,46 @@ fn open_popup(
             }
         }
     }
+}
+
+// passwords-ui
+fn login_to_fill(command: Option<&MenuCommand>) -> Option<usize> {
+    match command {
+        Some(MenuCommand::FillLogin(index)) => Some(*index),
+        _ => None,
+    }
+}
+
+// passwords-ui: the menu became the list of logins; its height changed, so it is placed again
+// once this state update is over.
+fn menu_rows_replaced(window: &MainWindow, model: &MenuModel) {
+    set_menu_rows(window, model);
+    window.set_controls_highlighted(highlighted(model.highlighted()));
+    slint::Timer::single_shot(Duration::ZERO, || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
+        with_controls(Controls::relayout);
+    });
+}
+
+fn set_menu_rows(window: &MainWindow, model: &MenuModel) {
+    window.set_controls_menu_rows(ModelRc::new(VecModel::from(
+        model
+            .rows()
+            .iter()
+            .map(|row| match row {
+                MenuRow::Item { label, enabled, .. } => ContextMenuRow {
+                    label: label.into(),
+                    enabled: *enabled,
+                    separator: false,
+                },
+                MenuRow::Separator => ContextMenuRow {
+                    label: Default::default(),
+                    enabled: false,
+                    separator: true,
+                },
+            })
+            .collect::<Vec<_>>(),
+    )));
 }
 
 /// Places the open popup over the page; `opened` also scrolls a select list to its highlight.
@@ -801,7 +870,10 @@ fn menu_answer(command: Option<MenuCommand>) -> (ControlAnswer, Option<String>) 
     match command {
         Some(MenuCommand::Engine(action)) => (ControlAnswer::ContextMenu(action), None),
         Some(MenuCommand::OpenInNewTab(address)) => (ControlAnswer::Dismiss, Some(address)),
-        None => (ControlAnswer::Dismiss, None),
+        // passwords-ui: the fill itself follows the dismissed menu (`key`, `row_clicked`).
+        Some(MenuCommand::ShowLogins | MenuCommand::FillLogin(_)) | None => {
+            (ControlAnswer::Dismiss, None)
+        }
     }
 }
 

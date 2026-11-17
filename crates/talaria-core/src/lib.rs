@@ -4,6 +4,8 @@ mod controller;
 mod controls;
 mod cursor;
 mod input;
+// passwords
+mod login_fill;
 mod page_icon;
 mod page_request;
 mod tab;
@@ -27,6 +29,8 @@ pub use input::{
     ClipboardCommand, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
     KeyboardModifiers,
 };
+// passwords
+pub use login_fill::LoginFill;
 pub use page_icon::PageIcon;
 pub use page_request::{
     HttpCredentials, MAX_COMBINING_MARKS, MAX_MESSAGE_CHARS, MAX_PROMPT_VALUE_CHARS, PageOrigin,

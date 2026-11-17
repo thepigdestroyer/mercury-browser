@@ -40,6 +40,8 @@ mod page_requests; // dialogs
 mod panic_hook;
 // tabs opened and closed by pages
 mod page_tabs;
+// passwords-ui
+mod passwords;
 #[cfg(target_os = "macos")]
 mod platform_macos;
 mod post_run;
@@ -128,6 +130,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     let settings =
         settings::SettingsHandle::start(profile.paths.as_ref().map(|p| p.root.as_path()));
     let options = settings::launch_options(options, &settings);
+    // passwords-ui: the login keychain only for a normal run of the default profile.
+    passwords::start(options.is_automated(), options.profile_dir.is_none());
     select_hardware_accelerated_backend(options.is_automated())?;
     #[cfg(target_os = "macos")]
     macos_terminate::end_the_run_in_order_on_terminate_requests();

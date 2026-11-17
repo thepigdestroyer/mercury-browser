@@ -30,6 +30,7 @@ impl SettingsWindowSlot {
             log::warn!("could not hide the settings window: {error}");
         }
         self.editing.borrow_mut().take();
+        crate::passwords::settings_window_closed(); // passwords-ui
     }
 }
 
@@ -55,6 +56,7 @@ pub(crate) fn show(handle: &Rc<SettingsHandle>) {
         Ok(window) => {
             super::apply_chrome_theme(&window);
             connect(&window, Rc::downgrade(handle));
+            crate::passwords::connect_settings_window(&window); // passwords-ui
             fill_text_fields(&window, &handle.settings());
             *slot.window.borrow_mut() = Some(window);
         }

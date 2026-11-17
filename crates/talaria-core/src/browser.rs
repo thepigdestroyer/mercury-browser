@@ -5,6 +5,8 @@ use crate::{
     DEFAULT_ZOOM_PERCENT, ImeInput, KeyboardInput, PageIcon, PointerCursor,
 };
 use crate::{PageRequest, PageRequestAnswer, PageRequestId};
+// passwords
+use crate::LoginFill;
 
 const DEFAULT_PAGE_TITLE: &str = "New Tab";
 const INITIAL_ADDRESS: &str = "";
@@ -151,6 +153,10 @@ pub enum BrowserCommand {
     // menus
     /// Cut, Copy or Paste chosen in the Edit menu while the page has focus.
     Clipboard(ClipboardCommand),
+    // passwords
+    /// Fills a login the user chose into the focused password field of the top-level document,
+    /// if that document has the login's origin.
+    FillLogin(LoginFill),
 }
 
 impl BrowserCommand {
@@ -235,6 +241,14 @@ pub enum BrowserEvent {
     PageRequested(PageRequest),
     /// A new document started loading in the tab (not a same-document navigation).
     PageLoadStarted,
+    // passwords
+    /// The context menu `menu` was opened in the same frame as the focused password field
+    /// `field` (an input-method control of a password input). Sent right after the menu's
+    /// `ControlShown`.
+    PasswordFieldMenu {
+        menu: ControlId,
+        field: ControlId,
+    },
 }
 
 impl BrowserEvent {
@@ -262,6 +276,8 @@ pub struct BrowserState {
     // controls
     pending_control: Option<(ControlId, ControlRequest)>,
     input_method: Option<(ControlId, ControlRect)>,
+    // passwords: the context menu and the password field it was opened over.
+    password_field_menu: Option<(ControlId, ControlId)>,
 }
 
 impl Default for BrowserState {
@@ -279,6 +295,7 @@ impl Default for BrowserState {
             fullscreen: false,
             pending_control: None,
             input_method: None,
+            password_field_menu: None,
         }
     }
 }
@@ -424,6 +441,29 @@ impl BrowserState {
             }
             // dialogs: kept by the tab's page requests, not here.
             BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
+            // passwords
+            BrowserEvent::PasswordFieldMenu { menu, field } => {
+                self.password_field_menu = Some((menu, field));
+            }
         }
+    }
+
+    // passwords
+    /// The control id of the focused editable element, while the input method is active.
+    pub fn input_method_id(&self) -> Option<ControlId> {
+        self.input_method.map(|(id, _)| id)
+    }
+
+    /// The focused password field, when the pending control is a context menu opened over it
+    /// (in its frame) and the field still has focus.
+    pub fn password_field_menu(&self) -> Option<ControlId> {
+        let (menu, field) = self.password_field_menu?;
+        let menu_pending = self
+            .pending_control
+            .as_ref()
+            .is_some_and(|(id, request)| {
+                *id == menu && matches!(request, ControlRequest::ContextMenu { .. })
+            });
+        (menu_pending && self.input_method_id() == Some(field)).then_some(field)
     }
 }

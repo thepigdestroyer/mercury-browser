@@ -133,6 +133,31 @@ impl EmbedderControls {
         }
     }
 
+    // passwords
+    /// For a context menu just shown (`shown` is its `ControlShown`): the event saying it was
+    /// opened in the frame of the focused password field, if a password input of that frame has
+    /// the input method. A right-click focuses the clicked field before Servo opens the menu.
+    pub(crate) fn password_field_menu(&self, shown: &BrowserEvent) -> Option<BrowserEvent> {
+        let BrowserEvent::ControlShown {
+            id: menu,
+            request: ControlRequest::ContextMenu { .. },
+        } = shown
+        else {
+            return None;
+        };
+        let store = self.store.borrow();
+        let field = password_field_in_frame(&store.entries, *menu, |control| match control {
+            EmbedderControl::InputMethod(input_method) => {
+                input_method.input_method_type() == servo::InputMethodType::Password
+            }
+            _ => false,
+        }, |a, b| a.pipeline_id == b.pipeline_id)?;
+        Some(BrowserEvent::PasswordFieldMenu {
+            menu: *menu,
+            field,
+        })
+    }
+
     /// Drops every pending control with the engine's default answer and returns the events that
     /// close them in the UI. Used when the page goes away (navigation, crash, web view closed).
     pub(crate) fn drop_all(&self) -> Vec<BrowserEvent> {
@@ -146,6 +171,25 @@ impl EmbedderControls {
             })
             .collect()
     }
+}
+
+// passwords
+/// The newest pending control that `is_password_field` accepts and that belongs to the same
+/// frame as the control `menu`.
+fn password_field_in_frame<K, C>(
+    entries: &[(ControlId, K, C)],
+    menu: ControlId,
+    is_password_field: impl Fn(&C) -> bool,
+    same_frame: impl Fn(&K, &K) -> bool,
+) -> Option<ControlId> {
+    let (_, menu_key, _) = entries.iter().find(|(id, _, _)| *id == menu)?;
+    entries
+        .iter()
+        .rev()
+        .find(|(id, key, control)| {
+            *id != menu && same_frame(key, menu_key) && is_password_field(control)
+        })
+        .map(|(id, _, _)| *id)
 }
 
 fn apply_answer(control: EmbedderControl, answer: ControlAnswer) {
@@ -427,6 +471,36 @@ mod tests {
 
         assert_eq!(store.take_all().len(), 2);
         assert!(store.take_all().is_empty());
+    }
+
+    // passwords
+    #[test]
+    fn a_menu_belongs_to_the_newest_password_field_of_its_own_frame_only() {
+        // Keys are (frame, index); controls say whether they are password fields.
+        let entries = vec![
+            (ControlId::new(1), (1, 1), true),
+            (ControlId::new(2), (2, 1), true),
+            (ControlId::new(3), (1, 2), false),
+            (ControlId::new(4), (1, 3), false),
+        ];
+        let same_frame = |a: &(u8, u8), b: &(u8, u8)| a.0 == b.0;
+
+        assert_eq!(
+            password_field_in_frame(&entries, ControlId::new(4), |c| *c, same_frame),
+            Some(ControlId::new(1))
+        );
+        let other_frame = vec![
+            (ControlId::new(2), (2, 1), true),
+            (ControlId::new(4), (1, 3), false),
+        ];
+        assert_eq!(
+            password_field_in_frame(&other_frame, ControlId::new(4), |c| *c, same_frame),
+            None
+        );
+        assert_eq!(
+            password_field_in_frame(&entries, ControlId::new(9), |c| *c, same_frame),
+            None
+        );
     }
 
     #[test]

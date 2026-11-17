@@ -19,6 +19,9 @@ glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
+# passwords-ui
+mercury-password-manager = { path = "../../crates/mercury-password-manager" }
+mercury-passwords = { path = "../../crates/mercury-passwords" }
 mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-ui = { path = "../../crates/mercury-ui" }
 servo.workspace = true
@@ -27,6 +30,7 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash.workspace = true
@@ -53,6 +57,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSMenuItem",
     "NSOpenPanel",
     "NSPanel",
+    # passwords-ui: copying a user name or password.
+    "NSPasteboard",
     "NSSavePanel",
     "NSView",
     "NSWindow",
@@ -108,6 +114,9 @@ quit-diagnostics = []
 # input (docs/developer-guide/testing.md). Off in `make build-release` and the app bundle;
 # `make check` and `make lint` compile it (`--all-features`).
 menu-diagnostics = []
+# passwords-ui: `MERCURY_PASSWORDS_DIAG_FILL`, a fill without the context menu in automated runs,
+# to check the fill script (docs/developer-guide/passwords.md). Never in a released build.
+passwords-diagnostics = []
 
 [build-dependencies]
 gl_generator = "0.14"

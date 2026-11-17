@@ -746,6 +746,7 @@ pub(crate) fn apply_pending_browser_events(
             continue;
         }
         let was_engine_ready = is_engine_ready(&controller, tab_id);
+        crate::passwords::observe_event(&mut controller, tab_id, &event); // passwords-ui
         state_changed |= controller.handle_event(tab_id, event);
         if !was_engine_ready && is_engine_ready(&controller, tab_id) {
             log::info!("tab {} is ready for commands", tab_id.value());
@@ -913,6 +914,10 @@ mod tests {
             &mut self,
             _command: talaria_core::ClipboardCommand,
         ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        // passwords-ui
+        fn fill_login(&mut self, _fill: talaria_core::LoginFill) -> Result<(), Self::Error> {
             Ok(())
         }
     }

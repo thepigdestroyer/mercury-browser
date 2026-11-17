@@ -1,6 +1,8 @@
 use crate::browser::{BrowserCommand, PointerButton, PointerButtonAction};
 use crate::{ClipboardCommand, ColorScheme, ControlAnswer, ControlId, ImeInput, KeyboardInput};
 use crate::{PageRequestAnswer, PageRequestId};
+// passwords
+use crate::LoginFill;
 
 pub trait WebView {
     type Error;
@@ -36,6 +38,8 @@ pub trait WebView {
     ) -> Result<(), Self::Error>;
     // menus
     fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error>;
+    // passwords
+    fn fill_login(&mut self, fill: LoginFill) -> Result<(), Self::Error>;
 }
 
 pub fn dispatch_command<W>(web_view: &mut W, command: BrowserCommand) -> Result<(), W::Error>
@@ -73,5 +77,7 @@ where
             web_view.answer_page_request(id, answer)
         }
         BrowserCommand::Clipboard(command) => web_view.clipboard(command),
+        // passwords
+        BrowserCommand::FillLogin(fill) => web_view.fill_login(fill),
     }
 }

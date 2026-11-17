@@ -8,7 +8,8 @@ description: How the mercury-passwords crate stores website logins in the macOS 
 `crates/mercury-passwords` is the storage and logic behind Mercury's password manager. It keeps
 website logins in the operating system's credential store, generates passwords, and reads and
 writes the login CSV files other browsers export. It has no UI and does not detect, offer to
-save or fill forms; those parts build on it.
+save or fill forms; those parts build on it (see [the password manager in the
+browser](#the-password-manager-in-the-browser)).
 
 ## The model
 
@@ -187,6 +188,60 @@ Keychain tests must never read or change the developer's own keychains, nor show
 
 Use the `security` tool read-only and only with an explicit path to a temporary keychain (for
 example `security dump-keychain <path>`), never with `-d`, which prints secrets.
+
+## The password manager in the browser
+
+`crates/mercury-password-manager` (no Servo, no Slint) holds the logic between the store and the
+interface; `apps/mercury-desktop/src/passwords/` connects it to the windows, the engine and macOS.
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Backend choice | `passwords::start` | The login keychain only in a normal interactive run of the default profile. `--screenshot`, `--background`, `--profile-dir` and tests keep logins in memory (`AnyBackend::Memory`), authenticate with `RefusingAuthenticator` and copy to an in-memory pasteboard: they never touch the login keychain, show a system prompt or change the real clipboard. |
+| Settings section | `passwords/section.rs`, `ui/passwords/passwords-section.slint` | List (`login_rows`, untrusted text made safe by `display_text`), search (`filter_rows`), open, copy the user name, show or copy the password, edit (`update_login`: a new user name saves the new key before removing the old), delete (asks first), the generator, CSV import (`import_csv`: never overwrites or reads a saved password) and export (`export_csv` + `write_private_file`: a new `0600` file renamed over the chosen path). The Slint side talks only through the `PasswordManagerUi` global. |
+| Authentication | `Authenticator`, `AuthGate`, `passwords/local_auth.rs` | Showing, copying and exporting a password first asks `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (Touch ID or the login password). One success lasts `AUTH_GRACE_PERIOD` (60 s) or until the settings window closes. |
+| Copying | `Pasteboard`, `CopiedSecret`, `passwords/system_pasteboard.rs` | A password is copied with the `org.nspasteboard.ConcealedType` marker and removed after `CLIPBOARD_CLEAR_DELAY` (60 s) if the pasteboard has not changed since. |
+| Manual fill | `passwords/fill.rs`, `controls/context_menu.rs`, `talaria_core::LoginFill` | See below. |
+| HTTP sign-in | `passwords/sign_in.rs`, `SignInSaves`, `page_requests.rs` | See below. |
+
+### Manual fill
+
+Servo 0.8 has no autofill hooks (research R6), so filling is user-started and top-frame only:
+
+1. A right-click focuses the clicked field before Servo opens its context menu. When the menu
+   arrives, `talaria-servo` looks for a pending input-method control of type `Password` in the
+   **same pipeline** as the menu and, if there is one, sends
+   `BrowserEvent::PasswordFieldMenu { menu, field }` after the menu's `ControlShown`.
+2. The context menu then starts with "Fill login…" if form logins are saved for the exact origin
+   of the tab's **top-level** URL (`fill_candidates`). Choosing it turns the menu into the list of
+   those logins.
+3. Picking one (a click or Return in Mercury's own menu: the user gesture) dismisses the engine's
+   menu and, if the same field still has focus and the page still has that origin, queues
+   `BrowserCommand::FillLogin`. `ServoWebView::fill_login` evaluates `talaria-core`'s
+   `login_fill.js` with the values as escaped string literals. `evaluate_javascript` only runs in
+   the top-level document; the script fills only if `location.origin` is the login's origin and
+   `document.activeElement` is one of that document's own password inputs (focus in any frame
+   makes the frame element the active element). It sets the value, finds the user-name partner
+   (the last editable text-like input before it in its form) and fires `input` and `change`. The
+   status word is logged; the values never are.
+
+Never filled: on page load, without the menu, into a frame, on a page whose origin cannot hold
+logins (plain HTTP other than loopback). The page can read a filled value, like any value the
+user types. Save-on-submit and frame-aware fill wait for the engine patch (R7 B2).
+
+**Diagnostics.** A build with the `passwords-diagnostics` feature reads
+`MERCURY_PASSWORDS_DIAG_FILL="<origin> <user> <password>"` in automated runs: it seeds that login
+in the run's memory store and fills the focused field each time a page finishes loading, as if the
+user had picked it. `tests/pages/login-form.html` and `login-iframe.html` (see
+`tests/pages/README-dialogs.md`) check the fill and the refusal in a frame with `--screenshot`.
+
+### HTTP sign-in
+
+The sign-in sheet starts filled with the most recently changed HTTP login saved for the exact
+origin that asked (realm `""`: Servo 0.8 does not report it); the store is read once per request.
+Unless the settings turn saving off or list the origin under "Never save passwords for", the sheet
+offers "Save the user name and password in Mercury Browser" (not for proxies). With it chosen, the
+login is saved once the sign-in has worked: the tab starts a new document and finishes loading it
+without asking the same origin again (`SignInSaves`; with wrong credentials Servo asks again first).
 
 ## Other platforms
 

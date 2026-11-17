@@ -1,5 +1,6 @@
 import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import { ChromePalette } from "../theme/chrome-palette.slint";
+import { PasswordsSection } from "../passwords/passwords-section.slint";
 
 // One search engine as the settings window lists it.
 export struct SearchEngineRow {
@@ -690,7 +691,7 @@ export component SettingsWindow inherits Window {
                         }
 
                         Note {
-                            text: "Kept for the password manager, which arrives in a later version.";
+                            text: "When a site asks you to sign in with the browser's sign-in sheet, the sheet offers to save the user name and password. Saving what you type into a page's own form needs a later version of the web engine.";
                         }
 
                         GroupTitle {
@@ -722,6 +723,9 @@ export component SettingsWindow inherits Window {
                                 }
                             }
                         }
+
+                        // passwords-ui
+                        PasswordsSection { }
                     }
 
                     // Advanced
