@@ -421,28 +421,9 @@ fn find_request(command: Option<BrowserCommand>) -> Option<FindRequest> {
     }
 }
 
-/// Whether two addresses name different documents; a change of fragment alone does not.
-pub(crate) fn is_other_document(old_url: &str, new_url: &str) -> bool {
-    fn without_fragment(url: &str) -> &str {
-        url.split_once('#').map_or(url, |(base, _)| base)
-    }
-    without_fragment(old_url) != without_fragment(new_url)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn fragments_do_not_make_another_document() {
-        assert!(!is_other_document("https://a.test/p", "https://a.test/p#x"));
-        assert!(!is_other_document(
-            "https://a.test/p#x",
-            "https://a.test/p#y"
-        ));
-        assert!(is_other_document("https://a.test/p", "https://a.test/q"));
-        assert!(is_other_document("", "https://a.test/"));
-    }
 
     #[test]
     fn request_ids_never_repeat() {
