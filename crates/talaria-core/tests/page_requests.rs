@@ -729,6 +729,9 @@ impl PermissionDecisions for AlwaysBlock {
     }
 
     fn remember(&mut self, _origin: &str, _permission: PagePermission, _: PermissionDecision) {}
+
+    // media-capture
+    fn forget(&mut self, _origin: &str, _permission: PagePermission) {}
 }
 
 #[test]
@@ -859,13 +862,17 @@ const EVERY_PERMISSION: [PagePermission; 13] = [
 ];
 
 #[test]
-fn only_persistent_storage_is_asked_and_every_other_permission_is_denied_without_asking() {
+fn only_storage_camera_and_microphone_are_asked_and_the_rest_denied_without_asking() {
     for (index, feature) in EVERY_PERMISSION.into_iter().enumerate() {
         let (mut controller, tab_id) = ready_controller();
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
-        if feature == PagePermission::PersistentStorage {
+        // media-capture: camera and microphone are asked too.
+        if matches!(
+            feature,
+            PagePermission::PersistentStorage | PagePermission::Camera | PagePermission::Microphone
+        ) {
             assert!(feature.is_promptable());
             assert_eq!(pending_id(&controller, tab_id), Some(id), "{feature:?}");
             assert!(drain(&mut controller).is_empty(), "{feature:?}");

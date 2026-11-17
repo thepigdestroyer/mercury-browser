@@ -14,6 +14,8 @@ use std::time::Duration;
 
 use url::Url;
 
+use crate::capture::{CaptureAccess, is_capture_permission, paired_capture_permission};
+
 /// A dialog that arrives within this time after the page's previous dialog was closed (or while
 /// another of its dialogs is waiting) offers "Don't allow this page to show more dialogs".
 /// Three seconds, as Firefox's `dom.successive_dialog_time_limit`: a page that reopens a dialog as
@@ -67,16 +69,22 @@ pub enum PagePermission {
 
 impl PagePermission {
     /// Whether the user is asked. Everything else is denied without a prompt, including any
-    /// variant added later. Only persistent storage does something in Mercury today:
+    /// variant added later. Persistent storage, camera and microphone do something in Mercury
+    /// today (camera and microphone on macOS, where `navigator.mediaDevices` exists; Mercury's
+    /// vendored engine refuses them in frames of another origin than the top-level page, so a
+    /// request for them always names the page that asks):
     /// - notifications, push, background sync: no notification or service-worker UI yet;
-    /// - camera, microphone, speaker, device info: WebRTC and `getUserMedia` are off;
+    /// - speaker, device info: no output selection; WebRTC is off;
     /// - MIDI, Bluetooth, gamepad: no device support is built or exposed;
     /// - geolocation and screen wake lock: their engine preferences (`dom_geolocation_enabled`,
     ///   `dom_wakelock_enabled`) are off. Add them here when they are turned on.
     ///
     /// A page can still name any of these in `navigator.permissions.request()`.
     pub const fn is_promptable(self) -> bool {
-        matches!(self, Self::PersistentStorage)
+        matches!(
+            self,
+            Self::PersistentStorage | Self::Camera | Self::Microphone
+        )
     }
 
     /// Completes "<site> wants to …".
@@ -276,6 +284,8 @@ impl PermissionDecision {
 pub trait PermissionDecisions: fmt::Debug {
     fn decision(&self, origin: &str, permission: PagePermission) -> Option<PermissionDecision>;
     fn remember(&mut self, origin: &str, permission: PagePermission, decision: PermissionDecision);
+    /// media-capture: forgets the decision, so that the site is asked again.
+    fn forget(&mut self, origin: &str, permission: PagePermission);
 }
 
 /// Remembers decisions until the browser exits.
@@ -294,6 +304,10 @@ impl PermissionDecisions for SessionPermissionDecisions {
     fn remember(&mut self, origin: &str, permission: PagePermission, decision: PermissionDecision) {
         self.decisions
             .insert((origin.to_owned(), permission), decision);
+    }
+
+    fn forget(&mut self, origin: &str, permission: PagePermission) {
+        self.decisions.remove(&(origin.to_owned(), permission));
     }
 }
 
@@ -368,6 +382,9 @@ pub struct PendingPageRequest {
     offers_to_block_dialogs: bool,
     for_reload: bool,
     credentials_rejected: bool,
+    /// media-capture: a camera (microphone) request from the same page waiting behind this
+    /// microphone (camera) request; one answer goes to both.
+    paired: Option<PagePermission>,
 }
 
 impl PendingPageRequest {
@@ -400,6 +417,12 @@ impl PendingPageRequest {
     pub const fn credentials_were_rejected(&self) -> bool {
         self.credentials_rejected
     }
+
+    /// media-capture: for a camera or microphone prompt, the other kind when the same page
+    /// asked for it too; the prompt then asks for both and its answer goes to both.
+    pub const fn paired_permission(&self) -> Option<PagePermission> {
+        self.paired
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -426,6 +449,10 @@ pub(crate) struct PageRequests {
     /// The page whose dialogs or leave prompts the user blocked (its origin, or `None` for a page
     /// without one).
     blocked_origin: Option<String>,
+    /// media-capture: what the current document has been allowed to capture, and from which
+    /// origin.
+    capture: CaptureAccess,
+    capture_origin: Option<PageOrigin>,
     /// The user navigated away from the blocked page: the blocks end once a new document starts or
     /// another site asks. They stay if the navigation produces no new document (a same-document
     /// traversal, a 204, a download) or the user stays.
@@ -447,7 +474,50 @@ impl PageRequests {
                 .skip(1)
                 .any(|queued| same_group(&queued.pending.kind));
         }
+        pending.paired =
+            self.paired_index(&pending)
+                .and_then(|index| match self.queue[index].pending.kind {
+                    PageRequestKind::Permission(permission) => Some(permission),
+                    _ => None,
+                });
         Some(pending)
+    }
+
+    /// media-capture: the queued request that `pending` (a camera or microphone request) is
+    /// shown and answered together with: the first one for the other kind from the same origin.
+    fn paired_index(&self, pending: &PendingPageRequest) -> Option<usize> {
+        let PageRequestKind::Permission(permission) = pending.kind else {
+            return None;
+        };
+        let other = paired_capture_permission(permission)?;
+        self.queue.iter().position(|queued| {
+            queued.pending.id != pending.id
+                && queued.pending.kind == PageRequestKind::Permission(other)
+                && queued.pending.origin == pending.origin
+        })
+    }
+
+    /// media-capture: the current document may use this kind (when it is camera or microphone).
+    fn grant_capture(&mut self, permission: PagePermission, origin: &PageOrigin) {
+        if is_capture_permission(permission) {
+            self.capture.grant(permission);
+            self.capture_origin = Some(origin.clone());
+        }
+    }
+
+    pub(crate) const fn capture_access(&self) -> CaptureAccess {
+        self.capture
+    }
+
+    pub(crate) const fn capture_origin(&self) -> Option<&PageOrigin> {
+        self.capture_origin.as_ref()
+    }
+
+    /// media-capture: the page no longer has camera or microphone access (it crashed, or the
+    /// user stopped it).
+    pub(crate) fn end_capture(&mut self) {
+        self.capture = CaptureAccess::default();
+        self.capture_origin = None;
     }
 
     /// Queues the request, or returns the answer it gets without asking.
@@ -487,6 +557,9 @@ impl PageRequests {
                     .key()
                     .and_then(|key| decisions.decision(key, *permission))
                 {
+                    if decision == PermissionDecision::Allow {
+                        self.grant_capture(*permission, &origin);
+                    }
                     return Some(decision.answer());
                 }
             }
@@ -519,24 +592,43 @@ impl PageRequests {
                 offers_to_block_dialogs,
                 for_reload,
                 credentials_rejected,
+                paired: None,
             },
         });
         None
     }
 
     /// Takes the request out of the queue. Also returns the ids of requests that the reply
-    /// discards (further dialogs, when it blocks them).
+    /// discards (further dialogs, when it blocks them), and the camera or microphone request
+    /// shown together with it, which gets the same answer.
     pub(crate) fn answer(
         &mut self,
         id: PageRequestId,
         reply: &PageRequestReply,
         now: Duration,
-    ) -> Option<(PendingPageRequest, Vec<PageRequestId>)> {
+    ) -> Option<Answered> {
+        let index = self
+            .queue
+            .iter()
+            .position(|queued| queued.pending.id == id)?;
+        let answered = self.queue[index].pending.clone();
+        // media-capture: the paired request leaves with it.
+        let paired = self
+            .paired_index(&answered)
+            .and_then(|paired| self.queue.remove(paired))
+            .map(|queued| queued.pending);
         let index = self
             .queue
             .iter()
             .position(|queued| queued.pending.id == id)?;
         let answered = self.queue.remove(index)?.pending;
+        if reply.answer == PageRequestAnswer::Accept {
+            for pending in std::iter::once(&answered).chain(paired.as_ref()) {
+                if let PageRequestKind::Permission(permission) = pending.kind {
+                    self.grant_capture(permission, &pending.origin);
+                }
+            }
+        }
         let mut discarded = Vec::new();
         match &answered.kind {
             PageRequestKind::LeavePage => {
@@ -569,7 +661,11 @@ impl PageRequests {
             }
             _ => {}
         }
-        Some((answered, discarded))
+        Some(Answered {
+            answered,
+            discarded,
+            paired,
+        })
     }
 
     /// Removes waiting permission requests that a newly remembered decision now answers.
@@ -577,16 +673,25 @@ impl PageRequests {
         &mut self,
         origin_key: &str,
         permission: PagePermission,
+        decision: PermissionDecision,
     ) -> Vec<PageRequestId> {
         let mut taken = Vec::new();
+        let mut granted_origin = None;
         self.queue.retain(|queued| {
             let decided = queued.pending.kind == PageRequestKind::Permission(permission)
                 && queued.pending.origin.key() == Some(origin_key);
             if decided {
                 taken.push(queued.pending.id);
+                granted_origin = Some(queued.pending.origin.clone());
             }
             !decided
         });
+        // media-capture: a remembered grant gives the page access.
+        if let Some(origin) = granted_origin
+            && decision == PermissionDecision::Allow
+        {
+            self.grant_capture(permission, &origin);
+        }
         taken
     }
 
@@ -651,6 +756,15 @@ impl PageRequests {
         });
         taken
     }
+}
+
+/// What answering a request took out of the tab's queue.
+pub(crate) struct Answered {
+    pub(crate) answered: PendingPageRequest,
+    /// Requests the reply discards (further dialogs, when it blocks them).
+    pub(crate) discarded: Vec<PageRequestId>,
+    /// media-capture: the camera or microphone request shown together with the answered one.
+    pub(crate) paired: Option<PendingPageRequest>,
 }
 
 /// Answers a user gives to a permission request that the decision store should remember.

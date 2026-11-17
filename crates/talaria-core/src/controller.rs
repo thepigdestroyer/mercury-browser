@@ -4,7 +4,9 @@ use std::time::Duration;
 use crate::address::{AddressResolutionError, SearchUrlBuilder, resolve_address};
 use crate::browser::LoadState;
 use crate::browser::{BrowserCommand, BrowserEvent, BrowserState};
-use crate::page_request::decision_to_remember;
+use crate::page_request::{Answered, decision_to_remember};
+// media-capture
+use crate::{CaptureAccess, PagePermission};
 use crate::{
     ColorScheme, ControlAnswer, ControlId, ControlRequest, DEFAULT_ZOOM_PERCENT, Tab,
     TabActivation, TabCommand, TabId,
@@ -572,27 +574,42 @@ impl BrowserController {
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
         };
-        let Some((answered, discarded)) = tab.page_requests_mut().answer(id, &reply, now) else {
+        let Some(Answered {
+            answered,
+            discarded,
+            paired,
+        }) = tab.page_requests_mut().answer(id, &reply, now)
+        else {
             return false;
         };
-        let remembered = decision_to_remember(&answered, &reply);
+        let remembered = std::iter::once(&answered)
+            .chain(paired.as_ref())
+            .filter_map(|pending| decision_to_remember(pending, &reply))
+            .collect::<Vec<_>>();
         self.queue_page_request_answers(tab_id, &discarded, PageRequestAnswer::Discard);
+        let answer = reply.into_answer();
         self.queue_command_for(
             tab_id,
             BrowserCommand::AnswerPageRequest {
                 id,
-                answer: reply.into_answer(),
+                answer: answer.clone(),
             },
         );
+        // media-capture: a camera and a microphone request shown together get one answer.
+        if let Some(paired) = &paired {
+            self.queue_page_request_answers(tab_id, &[paired.id()], answer);
+        }
 
-        if let Some((origin, permission, decision)) = remembered {
+        for (origin, permission, decision) in remembered {
             self.permission_decisions
                 .remember(&origin, permission, decision);
             let decided = self
                 .tabs
                 .iter_mut()
                 .map(|tab| {
-                    let ids = tab.page_requests_mut().take_decided(&origin, permission);
+                    let ids = tab
+                        .page_requests_mut()
+                        .take_decided(&origin, permission, decision);
                     (tab.id(), ids)
                 })
                 .collect::<Vec<_>>();
@@ -634,6 +651,8 @@ impl BrowserController {
             BrowserEvent::LoadStateChanged {
                 state: LoadState::Failed { .. },
             } => {
+                // media-capture: a crashed page has no devices any more.
+                requests.end_capture();
                 let discarded = requests.discard_all();
                 self.queue_page_request_answers(tab_id, &discarded, PageRequestAnswer::Discard);
             }
@@ -702,5 +721,52 @@ fn show_loading(tab: &mut Tab, url: String) {
 impl Default for BrowserController {
     fn default() -> Self {
         Self::new(BrowserState::default())
+    }
+}
+
+// media-capture
+impl BrowserController {
+    /// Which capture devices the tab's current page has been allowed to use (for the indicator).
+    pub fn capture_access(&self, tab_id: TabId) -> CaptureAccess {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == tab_id)
+            .map(|tab| tab.page_requests().capture_access())
+            .unwrap_or_default()
+    }
+
+    /// The site (as shown to the user) that was allowed to capture in the tab, if any.
+    pub fn capture_origin(&self, tab_id: TabId) -> Option<String> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == tab_id)?
+            .page_requests()
+            .capture_origin()
+            .map(|origin| origin.label().to_owned())
+    }
+
+    /// Stop: the site's remembered camera and microphone decisions are forgotten, the tab's
+    /// access ends, and the page is reloaded; the engine releases the devices when the old
+    /// document is unloaded, and the reloaded page has to ask again. Returns false (and does
+    /// nothing) when the tab's page has no access.
+    pub fn stop_capture(&mut self, tab_id: TabId) -> bool {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return false;
+        };
+        let requests = tab.page_requests_mut();
+        if requests.capture_access().is_empty() {
+            return false;
+        }
+        let origin_key = requests
+            .capture_origin()
+            .and_then(|origin| origin.key().map(str::to_owned));
+        requests.end_capture();
+        if let Some(origin_key) = origin_key {
+            for permission in [PagePermission::Camera, PagePermission::Microphone] {
+                self.permission_decisions.forget(&origin_key, permission);
+            }
+        }
+        self.queue_command_for(tab_id, BrowserCommand::Reload);
+        true
     }
 }

@@ -1,5 +1,7 @@
 mod address;
 mod browser;
+// media-capture
+mod capture;
 mod controller;
 mod controls;
 mod cursor;
@@ -16,6 +18,8 @@ pub use address::{
 pub use browser::{
     BrowserCommand, BrowserEvent, BrowserState, LoadState, PointerButton, PointerButtonAction,
 };
+// media-capture
+pub use capture::CaptureAccess;
 pub use controller::BrowserController;
 pub use controls::{
     ContextMenuAction, ContextMenuEntry, ControlAnswer, ControlId, ControlRect, ControlRequest,
