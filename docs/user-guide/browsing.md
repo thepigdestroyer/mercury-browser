@@ -21,6 +21,11 @@ Mercury follows familiar desktop-browser shortcuts while keeping the interface i
 | ++alt+right++ | Go forward |
 | ++ctrl+m++ (++cmd+shift+m++ on macOS) | Mute or unmute the active tab |
 
+On macOS, muting the tab is ++cmd+shift+m++. Firefox uses ++ctrl+m++, but on macOS Mercury leaves
+Control shortcuts to the page (++ctrl+m++ is a text-editing key there). ++cmd+m++ (Minimize) and
+++option+cmd+m++ (Minimize All) belong to the system. Chrome's ++cmd+shift+m++ opens its profile
+menu, which Mercury does not have. Elsewhere it is ++ctrl+m++, as in Firefox and Edge.
+
 ## Mouse and trackpad input
 
 The active page receives pointer movement, primary and secondary button events, and pixel-based scrolling. Navigation controls remain native UI elements outside the web content surface.

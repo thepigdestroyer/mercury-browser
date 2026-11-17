@@ -124,7 +124,11 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
     // media-session lane: system Now Playing and power assertions only in interactive launches.
-    media_session::install(&window, Rc::clone(&controller), !options.is_automated());
+    media_session::install(
+        &window,
+        Rc::clone(&controller),
+        media_session::uses_system_services(&options),
+    );
 
     let screenshot_result = Rc::new(Cell::new(ScreenshotResult::Pending));
     let screenshot_timer = options.screenshot.map(|screenshot| {

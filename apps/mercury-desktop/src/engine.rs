@@ -457,7 +457,10 @@ impl EngineState {
         }
 
         // media-session lane
-        crate::media_session::after_pump(&mut self.controller.borrow_mut());
+        crate::media_session::after_pump(
+            &mut self.controller.borrow_mut(),
+            self.runtime.engine_media_session_tab(),
+        );
         match dispatch_pending_commands(&self.controller, &mut self.web_views) {
             Ok(has_pending_commands) => {
                 if has_pending_commands {

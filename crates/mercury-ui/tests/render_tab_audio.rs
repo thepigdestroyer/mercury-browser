@@ -1,5 +1,5 @@
 //! Renders the tab strip's sound indicator with Slint's software renderer and clicks it.
-//! Set `MERCURY_UI_RENDER_DIR` to keep the PNGs.
+//! Set `MERCURY_UI_RENDER_DIR` to a directory to get the PNG.
 
 use std::cell::RefCell;
 use std::path::PathBuf;
@@ -20,10 +20,11 @@ impl Platform for SoftwarePlatform {
     }
 }
 
+/// Writes the PNG only when `MERCURY_UI_RENDER_DIR` names a directory.
 fn save(pixels: &SharedPixelBuffer<slint::Rgba8Pixel>, name: &str) {
-    let directory = std::env::var_os("MERCURY_UI_RENDER_DIR")
-        .map(PathBuf::from)
-        .unwrap_or_else(std::env::temp_dir);
+    let Some(directory) = std::env::var_os("MERCURY_UI_RENDER_DIR").map(PathBuf::from) else {
+        return;
+    };
     image::save_buffer_with_format(
         directory.join(name),
         pixels.as_bytes(),

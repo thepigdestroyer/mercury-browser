@@ -79,24 +79,48 @@ If a streaming site fails, first test a direct MP4 or WebM file. That comparison
 
 ## Which tab is playing, and muting a tab
 
-A tab whose page plays sound shows a speaker on its tab; click the speaker, or press ++ctrl+m++
-(++cmd+shift+m++ on macOS), to mute the tab, and again to unmute it. A muted tab shows a crossed-out
-speaker for as long as it stays muted, including after it goes to another page.
+A tab whose page plays sound shows a speaker on its tab; click the speaker, or press ++cmd+shift+m++
+on macOS (++ctrl+m++ elsewhere), to mute the tab, and again to unmute it. A muted tab shows a
+crossed-out speaker for as long as it stays muted, including after it goes to another page.
 
-- The speaker follows the page's `<audio>` and `<video>` elements. Video that the page itself keeps
-  muted (as many sites do with background videos) shows no speaker. Sound made only with Web Audio
-  (`AudioContext`) is not shown.
-- Muting is done inside the page: Mercury mutes its media elements, including ones added later,
-  and suspends audio contexts it can reach. A page can undo this, and media inside frames from
-  other sites (embedded players) is not muted. Servo has no engine-level mute yet.
+How Mercury decides that a tab makes sound:
+
+- Servo reports when the page's `<audio>` and `<video>` elements play or pause. Mercury then looks
+  into the page about once a second while it plays. If everything it can see playing is muted (or
+  at volume 0), and the page has no frames, the tab shows no speaker; this hides the silent
+  background videos many sites use.
+- Whatever Mercury cannot see counts as sound, so that a tab that makes sound is never hidden: media
+  in frames (embedded players, but also any page with an advertising frame), in closed shadow
+  roots, or in elements outside the page that started before Mercury first looked. Such pages can
+  show a speaker while silent.
+- Sound made only with Web Audio (`AudioContext`) is not shown.
+
+Muting is best effort, and the speaker's label says so. Servo has no engine-level mute yet, so
+Mercury mutes the page's media elements from inside the page: elements already there, those added
+later, those that play while outside the page, and those in open shadow roots it finds, and it
+suspends audio contexts created after the first mute. About once a second it checks again and mutes
+anything the page un-muted.
+
+- A page can undo the mute between checks, and media in frames from other sites, audio contexts
+  created before the mute, closed shadow roots and the first moments of media that starts as a
+  page opens are not muted.
+- The page can notice: it receives `volumechange` events, sees `muted` set on its elements, and
+  sees a helper property with a random name on its window (and a wrapped `AudioContext` and
+  `HTMLMediaElement.prototype.play`), which a script could use to tell that Mercury looked or muted.
 
 ## Media keys and Now Playing (macOS)
 
-The tab that most recently started playing sound appears in Control Centre's Now Playing with
-the page's title, artist and album. The play/pause key (and AirPods controls) acts on that tab;
-next and previous reach pages that handle them through the Media Session API. It stays there while paused, so play resumes it, and is removed when the
-tab stops, goes to another page or is closed. Muted tabs and silent background videos never take the
-media keys.
+The tab that most recently started playing sound appears in Control Centre's Now Playing. It shows
+the page's title, artist and album, cut to 256 characters and cleaned of control characters. It
+also always names the page's site: as the artist when the page gives none, otherwise after the
+album. The play/pause key (and AirPods controls) acts on that tab. Next and previous are only
+offered while Servo's media session belongs to that tab, and reach pages that handle them through
+the Media Session API.
+
+The tab stays in Now Playing while paused, so play resumes it. It is removed when the tab stops,
+goes to another page, is muted or is closed. A tab that pauses and plays again within a second (as
+pages with several media elements do) does not take Now Playing back from another tab. Muted tabs
+and silent background videos never take the media keys.
 
 While the active tab plays a video in fullscreen, Mercury keeps the display from going to sleep;
 pausing, leaving fullscreen, switching tabs or quitting lets it sleep again.

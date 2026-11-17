@@ -162,6 +162,7 @@ component BrowserTabButton inherits Rectangle {
             TabAudioButton {
                 state: root.tab.audio;
                 active-tab: root.tab.active;
+                tab-title: root.tab.title;
                 clicked => {
                     root.audio-clicked();
                 }

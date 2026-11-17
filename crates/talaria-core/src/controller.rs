@@ -342,7 +342,8 @@ impl BrowserController {
             tab.mark_engine_ready();
         }
         // media session
-        let reapply_mute = tab.state().is_audio_muted() && reaches_a_new_document(&event);
+        let reapply_mute = tab.state().is_audio_muted()
+            && (reaches_a_new_document(&event) || shows_unmuted_media(&event));
         tab.state_mut().apply(event);
         if reapply_mute {
             self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted: true });
@@ -401,6 +402,11 @@ fn reaches_a_new_document(event: &BrowserEvent) -> bool {
                 state: crate::MediaPlaybackState::Playing
             }
     )
+}
+
+/// The page un-muted media of a muted tab (or added media the mute has not reached yet).
+fn shows_unmuted_media(event: &BrowserEvent) -> bool {
+    matches!(event, BrowserEvent::MediaProbed { probe } if probe.audible > 0)
 }
 
 fn set_tab_initial_url(tab: &mut Tab, url: String) -> bool {

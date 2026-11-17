@@ -93,6 +93,8 @@ impl Tab {
             InitialUrl::Taken => None,
         }?;
         self.engine_ready = false;
+        // media session
+        self.state.forget_media();
         Some(initial_url)
     }
 }

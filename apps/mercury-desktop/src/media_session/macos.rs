@@ -4,6 +4,8 @@
 
 use std::ffi::{CStr, c_void};
 use std::ptr::NonNull;
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU8, Ordering};
 
 use block2::RcBlock;
 use objc2::msg_send;
@@ -11,7 +13,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool};
 use objc2_foundation::{NSDictionary, NSNumber, NSString};
 
-use super::{NowPlayingCenter, NowPlayingInfo, PowerAssertions, RemoteCommand};
+use super::{NowPlayingCenter, NowPlayingInfo, PowerAssertions, RemoteCommand, ServiceKind};
 
 #[link(name = "MediaPlayer", kind = "framework")]
 unsafe extern "C" {
@@ -43,13 +45,34 @@ const IO_RETURN_SUCCESS: i32 = 0;
 const PLAYBACK_STATE_PLAYING: usize = 1;
 const PLAYBACK_STATE_PAUSED: usize = 2;
 const PLAYBACK_STATE_STOPPED: usize = 3;
-/// `MPRemoteCommandHandlerStatus`.
+/// `MPRemoteCommandHandlerStatus` (`MPRemoteCommand.h`).
 const HANDLER_STATUS_SUCCESS: isize = 0;
+const HANDLER_STATUS_NO_ACTIONABLE_NOW_PLAYING_ITEM: isize = 110;
+const HANDLER_STATUS_COMMAND_FAILED: isize = 200;
 
-type CommandSink = std::sync::Arc<dyn Fn(RemoteCommand) + Send + Sync>;
+/// What the handlers may act on, read when a command arrives (on any thread).
+const NOTHING_PUBLISHED: u8 = 0;
+const PLAY_PAUSE_ONLY: u8 = 1;
+const ALL_COMMANDS: u8 = 2;
+
+type CommandSink = Arc<dyn Fn(RemoteCommand) + Send + Sync>;
+
+/// The status a remote-command handler answers with, given what is published.
+fn handler_status(command: RemoteCommand, availability: u8) -> isize {
+    match (availability, command) {
+        (NOTHING_PUBLISHED, _) => HANDLER_STATUS_NO_ACTIONABLE_NOW_PLAYING_ITEM,
+        (PLAY_PAUSE_ONLY, RemoteCommand::NextTrack | RemoteCommand::PreviousTrack) => {
+            HANDLER_STATUS_COMMAND_FAILED
+        }
+        _ => HANDLER_STATUS_SUCCESS,
+    }
+}
 
 pub(super) struct SystemNowPlaying {
     sink: CommandSink,
+    availability: Arc<AtomicU8>,
+    /// Next and previous, enabled only while they can reach the page.
+    skip_commands: Vec<Retained<AnyObject>>,
     /// The registered targets: (command object, target token), removed on `clear`.
     targets: Vec<(Retained<AnyObject>, Retained<AnyObject>)>,
 }
@@ -57,7 +80,9 @@ pub(super) struct SystemNowPlaying {
 impl SystemNowPlaying {
     pub(super) fn new(sink: impl Fn(RemoteCommand) + Send + Sync + 'static) -> Self {
         Self {
-            sink: std::sync::Arc::new(sink),
+            sink: Arc::new(sink),
+            availability: Arc::new(AtomicU8::new(NOTHING_PUBLISHED)),
+            skip_commands: Vec::new(),
             targets: Vec::new(),
         }
     }
@@ -105,11 +130,15 @@ impl SystemNowPlaying {
             else {
                 continue;
             };
-            let sink = std::sync::Arc::clone(&self.sink);
+            let sink = Arc::clone(&self.sink);
+            let availability = Arc::clone(&self.availability);
             // The handler only hands the command on; it captures nothing tied to a thread.
             let handler = RcBlock::new(move |_event: NonNull<AnyObject>| -> isize {
-                sink(command);
-                HANDLER_STATUS_SUCCESS
+                let status = handler_status(command, availability.load(Ordering::Acquire));
+                if status == HANDLER_STATUS_SUCCESS {
+                    sink(command);
+                }
+                status
             });
             // SAFETY: `-addTargetWithHandler:` takes a block
             // `MPRemoteCommandHandlerStatus (^)(MPRemoteCommandEvent *)` and returns the
@@ -119,6 +148,12 @@ impl SystemNowPlaying {
             unsafe {
                 let () = msg_send![&*remote_command, setEnabled: Bool::YES];
             }
+            if matches!(
+                command,
+                RemoteCommand::NextTrack | RemoteCommand::PreviousTrack
+            ) {
+                self.skip_commands.push(remote_command.clone());
+            }
             if let Some(target) = target {
                 self.targets.push((remote_command, target));
             }
@@ -126,7 +161,18 @@ impl SystemNowPlaying {
         log::info!("now playing: taking media keys");
     }
 
+    fn set_skip_enabled(&self, enabled: bool) {
+        let enabled = if enabled { Bool::YES } else { Bool::NO };
+        for remote_command in &self.skip_commands {
+            // SAFETY: `-setEnabled:` takes a BOOL.
+            unsafe {
+                let () = msg_send![&**remote_command, setEnabled: enabled];
+            }
+        }
+    }
+
     fn unregister_commands(&mut self) {
+        self.skip_commands.clear();
         for (remote_command, target) in self.targets.drain(..) {
             // SAFETY: `target` was returned by `-addTargetWithHandler:` on this command.
             unsafe {
@@ -138,6 +184,10 @@ impl SystemNowPlaying {
 }
 
 impl NowPlayingCenter for SystemNowPlaying {
+    fn kind(&self) -> ServiceKind {
+        ServiceKind::System
+    }
+
     fn publish(&mut self, info: &NowPlayingInfo) {
         let Some(center) = Self::info_center() else {
             return;
@@ -188,10 +238,21 @@ impl NowPlayingCenter for SystemNowPlaying {
             let () = msg_send![&*center, setNowPlayingInfo: &*dictionary];
             let () = msg_send![&*center, setPlaybackState: state];
         }
+        self.availability.store(
+            if info.can_skip {
+                ALL_COMMANDS
+            } else {
+                PLAY_PAUSE_ONLY
+            },
+            Ordering::Release,
+        );
         self.register_commands();
+        self.set_skip_enabled(info.can_skip);
     }
 
     fn clear(&mut self) {
+        self.availability
+            .store(NOTHING_PUBLISHED, Ordering::Release);
         self.unregister_commands();
         let Some(center) = Self::info_center() else {
             return;
@@ -218,6 +279,10 @@ pub(super) struct SystemPowerAssertions {
 }
 
 impl PowerAssertions for SystemPowerAssertions {
+    fn kind(&self) -> ServiceKind {
+        ServiceKind::System
+    }
+
     fn prevent_display_sleep(&mut self) -> bool {
         if self.assertion.is_some() {
             return true;
@@ -259,5 +324,41 @@ impl PowerAssertions for SystemPowerAssertions {
 impl Drop for SystemPowerAssertions {
     fn drop(&mut self) {
         self.allow_display_sleep();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Pure: no MediaPlayer object is created.
+    #[test]
+    fn handlers_answer_with_the_status_of_what_is_published() {
+        for command in [
+            RemoteCommand::Play,
+            RemoteCommand::Pause,
+            RemoteCommand::TogglePlayPause,
+            RemoteCommand::NextTrack,
+            RemoteCommand::PreviousTrack,
+        ] {
+            assert_eq!(
+                handler_status(command, NOTHING_PUBLISHED),
+                110,
+                "{command:?}"
+            );
+            assert_eq!(handler_status(command, ALL_COMMANDS), 0, "{command:?}");
+        }
+        assert_eq!(
+            handler_status(RemoteCommand::TogglePlayPause, PLAY_PAUSE_ONLY),
+            0
+        );
+        assert_eq!(
+            handler_status(RemoteCommand::NextTrack, PLAY_PAUSE_ONLY),
+            200
+        );
+        assert_eq!(
+            handler_status(RemoteCommand::PreviousTrack, PLAY_PAUSE_ONLY),
+            200
+        );
     }
 }

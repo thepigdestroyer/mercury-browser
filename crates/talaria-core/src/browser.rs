@@ -176,6 +176,8 @@ pub struct BrowserState {
     media: MediaState,
     /// The user's choice; kept across navigations in the tab.
     audio_muted: bool,
+    /// A load started; the next address change commits a new document.
+    document_pending: bool,
 }
 
 impl Default for BrowserState {
@@ -194,6 +196,7 @@ impl Default for BrowserState {
             // media session
             media: MediaState::default(),
             audio_muted: false,
+            document_pending: false,
         }
     }
 }
@@ -254,18 +257,28 @@ impl BrowserState {
     pub(crate) fn set_audio_muted(&mut self, muted: bool) {
         self.audio_muted = muted;
     }
-    /// A page that starts loading replaces the document whose media was reported (Servo then
-    /// reports `HeadParsed` as a second `Loading`, which keeps it); a failed or crashed page
-    /// plays nothing.
+    /// The tab's web view is about to be replaced by a new one.
+    pub(crate) fn forget_media(&mut self) {
+        self.media = MediaState::default();
+        self.document_pending = false;
+    }
+    /// Media belongs to a document. The old document keeps playing while a new one loads, and
+    /// a load that never commits (a download, a 204, a cancelled `beforeunload`) leaves it in
+    /// place; only the address change that commits the new document after a load started
+    /// (Servo reports `Started` as `Loading`, then the history change) replaces it. An address
+    /// change without a load is the same document (`pushState`, a fragment). A failed or crashed
+    /// page plays nothing.
     fn forget_media_of_a_replaced_document(&mut self, event: &BrowserEvent) {
-        if let BrowserEvent::LoadStateChanged { state } = event
-            && match state {
-                LoadState::Loading => self.load_state != LoadState::Loading,
-                LoadState::Failed { .. } => true,
-                LoadState::Idle | LoadState::Loaded => false,
-            }
-        {
-            self.media = MediaState::default();
+        match event {
+            BrowserEvent::LoadStateChanged {
+                state: LoadState::Loading,
+            } if self.load_state != LoadState::Loading => self.document_pending = true,
+            BrowserEvent::LoadStateChanged {
+                state: LoadState::Failed { .. },
+            } => self.forget_media(),
+            BrowserEvent::LoadStateChanged { .. } => self.document_pending = false,
+            BrowserEvent::AddressChanged { .. } if self.document_pending => self.forget_media(),
+            _ => {}
         }
     }
 

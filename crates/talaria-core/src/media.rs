@@ -63,14 +63,16 @@ impl PartialEq for MediaPosition {
 
 impl Eq for MediaPosition {}
 
-/// What a look into the page's top-level document found: media elements that are playing,
-/// how many of those are neither muted nor at volume 0, and whether the fullscreen element
-/// is (or holds a playing) video. Media inside frames and elements outside the document are
-/// not seen.
+/// What a look into the page's top-level document found: media elements that are playing
+/// (in the document, its open shadow roots, and elements outside the document that played
+/// since the first probe), how many of those are neither muted nor at volume 0, whether the
+/// page has places the probe cannot look into (frames), and whether the fullscreen element is
+/// (or holds a playing) video.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct MediaProbe {
     pub playing: u32,
     pub audible: u32,
+    pub unseen: bool,
     pub fullscreen_video: bool,
 }
 
@@ -124,14 +126,15 @@ impl MediaState {
         matches!(self.playback, MediaPlaybackState::Playing)
     }
 
-    /// Playing, and not silenced as far as the top-level document shows. When the probe sees
-    /// nothing playing, the media is somewhere it cannot look (a frame, a detached element),
-    /// so it counts as audible; so does media not probed yet.
+    /// Playing, and not shown to be silenced. Only a probe that found playing media, all of it
+    /// muted, and nowhere else media could be (no frames), makes playing media silent: a tab
+    /// that makes sound must never hide, so anything the probe cannot account for counts as
+    /// audible, as does media not probed yet.
     pub fn is_audible(&self) -> bool {
         self.is_playing()
             && self
                 .probe
-                .is_none_or(|probe| probe.playing == 0 || probe.audible > 0)
+                .is_none_or(|probe| probe.playing == 0 || probe.audible > 0 || probe.unseen)
     }
 
     pub fn plays_fullscreen_video(&self) -> bool {

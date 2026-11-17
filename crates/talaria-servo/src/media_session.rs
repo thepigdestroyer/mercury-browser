@@ -1,7 +1,10 @@
 //! Servo's media session and the script-level mute, probe and media-key fallback.
 
 use std::cell::Cell;
+use std::collections::hash_map::RandomState;
+use std::hash::{BuildHasher, Hasher};
 use std::rc::Rc;
+use std::sync::OnceLock;
 
 use servo::{
     JSValue, MediaSessionActionType, MediaSessionEvent, MediaSessionPlaybackState as ServoPlayback,
@@ -16,9 +19,60 @@ use talaria_core::{
 /// event) and sends every media-session action there, whichever web view it is given to.
 pub(crate) type EngineMediaSession = Rc<Cell<Option<TabId>>>;
 
-const MUTE_SCRIPT: &str = include_str!("../resources/media/tab-mute.js");
-const PROBE_SCRIPT: &str = include_str!("../resources/media/probe.js");
-const MEDIA_KEYS_SCRIPT: &str = include_str!("../resources/media/media-keys.js");
+const AGENT_SCRIPT: &str = include_str!("../resources/media/media-agent.js");
+
+/// The name of the property that holds each document's media helper: random for every browser
+/// run, so a page cannot claim it before the browser installs the helper.
+fn agent_token() -> &'static str {
+    static TOKEN: OnceLock<String> = OnceLock::new();
+    TOKEN.get_or_init(|| {
+        let random = |salt: u64| {
+            let mut hasher = RandomState::new().build_hasher();
+            hasher.write_u64(salt);
+            hasher.finish()
+        };
+        format!("__mercury_media_{:016x}{:016x}", random(1), random(2))
+    })
+}
+
+fn agent_script(call: &str) -> String {
+    AGENT_SCRIPT
+        .replace("__TOKEN__", agent_token())
+        .replace("__CALL__", call)
+}
+
+/// Page-controlled text in a log line: one line, at most this many characters.
+pub(crate) fn loggable(text: &str) -> String {
+    const LIMIT: usize = 64;
+    let mut line = text
+        .chars()
+        .map(|character| {
+            if character.is_control() {
+                ' '
+            } else {
+                character
+            }
+        })
+        .take(LIMIT)
+        .collect::<String>();
+    if text.chars().count() > LIMIT {
+        line.push('…');
+    }
+    line
+}
+
+/// A media-session event for the log, with the page's metadata cut short.
+pub(crate) fn describe_for_log(event: &BrowserEvent) -> String {
+    match event {
+        BrowserEvent::MediaMetadataChanged { metadata } => format!(
+            "metadata {:?} / {:?} / {:?}",
+            loggable(&metadata.title),
+            loggable(&metadata.artist),
+            loggable(&metadata.album)
+        ),
+        other => format!("{other:?}"),
+    }
+}
 
 pub(crate) fn browser_event_from_servo(event: MediaSessionEvent) -> BrowserEvent {
     match event {
@@ -77,15 +131,19 @@ fn servo_action(action: MediaSessionAction) -> MediaSessionActionType {
 }
 
 fn media_keys_script(action: &str) -> String {
-    MEDIA_KEYS_SCRIPT.replace("__ACTION__", &format!("\"{action}\""))
+    agent_script(&format!("[\"key\", \"{action}\"]"))
 }
 
 pub(crate) fn mute_script(muted: bool) -> String {
-    MUTE_SCRIPT.replace("__MUTED__", if muted { "true" } else { "false" })
+    agent_script(if muted {
+        "[\"mute\", true]"
+    } else {
+        "[\"mute\", false]"
+    })
 }
 
-pub(crate) fn probe_script() -> &'static str {
-    PROBE_SCRIPT
+pub(crate) fn probe_script() -> String {
+    agent_script("[\"probe\"]")
 }
 
 /// Reads the probe script's answer; anything else (a page that broke the script's built-ins,
@@ -97,6 +155,7 @@ pub(crate) fn probe_from_js(value: &JSValue) -> Option<MediaProbe> {
     let [
         JSValue::Number(playing),
         JSValue::Number(audible),
+        JSValue::Boolean(unseen),
         JSValue::Boolean(fullscreen_video),
     ] = items.as_slice()
     else {
@@ -109,6 +168,7 @@ pub(crate) fn probe_from_js(value: &JSValue) -> Option<MediaProbe> {
     Some(MediaProbe {
         playing: count(*playing)?,
         audible: count(*audible)?,
+        unseen: *unseen,
         fullscreen_video: *fullscreen_video,
     })
 }
@@ -203,12 +263,17 @@ mod tests {
         let ActionRoute::Script(pause) = route_action(MediaSessionAction::Pause, false) else {
             panic!("pause is played from script");
         };
-        assert!(pause.contains("})(\"pause\")"), "{pause}");
-        assert!(!pause.contains("__ACTION__"));
+        assert!(
+            pause.trim_end().ends_with(", [\"key\", \"pause\"])"),
+            "{pause}"
+        );
         let ActionRoute::Script(play) = route_action(MediaSessionAction::Play, false) else {
             panic!("play is played from script");
         };
-        assert!(play.contains("})(\"play\")"), "{play}");
+        assert!(
+            play.trim_end().ends_with(", [\"key\", \"play\"])"),
+            "{play}"
+        );
         for action in [
             MediaSessionAction::NextTrack,
             MediaSessionAction::PreviousTrack,
@@ -223,10 +288,42 @@ mod tests {
     #[test]
     fn the_mute_script_is_given_the_choice() {
         let mute = mute_script(true);
-        assert!(mute.trim_end().ends_with("})(true)"), "{mute}");
+        assert!(mute.trim_end().ends_with(", [\"mute\", true])"), "{mute}");
         let unmute = mute_script(false);
-        assert!(unmute.trim_end().ends_with("})(false)"), "{unmute}");
-        assert!(!mute.contains("__MUTED__") && !unmute.contains("__MUTED__"));
+        assert!(
+            unmute.trim_end().ends_with(", [\"mute\", false])"),
+            "{unmute}"
+        );
+        assert!(probe_script().trim_end().ends_with(", [\"probe\"])"));
+    }
+
+    #[test]
+    fn the_helper_lives_under_a_per_run_random_name_not_a_registry_symbol() {
+        let token = agent_token();
+        assert!(token.starts_with("__mercury_media_"));
+        assert_eq!(token.len(), "__mercury_media_".len() + 32);
+        assert_ne!(&token["__mercury_media_".len()..], "0".repeat(32));
+        for script in [mute_script(true), probe_script(), media_keys_script("play")] {
+            assert!(script.contains(&format!("(\"{token}\", [")), "{script}");
+            assert!(!script.contains("__TOKEN__") && !script.contains("__CALL__"));
+            assert!(!script.contains("Symbol.for"));
+        }
+    }
+
+    #[test]
+    fn page_metadata_is_cut_short_and_kept_on_one_line_in_the_log() {
+        assert_eq!(loggable("a\nb\u{7}c"), "a b c");
+        let long = "x".repeat(100);
+        assert_eq!(loggable(&long), format!("{}…", "x".repeat(64)));
+        let event = BrowserEvent::MediaMetadataChanged {
+            metadata: MediaMetadata {
+                title: long,
+                artist: "A".to_owned(),
+                album: String::new(),
+            },
+        };
+        let line = describe_for_log(&event);
+        assert!(line.len() < 120, "{line}");
     }
 
     #[test]
@@ -236,10 +333,12 @@ mod tests {
                 JSValue::Number(2.0),
                 JSValue::Number(1.0),
                 JSValue::Boolean(true),
+                JSValue::Boolean(true),
             ])),
             Some(MediaProbe {
                 playing: 2,
                 audible: 1,
+                unseen: true,
                 fullscreen_video: true,
             })
         );
@@ -251,18 +350,26 @@ mod tests {
             JSValue::Undefined,
             JSValue::Array(vec![JSValue::Number(1.0), JSValue::Number(1.0)]),
             JSValue::Array(vec![
+                JSValue::Number(1.0),
+                JSValue::Number(1.0),
+                JSValue::Boolean(false),
+            ]),
+            JSValue::Array(vec![
                 JSValue::Number(-1.0),
                 JSValue::Number(0.0),
+                JSValue::Boolean(false),
                 JSValue::Boolean(false),
             ]),
             JSValue::Array(vec![
                 JSValue::Number(f64::NAN),
                 JSValue::Number(0.0),
                 JSValue::Boolean(false),
+                JSValue::Boolean(false),
             ]),
             JSValue::Array(vec![
                 JSValue::String("1".to_owned()),
                 JSValue::Number(0.0),
+                JSValue::Boolean(false),
                 JSValue::Boolean(false),
             ]),
         ] {

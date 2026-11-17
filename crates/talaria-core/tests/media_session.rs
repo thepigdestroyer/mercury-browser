@@ -28,8 +28,21 @@ fn probe(playing: u32, audible: u32, fullscreen_video: bool) -> BrowserEvent {
         probe: MediaProbe {
             playing,
             audible,
+            unseen: false,
             fullscreen_video,
         },
+    }
+}
+
+fn commit(url: &str) -> BrowserEvent {
+    BrowserEvent::AddressChanged {
+        url: url.to_owned(),
+    }
+}
+
+fn loaded() -> BrowserEvent {
+    BrowserEvent::LoadStateChanged {
+        state: LoadState::Loaded,
     }
 }
 
@@ -131,32 +144,87 @@ fn the_none_state_forgets_the_session() {
     assert_eq!(state.media(), &MediaState::default());
 }
 
-#[test]
-fn a_new_document_starts_without_media() {
+fn playing_loaded_page() -> BrowserState {
     let mut state = BrowserState::default();
-    state.apply(BrowserEvent::LoadStateChanged {
-        state: LoadState::Loaded,
-    });
+    state.apply(loading());
+    state.apply(commit("https://a.test/"));
+    state.apply(loaded());
     state.apply(playing());
     state.apply(BrowserEvent::MediaMetadataChanged {
         metadata: metadata("Song"),
     });
+    state
+}
+
+#[test]
+fn a_new_document_starts_without_media_once_it_commits() {
+    let mut state = playing_loaded_page();
 
     state.apply(loading());
+    assert!(
+        state.media().is_playing(),
+        "the old document plays until the new one commits"
+    );
+    state.apply(commit("https://b.test/"));
 
     assert_eq!(state.media(), &MediaState::default());
 }
 
 #[test]
-fn head_parsed_does_not_forget_media_the_loading_document_started() {
+fn a_navigation_that_never_commits_keeps_the_media() {
+    // A download, a 204 or a cancelled `beforeunload`: loading starts and ends, no commit.
+    let mut state = playing_loaded_page();
+
+    state.apply(loading());
+    state.apply(loaded());
+    state.apply(commit("https://a.test/#later"));
+
+    assert!(state.media().is_playing());
+    assert_eq!(state.media().metadata(), Some(&metadata("Song")));
+}
+
+#[test]
+fn a_same_document_address_change_keeps_the_media() {
+    let mut state = playing_loaded_page();
+
+    state.apply(commit("https://a.test/next-track"));
+
+    assert!(state.media().is_playing());
+}
+
+#[test]
+fn head_parsed_does_not_forget_media_the_new_document_started() {
     let mut state = BrowserState::default();
     state.apply(loading());
+    state.apply(commit("https://a.test/"));
     state.apply(playing());
 
     // Servo reports `HeadParsed` as a second `Loading`.
     state.apply(loading());
+    state.apply(loaded());
 
     assert!(state.media().is_playing());
+}
+
+#[test]
+fn a_tab_whose_web_view_is_replaced_forgets_its_media() {
+    let mut controller = BrowserController::default();
+    let tab_id = controller.active_tab_id();
+    controller.handle_event(tab_id, playing());
+
+    // Not engine-ready: the navigation replaces the tab's web view.
+    controller
+        .queue_navigation("b.test")
+        .expect("the address resolves");
+    assert_eq!(
+        controller.take_initial_url(tab_id),
+        Some("https://b.test/".to_owned())
+    );
+
+    assert_eq!(
+        tab_state(&controller, tab_id).media(),
+        &MediaState::default()
+    );
 }
 
 #[test]
@@ -183,6 +251,25 @@ fn a_probe_that_finds_only_silenced_media_hides_the_indicator() {
     assert_eq!(state.audio_indicator(), TabAudio::Silent);
 
     state.apply(probe(2, 1, false));
+    assert!(state.media().is_audible());
+    assert_eq!(state.audio_indicator(), TabAudio::Playing);
+}
+
+#[test]
+fn media_in_places_the_probe_cannot_see_counts_as_audible() {
+    // A muted background video next to a frame (or a closed shadow root) that may play sound.
+    let mut state = BrowserState::default();
+    state.apply(playing());
+
+    state.apply(BrowserEvent::MediaProbed {
+        probe: MediaProbe {
+            playing: 1,
+            audible: 0,
+            unseen: true,
+            fullscreen_video: false,
+        },
+    });
+
     assert!(state.media().is_audible());
     assert_eq!(state.audio_indicator(), TabAudio::Playing);
 }
@@ -341,4 +428,32 @@ fn mute_is_per_tab() {
 
     assert!(tab_state(&controller, first).is_audio_muted());
     assert!(!tab_state(&controller, second).is_audio_muted());
+}
+
+#[test]
+fn a_muted_tab_whose_page_unmuted_its_media_is_muted_again() {
+    let (mut controller, tab_id) = ready_controller();
+    controller.toggle_audio_muted(tab_id);
+    drain(&mut controller);
+
+    controller.handle_event(tab_id, probe(1, 0, false));
+    assert!(drain(&mut controller).is_empty());
+
+    controller.handle_event(tab_id, probe(1, 1, false));
+    assert_eq!(
+        drain(&mut controller),
+        vec![TabCommand::new(
+            tab_id,
+            BrowserCommand::SetAudioMuted { muted: true }
+        )]
+    );
+}
+
+#[test]
+fn an_unmuted_tab_is_not_muted_by_a_probe() {
+    let (mut controller, tab_id) = ready_controller();
+
+    controller.handle_event(tab_id, probe(1, 1, false));
+
+    assert!(drain(&mut controller).is_empty());
 }

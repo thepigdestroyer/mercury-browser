@@ -1,10 +1,17 @@
 //! Keeping the display awake while a fullscreen video plays.
 
+use std::time::{Duration, Instant};
+
 use talaria_core::BrowserController;
+
+/// After the system refuses the assertion, how long before it is asked again (and so how
+/// often a refusal can be logged).
+pub(crate) const RETRY_INTERVAL: Duration = Duration::from_secs(1);
 
 /// A "prevent display sleep" power assertion. The macOS implementation is only created in an
 /// interactive launch; automated runs and tests use fakes.
 pub(crate) trait PowerAssertions {
+    fn kind(&self) -> super::ServiceKind;
     /// Returns false if the assertion could not be created.
     fn prevent_display_sleep(&mut self) -> bool;
     fn allow_display_sleep(&mut self);
@@ -15,6 +22,7 @@ pub(crate) trait PowerAssertions {
 #[derive(Debug, Default)]
 pub(crate) struct DisplaySleepPolicy {
     held: bool,
+    refused_at: Option<Instant>,
 }
 
 impl DisplaySleepPolicy {
@@ -23,17 +31,27 @@ impl DisplaySleepPolicy {
         state.is_fullscreen() && state.media().plays_fullscreen_video()
     }
 
-    pub(crate) fn update(&mut self, wanted: bool, power: &mut dyn PowerAssertions) {
+    pub(crate) fn update(&mut self, wanted: bool, power: &mut dyn PowerAssertions, now: Instant) {
         if wanted && !self.held {
+            let waiting = self
+                .refused_at
+                .is_some_and(|refused| now.saturating_duration_since(refused) < RETRY_INTERVAL);
+            if waiting {
+                return;
+            }
             self.held = power.prevent_display_sleep();
-        } else if !wanted && self.held {
-            power.allow_display_sleep();
-            self.held = false;
+            self.refused_at = (!self.held).then_some(now);
+        } else if !wanted {
+            self.refused_at = None;
+            if self.held {
+                power.allow_display_sleep();
+                self.held = false;
+            }
         }
     }
 
     pub(crate) fn release(&mut self, power: &mut dyn PowerAssertions) {
-        self.update(false, power);
+        self.update(false, power, Instant::now());
     }
 
     #[cfg(test)]
@@ -44,6 +62,8 @@ impl DisplaySleepPolicy {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use talaria_core::{BrowserEvent, MediaPlaybackState, MediaProbe, TabId};
 
     use super::*;
@@ -55,6 +75,9 @@ mod tests {
     }
 
     impl PowerAssertions for FakePower {
+        fn kind(&self) -> crate::media_session::ServiceKind {
+            crate::media_session::ServiceKind::Test
+        }
         fn prevent_display_sleep(&mut self) -> bool {
             self.calls.push("prevent");
             !self.refuse
@@ -84,6 +107,7 @@ mod tests {
                 probe: MediaProbe {
                     playing: 1,
                     audible: 1,
+                    unseen: false,
                     fullscreen_video: true,
                 },
             },
@@ -91,7 +115,11 @@ mod tests {
     }
 
     fn run(policy: &mut DisplaySleepPolicy, controller: &BrowserController, power: &mut FakePower) {
-        policy.update(DisplaySleepPolicy::wanted(controller), power);
+        policy.update(
+            DisplaySleepPolicy::wanted(controller),
+            power,
+            Instant::now(),
+        );
     }
 
     #[test]
@@ -130,6 +158,7 @@ mod tests {
                 probe: MediaProbe {
                     playing: 1,
                     audible: 1,
+                    unseen: false,
                     fullscreen_video: false,
                 },
             },
@@ -240,7 +269,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_assertion_is_asked_for_again_later() {
+    fn a_refused_assertion_is_asked_for_again_once_per_interval() {
         let mut controller = BrowserController::default();
         let tab_id = controller.active_tab_id();
         let mut policy = DisplaySleepPolicy::default();
@@ -249,11 +278,21 @@ mod tests {
             ..FakePower::default()
         };
         fullscreen_video(&mut controller, tab_id);
-        run(&mut policy, &controller, &mut power);
+        let start = Instant::now();
+        policy.update(true, &mut power, start);
         assert!(!policy.is_held());
 
+        // Every pump in between asks again only once the interval has passed.
+        policy.update(true, &mut power, start + RETRY_INTERVAL / 2);
+        policy.update(
+            true,
+            &mut power,
+            start + RETRY_INTERVAL - Duration::from_millis(1),
+        );
+        assert_eq!(power.calls, ["prevent"]);
+
         power.refuse = false;
-        run(&mut policy, &controller, &mut power);
+        policy.update(true, &mut power, start + RETRY_INTERVAL);
         policy.release(&mut power);
 
         assert_eq!(power.calls, ["prevent", "prevent", "allow"]);

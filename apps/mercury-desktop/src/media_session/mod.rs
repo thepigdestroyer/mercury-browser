@@ -21,6 +21,17 @@ use slint::ComponentHandle;
 use talaria_core::{BrowserCommand, BrowserController, TabAudio};
 
 pub(crate) use display_sleep::{DisplaySleepPolicy, PowerAssertions};
+
+/// Which implementation stands behind a service trait.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ServiceKind {
+    /// The operating system's: only in an interactive launch.
+    System,
+    /// Logs what it would do: automated runs, and platforms without the service.
+    Logging,
+    #[cfg(test)]
+    Test,
+}
 pub(crate) use now_playing::{
     NowPlayingCenter, NowPlayingChange, NowPlayingInfo, NowPlayingPolicy, RemoteCommand,
 };
@@ -47,20 +58,27 @@ impl MediaSessionHub {
         }
     }
 
-    /// Brings the system services in line with the tabs. Returns true if it queued commands.
-    pub(crate) fn update(&mut self, controller: &mut BrowserController, now: Instant) -> bool {
-        let due = self.probes.due(controller, now);
-        for tab_id in &due {
-            controller.queue_command_for(*tab_id, BrowserCommand::ProbeMedia);
+    /// Brings the system services in line with the tabs, and queues the probes that are due.
+    /// `engine_session` is the tab Servo sends media-session actions to.
+    pub(crate) fn update(
+        &mut self,
+        controller: &mut BrowserController,
+        engine_session: Option<talaria_core::TabId>,
+        now: Instant,
+    ) {
+        for tab_id in self.probes.due(controller, now) {
+            controller.queue_command_for(tab_id, BrowserCommand::ProbeMedia);
         }
-        match self.now_playing.update(controller) {
+        match self.now_playing.update(controller, engine_session, now) {
             Some(NowPlayingChange::Publish(info)) => self.center.publish(&info),
             Some(NowPlayingChange::Clear) => self.center.clear(),
             None => {}
         }
-        self.display_sleep
-            .update(DisplaySleepPolicy::wanted(controller), self.power.as_mut());
-        !due.is_empty()
+        self.display_sleep.update(
+            DisplaySleepPolicy::wanted(controller),
+            self.power.as_mut(),
+            now,
+        );
     }
 
     /// Sends a media key to the tab in Now Playing. Returns true if it queued a command.
@@ -102,13 +120,24 @@ thread_local! {
     static INSTALLED: RefCell<Option<Installed>> = const { RefCell::new(None) };
 }
 
-/// Sets the lane up for this run; `interactive` is false for screenshot and background runs.
+/// The system's Now Playing, media keys and power assertions are only used in an interactive
+/// launch, never in screenshot or background runs.
+pub(crate) fn uses_system_services(options: &crate::cli::LaunchOptions) -> bool {
+    !options.is_automated()
+}
+
+/// Sets the lane up for this run; `interactive` comes from `uses_system_services`.
 pub(crate) fn install(
     window: &MainWindow,
     controller: Rc<RefCell<BrowserController>>,
     interactive: bool,
 ) {
     let (center, power) = system_services(interactive);
+    log::info!(
+        "media session: Now Playing {:?}, display sleep {:?}",
+        center.kind(),
+        power.kind()
+    );
     if !interactive && std::env::var_os(START_MUTED_VARIABLE).is_some_and(|value| value == "1") {
         // Diagnostic for automated runs: the start-up tabs begin muted, as if the user had
         // muted them, so a test page can check what muting does without input.
@@ -154,15 +183,19 @@ pub(crate) fn toggle_mute(
     }
 }
 
-/// Called by the engine after each pump that applied browser events. Returns true if it
-/// queued commands for the engine.
-pub(crate) fn after_pump(controller: &mut BrowserController) -> bool {
+/// Called by the engine on every pump, before it dispatches commands (so the probes it queues
+/// go out in the same pump).
+pub(crate) fn after_pump(
+    controller: &mut BrowserController,
+    engine_session: Option<talaria_core::TabId>,
+) {
     INSTALLED.with(|installed| {
-        installed
-            .borrow_mut()
-            .as_mut()
-            .is_some_and(|installed| installed.hub.update(controller, Instant::now()))
-    })
+        if let Some(installed) = installed.borrow_mut().as_mut() {
+            installed
+                .hub
+                .update(controller, engine_session, Instant::now());
+        }
+    });
 }
 
 /// A media key or Now Playing control; runs on the event loop.
@@ -224,18 +257,27 @@ fn system_services(interactive: bool) -> (Box<dyn NowPlayingCenter>, Box<dyn Pow
 struct LoggingNowPlaying;
 
 impl NowPlayingCenter for LoggingNowPlaying {
+    fn kind(&self) -> ServiceKind {
+        ServiceKind::Logging
+    }
+
     fn publish(&mut self, info: &NowPlayingInfo) {
         log::info!(
-            "now playing (not published to the system): tab {} {:?} by {:?} on {:?}, {}, \
-             duration {:?}, elapsed {:?}, rate {}",
+            "now playing (not published to the system): tab {}, {}, duration {:?}, \
+             elapsed {:?}, rate {}, next/previous {}",
             info.tab_id.value(),
-            info.title,
-            info.artist,
-            info.album,
             if info.playing { "playing" } else { "paused" },
             info.duration,
             info.elapsed,
-            info.playback_rate
+            info.playback_rate,
+            if info.can_skip { "on" } else { "off" }
+        );
+        // The page's own text, cut short, only at debug level.
+        log::debug!(
+            "now playing (not published to the system): {:?} by {:?} on {:?}",
+            talaria_servo_loggable(&info.title),
+            talaria_servo_loggable(&info.artist),
+            talaria_servo_loggable(&info.album)
         );
     }
 
@@ -244,10 +286,23 @@ impl NowPlayingCenter for LoggingNowPlaying {
     }
 }
 
+/// One line, at most 64 characters (the text is already free of controls).
+fn talaria_servo_loggable(text: &str) -> String {
+    let mut line = text.chars().take(64).collect::<String>();
+    if text.chars().count() > 64 {
+        line.push('…');
+    }
+    line
+}
+
 /// Stands in for the power assertion in automated runs (and where there is none).
 struct LoggingPowerAssertions;
 
 impl PowerAssertions for LoggingPowerAssertions {
+    fn kind(&self) -> ServiceKind {
+        ServiceKind::Logging
+    }
+
     fn prevent_display_sleep(&mut self) -> bool {
         log::info!("display sleep: would be prevented now (no power assertion in this run)");
         true
@@ -282,6 +337,9 @@ mod tests {
     struct FakeCenter(Calls);
 
     impl NowPlayingCenter for FakeCenter {
+        fn kind(&self) -> ServiceKind {
+            ServiceKind::Test
+        }
         fn publish(&mut self, info: &NowPlayingInfo) {
             self.0.borrow_mut().push(Call::Publish(
                 info.tab_id.value(),
@@ -297,6 +355,9 @@ mod tests {
     struct FakePower(Calls);
 
     impl PowerAssertions for FakePower {
+        fn kind(&self) -> ServiceKind {
+            ServiceKind::Test
+        }
         fn prevent_display_sleep(&mut self) -> bool {
             self.0.borrow_mut().push(Call::Prevent);
             true
@@ -350,7 +411,7 @@ mod tests {
                 state: MediaPlaybackState::Playing,
             },
         );
-        assert!(hub.update(&mut controller, now));
+        hub.update(&mut controller, None, now);
         assert_eq!(
             drain(&mut controller),
             [TabCommand::new(tab_id, BrowserCommand::ProbeMedia)]
@@ -363,11 +424,13 @@ mod tests {
                 probe: MediaProbe {
                     playing: 1,
                     audible: 1,
+                    unseen: false,
                     fullscreen_video: false,
                 },
             },
         );
-        assert!(!hub.update(&mut controller, now));
+        hub.update(&mut controller, Some(tab_id), now);
+        assert!(drain(&mut controller).is_empty());
         assert_eq!(
             *calls.borrow(),
             [Call::Publish(tab_id.value(), "song".to_owned(), true)]
@@ -409,13 +472,14 @@ mod tests {
                 probe: MediaProbe {
                     playing: 1,
                     audible: 1,
+                    unseen: false,
                     fullscreen_video: true,
                 },
             },
         ] {
             controller.handle_event(tab_id, event);
         }
-        hub.update(&mut controller, Instant::now());
+        hub.update(&mut controller, None, Instant::now());
 
         hub.shut_down();
         hub.shut_down();
@@ -445,5 +509,94 @@ mod tests {
         assert_eq!(tab_audio_state(TabAudio::Silent), TabAudioState::Silent);
         assert_eq!(tab_audio_state(TabAudio::Playing), TabAudioState::Playing);
         assert_eq!(tab_audio_state(TabAudio::Muted), TabAudioState::Muted);
+    }
+
+    #[test]
+    fn only_interactive_launches_use_the_system_services() {
+        use crate::cli::{LaunchOptions, ScreenshotOptions};
+
+        assert!(uses_system_services(&LaunchOptions::default()));
+        assert!(!uses_system_services(&LaunchOptions {
+            background: true,
+            ..LaunchOptions::default()
+        }));
+        assert!(!uses_system_services(&LaunchOptions {
+            screenshot: Some(ScreenshotOptions {
+                path: "shot.png".into(),
+                delay: std::time::Duration::ZERO,
+            }),
+            ..LaunchOptions::default()
+        }));
+
+        let (center, power) = system_services(false);
+        assert_eq!(center.kind(), ServiceKind::Logging);
+        assert_eq!(power.kind(), ServiceKind::Logging);
+    }
+
+    #[test]
+    fn a_muted_tab_is_muted_again_after_a_navigation_and_never_published() {
+        let (mut hub, calls) = hub();
+        let mut controller = BrowserController::default();
+        let tab_id = controller.active_tab_id();
+        ready(&mut controller, tab_id, "first");
+        controller.toggle_audio_muted(tab_id);
+        let start = Instant::now();
+        hub.update(&mut controller, None, start);
+        assert_eq!(
+            drain(&mut controller),
+            [TabCommand::new(
+                tab_id,
+                BrowserCommand::SetAudioMuted { muted: true }
+            )]
+        );
+
+        // The tab goes to another page, which starts playing at once.
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::LoadStateChanged {
+                state: talaria_core::LoadState::Loading,
+            },
+        );
+        hub.update(&mut controller, None, start);
+        ready(&mut controller, tab_id, "second");
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::MediaPlaybackChanged {
+                state: MediaPlaybackState::Playing,
+            },
+        );
+        hub.update(&mut controller, Some(tab_id), start);
+        let mute = TabCommand::new(tab_id, BrowserCommand::SetAudioMuted { muted: true });
+        assert_eq!(
+            drain(&mut controller),
+            [
+                mute.clone(),
+                mute,
+                TabCommand::new(tab_id, BrowserCommand::ProbeMedia),
+            ]
+        );
+
+        // The page un-muted its audio: the probe hears it, the mute goes out again, and the
+        // muted tab is not published.
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::MediaProbed {
+                probe: MediaProbe {
+                    playing: 1,
+                    audible: 1,
+                    unseen: false,
+                    fullscreen_video: false,
+                },
+            },
+        );
+        hub.update(&mut controller, Some(tab_id), start);
+        assert_eq!(
+            drain(&mut controller),
+            [TabCommand::new(
+                tab_id,
+                BrowserCommand::SetAudioMuted { muted: true }
+            )]
+        );
+        assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
     }
 }

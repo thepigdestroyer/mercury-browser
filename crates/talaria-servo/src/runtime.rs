@@ -20,7 +20,7 @@ use crate::adblocker::ContentBlocker;
 use crate::frame_ready::FrameReadySignal;
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
 // media session
-use crate::media_session::{EngineMediaSession, browser_event_from_servo};
+use crate::media_session::{EngineMediaSession, browser_event_from_servo, describe_for_log};
 use crate::page_defaults::page_defaults_user_content;
 use crate::screen::ScreenMetrics;
 use crate::session_data::{AfterEngineCleanup, clean_up_before_engine_start, end_session_cookies};
@@ -203,6 +203,12 @@ impl ServoRuntime {
             web_view
                 .with_media_session(browser_event_sender, Rc::clone(&self.engine_media_session)),
         )
+    }
+
+    // media session
+    /// The tab whose page Servo sends media-session actions to (one for all web views).
+    pub fn engine_media_session_tab(&self) -> Option<TabId> {
+        self.engine_media_session.get()
     }
 
     pub fn spin_event_loop(&self) {
@@ -452,10 +458,15 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // The constellation forwards an event only after making its sender the active session.
         self.engine_media_session.set(Some(self.tab_id));
         let event = browser_event_from_servo(event);
-        if matches!(event, BrowserEvent::MediaPositionChanged { .. }) {
-            log::debug!("tab {}: media session: {event:?}", self.tab_id.value());
-        } else {
+        // Metadata and positions are the page's; playback changes are the browser's own.
+        if matches!(event, BrowserEvent::MediaPlaybackChanged { .. }) {
             info!("tab {}: media session: {event:?}", self.tab_id.value());
+        } else {
+            log::debug!(
+                "tab {}: media session: {}",
+                self.tab_id.value(),
+                describe_for_log(&event)
+            );
         }
         self.send_browser_event(event);
     }
