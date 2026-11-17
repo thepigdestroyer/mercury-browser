@@ -589,7 +589,6 @@ impl ProfileData {
 
     /// Why the database is not available in this run, once the service has tried to open it;
     /// `None` while it is opening and when it is available.
-    #[cfg_attr(not(test), expect(dead_code, reason = "shown by the history window"))]
     pub(crate) fn unavailable_reason(&self) -> Option<Arc<str>> {
         self.shared.unavailable.get().cloned().flatten()
     }

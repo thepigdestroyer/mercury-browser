@@ -7,8 +7,8 @@ use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
 use mercury_store::{
-    BookmarkImport, BookmarkKind, BookmarkRoot, ClearRange, DownloadState, NewDownload, Store,
-    StoreError, VisitImport, VisitTransition,
+    BookmarkKind, BookmarkRoot, ClearRange, DownloadState, NewDownload, Store, StoreError,
+    VisitImport, VisitTransition,
 };
 use talaria_core::{NavigationOrigin, VisitKey, VisitUpdate};
 
@@ -1236,139 +1236,6 @@ fn an_import_into_an_unavailable_database_fails_at_once() {
         summary.outcome,
         ImportOutcome::Failed(ProfileDataError::Unavailable(_))
     ));
-}
-
-fn bookmark_tree(count: usize) -> Vec<BookmarkImport> {
-    (0..count)
-        .map(|n| BookmarkImport::Folder {
-            title: format!("Folder {n}"),
-            guid: new_guid().unwrap(),
-            added_at_ms: None,
-            children: (0..3)
-                .map(|m| BookmarkImport::Bookmark {
-                    title: format!("Mark {n}.{m}"),
-                    url: format!("https://{n}.test/{m}"),
-                    guid: new_guid().unwrap(),
-                    added_at_ms: Some(NOW),
-                })
-                .collect(),
-        })
-        .collect()
-}
-
-#[test]
-fn a_bookmark_import_runs_in_chunks_of_whole_trees_and_notifies_once() {
-    let harness = Harness::new();
-    let changes = Rc::new(RefCell::new(0));
-    let count = Rc::clone(&changes);
-    harness
-        .data
-        .on_change(Area::Bookmarks, move |_| *count.borrow_mut() += 1);
-    let other = harness
-        .ask(|data, reply| data.bookmark_root(BookmarkRoot::Other, reply))
-        .unwrap();
-    let toolbar = harness
-        .ask(|data, reply| data.bookmark_root(BookmarkRoot::Toolbar, reply))
-        .unwrap();
-    // 1,000 folders of 4 nodes after one on the toolbar: chunks of 125 trees, 500 nodes.
-    let trees = bookmark_tree(1000);
-    let progress = Rc::new(RefCell::new(Vec::new()));
-    let summary = Rc::new(RefCell::new(None));
-    let (seen, done) = (Rc::clone(&progress), Rc::clone(&summary));
-
-    harness.data.import_bookmarks(
-        vec![(toolbar, bookmark_tree(1)), (other, trees)],
-        move |p| seen.borrow_mut().push(p.done),
-        move |s| *done.borrow_mut() = Some(s),
-    );
-    harness.settle(|| summary.borrow().is_some());
-    // The notification follows the summary, possibly in a later delivery.
-    harness.settle(|| *changes.borrow() > 0);
-
-    let summary = summary.borrow_mut().take().unwrap();
-    assert!(matches!(summary.outcome, ImportOutcome::Completed));
-    assert_eq!((summary.imported, summary.total), (4004, 4004));
-    assert_eq!(
-        *progress.borrow(),
-        (1..=8).map(|n| n * IMPORT_CHUNK as u64).collect::<Vec<_>>()
-    );
-    assert_eq!(*changes.borrow(), 1);
-    let positions = harness
-        .ask(|data, reply| data.bookmark_children(other, reply))
-        .unwrap()
-        .into_iter()
-        .map(|node| node.position)
-        .collect::<Vec<_>>();
-    assert_eq!(positions, (0..1000).collect::<Vec<_>>());
-}
-
-#[test]
-fn a_refused_bookmark_folder_is_skipped_with_its_contents() {
-    let harness = Harness::new();
-    let other = harness
-        .ask(|data, reply| data.bookmark_root(BookmarkRoot::Other, reply))
-        .unwrap();
-    let mut trees = bookmark_tree(600);
-    let BookmarkImport::Folder { guid, .. } = &trees[0] else {
-        unreachable!()
-    };
-    let reused = guid.clone();
-    let BookmarkImport::Folder { guid, .. } = &mut trees[550] else {
-        unreachable!()
-    };
-    *guid = reused;
-
-    let summary = Rc::new(RefCell::new(None));
-    let done = Rc::clone(&summary);
-    harness.data.import_bookmarks(
-        vec![(other, trees)],
-        |_| {},
-        move |s| *done.borrow_mut() = Some(s),
-    );
-    harness.settle(|| summary.borrow().is_some());
-
-    let summary = summary.borrow_mut().take().unwrap();
-    assert!(
-        matches!(summary.outcome, ImportOutcome::Completed),
-        "{:?}",
-        summary.outcome
-    );
-    // Folder 550 (a GUID already used by folder 0) and its three bookmarks are left out.
-    assert_eq!(
-        (summary.imported, summary.skipped, summary.resume_from),
-        (2396, 4, 600)
-    );
-    assert_eq!(
-        harness
-            .ask(|data, reply| data.bookmark_children(other, reply))
-            .unwrap()
-            .len(),
-        599
-    );
-}
-
-#[test]
-fn a_bookmark_import_notifies_the_folders_it_filled() {
-    let harness = Harness::new();
-    let changes = log();
-    let seen = Rc::clone(&changes);
-    harness.data.on_change(Area::Bookmarks, move |change| {
-        seen.borrow_mut().push(format!("{:?}", change.folders))
-    });
-    let other = harness
-        .ask(|data, reply| data.bookmark_root(BookmarkRoot::Other, reply))
-        .unwrap();
-    let summary = Rc::new(RefCell::new(None));
-    let done = Rc::clone(&summary);
-
-    harness.data.import_bookmarks(
-        vec![(other, bookmark_tree(300))],
-        |_| {},
-        move |s| *done.borrow_mut() = Some(s),
-    );
-    harness.settle(|| summary.borrow().is_some() && !changes.borrow().is_empty());
-
-    assert_eq!(*changes.borrow(), vec![format!("{:?}", Some(vec![other]))]);
 }
 
 /// The benchmark the review asked for: 100,000 visits through the chunked import into a

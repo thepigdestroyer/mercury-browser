@@ -287,7 +287,20 @@ impl VisitTracker {
                 if pending.target.is_some() && pending.target == recordable
                     || recordable.is_some() && !same_url =>
             {
-                tab.pending.take().map(|pending| pending.origin)
+                tab.pending.take().map(|pending| {
+                    // A typed address counts as typed only where it was typed for: one that
+                    // redirected to another host (a short link, a look-alike) is a link.
+                    let same_host = |target: &str, url: &str| site_host(target) == site_host(url);
+                    match (&pending.target, &recordable) {
+                        (Some(target), Some(url))
+                            if pending.origin == NavigationOrigin::Typed
+                                && !same_host(target, url) =>
+                        {
+                            NavigationOrigin::Link
+                        }
+                        _ => pending.origin,
+                    }
+                })
             }
             _ => None,
         };
@@ -479,6 +492,15 @@ impl VisitTracker {
             title: title.to_owned(),
         });
     }
+}
+
+/// `url`'s host in lower case without a leading `www.`; `None` without a host (`file:`).
+fn site_host(url: &str) -> Option<String> {
+    let host = Url::parse(url).ok()?.host_str()?.to_ascii_lowercase();
+    Some(
+        host.strip_prefix("www.")
+            .map_or(host.clone(), str::to_owned),
+    )
 }
 
 /// The URL to record for `url`, if it is recorded at all: `http`, `https` and `file` pages

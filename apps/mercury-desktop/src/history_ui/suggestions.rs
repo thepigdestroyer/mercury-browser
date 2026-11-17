@@ -25,6 +25,27 @@ pub(crate) struct Row {
     pub(crate) url: Emphasis,
     /// Where choosing the row goes.
     pub(crate) target: String,
+    /// Choosing the row counts as typing its address: the search row, and pages the user
+    /// typed or bookmarked before (those inline completion may complete). Others were only
+    /// reached by links or redirects, and choosing them must not earn them completion.
+    pub(crate) typed: bool,
+}
+
+/// A row chosen from the list.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Choice {
+    pub(crate) target: String,
+    /// See [`Row::typed`].
+    pub(crate) typed: bool,
+}
+
+impl Row {
+    fn choice(&self) -> Choice {
+        Choice {
+            target: self.target.clone(),
+            typed: self.typed,
+        }
+    }
 }
 
 /// A text split around its emphasised part.
@@ -101,6 +122,7 @@ pub(crate) fn rows(input: &str, suggestions: &[Suggestion]) -> Vec<Row> {
         title: Emphasis::plain(&format!("Search {SEARCH_ENGINE_NAME} for “{input}”")),
         url: Emphasis::default(),
         target: search,
+        typed: true,
     }];
     rows.extend(suggestions.iter().map(|suggestion| {
         let url = display_url(&suggestion.url);
@@ -115,6 +137,7 @@ pub(crate) fn rows(input: &str, suggestions: &[Suggestion]) -> Vec<Row> {
             title: emphasise(title, input),
             url: emphasise(&url, input),
             target: suggestion.url.clone(),
+            typed: suggestion.typed || suggestion.is_bookmark,
         }
     }));
     rows
@@ -144,8 +167,9 @@ pub(crate) fn move_selection(selected: Option<usize>, len: usize, down: bool) ->
 ///   matches;
 /// - in the host's **Unicode** form (`bü` completes `bücher.example`; typing `xn` never runs
 ///   into punycode);
-/// - **never past a completed label**: if the host goes on with `.` right after what was typed,
-///   nothing is completed (`example.com` never becomes `example.com.au`).
+/// - **never past a completed label**: once what was typed holds a dot, a host that goes on
+///   with `.` right after it is not completed (`example.com` never becomes `example.com.au`),
+///   while a whole first label still completes (`github` → `github.com`).
 pub(crate) fn inline_completion(typed: &str, suggestions: &[Suggestion]) -> Option<String> {
     if typed.is_empty() || typed.contains([' ', '/', ':', '?', '#']) {
         return None;
@@ -166,7 +190,8 @@ pub(crate) fn inline_completion(typed: &str, suggestions: &[Suggestion]) -> Opti
                     .map_or(host.clone(), str::to_owned)
             };
             let rest = host.strip_prefix(lower.as_str())?;
-            (!rest.is_empty() && !rest.starts_with('.')).then(|| rest.to_owned())
+            let extends_a_label = rest.starts_with('.') && lower.contains('.');
+            (!rest.is_empty() && !extends_a_label).then(|| rest.to_owned())
         })
 }
 
@@ -298,24 +323,20 @@ impl Session {
 
     /// Return: the selected row's target if the list is open and a row is selected; the list
     /// closes either way (the field then navigates to what it holds).
-    pub(crate) fn accept(&mut self) -> Option<String> {
-        let target = self
+    pub(crate) fn accept(&mut self) -> Option<Choice> {
+        let choice = self
             .selected
             .filter(|_| self.open)
-            .and_then(|index| self.rows.get(index).map(|row| row.target.clone()));
+            .and_then(|index| self.rows.get(index).map(Row::choice));
         self.close();
-        target
+        choice
     }
 
     /// A click on row `index` of the list shown.
-    pub(crate) fn choose(&mut self, index: usize) -> Option<String> {
-        let target = self
-            .rows
-            .get(index)
-            .filter(|_| self.open)
-            .map(|row| row.target.clone());
+    pub(crate) fn choose(&mut self, index: usize) -> Option<Choice> {
+        let choice = self.rows.get(index).filter(|_| self.open).map(Row::choice);
         self.close();
-        target
+        choice
     }
 }
 
@@ -468,15 +489,63 @@ mod tests {
     }
 
     #[test]
-    fn a_completed_label_is_never_extended() {
+    fn a_whole_first_label_completes_to_its_host() {
+        let github = [typed("https://github.com/")];
+
+        assert_eq!(
+            inline_completion("github", &github).as_deref(),
+            Some(".com")
+        );
+        assert_eq!(
+            inline_completion("example", &[typed("https://example.com/")]).as_deref(),
+            Some(".com")
+        );
+    }
+
+    #[test]
+    fn a_host_with_a_dot_typed_is_never_extended_by_a_label() {
         let longer = [typed("https://example.com.au/")];
 
         assert_eq!(inline_completion("example.com", &longer), None);
-        assert_eq!(inline_completion("example", &longer), None);
         assert_eq!(
             inline_completion("exam", &longer).as_deref(),
             Some("ple.com.au")
         );
+        assert_eq!(
+            inline_completion("example.co", &longer).as_deref(),
+            Some("m.au")
+        );
+    }
+
+    #[test]
+    fn a_chosen_row_counts_as_typed_only_if_its_host_could_complete() {
+        let mut session = Session::default();
+        let generation = ask(&mut session, "exa");
+        session.replied(
+            generation,
+            &[
+                suggestion("https://example.com/", None, false),
+                suggestion("https://example.org/", None, true),
+                typed("https://example.net/"),
+            ],
+            "exa",
+        );
+        let rows = session.rows().to_vec();
+        let choice = |index: usize| {
+            let mut session = Session {
+                open: true,
+                rows: rows.clone(),
+                ..Session::default()
+            };
+            session.choose(index).map(|choice| choice.typed)
+        };
+
+        // The search row searches what was typed.
+        assert_eq!(choice(0), Some(true));
+        // Reached only by links: following it is not typing it.
+        assert_eq!(choice(1), Some(false));
+        assert_eq!(choice(2), Some(true));
+        assert_eq!(choice(3), Some(true));
     }
 
     #[test]
@@ -587,7 +656,10 @@ mod tests {
         session.move_selection(true);
         session.move_selection(true);
 
-        assert_eq!(session.accept().as_deref(), Some("https://example.com/"));
+        assert_eq!(
+            session.accept().map(|choice| choice.target).as_deref(),
+            Some("https://example.com/")
+        );
         assert!(!session.is_open());
     }
 

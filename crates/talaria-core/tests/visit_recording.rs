@@ -1172,3 +1172,53 @@ fn a_replace_that_ends_on_an_error_page_records_the_replaced_page_again() {
     );
     assert_eq!(updates[4..], [title_update(page, "Redirector")]);
 }
+
+#[test]
+fn a_typed_address_that_redirects_to_another_host_is_a_link_visit() {
+    // A typed short link that ends on a look-alike: completing to it later must not be earned.
+    let (mut controller, tab_id) = controller_with_ready_tab();
+    commit(&mut controller, tab_id, "https://start.test/");
+    controller.take_visit_updates();
+    controller.queue_navigation("https://short.test/x").unwrap();
+
+    commit(
+        &mut controller,
+        tab_id,
+        "https://paypal.com.evil.test/login",
+    );
+
+    assert_eq!(
+        visits(&controller.take_visit_updates()),
+        vec![("https://paypal.com.evil.test/login", NavigationOrigin::Link)]
+    );
+}
+
+#[test]
+fn a_typed_address_that_only_gains_www_stays_typed() {
+    let (mut controller, tab_id) = controller_with_ready_tab();
+    commit(&mut controller, tab_id, "https://start.test/");
+    controller.take_visit_updates();
+    controller.queue_navigation("https://www.a.test/").unwrap();
+
+    commit(&mut controller, tab_id, "https://a.test/home");
+
+    assert_eq!(
+        visits(&controller.take_visit_updates()),
+        vec![("https://a.test/home", NavigationOrigin::Typed)]
+    );
+}
+
+#[test]
+fn a_typed_file_address_stays_typed() {
+    let (mut controller, tab_id) = controller_with_ready_tab();
+    controller
+        .queue_navigation("file:///tmp/page.html")
+        .unwrap();
+
+    commit(&mut controller, tab_id, "file:///tmp/page.html");
+
+    assert_eq!(
+        visits(&controller.take_visit_updates()),
+        vec![("file:///tmp/page.html", NavigationOrigin::Typed)]
+    );
+}

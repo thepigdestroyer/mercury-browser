@@ -186,11 +186,11 @@ pub(crate) fn handle_key(window: &MainWindow, event: &KeyEvent) -> bool {
                 true
             }
             Key::Named(NamedKey::Enter) => {
-                let target = ui.suggest.borrow_mut().accept();
+                let choice = ui.suggest.borrow_mut().accept();
                 ui.show_closed();
-                match target {
-                    Some(target) => {
-                        ui.navigate(target);
+                match choice {
+                    Some(choice) => {
+                        ui.navigate(choice);
                         true
                     }
                     // The address field navigates to what it holds.
@@ -363,17 +363,26 @@ impl HistoryUi {
 
     /// A click on a row: the search row searches, the others go to their page. Like typing it.
     fn choose(&self, index: Option<usize>) {
-        let target = index.and_then(|index| self.suggest.borrow_mut().choose(index));
+        let choice = index.and_then(|index| self.suggest.borrow_mut().choose(index));
         self.suggest_timer.stop();
         self.show_closed();
-        if let Some(target) = target {
-            self.navigate(target);
+        if let Some(choice) = choice {
+            self.navigate(choice);
         }
     }
 
-    fn navigate(&self, target: String) {
-        if let Some(window) = self.window.upgrade() {
-            window.invoke_navigate(target.into());
+    /// Goes where a chosen row leads, like typing it; a page only ever reached by links counts
+    /// as a link (see `Row::typed`).
+    fn navigate(&self, choice: suggestions::Choice) {
+        let Some(window) = self.window.upgrade() else {
+            return;
+        };
+        window.invoke_navigate(choice.target.into());
+        if !choice.typed {
+            let tab_id = self.controller.borrow().active_tab_id();
+            self.controller
+                .borrow_mut()
+                .set_navigation_origin(tab_id, NavigationOrigin::Link);
         }
     }
 
@@ -387,7 +396,13 @@ impl HistoryUi {
             self.list.borrow_mut().query = None;
             window.set_history_query(SharedString::default());
             window.set_history_open(true);
-            self.load(Load::First);
+            // Without a database, say why at once rather than asking the service.
+            match profile_data::handle().and_then(|data| data.unavailable_reason()) {
+                Some(reason) => {
+                    self.show_history_message(&format!("History is not available: {reason}"));
+                }
+                None => self.load(Load::First),
+            }
         }
         window.window().request_redraw();
     }

@@ -19,17 +19,24 @@ component TextButton inherits Rectangle {
     in property <string> label;
     in property <bool> danger: false;
     in property <bool> primary: false;
+    // The widest the button may grow; a longer label is elided.
+    in property <length> widest: 1000px;
     callback clicked;
 
     height: 28px;
-    min-width: label-text.preferred-width + 20px;
+    preferred-width: label-text.preferred-width + 20px;
+    min-width: Math.min(label-text.preferred-width + 20px, root.widest);
+    max-width: root.widest;
     border-radius: 6px;
     background: root.primary
         ? (touch.pressed ? HistoryColors.accent.darker(15%) : HistoryColors.accent)
         : touch.pressed ? HistoryColors.selected : touch.has-hover ? HistoryColors.hover : transparent;
 
     label-text := Text {
+        x: 10px;
+        width: parent.width - 20px;
         text: root.label;
+        overflow: elide;
         color: root.primary
             ? HistoryColors.on-accent
             : root.danger ? HistoryColors.danger : HistoryColors.accent;
@@ -242,7 +249,8 @@ export component HistoryPanel inherits FocusScope {
 
                         HorizontalLayout {
                             spacing: 4px;
-                            width: 400px;
+                            // As wide as its buttons.
+                            horizontal-stretch: 0;
                             alignment: end;
 
                             TextButton {
@@ -258,6 +266,7 @@ export component HistoryPanel inherits FocusScope {
                             if row.host != "": TextButton {
                                 y: 8px;
                                 label: "Delete all visits to " + row.host;
+                                widest: 300px;
                                 danger: true;
                                 clicked => {
                                     root.delete-site(row.entry);
