@@ -3,8 +3,8 @@
 use std::time::Duration;
 
 use talaria_core::{
-    BrowserController, BrowserEvent, ExternalLinkRequest, PageRequest, PageRequestId,
-    PageRequestKind, TabActivation, TabId,
+    BrowserController, BrowserEvent, CloseTabOutcome, ExternalLinkRequest, PageRequest,
+    PageRequestId, PageRequestKind, TabActivation, TabId,
 };
 
 fn requested(url: &str, page_url: Option<&str>) -> BrowserEvent {
@@ -82,7 +82,7 @@ fn closing_a_tab_drops_its_requests() {
     controller.handle_event(first, requested("tel:1", None));
     controller.handle_event(second, requested("tel:2", None));
 
-    assert!(controller.close_tab(second));
+    assert_eq!(controller.close_tab(second), CloseTabOutcome::Closed);
 
     let urls = controller
         .take_external_link_requests()
