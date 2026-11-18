@@ -453,6 +453,11 @@ export component MainWindow inherits Window {
     // What the application last wrote into the address field (or the text the user accepted
     // with Return): the field holds a draft of the user's while its text differs from this.
     out property <string> synced-address;
+    // A navigation that did not come from the field's Return (a suggestion, the history window,
+    // Home, a bookmark, Back, Forward, Reload): whatever the field holds is no longer a draft.
+    public function accept-address-draft() {
+        root.synced-address = root.address;
+    }
     // How many of `tabs` are pinned; they come first.
     in property <int> pinned-tab-count: 0;
     // Tab search: the rows matching the query, set by the application.

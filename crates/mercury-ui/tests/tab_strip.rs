@@ -14,7 +14,9 @@ use mercury_ui::{
 };
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedPixelBuffer, VecModel};
+use slint::{
+    ComponentHandle, LogicalPosition, LogicalSize, Model, ModelRc, SharedPixelBuffer, VecModel,
+};
 
 struct SoftwarePlatform;
 
@@ -350,6 +352,172 @@ fn hovering_shows_the_preview(theme: ChromeTheme, name: &str) {
     window.hide().expect("the window can be hidden");
 }
 
+fn tabs_model(window: &MainWindow) -> ModelRc<BrowserTab> {
+    window.get_tabs()
+}
+
+fn with_rows(window: &MainWindow, change: impl FnOnce(&VecModel<BrowserTab>)) {
+    let model = tabs_model(window);
+    let rows = model
+        .as_any()
+        .downcast_ref::<VecModel<BrowserTab>>()
+        .expect("the tabs are a VecModel");
+    change(rows);
+    slint::platform::update_timers_and_animations();
+}
+
+fn release_at(window: &slint::Window, x: f32) {
+    pointer(
+        window,
+        WindowEvent::PointerReleased {
+            position: LogicalPosition::new(x, TAB_Y),
+            button: PointerEventButton::Left,
+        },
+    );
+}
+
+fn move_to(window: &slint::Window, x: f32) {
+    pointer(
+        window,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(x, TAB_Y),
+        },
+    );
+}
+
+/// Whether the hover preview shows after resting on the first unpinned tab: it does not while a
+/// drag is (or is wrongly thought to be) in progress.
+fn preview_shows_after_resting(window: &MainWindow) -> bool {
+    move_to(window.window(), STRIP_X + 400.0);
+    move_to(window.window(), tab_x(0));
+    std::thread::sleep(Duration::from_millis(700));
+    slint::platform::update_timers_and_animations();
+    let pixels = window.window().take_snapshot().expect("the window renders");
+    let popup = rgb(window.global::<ChromePalette>().get_popup_background());
+    pixel(&pixels, tab_x(0) - 92.0 + 4.0, 70.0) == popup
+}
+
+// tabs-plus review I2: the strip changes while a tab is being dragged.
+fn a_drag_survives_a_tab_opening_elsewhere() {
+    let window = window_with(ChromeTheme::Dark, sample_tabs(), 2);
+    let moves = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&moves);
+    window.on_move_tab(move |id, index, pinned| recorded.borrow_mut().push((id, index, pinned)));
+
+    // Pick up the last tab (id 5)...
+    press_at(window.window(), tab_x(2), PointerEventButton::Left);
+    move_to(window.window(), tab_x(2) - 40.0);
+    // ... a page opens a tab in front of it (strip index 2) ...
+    with_rows(&window, |rows| {
+        rows.insert(2, tab(9, "Opened", false, false))
+    });
+    // ... and it is dropped over the first unpinned slot.
+    move_to(window.window(), tab_x(0));
+    release_at(window.window(), tab_x(0));
+
+    assert_eq!(*moves.borrow(), [(5, 2, false)]);
+    assert!(preview_shows_after_resting(&window), "the drag ended");
+    window.hide().expect("the window can be hidden");
+}
+
+fn a_drag_whose_tab_closes_is_cancelled() {
+    let window = window_with(ChromeTheme::Dark, sample_tabs(), 2);
+    let moves = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&moves);
+    window.on_move_tab(move |id, index, pinned| recorded.borrow_mut().push((id, index, pinned)));
+
+    press_at(window.window(), tab_x(2), PointerEventButton::Left);
+    move_to(window.window(), tab_x(2) - 40.0);
+    // The dragged tab's page closes it; another tab takes its row.
+    with_rows(&window, |rows| {
+        rows.set_row_data(4, tab(9, "Other", false, false))
+    });
+    move_to(window.window(), tab_x(0));
+    release_at(window.window(), tab_x(0));
+
+    assert!(moves.borrow().is_empty(), "{:?}", moves.borrow());
+    assert!(
+        preview_shows_after_resting(&window),
+        "no drag is left behind"
+    );
+
+    // The same when its row is removed outright.
+    press_at(window.window(), tab_x(1), PointerEventButton::Left);
+    move_to(window.window(), tab_x(1) - 40.0);
+    with_rows(&window, |rows| {
+        rows.remove(3);
+    });
+    move_to(window.window(), tab_x(0));
+    release_at(window.window(), tab_x(0));
+
+    assert!(moves.borrow().is_empty(), "{:?}", moves.borrow());
+    assert!(
+        preview_shows_after_resting(&window),
+        "no drag is left behind"
+    );
+    window.hide().expect("the window can be hidden");
+}
+
+// tabs-plus review M1: with no pinned tabs, a drop left of the strip does not pin.
+fn a_drop_left_of_the_strip_does_not_pin() {
+    let tabs = vec![
+        tab(1, "One", true, false),
+        tab(2, "Two", false, false),
+        tab(3, "Three", false, false),
+    ];
+    let window = window_with(ChromeTheme::Dark, tabs, 0);
+    let moves = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&moves);
+    window.on_move_tab(move |id, index, pinned| recorded.borrow_mut().push((id, index, pinned)));
+
+    drag(window.window(), STRIP_X + STRIDE + 92.0, 2.0);
+
+    assert_eq!(*moves.borrow(), [(2, 0, false)]);
+    window.hide().expect("the window can be hidden");
+}
+
+// tabs-plus review I3: the close button of a narrow inactive tab.
+fn the_close_button_of_a_narrow_tab_can_be_clicked() {
+    let tabs = (1..=15)
+        .map(|id| tab(id, &format!("Page {id}"), id == 1, false))
+        .collect::<Vec<_>>();
+    let window = window_with(ChromeTheme::Dark, tabs, 0);
+    let closed = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&closed);
+    window.on_close_tab(move |index| recorded.borrow_mut().push(index));
+    let selected = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&selected);
+    window.on_select_tab(move |index| recorded.borrow_mut().push(index));
+
+    // Tabs are 112 px wide (stride 118); the second one's × sits 8 px from its right edge.
+    let close_x = STRIP_X + 118.0 + 112.0 - 8.0 - 11.0;
+    move_to(window.window(), STRIP_X + 118.0 + 30.0);
+    move_to(window.window(), close_x - 4.0);
+    move_to(window.window(), close_x);
+    press_at(window.window(), close_x, PointerEventButton::Left);
+    release_at(window.window(), close_x);
+
+    assert_eq!(*closed.borrow(), [1]);
+    assert!(selected.borrow().is_empty(), "{:?}", selected.borrow());
+    window.hide().expect("the window can be hidden");
+}
+
+// tabs-plus: Duplicate tab in the tab menu.
+fn the_tab_menu_duplicates() {
+    let window = window_with(ChromeTheme::Light, sample_tabs(), 2);
+    let chosen = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&chosen);
+    window.on_tab_menu_activated(move |id, command| recorded.borrow_mut().push((id, command)));
+
+    right_click(window.window(), tab_x(1));
+    key(window.window(), Key::DownArrow);
+    key(window.window(), Key::DownArrow);
+    key(window.window(), Key::Return);
+
+    assert_eq!(*chosen.borrow(), [(4, TabMenuCommand::Duplicate)]);
+    window.hide().expect("the window can be hidden");
+}
+
 #[test]
 fn the_tab_strip_renders_and_responds() {
     slint::platform::set_platform(Box::new(SoftwarePlatform)).expect("no platform is set yet");
@@ -365,4 +533,9 @@ fn the_tab_strip_renders_and_responds() {
         hovering_shows_the_preview(theme, name);
     }
     dragging_reorders_and_pins();
+    a_drag_survives_a_tab_opening_elsewhere();
+    a_drag_whose_tab_closes_is_cancelled();
+    a_drop_left_of_the_strip_does_not_pin();
+    the_close_button_of_a_narrow_tab_can_be_clicked();
+    the_tab_menu_duplicates();
 }

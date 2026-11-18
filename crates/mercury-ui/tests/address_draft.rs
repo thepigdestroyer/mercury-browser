@@ -61,5 +61,19 @@ fn typing_makes_a_draft_that_return_accepts_and_escape_drops() {
     assert_eq!(*navigated.borrow(), ["y"]);
     assert_eq!(window.get_address(), "y");
     assert_eq!(window.get_synced_address(), "y");
+
+    accepting_the_draft_from_elsewhere_lets_the_page_address_back_in(&window);
     window.hide().expect("the window can be hidden");
+}
+
+// tabs-plus review I1: a navigation that does not come from the field's Return.
+fn accepting_the_draft_from_elsewhere_lets_the_page_address_back_in(window: &MainWindow) {
+    window.invoke_reset_address("https://a.test/".into());
+    window.set_address("exa".into());
+    assert_eq!(window.get_synced_address(), "https://a.test/");
+
+    // A suggestion, the history window, Home, Back… navigated: the draft is no longer one.
+    window.invoke_accept_address_draft();
+
+    assert_eq!(window.get_synced_address(), "exa");
 }
