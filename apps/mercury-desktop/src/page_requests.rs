@@ -727,3 +727,70 @@ mod tests {
         assert!(!protector.accepts(second, at(9_000)));
     }
 }
+
+// passwords-ui (review): written before the fix.
+#[cfg(test)]
+mod password_tests {
+    use std::time::Duration;
+
+    use mercury_passwords::{LoginKey, Origin, Password};
+    use talaria_core::{BrowserEvent, PageRequest, PageRequestId};
+
+    use super::*;
+    use crate::passwords::tests::{install_fakes, save_login};
+
+    fn sign_in(for_proxy: bool) -> PendingPageRequest {
+        let mut controller = BrowserController::default();
+        let tab_id = controller.active_tab_id();
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::PageRequested(PageRequest {
+                id: PageRequestId::new(3),
+                url: "https://example.com/private".to_owned(),
+                kind: PageRequestKind::Authentication { for_proxy },
+                received_at: Duration::ZERO,
+            }),
+        );
+        controller.pending_page_request(tab_id).expect("pending")
+    }
+
+    fn saved() {
+        let (passwords, _, _) = install_fakes();
+        save_login(
+            &passwords,
+            LoginKey::http_auth(Origin::parse("https://example.com").expect("valid"), "", "alice"),
+            Password::new("fake-pw".to_owned()),
+        );
+    }
+
+    #[test]
+    fn a_proxy_sign_in_gets_empty_fields_even_with_a_saved_login_for_the_url() {
+        saved();
+
+        let view = sign_in_view(&sign_in(true));
+
+        assert_eq!(view.value, "");
+        assert_eq!(view.secret, "");
+        assert_eq!(view.choice_label, "", "nothing is offered to save for a proxy");
+    }
+
+    #[test]
+    fn a_site_sign_in_starts_with_the_saved_user_name_only() {
+        saved();
+
+        let view = sign_in_view(&sign_in(false));
+
+        assert_eq!(view.value, "alice");
+        assert_eq!(view.secret, "", "the password is read only when the user signs in");
+        assert!(view.detail.contains("saved password"));
+    }
+
+    #[test]
+    fn a_memory_only_run_offers_to_remember_until_quit() {
+        saved();
+
+        let view = sign_in_view(&sign_in(false));
+
+        assert_eq!(view.choice_label, crate::passwords::REMEMBER_SIGN_IN_CHOICE);
+    }
+}

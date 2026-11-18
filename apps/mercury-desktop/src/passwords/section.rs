@@ -735,3 +735,69 @@ mod tests {
         assert!(!passwords.gate.borrow().is_open(std::time::Instant::now()));
     }
 }
+
+// passwords-ui (review): written before the fix.
+#[cfg(test)]
+mod worker_tests {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use mercury_password_manager::AuthOutcome;
+    use mercury_passwords::{LoginKey, Origin, Password};
+
+    use super::*;
+    use crate::passwords::tests::{install_deferred, save_login};
+    use crate::settings::tests::init_slint;
+
+    fn element(window: &SettingsWindow, label: &str) -> ElementHandle {
+        ElementHandle::find_by_accessible_label(window, label)
+            .find(|element| element.accessible_role() != Some(AccessibleRole::Text))
+            .unwrap_or_else(|| panic!("no control labelled {label:?}"))
+    }
+
+    fn key(username: &str) -> LoginKey {
+        LoginKey::form(Origin::parse("https://a.test").expect("valid"), username)
+    }
+
+    #[test]
+    fn a_reply_for_a_login_no_longer_open_is_dropped_and_waiting_is_shown() {
+        init_slint();
+        let (passwords, authenticator, _) = install_deferred();
+        save_login(&passwords, key("alice"), Password::new("fake-a".to_owned()));
+        save_login(&passwords, key("bob"), Password::new("fake-b".to_owned()));
+        let window = SettingsWindow::new().expect("a window");
+        window.set_section(4);
+        connect_settings_window(&window);
+        passwords.worker.run_queued();
+        let ui = ui(&window);
+
+        element(&window, "a.test, alice").invoke_accessible_default_action();
+        element(&window, "Show the password").invoke_accessible_default_action();
+        authenticator.answer(AuthOutcome::Allowed);
+        assert_eq!(ui.get_status(), WAITING_FOR_KEYCHAIN);
+        element(&window, "a.test, bob").invoke_accessible_default_action();
+        passwords.worker.run_queued();
+
+        assert!(!ui.get_password_shown());
+        assert_eq!(ui.get_shown_password(), "");
+    }
+
+    #[test]
+    fn searching_never_touches_the_store_and_long_passwords_show_whole() {
+        init_slint();
+        let (passwords, authenticator, _) = install_deferred();
+        let long = "aB3#".repeat(32);
+        save_login(&passwords, key("alice"), Password::new(long.clone()));
+        let window = SettingsWindow::new().expect("a window");
+        window.set_section(4);
+        connect_settings_window(&window);
+        passwords.worker.run_queued();
+
+        element(&window, "Search saved logins").set_accessible_value("ali");
+        assert_eq!(passwords.worker.pending(), 0);
+
+        element(&window, "a.test, alice").invoke_accessible_default_action();
+        element(&window, "Show the password").invoke_accessible_default_action();
+        authenticator.answer(AuthOutcome::Allowed);
+        passwords.worker.run_queued();
+        assert_eq!(ui(&window).get_shown_password(), long.as_str());
+    }
+}

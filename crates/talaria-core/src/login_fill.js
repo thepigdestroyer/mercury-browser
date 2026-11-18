@@ -22,8 +22,8 @@
     input.dispatchEvent(new Event("input", { bubbles: true }));
     input.dispatchEvent(new Event("change", { bubbles: true }));
   }
-  // The user-name partner: the last editable text-like field before the password field in its
-  // form (or, outside a form, in the document).
+  // The user-name partner: the last editable, rendered text-like field before the password field
+  // in its form (or, outside a form, in the document). Hidden ones (honeypots) are skipped.
   var partner = null;
   if (username !== "") {
     var scope = field.form ? field.form.elements : document.querySelectorAll("input");
@@ -34,7 +34,7 @@
         break;
       }
       if (input instanceof HTMLInputElement && textTypes.indexOf(input.type) !== -1 &&
-          !input.disabled && !input.readOnly) {
+          !input.disabled && !input.readOnly && input.getClientRects().length > 0) {
         partner = input;
       }
     }

@@ -51,6 +51,7 @@ pub struct StoreWorker {
     mode: Mode,
     persistent: bool,
     next_id: Cell<u64>,
+    last_interaction: Cell<Option<Interaction>>,
     waiting: RefCell<HashMap<u64, Reply>>,
 }
 
@@ -92,6 +93,7 @@ impl StoreWorker {
             mode,
             persistent,
             next_id: Cell::new(0),
+            last_interaction: Cell::new(None),
             waiting: RefCell::default(),
         }
     }
@@ -115,6 +117,7 @@ impl StoreWorker {
                 reply(*result);
             }
         });
+        self.last_interaction.set(Some(interaction));
         let id = self.next_id.get() + 1;
         self.next_id.set(id);
         match &self.mode {
@@ -157,6 +160,11 @@ impl StoreWorker {
             self.finish(id, result);
             ran += 1;
         }
+    }
+
+    /// The interaction allowed to the job started last, for tests.
+    pub fn last_interaction(&self) -> Option<Interaction> {
+        self.last_interaction.get()
     }
 
     /// Jobs started whose reply has not run yet.
@@ -213,6 +221,16 @@ mod tests {
         assert_eq!(seen.get(), Some(true));
         assert!(!worker.is_persistent());
         assert_eq!(worker.pending(), 0);
+    }
+
+    #[test]
+    fn the_last_jobs_interaction_is_known() {
+        let worker = StoreWorker::inline(memory());
+        assert_eq!(worker.last_interaction(), None);
+
+        worker.run(Interaction::Never, |_| (), |()| {});
+
+        assert_eq!(worker.last_interaction(), Some(Interaction::Never));
     }
 
     #[test]

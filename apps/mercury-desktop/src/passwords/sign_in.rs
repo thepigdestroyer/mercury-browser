@@ -261,3 +261,65 @@ mod tests {
         assert!(saved_http_credentials(PageRequestId::new(8), ORIGIN, None).is_none());
     }
 }
+
+// passwords-ui (review): written before the fix.
+#[cfg(test)]
+mod worker_tests {
+    use std::cell::RefCell;
+
+    use mercury_password_manager::Interaction;
+    use mercury_passwords::LoginKey;
+
+    use super::*;
+    use crate::passwords::tests::{install_deferred, save_login};
+
+    const ORIGIN: &str = "https://example.com";
+
+    #[test]
+    fn the_saved_password_is_read_only_when_the_user_signs_in() {
+        let (passwords, _, _) = install_deferred();
+        save_login(
+            &passwords,
+            LoginKey::http_auth(Origin::parse(ORIGIN).expect("valid"), "", "alice"),
+            Password::new("fake-pw".to_owned()),
+        );
+        assert_eq!(saved_sign_in_username(ORIGIN, false).as_deref(), Some("alice"));
+        assert_eq!(saved_sign_in_username(ORIGIN, true), None, "never for a proxy");
+        let read = Rc::new(RefCell::new(None));
+        let seen = Rc::clone(&read);
+
+        read_saved_sign_in(ORIGIN, "alice", move |password| {
+            *seen.borrow_mut() = Some(password);
+        });
+        assert!(read.borrow().is_none());
+        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Allowed));
+        passwords.worker.run_queued();
+
+        assert_eq!(
+            read.borrow().clone().flatten().as_deref(),
+            Some("fake-pw")
+        );
+    }
+
+    #[test]
+    fn a_sign_in_that_worked_is_saved_without_asking_the_user() {
+        crate::settings::tests::init_slint();
+        let _settings = crate::settings::SettingsHandle::start(None);
+        let (passwords, _, _) = install_deferred();
+        let tab = TabId::new(1);
+
+        sign_in_sent(tab, ORIGIN, "bob", "fake-b");
+        observe_event(&passwords, tab, &BrowserEvent::PageLoadStarted);
+        observe_event(
+            &passwords,
+            tab,
+            &BrowserEvent::LoadStateChanged {
+                state: LoadState::Loaded,
+            },
+        );
+
+        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Never));
+        passwords.worker.run_queued();
+        assert_eq!(saved_sign_in_username(ORIGIN, false).as_deref(), Some("bob"));
+    }
+}

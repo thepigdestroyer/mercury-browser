@@ -117,6 +117,8 @@ mod tests {
         assert!(script.ends_with(r#"})("https://example.com", "alice", "fake\"pw");"#));
         assert!(script.contains("location.origin !== origin"));
         assert!(script.contains("document.activeElement"));
+        // Hidden inputs (no layout box, such as honeypots) are never the user-name partner.
+        assert!(script.contains("getClientRects().length > 0"));
     }
 
     #[test]

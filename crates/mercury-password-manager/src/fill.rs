@@ -1,25 +1,30 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-use mercury_passwords::{LoginSummary, Origin, PasswordStore, SecretBackend};
+use mercury_passwords::{LoginKind, LoginSummary, Origin};
 
-/// The form logins that may be offered for filling into the top-level page at `page_url`: those
-/// saved for exactly its origin. A page that cannot hold logins (plain HTTP other than loopback,
-/// `file:`, `data:`, `about:`) gets none, and so does a store that cannot be listed. Offering is
+/// The form logins that may be offered for filling into the top-level page at `page_url`, from the
+/// saved `logins`: those for exactly its origin, by user name. A page that cannot hold logins
+/// (plain HTTP other than loopback, `file:`, `data:`, `about:`) gets none. Offering is
 /// all this does: a login is filled only after the user picks it in the browser's own menu.
-pub fn fill_candidates<B: SecretBackend>(
-    store: &PasswordStore<B>,
+pub fn fill_candidates(
+    logins: &[LoginSummary],
     page_url: &str,
 ) -> (Option<Origin>, Vec<LoginSummary>) {
     let Ok(origin) = Origin::parse(page_url) else {
         return (None, Vec::new());
     };
-    let logins = store.logins_for(&origin).unwrap_or_default();
-    (Some(origin), logins)
+    let mut found = logins
+        .iter()
+        .filter(|summary| summary.key.origin == origin && summary.key.kind == LoginKind::Form)
+        .cloned()
+        .collect::<Vec<_>>();
+    found.sort_by(|a, b| a.key.username.cmp(&b.key.username));
+    (Some(origin), found)
 }
 
 #[cfg(test)]
 mod tests {
-    use mercury_passwords::{LoginKey, MemoryBackend, Password};
+    use mercury_passwords::{LoginKey, MemoryBackend, Password, PasswordStore};
 
     use super::*;
 
@@ -60,7 +65,7 @@ mod tests {
 
     #[test]
     fn only_form_logins_of_exactly_the_pages_origin_are_offered() {
-        let (origin, found) = fill_candidates(&store(), "https://example.com/login?next=/");
+        let (origin, found) = fill_candidates(&store().all().expect("listed"), "https://example.com/login?next=/");
 
         assert_eq!(
             origin.map(|origin| origin.as_str().to_owned()).as_deref(),
@@ -78,7 +83,7 @@ mod tests {
             "data:text/html,<input type=password>",
             "",
         ] {
-            let (origin, found) = fill_candidates(&store(), url);
+            let (origin, found) = fill_candidates(&store().all().expect("listed"), url);
             assert!(origin.is_none() && found.is_empty(), "{url}");
         }
     }

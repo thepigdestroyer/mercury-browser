@@ -237,3 +237,21 @@ pub(crate) mod tests {
         assert_eq!(pasteboard.contents(), None);
     }
 }
+
+// passwords-ui (review): written before the fix.
+#[cfg(test)]
+mod quit_tests {
+    use super::tests::install_fakes;
+    use super::*;
+
+    #[test]
+    fn a_copied_password_is_cleared_at_quit() {
+        crate::settings::tests::init_slint();
+        let (passwords, _, pasteboard) = install_fakes();
+        assert!(passwords.copy_secret("fake-pw"));
+
+        finish_run();
+
+        assert_eq!(pasteboard.contents(), None);
+    }
+}

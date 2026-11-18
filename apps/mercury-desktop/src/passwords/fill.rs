@@ -347,3 +347,91 @@ mod tests {
         assert_eq!(fills(&controller).len(), 1);
     }
 }
+
+// passwords-ui (review): written before the fix.
+#[cfg(test)]
+mod worker_tests {
+    use mercury_passwords::Password;
+    use talaria_core::{BrowserEvent, ControlRect, ControlRequest, TabCommand};
+
+    use super::*;
+    use crate::passwords::tests::{install_deferred, install_fakes, save_login};
+
+    const RECT: ControlRect = ControlRect {
+        x: 0,
+        y: 0,
+        width: 10,
+        height: 10,
+    };
+
+    fn controller(url: &str) -> (Rc<RefCell<BrowserController>>, TabId) {
+        let mut controller = BrowserController::default();
+        let tab_id = controller.active_tab_id();
+        for event in [
+            BrowserEvent::AddressChanged {
+                url: url.to_owned(),
+            },
+            BrowserEvent::InputMethodShown {
+                id: ControlId::new(1),
+                rect: RECT,
+            },
+            BrowserEvent::ControlShown {
+                id: ControlId::new(2),
+                request: ControlRequest::ContextMenu {
+                    rect: RECT,
+                    entries: Vec::new(),
+                    link_url: None,
+                    image_url: None,
+                },
+            },
+        ] {
+            controller.handle_event(tab_id, event);
+        }
+        (Rc::new(RefCell::new(controller)), tab_id)
+    }
+
+    fn alice() -> LoginKey {
+        LoginKey::form(Origin::parse("https://example.com").expect("valid"), "alice")
+    }
+
+    fn fills(controller: &Rc<RefCell<BrowserController>>) -> usize {
+        std::iter::from_fn(|| controller.borrow_mut().next_command())
+            .map(TabCommand::into_command)
+            .filter(|command| matches!(command, BrowserCommand::FillLogin(_)))
+            .count()
+    }
+
+    #[test]
+    fn a_field_that_lost_focus_while_the_keychain_answered_gets_nothing() {
+        let (passwords, _, _) = install_deferred();
+        save_login(&passwords, alice(), Password::new("fake".to_owned()));
+        let (controller, tab_id) = controller("https://example.com/login");
+        fill_menu(tab_id, ControlId::new(1), "https://example.com/login").expect("offered");
+        let queued = Rc::new(std::cell::Cell::new(false));
+        let seen = Rc::clone(&queued);
+
+        fill_chosen(&controller, 0, move || seen.set(true));
+        assert_eq!(fills(&controller), 0, "nothing before the keychain answers");
+        controller.borrow_mut().handle_event(
+            tab_id,
+            BrowserEvent::ControlHidden {
+                id: ControlId::new(1),
+            },
+        );
+        passwords.worker.run_queued();
+
+        assert_eq!(fills(&controller), 0);
+        assert!(!queued.get());
+    }
+
+    #[test]
+    fn a_menu_without_logins_clears_an_older_offer() {
+        let (passwords, _, _) = install_fakes();
+        save_login(&passwords, alice(), Password::new("fake".to_owned()));
+        fill_menu(TabId::new(1), ControlId::new(1), "https://example.com/").expect("offered");
+
+        assert!(fill_menu(TabId::new(1), ControlId::new(1), "about:blank").is_none());
+
+        assert!(passwords.fill.borrow().is_none());
+    }
+}
