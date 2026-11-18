@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Popups for page controls: `<select>` lists, the colour picker, the file panel, the page
 //! context menu, and placing the input-method window at the caret.
 //!
@@ -13,7 +14,7 @@
 
 mod color;
 mod context_menu;
-mod file_panel;
+pub(crate) mod file_panel; // bookmarks lane: its file panels are here too
 mod geometry;
 mod select;
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! What the browser's settings can change in the controller: the search used for address-bar
 //! input that is not an address, the default page zoom, and a colour scheme forced over the
 //! system's.
@@ -244,5 +245,23 @@ fn others_resolve_address_bar_text_through_the_controllers_own_builder() {
     assert!(
         controller.active_state().url().is_empty(),
         "nothing navigates"
+    );
+}
+
+// history
+
+#[test]
+fn the_search_row_searches_even_text_that_looks_like_an_address() {
+    let mut controller = BrowserController::default();
+    assert!(matches!(
+        controller.search_url("example.com"),
+        Err(AddressResolutionError::Search(_))
+    ));
+
+    controller.set_search_url_builder(test_search());
+
+    assert_eq!(
+        controller.search_url(" example.com ").unwrap().as_str(),
+        "https://search.test/?q=example.com"
     );
 }

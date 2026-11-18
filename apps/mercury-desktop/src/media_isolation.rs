@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Keeps the GStreamer bundled with Mercury away from any other GStreamer on the machine.
 
 use std::ffi::OsString;

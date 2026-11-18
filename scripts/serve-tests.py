@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Replaced by scripts/serve-tests.sh (Rust, crates/mercury-devtools); deleted once the lanes in progress have merged.
 """Serve the repository's tests/ directory on the loopback interface, for the media checks.
 

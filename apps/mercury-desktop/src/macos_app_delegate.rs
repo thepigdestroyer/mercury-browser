@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Methods Mercury adds to the application delegate winit installs, at run time.
 //!
 //! winit 0.30 owns `NSApplication`'s delegate (`WinitApplicationDelegate`,

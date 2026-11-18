@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 # The macOS job and the lint, policy and fast jobs are adapted from Zervo,
 # https://github.com/Goddv/Zervo, commit 86cb7126, .github/workflows/check.yml
 # and .github/workflows/macos.yml, MPL-2.0.
@@ -453,6 +454,12 @@ jobs:
           shellcheck --version
           find scripts -type f -name '*.sh' -print0 | xargs -0 shellcheck -x
 
+      - name: Licence headers
+        # Every file names its licence (PolyForm Noncommercial or MPL-2.0) in an
+        # SPDX header or in REUSE.toml; see LICENSE.
+        shell: bash
+        run: scripts/ci/check-license-headers.sh
+
       - name: Byte-compile the Python scripts
         # Only scripts/serve-tests.py is left, kept until the lanes in progress
         # have moved to scripts/serve-tests.sh (Rust); then this step goes too.
@@ -514,3 +521,30 @@ jobs:
 
       - name: cargo deny check
         run: cargo-deny --locked check --show-stats
+
+  # Each crate in third_party/ must be the crate as published on crates.io plus
+  # its exported patch in third_party/patches/, with a `Mercury:` comment in
+  # every changed file (crates/mercury-servo-patches). Builds only that small
+  # tool; the published archives come from crates.io.
+  servo-patches:
+    name: Vendored crates
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Reads rust-toolchain.toml: channel, profile and components.
+          rustup toolchain install
+          cargo --version
+
+      - name: Check the vendored crates
+        run: make servo-patches-check

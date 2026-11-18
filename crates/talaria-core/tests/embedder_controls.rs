@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use talaria_core::{
     BrowserCommand, BrowserController, BrowserEvent, ContextMenuAction, ControlAnswer, ControlId,
     ControlRect, ControlRequest, LoadState, Rgb, TabCommand, TabId,

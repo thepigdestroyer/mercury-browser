@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Keeps the engine's form-control and context-menu requests until the browser answers them.
 //!
 //! Servo hands the delegate an owned request object that must be answered later; dropping it

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
@@ -35,6 +37,10 @@ pub(crate) struct PageFeedback {
     title_in_flight: Cell<Option<u64>>,
     /// A title read was asked for while one was in flight; `refresh_title` starts it.
     title_wanted: Cell<bool>,
+    /// history lane: the address shown (as `AddressChanged` sent it), so that a title read
+    /// also goes out as `PageTitleAt` for history recording. A read answers only while the
+    /// address it was asked for is still shown (`generation`).
+    address: RefCell<Option<String>>,
 }
 
 impl PageFeedback {
@@ -46,6 +52,7 @@ impl PageFeedback {
             icon: RefCell::new(None),
             title_in_flight: Cell::new(None),
             title_wanted: Cell::new(false),
+            address: RefCell::new(None),
         })
     }
 
@@ -65,6 +72,12 @@ impl PageFeedback {
     /// cleared the tab's copy.
     pub(crate) fn load_completed(&self) {
         self.send_icon();
+    }
+
+    // history lane
+    /// The address now shown, as `AddressChanged` sent it.
+    pub(crate) fn set_address(&self, url: String) {
+        self.address.replace(Some(url));
     }
 
     /// The address changed. For a same-document navigation the icon is sent again (the
@@ -110,7 +123,18 @@ impl PageFeedback {
             return;
         }
         if let Ok(JSValue::String(title)) = result {
-            self.send(BrowserEvent::PageTitleChanged { title: Some(title) });
+            self.send(BrowserEvent::PageTitleChanged {
+                title: Some(title.clone()),
+            });
+            // history lane: Servo notifies no title for a new document whose title equals the
+            // last one, so history takes the titles read here too.
+            let address = self.address.borrow().clone();
+            if let Some(url) = address {
+                self.send(BrowserEvent::PageTitleAt {
+                    url,
+                    title: Some(title),
+                });
+            }
         }
     }
 
@@ -194,6 +218,28 @@ mod tests {
         evaluations.answer(Ok(JSValue::String("Same title".to_owned())));
 
         assert_eq!(events(&receiver), vec![title("Same title")]);
+    }
+
+    // history lane
+    #[test]
+    fn a_title_read_also_goes_to_history_with_the_address_it_was_read_at() {
+        let (feedback, receiver) = feedback();
+        let evaluations = Evaluations::default();
+        feedback.set_address("https://a.test/".to_owned());
+
+        feedback.request_title(evaluations.evaluate());
+        evaluations.answer(Ok(JSValue::String("Same title".to_owned())));
+
+        assert_eq!(
+            events(&receiver),
+            vec![
+                title("Same title"),
+                BrowserEvent::PageTitleAt {
+                    url: "https://a.test/".to_owned(),
+                    title: Some("Same title".to_owned()),
+                },
+            ]
+        );
     }
 
     #[test]

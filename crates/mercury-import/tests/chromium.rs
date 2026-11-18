@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Chromium-family profiles, built in temporary directories: the `Bookmarks` JSON is written by
 //! hand and the `History` database is created here with the columns Chromium's
 //! `url_database.cc` and `visit_database.cc` define.
@@ -5,10 +7,17 @@
 use std::path::{Path, PathBuf};
 
 use mercury_import::{
-    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_IMPORTED_VISITS,
-    find_chromium_profiles, read_chromium_bookmarks, read_chromium_history,
+    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_IMPORTED_VISITS, MAX_TITLE_CHARS,
+    MAX_URL_BYTES, ReadContext, find_chromium_profiles, read_chromium_bookmarks,
+    read_chromium_history,
 };
 use rusqlite::{Connection, params};
+
+/// Copies go to the system temporary directory in these tests; each is removed when its read
+/// ends.
+fn ctx() -> ReadContext {
+    ReadContext::new(std::env::temp_dir())
+}
 
 const BOOKMARKS: &str = include_str!("fixtures/chromium_Bookmarks.json");
 
@@ -83,7 +92,8 @@ fn the_bar_becomes_a_toolbar_folder_and_dates_become_unix_milliseconds() {
     let profile = tempfile::tempdir().unwrap();
     std::fs::write(profile.path().join("Bookmarks"), BOOKMARKS).unwrap();
 
-    let nodes = read_chromium_bookmarks(profile.path()).expect("the fixture should be read");
+    let nodes =
+        read_chromium_bookmarks(profile.path(), &ctx()).expect("the fixture should be read");
 
     assert_eq!(
         nodes,
@@ -159,7 +169,7 @@ fn a_signed_in_profile_reads_its_account_bookmarks_root_by_root() {
     )
     .unwrap();
 
-    let nodes = read_chromium_bookmarks(profile.path()).unwrap();
+    let nodes = read_chromium_bookmarks(profile.path(), &ctx()).unwrap();
 
     assert_eq!(
         nodes,
@@ -194,7 +204,9 @@ fn a_signed_in_profile_reads_its_account_bookmarks_root_by_root() {
 
     std::fs::remove_file(profile.path().join("Bookmarks")).unwrap();
     assert_eq!(
-        read_chromium_bookmarks(profile.path()).unwrap().len(),
+        read_chromium_bookmarks(profile.path(), &ctx())
+            .unwrap()
+            .len(),
         2,
         "the account file alone is enough"
     );
@@ -217,7 +229,7 @@ fn history_is_newest_first_in_unix_milliseconds_and_capped_by_the_limit() {
     add_visit(&conn, 5, 1_700_000_600_000);
     drop(conn);
 
-    let all = read_chromium_history(profile.path(), 100).unwrap();
+    let all = read_chromium_history(profile.path(), 100, &ctx()).unwrap();
     assert_eq!(
         all,
         vec![
@@ -228,9 +240,12 @@ fn history_is_newest_first_in_unix_milliseconds_and_capped_by_the_limit() {
         ]
     );
 
-    let newest = read_chromium_history(profile.path(), 2).unwrap();
+    let newest = read_chromium_history(profile.path(), 2, &ctx()).unwrap();
     assert_eq!(newest, all[..2].to_vec());
-    assert_eq!(read_chromium_history(profile.path(), 0).unwrap(), vec![]);
+    assert_eq!(
+        read_chromium_history(profile.path(), 0, &ctx()).unwrap(),
+        vec![]
+    );
 }
 
 #[test]
@@ -252,7 +267,7 @@ fn history_never_returns_more_than_the_import_cap() {
     tx.commit().unwrap();
     drop(conn);
 
-    let visits = read_chromium_history(profile.path(), usize::MAX).unwrap();
+    let visits = read_chromium_history(profile.path(), usize::MAX, &ctx()).unwrap();
 
     assert_eq!(visits.len(), MAX_IMPORTED_VISITS);
     assert_eq!(
@@ -283,7 +298,7 @@ fn history_held_by_a_running_browser_is_read_from_a_copy_and_left_untouched() {
         "the database really is locked against other readers"
     );
 
-    let visits = read_chromium_history(profile.path(), 10).unwrap();
+    let visits = read_chromium_history(profile.path(), 10, &ctx()).unwrap();
 
     assert_eq!(
         visits,
@@ -305,11 +320,11 @@ fn a_profile_without_bookmarks_or_history_reports_not_found() {
     let profile = tempfile::tempdir().unwrap();
 
     assert!(matches!(
-        read_chromium_bookmarks(profile.path()),
+        read_chromium_bookmarks(profile.path(), &ctx()),
         Err(ImportError::NotFound(_))
     ));
     assert!(matches!(
-        read_chromium_history(profile.path(), 10),
+        read_chromium_history(profile.path(), 10, &ctx()),
         Err(ImportError::NotFound(_))
     ));
 }
@@ -330,7 +345,7 @@ fn truncated_or_unexpected_bookmark_json_is_malformed() {
         std::fs::write(&path, text).unwrap();
         assert!(
             matches!(
-                read_chromium_bookmarks(profile.path()),
+                read_chromium_bookmarks(profile.path(), &ctx()),
                 Err(ImportError::Malformed(_))
             ),
             "{text:?}"
@@ -341,7 +356,7 @@ fn truncated_or_unexpected_bookmark_json_is_malformed() {
     std::fs::write(&path, BOOKMARKS).unwrap();
     std::fs::write(profile.path().join("AccountBookmarks"), cut).unwrap();
     assert!(matches!(
-        read_chromium_bookmarks(profile.path()),
+        read_chromium_bookmarks(profile.path(), &ctx()),
         Err(ImportError::Malformed(_))
     ));
 }
@@ -353,7 +368,7 @@ fn an_oversized_bookmarks_file_is_refused() {
     file.set_len(64 * 1024 * 1024).unwrap();
 
     assert!(matches!(
-        read_chromium_bookmarks(profile.path()),
+        read_chromium_bookmarks(profile.path(), &ctx()),
         Err(ImportError::TooLarge { .. })
     ));
 }
@@ -368,7 +383,7 @@ fn a_damaged_history_database_is_an_error() {
     .unwrap();
 
     assert!(matches!(
-        read_chromium_history(profile.path(), 10),
+        read_chromium_history(profile.path(), 10, &ctx()),
         Err(ImportError::Database { .. })
     ));
 }
@@ -385,7 +400,7 @@ fn a_history_database_with_another_schema_is_malformed() {
     drop(conn);
 
     assert!(matches!(
-        read_chromium_history(profile.path(), 10),
+        read_chromium_history(profile.path(), 10, &ctx()),
         Err(ImportError::Malformed(_))
     ));
 
@@ -395,7 +410,7 @@ fn a_history_database_with_another_schema_is_malformed() {
         .execute_batch("CREATE TABLE unrelated(x)")
         .unwrap();
     assert!(matches!(
-        read_chromium_history(profile.path(), 10),
+        read_chromium_history(profile.path(), 10, &ctx()),
         Err(ImportError::Malformed(_))
     ));
 }
@@ -412,7 +427,7 @@ fn an_unreadable_file_is_an_error() {
     // A privileged runner may read it anyway; the check only means something when it cannot.
     if std::fs::File::open(&path).is_err() {
         assert!(matches!(
-            read_chromium_bookmarks(profile.path()),
+            read_chromium_bookmarks(profile.path(), &ctx()),
             Err(ImportError::Io { .. })
         ));
     }
@@ -542,7 +557,7 @@ fn a_root_left_empty_by_the_address_rule_is_left_out() {
     .unwrap();
 
     assert_eq!(
-        read_chromium_bookmarks(profile.path()).unwrap(),
+        read_chromium_bookmarks(profile.path(), &ctx()).unwrap(),
         vec![folder(
             "Bar",
             true,
@@ -567,7 +582,7 @@ fn bookmark_and_history_addresses_come_out_normalised() {
     drop(conn);
 
     assert_eq!(
-        read_chromium_bookmarks(profile.path()).unwrap(),
+        read_chromium_bookmarks(profile.path(), &ctx()).unwrap(),
         vec![folder(
             "Bar",
             true,
@@ -576,7 +591,7 @@ fn bookmark_and_history_addresses_come_out_normalised() {
         )]
     );
     assert_eq!(
-        read_chromium_history(profile.path(), 10).unwrap(),
+        read_chromium_history(profile.path(), 10, &ctx()).unwrap(),
         vec![visit(
             "https://upper.example/Path?q=a%20b",
             Some("Upper"),
@@ -599,7 +614,7 @@ fn visits_without_a_time_are_skipped() {
     drop(conn);
 
     assert_eq!(
-        read_chromium_history(profile.path(), 10).unwrap(),
+        read_chromium_history(profile.path(), 10, &ctx()).unwrap(),
         vec![visit("https://a.example/", Some("A"), 1_700_000_000_000)]
     );
 }
@@ -627,10 +642,28 @@ fn an_unreadable_history_row_is_skipped_not_fatal() {
     drop(conn);
 
     assert_eq!(
-        read_chromium_history(profile.path(), 10).unwrap(),
+        read_chromium_history(profile.path(), 10, &ctx()).unwrap(),
         vec![
             visit("https://d.example/", Some("D"), 1_700_000_004_000),
             visit("https://a.example/", Some("A"), 1_700_000_001_000),
         ]
     );
+}
+
+#[test]
+fn huge_history_titles_are_cut_and_huge_addresses_left_out_while_reading() {
+    let profile = tempfile::tempdir().unwrap();
+    let conn = history_db(&profile.path().join("History"));
+    let huge_url = format!("https://long.example/{}", "a".repeat(MAX_URL_BYTES));
+    add_url(&conn, 1, "https://a.example/", Some(&"t".repeat(100_000)));
+    add_url(&conn, 2, &huge_url, Some("Long"));
+    for n in 0..1000 {
+        add_visit(&conn, 1 + n % 2, 1_700_000_000_000 + n);
+    }
+    drop(conn);
+
+    let visits = read_chromium_history(profile.path(), usize::MAX, &ctx()).unwrap();
+    assert_eq!(visits.len(), 500);
+    assert!(visits.iter().all(|visit| visit.url == "https://a.example/"
+        && visit.title.as_ref().unwrap().chars().count() == MAX_TITLE_CHARS));
 }

@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Checks the macOS media scripts: scripts/macos/gstreamer-plugins.sh (the plugin
 # definition), scripts/macos/collect-gstreamer.sh (the library collector),
 # scripts/macos/gstreamer-notices.sh, scripts/macos/gstreamer.sh, and that the

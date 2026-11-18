@@ -1,0 +1,13 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<meta charset="utf-8">
+<title>Geolocation opener</title>
+<!--
+  Opens geolocation.html in a new tab without a user gesture, so a page-opened tab asks for a
+  location. Run with MERCURY_ALLOW_POP_UPS=1 (and MERCURY_FAKE_GEOLOCATION) in an automated run.
+-->
+<p>Opening geolocation.html in a new tab…</p>
+<script>
+  window.open("geolocation.html");
+</script>

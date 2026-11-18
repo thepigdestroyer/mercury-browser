@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Firefox-family profiles, built in temporary directories: `places.sqlite` is created here with
 //! the tables of Firefox's `nsPlacesTables.h`, and `profiles.ini` is written by hand.
 
@@ -5,10 +7,16 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use mercury_import::{
-    BrowserProfile, ImportError, ImportedNode, ImportedVisit, find_firefox_profiles,
-    read_firefox_bookmarks, read_firefox_history,
+    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_TITLE_CHARS, MAX_URL_BYTES,
+    ReadContext, find_firefox_profiles, read_firefox_bookmarks, read_firefox_history,
 };
 use rusqlite::{Connection, params};
+
+/// Copies go to the system temporary directory in these tests; each is removed when its read
+/// ends.
+fn ctx() -> ReadContext {
+    ReadContext::new(std::env::temp_dir())
+}
 
 const SCHEMA: &str = "
     CREATE TABLE moz_places (id INTEGER PRIMARY KEY, url LONGVARCHAR, title LONGVARCHAR,
@@ -152,7 +160,7 @@ fn the_toolbar_root_becomes_a_toolbar_folder_and_tags_are_not_bookmarks() {
     let profile = tempfile::tempdir().unwrap();
     drop(sample_places(profile.path()));
 
-    let nodes = read_firefox_bookmarks(profile.path()).expect("the fixture should be read");
+    let nodes = read_firefox_bookmarks(profile.path(), &ctx()).expect("the fixture should be read");
 
     assert_eq!(
         nodes,
@@ -166,7 +174,7 @@ fn history_is_newest_first_in_unix_milliseconds_and_capped_by_the_limit() {
     let profile = tempfile::tempdir().unwrap();
     drop(sample_places(profile.path()));
 
-    let all = read_firefox_history(profile.path(), 100).unwrap();
+    let all = read_firefox_history(profile.path(), 100, &ctx()).unwrap();
 
     assert_eq!(
         all,
@@ -178,10 +186,13 @@ fn history_is_newest_first_in_unix_milliseconds_and_capped_by_the_limit() {
         ]
     );
     assert_eq!(
-        read_firefox_history(profile.path(), 1).unwrap(),
+        read_firefox_history(profile.path(), 1, &ctx()).unwrap(),
         all[..1].to_vec()
     );
-    assert_eq!(read_firefox_history(profile.path(), 0).unwrap(), vec![]);
+    assert_eq!(
+        read_firefox_history(profile.path(), 0, &ctx()).unwrap(),
+        vec![]
+    );
 }
 
 #[test]
@@ -209,8 +220,8 @@ fn changes_still_in_the_write_ahead_log_are_read_and_the_files_left_untouched() 
         std::fs::read(&wal).unwrap(),
     );
 
-    let nodes = read_firefox_bookmarks(profile.path()).unwrap();
-    let visits = read_firefox_history(profile.path(), 10).unwrap();
+    let nodes = read_firefox_bookmarks(profile.path(), &ctx()).unwrap();
+    let visits = read_firefox_history(profile.path(), 10, &ctx()).unwrap();
 
     assert_eq!(
         nodes,
@@ -271,7 +282,7 @@ fn a_database_locked_by_a_running_firefox_is_read_from_a_copy() {
         "the database really is locked against other readers"
     );
 
-    let visits = read_firefox_history(profile.path(), 1).unwrap();
+    let visits = read_firefox_history(profile.path(), 1, &ctx()).unwrap();
 
     assert_eq!(
         visits,
@@ -281,7 +292,12 @@ fn a_database_locked_by_a_running_firefox_is_read_from_a_copy() {
             1_700_000_500_000
         )]
     );
-    assert_eq!(read_firefox_bookmarks(profile.path()).unwrap().len(), 3);
+    assert_eq!(
+        read_firefox_bookmarks(profile.path(), &ctx())
+            .unwrap()
+            .len(),
+        3
+    );
     assert_eq!(contents(), before, "the original files are not changed");
     // Firefox's own connection is unaffected.
     conn.execute(
@@ -298,11 +314,11 @@ fn a_profile_without_places_reports_not_found() {
     let profile = tempfile::tempdir().unwrap();
 
     assert!(matches!(
-        read_firefox_bookmarks(profile.path()),
+        read_firefox_bookmarks(profile.path(), &ctx()),
         Err(ImportError::NotFound(_))
     ));
     assert!(matches!(
-        read_firefox_history(profile.path(), 10),
+        read_firefox_history(profile.path(), 10, &ctx()),
         Err(ImportError::NotFound(_))
     ));
 }
@@ -315,11 +331,11 @@ fn a_damaged_database_is_an_error() {
     std::fs::write(profile.path().join("places.sqlite"), bytes).unwrap();
 
     assert!(matches!(
-        read_firefox_bookmarks(profile.path()),
+        read_firefox_bookmarks(profile.path(), &ctx()),
         Err(ImportError::Database { .. })
     ));
     assert!(matches!(
-        read_firefox_history(profile.path(), 10),
+        read_firefox_history(profile.path(), 10, &ctx()),
         Err(ImportError::Database { .. })
     ));
 }
@@ -333,11 +349,11 @@ fn a_database_with_another_schema_is_malformed() {
         .unwrap();
 
     assert!(matches!(
-        read_firefox_bookmarks(profile.path()),
+        read_firefox_bookmarks(profile.path(), &ctx()),
         Err(ImportError::Malformed(_))
     ));
     assert!(matches!(
-        read_firefox_history(profile.path(), 10),
+        read_firefox_history(profile.path(), 10, &ctx()),
         Err(ImportError::Malformed(_))
     ));
 }
@@ -348,7 +364,7 @@ fn bookmarks_without_the_fixed_roots_are_malformed() {
     drop(places(profile.path()));
 
     assert!(matches!(
-        read_firefox_bookmarks(profile.path()),
+        read_firefox_bookmarks(profile.path(), &ctx()),
         Err(ImportError::Malformed(_))
     ));
 }
@@ -391,7 +407,8 @@ fn a_loop_or_a_very_deep_tree_in_a_damaged_file_ends() {
     tx.commit().unwrap();
     drop(conn);
 
-    let nodes = read_firefox_bookmarks(profile.path()).expect("a damaged tree is still read");
+    let nodes =
+        read_firefox_bookmarks(profile.path(), &ctx()).expect("a damaged tree is still read");
 
     assert_eq!(
         nodes[0],
@@ -452,7 +469,7 @@ fn profiles_ini_lists_profiles_with_the_installed_default_first() {
     )
     .unwrap();
 
-    let found = find_firefox_profiles(&[support.path().to_owned()]);
+    let found = find_firefox_profiles(&[support.path().to_owned()], &ctx());
 
     assert_eq!(
         canonical(found),
@@ -501,7 +518,7 @@ fn profiles_made_in_a_profile_group_are_listed_but_may_not_leave_the_tree() {
     drop(store);
     drop(places(&support.path().join("outside")));
 
-    let found = find_firefox_profiles(&[support.path().to_owned()]);
+    let found = find_firefox_profiles(&[support.path().to_owned()], &ctx());
 
     assert_eq!(
         canonical(found),
@@ -535,7 +552,7 @@ fn trees_of_firefox_and_its_forks_are_found_under_a_home_directory() {
     )
     .unwrap();
 
-    let found = find_firefox_profiles(&[home.path().to_owned(), home.path().to_owned()]);
+    let found = find_firefox_profiles(&[home.path().to_owned(), home.path().to_owned()], &ctx());
 
     assert_eq!(
         canonical(found),
@@ -571,8 +588,11 @@ fn a_damaged_profile_group_leaves_profiles_ini_alone() {
     )
     .unwrap();
 
-    assert_eq!(find_firefox_profiles(&[support.path().to_owned()]).len(), 1);
-    assert_eq!(find_firefox_profiles(&[]), vec![]);
+    assert_eq!(
+        find_firefox_profiles(&[support.path().to_owned()], &ctx()).len(),
+        1
+    );
+    assert_eq!(find_firefox_profiles(&[], &ctx()), vec![]);
 }
 
 #[test]
@@ -594,7 +614,7 @@ fn a_root_left_empty_by_the_address_rule_is_left_out() {
     drop(conn);
 
     assert_eq!(
-        read_firefox_bookmarks(profile.path()).unwrap(),
+        read_firefox_bookmarks(profile.path(), &ctx()).unwrap(),
         vec![folder(
             "Bookmarks Toolbar",
             true,
@@ -619,7 +639,7 @@ fn bookmark_and_history_addresses_come_out_normalised() {
     drop(conn);
 
     assert_eq!(
-        read_firefox_bookmarks(profile.path()).unwrap(),
+        read_firefox_bookmarks(profile.path(), &ctx()).unwrap(),
         vec![folder(
             "Bookmarks Toolbar",
             true,
@@ -628,7 +648,7 @@ fn bookmark_and_history_addresses_come_out_normalised() {
         )]
     );
     assert_eq!(
-        read_firefox_history(profile.path(), 10).unwrap(),
+        read_firefox_history(profile.path(), 10, &ctx()).unwrap(),
         vec![visit(
             "https://upper.example/a%20b",
             Some("Upper"),
@@ -650,7 +670,7 @@ fn visits_without_a_time_are_skipped() {
     drop(conn);
 
     assert_eq!(
-        read_firefox_history(profile.path(), 10).unwrap(),
+        read_firefox_history(profile.path(), 10, &ctx()).unwrap(),
         vec![visit("https://a.example/", Some("A"), 1_700_000_000_000)]
     );
 }
@@ -673,7 +693,7 @@ fn an_unreadable_history_row_is_skipped_not_fatal() {
     drop(conn);
 
     assert_eq!(
-        read_firefox_history(profile.path(), 10).unwrap(),
+        read_firefox_history(profile.path(), 10, &ctx()).unwrap(),
         vec![
             visit("https://d.example/", Some("D"), 1_700_000_004_000),
             visit("https://a.example/", Some("A"), 1_700_000_001_000),
@@ -703,7 +723,7 @@ fn undecodable_titles_are_kept_lossily_and_unreadable_addresses_skipped() {
     drop(conn);
 
     assert_eq!(
-        read_firefox_bookmarks(profile.path()).unwrap(),
+        read_firefox_bookmarks(profile.path(), &ctx()).unwrap(),
         vec![folder(
             "Bookmarks Toolbar",
             true,
@@ -720,4 +740,55 @@ fn undecodable_titles_are_kept_lossily_and_unreadable_addresses_skipped() {
             ]
         )]
     );
+}
+
+#[test]
+fn huge_titles_are_cut_and_huge_addresses_left_out_while_reading() {
+    let profile = tempfile::tempdir().unwrap();
+    let conn = places(profile.path());
+    conn.execute_batch(ROOTS).unwrap();
+    let huge_title = "t".repeat(100_000);
+    let huge_url = format!("https://long.example/{}", "a".repeat(MAX_URL_BYTES));
+    conn.execute(
+        "INSERT INTO moz_places (id, url, title) VALUES (1, 'https://a.example/', ?1), (2, ?2, 'Long')",
+        params![huge_title, huge_url],
+    )
+    .unwrap();
+    conn.execute_batch(
+        "WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i + 1 FROM n WHERE i < 2000)
+         INSERT INTO moz_historyvisits (place_id, visit_date)
+             SELECT 1 + (i % 2), 1700000000000000 + i FROM n;",
+    )
+    .unwrap();
+    conn.execute(
+        "INSERT INTO moz_bookmarks (id, type, fk, parent, position, title, dateAdded, guid)
+             VALUES (10, 1, 1, 3, 0, ?1, 1700000000000000, 'a___________'),
+                    (11, 1, 2, 3, 1, 'Long', 1700000000000000, 'b___________')",
+        params!["b".repeat(100_000)],
+    )
+    .unwrap();
+    drop(conn);
+
+    let visits = read_firefox_history(profile.path(), usize::MAX, &ctx()).unwrap();
+    assert_eq!(
+        visits.len(),
+        1000,
+        "the visits to the huge address are left out"
+    );
+    assert!(visits.iter().all(|visit| visit.url == "https://a.example/"
+        && visit.title.as_ref().unwrap().chars().count() == MAX_TITLE_CHARS));
+
+    let bookmarks = read_firefox_bookmarks(profile.path(), &ctx()).unwrap();
+    let ImportedNode::Folder { children, .. } = &bookmarks[0] else {
+        panic!("the toolbar");
+    };
+    assert_eq!(
+        children.len(),
+        1,
+        "the bookmark with the huge address is left out"
+    );
+    let ImportedNode::Bookmark { title, .. } = &children[0] else {
+        panic!("a bookmark");
+    };
+    assert_eq!(title.chars().count(), MAX_TITLE_CHARS);
 }
