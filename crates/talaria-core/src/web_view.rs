@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use crate::browser::{BrowserCommand, PointerButton, PointerButtonAction};
 use crate::{ClipboardCommand, ColorScheme, ControlAnswer, ControlId, ImeInput, KeyboardInput};
 use crate::{PageRequestAnswer, PageRequestId};

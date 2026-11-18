@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What the readers log about rows they leave out: rows that could not be read at `warn`,
 //! ordinary omissions (visits without a usable time, refused addresses) at `debug`.
 

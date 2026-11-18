@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Shows the active tab's page requests (JavaScript dialogs, the leave prompt, HTTP sign-in and
 //! permission prompts) and routes the user's answers back to the request that asked.
 //!

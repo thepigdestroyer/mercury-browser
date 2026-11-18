@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Chromium-family profiles, built in temporary directories: the `Bookmarks` JSON is written by
 //! hand and the `History` database is created here with the columns Chromium's
 //! `url_database.cc` and `visit_database.cc` define.

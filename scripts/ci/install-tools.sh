@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Download the pinned CI tools, verify their SHA-256, and unpack them.
 #
 #   scripts/ci/install-tools.sh [--dir <dir>] [shellcheck] [actionlint] [cargo-deny]

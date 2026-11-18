@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Loading and saving the files in the profile directory.
 //!
 //! Each file is one pretty-printed JSON object whose first member is `"format_version"`.

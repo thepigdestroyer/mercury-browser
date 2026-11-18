@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Servo's HTTP disk cache: one SQLite database (`servo-net` 0.8.0 `disk_cache.rs`), opened in
 //! write-ahead-log mode, so it is the database file and its `-wal` and `-shm` companions.
 
