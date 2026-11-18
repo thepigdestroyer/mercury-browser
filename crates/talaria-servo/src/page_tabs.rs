@@ -10,6 +10,7 @@ use crate::ServoWebView;
 use crate::adblocker::ContentBlocker;
 use crate::document_starts::SharedDocumentStartedListener;
 use crate::embedder_controls::ControlIds;
+use crate::geolocation::GeolocationService;
 use crate::screen::ScreenMetrics;
 use crate::session_data::AfterEngineCleanup;
 
@@ -39,6 +40,8 @@ pub(crate) struct PageTabs {
     pub(crate) screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
     pub(crate) user_content: Rc<servo::UserContentManager>,
     pub(crate) after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
+    /// geolocation: gives every tab its `WebViewGeolocation`; `None` while geolocation is off.
+    pub(crate) geolocation: Option<Rc<GeolocationService>>,
 }
 
 impl PageTabs {

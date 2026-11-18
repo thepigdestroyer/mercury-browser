@@ -5,8 +5,9 @@
   file when the identity is "-"). Never use it with a Developer ID: those
   builds use entitlements.plist, which keeps library validation on.
 
-  The first two keys are the JavaScript JIT entitlements, and the last two the
-  camera and microphone entitlements, exactly as in entitlements.plist; see the
+  The first two keys are the JavaScript JIT entitlements; the camera, microphone
+  and location keys are the device and Location Services entitlements, exactly as
+  in entitlements.plist; see the
   explanation there.
 
     com.apple.security.cs.disable-library-validation
@@ -34,6 +35,8 @@
 	<key>com.apple.security.device.camera</key>
 	<true/>
 	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.personal-information.location</key>
 	<true/>
 </dict>
 </plist>

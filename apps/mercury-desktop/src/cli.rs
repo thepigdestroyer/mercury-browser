@@ -12,6 +12,9 @@ pub(crate) struct LaunchOptions {
     pub gpu_canvas: bool,
     pub profile_dir: Option<PathBuf>,
     pub experimental_web_features: bool,
+    // import-ui lane: diagnostics.
+    pub import_from: Option<PathBuf>,
+    pub import_snapshot: Option<PathBuf>,
     pub exit_request: Option<ExitRequest>,
     /// media-capture: `--fake-media-devices`, a diagnostic for automated runs: pages get a fake
     /// camera and microphone. Allowed only beside a `lib` directory without the plugins that
@@ -63,6 +66,8 @@ impl Default for LaunchOptions {
             gpu_canvas: true,
             profile_dir: None,
             experimental_web_features: true,
+            import_from: None,
+            import_snapshot: None,
             exit_request: None,
             fake_media_devices: false,
             answer_permission_prompts: None,
@@ -74,7 +79,7 @@ impl Default for LaunchOptions {
 impl LaunchOptions {
     /// Screenshot and background runs are automated: they never use the user's own profile.
     pub(crate) fn is_automated(&self) -> bool {
-        self.screenshot.is_some() || self.background
+        self.screenshot.is_some() || self.background || self.import_from.is_some()
     }
 }
 
@@ -149,17 +154,39 @@ Exit status:
   On SIGTERM, SIGINT or SIGHUP the browser quits in order and then ends by that same
   signal (a shell reports 128 + its number: 143, 130, 129); a second one ends it at once.";
 
+// import-ui lane: diagnostic options, only in builds with the `diagnostics` feature.
+#[cfg(feature = "diagnostics")]
+const DIAGNOSTIC_USAGE: &str = "
+
+Diagnostic options (this build has the `diagnostics` feature):
+  --import-from <directory>        Import the bookmarks and history of every browser profile
+                                   found under this directory (laid out like the
+                                   application-support directory) into the profile, print
+                                   what was imported, then exit
+  --import-snapshot <file.png>     With --import-from, save the import window as a PNG
+                                   before exiting";
+#[cfg(not(feature = "diagnostics"))]
+const DIAGNOSTIC_USAGE: &str = "";
+
+fn usage() -> String {
+    format!("{USAGE}{DIAGNOSTIC_USAGE}")
+}
+
 /// `--profile-dir` and `--screenshot` need paths that are valid UTF-8; anything else would be
 /// silently altered by the conversion to `String`. Returns the usage error to print, if any.
 pub(crate) fn reject_non_utf8_paths(arguments: &[std::ffi::OsString]) -> Option<CliOutcome> {
     let pair = arguments.windows(2).find(|pair| {
-        (pair[0] == "--profile-dir" || pair[0] == "--screenshot") && pair[1].to_str().is_none()
+        matches!(
+            pair[0].to_str(),
+            Some("--profile-dir" | "--screenshot" | "--import-from" | "--import-snapshot")
+        ) && pair[1].to_str().is_none()
     })?;
     Some(CliOutcome::PrintAndExit {
         text: format!(
-            "mercury-browser: the {} path '{}' is not valid UTF-8; choose another path\n\n{USAGE}",
+            "mercury-browser: the {} path '{}' is not valid UTF-8; choose another path\n\n{}",
             pair[0].to_string_lossy(),
-            pair[1].to_string_lossy()
+            pair[1].to_string_lossy(),
+            usage()
         ),
         code: 2,
     })
@@ -170,7 +197,7 @@ pub(crate) fn parse_arguments(arguments: impl IntoIterator<Item = String>) -> Cl
     match parse_launch_options(arguments.into_iter()) {
         Ok(outcome) => outcome,
         Err(message) => CliOutcome::PrintAndExit {
-            text: format!("mercury-browser: {message}\n\n{USAGE}"),
+            text: format!("mercury-browser: {message}\n\n{}", usage()),
             code: 2,
         },
     }
@@ -185,6 +212,16 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut gpu_canvas = true;
     let mut profile_dir = None;
     let mut experimental_web_features = true;
+    #[cfg_attr(
+        not(feature = "diagnostics"),
+        expect(unused_mut, reason = "set by diagnostics")
+    )]
+    let mut import_from = None;
+    #[cfg_attr(
+        not(feature = "diagnostics"),
+        expect(unused_mut, reason = "set by diagnostics")
+    )]
+    let mut import_snapshot = None;
     let mut exit_after = None;
     let mut exit_by = None;
     let mut fake_media_devices = false;
@@ -195,7 +232,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         match argument.as_str() {
             "--help" => {
                 return Ok(CliOutcome::PrintAndExit {
-                    text: USAGE.to_owned(),
+                    text: usage(),
                     code: 0,
                 });
             }
@@ -253,6 +290,16 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--profile-dir", "<directory>")?;
                 profile_dir = Some(PathBuf::from(value));
             }
+            #[cfg(feature = "diagnostics")]
+            "--import-from" => {
+                let value = option_value(&mut arguments, "--import-from", "<directory>")?;
+                import_from = Some(PathBuf::from(value));
+            }
+            #[cfg(feature = "diagnostics")]
+            "--import-snapshot" => {
+                let value = option_value(&mut arguments, "--import-snapshot", "<file.png>")?;
+                import_snapshot = Some(PathBuf::from(value));
+            }
             "--exit-after" => {
                 let value = option_value(&mut arguments, "--exit-after", "<milliseconds>")?;
                 let milliseconds = value.parse::<u64>().map_err(|_| {
@@ -290,6 +337,9 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, Some(_)) => return Err("--screenshot-delay requires --screenshot".to_owned()),
         (None, None) => None,
     };
+    if import_snapshot.is_some() && import_from.is_none() {
+        return Err("--import-snapshot requires --import-from".to_owned());
+    }
     let exit_request = match (exit_after, exit_by) {
         (Some(after), by) => Some(ExitRequest {
             after,
@@ -316,6 +366,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         gpu_canvas,
         profile_dir,
         experimental_web_features,
+        import_from,
+        import_snapshot,
         exit_request,
         fake_media_devices,
         answer_permission_prompts,
@@ -402,6 +454,8 @@ mod tests {
                 gpu_canvas: true,
                 profile_dir: None,
                 experimental_web_features: true,
+                import_from: None,
+                import_snapshot: None,
                 exit_request: None,
                 fake_media_devices: false,
                 answer_permission_prompts: None,
@@ -936,5 +990,41 @@ mod tests {
     fn capture_diagnostics_are_not_in_the_help() {
         assert!(!USAGE.contains("--answer-permission-prompts"));
         assert!(!USAGE.contains("--fake-system-denies-capture"));
+    }
+
+    #[cfg(not(feature = "diagnostics"))]
+    #[test]
+    fn without_the_diagnostics_feature_import_from_is_unknown() {
+        assert_eq!(exit_code(&parse(&["--import-from", "/fixtures"])), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(!text.contains("--import-from"));
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn import_from_is_a_diagnostic_that_makes_the_run_automated() {
+        let CliOutcome::Run(options) = parse(&[
+            "--import-from",
+            "/fixtures",
+            "--import-snapshot",
+            "import.png",
+        ]) else {
+            panic!("--import-from should run the browser");
+        };
+        assert_eq!(options.import_from, Some(PathBuf::from("/fixtures")));
+        assert_eq!(options.import_snapshot, Some(PathBuf::from("import.png")));
+        assert!(options.is_automated());
+        assert_eq!(exit_code(&parse(&["--import-from"])), Some(2));
+        assert_eq!(
+            exit_code(&parse(&["--import-snapshot", "import.png"])),
+            Some(2),
+            "a snapshot needs --import-from"
+        );
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(text.contains("--import-from <directory>"));
     }
 }

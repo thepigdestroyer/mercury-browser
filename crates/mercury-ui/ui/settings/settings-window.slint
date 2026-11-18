@@ -522,6 +522,7 @@ export component SettingsWindow inherits Window {
                     // Appearance
                     if root.section == 1: VerticalLayout {
                         spacing: 12px;
+                        alignment: start;
 
                         LabelledRow {
                             label: "Theme";
@@ -554,10 +555,6 @@ export component SettingsWindow inherits Window {
                             toggled => {
                                 root.toggled("show-bookmarks-bar", self.checked);
                             }
-                        }
-
-                        Note {
-                            text: "The bookmarks bar arrives with bookmarks; this choice is kept until then.";
                         }
                     }
 
@@ -600,7 +597,7 @@ export component SettingsWindow inherits Window {
                         }
 
                         CheckBox {
-                            text: "Browsing history";
+                            text: "Browsing and download history";
                             checked <=> root.clear-history-on-exit;
                             toggled => {
                                 root.toggled("clear-history-on-exit", self.checked);

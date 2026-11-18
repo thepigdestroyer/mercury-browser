@@ -28,6 +28,13 @@
   signed with the hardened runtime but without them cannot start its
   JavaScript engine (servo-script panics with InitFailed) and loads no page.
 
+    com.apple.security.personal-information.location
+      the hardened runtime's resource-access entitlement for Location
+      Services. Without it macOS never lets the process read the location,
+      even after the user allows it. Pages get a position only after the
+      user allows the site in Mercury, and macOS asks once more with the
+      NSLocationUsageDescription string in Info.plist.
+
   Deliberately absent: com.apple.security.cs.disable-library-validation (with
   a Developer ID, the libraries in Contents/MacOS/lib carry the same team
   identifier as the executable, so validation passes and stays on) and
@@ -49,6 +56,8 @@
 	<key>com.apple.security.device.camera</key>
 	<true/>
 	<key>com.apple.security.device.audio-input</key>
+	<true/>
+	<key>com.apple.security.personal-information.location</key>
 	<true/>
 </dict>
 </plist>

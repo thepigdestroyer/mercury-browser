@@ -4,11 +4,14 @@ mod content_process;
 mod document_starts;
 mod embedder_controls;
 mod error;
+mod error_pages;
 mod exit_clearing;
 // media-capture
 #[cfg(target_os = "macos")]
 mod fake_media_devices;
 mod frame_ready;
+mod geolocation;
+mod history_events;
 mod http_disk_cache;
 mod load_metrics;
 mod opengl_context;
@@ -21,17 +24,22 @@ mod proxy;
 mod runtime;
 mod screen;
 mod session_data;
+mod site_data;
 mod web_view;
 
 pub use content_process::{
     ContentProcessArgumentError, record_browser_process_id, run_content_process_if_requested,
 };
 pub use error::ServoWebViewError;
+pub use error_pages::error_page_titles;
 pub use exit_clearing::{EngineSwitches, ExitClearing};
 // media-capture
 #[cfg(target_os = "macos")]
 pub use fake_media_devices::{
     FAKE_MEDIA_DEVICES_VARIABLE, executable_lib_dir, fake_media_devices_problem,
+};
+pub use geolocation::{
+    FakeLocation, FixedPosition, GeolocationDiagnostic, GeolocationSetup, LocationError,
 };
 pub use http_disk_cache::remove_http_disk_cache;
 pub use opengl_context::ViewportSize;
@@ -41,4 +49,5 @@ pub use panics::{hard_fail_in_single_process, should_panic_hook_suppress_termina
 pub use proxy::{ProxyPreferences, ProxyServer, SystemProxySettings};
 pub use runtime::{EventLoopWaker, NEW_TAB_URL, RuntimeOptions, ServoRuntime};
 pub use screen::ScreenMetrics;
+pub use site_data::SiteDataKinds;
 pub use web_view::ServoWebView;

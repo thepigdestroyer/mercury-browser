@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mercury-servo-patches"
+description = "Vendors crates into third_party/, exports Mercury's patches against them and checks or upgrades them"
+publish = false
+version.workspace = true
+edition.workspace = true
+license = "PolyForm-Noncommercial-1.0.0"
+
+[dependencies]
+diffy = { version = "0.5", features = ["std"] }
+flate2 = "1.1"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2 = "0.10"
+tar = "0.4"
+toml = "0.9"
+
+[dev-dependencies]
+tempfile.workspace = true

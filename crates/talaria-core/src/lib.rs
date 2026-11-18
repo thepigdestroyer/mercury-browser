@@ -10,6 +10,7 @@ mod input;
 mod page_icon;
 mod page_request;
 mod tab;
+mod visits;
 mod web_view;
 mod zoom;
 
@@ -34,12 +35,13 @@ pub use input::{
 };
 pub use page_icon::PageIcon;
 pub use page_request::{
-    HttpCredentials, MAX_COMBINING_MARKS, MAX_MESSAGE_CHARS, MAX_PROMPT_VALUE_CHARS, PageOrigin,
-    PagePermission, PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind,
-    PageRequestReply, PendingPageRequest, PermissionDecision, PermissionDecisions,
-    SIGN_IN_RETRY_INTERVAL, SUCCESSIVE_DIALOG_INTERVAL, SessionPermissionDecisions,
-    sanitize_page_text, strip_user_info,
+    GEOLOCATION_FRAME_GATE, GEOLOCATION_OFFERED, HttpCredentials, MAX_COMBINING_MARKS,
+    MAX_MESSAGE_CHARS, MAX_PROMPT_VALUE_CHARS, PageOrigin, PagePermission, PageRequest,
+    PageRequestAnswer, PageRequestId, PageRequestKind, PageRequestReply, PendingPageRequest,
+    PermissionDecision, PermissionDecisions, SIGN_IN_RETRY_INTERVAL, SUCCESSIVE_DIALOG_INTERVAL,
+    SessionPermissionDecisions, sanitize_page_text, strip_user_info,
 };
-pub use tab::{Tab, TabActivation, TabCommand, TabEvent, TabId};
+pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
+pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};

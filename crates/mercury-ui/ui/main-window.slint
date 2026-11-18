@@ -14,6 +14,15 @@ import { PopUpBlockedIndicator } from "tabs/pop-up-blocked.slint";
 // menus
 import { AddressBarEdit, BrowserMenu, BrowserMenuCommand, BrowserMenuEntry } from "menus/browser-menu.slint";
 export { AboutLink, AboutWindow } from "about/about-window.slint";
+// history lane
+import { ClearDataDialog, HistoryPanel, HistoryRow, SuggestionList, SuggestionRow } from "history/history.slint";
+// bookmarks
+import { BookmarkStar, BookmarksBar, BookmarkBarItem, BookmarkMenuRow } from "bookmarks/bookmarks.slint";
+export { BookmarkRowKind, BookmarksManager, BookmarksPreview } from "bookmarks/bookmarks.slint";
+// import-ui
+export { ImportPage, ImportProfileRow, ImportSummaryLine, ImportWindow } from "import/import-window.slint";
+// session
+import { SessionBar } from "session/session-bar.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -221,13 +230,71 @@ export component MainWindow inherits Window {
     in property <string> status-text: "";
     // The page is fullscreen: the tab strip and toolbar are hidden.
     in property <bool> chrome-hidden: false;
-    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused);
+    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused) || root.history-search-focused;
     out property <bool> web-view-hovered: web-view-input.has-hover;
     out property <float> web-view-pointer-x: web-view-input.mouse-x / 1px;
     out property <float> web-view-pointer-y: web-view-input.mouse-y / 1px;
     property <bool> new-tab-search-focused: false;
     // The window's colour scheme as Slint determined it, used when winit reports none.
     out property <ColorScheme> system-color-scheme: Palette.color-scheme;
+    // --- history lane ---
+    // Suggestions under the address field.
+    in property <[SuggestionRow]> suggestions;
+    in property <int> suggestion-selected: -1;
+    in property <bool> suggestions-open: false;
+    out property <bool> address-focused: address-input.has-focus;
+    callback address-edited(string);
+    callback suggestion-chosen(int);
+    // The field lost focus: the list closes, and a reply on its way is dropped.
+    callback address-blurred();
+    changed address-focused => {
+        if !self.address-focused {
+            root.address-blurred();
+        }
+    }
+    // Puts `text` in the address field and selects from `start` to `end` (UTF-8 offsets).
+    public function complete-address(text: string, start: int, end: int) {
+        root.address = text;
+        address-input.set-selection-offsets(start, end);
+    }
+    // The history window.
+    in property <bool> history-open: false;
+    in property <[HistoryRow]> history-rows;
+    in property <string> history-message;
+    in-out property <string> history-query;
+    // The window's search field has focus (it counts as a focused text input).
+    in-out property <bool> history-search-focused: false;
+    callback history-search(string);
+    callback history-open-entry(int, bool);
+    callback history-delete-entry(int);
+    callback history-delete-site(int);
+    callback history-more();
+    callback history-close();
+    // "Clear browsing data".
+    in property <bool> clear-dialog-open: false;
+    in-out property <int> clear-period: 0;
+    in-out property <bool> clear-history: true;
+    in-out property <bool> clear-cookies: false;
+    in-out property <bool> clear-cache: false;
+    in property <bool> clear-busy: false;
+    callback show-clear-dialog();
+    callback clear-confirm();
+    callback clear-cancel();
+    // --- end history lane ---
+    // --- session ---
+    // Sessions that did not close properly, newest first, named for the chooser; while any are
+    // listed the bar under the toolbar offers to restore them.
+    in property <[string]> recovery-sessions;
+    // A one-time message about the saved session, shown in the same bar.
+    in property <string> session-notice;
+    // Whether "Restore previous session" and "Reopen closed tab" have anything to do.
+    in property <bool> can-restore-previous-session;
+    in property <bool> can-reopen-closed-tab;
+    callback restore-recovered-session(int);
+    callback dismiss-recovered-sessions();
+    callback dismiss-session-notice();
+    callback restore-previous-session();
+    // --- end session ---
 
     callback navigate(string);
     callback go-back;
@@ -298,6 +365,47 @@ export component MainWindow inherits Window {
         root.controls-page-changed();
     }
     // --- end controls ---
+
+    // --- bookmarks ---
+    in property <bool> bookmark-star-enabled: false;
+    in property <bool> bookmark-star-filled: false;
+    in property <bool> bookmark-popover-is-new;
+    in-out property <string> bookmark-popover-name;
+    in property <[string]> bookmark-popover-folders;
+    in-out property <int> bookmark-popover-folder-index;
+    in property <bool> bookmarks-bar-shown: true;
+    in property <[BookmarkBarItem]> bookmarks-bar-items;
+    in property <bool> bookmarks-bar-overflow;
+    in property <[BookmarkMenuRow]> bookmarks-menu-rows;
+    out property <length> bookmarks-bar-available-width: bookmarks-bar.available-width;
+    out property <bool> bookmarks-menu-open: bookmarks-bar.menu-open;
+    callback bookmark-star-clicked();
+    callback bookmark-popover-done();
+    callback bookmark-popover-remove();
+    callback bookmark-popover-dismissed();
+    callback bookmarks-bar-measured(int, length);
+    callback bookmarks-bar-width-changed(length);
+    callback bookmarks-bar-item-activated(int, bool);
+    callback bookmarks-bar-folder-opened(int, length);
+    callback bookmarks-bar-overflow-opened(length);
+    callback bookmarks-menu-row-activated(int, bool);
+
+    public function open-bookmark-popover() {
+        bookmark-star.open-popover();
+    }
+
+    public function close-bookmark-popover() {
+        bookmark-star.close-popover();
+    }
+
+    public function show-bookmarks-menu(x: length) {
+        bookmarks-bar.show-menu(x);
+    }
+
+    public function close-bookmarks-menu() {
+        bookmarks-bar.close-menu();
+    }
+    // --- end bookmarks ---
 
     pure function mouse-cursor-for(cursor: WebViewCursor) -> MouseCursor {
         if cursor == WebViewCursor.none {
@@ -578,7 +686,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Rectangle {
+                address-box := Rectangle {
                     horizontal-stretch: 1;
                     height: 38px;
                     border-radius: 9px;
@@ -588,7 +696,7 @@ export component MainWindow inherits Window {
 
                     address-input := TextInput {
                         x: 14px;
-                        width: parent.width - 28px;
+                        width: parent.width - 28px - 30px;
                         height: parent.height;
                         text <=> root.address;
                         color: ChromePalette.text;
@@ -603,6 +711,9 @@ export component MainWindow inherits Window {
                             }
                             root.navigate(self.text);
                         }
+                        edited => {
+                            root.address-edited(self.text);
+                        }
                         // tabs: Escape drops the draft and returns focus to the page
                         key-pressed(event) => {
                             if event.text != Key.Escape {
@@ -612,7 +723,8 @@ export component MainWindow inherits Window {
                             if self.preedit-text != "" {
                                 return reject;
                             }
-                            // history lane: close the suggestion list here first, and accept.
+                            // history lane: an open suggestion list has taken Escape already
+                            // (`history_ui::handle_key`, before Slint sees the key).
                             root.reset-address(root.committed-address);
                             if root.web-view-visible {
                                 web-view-focus.focus();
@@ -620,6 +732,30 @@ export component MainWindow inherits Window {
                                 self.clear-focus();
                             }
                             accept
+                        }
+                    }
+
+                    // bookmarks
+                    bookmark-star := BookmarkStar {
+                        x: parent.width - self.width - 4px;
+                        y: (parent.height - self.height) / 2;
+                        enabled: root.bookmark-star-enabled;
+                        filled: root.bookmark-star-filled;
+                        popover-is-new: root.bookmark-popover-is-new;
+                        popover-name <=> root.bookmark-popover-name;
+                        popover-folders: root.bookmark-popover-folders;
+                        popover-folder-index <=> root.bookmark-popover-folder-index;
+                        clicked => {
+                            root.bookmark-star-clicked();
+                        }
+                        popover-done => {
+                            root.bookmark-popover-done();
+                        }
+                        popover-remove => {
+                            root.bookmark-popover-remove();
+                        }
+                        popover-dismissed => {
+                            root.bookmark-popover-dismissed();
                         }
                     }
                 }
@@ -692,6 +828,48 @@ export component MainWindow inherits Window {
             text: root.settings-notice;
             dismissed => {
                 root.dismiss-settings-notice();
+            }
+        }
+
+        // bookmarks
+        bookmarks-bar := BookmarksBar {
+            height: root.bookmarks-bar-shown && !root.chrome-hidden ? 34px : 0px;
+            visible: root.bookmarks-bar-shown && !root.chrome-hidden;
+            items: root.bookmarks-bar-items;
+            overflow: root.bookmarks-bar-overflow;
+            menu-rows: root.bookmarks-menu-rows;
+            measured(index, width) => {
+                root.bookmarks-bar-measured(index, width);
+            }
+            available-width-changed(width) => {
+                root.bookmarks-bar-width-changed(width);
+            }
+            item-activated(index, new-tab) => {
+                root.bookmarks-bar-item-activated(index, new-tab);
+            }
+            folder-opened(index, x) => {
+                root.bookmarks-bar-folder-opened(index, x);
+            }
+            overflow-opened(x) => {
+                root.bookmarks-bar-overflow-opened(x);
+            }
+            menu-row-activated(index, new-tab) => {
+                root.bookmarks-menu-row-activated(index, new-tab);
+            }
+        }
+
+        // session: the offer to restore tabs after a crash
+        if !root.chrome-hidden && (root.recovery-sessions.length > 0 || root.session-notice != ""): SessionBar {
+            sessions: root.recovery-sessions;
+            notice: root.session-notice;
+            restore(index) => {
+                root.restore-recovered-session(index);
+            }
+            dismiss => {
+                root.dismiss-recovered-sessions();
+            }
+            dismiss-notice => {
+                root.dismiss-session-notice();
             }
         }
 
@@ -1061,6 +1239,78 @@ export component MainWindow inherits Window {
         }
         row-hovered(index) => {
             root.controls-row-hovered(index);
+        }
+    }
+
+    // history lane
+    if root.history-open: HistoryPanel {
+        x: 0px;
+        y: web-view-area.absolute-position.y;
+        width: root.width;
+        height: web-view-area.height;
+        rows: root.history-rows;
+        message: root.history-message;
+        query <=> root.history-query;
+        init => {
+            self.focus-search();
+        }
+        search(text) => {
+            root.history-search(text);
+        }
+        search-focus-changed(focused) => {
+            root.history-search-focused = focused;
+        }
+        open(entry, new-tab) => {
+            root.history-open-entry(entry, new-tab);
+        }
+        delete-entry(entry) => {
+            root.history-delete-entry(entry);
+        }
+        delete-site(entry) => {
+            root.history-delete-site(entry);
+        }
+        more => {
+            root.history-more();
+        }
+        close => {
+            root.history-close();
+        }
+        clear-data => {
+            root.show-clear-dialog();
+        }
+    }
+
+    // history lane
+    if root.suggestions-open && address-input.has-focus && root.suggestions.length > 0: SuggestionList {
+        x: address-box.absolute-position.x;
+        y: address-box.absolute-position.y + address-box.height + 6px;
+        width: address-box.width;
+        rows: root.suggestions;
+        selected: root.suggestion-selected;
+        chosen(index) => {
+            root.suggestion-chosen(index);
+        }
+    }
+
+    // history lane
+    if root.clear-dialog-open: ClearDataDialog {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        period <=> root.clear-period;
+        history <=> root.clear-history;
+        cookies <=> root.clear-cookies;
+        cache <=> root.clear-cache;
+        busy: root.clear-busy;
+        init => {
+            self.focus();
+        }
+        confirm => {
+            root.clear-confirm();
+        }
+        cancel => {
+            root.clear-cancel();
         }
     }
 

@@ -52,6 +52,21 @@ mod tests {
     }
 
     #[test]
+    fn embedded_info_plist_explains_location_access() {
+        for key in [
+            "NSLocationUsageDescription",
+            "NSLocationWhenInUseUsageDescription",
+        ] {
+            assert!(
+                embedded().contains(&format!(
+                    "<key>{key}</key>\n\t<string>Websites you allow can ask for your location.</string>"
+                )),
+                "{key}"
+            );
+        }
+    }
+
+    #[test]
     fn embedded_info_plist_names_the_executable_and_identifier() {
         assert!(embedded().contains("<string>mercury-browser</string>"));
         assert!(embedded().contains("<string>io.github.thepigdestroyer.mercury-browser</string>"));

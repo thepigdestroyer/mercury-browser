@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# The crates Mercury vendors in third_party/<name>/: each is the crate exactly as published on
+# crates.io (`checksum`, built from `repository` at `commit`, directory `path`) plus Mercury's
+# changes in third_party/patches/<name>.patch. Written by `mercury-servo-patches vendor` and
+# `upgrade`; `unmarked` lists the changed files that cannot carry a `Mercury:` comment and is
+# the only field edited by hand. See docs/developer-guide/vendored-patches.md.
+
+[[crate]]
+name = "gaol"
+version = "0.2.1"
+checksum = "061957ca7a966a39a79ebca393a9a6c7babda10bf9dd6f11d00041558d929c22"
+repository = "https://github.com/servo/gaol"
+commit = "4544946c5c922ee619a932ae5c3fd1d26f143384"
+unmarked = ["Cargo.lock"]
+
+[[crate]]
+name = "servo-canvas"
+version = "0.8.0"
+checksum = "318945d504987838d404bb7dce122e0ad17afeaf02ebd3d3a3167b739b73db7d"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/canvas"
+
+[[crate]]
+name = "surfman"
+version = "0.14.0"
+checksum = "7fe194717def845ecb64e7aeda3e2108c4b3b1584a01aa6e545e702cedca2a00"
+repository = "https://github.com/servo/surfman"
+commit = "ca64434fb50cab45d9eda38a00f01fa0ddc43fe4"
+path = ""
