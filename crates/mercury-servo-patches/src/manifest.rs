@@ -13,9 +13,10 @@ const HEADER: &str = "\
 # SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # The crates Mercury vendors in third_party/<name>/: each is the crate exactly as published on
 # crates.io (`checksum`, built from `repository` at `commit`, directory `path`) plus Mercury's
-# changes in third_party/patches/<name>.patch. Written by `mercury-servo-patches vendor` and
-# `upgrade`; `unmarked` lists the changed files that cannot carry a `Mercury:` comment and is
-# the only field edited by hand. See docs/developer-guide/vendored-patches.md.
+# changes in third_party/patches/<name>.patch. `license` is the licence its Cargo.toml declares.
+# Written by `mercury-servo-patches vendor` and `upgrade`. Two fields are edited by hand:
+# `license_note` says which terms Mercury uses and what they require, and `unmarked` lists the
+# changed files that cannot carry a `Mercury:` comment. See docs/developer-guide/vendored-patches.md.
 ";
 
 #[derive(Debug, Clone, PartialEq, Eq, Deserialize)]
@@ -30,6 +31,10 @@ pub struct Entry {
     pub commit: Option<String>,
     #[serde(default)]
     pub path: Option<String>,
+    #[serde(default)]
+    pub license: Option<String>,
+    #[serde(default)]
+    pub license_note: Option<String>,
     #[serde(default)]
     pub unmarked: Vec<String>,
 }
@@ -113,6 +118,8 @@ impl Manifest {
                 ("repository", &entry.repository),
                 ("commit", &entry.commit),
                 ("path", &entry.path),
+                ("license", &entry.license),
+                ("license_note", &entry.license_note),
             ] {
                 if let Some(value) = value {
                     out.push_str(&format!("{key} = {}\n", quote(value)));
@@ -139,6 +146,8 @@ mod tests {
             repository: Some("https://github.com/servo/servo".into()),
             commit: Some("4e136d8".into()),
             path: Some("components/x".into()),
+            license: Some("MPL-2.0".into()),
+            license_note: None,
             unmarked: vec![],
         }
     }
@@ -150,6 +159,7 @@ mod tests {
         let mut gaol = entry("gaol");
         gaol.repository = None;
         gaol.unmarked = vec!["Cargo.lock".into()];
+        gaol.license_note = Some("Modifications allowed; keep notices.".into());
         manifest.upsert(gaol);
         manifest.upsert(entry("servo-canvas"));
         let text = manifest.render();

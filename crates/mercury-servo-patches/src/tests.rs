@@ -192,6 +192,8 @@ fn vendor_unpacks_the_crate_unchanged_and_records_it() {
     );
     assert_eq!(entry.commit.as_deref(), Some("1111"));
     assert_eq!(entry.path.as_deref(), Some("components/demo"));
+    assert_eq!(entry.license.as_deref(), Some("MPL-2.0"));
+    assert_eq!(entry.license_note, None);
 
     assert_eq!(
         f.read("Cargo.toml"),
@@ -615,4 +617,32 @@ fn workspace_problems_catch_members_and_path_dependencies_in_third_party() {
     assert_eq!(problems.len(), 2, "{problems:?}");
     assert!(problems[0].contains("depends on servo-canvas by path"));
     assert!(problems[1].contains("gaol in third_party/ is a workspace member"));
+}
+
+#[test]
+fn check_fails_when_the_recorded_licence_is_not_the_declared_one() {
+    let f = fixture();
+    f.vendor_demo();
+    let mut manifest = Manifest::parse(&f.read("third_party/vendor.toml")).unwrap();
+    manifest.crates[0].license = Some("MIT".into());
+    manifest.crates[0].license_note = Some("Kept by upgrade and export.".into());
+    f.write("third_party/vendor.toml", &manifest.render());
+    assert_eq!(
+        f.check().unwrap_err(),
+        "third_party/vendor.toml: demo records the licence MIT, but the crate declares MPL-2.0"
+    );
+    manifest.crates[0].license = None;
+    f.write("third_party/vendor.toml", &manifest.render());
+    assert!(f.check().unwrap_err().contains("records the licence none"));
+    manifest.crates[0].license = Some("MPL-2.0".into());
+    f.write("third_party/vendor.toml", &manifest.render());
+    f.check().unwrap();
+    f.repo
+        .upgrade(UpgradeTarget::Crate("demo@1.1.0".into()), &mut Vec::new())
+        .unwrap();
+    let upgraded = Manifest::parse(&f.read("third_party/vendor.toml")).unwrap();
+    assert_eq!(
+        upgraded.crates[0].license_note.as_deref(),
+        Some("Kept by upgrade and export.")
+    );
 }

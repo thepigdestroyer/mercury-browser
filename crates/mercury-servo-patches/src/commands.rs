@@ -478,6 +478,8 @@ impl Repo {
             repository: source.repository,
             commit: source.commit,
             path: source.path,
+            license: source.license.clone(),
+            license_note: None,
             unmarked: Vec::new(),
         };
         manifest.upsert(entry.clone());
@@ -612,6 +614,14 @@ impl Repo {
             problems.push(format!(
                 "{expected_path}/Cargo.toml does not declare {name} {}",
                 entry.version
+            ));
+        }
+        let declared = source_of(&pristine, name)?.license;
+        if declared != entry.license {
+            problems.push(format!(
+                "{MANIFEST_PATH}: {name} records the licence {}, but the crate declares {}",
+                entry.license.as_deref().unwrap_or("none"),
+                declared.as_deref().unwrap_or("none")
             ));
         }
         let patch_path = self.patch_file(name);
@@ -866,6 +876,7 @@ impl Repo {
                 repository: source.repository.or(entry.repository.clone()),
                 commit: source.commit,
                 path: source.path,
+                license: source.license.clone(),
                 ..entry.clone()
             });
 
@@ -873,6 +884,16 @@ impl Repo {
                 out,
                 &format!("{} {} -> {version}\n", entry.name, entry.version),
             )?;
+            if source.license != entry.license {
+                write_out(
+                    out,
+                    &format!(
+                        "  LICENCE CHANGED: {} -> {}; review license_note in {MANIFEST_PATH} and deny.toml\n",
+                        entry.license.as_deref().unwrap_or("none"),
+                        source.license.as_deref().unwrap_or("none")
+                    ),
+                )?;
+            }
             if files.is_empty() {
                 write_out(out, "  no Mercury changes\n")?;
             }
