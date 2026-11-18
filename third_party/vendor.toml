@@ -17,12 +17,166 @@ license = "MIT/Apache-2.0"
 unmarked = ["Cargo.lock"]
 
 [[crate]]
+name = "i-slint-backend-winit"
+version = "1.17.1"
+checksum = "a27c7e8f53418d3017362465367b6612b6e439a68097d627d1b91c94b885f0a6"
+repository = "https://github.com/slint-ui/slint"
+commit = "cf62c975c311e7036d599ed8ed0b7e6a8386a934"
+path = "internal/backends/winit"
+license = "GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0"
+license_note = "Used under LicenseRef-Slint-Royalty-free-2.0, like the rest of Slint (deny.toml). It allows modification and distribution as part of an application, provided no licence notice in the source is removed or altered (copyright, SPDX headers, disclaimers) and the app shows Slint's attribution. Mercury's changes stay under the Slint licence. See its MERCURY.md."
+
+[[crate]]
+name = "servo"
+version = "0.8.0"
+checksum = "58a502704ce2fee976f20ee6192c575a3a77dfe844431f83cd4946da6e524985"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/servo"
+license = "MPL-2.0"
+
+[[crate]]
 name = "servo-canvas"
 version = "0.8.0"
 checksum = "318945d504987838d404bb7dce122e0ad17afeaf02ebd3d3a3167b739b73db7d"
 repository = "https://github.com/servo/servo"
 commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
 path = "components/canvas"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-config"
+version = "0.8.0"
+checksum = "cdc1c3fa6136a6d3337ba6297118e3ce5194a9e5a17d41ef91a4973fde68d74e"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/config"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-constellation"
+version = "0.8.0"
+checksum = "327d28714f0dcbb946844c83995ca01926d103c2bcbf6c6797f3f09c7893b4ea"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/constellation"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-constellation-traits"
+version = "0.8.0"
+checksum = "a877d7852a4d254dc250fc6e9883b5c01db639012660aab65050be2f53835ec8"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/shared/constellation"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-embedder-traits"
+version = "0.8.0"
+checksum = "76d97f10b2d5979cd0ff330ab257a69addcf08e853811f6f97ff12db5f7468af"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/shared/embedder"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-layout"
+version = "0.8.0"
+checksum = "02047fd51cca1b92cfd38bc4663c9f11f6ebf99cd2d5550bac507a0a2b77addc"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/layout"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-layout-api"
+version = "0.8.0"
+checksum = "3ba7c3c73cc25b20dbdf2f6b04a886a6dc595dc7d11c8b412200570d04f1555e"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/shared/layout"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-media"
+version = "0.8.0"
+checksum = "710187bb2f163fcf0cbb30a2c40684ff1bd5ab3a4ffbe7d338a099f4c6bf2b2f"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/media/servo-media"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-media-player"
+version = "0.8.0"
+checksum = "fd072c0c9456f27cd17e9b3a752bf3a6e570468e806bc7d085d1a521e76f9083"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/media/player"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-media-webrtc"
+version = "0.8.0"
+checksum = "8ea6364262fade2feba53d33baced386299ad3aca0745af4cbb3a47e3613981f"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/media/webrtc"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-net"
+version = "0.8.0"
+checksum = "e274e25650db0dacd2a290d13f51effd12735c17d5448403c2c77fea530e034d"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/net"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-net-traits"
+version = "0.8.0"
+checksum = "80e6ac24573425319af0ac9dbc3ec7eec925b9da656902a15815506fd5e3e417"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/shared/net"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-storage"
+version = "0.8.0"
+checksum = "346be02eac3b3be12d17a806b56076f2cb706adbe2aa1b3331964a77ec3a5856"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/storage"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-storage-traits"
+version = "0.8.0"
+checksum = "e74add8ac3dcd4bd29c91f6f06e4aaeb9d047e903d74d3324d4dbfe8d3447640"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/shared/storage"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-webgl"
+version = "0.8.0"
+checksum = "28d10b20a6a3dd77133b91fbd0e7840c582faf379ee5b870abad9429d0863aa6"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/webgl"
+license = "MPL-2.0"
+
+[[crate]]
+name = "stylo_static_prefs"
+version = "0.23.0"
+checksum = "8e06c605a1d428d159798ebfed3f81f3a145f1838872360ebb24ec6d85993fe1"
+repository = "https://github.com/servo/stylo"
+commit = "2dca34592ced37c6aa01733e94206a767194cf9d"
+path = "stylo_static_prefs"
 license = "MPL-2.0"
 
 [[crate]]

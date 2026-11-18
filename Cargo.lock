@@ -3940,8 +3940,6 @@ dependencies = [
 [[package]]
 name = "i-slint-backend-winit"
 version = "1.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a27c7e8f53418d3017362465367b6612b6e439a68097d627d1b91c94b885f0a6"
 dependencies = [
  "block2 0.6.2",
  "bytemuck",
@@ -8475,8 +8473,6 @@ dependencies = [
 [[package]]
 name = "servo"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "58a502704ce2fee976f20ee6192c575a3a77dfe844431f83cd4946da6e524985"
 dependencies = [
  "accesskit",
  "arboard",
@@ -8658,8 +8654,6 @@ dependencies = [
 [[package]]
 name = "servo-config"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "cdc1c3fa6136a6d3337ba6297118e3ce5194a9e5a17d41ef91a4973fde68d74e"
 dependencies = [
  "num_enum",
  "serde",
@@ -8684,8 +8678,6 @@ dependencies = [
 [[package]]
 name = "servo-constellation"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "327d28714f0dcbb946844c83995ca01926d103c2bcbf6c6797f3f09c7893b4ea"
 dependencies = [
  "accesskit",
  "backtrace",
@@ -8729,8 +8721,6 @@ dependencies = [
 [[package]]
 name = "servo-constellation-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a877d7852a4d254dc250fc6e9883b5c01db639012660aab65050be2f53835ec8"
 dependencies = [
  "accesskit",
  "base64 0.23.1",
@@ -8847,8 +8837,6 @@ dependencies = [
 [[package]]
 name = "servo-embedder-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76d97f10b2d5979cd0ff330ab257a69addcf08e853811f6f97ff12db5f7468af"
 dependencies = [
  "accesskit",
  "bitflags 2.13.2",
@@ -9008,8 +8996,6 @@ dependencies = [
 [[package]]
 name = "servo-layout"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "02047fd51cca1b92cfd38bc4663c9f11f6ebf99cd2d5550bac507a0a2b77addc"
 dependencies = [
  "accesskit",
  "app_units",
@@ -9072,8 +9058,6 @@ dependencies = [
 [[package]]
 name = "servo-layout-api"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3ba7c3c73cc25b20dbdf2f6b04a886a6dc595dc7d11c8b412200570d04f1555e"
 dependencies = [
  "accesskit",
  "app_units",
@@ -9159,8 +9143,6 @@ dependencies = [
 [[package]]
 name = "servo-media"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "710187bb2f163fcf0cbb30a2c40684ff1bd5ab3a4ffbe7d338a099f4c6bf2b2f"
 dependencies = [
  "servo-base",
  "servo-media-audio",
@@ -9324,8 +9306,6 @@ dependencies = [
 [[package]]
 name = "servo-media-player"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fd072c0c9456f27cd17e9b3a752bf3a6e570468e806bc7d085d1a521e76f9083"
 dependencies = [
  "malloc_size_of_derive",
  "serde",
@@ -9379,8 +9359,6 @@ dependencies = [
 [[package]]
 name = "servo-media-webrtc"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8ea6364262fade2feba53d33baced386299ad3aca0745af4cbb3a47e3613981f"
 dependencies = [
  "log",
  "malloc_size_of_derive",
@@ -9408,8 +9386,6 @@ dependencies = [
 [[package]]
 name = "servo-net"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e274e25650db0dacd2a290d13f51effd12735c17d5448403c2c77fea530e034d"
 dependencies = [
  "async-compression",
  "async-recursion",
@@ -9486,8 +9462,6 @@ dependencies = [
 [[package]]
 name = "servo-net-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80e6ac24573425319af0ac9dbc3ec7eec925b9da656902a15815506fd5e3e417"
 dependencies = [
  "bytes",
  "content-security-policy",
@@ -9914,8 +9888,6 @@ dependencies = [
 [[package]]
 name = "servo-storage"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "346be02eac3b3be12d17a806b56076f2cb706adbe2aa1b3331964a77ec3a5856"
 dependencies = [
  "libc",
  "log",
@@ -9940,8 +9912,6 @@ dependencies = [
 [[package]]
 name = "servo-storage-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e74add8ac3dcd4bd29c91f6f06e4aaeb9d047e903d74d3324d4dbfe8d3447640"
 dependencies = [
  "malloc_size_of_derive",
  "serde",
@@ -10002,8 +9972,6 @@ dependencies = [
 [[package]]
 name = "servo-webgl"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "28d10b20a6a3dd77133b91fbd0e7840c582faf379ee5b870abad9429d0863aa6"
 dependencies = [
  "bitflags 2.13.2",
  "byteorder",
@@ -10767,8 +10735,6 @@ dependencies = [
 [[package]]
 name = "stylo_static_prefs"
 version = "0.23.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "8e06c605a1d428d159798ebfed3f81f3a145f1838872360ebb24ec6d85993fe1"
 dependencies = [
  "toml 1.2.1+spec-1.1.0",
 ]
