@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Links and files macOS sends to Mercury Browser: a link clicked in Mail or Slack arrives as a
 //! get-URL Apple event (`kInternetEventClass`/`kAEGetURL`), a file opened from Finder as
 //! `application:openURLs:` (AppKit turns the open-documents event into that call, or into

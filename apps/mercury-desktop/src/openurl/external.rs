@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Links to schemes the engine cannot load (`mailto:`, `tel:`, an app's own scheme). The engine
 //! has already been refused (`talaria-servo`'s `request_navigation`); here the link may be handed
 //! to the system's handler for the scheme, but only after a user gesture in that tab and the

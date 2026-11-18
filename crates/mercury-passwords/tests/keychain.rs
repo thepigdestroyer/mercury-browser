@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The macOS Keychain backend: item layout, isolation, foreign items and errors. Every test runs
 //! on its own temporary keychain (see `common/keychain.rs`); none touches an existing keychain.
 #![cfg(target_os = "macos")]

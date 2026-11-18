@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Print the cargo `-p` arguments for every workspace member that can be built
 # without the browser engine or the UI toolkit: members whose full dependency
 # closure (normal, build and dev dependencies, for every target platform)

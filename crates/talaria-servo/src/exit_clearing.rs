@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Browsing data the user asked to have cleared when the browser quits, and the switches the
 //! browser can change while the engine runs.
 

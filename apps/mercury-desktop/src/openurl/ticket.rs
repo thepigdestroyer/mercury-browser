@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Who decides the fate of a second launch's addresses: the window, which opens them, or the
 //! listening thread, which gives up waiting. Exactly one of them wins, so a late window never
 //! opens tabs the second launch was told were not opened, and the thread never reports a

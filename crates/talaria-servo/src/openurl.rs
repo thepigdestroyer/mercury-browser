@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What a page may navigate to and load, as the engine side of the openurl lane: page-initiated
 //! navigations (`request_navigation`) are judged by `talaria_core::navigation_verdict`, and
 //! `file:` frames and resources of pages that are not local files are refused in

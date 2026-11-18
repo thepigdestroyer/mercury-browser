@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What the browser does with a navigation a page asks for (a link, a form, `location = …`):
 //! the engine loads it, it is refused, or it belongs to another app.
 
