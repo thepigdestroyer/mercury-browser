@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The Keychain account string of a login: an unambiguous, versioned encoding of its key, so a
 //! login can be rebuilt from the item's attributes without reading its secret.
 //!

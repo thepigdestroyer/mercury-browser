@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Browsing data the user asked to have cleared when the browser quits, and the switches the
 //! browser can change while the engine runs.
 
@@ -240,6 +241,38 @@ pub(crate) mod tests {
             remaining(directory.path()),
             vec!["auth_cache.json", "hsts_list.json"]
         );
+    }
+
+    // history lane
+    #[test]
+    fn removing_site_data_never_touches_the_history_database() {
+        // The profile: `places.sqlite` and its companions beside Servo's directory, and (were
+        // a layout ever to put them there) inside it too.
+        let profile = tempfile::tempdir().expect("a directory");
+        let servo_directory = profile.path().join("servo");
+        std::fs::create_dir(&servo_directory).expect("a directory");
+        let history_files = [
+            "places.sqlite",
+            "places.sqlite-wal",
+            "places.sqlite-shm",
+            "places.sqlite.checked",
+            "places.sqlite.clear-pending",
+        ];
+        for directory in [profile.path(), servo_directory.as_path()] {
+            for file in history_files {
+                std::fs::write(directory.join(file), "history").expect("a file");
+            }
+        }
+        std::fs::write(servo_directory.join("cookie_jar.json"), "{}").expect("a file");
+
+        remove_site_data_files(&servo_directory);
+
+        let mut kept = history_files.map(str::to_owned).to_vec();
+        kept.sort();
+        assert_eq!(remaining(&servo_directory), kept);
+        for file in history_files {
+            assert!(profile.path().join(file).exists(), "{file}");
+        }
     }
 
     #[test]

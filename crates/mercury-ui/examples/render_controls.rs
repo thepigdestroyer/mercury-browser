@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Renders the page-control popups headless, through Slint's software renderer, to PNG files:
 //! `cargo run --release -p mercury-ui --example render_controls -- <output directory>`.
 //!

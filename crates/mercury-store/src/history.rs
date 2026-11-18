@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Browsing history: pages, visits, full-text search and address-bar suggestions.
 
 use rusqlite::{Connection, OptionalExtension, params};
@@ -236,13 +238,58 @@ impl Store {
         Ok(removed > 0)
     }
 
+    /// Deletes every visit to pages of the site `host` (as typed or shown: case and a leading
+    /// `www.` do not matter; any scheme and port) and returns how many were removed. Pages of
+    /// other hosts, including subdomains such as `mail.` and longer names that start the same,
+    /// are kept. Pages left with no visits are removed unless bookmarked; their titles seen on
+    /// those visits are forgotten. An empty `host` is refused with
+    /// [`StoreError::InvalidArgument`](crate::StoreError::InvalidArgument).
+    pub fn delete_site(&mut self, host: &str, now_ms: i64) -> Result<u64> {
+        let key = url_key(host.trim(), true);
+        if key.is_empty() {
+            return Err(crate::StoreError::InvalidArgument("no site given"));
+        }
+        // `url_key` is the host (and port) followed by the rest of the URL: the site's pages
+        // are the key itself and the keys continuing with one of `/ : ? #`. Each continuation
+        // is a key range, so the index on `url_key` finds them.
+        let ranges = ['/', ':', '?', '#'].map(|separator| {
+            let next = char::from_u32(separator as u32 + 1).unwrap_or(separator);
+            (format!("{key}{separator}"), format!("{key}{next}"))
+        });
+        let tx = self.conn.transaction()?;
+        let mut places: Vec<i64> = tx
+            .prepare_cached("SELECT id FROM places WHERE url_key = ?1")?
+            .query_map([&key], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        for (from, to) in &ranges {
+            places.extend(
+                tx.prepare_cached("SELECT id FROM places WHERE url_key >= ?1 AND url_key < ?2")?
+                    .query_map([from, to], |row| row.get::<_, i64>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?,
+            );
+        }
+        let mut removed = 0;
+        for place_id in places {
+            let deleted = tx
+                .prepare_cached("DELETE FROM visits WHERE place_id = ?1")?
+                .execute([place_id])?;
+            if deleted > 0 {
+                forget_titles_seen(&tx, place_id, i64::MIN, i64::MAX)?;
+            }
+            refresh_place(&tx, place_id, now_ms)?;
+            removed += deleted as u64;
+        }
+        tx.commit()?;
+        Ok(removed)
+    }
+
     /// Deletes the visits in `range` and returns how many were removed. Pages left with no
     /// visits are removed unless bookmarked. A page whose title was seen on a visit in the range
     /// loses that title (the older one cannot be restored, as visits do not keep titles); a
     /// later visit gives it a title again. Bookmark titles are never touched.
     pub fn clear_history(&mut self, range: ClearRange, now_ms: i64) -> Result<u64> {
         let from = match range {
-            ClearRange::All => i64::MIN,
+            ClearRange::All => return self.clear_all_history(now_ms),
             ClearRange::Since { from_ms } => from_ms,
         };
         let tx = self.conn.transaction()?;
@@ -255,6 +302,33 @@ impl Store {
             .execute([from])?;
         for place_id in places {
             forget_titles_seen(&tx, place_id, from, i64::MAX)?;
+            refresh_place(&tx, place_id, now_ms)?;
+        }
+        tx.commit()?;
+        Ok(removed as u64)
+    }
+}
+
+impl Store {
+    /// `clear_history(ClearRange::All)`, with the same result as the general path but set-based:
+    /// visited pages that are not bookmarked go in one statement (their visits with them), and
+    /// only the bookmarked ones are refreshed one by one.
+    fn clear_all_history(&mut self, now_ms: i64) -> Result<u64> {
+        let tx = self.conn.transaction()?;
+        let removed: i64 = tx.query_row("SELECT count(*) FROM visits", [], |row| row.get(0))?;
+        tx.execute(
+            "DELETE FROM places
+             WHERE id IN (SELECT place_id FROM visits)
+               AND id NOT IN (SELECT place_id FROM bookmarks WHERE place_id IS NOT NULL)",
+            [],
+        )?;
+        let bookmarked: Vec<i64> = tx
+            .prepare("SELECT DISTINCT place_id FROM visits")?
+            .query_map([], |row| row.get(0))?
+            .collect::<rusqlite::Result<_>>()?;
+        tx.execute("DELETE FROM visits", [])?;
+        for place_id in bookmarked {
+            forget_titles_seen(&tx, place_id, i64::MIN, i64::MAX)?;
             refresh_place(&tx, place_id, now_ms)?;
         }
         tx.commit()?;

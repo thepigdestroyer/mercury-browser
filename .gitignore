@@ -1,3 +1,30 @@
+# SPDX-License-Identifier: MPL-2.0
+# Build output. The disk guard (.opencode/plugins/) deletes it after every round of work.
 /target/
 /dist/
+
+# Documentation toolchain (MkDocs builds into target/mkdocs)
 /.venv-docs/
+
+# macOS
+.DS_Store
+.AppleDouble
+._*
+
+# Editors and IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# OpenCode: the plugin and skills in .opencode/ are tracked; anything OpenCode installs beside them is not
+/.opencode/node_modules/
+/.opencode/package.json
+/.opencode/package-lock.json
+/.opencode/bun.lock
+
+# Planning notes, kept in a separate private repository
+/.superpowers/
+
+# Local scratch
+/humanize/

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 mod common;
 
 use common::{NOW, TempDir};
@@ -103,4 +105,23 @@ fn a_visit_that_fails_half_way_leaves_the_database_unchanged() {
     let entries = store.history(None, None, 10).unwrap();
     assert_eq!(entries.len(), 1);
     assert_eq!(entries[0].title.as_deref(), Some("A"));
+}
+
+#[test]
+fn a_passive_checkpoint_moves_the_log_into_the_database_file() {
+    let dir = common::TempDir::new("checkpoint");
+    let mut store = mercury_store::Store::open(&dir.db()).unwrap();
+    store
+        .record_visit(
+            "https://a.example/",
+            None,
+            mercury_store::VisitTransition::Link,
+            common::NOW,
+        )
+        .unwrap();
+
+    let (log, checkpointed) = store.checkpoint().unwrap();
+
+    assert!(log > 0, "the write is in the log");
+    assert_eq!(checkpointed, log);
 }

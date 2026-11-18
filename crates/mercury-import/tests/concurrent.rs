@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! A browser writing while it is imported from. A writer thread commits continuously to a fixture
 //! database while the importer reads it in a loop; every read must fail or be consistent.
 //!
@@ -12,8 +14,16 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
-use mercury_import::{ImportError, ImportedVisit, read_chromium_history, read_firefox_history};
+use mercury_import::{
+    ImportError, ImportedVisit, ReadContext, read_chromium_history, read_firefox_history,
+};
 use rusqlite::{Connection, params};
+
+/// Copies go to the system temporary directory in these tests; each is removed when its read
+/// ends.
+fn ctx() -> ReadContext {
+    ReadContext::new(std::env::temp_dir())
+}
 
 const READ_FOR: Duration = Duration::from_secs(2);
 const FILLER_ROWS: i64 = 400;
@@ -148,7 +158,7 @@ fn check_consistent(visits: &[ImportedVisit], previous: &mut usize) {
 fn read_while_writing(
     layout: &'static Layout,
     file: &str,
-    read: fn(&Path, usize) -> Result<Vec<ImportedVisit>, ImportError>,
+    read: fn(&Path, usize, &ReadContext) -> Result<Vec<ImportedVisit>, ImportError>,
 ) {
     let profile = tempfile::tempdir().unwrap();
     let path = profile.path().join(file);
@@ -160,7 +170,7 @@ fn read_while_writing(
     let (mut oks, mut errors, mut previous) = (0, Vec::new(), 0);
     let started = Instant::now();
     while started.elapsed() < READ_FOR {
-        match read(profile.path(), usize::MAX) {
+        match read(profile.path(), usize::MAX, &ctx()) {
             Ok(visits) => {
                 check_consistent(&visits, &mut previous);
                 oks += 1;

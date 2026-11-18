@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 /// The mouse cursor a page asks for: one variant per CSS cursor keyword the engine reports.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum PointerCursor {

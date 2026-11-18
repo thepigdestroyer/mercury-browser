@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 mod common;
 
 use common::{DAY_MS, NOW};
@@ -622,4 +624,28 @@ fn host_keys_ignore_user_info_and_read_international_hosts() {
             "{input}"
         );
     }
+}
+
+#[test]
+fn suggestions_say_whether_the_page_was_ever_typed() {
+    let mut store = Store::open_in_memory().unwrap();
+    store
+        .record_visit("https://typed.example/", None, VisitTransition::Typed, NOW)
+        .unwrap();
+    store
+        .record_visit("https://typed.example/", None, VisitTransition::Link, NOW)
+        .unwrap();
+    store
+        .record_visit("https://linked.example/", None, VisitTransition::Link, NOW)
+        .unwrap();
+
+    let typed = store
+        .suggest("example", 10, NOW)
+        .unwrap()
+        .into_iter()
+        .map(|s| (s.url, s.typed))
+        .collect::<std::collections::BTreeMap<_, _>>();
+
+    assert!(typed["https://typed.example/"]);
+    assert!(!typed["https://linked.example/"]);
 }

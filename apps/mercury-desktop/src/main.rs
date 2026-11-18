@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::process::ExitCode;
@@ -18,6 +19,7 @@ use ui_sync::sync_ui;
 mod about;
 // activation (tabs lane)
 mod activation;
+mod bookmarks;
 mod callback_scope;
 mod callbacks;
 mod cli;
@@ -25,6 +27,9 @@ mod cli;
 mod controls;
 mod crash_handler;
 mod engine;
+mod geolocation;
+mod history_ui;
+mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -44,10 +49,12 @@ mod page_tabs;
 mod platform_macos;
 mod post_run;
 mod profile;
+mod profile_data;
 mod quit;
 mod rendering;
 mod screen_metrics;
 mod screenshot;
+mod session;
 mod settings;
 mod shortcuts;
 mod shutdown;
@@ -142,6 +149,21 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // settings-ui: search engine, zoom and colour scheme before any address is resolved.
     settings::prepare_controller(&settings, &mut controller.borrow_mut(), &options.urls);
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
+    profile_data::start(&profile, &mut controller.borrow_mut()); // history lane
+    import_ui::configure(
+        options.is_automated(),
+        options.import_from.as_deref(),
+        profile.paths.as_ref().map(|paths| paths.root.clone()),
+        options.profile_dir.is_none() && !options.is_automated(),
+    ); // import-ui lane
+    // session: begin the run, restore the saved tabs if asked to, and start saving
+    let session_timer = session::start(
+        &window,
+        &controller,
+        &profile,
+        &settings,
+        options.window_size.is_some(),
+    );
     let web_view_focused = Rc::new(Cell::new(false));
 
     connect_servo_runtime(
@@ -162,6 +184,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
     );
+    history_ui::connect(&window, Rc::clone(&controller), options.is_automated()); // history lane
     // tabs: the "Pop-up blocked" indicator
     page_tabs::connect_pop_up_indicator(&window, &controller);
     // tabs: MERCURY_ALLOW_POP_UPS only counts in automated runs
@@ -180,11 +203,17 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
+    #[cfg(feature = "diagnostics")]
+    if options.import_from.is_some() {
+        import_ui::run_diagnostic_import(options.import_snapshot.clone()); // import-ui lane
+    }
     // controls
     controls::connect_controls(&window, Rc::clone(&controller));
     quit::quit_when_the_window_is_closed(&window);
+    bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
 
     let mut timers = Vec::new();
+    timers.extend(session_timer); // session
     let screenshot_result = options.screenshot.map(|screenshot| {
         let result = Rc::new(Cell::new(ScreenshotResult::Pending));
         timers.push(start_screenshot(
@@ -236,6 +265,8 @@ fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeO
         gpu_canvas: options.gpu_canvas,
         config_dir: profile.servo_config_dir(),
         experimental_web_features: options.experimental_web_features,
+        // geolocation: the system's in normal runs; off or MERCURY_FAKE_GEOLOCATION when automated
+        geolocation: geolocation::setup_for_this_run(options.is_automated()),
         http_disk_cache_dir: profile.http_cache_dir(),
         // settings-ui: filled in by `settings::with_privacy`.
         ..RuntimeOptions::default()

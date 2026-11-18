@@ -1,6 +1,7 @@
+# SPDX-License-Identifier: MPL-2.0
 site_name: Mercury Browser
 site_description: User and developer documentation for the Mercury Browser technical preview.
-site_author: Kayk Caputo
+site_author: Mrinal Joshi
 site_url: https://thepigdestroyer.github.io/mercury-browser/
 copyright: Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors · Source-available, free for non-commercial use (PolyForm Noncommercial 1.0.0; Hermes-derived files MPL-2.0) · Began as a fork of Hermes Browser by Kayk Caputo
 
