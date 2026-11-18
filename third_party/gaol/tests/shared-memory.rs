@@ -1,6 +1,9 @@
 // Any copyright is dedicated to the Public Domain.
 // http://creativecommons.org/publicdomain/zero/1.0/
 
+// Mercury: Servo sizes its shared-memory IPC files with ftruncate; this checks that the
+// sandbox allows it (gaol set RLIMIT_FSIZE to zero, which killed content processes).
+
 extern crate gaol;
 extern crate libc;
 
