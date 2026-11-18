@@ -140,6 +140,8 @@ pub(crate) fn connect_servo_runtime(
         runtime.set_new_tab_allocator(new_tab_allocator);
         // activation (tabs lane): a new document does not inherit the last one's activation
         runtime.set_document_started_listener(crate::page_tabs::document_started_listener());
+        // downloads-ui lane: decides, as each top-level request starts, whether the user started it
+        runtime.set_document_request_listener(crate::downloads::document_request_listener());
     }
     ENGINE.with(|current| *current.borrow_mut() = Rc::downgrade(&engine));
     schedule_graphics_bootstrap(Rc::downgrade(&engine), GRAPHICS_BOOTSTRAP_DELAY);
@@ -430,6 +432,7 @@ impl EngineState {
             web_view.refresh_page_feedback();
         }
         crate::profile_data::record_visits(&mut self.controller.borrow_mut()); // history lane
+        crate::downloads::take_download_offers(&self.controller); // downloads-ui lane
         let active_became_ready = !ready_before && {
             let controller = self.controller.borrow();
             is_engine_ready(&controller, controller.active_tab_id())

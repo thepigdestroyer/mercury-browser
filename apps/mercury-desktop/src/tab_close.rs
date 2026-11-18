@@ -22,5 +22,5 @@ pub(crate) fn finish_closing_tab(
 /// Quits because the last tab was closed. Ending the event loop lets `main` shut the engine down.
 pub(crate) fn quit_after_last_tab() {
     log::info!("the last tab was closed; quitting");
-    crate::quit::request_quit();
+    crate::quit::request_quit_asking(); // downloads-ui lane
 }

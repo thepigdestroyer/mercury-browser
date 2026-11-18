@@ -15,6 +15,10 @@ pub(crate) struct LaunchOptions {
     // import-ui lane: diagnostics.
     pub import_from: Option<PathBuf>,
     pub import_snapshot: Option<PathBuf>,
+    /// Diagnostics of the downloads work: `--download` and `--download-dir`.
+    pub download_url: Option<String>,
+    pub download_dir: Option<PathBuf>,
+    pub download_offer_answer: Option<crate::downloads::OfferAnswer>,
     pub exit_request: Option<ExitRequest>,
     // find: diagnostics build only
     #[cfg(feature = "diagnostics")]
@@ -65,6 +69,9 @@ impl Default for LaunchOptions {
             experimental_web_features: true,
             import_from: None,
             import_snapshot: None,
+            download_url: None,
+            download_dir: None,
+            download_offer_answer: None,
             exit_request: None,
             #[cfg(feature = "diagnostics")]
             find: None,
@@ -126,6 +133,10 @@ Options:
                                    feature the settings turned off
   --profile-dir <directory>        Keep cookies and site data in this directory
                                    (screenshot and background runs otherwise use a temporary one)
+  --download <URL>                 Diagnostic: download this address once the browser is up
+  --download-dir <directory>       Diagnostic: save downloads in this directory in this run
+  --download-offer-answer <download|block>
+                                   Diagnostic: answer every 'wants to download' bar this way
   --help                           Print this help and exit
   --version                        Print the version and exit
 
@@ -177,7 +188,13 @@ pub(crate) fn reject_non_utf8_paths(arguments: &[std::ffi::OsString]) -> Option<
     let pair = arguments.windows(2).find(|pair| {
         matches!(
             pair[0].to_str(),
-            Some("--profile-dir" | "--screenshot" | "--import-from" | "--import-snapshot")
+            Some(
+                "--profile-dir"
+                    | "--screenshot"
+                    | "--import-from"
+                    | "--import-snapshot"
+                    | "--download-dir"
+            )
         ) && pair[1].to_str().is_none()
     })?;
     Some(CliOutcome::PrintAndExit {
@@ -221,6 +238,9 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         expect(unused_mut, reason = "set by diagnostics")
     )]
     let mut import_snapshot = None;
+    let mut download_url = None;
+    let mut download_dir = None;
+    let mut download_offer_answer = None;
     let mut exit_after = None;
     let mut exit_by = None;
     #[cfg(feature = "diagnostics")]
@@ -286,6 +306,29 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 find_steps = Some(value.parse::<i32>().map_err(|_| {
                     format!("invalid --find-steps '{value}': expected a whole number")
                 })?);
+            }
+            "--download" => {
+                download_url = Some(option_value(&mut arguments, "--download", "<URL>")?);
+            }
+            "--download-dir" => {
+                let value = option_value(&mut arguments, "--download-dir", "<directory>")?;
+                download_dir = Some(PathBuf::from(value));
+            }
+            "--download-offer-answer" => {
+                let value = option_value(
+                    &mut arguments,
+                    "--download-offer-answer",
+                    "<download|block>",
+                )?;
+                download_offer_answer = Some(match value.as_str() {
+                    "download" => crate::downloads::OfferAnswer::Download,
+                    "block" => crate::downloads::OfferAnswer::Block,
+                    _ => {
+                        return Err(format!(
+                            "invalid --download-offer-answer '{value}': expected download or block"
+                        ));
+                    }
+                });
             }
             "--exit-after" => {
                 let value = option_value(&mut arguments, "--exit-after", "<milliseconds>")?;
@@ -356,6 +399,9 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         experimental_web_features,
         import_from,
         import_snapshot,
+        download_url,
+        download_dir,
+        download_offer_answer,
         exit_request,
         #[cfg(feature = "diagnostics")]
         find,
@@ -443,6 +489,9 @@ mod tests {
                 experimental_web_features: true,
                 import_from: None,
                 import_snapshot: None,
+                download_url: None,
+                download_dir: None,
+                download_offer_answer: None,
                 exit_request: None,
                 #[cfg(feature = "diagnostics")]
                 find: None,
@@ -949,5 +998,41 @@ mod tests {
             Some(2)
         );
         assert_eq!(exit_code(&parse(&["--find"])), Some(2));
+    }
+
+    // downloads-ui lane
+    #[test]
+    fn download_diagnostics_are_parsed() {
+        let CliOutcome::Run(options) = parse(&[
+            "--download",
+            "http://127.0.0.1:8000/a.zip",
+            "--download-dir",
+            "/scratch/downloads",
+            "http://127.0.0.1:8000/",
+        ]) else {
+            panic!("the download diagnostics should be accepted");
+        };
+        assert_eq!(
+            options.download_url.as_deref(),
+            Some("http://127.0.0.1:8000/a.zip")
+        );
+        assert_eq!(
+            options.download_dir.as_deref(),
+            Some(std::path::Path::new("/scratch/downloads"))
+        );
+        assert_eq!(options.urls, ["http://127.0.0.1:8000/"]);
+        assert_eq!(exit_code(&parse(&["--download"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--download-dir"])), Some(2));
+        let CliOutcome::Run(options) = parse(&["--download-offer-answer", "block"]) else {
+            panic!("a bar answer should be accepted");
+        };
+        assert_eq!(
+            options.download_offer_answer,
+            Some(crate::downloads::OfferAnswer::Block)
+        );
+        assert_eq!(
+            exit_code(&parse(&["--download-offer-answer", "maybe"])),
+            Some(2)
+        );
     }
 }

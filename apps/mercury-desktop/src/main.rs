@@ -26,6 +26,7 @@ mod cli;
 // controls
 mod controls;
 mod crash_handler;
+mod downloads; // downloads-ui lane
 mod engine;
 mod find;
 mod geolocation;
@@ -215,7 +216,11 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
     );
-    connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
+    connect_native_keyboard_input(
+        &window,
+        Rc::clone(&controller),
+        Rc::clone(&web_view_focused),
+    );
     #[cfg(feature = "diagnostics")]
     if options.import_from.is_some() {
         import_ui::run_diagnostic_import(options.import_snapshot.clone()); // import-ui lane
@@ -230,6 +235,18 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         media_session::uses_system_services(&options),
     );
+    downloads::start(
+        &window,
+        Rc::clone(&controller),
+        web_view_focused,
+        downloads::DownloadOptions {
+            folder: options.download_dir.clone(),
+            url: options.download_url.clone(),
+            offer_answer: options.download_offer_answer,
+            automated: options.is_automated(),
+            profile_root: profile.paths.as_ref().map(|paths| paths.root.clone()),
+        },
+    ); // downloads-ui lane
 
     // find
     find::connect_find_bar(&window, Rc::clone(&controller));

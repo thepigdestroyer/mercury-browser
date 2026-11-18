@@ -2,6 +2,8 @@
 mod adblocker;
 mod content_process;
 mod document_starts;
+mod download_offers;
+mod downloads;
 mod embedder_controls;
 mod error;
 mod error_pages;
@@ -40,7 +42,9 @@ pub use geolocation::{
 pub use http_disk_cache::remove_http_disk_cache;
 pub use opengl_context::ViewportSize;
 pub use page_requests::page_request_clock;
-pub use page_tabs::{AdoptedWebView, DocumentStartedListener, NewTabAllocator};
+pub use page_tabs::{
+    AdoptedWebView, DocumentRequestListener, DocumentStartedListener, NewTabAllocator,
+};
 pub use panics::{hard_fail_in_single_process, should_panic_hook_suppress_termination};
 pub use proxy::{ProxyPreferences, ProxyServer, SystemProxySettings};
 pub use runtime::{EventLoopWaker, NEW_TAB_URL, RuntimeOptions, ServoRuntime};

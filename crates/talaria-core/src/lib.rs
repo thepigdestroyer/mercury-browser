@@ -20,8 +20,8 @@ pub use address::{
     AddressResolutionError, NavigationTarget, SearchUrlBuilder, classify_address, resolve_address,
 };
 pub use browser::{
-    BrowserCommand, BrowserEvent, BrowserState, LoadState, PointerButton, PointerButtonAction,
-    display_origin, placeholder_title,
+    BrowserCommand, BrowserEvent, BrowserState, DownloadOffer, DownloadSignal, LoadState,
+    PointerButton, PointerButtonAction, display_origin, placeholder_title,
 };
 pub use controller::{BrowserController, CloseTabOutcome};
 pub use controls::{

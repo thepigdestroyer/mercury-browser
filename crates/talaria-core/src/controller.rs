@@ -37,6 +37,8 @@ pub struct BrowserController {
     next_tab_id: u64,
     command_queue: VecDeque<TabCommand>,
     color_scheme: ColorScheme,
+    /// downloads: top-level requests and pages offered as downloads, oldest first.
+    download_signals: Vec<(TabId, crate::DownloadSignal)>,
     // settings
     /// The system's scheme, as last reported; `color_scheme` is what pages see.
     system_color_scheme: ColorScheme,
@@ -60,6 +62,7 @@ impl BrowserController {
             next_tab_id: 2,
             command_queue: VecDeque::new(),
             color_scheme: ColorScheme::default(),
+            download_signals: Vec::new(),
             system_color_scheme: ColorScheme::default(),
             forced_color_scheme: None,
             default_zoom_percent: DEFAULT_ZOOM_PERCENT,
@@ -426,6 +429,38 @@ impl BrowserController {
         if self.tabs.iter().any(|tab| tab.id() == tab_id) {
             self.visits.observe(tab_id, &event);
         }
+        // downloads
+        if self.tabs.iter().any(|tab| tab.id() == tab_id) {
+            let signal = match &event {
+                BrowserEvent::DownloadOffered {
+                    url,
+                    mime_type,
+                    posted,
+                    referrer,
+                } => Some(crate::DownloadSignal::Offered(crate::DownloadOffer {
+                    url: url.clone(),
+                    mime_type: mime_type.clone(),
+                    posted: *posted,
+                    referrer: referrer.clone(),
+                })),
+                BrowserEvent::DocumentRequestStarted {
+                    url,
+                    redirect,
+                    from,
+                    user_started,
+                } => Some(crate::DownloadSignal::RequestStarted {
+                    url: url.clone(),
+                    redirect: *redirect,
+                    from: from.clone(),
+                    user_started: *user_started,
+                }),
+                _ => None,
+            };
+            if let Some(signal) = signal {
+                self.download_signals.push((tab_id, signal));
+                return true;
+            }
+        }
         // dialogs
         self.observe_event_for_page_requests(tab_id, &event);
         // controls
@@ -542,6 +577,12 @@ impl BrowserController {
         self.tabs
             .iter()
             .any(|tab| tab.id() == tab_id && tab.is_load_deferred())
+    }
+
+    /// downloads: the top-level requests and the pages offered as downloads since the last
+    /// call, oldest first.
+    pub fn take_download_signals(&mut self) -> Vec<(TabId, crate::DownloadSignal)> {
+        std::mem::take(&mut self.download_signals)
     }
 
     /// Reserves a tab for a web view the engine is creating itself. The tab is inserted

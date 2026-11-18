@@ -250,6 +250,28 @@ pub enum BrowserEvent {
     FullscreenChanged {
         fullscreen: bool,
     },
+    // downloads
+    /// The top-level page at `url` is the engine's own "Unknown content type" page: the
+    /// response was of a type it cannot show (`mime_type`). `posted` says whether the request
+    /// that fetched it was not a GET (a form, which cannot be fetched again); `None` when that
+    /// request is not known. `referrer` is the page that request came from, if the engine sent
+    /// one.
+    DownloadOffered {
+        url: String,
+        mime_type: String,
+        posted: Option<bool>,
+        referrer: Option<String>,
+    },
+    /// A top-level request is starting: a new navigation, or (`redirect`) the next hop of one.
+    /// `from` is the page the tab showed when it started, if any.
+    /// `user_started`: the embedder decided, synchronously as the request started, that the
+    /// user started this navigation (a gesture in the tab, or the address they typed).
+    DocumentRequestStarted {
+        url: String,
+        redirect: bool,
+        from: Option<String>,
+        user_started: bool,
+    },
     // tabs opened and closed by pages
     /// The page closed its own tab (`window.close()`).
     CloseRequested,
@@ -318,6 +340,30 @@ pub enum BrowserEvent {
         request_id: u64,
         selection: Option<FindSelection>,
     },
+}
+
+/// A page the engine could not show, offered to the browser as a download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadOffer {
+    pub url: String,
+    pub mime_type: String,
+    pub posted: Option<bool>,
+    pub referrer: Option<String>,
+}
+
+/// What the downloads work learns from a tab's engine events, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadSignal {
+    /// A top-level request started (`redirect`: the next hop of the same navigation).
+    /// `from` is the page the tab showed when it started.
+    RequestStarted {
+        url: String,
+        redirect: bool,
+        from: Option<String>,
+        user_started: bool,
+    },
+    /// A page the engine could not show.
+    Offered(DownloadOffer),
 }
 
 impl BrowserEvent {
@@ -550,6 +596,8 @@ impl BrowserState {
             BrowserEvent::FullscreenChanged { fullscreen } => {
                 self.fullscreen = fullscreen;
             }
+            // downloads: queued by the controller, not shown.
+            BrowserEvent::DownloadOffered { .. } | BrowserEvent::DocumentRequestStarted { .. } => {}
             // Closing is the controller's business; the tab's own state does not change.
             BrowserEvent::CloseRequested => {}
             BrowserEvent::ControlShown { id, request } => {

@@ -15,8 +15,6 @@
 //! GUID; clearing notifies without one. Progress and validators notify nothing: they do not
 //! change the list, and live progress is `mercury-downloads`' in-memory state.
 
-#![cfg_attr(not(test), expect(dead_code, reason = "called by the downloads work"))]
-
 use mercury_store::{DownloadRecord, DownloadRecordId, DownloadState, NewDownload, StoreError};
 
 use super::{Area, Change, Database, ProfileData, ProfileDataError};
@@ -126,6 +124,16 @@ impl ProfileData {
         );
     }
 
+    /// Records where the finished file really is, when the transfer published it under another
+    /// name than the one inserted. No reply (a failure is logged) and no notification: the list
+    /// already knows from the transfer.
+    pub(crate) fn set_download_target_path(&self, guid: String, target_path: String) {
+        self.submit(None, "recording a download's file name", move |db, _| {
+            let id = db.download_id(&guid)?;
+            db.store().set_download_target_path(id, &target_path)
+        });
+    }
+
     /// Marks a download complete, cancelled or interrupted, at the service's current time, then
     /// runs a passive checkpoint so the log does not keep growing during a long download
     /// session.
@@ -212,6 +220,13 @@ impl ProfileData {
     }
 
     /// Removes every record that is not in progress; replies with how many.
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "the list uses clear_finished_downloads_and_partials (downloads-ui lane)"
+        )
+    )]
     pub(crate) fn clear_finished_downloads(
         &self,
         reply: impl FnOnce(Result<u64, ProfileDataError>) + 'static,
@@ -222,6 +237,31 @@ impl ProfileData {
                 let removed = db.store().clear_finished_downloads()?;
                 db.download_ids.clear();
                 Ok(removed)
+            },
+            reply,
+        );
+    }
+
+    /// Like `clear_finished_downloads`, and replies with the partial files (target path,
+    /// partial path) of the interrupted records it removed, so the caller can remove them too
+    /// (downloads-ui lane). Read and cleared in one job, so nothing slips in between.
+    pub(crate) fn clear_finished_downloads_and_partials(
+        &self,
+        reply: impl FnOnce(Result<Vec<(String, String)>, ProfileDataError>) + 'static,
+    ) {
+        self.request(
+            Some(Area::Downloads),
+            move |db, _| {
+                let partials = db
+                    .store()
+                    .downloads(u32::MAX)?
+                    .into_iter()
+                    .filter(|record| record.state == DownloadState::Interrupted)
+                    .filter_map(|record| Some((record.target_path, record.temp_path?)))
+                    .collect();
+                db.store().clear_finished_downloads()?;
+                db.download_ids.clear();
+                Ok(partials)
             },
             reply,
         );

@@ -46,6 +46,11 @@ pub(crate) enum ShortcutAction {
     Quit,
     /// Escape while the active tab's page is fullscreen.
     ExitFullscreen,
+    // downloads-ui lane
+    /// Save page as… (the page's HTML only).
+    SavePage,
+    /// Opens or closes the list of downloads.
+    ShowDownloads,
     // settings-ui
     ShowSettings,
     // history
@@ -216,6 +221,7 @@ pub(crate) fn shortcut_action(
             (Some("-"), false) => Some(ZoomOut),
             (Some("0"), false) => Some(ZoomReset),
             (Some("9"), false) => Some(SelectLastTab),
+            (Some("s"), false) => Some(SavePage), // downloads-ui lane
             // settings-ui
             (Some(","), false) => Some(ShowSettings),
             // media-session lane
@@ -236,6 +242,8 @@ pub(crate) fn shortcut_action(
         }
 
         return match (platform, key, character, shift) {
+            (Platform::MacOs, _, Some("j"), true) => Some(ShowDownloads), // downloads-ui lane
+            (Platform::Other, _, Some("j"), false) => Some(ShowDownloads), // downloads-ui lane
             (Platform::MacOs, _, Some("["), false) => Some(Back),
             (Platform::MacOs, _, Some("]"), false) => Some(Forward),
             (Platform::MacOs, _, Some("[" | "{"), true) => Some(PreviousTab),
@@ -409,13 +417,15 @@ pub(crate) fn run_shortcut(
             sync_ui(window, &controller.borrow());
         }
         ShortcutAction::Quit => {
-            if let Err(error) = slint::quit_event_loop() {
-                log::warn!("could not quit: {error}");
-            }
+            // downloads-ui lane: asks first while downloads are running.
+            crate::quit::request_quit_asking();
         }
         ShortcutAction::ExitFullscreen => controller
             .borrow_mut()
             .queue_command(BrowserCommand::ExitFullscreen),
+        // downloads-ui lane
+        ShortcutAction::SavePage => crate::downloads::save_page(controller),
+        ShortcutAction::ShowDownloads => crate::downloads::show_list(),
         // settings-ui
         ShortcutAction::ShowSettings => window.invoke_show_settings(),
         // history lane
@@ -711,6 +721,8 @@ mod tests {
             (ZoomReset, false),
             (Quit, false),
             (ExitFullscreen, false),
+            (SavePage, false),      // downloads-ui lane
+            (ShowDownloads, false), // downloads-ui lane
             (ShowSettings, false),
             (ShowHistory, false),
             (ClearBrowsingData, false),
@@ -756,6 +768,7 @@ mod tests {
                 | Find
                 | FindNext
                 | FindPrevious => {}
+                SavePage | ShowDownloads => {} // downloads-ui lane
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -968,5 +981,16 @@ mod tests {
         assert_eq!(mac(character("m"), CTRL), None);
         assert_eq!(other(character("m"), CTRL), Some(ToggleMute));
         assert_eq!(other(character("m"), CTRL | SHIFT), None);
+    }
+
+    // downloads-ui lane
+    #[test]
+    fn save_page_and_the_downloads_list() {
+        assert_eq!(mac(character("s"), CMD), Some(SavePage));
+        assert_eq!(other(character("s"), CTRL), Some(SavePage));
+        assert_eq!(mac(character("J"), CMD | SHIFT), Some(ShowDownloads));
+        assert_eq!(mac(character("j"), CMD), None);
+        assert_eq!(other(character("j"), CTRL), Some(ShowDownloads));
+        assert!(!SavePage.repeats() && !ShowDownloads.repeats());
     }
 }

@@ -15,6 +15,13 @@ pub(crate) fn request_quit() {
     }
 }
 
+/// downloads-ui lane: a quit the user asked for (the quit shortcut, a Quit menu item, the
+/// window's close button, closing the last tab): asks "Cancel N downloads and quit?" first
+/// while downloads are running. Signals and the session's end quit without asking.
+pub(crate) fn request_quit_asking() {
+    crate::downloads::confirm_quit(request_quit);
+}
+
 /// Closing the window (its close button, or the close request `--exit-by close-request` sends)
 /// quits like the quit shortcut. The window stays shown until the event loop has ended and the
 /// engine's state has been taken: a window Slint hides by itself is suspended while the loop
@@ -23,7 +30,7 @@ pub(crate) fn request_quit() {
 pub(crate) fn quit_when_the_window_is_closed(window: &MainWindow) {
     window.window().on_close_requested(|| {
         let _slint = crate::callback_scope::InSlintCallback::enter();
-        request_quit();
+        request_quit_asking(); // downloads-ui lane
         CloseRequestResponse::KeepWindowShown
     });
 }

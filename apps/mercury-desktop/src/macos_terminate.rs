@@ -168,7 +168,7 @@ unsafe extern "C-unwind" fn application_should_terminate(
         TerminateDecision::QuitThroughTheEventLoop(why) => {
             let _ = std::panic::catch_unwind(|| {
                 log::info!("asked to terminate ({why:?}); quitting in order");
-                crate::quit::request_quit();
+                crate::quit::request_quit_asking(); // downloads-ui lane
             });
             NSApplicationTerminateReply::TerminateCancel
         }

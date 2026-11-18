@@ -26,6 +26,7 @@ path = [
   "docs/superpowers/plans/2026-11-15-phase-1-foundation.md",
   "docs/superpowers/specs/2026-11-15-mercury-browser-design.md",
   "docs/superpowers/specs/2026-11-15-mercury-browser-roadmap.md",
+  "docs/user-guide/downloads.md",
   "NOTICE",
   "scripts/macos/render-icon.swift",
   "tests/media/README.md",

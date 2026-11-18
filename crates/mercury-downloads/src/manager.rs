@@ -12,7 +12,7 @@ use std::time::{Duration, Instant};
 use futures_util::FutureExt;
 use tokio::sync::watch;
 
-use crate::transfer::{Outcome, PartsInUse, Transfer};
+use crate::transfer::{Outcome, PartsInUse, Stop, Transfer};
 
 /// How long dropping the manager waits for cancelled transfers to clean up.
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(3);
@@ -154,8 +154,8 @@ type EventSink = Arc<dyn Fn(DownloadEvent) + Send + Sync>;
 
 struct Shared {
     on_event: EventSink,
-    /// Running transfers and the switch that cancels each.
-    running: Mutex<HashMap<DownloadId, watch::Sender<bool>>>,
+    /// Running transfers and the switch that stops each.
+    running: Mutex<HashMap<DownloadId, watch::Sender<Stop>>>,
     /// Tasks that have not yet returned, including ones emitting their terminal event.
     alive: Mutex<usize>,
     all_done: Condvar,
@@ -254,7 +254,7 @@ impl DownloadManager {
     /// Starts a download and returns at once; progress arrives through `on_event`.
     pub fn start(&self, request: DownloadRequest) -> DownloadId {
         let id = DownloadId(self.next_id.fetch_add(1, Ordering::Relaxed));
-        let (cancel, cancelled) = watch::channel(false);
+        let (cancel, cancelled) = watch::channel(Stop::Run);
         lock(&self.shared.running).insert(id, cancel);
         *lock(&self.shared.alive) += 1;
 
@@ -297,7 +297,24 @@ impl DownloadManager {
     /// Stops the transfer and deletes its partial file. Idempotent; unknown ids are ignored.
     pub fn cancel(&self, id: DownloadId) {
         if let Some(cancel) = lock(&self.shared.running).get(&id) {
-            let _ = cancel.send(true);
+            let _ = cancel.send(Stop::Cancel);
+        }
+    }
+
+    /// Stops the transfer like a dropped connection, as when the browser quits: it ends with
+    /// `Failed`, and `resumable: true` exactly when the partial file was kept for a later
+    /// `ResumeFrom` (the server gave a validator and accepts byte ranges); otherwise the partial
+    /// file is removed. A transfer that has already received its whole body finishes instead.
+    /// Idempotent; unknown ids are ignored; a cancel already asked for still wins.
+    pub fn interrupt(&self, id: DownloadId) {
+        if let Some(stop) = lock(&self.shared.running).get(&id) {
+            stop.send_if_modified(|stop| {
+                let running = *stop == Stop::Run;
+                if running {
+                    *stop = Stop::Interrupt;
+                }
+                running
+            });
         }
     }
 
@@ -307,12 +324,21 @@ impl DownloadManager {
     }
 }
 
-impl Drop for DownloadManager {
-    fn drop(&mut self) {
+impl DownloadManager {
+    /// Cancels every running download (their partial files are removed; `interrupt` them first
+    /// to keep resumable ones) and waits for them to clean up until `deadline` at the latest.
+    /// Dropping the manager does the same with a three-second grace.
+    pub fn shut_down(mut self, deadline: Instant) {
+        self.stop(deadline);
+    }
+
+    fn stop(&mut self, deadline: Instant) {
+        let Some(runtime) = self.runtime.take() else {
+            return;
+        };
         for cancel in lock(&self.shared.running).values() {
-            let _ = cancel.send(true);
+            let _ = cancel.send(Stop::Cancel);
         }
-        let deadline = Instant::now() + SHUTDOWN_GRACE;
         let mut alive = lock(&self.shared.alive);
         while *alive > 0 {
             let left = deadline.saturating_duration_since(Instant::now());
@@ -328,10 +354,14 @@ impl Drop for DownloadManager {
                 .0;
         }
         drop(alive);
-        if let Some(runtime) = self.runtime.take() {
-            // Never blocks, and is allowed even when dropped from inside an async context.
-            runtime.shutdown_background();
-        }
+        // Never blocks, and is allowed even when dropped from inside an async context.
+        runtime.shutdown_background();
+    }
+}
+
+impl Drop for DownloadManager {
+    fn drop(&mut self) {
+        self.stop(Instant::now() + SHUTDOWN_GRACE);
     }
 }
 
