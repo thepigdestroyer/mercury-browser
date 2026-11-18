@@ -65,7 +65,6 @@ pub(crate) struct JobHandle {
 }
 
 impl JobHandle {
-    #[cfg_attr(not(test), expect(dead_code, reason = "called by the import work"))]
     pub(crate) fn cancel(&self) {
         self.cancel.store(true, Ordering::Release);
     }

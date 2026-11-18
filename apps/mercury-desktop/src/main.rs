@@ -28,6 +28,7 @@ mod controls;
 mod crash_handler;
 mod engine;
 mod history_ui;
+mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -147,6 +148,12 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     settings::prepare_controller(&settings, &mut controller.borrow_mut(), &options.urls);
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
     profile_data::start(&profile, &mut controller.borrow_mut()); // history lane
+    import_ui::configure(
+        options.is_automated(),
+        options.import_from.as_deref(),
+        profile.paths.as_ref().map(|paths| paths.root.clone()),
+        options.profile_dir.is_none() && !options.is_automated(),
+    ); // import-ui lane
     let web_view_focused = Rc::new(Cell::new(false));
 
     connect_servo_runtime(
@@ -186,6 +193,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
+    #[cfg(feature = "diagnostics")]
+    if options.import_from.is_some() {
+        import_ui::run_diagnostic_import(options.import_snapshot.clone()); // import-ui lane
+    }
     // controls
     controls::connect_controls(&window, Rc::clone(&controller));
     quit::quit_when_the_window_is_closed(&window);

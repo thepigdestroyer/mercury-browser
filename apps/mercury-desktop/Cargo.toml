@@ -26,6 +26,7 @@ mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-store = { path = "../../crates/mercury-store" }
 mercury-ui = { path = "../../crates/mercury-ui" }
 rusqlite.workspace = true
+serde_json.workspace = true
 servo.workspace = true
 slint.workspace = true
 surfman.workspace = true
@@ -115,6 +116,9 @@ quit-diagnostics = []
 # input (docs/developer-guide/testing.md). Off in `make build-release` and the app bundle;
 # `make check` and `make lint` compile it (`--all-features`).
 menu-diagnostics = []
+# import-ui lane: `--import-from` and `--import-snapshot` (docs in `cli.rs`). Never in a
+# released build; `make lint`, `make check` and `make test` turn it on (`--all-features`).
+diagnostics = []
 
 [build-dependencies]
 gl_generator = "0.14"

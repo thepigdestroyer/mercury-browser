@@ -4,6 +4,8 @@
 //! addresses may be imported at all.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rusqlite::Row;
 use url::Url;
@@ -44,6 +46,60 @@ pub struct ImportedVisit {
 /// covers a full Chrome history and the most recent months of a Firefox one. At a few hundred
 /// bytes a visit the result stays in the tens of megabytes.
 pub const MAX_IMPORTED_VISITS: usize = 100_000;
+
+/// Titles longer than this many characters are cut while they are read (Mercury's store keeps
+/// no more), so a hostile file cannot make a reader hold huge titles.
+pub const MAX_TITLE_CHARS: usize = 4096;
+/// Addresses longer than this many bytes are left out while they are read (Mercury's store
+/// refuses them).
+pub const MAX_URL_BYTES: usize = 65_536;
+/// The most a database and its journal may weigh together to be copied and read: well above
+/// any real browser's history (a heavy Firefox user's `places.sqlite` is in the low hundreds
+/// of megabytes), and the copy must fit beside the original.
+pub const MAX_DATABASE_BYTES: u64 = 1 << 30;
+
+/// Where a read puts its private copies of another browser's databases, and how to stop it.
+///
+/// The copies go into a new directory (mode 0700 on Unix) inside `copy_dir`, which must exist,
+/// and are removed when the read ends; a process that is killed while reading leaves them
+/// there, so the caller should give a directory of its own and empty it at its next start.
+/// A cancelled read stops between copying, checking and querying (and every few thousand rows
+/// while querying) with [`ImportError::Cancelled`].
+#[derive(Debug, Clone)]
+pub struct ReadContext {
+    copy_dir: PathBuf,
+    cancel: Arc<AtomicBool>,
+}
+
+impl ReadContext {
+    pub fn new(copy_dir: PathBuf) -> Self {
+        Self {
+            copy_dir,
+            cancel: Arc::new(AtomicBool::new(false)),
+        }
+    }
+
+    pub fn copy_dir(&self) -> &Path {
+        &self.copy_dir
+    }
+
+    /// Stops every read using this context (or a clone of it) at its next check.
+    pub fn cancel(&self) {
+        self.cancel.store(true, Ordering::Release);
+    }
+
+    pub fn is_cancelled(&self) -> bool {
+        self.cancel.load(Ordering::Acquire)
+    }
+
+    pub(crate) fn check(&self) -> Result<(), ImportError> {
+        if self.is_cancelled() {
+            Err(ImportError::Cancelled)
+        } else {
+            Ok(())
+        }
+    }
+}
 
 /// A browser profile found on disk that may be imported from.
 ///
@@ -95,6 +151,12 @@ pub enum ImportError {
     /// unexpected schema, or a file that is not a bookmark file.
     #[error("unexpected format: {0}")]
     Malformed(String),
+    /// The file is a symbolic link (or not a regular file), which is never followed.
+    #[error("{} is not a regular file (symbolic links are not followed)", .0.display())]
+    NotARegularFile(PathBuf),
+    /// The read was cancelled through its [`ReadContext`].
+    #[error("the read was cancelled")]
+    Cancelled,
 }
 
 impl ImportError {

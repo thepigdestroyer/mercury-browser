@@ -5385,6 +5385,7 @@ dependencies = [
  "objc2-metal 0.3.2",
  "objc2-system-configuration",
  "rusqlite",
+ "serde_json",
  "servo",
  "signal-hook-registry",
  "slint",

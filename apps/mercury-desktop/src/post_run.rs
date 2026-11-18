@@ -217,6 +217,9 @@ impl EndOfRun for Steps {
     }
 
     fn shut_down_profile_data(&mut self, deadline: Instant) {
+        // import-ui lane: tells a read of another browser's files to stop, without waiting;
+        // what it leaves in the copy area is removed at the next start.
+        crate::import_ui::shut_down();
         // Slot (history): queues "clear history on exit" if the settings ask for it, then
         // closes the history database, waiting for its queued work (that clear included).
         self.settings.clear_history_on_exit_if_asked();

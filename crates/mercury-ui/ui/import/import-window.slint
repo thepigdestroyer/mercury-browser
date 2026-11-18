@@ -1,0 +1,465 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+import { Button, CheckBox, Palette, ProgressIndicator, ScrollView } from "std-widgets.slint";
+
+// A profile of another browser that can be imported from.
+export struct ImportProfileRow {
+    browser: string,
+    name: string,
+    // What it holds, for example "Bookmarks and history".
+    holds: string,
+    bookmarks: bool,
+    history: bool,
+}
+
+// One line of an import's summary; problems are shown as warnings.
+export struct ImportSummaryLine {
+    text: string,
+    problem: bool,
+}
+
+// The pages of the import window.
+export enum ImportPage {
+    looking,
+    choose,
+    nothing-found,
+    importing,
+    summary,
+}
+
+component Heading inherits Text {
+    font-size: 17px;
+    font-weight: 650;
+    color: Palette.foreground;
+    wrap: word-wrap;
+}
+
+component Note inherits Text {
+    font-size: 12px;
+    color: Palette.foreground.with-alpha(0.65);
+    wrap: word-wrap;
+}
+
+// One profile in the list. Rows take keyboard focus (Tab, or Up and Down once the list has
+// focus), and the focused row is the selected one, so a screen reader announces the selection.
+component ProfileRowView inherits Rectangle {
+    in property <ImportProfileRow> profile;
+    in property <bool> selected;
+    in property <int> index;
+    in property <int> count;
+    // Whether the keyboard is in the list: then the selected row takes the focus.
+    in property <bool> keyboard-in-list;
+    callback clicked;
+    callback step(int);
+    callback focus-changed(bool);
+
+    height: 52px;
+    border-radius: 6px;
+    border-width: focus.has-focus ? 2px : 0px;
+    border-color: Palette.accent-background;
+    background: root.selected
+        ? Palette.selection-background
+        : touch.has-hover ? Palette.alternate-background : transparent;
+
+    changed selected => {
+        if root.selected && root.keyboard-in-list && !focus.has-focus {
+            focus.focus();
+        }
+    }
+
+    VerticalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        alignment: center;
+        spacing: 2px;
+        Text {
+            text: root.profile.browser + " — " + root.profile.name;
+            font-size: 14px;
+            font-weight: 600;
+            color: root.selected ? Palette.selection-foreground : Palette.foreground;
+            overflow: elide;
+        }
+
+        Text {
+            text: root.profile.holds;
+            font-size: 12px;
+            color: (root.selected ? Palette.selection-foreground : Palette.foreground).with-alpha(0.7);
+            overflow: elide;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            focus.focus();
+            root.clicked();
+        }
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        accessible-role: list-item;
+        accessible-label: root.profile.browser + ", " + root.profile.name + ", " + root.profile.holds;
+        accessible-item-selectable: true;
+        accessible-item-selected: root.selected;
+        accessible-item-index: root.index;
+        accessible-item-count: root.count;
+        accessible-action-default => {
+            root.clicked();
+        }
+        changed has-focus => {
+            root.focus-changed(self.has-focus);
+            if self.has-focus {
+                root.clicked();
+            }
+        }
+        key-pressed(event) => {
+            if event.text == Key.UpArrow {
+                root.step(-1);
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                root.step(1);
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+export component ImportWindow inherits Window {
+    // The colour scheme the appearance setting asks for; `unknown` follows the system.
+    in property <ColorScheme> forced-color-scheme: ColorScheme.unknown;
+    property <bool> dark: Palette.color-scheme == ColorScheme.dark;
+    // The only colour of its own: problems in the summary.
+    property <color> problem-color: root.dark ? #ff9e94 : #b3261e;
+
+    in property <ImportPage> page: ImportPage.looking;
+    in property <[ImportProfileRow]> profiles;
+    in-out property <int> selected: 0;
+    in-out property <bool> import-bookmarks: true;
+    in-out property <bool> import-history: true;
+    // "The import from Firefox — Default did not finish." when there is one to continue.
+    in property <string> unfinished-notice;
+    in property <string> progress-title;
+    in property <string> progress-detail;
+    in property <float> progress;
+    in property <bool> progress-known;
+    in property <bool> cancelling;
+    in property <string> summary-title: "Import finished";
+    in property <[ImportSummaryLine]> summary;
+    in property <bool> can-import-from-file;
+    property <bool> keyboard-in-list;
+
+    callback start-import();
+    callback cancel-import();
+    callback continue-import();
+    callback import-from-file();
+    callback close-window();
+
+    property <ImportProfileRow> current: root.profiles[root.selected];
+    property <bool> can-start: root.profiles.length > 0
+        && ((root.import-bookmarks && root.current.bookmarks) || (root.import-history && root.current.history));
+
+    title: "Import from another browser";
+    preferred-width: 560px;
+    preferred-height: 480px;
+    min-width: 460px;
+    min-height: 420px;
+    background: Palette.background;
+
+    init => {
+        if root.forced-color-scheme != ColorScheme.unknown {
+            Palette.color-scheme = root.forced-color-scheme;
+        }
+        keys.focus();
+    }
+    changed forced-color-scheme => {
+        Palette.color-scheme = root.forced-color-scheme;
+    }
+
+    function choose(index: int) {
+        if index >= 0 && index < root.profiles.length {
+            root.selected = index;
+            root.import-bookmarks = root.profiles[index].bookmarks;
+            root.import-history = root.profiles[index].history;
+        }
+    }
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                if root.page == ImportPage.importing {
+                    root.cancel-import();
+                } else {
+                    root.close-window();
+                }
+                return accept;
+            }
+            if event.text == Key.Return {
+                if root.page == ImportPage.choose && root.can-start {
+                    root.start-import();
+                    return accept;
+                }
+                if root.page == ImportPage.summary || root.page == ImportPage.nothing-found {
+                    root.close-window();
+                    return accept;
+                }
+            }
+            if root.page == ImportPage.choose && event.text == Key.UpArrow {
+                root.keyboard-in-list = true;
+                root.choose(root.selected - 1);
+                return accept;
+            }
+            if root.page == ImportPage.choose && event.text == Key.DownArrow {
+                root.keyboard-in-list = true;
+                root.choose(root.selected + 1);
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+
+            if root.page == ImportPage.looking: VerticalLayout {
+                spacing: 12px;
+                Heading {
+                    text: "Looking for other browsers…";
+                }
+
+                ProgressIndicator {
+                    indeterminate: true;
+                    accessible-label: "Looking for other browsers";
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+            }
+
+            if root.page == ImportPage.choose: VerticalLayout {
+                spacing: 10px;
+                Heading {
+                    text: "Import bookmarks and history from another browser";
+                }
+
+                if root.unfinished-notice != "": HorizontalLayout {
+                    spacing: 10px;
+                    Note {
+                        text: root.unfinished-notice;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                    }
+
+                    Button {
+                        text: "Continue the import";
+                        clicked => {
+                            root.continue-import();
+                        }
+                    }
+                }
+
+                Text {
+                    text: "Import from:";
+                    font-size: 13px;
+                    color: Palette.foreground;
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                    min-height: 120px;
+                    accessible-role: list;
+                    accessible-label: "Browser profiles";
+                    border-width: 1px;
+                    border-radius: 6px;
+                    border-color: Palette.border;
+                    ScrollView {
+                        VerticalLayout {
+                            padding: 4px;
+                            spacing: 2px;
+                            alignment: start;
+                            for row[index] in root.profiles: ProfileRowView {
+                                profile: row;
+                                selected: index == root.selected;
+                                index: index;
+                                count: root.profiles.length;
+                                keyboard-in-list: root.keyboard-in-list;
+                                clicked => {
+                                    root.choose(index);
+                                }
+                                step(by) => {
+                                    root.choose(root.selected + by);
+                                }
+                                focus-changed(focused) => {
+                                    root.keyboard-in-list = focused;
+                                }
+                            }
+                        }
+                    }
+                }
+
+                HorizontalLayout {
+                    spacing: 20px;
+                    alignment: start;
+                    CheckBox {
+                        text: "Bookmarks";
+                        enabled: root.current.bookmarks;
+                        checked <=> root.import-bookmarks;
+                    }
+
+                    CheckBox {
+                        text: "History";
+                        enabled: root.current.history;
+                        checked <=> root.import-history;
+                    }
+                }
+
+                Note {
+                    text: "Bookmarks go into a folder named after the browser in Other Bookmarks. Importing the same profile again adds only what is new.";
+                }
+
+                Note {
+                    text: "Passwords, cookies and settings are not imported. Safari is not supported: its files can only be read with Full Disk Access.";
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: end;
+                    Button {
+                        text: "Cancel";
+                        clicked => {
+                            root.close-window();
+                        }
+                    }
+
+                    Button {
+                        text: "Import";
+                        primary: true;
+                        enabled: root.can-start;
+                        clicked => {
+                            root.start-import();
+                        }
+                    }
+                }
+            }
+
+            if root.page == ImportPage.nothing-found: VerticalLayout {
+                spacing: 12px;
+                Heading {
+                    text: "No other browser was found";
+                }
+
+                Note {
+                    text: "Mercury Browser looked for Firefox, Chrome, Chromium, Edge, Brave, Vivaldi, Arc, LibreWolf, Waterfox, Floorp and Zen, and found no profile with bookmarks or history. You can still import bookmarks that another browser saved to a file.";
+                }
+
+                Note {
+                    text: "Safari is not supported: its files can only be read with Full Disk Access.";
+                }
+
+                HorizontalLayout {
+                    alignment: start;
+                    Button {
+                        text: "Import bookmarks from a file…";
+                        enabled: root.can-import-from-file;
+                        clicked => {
+                            root.import-from-file();
+                        }
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: "Close";
+                        primary: true;
+                        clicked => {
+                            root.close-window();
+                        }
+                    }
+                }
+            }
+
+            if root.page == ImportPage.importing: VerticalLayout {
+                spacing: 12px;
+                Heading {
+                    text: root.progress-title;
+                }
+
+                ProgressIndicator {
+                    indeterminate: !root.progress-known;
+                    progress: root.progress;
+                    accessible-label: root.progress-title;
+                }
+
+                Note {
+                    text: root.cancelling ? "Stopping after the current step…" : root.progress-detail;
+                }
+
+                Note {
+                    text: "You can keep browsing while the import runs. Closing this window cancels the import; what was imported so far stays.";
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: "Cancel";
+                        enabled: !root.cancelling;
+                        clicked => {
+                            root.cancel-import();
+                        }
+                    }
+                }
+            }
+
+            if root.page == ImportPage.summary: VerticalLayout {
+                spacing: 10px;
+                Heading {
+                    text: root.summary-title;
+                }
+
+                // A little taller than the text asks for: the GPU renderer measures wrapped
+                // lines a few pixels short and would clip the descenders of the last one.
+                for line in root.summary: Rectangle {
+                    height: text.preferred-height + 4px;
+                    text := Text {
+                        x: 0;
+                        y: 0;
+                        width: parent.width;
+                        height: parent.height;
+                        text: (line.problem ? "⚠  " : "✓  ") + line.text;
+                        font-size: 13px;
+                        color: line.problem ? root.problem-color : Palette.foreground;
+                        wrap: word-wrap;
+                        vertical-alignment: top;
+                    }
+                }
+
+                Rectangle {
+                    vertical-stretch: 1;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    Button {
+                        text: "Done";
+                        primary: true;
+                        clicked => {
+                            root.close-window();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
