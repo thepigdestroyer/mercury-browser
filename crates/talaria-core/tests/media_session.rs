@@ -495,3 +495,28 @@ fn only_positive_evidence_of_sound_counts_for_the_media_keys() {
     state.apply(paused());
     assert!(!state.media().has_audible_evidence());
 }
+
+#[test]
+fn a_late_pause_from_the_previous_document_does_not_revive_its_media() {
+    let mut state = playing_loaded_page();
+
+    state.apply(BrowserEvent::DocumentStarted);
+    // The old document's elements report their pause as they are torn down; Servo does not say
+    // which document an event came from.
+    state.apply(paused());
+
+    assert_eq!(state.media(), &MediaState::default());
+}
+
+#[test]
+fn a_document_reports_pauses_once_its_media_has_played() {
+    let mut state = BrowserState::default();
+    state.apply(BrowserEvent::DocumentStarted);
+    // GStreamer reports Paused while it prepares an element, before it plays.
+    state.apply(paused());
+    assert_eq!(state.media().playback(), MediaPlaybackState::None);
+
+    state.apply(playing());
+    state.apply(paused());
+    assert_eq!(state.media().playback(), MediaPlaybackState::Paused);
+}

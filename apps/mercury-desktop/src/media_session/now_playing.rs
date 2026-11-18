@@ -16,6 +16,10 @@ const SEEK_JUMP_SECONDS: f64 = 1.5;
 /// start, so such a tab does not take Now Playing back from another.
 const FLAP_HOLD: Duration = Duration::from_secs(1);
 
+/// Servo's media session counts as the published tab's only after it has stayed there this
+/// long: any page can move it by sending media-session events, playing or not.
+const SESSION_HOLD: Duration = Duration::from_secs(1);
+
 /// Each text shown in Control Centre is cut to this many characters.
 pub(crate) const MAX_TEXT_CHARACTERS: usize = 256;
 
@@ -84,6 +88,8 @@ pub(crate) struct NowPlayingPolicy {
     last_playing: HashMap<TabId, Instant>,
     published: Option<NowPlayingInfo>,
     last_position: Option<(TabId, f64)>,
+    /// When Servo's session was last seen on a tab other than the one being shown.
+    session_elsewhere_at: Option<Instant>,
 }
 
 impl NowPlayingPolicy {
@@ -132,17 +138,22 @@ impl NowPlayingPolicy {
         };
 
         // Servo keeps one media session for all web views, moved by every event a page sends
-        // (position reports included, ten a second while playing), and sends actions there. It
-        // is known to be this tab's only when this tab alone plays, or nobody plays and this tab
-        // sent the last event.
+        // (position reports, ten a second while playing, and any page's own
+        // `navigator.mediaSession` calls), and sends actions there. It counts as this tab's
+        // only when no other tab plays and the session has stayed on this tab for
+        // `SESSION_HOLD`. Sampled once per pump, so a move and back between two pumps is not
+        // seen.
         let others_play = controller
             .tabs()
             .any(|tab| tab.id() != tab_id && tab.state().media().is_playing());
-        let owns_engine_session = if state.media().is_playing() {
-            !others_play
-        } else {
-            !others_play && engine_session == Some(tab_id)
-        };
+        if engine_session.is_some_and(|engine| engine != tab_id) {
+            self.session_elsewhere_at = Some(now);
+        }
+        let held = engine_session == Some(tab_id)
+            && self
+                .session_elsewhere_at
+                .is_none_or(|elsewhere| now.saturating_duration_since(elsewhere) >= SESSION_HOLD);
+        let owns_engine_session = !others_play && held;
         let info = now_playing_info(tab_id, state, owns_engine_session);
         let sought = match (self.last_position, info.elapsed) {
             (Some((last_tab_id, last)), Some(elapsed)) if last_tab_id == tab_id => {
@@ -421,6 +432,7 @@ mod tests {
     fn a_playing_tab_is_published_with_its_metadata() {
         let (mut controller, first, _) = two_tabs();
         let mut policy = NowPlayingPolicy::default();
+        ENGINE_SESSION.with(|session| session.set(Some(first)));
         event(
             &mut controller,
             first,
@@ -495,6 +507,7 @@ mod tests {
     fn the_most_recently_started_tab_wins() {
         let (mut controller, first, second) = two_tabs();
         let mut policy = NowPlayingPolicy::default();
+        ENGINE_SESSION.with(|session| session.set(Some(second)));
         start_audible(&mut controller, first);
         assert_eq!(published(update(&mut policy, &controller)).tab_id, first);
 
@@ -787,11 +800,12 @@ mod tests {
     fn servos_session_is_used_only_when_the_published_tab_alone_plays() {
         let (mut controller, first, second) = two_tabs();
         let mut policy = NowPlayingPolicy::default();
-        let now = Instant::now();
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
         start_audible(&mut controller, first);
 
-        // Alone in playing: Servo's session follows it within one position report.
-        let info = published(policy.update(&controller, Some(second), now));
+        // Alone in playing, and Servo's session is its own.
+        let info = published(policy.update(&controller, Some(first), at(0)));
         assert!(info.can_skip);
         assert!(policy.through_engine());
         assert_eq!(
@@ -801,7 +815,7 @@ mod tests {
 
         // A muted background video starts in the other tab: no longer alone.
         playback(&mut controller, second, MediaPlaybackState::Playing);
-        let info = published(policy.update(&controller, Some(second), now));
+        let info = published(policy.update(&controller, Some(first), at(100)));
         assert!(!info.can_skip);
         assert!(!policy.through_engine());
         assert_eq!(policy.action_for(RemoteCommand::NextTrack), None);
@@ -810,11 +824,41 @@ mod tests {
             Some((first, MediaSessionAction::Pause))
         );
 
-        // Nobody plays: the session is the published tab's only if it sent the last event.
+        // Nobody plays: the session is the published tab's only if it holds it, steadily.
         playback(&mut controller, second, MediaPlaybackState::Paused);
         playback(&mut controller, first, MediaPlaybackState::Paused);
-        assert!(!published(policy.update(&controller, Some(second), now)).can_skip);
-        assert!(published(policy.update(&controller, Some(first), now)).can_skip);
+        assert!(!published(policy.update(&controller, Some(second), at(200))).can_skip);
+        assert_eq!(policy.update(&controller, Some(first), at(400)), None);
+        assert!(published(policy.update(&controller, Some(first), at(1300))).can_skip);
+    }
+
+    #[test]
+    fn a_page_that_keeps_taking_servos_session_leaves_the_keys_on_the_script_route() {
+        // Any page can move Servo's session with `navigator.mediaSession.setPositionState` in
+        // a loop, without playing anything.
+        let (controller, first, second) = {
+            let (mut controller, first, second) = two_tabs();
+            start_audible(&mut controller, first);
+            (controller, first, second)
+        };
+        let mut policy = NowPlayingPolicy::default();
+        let start = Instant::now();
+        let at = |millis: u64| start + Duration::from_millis(millis);
+        assert!(published(policy.update(&controller, Some(first), at(0))).can_skip);
+
+        assert!(!published(policy.update(&controller, Some(second), at(100))).can_skip);
+        for millis in [200, 400, 900, 1000] {
+            let engine = if millis % 200 == 0 { first } else { second };
+            policy.update(&controller, Some(engine), at(millis));
+            assert!(!policy.through_engine(), "at {millis} ms");
+        }
+        // Held by the published tab for a second: Servo's session can be used again.
+        policy.update(&controller, Some(first), at(2001));
+        assert!(policy.through_engine());
+
+        // No event seen yet from any tab: not known.
+        let mut fresh = NowPlayingPolicy::default();
+        assert!(!published(fresh.update(&controller, None, at(0))).can_skip);
     }
 
     #[test]

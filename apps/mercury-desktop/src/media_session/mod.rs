@@ -116,6 +116,28 @@ impl MediaSessionHub {
 
 /// Only read in screenshot and background runs.
 const START_MUTED_VARIABLE: &str = "MERCURY_START_MUTED";
+/// Only read in screenshot and background runs: browser commands to give the active tab at
+/// times after start-up, as `reload@4000,back@6500` (milliseconds), so a run can check what a
+/// reload or Back does to the media state without input.
+const DIAGNOSTIC_COMMANDS_VARIABLE: &str = "MERCURY_MEDIA_DIAGNOSTIC_COMMANDS";
+
+fn diagnostic_commands(text: &str) -> Vec<(std::time::Duration, BrowserCommand)> {
+    text.split(',')
+        .filter_map(|entry| {
+            let (name, millis) = entry.trim().split_once('@')?;
+            let command = match name {
+                "reload" => BrowserCommand::Reload,
+                "back" => BrowserCommand::GoBack,
+                "forward" => BrowserCommand::GoForward,
+                _ => return None,
+            };
+            Some((
+                std::time::Duration::from_millis(millis.parse().ok()?),
+                command,
+            ))
+        })
+        .collect()
+}
 
 struct Installed {
     hub: MediaSessionHub,
@@ -156,6 +178,19 @@ pub(crate) fn install(
             controller.borrow_mut().toggle_audio_muted(tab_id);
         }
         log::info!("{START_MUTED_VARIABLE}=1: the start-up tabs are muted");
+    }
+    if !interactive && let Some(text) = std::env::var_os(DIAGNOSTIC_COMMANDS_VARIABLE) {
+        for (delay, command) in diagnostic_commands(&text.to_string_lossy()) {
+            let controller = Rc::downgrade(&controller);
+            slint::Timer::single_shot(delay, move || {
+                let Some(controller) = controller.upgrade() else {
+                    return;
+                };
+                log::info!("{DIAGNOSTIC_COMMANDS_VARIABLE}: {command:?} to the active tab");
+                controller.borrow_mut().queue_command(command);
+                crate::engine::request_pump();
+            });
+        }
     }
     INSTALLED.with(|installed| {
         *installed.borrow_mut() = Some(Installed {
@@ -609,5 +644,20 @@ mod tests {
             )]
         );
         assert!(calls.borrow().is_empty(), "{:?}", calls.borrow());
+    }
+
+    #[test]
+    fn diagnostic_commands_are_read_and_bad_entries_skipped() {
+        use std::time::Duration;
+
+        assert_eq!(
+            diagnostic_commands("reload@4000, back@6500,forward@7000"),
+            [
+                (Duration::from_millis(4000), BrowserCommand::Reload),
+                (Duration::from_millis(6500), BrowserCommand::GoBack),
+                (Duration::from_millis(7000), BrowserCommand::GoForward),
+            ]
+        );
+        assert_eq!(diagnostic_commands("navigate@1, reload, reload@x, @5,"), []);
     }
 }

@@ -21,7 +21,7 @@ use crate::frame_ready::FrameReadySignal;
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
 // media session
 use crate::media_session::{
-    EngineMediaSession, browser_event_from_servo, describe_for_log, document_started,
+    DocumentStarts, EngineMediaSession, browser_event_from_servo, describe_for_log,
 };
 use crate::page_defaults::page_defaults_user_content;
 use crate::screen::ScreenMetrics;
@@ -177,7 +177,7 @@ impl ServoRuntime {
         let initial_url = Url::parse(initial_url)?;
         let frame_ready = FrameReadySignal::default();
         // media session
-        let document_start_armed = Rc::new(Cell::new(false));
+        let document_starts = Rc::new(DocumentStarts::new());
         let delegate = Rc::new(BrowserDelegate {
             tab_id,
             browser_event_sender: browser_event_sender.clone(),
@@ -188,7 +188,7 @@ impl ServoRuntime {
             _after_engine_cleanup: self.after_engine_cleanup.clone(),
             // media session
             engine_media_session: Rc::clone(&self.engine_media_session),
-            document_start_armed: Rc::clone(&document_start_armed),
+            document_starts: Rc::clone(&document_starts),
         });
 
         let inner = WebViewBuilder::new(&self.inner, rendering_context)
@@ -204,7 +204,7 @@ impl ServoRuntime {
         info!("created Servo WebView for tab {}", tab_id.value());
         let web_view = ServoWebView::new(inner, frame_ready, tab_id, scale_factor);
         // media session
-        Ok(web_view.with_media_session(browser_event_sender, document_start_armed))
+        Ok(web_view.with_media_session(browser_event_sender, document_starts))
     }
 
     // media session
@@ -343,8 +343,8 @@ struct BrowserDelegate {
     _after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
     // media session
     engine_media_session: EngineMediaSession,
-    /// Set by the web view after a navigation whose `Started` Servo will swallow.
-    document_start_armed: Rc<Cell<bool>>,
+    /// Shared with the web view, which notes navigations whose `Started` Servo will swallow.
+    document_starts: Rc<DocumentStarts>,
 }
 
 impl BrowserDelegate {
@@ -421,8 +421,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
             state: load_state_from_servo(status),
         });
         // media session
-        if document_started(&self.document_start_armed, status) {
-            self.send_browser_event(BrowserEvent::DocumentStarted);
+        for event in self.document_starts.on_load_status(status) {
+            self.send_browser_event(event);
         }
     }
 

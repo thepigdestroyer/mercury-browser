@@ -22,8 +22,7 @@ use url::Url;
 use crate::frame_ready::FrameReadySignal;
 // media session
 use crate::media_session::{
-    ActionRoute, arms_document_start, mute_script, origin_of, probe_from_js, probe_script,
-    route_action,
+    ActionRoute, DocumentStarts, Navigation, mute_script, probe_from_js, probe_script, route_action,
 };
 use crate::{ServoWebViewError, ViewportSize};
 
@@ -36,7 +35,7 @@ pub struct ServoWebView {
     // media session
     /// Where script results (the media probe) are reported; `None` until `with_media_session`.
     browser_event_sender: Option<Sender<TabEvent>>,
-    document_start_armed: Rc<Cell<bool>>,
+    document_starts: Rc<DocumentStarts>,
 }
 
 impl ServoWebView {
@@ -53,7 +52,7 @@ impl ServoWebView {
             scale_factor: Cell::new(scale_factor),
             // media session
             browser_event_sender: None,
-            document_start_armed: Rc::default(),
+            document_starts: Rc::new(DocumentStarts::new()),
         }
     }
 
@@ -61,23 +60,20 @@ impl ServoWebView {
     pub(crate) fn with_media_session(
         mut self,
         browser_event_sender: Sender<TabEvent>,
-        document_start_armed: Rc<Cell<bool>>,
+        document_starts: Rc<DocumentStarts>,
     ) -> Self {
         self.browser_event_sender = Some(browser_event_sender);
-        self.document_start_armed = document_start_armed;
+        self.document_starts = document_starts;
         self
     }
 
-    /// Before Mercury navigates the web view: see `document_started`.
-    fn arm_document_start(&self, reload: bool) {
-        if arms_document_start(reload, self.inner.load_status()) {
-            self.document_start_armed.set(true);
-        }
-    }
-
-    /// The helper's name is derived from the origin of the page the script will run in.
+    /// What the helper's name is derived from: the current page's origin (see
+    /// `DocumentStarts::agent_key`). A script built now can land in the next document if a
+    /// navigation commits before Servo runs it; it then installs a second helper under this
+    /// key, which the new document never looks up again (its own scripts use its own key). That
+    /// helper is inert apart from the one call it was built for, so this is harmless.
     fn origin(&self) -> String {
-        origin_of(self.inner.url().as_ref())
+        self.document_starts.agent_key(self.inner.url().as_ref())
     }
 
     fn run_script(&self, script: String, what: &'static str) {
@@ -132,30 +128,38 @@ impl TalariaWebView for ServoWebView {
 
     fn navigate(&mut self, url: &str) -> Result<(), Self::Error> {
         let url = Url::parse(url)?;
-        // media session
-        self.arm_document_start(false);
-        self.inner.load(url);
+        // media session: through `DocumentStarts`, which notes whether `Started` will be lost.
+        let status = self.inner.load_status();
+        self.document_starts
+            .navigate(Navigation::Load, status, || self.inner.load(url));
         Ok(())
     }
 
     fn go_back(&mut self) -> Result<(), Self::Error> {
         // media session
-        self.arm_document_start(false);
-        let _traversal_id = self.inner.go_back(1);
+        let status = self.inner.load_status();
+        self.document_starts
+            .navigate(Navigation::Traverse, status, || {
+                let _traversal_id = self.inner.go_back(1);
+            });
         Ok(())
     }
 
     fn go_forward(&mut self) -> Result<(), Self::Error> {
         // media session
-        self.arm_document_start(false);
-        let _traversal_id = self.inner.go_forward(1);
+        let status = self.inner.load_status();
+        self.document_starts
+            .navigate(Navigation::Traverse, status, || {
+                let _traversal_id = self.inner.go_forward(1);
+            });
         Ok(())
     }
 
     fn reload(&mut self) -> Result<(), Self::Error> {
         // media session
-        self.arm_document_start(true);
-        self.inner.reload();
+        let status = self.inner.load_status();
+        self.document_starts
+            .navigate(Navigation::Reload, status, || self.inner.reload());
         Ok(())
     }
 

@@ -5,6 +5,7 @@ use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::rc::Rc;
 use std::sync::OnceLock;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use url::Url;
 
@@ -38,14 +39,6 @@ fn agent_name(origin: &str) -> String {
         hasher.finish()
     };
     format!("__mercury_media_{:016x}{:016x}", half(1), half(2))
-}
-
-/// The origin of a web view's current page, as `location.origin` gives it.
-pub(crate) fn origin_of(url: Option<&Url>) -> String {
-    url.map_or_else(
-        || "null".to_owned(),
-        |url| url.origin().ascii_serialization(),
-    )
 }
 
 fn agent_script(call: &str, origin: &str) -> String {
@@ -87,6 +80,64 @@ pub(crate) fn describe_for_log(event: &BrowserEvent) -> String {
     }
 }
 
+/// How Mercury asks a web view to navigate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Navigation {
+    Load,
+    Reload,
+    Traverse,
+}
+
+/// Document starts of one web view, shared by the web view (which navigates) and its delegate
+/// (which hears load statuses). Also counts them, to name the helper of opaque-origin documents.
+#[derive(Debug)]
+pub(crate) struct DocumentStarts {
+    armed: Cell<bool>,
+    generation: Cell<u64>,
+    /// Unique to this web view in this run.
+    serial: u64,
+}
+
+impl DocumentStarts {
+    pub(crate) fn new() -> Self {
+        static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
+        Self {
+            armed: Cell::new(false),
+            generation: Cell::new(0),
+            serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
+        }
+    }
+
+    /// Navigates with `go`, first noting whether Servo will swallow the new document's `Started`.
+    pub(crate) fn navigate(&self, navigation: Navigation, status: LoadStatus, go: impl FnOnce()) {
+        if arms_document_start(navigation == Navigation::Reload, status) {
+            self.armed.set(true);
+        }
+        go();
+    }
+
+    /// The events a load-status change adds to `LoadStateChanged`.
+    pub(crate) fn on_load_status(&self, status: LoadStatus) -> Vec<BrowserEvent> {
+        if document_started(&self.armed, status) {
+            self.generation.set(self.generation.get() + 1);
+            vec![BrowserEvent::DocumentStarted]
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// What the helper's name is derived from for the page at `url`. A tuple origin is enough:
+    /// every document of a site shares the name, no other site sees it. Opaque origins
+    /// (`about:blank` popups a site opens and scripts, `data:`, `file:`) all serialise as
+    /// "null", so their documents get a key of their own: this web view and its document count.
+    pub(crate) fn agent_key(&self, url: Option<&Url>) -> String {
+        match url.map(Url::origin) {
+            Some(origin) if origin.is_tuple() => origin.ascii_serialization(),
+            _ => format!("null#{}#{}", self.serial, self.generation.get()),
+        }
+    }
+}
+
 /// Whether a load-status change is a new top-level document. Servo's `Started` is sent by the
 /// new document as it is initialised (`servo-script-0.8.0/dom/document/document.rs`,
 /// `set_document_readiness_to_loading_for_initialization`), which a navigation that loads no
@@ -96,7 +147,7 @@ pub(crate) fn describe_for_log(event: &BrowserEvent) -> String {
 /// `Complete` counts instead. Unarmed, they never do: a page sends `HeadParsed` by inserting a
 /// `<body>`. The same reasoning as the dialogs lane's `DocumentStartTracker`, which should
 /// replace this at merge.
-pub(crate) fn document_started(armed: &Cell<bool>, status: LoadStatus) -> bool {
+fn document_started(armed: &Cell<bool>, status: LoadStatus) -> bool {
     match status {
         LoadStatus::Started => {
             armed.set(false);
@@ -108,7 +159,7 @@ pub(crate) fn document_started(armed: &Cell<bool>, status: LoadStatus) -> bool {
 }
 
 /// Whether Servo will swallow the `Started` of the document a navigation may load.
-pub(crate) fn arms_document_start(reload: bool, status: LoadStatus) -> bool {
+fn arms_document_start(reload: bool, status: LoadStatus) -> bool {
     reload || status == LoadStatus::Started
 }
 
@@ -376,15 +427,6 @@ mod tests {
     }
 
     #[test]
-    fn web_view_origins_are_serialised_like_the_page_sees_them() {
-        let origin = |url: &str| origin_of(Some(&Url::parse(url).unwrap()));
-        assert_eq!(origin("https://a.test/path?q#f"), "https://a.test");
-        assert_eq!(origin("https://a.test:8443/"), "https://a.test:8443");
-        assert_eq!(origin("data:text/html,x"), "null");
-        assert_eq!(origin_of(None), "null");
-    }
-
-    #[test]
     fn page_metadata_is_cut_short_and_kept_on_one_line_in_the_log() {
         assert_eq!(loggable("a\nb\u{7}c"), "a b c");
         let long = "x".repeat(100);
@@ -482,5 +524,72 @@ mod tests {
         let armed = Cell::new(true);
         assert!(document_started(&armed, LoadStatus::Started));
         assert!(!armed.get());
+    }
+
+    #[test]
+    fn a_started_document_is_reported_and_counted() {
+        let starts = DocumentStarts::new();
+        assert_eq!(
+            starts.on_load_status(LoadStatus::Started),
+            [BrowserEvent::DocumentStarted]
+        );
+        assert!(starts.on_load_status(LoadStatus::HeadParsed).is_empty());
+        assert!(starts.on_load_status(LoadStatus::Complete).is_empty());
+    }
+
+    #[test]
+    fn mercurys_reload_counts_its_first_milestone_as_the_document_start() {
+        let starts = DocumentStarts::new();
+        let mut reloaded = false;
+        // `reload()` pre-sets `Started` without telling (status `Complete` before).
+        starts.navigate(Navigation::Reload, LoadStatus::Complete, || reloaded = true);
+        assert!(reloaded);
+        assert_eq!(
+            starts.on_load_status(LoadStatus::HeadParsed),
+            [BrowserEvent::DocumentStarted]
+        );
+        assert!(starts.on_load_status(LoadStatus::Complete).is_empty());
+
+        // A load from a settled page gets its own `Started`; a `<body>` the page inserts later
+        // is no document start.
+        starts.navigate(Navigation::Load, LoadStatus::Complete, || {});
+        assert!(starts.on_load_status(LoadStatus::HeadParsed).is_empty());
+        // A traversal while the status is still `Started` will have its `Started` swallowed.
+        starts.navigate(Navigation::Traverse, LoadStatus::Started, || {});
+        assert_eq!(
+            starts.on_load_status(LoadStatus::Complete),
+            [BrowserEvent::DocumentStarted]
+        );
+    }
+
+    #[test]
+    fn opaque_documents_get_a_name_of_their_own() {
+        let url = |text: &str| Url::parse(text).unwrap();
+        let first = DocumentStarts::new();
+        let second = DocumentStarts::new();
+        let blank = url("about:blank");
+
+        // Tuple origins: one name per origin and run, whichever web view or document.
+        assert_eq!(
+            first.agent_key(Some(&url("https://a.test/x"))),
+            second.agent_key(Some(&url("https://a.test/y")))
+        );
+        assert_eq!(
+            first.agent_key(Some(&url("https://a.test/"))),
+            "https://a.test"
+        );
+
+        // Opaque origins (`about:blank` popups, `data:`, `file:`): never shared between web
+        // views, nor between documents of one web view.
+        let popup = first.agent_key(Some(&blank));
+        assert_ne!(popup, second.agent_key(Some(&blank)));
+        assert_eq!(popup, first.agent_key(Some(&url("data:text/html,x"))));
+        first.on_load_status(LoadStatus::Started);
+        assert_ne!(popup, first.agent_key(Some(&blank)));
+        assert_ne!(
+            agent_name(&popup),
+            agent_name(&first.agent_key(Some(&blank)))
+        );
+        assert_ne!(first.agent_key(None), second.agent_key(None));
     }
 }

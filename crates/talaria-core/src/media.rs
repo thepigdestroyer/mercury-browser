@@ -103,6 +103,10 @@ pub struct MediaState {
     metadata: Option<MediaMetadata>,
     position: Option<MediaPosition>,
     probe: Option<MediaProbe>,
+    /// Media of the current document has played. Until then a `Paused` is either GStreamer
+    /// preparing an element or the previous document's elements being torn down (Servo does not
+    /// say which document an event comes from), and neither is a session to show.
+    played: bool,
 }
 
 impl MediaState {
@@ -152,10 +156,14 @@ impl MediaState {
     }
 
     pub(crate) fn set_playback(&mut self, playback: MediaPlaybackState) {
-        if playback == MediaPlaybackState::None {
-            *self = Self::default();
-        } else {
-            self.playback = playback;
+        match playback {
+            MediaPlaybackState::None => *self = Self::default(),
+            MediaPlaybackState::Playing => {
+                self.playback = playback;
+                self.played = true;
+            }
+            MediaPlaybackState::Paused if self.played => self.playback = playback,
+            MediaPlaybackState::Paused => {}
         }
     }
 

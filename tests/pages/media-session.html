@@ -105,7 +105,59 @@
       location.reload();
     }
 
-    (new URLSearchParams(location.search).has("reload") ? reloadOnce() : run())
+    // ?wait-for-reload: play, and wait for the browser to reload the tab (MERCURY_MEDIA_
+    // DIAGNOSTIC_COMMANDS=reload@…); the reloaded page plays nothing.
+    async function waitForReload() {
+      if (sessionStorage.getItem("media-session-reloaded")) {
+        line("reloaded by the browser; this document plays nothing (no speaker)", null);
+        return;
+      }
+      sessionStorage.setItem("media-session-reloaded", "1");
+      const tone = silentElement(document.getElementById("tone"));
+      await tone.play();
+      line("playing; waiting for the browser to reload", !tone.paused);
+    }
+
+    // ?hop: play, go to a page that plays nothing, and on coming back (the browser's Back,
+    // MERCURY_MEDIA_DIAGNOSTIC_COMMANDS=back@…) play again.
+    async function hop() {
+      const visits = Number(sessionStorage.getItem("media-session-hops") || "0") + 1;
+      sessionStorage.setItem("media-session-hops", String(visits));
+      const tone = silentElement(document.getElementById("tone"));
+      await tone.play();
+      if (visits > 1) {
+        line("back again (visit " + visits + ") and playing", !tone.paused);
+        return;
+      }
+      line("playing; leaving for a page without media", !tone.paused);
+      // Servo keeps the previous documents of a tab alive (session history) and Back shows this
+      // one again without reloading it; say what its media does then.
+      window.addEventListener("pageshow", (event) => {
+        if (!event.persisted && performance.now() - started < 5000) return;
+        line("shown again (persisted=" + event.persisted + "), paused=" + tone.paused, null);
+        tone.play().then(() => line("playing again after Back", !tone.paused),
+          (error) => line("play() after Back failed: " + error.message, false));
+      });
+      // What the tone is doing, refreshed every half second (after Back too).
+      const status = document.createElement("div");
+      status.className = "note";
+      results.after(status);
+      setInterval(() => {
+        status.textContent = "now: paused=" + tone.paused + ", currentTime=" + tone.currentTime.toFixed(2)
+          + " at " + ((performance.now() - started) / 1000).toFixed(1) + " s";
+      }, 500);
+      document.addEventListener("visibilitychange", () => {
+        line("visibility " + document.visibilityState + ", paused=" + tone.paused, null);
+      });
+      await wait(1500);
+      location.href = "unstyled.html";
+    }
+
+    const mode = new URLSearchParams(location.search);
+    (mode.has("reload") ? reloadOnce()
+      : mode.has("wait-for-reload") ? waitForReload()
+      : mode.has("hop") ? hop()
+      : run())
       .catch((error) => line("unexpected: " + error.message, false))
       .finally(() => { line("DONE", null); finished = true; });
   </script>
