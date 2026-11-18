@@ -983,12 +983,11 @@ mod tests {
     #[test]
     fn actions_that_do_not_exist_yet_are_disabled() {
         let snapshot = MenuSnapshot::default();
-        for command in [MenuCommand::Stop] {
-            assert!(
-                !is_enabled(command, &snapshot, EditTarget::AddressBar),
-                "{command:?}"
-            );
-        }
+        // Stop is the one item left without an action: Servo 0.8.0 has no API for it.
+        assert!(
+            !is_enabled(MenuCommand::Stop, &snapshot, EditTarget::AddressBar),
+            "Stop"
+        );
         assert!(is_enabled(
             MenuCommand::Shortcut(ShortcutAction::NewTab),
             &snapshot,
