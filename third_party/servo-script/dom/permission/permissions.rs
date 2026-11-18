@@ -306,6 +306,16 @@ pub(crate) fn descriptor_permission_state(
     // Step 3. Let feature be descriptor's name.
     // The caller has already converted the descriptor into a name.
 
+    // Mercury: camera and microphone are only for documents that may use them (the top-level
+    // document and documents same origin with it, see `Document::allowed_to_use_feature`). A
+    // worker may belong to a frame of another origin, and its request would be shown in the
+    // top-level page's name, so workers never get them.
+    if matches!(feature, PermissionName::Camera | PermissionName::Microphone) &&
+        global_scope.downcast::<Window>().is_none()
+    {
+        return PermissionState::Denied;
+    }
+
     // Step 4. If there exists a policy-controlled feature for feature and settings'
     // relevant global object has an associated Document run the following step:
     //   1. Let document be settings' relevant global object's associated Document.

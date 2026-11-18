@@ -2,6 +2,7 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+use std::cell::Cell;
 use std::sync::{Arc, Mutex};
 
 use dom_struct::dom_struct;
@@ -12,10 +13,10 @@ use script_bindings::cell::DomRefCell;
 use script_bindings::reflector::reflect_dom_object;
 use servo_base::generic_channel::GenericCallback;
 use servo_media::ServoMedia;
+use servo_media::streams::MediaStreamType;
 use servo_media::streams::capture::{Constrain, ConstrainRange, MediaTrackConstraintSet};
 use servo_media::streams::device_monitor::MediaDeviceKind as ServoMediaDeviceKind;
 use servo_media::streams::registry::{MediaStreamId, get_stream};
-use servo_media::streams::MediaStreamType;
 
 use crate::conversions::Convert;
 use crate::dom::bindings::codegen::Bindings::MediaDeviceInfoBinding::MediaDeviceKind;
@@ -51,6 +52,10 @@ pub(crate) struct MediaDevices {
     /// Mercury: the live tracks that `getUserMedia()` made from a device, and their clones.
     /// A device is released when its last track stops or when the document goes away.
     capture_tracks: DomRefCell<Vec<Dom<MediaStreamTrack>>>,
+    /// Mercury: counts `stop_all_capture` calls. A `getUserMedia` call started before the last
+    /// one (the document was unloaded or torn down since) never opens a device, even if a
+    /// permission answer for it arrives late.
+    capture_generation: Cell<u64>,
 }
 
 /// Mercury: one call to `getUserMedia()` waiting for the user's answers. It is shared by the
@@ -62,6 +67,8 @@ struct CaptureRequest {
     /// `None` while the answer is outstanding; `Some(true)` when not asked for.
     audio_granted: Option<bool>,
     video_granted: Option<bool>,
+    /// `MediaDevices::capture_generation` when the call was made.
+    generation: u64,
 }
 
 impl MediaDevices {
@@ -69,6 +76,7 @@ impl MediaDevices {
         MediaDevices {
             eventtarget: EventTarget::new_inherited(),
             capture_tracks: Default::default(),
+            capture_generation: Cell::new(0),
         }
     }
 
@@ -134,8 +142,17 @@ impl MediaDevices {
             return;
         };
         let (audio, video) = (request.audio.take(), request.video.take());
+        let generation = request.generation;
         drop(request);
         let promise = promise.root(cx);
+        // The answer may arrive after the document stopped being fully active, or after its
+        // capture was stopped (it was unloaded, perhaps kept for the history): open nothing then.
+        if generation != self.capture_generation.get() ||
+            !self.global().as_window().Document().is_fully_active()
+        {
+            promise.reject_error(cx, Error::Abort(None));
+            return;
+        }
         self.start_capture(cx, &promise, audio, video);
     }
 
@@ -209,6 +226,8 @@ impl MediaDevices {
     /// forgets the camera and microphone answers, so that a page restored from the history
     /// asks again. Run when the document is unloaded and when its window is torn down.
     pub(crate) fn stop_all_capture(&self) {
+        self.capture_generation
+            .set(self.capture_generation.get().wrapping_add(1));
         let tracks: Vec<_> = self
             .capture_tracks
             .borrow_mut()
@@ -280,6 +299,7 @@ impl MediaDevicesMethods<crate::DomTypeHolder> for MediaDevices {
             video,
             audio_granted: (!wants_audio).then_some(true),
             video_granted: (!wants_video).then_some(true),
+            generation: self.capture_generation.get(),
         }));
         for (wanted, name) in [
             (wants_audio, PermissionName::Microphone),

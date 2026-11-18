@@ -44,7 +44,10 @@ with these changes.
   granted. The first refusal rejects with `NotAllowedError`; a missing device
   after the grant rejects with `NotFoundError` and stops a source already
   opened for the other kind. The tracks are "capture tracks", registered with
-  the document's `MediaDevices`.
+  the document's `MediaDevices`. An answer that arrives after the document
+  stopped being fully active, or after its capture was stopped (unload or
+  teardown; `MediaDevices::capture_generation`), opens nothing and rejects
+  with `AbortError`.
 - **Upstream:** `mediadevices.rs:49-72`.
 - **Drop when:** Servo asks for permission in `getUserMedia`.
 
@@ -91,7 +94,12 @@ with these changes.
   without a prompt. `allow=` on an iframe is not honoured. Servo labels every
   permission request with the top-level origin, so this also keeps a
   cross-origin frame from asking in its embedder's name.
-- **Upstream:** `document.rs:3608-3625`.
+- **Workers:** `descriptor_permission_state` (`dom/permission/permissions.rs`)
+  returns `Denied` for `Camera` and `Microphone` in any global that is not a
+  `Window`. A worker may belong to a frame of another origin, and the rule
+  above looks only at documents; without this, a cross-origin frame's worker
+  could prompt (`navigator.permissions.request`) in the top-level page's name.
+- **Upstream:** `document.rs:3608-3625`; `permissions.rs:288-337`.
 - **Drop when:** Servo implements Permissions Policy and reports the asking frame.
 
 ### 7. (in servo-media-gstreamer) Showing a capture stream no longer crashes the tab
