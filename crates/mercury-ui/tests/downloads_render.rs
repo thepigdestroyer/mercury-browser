@@ -279,9 +279,11 @@ impl Fixture {
     }
 
     fn reset(&self, dark: bool) {
-        self.harness
-            .global::<ChromePalette>()
-            .set_theme(if dark { ChromeTheme::Dark } else { ChromeTheme::Light });
+        self.harness.global::<ChromePalette>().set_theme(if dark {
+            ChromeTheme::Dark
+        } else {
+            ChromeTheme::Light
+        });
         self.harness.set_popover_open(false);
         self.harness.set_panel_open(false);
         self.harness.set_prompt_open(false);
