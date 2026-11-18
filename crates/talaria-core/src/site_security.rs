@@ -47,7 +47,7 @@ pub enum SecurityIndicator {
     LocalHost,
     /// A file on this computer.
     File,
-    /// One of Mercury's own pages (`about:`, `data:`, an error page).
+    /// One of Mercury's own error pages (recognised by its secret marker).
     Internal,
 }
 
@@ -101,7 +101,10 @@ pub fn security_indicator(
             SecurityIndicator::LocalHost
         }
         "file" => SecurityIndicator::File,
-        "about" | "data" => SecurityIndicator::Internal,
+        // A page can write into an `about:blank` pop-up and open `data:` pages, so neither is
+        // ever labelled as Mercury's own; only recognised error pages are (above).
+        "about" => SecurityIndicator::None,
+        "data" => SecurityIndicator::NotSecure,
         "blob" => {
             let inner = parsed.path();
             security_indicator(inner, None, certificate_exception)

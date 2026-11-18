@@ -80,8 +80,10 @@ fn the_indicator_follows_the_scheme() {
         ("http://[::1]/", SecurityIndicator::LocalHost),
         ("http://192.168.1.2/", SecurityIndicator::NotSecure),
         ("file:///tmp/a.html", SecurityIndicator::File),
-        ("about:blank", SecurityIndicator::Internal),
-        ("data:text/html,hi", SecurityIndicator::Internal),
+        // A page can write an about:blank pop-up or open a data: page: never labelled as Mercury's.
+        ("about:blank", SecurityIndicator::None),
+        ("about:memory", SecurityIndicator::None),
+        ("data:text/html,hi", SecurityIndicator::NotSecure),
         ("blob:https://example.com/0d3e", SecurityIndicator::Secure),
         ("blob:http://example.com/0d3e", SecurityIndicator::NotSecure),
         ("ftp://example.com/", SecurityIndicator::NotSecure),
