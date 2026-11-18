@@ -724,7 +724,9 @@ impl Repo {
         }
 
         for entry in &manifest.crates {
-            let found = self.check_crate(entry, &lock, &cargo_toml)?;
+            let found = self
+                .check_crate(entry, &lock, &cargo_toml)
+                .unwrap_or_else(|error| vec![error.0]);
             if found.is_empty() {
                 let changed =
                     patch::parse(&fs::read(self.patch_file(&entry.name)).unwrap_or_default())
@@ -752,18 +754,24 @@ impl Repo {
                     "--offline",
                 ])
                 .current_dir(&self.root)
-                .output()
-                .context(|| "running cargo metadata".to_owned())?;
-            if !output.status.success() {
-                problems.push(format!(
+                .output();
+            match output {
+                Err(error) => problems.push(format!(
+                    "cannot run {} metadata ({error}); is cargo on PATH?",
+                    cargo.display()
+                )),
+                Ok(output) if !output.status.success() => problems.push(format!(
                     "cargo metadata --locked failed (is Cargo.lock up to date?): {}",
                     String::from_utf8_lossy(&output.stderr).trim()
-                ));
-            } else {
-                let metadata: serde_json::Value = serde_json::from_slice(&output.stdout)
-                    .map_err(|error| fail!("cargo metadata: {error}"))?;
-                let root = fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
-                problems.extend(workspace_problems(&metadata, &root));
+                )),
+                Ok(output) => match serde_json::from_slice(&output.stdout) {
+                    Err(error) => problems.push(format!("cargo metadata: {error}")),
+                    Ok(metadata) => {
+                        let root =
+                            fs::canonicalize(&self.root).unwrap_or_else(|_| self.root.clone());
+                        problems.extend(workspace_problems(&metadata, &root));
+                    }
+                },
             }
         }
 

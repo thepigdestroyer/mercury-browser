@@ -400,6 +400,29 @@ fn check_fails_when_the_published_archive_is_not_the_recorded_one() {
 }
 
 #[test]
+fn check_reports_every_problem_even_when_one_crate_or_cargo_fails() {
+    let mut f = fixture();
+    f.repo.vendor("gaol@0.2.1", &mut Vec::new()).unwrap();
+    f.vendor_demo();
+    let mut manifest = Manifest::parse(&f.read("third_party/vendor.toml")).unwrap();
+    manifest.crates[1].checksum = sha256_hex(b"something else");
+    f.write("third_party/vendor.toml", &manifest.render());
+    f.write("third_party/demo/src/lib.rs", "// edited\n");
+    f.repo.cargo = Some(f.root().join("no-such-cargo"));
+    let error = f.check().unwrap_err();
+    for expected in [
+        "demo: the directory is not the published crate plus",
+        "gaol 0.2.1: the cached archive does not have the expected SHA-256",
+        "cannot run",
+    ] {
+        assert!(
+            error.contains(expected),
+            "{expected:?} missing from:\n{error}"
+        );
+    }
+}
+
+#[test]
 fn export_removes_patches_of_crates_no_longer_vendored() {
     let f = fixture();
     f.vendor_demo();
