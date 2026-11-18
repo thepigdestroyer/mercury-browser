@@ -22,8 +22,8 @@ mod activation;
 mod bookmarks;
 mod callback_scope;
 mod callbacks;
-mod clipboard;
 mod cli;
+mod clipboard;
 // controls
 mod controls;
 mod crash_handler;

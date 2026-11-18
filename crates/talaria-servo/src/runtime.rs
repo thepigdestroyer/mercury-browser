@@ -1175,10 +1175,7 @@ mod tests {
         let preferences = preferences_with_experimental_web_features(true);
 
         assert_eq!(EXPERIMENTAL_PREFS.len(), 18);
-        assert_eq!(
-            EXCLUDED_EXPERIMENTAL_PREFS,
-            &["dom_webgpu_enabled"]
-        );
+        assert_eq!(EXCLUDED_EXPERIMENTAL_PREFS, &["dom_webgpu_enabled"]);
         let enabled = EXPERIMENTAL_PREFS
             .iter()
             .filter(|name| !EXCLUDED_EXPERIMENTAL_PREFS.contains(name))

@@ -249,7 +249,10 @@ mod tests {
         assert!(!clipboard.write_text("page"));
         assert!(!clipboard.clear());
         assert_eq!(pasteboard.text().as_deref(), Some("the user's"));
-        assert_eq!(*uses.borrow(), vec![ActivationUse::Peek, ActivationUse::Peek]);
+        assert_eq!(
+            *uses.borrow(),
+            vec![ActivationUse::Peek, ActivationUse::Peek]
+        );
     }
 
     #[test]
