@@ -1,12 +1,15 @@
 # Third-party notices
 
 This file records the projects that Mercury Browser's source code is derived from or copies code
-from, together with their licences. The whole codebase derives from Hermes Browser, the upstream
-base listed first; its files do not carry individual source headers. Every file that contains code
-copied or adapted from any other project names that source at the top and has a matching entry
-here. Vendored dependencies under `third_party/` keep their own licence files.
+from, together with their licences. Mercury began as a fork of Hermes Browser, listed first; the
+files that came from Hermes, or contain code from it, carry an `SPDX-License-Identifier: MPL-2.0`
+header. Every file that contains code copied or adapted from any other project names that source
+at the top, has a matching entry here, and stays under the MPL-2.0 (with the upstream licence of
+the adapted portions noted where it differs). Vendored dependencies under `third_party/` keep their
+own licence files. Mercury's own licences are explained in `LICENSE`, and its copyright notice is
+in `NOTICE`.
 
-- Hermes Browser — https://github.com/KaykCaputo/hermes-browser — MPL-2.0 — Mercury Browser is derived from this project at commit `a41f18e`.
+- Hermes Browser — https://github.com/KaykCaputo/hermes-browser — MPL-2.0, Copyright © 2026 Kayk Caputo — Mercury began as a fork of this project at Hermes commit `a41f18e`; the parts of Mercury derived from it remain under the MPL-2.0.
 - Servo `servo-canvas` 0.8.0 — https://github.com/servo/servo, commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`, path `components/canvas` — MPL-2.0 — vendored in `third_party/servo-canvas` with a small fix to its GPU (vello) backend; see `third_party/servo-canvas/MERCURY.md`.
 - Servo `python/servo/gstreamer.py` — https://github.com/servo/servo, tag `v0.8.0` (commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), functions `package_gstreamer_dylibs` and `load_plugin_libraries_from_text_file` — Apache-2.0 OR MIT, Copyright 2013 The Servo Project Developers — adapted as `scripts/macos/collect-gstreamer.sh`.
 - Servo `ports/servoshell/build.rs` — https://github.com/servo/servo, tag `v0.8.0` — MPL-2.0 — the macOS `@executable_path/lib/` rpath in `apps/mercury-desktop/build.rs`.
@@ -25,6 +28,7 @@ here. Vendored dependencies under `third_party/` keep their own licence files.
 - Zervo — https://github.com/Goddv/Zervo, commit `86cb7126`, path `zervo-core/src/store.rs` (`write_private`, lines 80-123, and the ideas of its tests, lines 125-232) — MPL-2.0 — adapted in `crates/mercury-settings/src/atomic.rs` (exclusive, uniquely named temporary file; directory sync after the rename; see the file header). The settings patterns (a default for every field, first-run detection from a missing file, a migration test) and the starting list of search engines follow `src/settings.rs` at the same commit; no code from it is copied.
 - Servo's servoshell 0.8.0 — https://github.com/servo/servo, tag `v0.8.0` (commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), paths `ports/servoshell/panic_hook.rs`, `ports/servoshell/crash_handler.rs` and `ports/servoshell/backtrace.rs` — MPL-2.0 — adapted in `apps/mercury-desktop/src/panic_hook.rs` and `apps/mercury-desktop/src/crash_handler.rs`.
 - Servo's servoshell 0.8.0 — https://github.com/servo/servo, tag `v0.8.0` (commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), path `ports/servoshell/prefs.rs` lines 29-53 (`EXPERIMENTAL_PREFS`, the list of experimental web-platform preferences) — MPL-2.0 — copied into `crates/talaria-servo/src/runtime.rs`.
+- Zervo — https://github.com/Goddv/Zervo, commit `86cb71267066f3b1f402abbd5c26faaf24ddf165` — MPL-2.0 — adapted from its files of the same names: `rust-toolchain.toml`; `deny.toml`; `.github/workflows/ci.yml` (from `.github/workflows/check.yml` and `.github/workflows/macos.yml`); `.github/workflows/release.yml` (macOS signing and publishing, from `.github/workflows/macos.yml` and `.github/workflows/release.yml`); `scripts/ci/check-macos-bundle.sh` (from the "Check the bundle" step of `.github/workflows/macos.yml`).
 
 ## Bundled libraries (macOS application)
 
@@ -130,4 +134,3 @@ code and keep their own licences.
 - Brave Firstparty specific filters — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-firstparty.txt`) — local file `brave-firstparty.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
 - Brave Specific — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-specific.txt`) — local file `brave-specific.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
 - Brave unbreak list (its only line is `! Brave desktop filters`) — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-unbreak.txt`) — local file `brave-unbreak.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
-- Zervo — https://github.com/Goddv/Zervo, commit `86cb71267066f3b1f402abbd5c26faaf24ddf165` — MPL-2.0 — adapted from its files of the same names: `rust-toolchain.toml`; `deny.toml`; `.github/workflows/ci.yml` (from `.github/workflows/check.yml` and `.github/workflows/macos.yml`); `.github/workflows/release.yml` (macOS signing and publishing, from `.github/workflows/macos.yml` and `.github/workflows/release.yml`); `scripts/ci/check-macos-bundle.sh` (from the "Check the bundle" step of `.github/workflows/macos.yml`).

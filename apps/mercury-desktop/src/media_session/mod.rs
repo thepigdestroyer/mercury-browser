@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Media-session lane: which tab plays, muting a tab, the system's Now Playing and media keys,
 //! and keeping the display awake during fullscreen video.
 //!
@@ -183,6 +185,7 @@ pub(crate) fn install(
         for (delay, command) in diagnostic_commands(&text.to_string_lossy()) {
             let controller = Rc::downgrade(&controller);
             slint::Timer::single_shot(delay, move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
                 let Some(controller) = controller.upgrade() else {
                     return;
                 };
@@ -201,6 +204,7 @@ pub(crate) fn install(
 
     let weak_window = window.as_weak();
     window.on_toggle_tab_muted(move |index| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         let Some(window) = weak_window.upgrade() else {
             return;
         };
@@ -248,7 +252,10 @@ pub(crate) fn on_remote_command(command: RemoteCommand) {
         };
         let Ok(mut controller) = installed.controller.try_borrow_mut() else {
             // Busy: try again from a fresh turn of the event loop.
-            let _queued = slint::invoke_from_event_loop(move || on_remote_command(command));
+            let _queued = slint::invoke_from_event_loop(move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
+                on_remote_command(command);
+            });
             return false;
         };
         installed.hub.remote_command(&mut controller, command)
@@ -281,7 +288,10 @@ fn system_services(interactive: bool) -> (Box<dyn NowPlayingCenter>, Box<dyn Pow
         return (
             Box::new(macos::SystemNowPlaying::new(|command| {
                 // The command centre may call from any thread; hand the command to the event loop.
-                let _queued = slint::invoke_from_event_loop(move || on_remote_command(command));
+                let _queued = slint::invoke_from_event_loop(move || {
+                    let _slint = crate::callback_scope::InSlintCallback::enter();
+                    on_remote_command(command);
+                });
             })),
             Box::new(macos::SystemPowerAssertions::default()),
         );
@@ -601,7 +611,7 @@ mod tests {
                 state: talaria_core::LoadState::Loading,
             },
         );
-        controller.handle_event(tab_id, BrowserEvent::DocumentStarted);
+        controller.handle_event(tab_id, BrowserEvent::PageLoadStarted);
         hub.update(&mut controller, None, start);
         ready(&mut controller, tab_id, "second");
         controller.handle_event(

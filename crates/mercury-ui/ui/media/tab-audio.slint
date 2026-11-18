@@ -1,4 +1,8 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // media-session lane: the sound indicator on a tab, which mutes or unmutes the tab when clicked.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 export enum TabAudioState {
     silent,
@@ -17,12 +21,12 @@ export component TabAudioButton inherits Rectangle {
         ? "Unmute tab: " + root.tab-title
         : "Mute tab: " + root.tab-title + " (the page can override this)";
 
-    // Colours, kept together for the move to ChromePalette at merge.
-    property <color> icon-color: root.active-tab ? #edf4fa : #8b98a8;
-    property <color> icon-hover-color: #71c5ff;
-    property <color> muted-icon-color: #e08a8a;
-    property <color> hover-background: #222c37;
-    property <color> pressed-background: #2b3744;
+    // Colours: the chrome's palette, so the icon follows the theme.
+    property <color> icon-color: root.active-tab ? ChromePalette.text : ChromePalette.tab-title-inactive;
+    property <color> icon-hover-color: ChromePalette.button-label-hover;
+    property <color> muted-icon-color: ChromePalette.danger;
+    property <color> hover-background: ChromePalette.tab-close-hover;
+    property <color> pressed-background: ChromePalette.tab-close-pressed;
 
     width: 22px;
     height: 22px;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Which tab the system's Now Playing shows, and where media keys go.
 
 use std::collections::{HashMap, HashSet};
@@ -591,7 +593,7 @@ mod tests {
             None,
             "a load alone keeps it"
         );
-        event(&mut controller, first, BrowserEvent::DocumentStarted);
+        event(&mut controller, first, BrowserEvent::PageLoadStarted);
         assert_eq!(
             update(&mut policy, &controller),
             Some(NowPlayingChange::Clear)

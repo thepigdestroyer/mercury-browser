@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Fetch Servo's GStreamer plugin lists from the `servo` crate pinned in
 # Cargo.lock, without cargo.
 #

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The Mercury Browser profile database: browsing history, bookmarks and download records in one
 //! SQLite file (`places.sqlite`).
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 /// What the engine last said about a page's media: from Servo's media session, which every
 /// `<audio>` and `<video>` element reports to, whether or not the page uses the Media Session API.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]

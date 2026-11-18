@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Servo's media session and the script-level mute, probe and media-key fallback.
 
 use std::cell::Cell;
@@ -5,13 +7,11 @@ use std::collections::hash_map::RandomState;
 use std::hash::{BuildHasher, Hasher};
 use std::rc::Rc;
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicU64, Ordering};
 
 use url::Url;
 
 use servo::{
-    JSValue, LoadStatus, MediaSessionActionType, MediaSessionEvent,
-    MediaSessionPlaybackState as ServoPlayback,
+    JSValue, MediaSessionActionType, MediaSessionEvent, MediaSessionPlaybackState as ServoPlayback,
 };
 use talaria_core::{
     BrowserEvent, MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction,
@@ -80,87 +80,16 @@ pub(crate) fn describe_for_log(event: &BrowserEvent) -> String {
     }
 }
 
-/// How Mercury asks a web view to navigate.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(crate) enum Navigation {
-    Load,
-    Reload,
-    Traverse,
-}
-
-/// Document starts of one web view, shared by the web view (which navigates) and its delegate
-/// (which hears load statuses). Also counts them, to name the helper of opaque-origin documents.
-#[derive(Debug)]
-pub(crate) struct DocumentStarts {
-    armed: Cell<bool>,
-    generation: Cell<u64>,
-    /// Unique to this web view in this run.
-    serial: u64,
-}
-
-impl DocumentStarts {
-    pub(crate) fn new() -> Self {
-        static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
-        Self {
-            armed: Cell::new(false),
-            generation: Cell::new(0),
-            serial: NEXT_SERIAL.fetch_add(1, Ordering::Relaxed),
-        }
+/// What the media helper's name is derived from for the page at `url`. A tuple origin is
+/// enough: every document of a site shares the name, no other site sees it. Opaque origins
+/// (`about:blank` popups a site opens and scripts, `data:`, `file:`) all serialise as "null", so
+/// their documents get a key of their own from the web view's `serial` (unique in the run) and
+/// its count of document starts (`generation`); see `DocumentStarts::identity`.
+pub(crate) fn agent_key(url: Option<&Url>, serial: u64, generation: u64) -> String {
+    match url.map(Url::origin) {
+        Some(origin) if origin.is_tuple() => origin.ascii_serialization(),
+        _ => format!("null#{serial}#{generation}"),
     }
-
-    /// Navigates with `go`, first noting whether Servo will swallow the new document's `Started`.
-    pub(crate) fn navigate(&self, navigation: Navigation, status: LoadStatus, go: impl FnOnce()) {
-        if arms_document_start(navigation == Navigation::Reload, status) {
-            self.armed.set(true);
-        }
-        go();
-    }
-
-    /// The events a load-status change adds to `LoadStateChanged`.
-    pub(crate) fn on_load_status(&self, status: LoadStatus) -> Vec<BrowserEvent> {
-        if document_started(&self.armed, status) {
-            self.generation.set(self.generation.get() + 1);
-            vec![BrowserEvent::DocumentStarted]
-        } else {
-            Vec::new()
-        }
-    }
-
-    /// What the helper's name is derived from for the page at `url`. A tuple origin is enough:
-    /// every document of a site shares the name, no other site sees it. Opaque origins
-    /// (`about:blank` popups a site opens and scripts, `data:`, `file:`) all serialise as
-    /// "null", so their documents get a key of their own: this web view and its document count.
-    pub(crate) fn agent_key(&self, url: Option<&Url>) -> String {
-        match url.map(Url::origin) {
-            Some(origin) if origin.is_tuple() => origin.ascii_serialization(),
-            _ => format!("null#{}#{}", self.serial, self.generation.get()),
-        }
-    }
-}
-
-/// Whether a load-status change is a new top-level document. Servo's `Started` is sent by the
-/// new document as it is initialised (`servo-script-0.8.0/dom/document/document.rs`,
-/// `set_document_readiness_to_loading_for_initialization`), which a navigation that loads no
-/// document (a 204, a cancelled `beforeunload`) never reaches. Servo drops it as unchanged while
-/// the status is still `Started` (`servo-0.8.0/webview.rs:334-336`), as after `reload()`, which
-/// pre-sets it (`webview.rs:552`); after such a navigation (`armed`), the first `HeadParsed` or
-/// `Complete` counts instead. Unarmed, they never do: a page sends `HeadParsed` by inserting a
-/// `<body>`. The same reasoning as the dialogs lane's `DocumentStartTracker`, which should
-/// replace this at merge.
-fn document_started(armed: &Cell<bool>, status: LoadStatus) -> bool {
-    match status {
-        LoadStatus::Started => {
-            armed.set(false);
-            true
-        }
-        LoadStatus::HeadParsed | LoadStatus::Complete => armed.replace(false),
-        LoadStatus::Stopped => false,
-    }
-}
-
-/// Whether Servo will swallow the `Started` of the document a navigation may load.
-fn arms_document_start(reload: bool, status: LoadStatus) -> bool {
-    reload || status == LoadStatus::Started
 }
 
 pub(crate) fn browser_event_from_servo(event: MediaSessionEvent) -> BrowserEvent {
@@ -271,7 +200,7 @@ pub(crate) fn probe_from_js(value: &JSValue) -> Option<MediaProbe> {
 
 #[cfg(test)]
 mod tests {
-    use servo::{LoadStatus, MediaMetadata as ServoMetadata, MediaPositionState};
+    use servo::{MediaMetadata as ServoMetadata, MediaPositionState};
 
     use super::*;
 
@@ -494,102 +423,30 @@ mod tests {
     }
 
     #[test]
-    fn servos_started_is_a_new_document() {
-        let armed = Cell::new(false);
-        assert!(document_started(&armed, LoadStatus::Started));
-        assert!(!document_started(&armed, LoadStatus::HeadParsed));
-        assert!(!document_started(&armed, LoadStatus::Complete));
-        assert!(!document_started(&armed, LoadStatus::Stopped));
-    }
-
-    #[test]
-    fn after_a_navigation_whose_started_servo_swallows_the_next_milestone_is_the_start() {
-        // A reload pre-sets `Started` without telling, so the new document's `Started` is
-        // dropped as unchanged.
-        assert!(arms_document_start(true, LoadStatus::Complete));
-        assert!(arms_document_start(false, LoadStatus::Started));
-        assert!(!arms_document_start(false, LoadStatus::Complete));
-
-        let armed = Cell::new(true);
-        assert!(document_started(&armed, LoadStatus::HeadParsed));
-        assert!(
-            !document_started(&armed, LoadStatus::Complete),
-            "only the first counts"
-        );
-
-        // Unarmed, a `HeadParsed` (a page inserting a `<body>`) is not a new document.
-        assert!(!document_started(&armed, LoadStatus::HeadParsed));
-
-        // A real `Started` disarms.
-        let armed = Cell::new(true);
-        assert!(document_started(&armed, LoadStatus::Started));
-        assert!(!armed.get());
-    }
-
-    #[test]
-    fn a_started_document_is_reported_and_counted() {
-        let starts = DocumentStarts::new();
-        assert_eq!(
-            starts.on_load_status(LoadStatus::Started),
-            [BrowserEvent::DocumentStarted]
-        );
-        assert!(starts.on_load_status(LoadStatus::HeadParsed).is_empty());
-        assert!(starts.on_load_status(LoadStatus::Complete).is_empty());
-    }
-
-    #[test]
-    fn mercurys_reload_counts_its_first_milestone_as_the_document_start() {
-        let starts = DocumentStarts::new();
-        let mut reloaded = false;
-        // `reload()` pre-sets `Started` without telling (status `Complete` before).
-        starts.navigate(Navigation::Reload, LoadStatus::Complete, || reloaded = true);
-        assert!(reloaded);
-        assert_eq!(
-            starts.on_load_status(LoadStatus::HeadParsed),
-            [BrowserEvent::DocumentStarted]
-        );
-        assert!(starts.on_load_status(LoadStatus::Complete).is_empty());
-
-        // A load from a settled page gets its own `Started`; a `<body>` the page inserts later
-        // is no document start.
-        starts.navigate(Navigation::Load, LoadStatus::Complete, || {});
-        assert!(starts.on_load_status(LoadStatus::HeadParsed).is_empty());
-        // A traversal while the status is still `Started` will have its `Started` swallowed.
-        starts.navigate(Navigation::Traverse, LoadStatus::Started, || {});
-        assert_eq!(
-            starts.on_load_status(LoadStatus::Complete),
-            [BrowserEvent::DocumentStarted]
-        );
-    }
-
-    #[test]
     fn opaque_documents_get_a_name_of_their_own() {
         let url = |text: &str| Url::parse(text).unwrap();
-        let first = DocumentStarts::new();
-        let second = DocumentStarts::new();
         let blank = url("about:blank");
 
         // Tuple origins: one name per origin and run, whichever web view or document.
         assert_eq!(
-            first.agent_key(Some(&url("https://a.test/x"))),
-            second.agent_key(Some(&url("https://a.test/y")))
+            agent_key(Some(&url("https://a.test/x")), 1, 0),
+            agent_key(Some(&url("https://a.test/y")), 2, 7)
         );
         assert_eq!(
-            first.agent_key(Some(&url("https://a.test/"))),
+            agent_key(Some(&url("https://a.test/")), 1, 0),
             "https://a.test"
         );
 
         // Opaque origins (`about:blank` popups, `data:`, `file:`): never shared between web
         // views, nor between documents of one web view.
-        let popup = first.agent_key(Some(&blank));
-        assert_ne!(popup, second.agent_key(Some(&blank)));
-        assert_eq!(popup, first.agent_key(Some(&url("data:text/html,x"))));
-        first.on_load_status(LoadStatus::Started);
-        assert_ne!(popup, first.agent_key(Some(&blank)));
+        let popup = agent_key(Some(&blank), 1, 0);
+        assert_ne!(popup, agent_key(Some(&blank), 2, 0));
+        assert_ne!(popup, agent_key(Some(&blank), 1, 1));
+        assert_eq!(popup, agent_key(Some(&url("data:text/html,x")), 1, 0));
         assert_ne!(
             agent_name(&popup),
-            agent_name(&first.agent_key(Some(&blank)))
+            agent_name(&agent_key(Some(&blank), 1, 1))
         );
-        assert_ne!(first.agent_key(None), second.agent_key(None));
+        assert_ne!(agent_key(None, 1, 0), agent_key(None, 2, 0));
     }
 }

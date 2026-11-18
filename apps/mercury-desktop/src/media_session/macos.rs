@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The macOS services behind the media-session lane's traits: `MPNowPlayingInfoCenter` and
 //! `MPRemoteCommandCenter` (MediaPlayer framework) and an IOKit power assertion. Only created in
 //! an interactive launch (see `system_services`); nothing here runs in tests or automated runs.

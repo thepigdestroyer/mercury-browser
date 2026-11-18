@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Renders the tab strip's sound indicator with Slint's software renderer and clicks it.
 //! Set `MERCURY_UI_RENDER_DIR` to a directory to get the PNG.
 

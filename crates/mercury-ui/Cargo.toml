@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 [package]
 name = "mercury-ui"
 publish = false
@@ -6,14 +7,23 @@ edition.workspace = true
 license.workspace = true
 build = "build.rs"
 
+[features]
+# Names the elements in the generated code, so tests can find them through Slint's testing
+# backend. Only for tests: it also turns off one of Slint's optimisations for the whole UI.
+test-support = []
+
 [dependencies]
 slint.workspace = true
 
-[build-dependencies]
-slint-build.workspace = true
-
-# Headless rendering tests (media-session lane, tests/render_tab_audio.rs; the menus, dialogs and
-# controls lanes add the same lines). Slint's software renderer is already in Cargo.lock.
+# Only for rendering without a display: `examples/render_settings.rs` (the settings window),
+# `examples/render_controls.rs` (the page-control popups), `examples/render_tabs.rs` (the
+# pop-up indicator), `tests/page_request_render.rs` (the dialog components, which also uses
+# talaria-core's message cleaning), `tests/render_menus.rs` (the browser menu and the About
+# window) and `tests/render_tab_audio.rs` (the tab's sound indicator). Dev-only, so the application's Slint features are unchanged.
 [dev-dependencies]
 image.workspace = true
 slint = { workspace = true, features = ["renderer-software"] }
+talaria-core = { path = "../talaria-core" }
+
+[build-dependencies]
+slint-build.workspace = true

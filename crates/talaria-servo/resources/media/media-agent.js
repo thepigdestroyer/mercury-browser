@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // Mercury Browser: the media helper of one document, evaluated by the browser with
 // `evaluate_javascript`. `__TOKEN__` is a random name chosen per browser run and `__CALL__` the
 // command: ["mute", true|false], ["probe"] or ["key", "play"|"pause"].

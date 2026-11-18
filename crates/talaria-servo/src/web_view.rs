@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::Cell;
 use std::rc::Rc;
 use std::sync::mpsc::Sender;
@@ -5,75 +6,104 @@ use std::sync::mpsc::Sender;
 use dpi::PhysicalSize;
 use euclid::{Point2D, Scale};
 use servo::{
-    Code, CompositionEvent as ServoCompositionEvent, CompositionState as ServoCompositionState,
-    DevicePoint, ImeEvent as ServoImeEvent, InputEvent, Key, KeyState as ServoKeyState,
-    KeyboardEvent as ServoKeyboardEvent, Location, Modifiers,
+    ClipboardAction, Code, CompositionEvent as ServoCompositionEvent,
+    CompositionState as ServoCompositionState, DevicePoint, ImeEvent as ServoImeEvent, InputEvent,
+    Key, KeyState as ServoKeyState, KeyboardEvent as ServoKeyboardEvent, Location, Modifiers,
     MouseButtonAction as ServoMouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
     MouseMoveEvent, NamedKey, Theme, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
 };
 use talaria_core::{
-    ColorScheme, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput, PointerButton,
-    PointerButtonAction, TabId, WebView as TalariaWebView,
+    ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId, ImeInput,
+    KeyLocation, KeyState, KeyboardInput, PointerButton, PointerButtonAction, TabId,
+    WebView as TalariaWebView,
 };
+use talaria_core::{PageRequestAnswer, PageRequestId};
 // media session
 use talaria_core::{BrowserEvent, MediaSessionAction, TabEvent};
 use url::Url;
 
+use crate::document_starts::DocumentStarts;
+use crate::embedder_controls::EmbedderControls;
 use crate::frame_ready::FrameReadySignal;
 // media session
 use crate::media_session::{
-    ActionRoute, DocumentStarts, Navigation, mute_script, probe_from_js, probe_script, route_action,
+    ActionRoute, agent_key, mute_script, probe_from_js, probe_script, route_action,
 };
+use crate::page_feedback::{DOCUMENT_TITLE_SCRIPT, PageFeedback};
+use crate::page_requests::{ClosesOnDrop, EngineRequest, Navigation, ServoPageRequest};
+use crate::session_data::{AfterEngineCleanup, HandleThenCleanup};
 use crate::{ServoWebViewError, ViewportSize};
 
 pub struct ServoWebView {
-    inner: servo::WebView,
+    /// Servo's `WebView` holds handles to Servo (its own and its user-content manager's); the
+    /// share of the after-engine clean-up beside it is released only after them.
+    inner: HandleThenCleanup<servo::WebView, AfterEngineCleanup>,
     frame_ready: FrameReadySignal,
     tab_id: TabId,
     /// Device pixels per logical pixel; pointer positions arrive in logical pixels.
     scale_factor: Cell<f32>,
+    // controls
+    controls: EmbedderControls,
+    // dialogs: closes the delegate's store when the web view goes, which gives every
+    // unanswered request the engine's default.
+    page_requests: ClosesOnDrop<ServoPageRequest>,
+    document_start: Rc<DocumentStarts>,
+    // tabs
+    page_feedback: Rc<PageFeedback>,
     // media session
-    /// Where script results (the media probe) are reported; `None` until `with_media_session`.
-    browser_event_sender: Option<Sender<TabEvent>>,
-    document_starts: Rc<DocumentStarts>,
+    /// Where script results (the media probe) are reported.
+    browser_event_sender: Sender<TabEvent>,
+}
+
+/// What a tab's web view shares with its delegate.
+pub(crate) struct TabParts {
+    pub(crate) frame_ready: FrameReadySignal,
+    pub(crate) controls: EmbedderControls,
+    pub(crate) page_requests: ClosesOnDrop<ServoPageRequest>,
+    pub(crate) document_start: Rc<DocumentStarts>,
+    pub(crate) page_feedback: Rc<PageFeedback>,
+    // media session
+    pub(crate) browser_event_sender: Sender<TabEvent>,
 }
 
 impl ServoWebView {
     pub(crate) fn new(
-        inner: servo::WebView,
-        frame_ready: FrameReadySignal,
+        inner: HandleThenCleanup<servo::WebView, AfterEngineCleanup>,
         tab_id: TabId,
         scale_factor: f32,
+        parts: TabParts,
     ) -> Self {
+        let TabParts {
+            frame_ready,
+            controls,
+            page_requests,
+            document_start,
+            page_feedback,
+            browser_event_sender,
+        } = parts;
         Self {
             inner,
             frame_ready,
             tab_id,
             scale_factor: Cell::new(scale_factor),
-            // media session
-            browser_event_sender: None,
-            document_starts: Rc::new(DocumentStarts::new()),
+            controls,
+            page_requests,
+            document_start,
+            page_feedback,
+            browser_event_sender,
         }
     }
 
     // media session
-    pub(crate) fn with_media_session(
-        mut self,
-        browser_event_sender: Sender<TabEvent>,
-        document_starts: Rc<DocumentStarts>,
-    ) -> Self {
-        self.browser_event_sender = Some(browser_event_sender);
-        self.document_starts = document_starts;
-        self
-    }
-
-    /// What the helper's name is derived from: the current page's origin (see
-    /// `DocumentStarts::agent_key`). A script built now can land in the next document if a
-    /// navigation commits before Servo runs it; it then installs a second helper under this
-    /// key, which the new document never looks up again (its own scripts use its own key). That
-    /// helper is inert apart from the one call it was built for, so this is harmless.
+    /// What the helper's name is derived from: the current page's origin, or for an opaque
+    /// origin this web view and document (see `agent_key`). A script built now can land in the
+    /// next document if a navigation commits before Servo runs it; it then installs a second
+    /// helper under this key, which the new document never looks up again (its own scripts use
+    /// its own key). That helper is inert apart from the one call it was built for, so this is
+    /// harmless.
     fn origin(&self) -> String {
-        self.document_starts.agent_key(self.inner.url().as_ref())
+        let (serial, generation) = self.document_start.identity();
+        agent_key(self.inner.url().as_ref(), serial, generation)
     }
 
     fn run_script(&self, script: String, what: &'static str) {
@@ -82,6 +112,22 @@ impl ServoWebView {
             if let Err(error) = result {
                 log::info!("tab {}: {what} script failed: {error:?}", tab_id.value());
             }
+        });
+    }
+
+    // dialogs: the navigation's document may start without a `Started` Servo reports.
+    // tabs: the tab's user activation is forgotten as the navigation is sent.
+    fn arm_document_start(&self, navigation: Navigation) {
+        self.document_start
+            .navigation_sent(navigation, self.inner.load_status());
+    }
+
+    /// Starts a title read that was owed while another was in flight. Cheap when none is owed;
+    /// call once per engine pump.
+    pub fn refresh_page_feedback(&self) {
+        self.page_feedback.refresh_title(|callback| {
+            self.inner
+                .evaluate_javascript(DOCUMENT_TITLE_SCRIPT, callback);
         });
     }
 
@@ -108,6 +154,18 @@ impl ServoWebView {
         true
     }
 
+    /// Paints the shared rendering context now, whether or not a new frame was announced.
+    pub fn paint(&self) {
+        self.inner.paint();
+    }
+
+    /// Forgets a frame announced before now. A hidden web view is told about every frame of the
+    /// shared rendering context, including frames drawn while another tab was shown; after
+    /// `show()` only a frame announced later contains this web view.
+    pub fn discard_ready_frame(&self) {
+        let _was_ready = self.frame_ready.take_ready();
+    }
+
     pub fn show(&self) {
         self.inner.show();
     }
@@ -120,6 +178,8 @@ impl ServoWebView {
 impl Drop for ServoWebView {
     fn drop(&mut self) {
         log::info!("closing Servo WebView for tab {}", self.tab_id.value());
+        // controls: requests of a closed or replaced web view get the engine's default answer.
+        let _hidden = self.controls.drop_all();
     }
 }
 
@@ -128,38 +188,26 @@ impl TalariaWebView for ServoWebView {
 
     fn navigate(&mut self, url: &str) -> Result<(), Self::Error> {
         let url = Url::parse(url)?;
-        // media session: through `DocumentStarts`, which notes whether `Started` will be lost.
-        let status = self.inner.load_status();
-        self.document_starts
-            .navigate(Navigation::Load, status, || self.inner.load(url));
+        self.arm_document_start(Navigation::Load); // dialogs
+        self.inner.load(url);
         Ok(())
     }
 
     fn go_back(&mut self) -> Result<(), Self::Error> {
-        // media session
-        let status = self.inner.load_status();
-        self.document_starts
-            .navigate(Navigation::Traverse, status, || {
-                let _traversal_id = self.inner.go_back(1);
-            });
+        self.arm_document_start(Navigation::Traverse); // dialogs
+        let _traversal_id = self.inner.go_back(1);
         Ok(())
     }
 
     fn go_forward(&mut self) -> Result<(), Self::Error> {
-        // media session
-        let status = self.inner.load_status();
-        self.document_starts
-            .navigate(Navigation::Traverse, status, || {
-                let _traversal_id = self.inner.go_forward(1);
-            });
+        self.arm_document_start(Navigation::Traverse); // dialogs
+        let _traversal_id = self.inner.go_forward(1);
         Ok(())
     }
 
     fn reload(&mut self) -> Result<(), Self::Error> {
-        // media session
-        let status = self.inner.load_status();
-        self.document_starts
-            .navigate(Navigation::Reload, status, || self.inner.reload());
+        self.arm_document_start(Navigation::Reload); // dialogs
+        self.inner.reload();
         Ok(())
     }
 
@@ -270,6 +318,45 @@ impl TalariaWebView for ServoWebView {
         Ok(())
     }
 
+    // controls
+    fn answer_control(&mut self, id: ControlId, answer: ControlAnswer) -> Result<(), Self::Error> {
+        self.controls.answer(id, answer);
+        Ok(())
+    }
+
+    // dialogs
+    fn answer_page_request(
+        &mut self,
+        id: PageRequestId,
+        answer: PageRequestAnswer,
+    ) -> Result<(), Self::Error> {
+        // Taken out first, so answering never runs while the store is borrowed.
+        let request = self.page_requests.take(id);
+        // Staying on a page that asked before it was left: no new document follows.
+        if matches!(request, Some(ServoPageRequest::Unload(_)))
+            && answer == PageRequestAnswer::Decline
+        {
+            self.document_start.navigation_cancelled();
+        }
+        match request {
+            Some(request) => request.respond(answer),
+            None => log::debug!(
+                "tab {}: page request {} is gone",
+                self.tab_id.value(),
+                id.value()
+            ),
+        }
+        Ok(())
+    }
+
+    // menus
+    fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error> {
+        let _event_id = self
+            .inner
+            .notify_input_event(InputEvent::EditingAction(servo_clipboard_action(command)));
+        Ok(())
+    }
+
     // media session
     fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error> {
         self.run_script(mute_script(muted, &self.origin()), "mute");
@@ -298,7 +385,7 @@ impl TalariaWebView for ServoWebView {
         self.inner
             .evaluate_javascript(probe_script(&self.origin()), move |result| match result {
                 Ok(value) => {
-                    if let (Some(probe), Some(sender)) = (probe_from_js(&value), sender) {
+                    if let Some(probe) = probe_from_js(&value) {
                         let _send_result =
                             sender.send(TabEvent::new(tab_id, BrowserEvent::MediaProbed { probe }));
                     }
@@ -308,6 +395,15 @@ impl TalariaWebView for ServoWebView {
                 }
             });
         Ok(())
+    }
+}
+
+/// The same editing Servo performs for Cmd/Ctrl+X, C and V in the page.
+fn servo_clipboard_action(command: ClipboardCommand) -> ClipboardAction {
+    match command {
+        ClipboardCommand::Cut => ClipboardAction::Cut,
+        ClipboardCommand::Copy => ClipboardAction::Copy,
+        ClipboardCommand::Paste => ClipboardAction::Paste,
     }
 }
 
@@ -407,6 +503,22 @@ fn servo_mouse_button(button: PointerButton) -> servo::MouseButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_commands_become_servo_editing_actions() {
+        assert_eq!(
+            servo_clipboard_action(ClipboardCommand::Cut),
+            ClipboardAction::Cut
+        );
+        assert_eq!(
+            servo_clipboard_action(ClipboardCommand::Copy),
+            ClipboardAction::Copy
+        );
+        assert_eq!(
+            servo_clipboard_action(ClipboardCommand::Paste),
+            ClipboardAction::Paste
+        );
+    }
 
     #[test]
     fn logical_coordinates_become_device_coordinates() {

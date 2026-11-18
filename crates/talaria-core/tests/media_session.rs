@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use talaria_core::{
     BrowserCommand, BrowserController, BrowserEvent, BrowserState, LoadState, MediaMetadata,
     MediaPlaybackState, MediaPosition, MediaProbe, MediaState, TabAudio, TabCommand, TabId,
@@ -147,7 +149,7 @@ fn the_none_state_forgets_the_session() {
 fn playing_loaded_page() -> BrowserState {
     let mut state = BrowserState::default();
     state.apply(loading());
-    state.apply(BrowserEvent::DocumentStarted);
+    state.apply(BrowserEvent::PageLoadStarted);
     state.apply(commit("https://a.test/"));
     state.apply(loaded());
     state.apply(playing());
@@ -164,7 +166,7 @@ fn a_new_document_starts_without_media() {
     let mut state = playing_loaded_page();
 
     state.apply(loading());
-    state.apply(BrowserEvent::DocumentStarted);
+    state.apply(BrowserEvent::PageLoadStarted);
 
     assert_eq!(state.media(), &MediaState::default());
 }
@@ -188,7 +190,7 @@ fn load_states_and_address_changes_alone_keep_the_media() {
 fn media_the_new_document_starts_is_kept() {
     let mut state = BrowserState::default();
     state.apply(loading());
-    state.apply(BrowserEvent::DocumentStarted);
+    state.apply(BrowserEvent::PageLoadStarted);
     state.apply(playing());
 
     state.apply(loading());
@@ -204,7 +206,7 @@ fn a_muted_tab_is_muted_again_when_a_document_starts() {
     controller.toggle_audio_muted(tab_id);
     drain(&mut controller);
 
-    controller.handle_event(tab_id, BrowserEvent::DocumentStarted);
+    controller.handle_event(tab_id, BrowserEvent::PageLoadStarted);
 
     assert_eq!(
         drain(&mut controller),
@@ -500,7 +502,7 @@ fn only_positive_evidence_of_sound_counts_for_the_media_keys() {
 fn a_late_pause_from_the_previous_document_does_not_revive_its_media() {
     let mut state = playing_loaded_page();
 
-    state.apply(BrowserEvent::DocumentStarted);
+    state.apply(BrowserEvent::PageLoadStarted);
     // The old document's elements report their pause as they are torn down; Servo does not say
     // which document an event came from.
     state.apply(paused());
@@ -511,7 +513,7 @@ fn a_late_pause_from_the_previous_document_does_not_revive_its_media() {
 #[test]
 fn a_document_reports_pauses_once_its_media_has_played() {
     let mut state = BrowserState::default();
-    state.apply(BrowserEvent::DocumentStarted);
+    state.apply(BrowserEvent::PageLoadStarted);
     // GStreamer reports Paused while it prepares an element, before it plays.
     state.apply(paused());
     assert_eq!(state.media().playback(), MediaPlaybackState::None);

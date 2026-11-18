@@ -1,4 +1,6 @@
 #!/bin/bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # The table of bundled GStreamer libraries in THIRD-PARTY-NOTICES.md, generated
 # from a collected lib directory so that it cannot drift from what ships.
 #
