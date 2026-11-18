@@ -180,6 +180,13 @@ pub fn main_frame_load(policy: &HttpsPolicy, url: &Url, is_get: bool) -> MainFra
 /// starts a new navigation, so the engine's own redirect limit never stops a site whose HTTPS
 /// pages send the browser back to HTTP; this does. An `http` address that was already upgraded
 /// in the chain, or more than `MAX_UPGRADES` upgrades without a finished load, is blocked.
+///
+/// Known gap, accepted: the chain starts again at every finished load (`load_finished`). A site
+/// whose HTTPS page finishes loading and then sends the tab to its own `http` address (by script
+/// or a `<meta http-equiv="refresh">`) is upgraded again, and again, for as long as the site keeps
+/// doing it. Any site can loop navigation like this without HTTPS-only. Each round shows a
+/// finished page and the user can navigate away, so the browser does not hang. It is deliberately
+/// not stopped here, and `the_chain_upgrades_the_same_link_again_after_a_finished_load` pins it.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct HttpsUpgradeChain {
     upgraded: Vec<Url>,

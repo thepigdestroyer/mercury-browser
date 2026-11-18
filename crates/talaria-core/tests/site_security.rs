@@ -587,6 +587,9 @@ fn chain_decides(
     chain.decide(policy, &url(address), true, true)
 }
 
+// A finished load starts a new chain, so the same `http://` address is upgraded again. This also
+// pins the accepted gap that a page may loop through script or a meta refresh to its own `http`
+// address (see the `HttpsUpgradeChain` docs); do not "fix" it by remembering across loads.
 #[test]
 fn the_chain_upgrades_the_same_link_again_after_a_finished_load() {
     let policy = strict();
