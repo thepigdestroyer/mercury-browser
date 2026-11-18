@@ -740,22 +740,10 @@ mod tests {
         protector.show_request(Some((camera, None)), at(1_000));
         assert!(protector.accepts_request(camera, None, at(1_600)));
         // The microphone request joins it before the click is handled.
-        assert!(!protector.accepts_request(
-            camera,
-            Some(PagePermission::Microphone),
-            at(1_600)
-        ));
+        assert!(!protector.accepts_request(camera, Some(PagePermission::Microphone), at(1_600)));
         protector.show_request(Some((camera, Some(PagePermission::Microphone))), at(1_700));
-        assert!(!protector.accepts_request(
-            camera,
-            Some(PagePermission::Microphone),
-            at(1_800)
-        ));
-        assert!(protector.accepts_request(
-            camera,
-            Some(PagePermission::Microphone),
-            at(2_200)
-        ));
+        assert!(!protector.accepts_request(camera, Some(PagePermission::Microphone), at(1_800)));
+        assert!(protector.accepts_request(camera, Some(PagePermission::Microphone), at(2_200)));
         assert!(!protector.accepts_request(camera, None, at(2_200)));
     }
 }
