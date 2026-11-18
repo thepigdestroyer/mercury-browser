@@ -477,6 +477,9 @@ pub(crate) struct PageRequests {
     capture_stop: CaptureStop,
     /// media-capture: see `refuse_waiting_capture_partner`.
     refused_partners: Vec<PageRequestId>,
+    /// media-capture: the last kind a remembered Block refused, for which origin, and when it
+    /// was asked; the other kind of the same call, arriving after it, is refused too.
+    remembered_refusal: Option<(PagePermission, PageOrigin, Duration)>,
     /// The user navigated away from the blocked page: the blocks end once a new document starts or
     /// another site asks. They stay if the navigation produces no new document (a same-document
     /// traversal, a 204, a download) or the user stays.
@@ -536,6 +539,25 @@ impl PageRequests {
         {
             self.refused_partners.push(refused.pending.id);
         }
+    }
+
+    /// media-capture: the mirror of `refuse_waiting_capture_partner`, for the kind asked second
+    /// (the engine asks for the microphone first): it arrives after the remembered Block of the
+    /// first kind refused the call. Requests of the same origin asked within
+    /// `CAPTURE_CALL_WINDOW` of that refusal are taken as the same call.
+    fn refuses_as_partner_of_a_remembered_refusal(
+        &self,
+        permission: PagePermission,
+        origin: &PageOrigin,
+        received_at: Duration,
+    ) -> bool {
+        self.remembered_refusal
+            .as_ref()
+            .is_some_and(|(refused, refused_origin, refused_at)| {
+                paired_capture_permission(*refused) == Some(permission)
+                    && refused_origin == origin
+                    && received_at.saturating_sub(*refused_at) < CAPTURE_CALL_WINDOW
+            })
     }
 
     /// media-capture: requests refused with a remembered Block of their partner, to be answered.
@@ -618,8 +640,17 @@ impl PageRequests {
                     }
                     if decision == PermissionDecision::Block {
                         self.refuse_waiting_capture_partner(*permission, &origin);
+                        self.remembered_refusal =
+                            Some((*permission, origin.clone(), request.received_at));
                     }
                     return Some(decision.answer());
+                }
+                if self.refuses_as_partner_of_a_remembered_refusal(
+                    *permission,
+                    &origin,
+                    request.received_at,
+                ) {
+                    return Some(PageRequestAnswer::Decline);
                 }
             }
             _ => {}
@@ -692,7 +723,10 @@ impl PageRequests {
         match &answered.kind {
             PageRequestKind::LeavePage => {
                 // media-capture: Stay on the reload Stop asked for: the page keeps its devices.
+                // Only the reload prompt counts; a Stay on another navigation says nothing about
+                // Stop.
                 if reply.answer == PageRequestAnswer::Decline
+                    && answered.is_reload_prompt()
                     && self.capture_stop == CaptureStop::Requested
                 {
                     self.capture_stop = CaptureStop::Refused;
@@ -783,6 +817,10 @@ impl PageRequests {
     /// document, and the next site's dialogs must not inherit its blocks).
     pub(crate) fn note_user_navigation(&mut self, reload: bool) -> Vec<PageRequestId> {
         self.reload_requested = reload;
+        // media-capture: another navigation replaces the reload Stop asked for.
+        if !reload && self.capture_stop == CaptureStop::Requested {
+            self.capture_stop = CaptureStop::None;
+        }
         if self.dialogs_blocked || self.leave_prompts_blocked {
             self.blocks_end_with_navigation = true;
         }
@@ -822,6 +860,11 @@ impl PageRequests {
         taken
     }
 }
+
+/// media-capture: how long after one kind's request the other kind's request of the same
+/// `getUserMedia` call arrives at most. The engine sends both at once, so they come within
+/// one IPC round trip.
+const CAPTURE_CALL_WINDOW: Duration = Duration::from_secs(1);
 
 /// media-capture: where a Stop of the tab's capture stands.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]

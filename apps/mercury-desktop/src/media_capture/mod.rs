@@ -333,9 +333,9 @@ fn start_answering_prompts(
 
 #[cfg(test)]
 mod tests {
-    use talaria_core::{BrowserEvent, PageRequest, PageRequestId};
     #[cfg(not(target_os = "macos"))]
     use talaria_core::BrowserCommand;
+    use talaria_core::{BrowserEvent, PageRequest, PageRequestId};
 
     use super::*;
 
@@ -554,7 +554,7 @@ mod tests {
                 automatic_reply_to(&pending, PromptAnswer::Allow, allowed),
                 PageRequestReply::new(PageRequestAnswer::Accept)
             );
-            let storage = pending(&[(2, PAGE, PagePermission::PersistentStorage)]);
+            let storage = super::pending(&[(2, PAGE, PagePermission::PersistentStorage)]);
             assert_eq!(
                 automatic_reply_to(&storage, PromptAnswer::Allow, camera_denied),
                 PageRequestReply::new(PageRequestAnswer::Accept)
