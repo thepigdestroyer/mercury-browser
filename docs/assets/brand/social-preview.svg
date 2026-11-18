@@ -1,0 +1,66 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" width="1280" height="640" role="img" aria-labelledby="t d">
+  <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+  <!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+  <!-- GitHub social preview (Settings, General, Social preview). Upload social-preview.png, rendered from this file. -->
+  <title id="t">Mercury Browser</title>
+  <desc id="d">The Mercury Browser icon beside the Mercury lettering: a Rust browser built on Servo.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0C0819"/>
+      <stop offset="1" stop-color="#231941"/>
+    </linearGradient>
+    <radialGradient id="glow" cx="0.5" cy="0.5" r="0.5">
+      <stop offset="0" stop-color="#FF9A3C" stop-opacity="0.28"/>
+      <stop offset="1" stop-color="#FF9A3C" stop-opacity="0"/>
+    </radialGradient>
+  </defs>
+  <rect width="1280" height="640" fill="url(#bg)"/>
+  <g fill="none" stroke="#FFB547" stroke-width="2">
+    <ellipse cx="900" cy="330" rx="560" ry="150" transform="rotate(-12 900 330)" opacity="0.10"/>
+    <ellipse cx="900" cy="330" rx="400" ry="104" transform="rotate(-12 900 330)" opacity="0.07"/>
+  </g>
+  <circle cx="330" cy="320" r="300" fill="url(#glow)"/>
+  <g transform="translate(110 100) scale(0.4297)">
+  <defs>
+    <linearGradient id="i-plate" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="924">
+      <stop offset="0" stop-color="#2A1F4F"/>
+      <stop offset="1" stop-color="#0C0819"/>
+    </linearGradient>
+    <linearGradient id="i-sheen" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="600">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="i-halo" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="300">
+      <stop offset="0.7" stop-color="#FF9A3C" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF9A3C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="i-sun" gradientUnits="userSpaceOnUse" cx="482" cy="462" r="290">
+      <stop offset="0" stop-color="#FFF3C4"/>
+      <stop offset="0.45" stop-color="#FFC857"/>
+      <stop offset="0.85" stop-color="#FF8A2F"/>
+      <stop offset="1" stop-color="#EC5B27"/>
+    </radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="url(#i-plate)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="url(#i-sheen)"/>
+  <rect x="101" y="101" width="822" height="822" rx="184.4" fill="none" stroke="#FFFFFF" stroke-opacity="0.1" stroke-width="2"/>
+  <circle cx="512" cy="512" r="300" fill="url(#i-halo)"/>
+  <circle cx="512" cy="512" r="232" fill="url(#i-sun)"/>
+  <g fill="none" stroke="#1E1233" stroke-width="34.7" stroke-linecap="round">
+    <path d="M405.4,648 V400 C405.4,459.5 447.5,510.4 482.2,543.8"/>
+    <path d="M618.6,648 V400 C618.6,459.5 576.5,510.4 541.8,543.8"/>
+    <circle cx="512" cy="579.8" r="42.2"/>
+  </g>
+  </g>
+  <g transform="translate(600 196) scale(1.18)" fill="none" stroke="#FFFFFF" stroke-width="14" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M7,100 V7 C7,30 25,50 43,66 M79,100 V7 C79,30 61,50 43,66"/>
+      <path d="M109,65 H165 A28,28 0 1 0 158.4,83"/>
+      <path d="M195,100 V30 M195,58 C195,40 207,30 225,30"/>
+      <path d="M296.4,47 A28,28 0 1 0 296.4,83"/>
+      <path d="M326,30 V72 A21,21 0 0 0 368,72 M368,30 V100"/>
+      <path d="M398,100 V30 M398,58 C398,40 410,30 428,30"/>
+      <path d="M450,30 V65 A21,21 0 0 0 492,65 M492,30 V112 C492,130 480,136 462,134"/>
+  </g>
+  <text x="604" y="410" font-family="-apple-system, BlinkMacSystemFont, 'SF Pro Display', 'Segoe UI', 'Helvetica Neue', Helvetica, Arial, sans-serif" font-size="38" font-weight="400" fill="#BDB3D6">A Rust browser built on Servo</text>
+  <text x="604" y="466" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, monospace" font-size="24" fill="#FFB547" opacity="0.9">macOS · Servo 0.8 · Slint · Rust</text>
+</svg>

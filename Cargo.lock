@@ -5717,6 +5717,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-iconset"
+version = "0.2.0"
+dependencies = [
+ "resvg 0.48.1",
+ "tempfile",
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "mercury-import"
 version = "0.2.0"
 dependencies = [

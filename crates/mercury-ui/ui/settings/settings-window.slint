@@ -22,7 +22,7 @@ component SectionButton inherits Rectangle {
     border-width: focus.has-focus ? 2px : 0px;
     border-color: ChromePalette.focus-ring;
     background: root.selected
-        ? Palette.accent-background
+        ? ChromePalette.item-selected
         : touch.has-hover ? Palette.alternate-background : transparent;
     accessible-role: tab;
     accessible-label: root.label;
@@ -36,7 +36,7 @@ component SectionButton inherits Rectangle {
         width: parent.width - 24px;
         height: parent.height;
         text: root.label;
-        color: root.selected ? Palette.accent-foreground : Palette.foreground;
+        color: root.selected ? ChromePalette.item-selected-text : Palette.foreground;
         font-size: 13px;
         vertical-alignment: center;
         overflow: elide;
