@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Renders the downloads components (toolbar button, popover, full list, quit question)
 //! headlessly with Slint's software renderer, in the dark and light palettes, and checks how
 //! they answer clicks. Set `MERCURY_UI_RENDER_DIR` to also save each rendering as a PNG.

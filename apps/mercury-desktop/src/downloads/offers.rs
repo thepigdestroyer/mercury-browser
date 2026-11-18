@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Pages the engine could not show (its "Unknown content type" page), offered as downloads.
 //!
 //! Who started the navigation is decided synchronously when its top-level request *starts*

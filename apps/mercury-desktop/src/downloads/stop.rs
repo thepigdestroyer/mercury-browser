@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The events of `mercury-downloads`, waiting for the UI thread, and stopping every transfer
 //! when the browser quits.
 

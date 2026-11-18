@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Bookmark requests: reading and editing the tree. New nodes get a fresh GUID
 //! ([`new_guid`](super::new_guid)). Writes notify [`Area::Bookmarks`] with the folders whose
 //! listing changed (both folders for a move).

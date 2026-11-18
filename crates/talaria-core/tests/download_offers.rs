@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What the downloads work needs from the engine's events: top-level requests as they start,
 //! and pages the engine could not show, offered as downloads. Both are queued per tab, in order.
 

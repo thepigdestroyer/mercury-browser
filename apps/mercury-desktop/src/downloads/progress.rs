@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! How often a download's progress is written to the profile database.
 //!
 //! `mercury-downloads` reports progress up to four times a second; the list shows every report

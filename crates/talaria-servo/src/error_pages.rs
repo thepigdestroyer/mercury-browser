@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Recognising the pages Servo shows in place of a page it could not load.
 //!
 //! Servo commits a failed navigation at the requested URL and shows its own error document

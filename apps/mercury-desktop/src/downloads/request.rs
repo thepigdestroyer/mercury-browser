@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Building a `mercury_downloads::DownloadRequest` from what the browser knows about the page:
 //! the engine's user agent, the cookies Servo holds for the URL, and the referrer.
 

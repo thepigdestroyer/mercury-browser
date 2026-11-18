@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What a download needs from the engine: its user agent and its cookies for the download's
 //! own URL. The engine is reached on the UI thread between pumps; while a pump holds it, the
 //! request waits for a later turn rather than going out without cookies.

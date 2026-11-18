@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Saving files: links, images and pages the user asks for, pages the engine could not show
 //! (offered as downloads), the downloads list, and the question before quitting with downloads
 //! running. The transfers are `mercury-downloads`' work; their records live in the profile

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Recognising Servo's "Unknown content type" page, which it shows when a navigation's response
 //! is of a type it cannot display (Servo 0.8.0 has no downloads of its own).
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The downloads list: every download of this run and the records of earlier runs, the state
 //! each is in, and the database writes each change needs.
 //!
