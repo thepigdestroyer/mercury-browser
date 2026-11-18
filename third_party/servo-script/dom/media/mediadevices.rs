@@ -201,6 +201,8 @@ impl MediaDevices {
         promise.resolve_native(cx, &stream);
     }
 
+    /// Mercury: a device was missing after the grant: stops the sources already opened for the
+    /// call and rejects it with `NotFoundError`.
     fn fail_capture(
         &self,
         cx: &mut JSContext,
@@ -470,20 +472,21 @@ enum AnswerOutcome {
     Settled(PermissionState),
 }
 
-/// Mercury: `record` stores an answer in the global's permission results.
+/// Mercury: `record` stores an answer in the global's permission results. A stale answer is
+/// not stored: `stop_all_capture` cleared those results, and a late Allow written back would let
+/// the document, if it is restored from the history, capture without asking.
 fn settle_answer(
     stale: bool,
     response: Option<AllowOrDeny>,
     record: impl FnOnce(AllowOrDeny) -> PermissionState,
 ) -> AnswerOutcome {
-    let state = match response {
-        Some(answer) => record(answer),
-        None => PermissionState::Denied,
-    };
     if stale {
         return AnswerOutcome::Stale;
     }
-    AnswerOutcome::Settled(state)
+    AnswerOutcome::Settled(match response {
+        Some(answer) => record(answer),
+        None => PermissionState::Denied,
+    })
 }
 
 #[cfg(test)]

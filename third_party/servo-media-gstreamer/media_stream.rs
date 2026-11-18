@@ -56,17 +56,26 @@ impl MediaStream for GStreamerMediaStream {
     /// Mercury: takes the source element out (the device is closed in the NULL state), so that
     /// a consumer that attaches this stream later cannot start the device again.
     fn stop(&mut self) {
+        // Mercury: releasing the device is what this must not fail at silently.
         if let Some(pipeline) = &self.pipeline {
-            let _ = pipeline.set_state(gstreamer::State::Null);
+            if let Err(error) = pipeline.set_state(gstreamer::State::Null) {
+                log::warn!("capture stream: stopping the pipeline failed: {error:?}");
+            }
         }
         if self.elements.len() < 2 {
             return;
         }
         let source = self.elements.remove(0);
         if let Some(pipeline) = &self.pipeline {
-            let _ = pipeline.remove(&source);
+            if let Err(error) = pipeline.remove(&source) {
+                log::warn!(
+                    "capture stream: taking the source out of its pipeline failed: {error:?}"
+                );
+            }
         }
-        let _ = source.set_state(gstreamer::State::Null);
+        if let Err(error) = source.set_state(gstreamer::State::Null) {
+            log::warn!("capture stream: stopping the device source failed: {error:?}");
+        }
     }
 }
 

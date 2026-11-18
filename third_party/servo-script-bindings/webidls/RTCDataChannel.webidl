@@ -5,7 +5,7 @@
 // https://w3c.github.io/webrtc-pc/#dom-rtcdatachannel
 
 // Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
-// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/MERCURY.md).
+// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
 [Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
 interface RTCDataChannel : EventTarget {
   readonly attribute USVString label;

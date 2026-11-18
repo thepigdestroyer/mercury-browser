@@ -73,6 +73,7 @@ impl MediaStreamTrack {
         )
     }
 
+    /// Mercury: whether the track has ended (`readyState` is "ended").
     pub(crate) fn is_ended(&self) -> bool {
         self.ended.get()
     }
