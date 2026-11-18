@@ -127,6 +127,7 @@ pie showData title Work packages, 17 November 2026
 | Accessibility of Mercury's own windows | 🗓️ Planned | |
 | Phishing protection, search suggestions, password breach checks, translation, update checks | 🗓️ Planned | Waiting for decisions on providers and keys |
 | macOS disk image built and published by CI, signed ad hoc | ✅ Done | |
+| With each release: SHA-256 checksums, a build-provenance attestation, the source of the bundled LGPL libraries and a signed update manifest | ✅ Done | The release workflow makes them once the owner has set up the update signing key. The browser does not check for updates yet |
 | macOS releases signed with a Developer ID and notarised | 🗓️ Planned | Needs an Apple Developer ID |
 
 ## Problems and limits
@@ -145,8 +146,9 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 
 **From where Mercury is right now**
 
-- There's no Apple Developer ID yet. Hence the ad hoc signature, the warning on first launch, and no automatic updates.
-- Releases carry an ad-hoc signed macOS disk image and a Linux x86-64 archive. Neither is notarised or auto-updating.
+- There's no Apple Developer ID yet. Hence the ad hoc signature and the warning on first launch.
+- Updates are manual: the browser has no update check yet. Each release does carry a signed update manifest (`update.json`) for the check that is planned, but nothing reads it today.
+- Releases carry an ad-hoc signed macOS disk image and a Linux x86-64 archive, with SHA-256 checksums and a build-provenance attestation ([how to check them](docs/user-guide/installation.md#verify-a-download)). Neither is notarised, and neither updates itself.
 - Building is heavy. A cold build compiles the whole of Servo and wants 15–20 GB free while it runs.
 - Saved logins sit in the Keychain but don't get filled into pages. That needs engine hooks, which are on the patch list.
 
@@ -157,6 +159,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 - A ground-up redesign of the interface, with themes, layouts and a toolbar you arrange yourself.
 - Accessibility for Mercury's own windows.
 - The outside services in the table above, once providers and keys are settled.
+- An update check in the browser, using the signed update manifest each release already carries.
 - Developer ID signing and notarisation of the macOS release, once there's a Developer ID.
 - Finally, merging `mercury` into `master`.
 
@@ -164,7 +167,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 
 ### Download for macOS (Apple Silicon)
 
-1. Download `Mercury-Browser-<version>-macos-arm64.dmg` from the [latest release](https://github.com/thepigdestroyer/mercury-browser/releases/latest). It needs an M1 or later and macOS 13 Ventura or later.
+1. Download `Mercury-Browser-<version>-macos-arm64.dmg` from the [latest release](https://github.com/thepigdestroyer/mercury-browser/releases/latest). It needs an M1 or later and macOS 13 Ventura or later. To check the download first, see [Verify a download](docs/user-guide/installation.md#verify-a-download).
 2. Open the disk image and drag **Mercury Browser** onto **Applications**.
 3. Open it the first time. The app is signed ad hoc and **not notarised by Apple**, so macOS blocks the first launch; choose **Done**, then allow it once:
    - on macOS 13 or 14: Control-click (or right-click) Mercury Browser in Applications, choose **Open**, then **Open** again;
@@ -180,15 +183,19 @@ You'll need the Xcode command-line tools and [rustup](https://rustup.rs/). The R
 git clone https://github.com/thepigdestroyer/mercury-browser.git
 cd mercury-browser
 git checkout mercury
-make gstreamer-macos   # downloads and unpacks GStreamer 1.28.9 for this user only
-make run               # builds and starts the optimised browser
-make app-macos         # builds dist/Mercury Browser.app
+make gstreamer-macos
+make run
+make app-macos
 ```
+
+`make gstreamer-macos` downloads and unpacks GStreamer 1.28.9 for this user only, `make run` builds and starts the optimised browser, and `make app-macos` builds `dist/Mercury Browser.app`.
 
 ### Linux
 
+On Debian and Ubuntu, this installs the packages CI uses, then builds and starts Mercury:
+
 ```bash
-make install-linux-deps   # Debian and Ubuntu; installs the packages CI uses
+make install-linux-deps
 make run
 ```
 
@@ -196,20 +203,20 @@ On other distributions, install the equivalent compiler, Fontconfig, X11, Waylan
 
 ## Everyday commands
 
-```bash
-make doctor          # Check the tools a build needs
-make check           # Type-check every target and feature
-make fmt             # Format the code
-make lint            # Clippy with warnings as errors
-make test            # The full test suite
-make qa              # Formatting, lint and tests together
-make build-release   # Build the optimised workspace
-make app-macos       # Build the macOS app bundle
-make test-bundle-macos  # Check the bundle's contents and signature
-make deny            # Dependency licences and advisories
-make lint-scripts    # Shell scripts and workflows
-make docs            # Build the documentation site
-```
+| Command | What it does |
+| --- | --- |
+| `make doctor` | Check the tools a build needs |
+| `make check` | Type-check every target and feature |
+| `make fmt` | Format the code |
+| `make lint` | Clippy with warnings as errors |
+| `make test` | The full test suite |
+| `make qa` | Formatting, lint and tests together |
+| `make build-release` | Build the optimised workspace |
+| `make app-macos` | Build the macOS app bundle |
+| `make test-bundle-macos` | Check the bundle's contents and signature |
+| `make deny` | Dependency licences and advisories |
+| `make lint-scripts` | Shell scripts and workflows, and the licence headers |
+| `make docs` | Build the documentation site |
 
 ## Keyboard shortcuts (macOS)
 

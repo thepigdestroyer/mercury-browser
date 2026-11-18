@@ -7,11 +7,11 @@ description: Install Mercury Browser on macOS from the disk image, or build and 
 
 ## macOS (Apple Silicon)
 
-Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `Mercury-Browser-0.2.0-macos-arm64.dmg`, attached to each release on the [GitHub Releases page](https://github.com/thepigdestroyer/mercury-browser/releases). Mercury is source-available, free for non-commercial use; the disk image carries its `LICENSE` and `NOTICE` next to the app. The app bundles GStreamer and the libraries it needs; the source of the LGPL ones is attached to the same release as `Mercury-Browser-<version>-lgpl-sources.tar`. This software is based in part on the work of the Independent JPEG Group.
+Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `Mercury-Browser-0.2.0-macos-arm64.dmg`, attached to each release on the [GitHub Releases page](https://github.com/thepigdestroyer/mercury-browser/releases). Mercury is source-available, free for non-commercial use; the disk image carries its `LICENSE` and `NOTICE` next to the app, and the app carries them, with the third-party notices, in its own `Contents/Resources`. The app bundles GStreamer and the libraries it needs; the source of the LGPL ones is attached to the same release as `Mercury-Browser-<version>-lgpl-sources.tar`. This software is based in part on the work of the Independent JPEG Group.
 
 ### Install from the disk image
 
-1. Download `Mercury-Browser-<version>-macos-arm64.dmg` and, optionally, the `.sha256` file next to it from the release. Check the download against it:
+1. Download `Mercury-Browser-<version>-macos-arm64.dmg` and, optionally, the `.sha256` file next to it from the release. Check the download against it (more checks are in [Verify a download](#verify-a-download)):
 
     ```bash
     shasum -a 256 -c Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
@@ -58,6 +58,46 @@ Quit Mercury Browser and move `/Applications/Mercury Browser.app` to the Trash. 
 ### Build the app yourself
 
 With the Xcode command-line tools and Rust installed, run `make gstreamer-macos` once (it downloads GStreamer, about 0.9 GB, and unpacks it into your user cache without `sudo`; see [Development setup](../developer-guide/setup.md#macos-media-set-up-gstreamer)). Then `make app-macos` builds `dist/Mercury Browser.app` from source, with audio and video, and `make package-macos` also makes the disk image. An app you build yourself is not marked as downloaded, so Gatekeeper does not block it. See [Releases](../developer-guide/releases.md#package-for-macos).
+
+## Verify a download
+
+Checking a download is optional, and takes a minute. Every release lists these files:
+
+| File | What it is |
+| --- | --- |
+| `Mercury-Browser-<version>-macos-arm64.dmg` | The macOS disk image |
+| `mercury-browser-linux-x86_64.tar.gz` | A Linux x86-64 preview archive, for testing; the supported Linux route is still the source build below |
+| `Mercury-Browser-<version>-lgpl-sources.tar` | The source of the LGPL libraries bundled in the macOS app |
+| `update.json` and `update.json.minisig` | A manifest of the release and its signature, for a future update check |
+| `SHA256SUMS`, and a `.sha256` file next to each download | Checksums |
+
+**Check the checksum.** Put the file and its `.sha256` file in one folder and run the command for your system. It prints `OK` when the file is the one that was uploaded:
+
+```bash
+shasum -a 256 -c Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
+```
+
+```bash
+sha256sum -c mercury-browser-linux-x86_64.tar.gz.sha256
+```
+
+`SHA256SUMS` lists the same digests for the two downloads, the LGPL sources and `update.json` in one file. To check one file against it, pick out its line (here on macOS; on Linux use `sha256sum -c -`):
+
+```bash
+grep ' Mercury-Browser-0.2.0-macos-arm64.dmg$' SHA256SUMS | shasum -a 256 -c -
+```
+
+A checksum only shows that the file was not damaged on the way: whoever could change the file could change the checksum next to it. The next check does not have that weakness.
+
+**Check where it was built.** The release workflow attests the build provenance of each file listed in `SHA256SUMS` (the downloads, the LGPL sources and `update.json`) with GitHub's artifact attestations. With the [GitHub CLI](https://cli.github.com/) installed and signed in (`gh auth login`), this checks that GitHub signed a record saying the file you hold was built by a workflow of this repository:
+
+```bash
+gh attestation verify Mercury-Browser-0.2.0-macos-arm64.dmg --repo thepigdestroyer/mercury-browser
+```
+
+It prints the verification result and exits with an error if there is no matching attestation for the file. The `.sha256` files, `update.json.minisig` and `SHA256SUMS` itself are not attested, and you need none of them to install Mercury. An attestation says where a file came from, not that the software is free of faults or that the repository is trustworthy.
+
+**About `update.json.minisig`.** It is the minisign signature of `update.json`, made with a key the project keeps for its future update check. **Mercury does not check for updates yet**: the browser reads neither file, so you update by downloading the new version yourself and, if you like, verifying it as above. You do not need either file to install Mercury.
 
 ## Linux
 
