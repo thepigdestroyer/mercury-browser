@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mercury-release"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Release tooling: writes and signs the update manifest published with each release."
+
+[[bin]]
+name = "mercury-release"
+path = "src/main.rs"
+
+[dependencies]
+minisign = "=0.10.0"
+rpassword = "7.5"
