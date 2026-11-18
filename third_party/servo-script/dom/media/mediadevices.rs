@@ -101,11 +101,15 @@ impl MediaDevices {
             let request = request.clone();
             task_source.queue(task!(getusermedia_permission_response: move |cx| {
                 let this = this.root();
-                let state = match response {
-                    Ok(response) => record_permission_request_result(name, &this.global(), response),
-                    Err(_) => PermissionState::Denied,
-                };
-                this.permission_settled(cx, &request, name, state);
+                let stale = request.lock().unwrap().generation != this.capture_generation.get() ||
+                    !this.global().as_window().Document().is_fully_active();
+                let global = this.global();
+                match settle_answer(stale, response.ok(), |answer| {
+                    record_permission_request_result(name, &global, answer)
+                }) {
+                    AnswerOutcome::Stale => this.abort_stale_request(cx, &request),
+                    AnswerOutcome::Settled(state) => this.permission_settled(cx, &request, name, state),
+                }
             }));
         })
         .expect("Could not create callback in script.")
@@ -154,6 +158,15 @@ impl MediaDevices {
             return;
         }
         self.start_capture(cx, &promise, audio, video);
+    }
+
+    /// Mercury: a stale call opens nothing and rejects with `AbortError`; its other answer, if
+    /// any, finds the promise gone and does nothing.
+    fn abort_stale_request(&self, cx: &mut JSContext, request: &Mutex<CaptureRequest>) {
+        let promise = request.lock().unwrap().promise.take();
+        if let Some(promise) = promise {
+            promise.root(cx).reject_error(cx, Error::Abort(None));
+        }
     }
 
     /// Mercury: opens the devices (only after permission) and settles the promise.
@@ -445,5 +458,73 @@ fn convert_cdouble(js: &ConstrainDouble) -> Option<Constrain<f64>> {
                 range.exact.map(|exact| Constrain::Value(*exact))
             }
         },
+    }
+}
+
+/// Mercury: what one permission answer to a `getUserMedia` call amounts to.
+#[derive(Debug, PartialEq)]
+enum AnswerOutcome {
+    /// The call was made before the document's capture was last stopped, or the document is no
+    /// longer fully active.
+    Stale,
+    Settled(PermissionState),
+}
+
+/// Mercury: `record` stores an answer in the global's permission results.
+fn settle_answer(
+    stale: bool,
+    response: Option<AllowOrDeny>,
+    record: impl FnOnce(AllowOrDeny) -> PermissionState,
+) -> AnswerOutcome {
+    let state = match response {
+        Some(answer) => record(answer),
+        None => PermissionState::Denied,
+    };
+    if stale {
+        return AnswerOutcome::Stale;
+    }
+    AnswerOutcome::Settled(state)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use embedder_traits::AllowOrDeny;
+
+    use super::{AnswerOutcome, PermissionState, settle_answer};
+
+    // Mercury: a late Allow must not be stored after `stop_all_capture` cleared the results: a
+    // document restored from the history would capture again without asking, and without marks.
+    #[test]
+    fn a_stale_answer_is_not_recorded() {
+        let recorded = Cell::new(false);
+        let record = |_| {
+            recorded.set(true);
+            PermissionState::Granted
+        };
+        assert_eq!(
+            settle_answer(true, Some(AllowOrDeny::Allow), record),
+            AnswerOutcome::Stale
+        );
+        assert!(!recorded.get());
+    }
+
+    #[test]
+    fn a_current_answer_is_recorded() {
+        let recorded = Cell::new(false);
+        let record = |_| {
+            recorded.set(true);
+            PermissionState::Granted
+        };
+        assert_eq!(
+            settle_answer(false, Some(AllowOrDeny::Allow), record),
+            AnswerOutcome::Settled(PermissionState::Granted)
+        );
+        assert!(recorded.get());
+        assert_eq!(
+            settle_answer(false, None, |_| unreachable!("nothing to record")),
+            AnswerOutcome::Settled(PermissionState::Denied)
+        );
     }
 }

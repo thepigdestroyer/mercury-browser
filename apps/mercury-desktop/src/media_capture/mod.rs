@@ -334,6 +334,8 @@ fn start_answering_prompts(
 #[cfg(test)]
 mod tests {
     use talaria_core::{BrowserEvent, PageRequest, PageRequestId};
+    #[cfg(not(target_os = "macos"))]
+    use talaria_core::BrowserCommand;
 
     use super::*;
 
@@ -368,110 +370,11 @@ mod tests {
         SystemAccess::Allowed
     }
 
-    fn camera_denied(permission: PagePermission) -> SystemAccess {
-        if permission == PagePermission::Camera {
-            SystemAccess::Denied
-        } else {
-            SystemAccess::Allowed
-        }
-    }
-
-    #[test]
-    fn camera_and_microphone_are_asked_in_one_prompt_with_the_remember_choice() {
-        let pending = pending(&[
-            (1, PAGE, PagePermission::Microphone),
-            (2, PAGE, PagePermission::Camera),
-        ]);
-        let view = permission_view(&pending, allowed).expect("a capture prompt");
-
-        assert_eq!(view.style, PageRequestStyle::Permission);
-        assert_eq!(
-            view.heading,
-            "127.0.0.1:8123 wants to use your camera and microphone"
-        );
-        assert_eq!(view.choice_label, REMEMBER_CHOICE);
-        assert_eq!(view.accept_label, "Allow");
-        assert_eq!(view.decline_label, "Block");
-        assert_eq!(view.message, "");
-    }
-
-    #[test]
-    fn a_single_kind_names_only_that_device() {
-        let pending = pending(&[(1, PAGE, PagePermission::Camera)]);
-        assert_eq!(
-            permission_view(&pending, allowed)
-                .expect("a capture prompt")
-                .heading,
-            "127.0.0.1:8123 wants to use your camera"
-        );
-    }
-
     #[test]
     fn other_permissions_keep_the_dialogs_prompt() {
         let pending = pending(&[(1, PAGE, PagePermission::PersistentStorage)]);
         assert_eq!(permission_view(&pending, allowed), None);
         assert_eq!(capture_reply(&pending, true, true, allowed), None);
-    }
-
-    #[test]
-    fn allow_with_the_choice_ticked_remembers_for_the_site() {
-        let pending = pending(&[(1, PAGE, PagePermission::Camera)]);
-
-        assert_eq!(
-            capture_reply(&pending, true, true, allowed),
-            Some((
-                PageRequestReply::new(PageRequestAnswer::Accept).remembering_for_site(),
-                None
-            ))
-        );
-        assert_eq!(
-            capture_reply(&pending, false, false, allowed),
-            Some((PageRequestReply::new(PageRequestAnswer::Decline), None))
-        );
-    }
-
-    #[test]
-    fn a_page_without_an_origin_is_never_remembered() {
-        let pending = pending(&[(1, "file:///tmp/capture.html", PagePermission::Camera)]);
-        let view = permission_view(&pending, allowed).expect("a capture prompt");
-
-        assert_eq!(view.choice_label, "");
-        assert_eq!(
-            capture_reply(&pending, true, true, allowed),
-            Some((PageRequestReply::new(PageRequestAnswer::Accept), None))
-        );
-    }
-
-    #[test]
-    fn when_macos_refuses_the_prompt_explains_and_the_page_is_refused() {
-        let pending = pending(&[
-            (1, PAGE, PagePermission::Camera),
-            (2, PAGE, PagePermission::Microphone),
-        ]);
-        let view = permission_view(&pending, camera_denied).expect("a capture prompt");
-
-        assert_eq!(
-            view.heading,
-            "127.0.0.1:8123 wants to use your camera and microphone"
-        );
-        assert_eq!(
-            view.message,
-            "macOS does not allow Mercury Browser to use the camera. You can allow it in System \
-             Settings, Privacy & Security, Camera."
-        );
-        assert_eq!(view.accept_label, "Open Privacy Settings");
-        assert_eq!(view.decline_label, "Close");
-        assert_eq!(view.choice_label, "");
-
-        let refused = PageRequestReply::new(PageRequestAnswer::Decline);
-        assert_eq!(
-            capture_reply(&pending, true, true, camera_denied),
-            Some((refused.clone(), Some(PagePermission::Camera)))
-        );
-        assert_eq!(
-            capture_reply(&pending, false, false, camera_denied),
-            Some((refused, None))
-        );
     }
 
     #[test]
@@ -483,26 +386,6 @@ mod tests {
         assert_eq!(
             automatic_reply(PromptAnswer::Deny),
             PageRequestReply::new(PageRequestAnswer::Decline)
-        );
-    }
-
-    #[test]
-    fn an_automatic_allow_is_refused_when_macos_refuses() {
-        let pending = pending(&[(1, PAGE, PagePermission::Camera)]);
-        let refused = PageRequestReply::new(PageRequestAnswer::Decline);
-
-        assert_eq!(
-            automatic_reply_to(&pending, PromptAnswer::Allow, camera_denied),
-            refused
-        );
-        assert_eq!(
-            automatic_reply_to(&pending, PromptAnswer::Allow, allowed),
-            PageRequestReply::new(PageRequestAnswer::Accept)
-        );
-        let storage = super::tests::pending(&[(2, PAGE, PagePermission::PersistentStorage)]);
-        assert_eq!(
-            automatic_reply_to(&storage, PromptAnswer::Allow, camera_denied),
-            PageRequestReply::new(PageRequestAnswer::Accept)
         );
     }
 
@@ -551,6 +434,166 @@ mod tests {
         assert_eq!(
             view.note,
             "The page did not reload, so it can still use your camera. Close the tab to stop it."
+        );
+    }
+
+    // Camera and microphone are asked for only on macOS; elsewhere they never wait for an answer.
+    #[cfg(target_os = "macos")]
+    mod macos_prompts {
+        use super::*;
+
+        fn camera_denied(permission: PagePermission) -> SystemAccess {
+            if permission == PagePermission::Camera {
+                SystemAccess::Denied
+            } else {
+                SystemAccess::Allowed
+            }
+        }
+
+        #[test]
+        fn camera_and_microphone_are_asked_in_one_prompt_with_the_remember_choice() {
+            let pending = pending(&[
+                (1, PAGE, PagePermission::Microphone),
+                (2, PAGE, PagePermission::Camera),
+            ]);
+            let view = permission_view(&pending, allowed).expect("a capture prompt");
+
+            assert_eq!(view.style, PageRequestStyle::Permission);
+            assert_eq!(
+                view.heading,
+                "127.0.0.1:8123 wants to use your camera and microphone"
+            );
+            assert_eq!(view.choice_label, REMEMBER_CHOICE);
+            assert_eq!(view.accept_label, "Allow");
+            assert_eq!(view.decline_label, "Block");
+            assert_eq!(view.message, "");
+        }
+
+        #[test]
+        fn a_single_kind_names_only_that_device() {
+            let pending = pending(&[(1, PAGE, PagePermission::Camera)]);
+            assert_eq!(
+                permission_view(&pending, allowed)
+                    .expect("a capture prompt")
+                    .heading,
+                "127.0.0.1:8123 wants to use your camera"
+            );
+        }
+
+        #[test]
+        fn allow_with_the_choice_ticked_remembers_for_the_site() {
+            let pending = pending(&[(1, PAGE, PagePermission::Camera)]);
+
+            assert_eq!(
+                capture_reply(&pending, true, true, allowed),
+                Some((
+                    PageRequestReply::new(PageRequestAnswer::Accept).remembering_for_site(),
+                    None
+                ))
+            );
+            assert_eq!(
+                capture_reply(&pending, false, false, allowed),
+                Some((PageRequestReply::new(PageRequestAnswer::Decline), None))
+            );
+        }
+
+        #[test]
+        fn a_page_without_an_origin_is_never_remembered() {
+            let pending = pending(&[(1, "file:///tmp/capture.html", PagePermission::Camera)]);
+            let view = permission_view(&pending, allowed).expect("a capture prompt");
+
+            assert_eq!(view.choice_label, "");
+            assert_eq!(
+                capture_reply(&pending, true, true, allowed),
+                Some((PageRequestReply::new(PageRequestAnswer::Accept), None))
+            );
+        }
+
+        #[test]
+        fn when_macos_refuses_the_prompt_explains_and_the_page_is_refused() {
+            let pending = pending(&[
+                (1, PAGE, PagePermission::Camera),
+                (2, PAGE, PagePermission::Microphone),
+            ]);
+            let view = permission_view(&pending, camera_denied).expect("a capture prompt");
+
+            assert_eq!(
+                view.heading,
+                "127.0.0.1:8123 wants to use your camera and microphone"
+            );
+            assert_eq!(
+                view.message,
+                "macOS does not allow Mercury Browser to use the camera. You can allow it in System \
+                 Settings, Privacy & Security, Camera."
+            );
+            assert_eq!(view.accept_label, "Open Privacy Settings");
+            assert_eq!(view.decline_label, "Close");
+            assert_eq!(view.choice_label, "");
+
+            let refused = PageRequestReply::new(PageRequestAnswer::Decline);
+            assert_eq!(
+                capture_reply(&pending, true, true, camera_denied),
+                Some((refused.clone(), Some(PagePermission::Camera)))
+            );
+            assert_eq!(
+                capture_reply(&pending, false, false, camera_denied),
+                Some((refused, None))
+            );
+        }
+
+        #[test]
+        fn an_automatic_allow_is_refused_when_macos_refuses() {
+            let pending = pending(&[(1, PAGE, PagePermission::Camera)]);
+            let refused = PageRequestReply::new(PageRequestAnswer::Decline);
+
+            assert_eq!(
+                automatic_reply_to(&pending, PromptAnswer::Allow, camera_denied),
+                refused
+            );
+            assert_eq!(
+                automatic_reply_to(&pending, PromptAnswer::Allow, allowed),
+                PageRequestReply::new(PageRequestAnswer::Accept)
+            );
+            let storage = pending(&[(2, PAGE, PagePermission::PersistentStorage)]);
+            assert_eq!(
+                automatic_reply_to(&storage, PromptAnswer::Allow, camera_denied),
+                PageRequestReply::new(PageRequestAnswer::Accept)
+            );
+        }
+    }
+
+    #[cfg(not(target_os = "macos"))]
+    #[test]
+    fn off_macos_a_camera_request_is_refused_with_nothing_waiting() {
+        let mut controller = BrowserController::default();
+        let tab_id = controller.active_tab_id();
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::AddressChanged {
+                url: PAGE.to_owned(),
+            },
+        );
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::PageRequested(PageRequest {
+                id: PageRequestId::new(1),
+                url: PAGE.to_owned(),
+                kind: PageRequestKind::Permission(PagePermission::Camera),
+                received_at: Duration::ZERO,
+            }),
+        );
+
+        assert!(controller.pending_page_request(tab_id).is_none());
+        let answers: Vec<_> = std::iter::from_fn(|| controller.next_command())
+            .map(|command| command.command().clone())
+            .filter(|command| matches!(command, BrowserCommand::AnswerPageRequest { .. }))
+            .collect();
+        assert_eq!(
+            answers,
+            [BrowserCommand::AnswerPageRequest {
+                id: PageRequestId::new(1),
+                answer: PageRequestAnswer::Decline,
+            }]
         );
     }
 }

@@ -468,3 +468,91 @@ fn a_remembered_refusal_of_one_kind_refuses_the_other_kind_of_the_same_call() {
     );
     assert_eq!(controller.pending_page_request(tab_id), None);
 }
+
+fn leave_prompt(controller: &mut BrowserController, tab_id: TabId, id: u64) {
+    assert!(controller.handle_event(
+        tab_id,
+        BrowserEvent::PageRequested(PageRequest {
+            id: PageRequestId::new(id),
+            url: PAGE.to_owned(),
+            kind: PageRequestKind::LeavePage,
+            received_at: Duration::ZERO,
+        }),
+    ));
+}
+
+fn click_in_page(controller: &mut BrowserController) {
+    controller.queue_command(BrowserCommand::PointerButton {
+        action: PointerButtonAction::Down,
+        button: PointerButton::Left,
+        x: 0.0,
+        y: 0.0,
+    });
+}
+
+#[test]
+fn staying_on_a_page_the_user_leaves_after_stop_is_not_called_a_refused_stop() {
+    let (mut controller, tab_id) = ready_controller();
+    ask(&mut controller, tab_id, 1, PAGE, PagePermission::Camera);
+    reply_front(&mut controller, tab_id, allow());
+    click_in_page(&mut controller);
+    assert!(controller.stop_capture(tab_id));
+    drain(&mut controller);
+
+    // Before the reload shows anything, the user goes to another address, and stays when the
+    // page asks: that is not the page refusing Stop's reload.
+    controller.queue_command(BrowserCommand::Navigate {
+        url: "https://elsewhere.example/".to_owned(),
+    });
+    leave_prompt(&mut controller, tab_id, 9);
+    let leave = controller
+        .pending_page_request(tab_id)
+        .expect("the leave prompt");
+    assert!(!leave.is_reload_prompt());
+    reply_front(&mut controller, tab_id, block());
+
+    assert!(!controller.capture_stop_refused(tab_id));
+    assert_eq!(controller.capture_access(tab_id), access(true, false));
+}
+
+#[test]
+fn a_remembered_refusal_of_the_kind_asked_first_refuses_the_kind_asked_next() {
+    let (mut controller, tab_id) = ready_controller();
+    let mut decisions = SessionPermissionDecisions::default();
+    decisions.remember(
+        "https://meet.example",
+        PagePermission::Microphone,
+        PermissionDecision::Block,
+    );
+    controller.set_permission_decisions(Box::new(decisions));
+
+    // The engine asks for the microphone, then the camera, of one getUserMedia call: the call
+    // has already failed when the camera request arrives.
+    ask(&mut controller, tab_id, 1, PAGE, PagePermission::Microphone);
+    ask(&mut controller, tab_id, 2, PAGE, PagePermission::Camera);
+    assert_eq!(
+        answers(&mut controller),
+        vec![
+            answer_command(1, PageRequestAnswer::Decline),
+            answer_command(2, PageRequestAnswer::Decline),
+        ]
+    );
+    assert_eq!(controller.pending_page_request(tab_id), None);
+
+    // A camera request of a later call is asked as usual.
+    assert!(controller.handle_event(
+        tab_id,
+        BrowserEvent::PageRequested(PageRequest {
+            id: PageRequestId::new(3),
+            url: PAGE.to_owned(),
+            kind: PageRequestKind::Permission(PagePermission::Camera),
+            received_at: Duration::from_secs(5),
+        }),
+    ));
+    assert_eq!(
+        controller
+            .pending_page_request(tab_id)
+            .map(|pending| pending.id().value()),
+        Some(3)
+    );
+}
