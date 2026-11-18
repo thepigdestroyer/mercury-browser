@@ -105,7 +105,7 @@ hide:
 </section>
 
 <section class="mercury-showcase">
-  <img src="screenshots/mercury-servo.png" alt="servo.org open in Mercury Browser, with two more tabs" loading="lazy">
+  <img src="screenshots/mercury-servo.png" alt="servo.org open in Mercury Browser in Dark mode" loading="lazy">
   <div class="mercury-showcase__copy">
     <p class="mercury-eyebrow">How it fits together</p>
     <h2>One Servo web view per tab.</h2>
