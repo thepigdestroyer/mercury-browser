@@ -81,6 +81,7 @@ jobs:
     # artefact; the publishing job checks the downloaded file against it.
     outputs:
       archive-sha256: ${{ steps.archive.outputs.sha256 }}
+      archive-size: ${{ steps.archive.outputs.size }}
     env:
       # Keep bindgen's clang executable and dynamically loaded libclang on the
       # same version. The runner also ships Clang 15, and mixing its libclang
@@ -281,6 +282,7 @@ jobs:
           test -f "${archive}"
           test -f "${checksum}"
           echo "sha256=$(sha256sum "${archive}" | cut -d ' ' -f 1)" >> "${GITHUB_OUTPUT}"
+          echo "size=$(stat -c %s "${archive}")" >> "${GITHUB_OUTPUT}"
 
       - name: Upload Linux artifacts
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -499,6 +501,7 @@ jobs:
     timeout-minutes: 90
     outputs:
       dmg-sha256: ${{ steps.shipped.outputs.sha256 }}
+      dmg-size: ${{ steps.shipped.outputs.size }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       EXECUTABLE_SHA256: ${{ needs.build-macos.outputs.executable-sha256 }}
@@ -885,6 +888,7 @@ jobs:
             "${mountpoint}/Mercury Browser.app"
 
           echo "sha256=$(shasum -a 256 "dist/${name}" | cut -d ' ' -f 1)" >> "${GITHUB_OUTPUT}"
+          echo "size=$(stat -f %z "dist/${name}")" >> "${GITHUB_OUTPUT}"
 
       - name: Describe the signature in the job summary
         shell: bash
@@ -934,6 +938,230 @@ jobs:
           fi
           rm -f -- "${RUNNER_TEMP}/mercury-signing.p12" "${RUNNER_TEMP}/mercury-notary-key.p8"
 
+  # The corresponding source of the LGPL libraries in the macOS app
+  # (GStreamer, FFmpeg, GLib, proxy-libintl, libnice) and the whole of
+  # cerbero, which built them; published next to the disk image. Every
+  # tarball is checked against a SHA-256 pinned in the script.
+  lgpl-sources:
+    name: LGPL library sources
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    outputs:
+      sha256: ${{ steps.collect.outputs.sha256 }}
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Collect the sources
+        id: collect
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          scripts/ci/lgpl-sources.sh "${VERSION}" dist
+          name="Mercury-Browser-${VERSION}-lgpl-sources.tar"
+          (cd dist && sha256sum --check "${name}.sha256")
+          tar -tvf "dist/${name}"
+          echo "sha256=$(sha256sum "dist/${name}" | cut -d ' ' -f 1)" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload the sources
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mercury-browser-lgpl-sources
+          path: |
+            dist/Mercury-Browser-${{ needs.version.outputs.version }}-lgpl-sources.tar
+            dist/Mercury-Browser-${{ needs.version.outputs.version }}-lgpl-sources.tar.sha256
+          if-no-files-found: error
+          retention-days: 14
+
+  # Builds and tests the update-manifest signer (crates/mercury-release, a
+  # pure-Rust minisign signer) with no secrets, so the build scripts of its
+  # dependencies never run where the signing key is. The signing job below
+  # receives only the executable, checked against the digest recorded here.
+  release-tool:
+    name: Update-manifest signer (build)
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    outputs:
+      sha256: ${{ steps.digest.outputs.sha256 }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rustup toolchain install
+          rustc --version
+
+      - name: Test the signer
+        run: cargo test --locked --release --package mercury-release
+
+      - name: Build the signer
+        run: cargo build --locked --release --package mercury-release
+
+      - name: Record the signer's digest
+        id: digest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sha256="$(sha256sum target/release/mercury-release | cut -d ' ' -f 1)"
+          echo "sha256=${sha256}" >> "${GITHUB_OUTPUT}"
+          echo "target/release/mercury-release: ${sha256}"
+
+      - name: Upload the signer
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          # Not named mercury-browser-*: the publishing job takes those.
+          name: release-tool-linux-x86_64
+          path: target/release/mercury-release
+          if-no-files-found: error
+          retention-days: 14
+
+  # Writes update.json (the version and every download's SHA-256 and size,
+  # from the digests the jobs that made them recorded) and signs it with the
+  # update key. Mercury's update check verifies the signature against the
+  # public key in apps/mercury-desktop/resources/update-key.pub. Like the
+  # macOS signing job: the `release` environment, only for v* tags, a fresh
+  # runner, no build step, no cache, and the key only in the signing step.
+  sign-update:
+    name: Sign the update manifest
+    needs:
+      - version
+      - build-linux
+      - package-macos
+      - release-tool
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-24.04
+    environment: release
+    timeout-minutes: 10
+    env:
+      VERSION: ${{ needs.version.outputs.version }}
+      TOOL_SHA256: ${{ needs.release-tool.outputs.sha256 }}
+      LINUX_SHA256: ${{ needs.build-linux.outputs.archive-sha256 }}
+      LINUX_SIZE: ${{ needs.build-linux.outputs.archive-size }}
+      MACOS_SHA256: ${{ needs.package-macos.outputs.dmg-sha256 }}
+      MACOS_SIZE: ${{ needs.package-macos.outputs.dmg-size }}
+
+    steps:
+      - name: Check out the repository
+        # For the committed public key only.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Check that the public key is committed
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          key="apps/mercury-desktop/resources/update-key.pub"
+          if [ ! -s "${key}" ]; then
+            echo "::error::${key} is missing. Generate the update key pair and commit its public half first (docs/developer-guide/releases.md, \"The update signing key\")."
+            exit 1
+          fi
+
+      - name: Download the signer
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-tool-linux-x86_64
+          path: ${{ runner.temp }}/release-tool
+
+      - name: Verify the signer against the build's digest
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tool="${RUNNER_TEMP}/release-tool/mercury-release"
+          case "${TOOL_SHA256}" in
+            "" | *[!0-9a-f]*) echo "the build job recorded no usable digest" >&2; exit 1 ;;
+          esac
+          if [ -L "${tool}" ] || [ ! -f "${tool}" ]; then
+            echo "${tool} is not a regular file" >&2
+            exit 1
+          fi
+          listing="$(find "${RUNNER_TEMP}/release-tool" -mindepth 1)"
+          if [ "${listing}" != "${tool}" ]; then
+            echo "the artefact holds more than the signer: ${listing}" >&2
+            exit 1
+          fi
+          actual="$(sha256sum "${tool}" | cut -d ' ' -f 1)"
+          if [ "${actual}" != "${TOOL_SHA256}" ]; then
+            echo "digest ${actual} is not the build's ${TOOL_SHA256}" >&2
+            exit 1
+          fi
+          chmod 755 "${tool}"
+          echo "MERCURY_RELEASE_TOOL=${tool}" >> "${GITHUB_ENV}"
+
+      - name: Write update.json
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist
+          "${MERCURY_RELEASE_TOOL}" update-manifest \
+            --version "${VERSION}" \
+            --published "$(date -u +%Y-%m-%d)" \
+            --platform "macos-arm64=Mercury-Browser-${VERSION}-macos-arm64.dmg:${MACOS_SHA256}:${MACOS_SIZE}" \
+            --platform "linux-x86_64=mercury-browser-linux-x86_64.tar.gz:${LINUX_SHA256}:${LINUX_SIZE}" \
+            --out dist/update.json
+          cat dist/update.json
+
+      - name: Sign update.json
+        # The only step that receives the key. The signer reads it from the
+        # environment, never from a command line, and refuses a key without a
+        # password.
+        shell: bash
+        env:
+          MINISIGN_SECRET_KEY: ${{ secrets.MINISIGN_SECRET_KEY }}
+          MINISIGN_PASSWORD: ${{ secrets.MINISIGN_PASSWORD }}
+        run: |
+          set -euo pipefail
+
+          if [ -z "${MINISIGN_SECRET_KEY}" ] || [ -z "${MINISIGN_PASSWORD}" ]; then
+            echo "::error::The release environment needs the MINISIGN_SECRET_KEY and MINISIGN_PASSWORD secrets (docs/developer-guide/releases.md, \"The update signing key\")."
+            exit 1
+          fi
+          "${MERCURY_RELEASE_TOOL}" sign \
+            --manifest dist/update.json \
+            --version "${VERSION}" \
+            --out dist/update.json.minisig
+
+      - name: Verify the signature with the committed public key
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          "${MERCURY_RELEASE_TOOL}" verify \
+            --manifest dist/update.json \
+            --signature dist/update.json.minisig \
+            --public-key apps/mercury-desktop/resources/update-key.pub \
+            --version "${VERSION}"
+          cat dist/update.json.minisig
+
+      - name: Upload the signed manifest
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: mercury-browser-update-manifest
+          path: |
+            dist/update.json
+            dist/update.json.minisig
+          if-no-files-found: error
+          retention-days: 14
+
   # Only a push of a v* tag publishes. A manual run (workflow_dispatch) builds
   # and leaves its artefacts on the run; it never touches a release, so it
   # cannot replace published files with different bytes.
@@ -944,6 +1172,8 @@ jobs:
       - version
       - build-linux
       - package-macos
+      - lgpl-sources
+      - sign-update
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     env:
@@ -951,6 +1181,7 @@ jobs:
       # Recorded by the jobs that made the files, as job outputs.
       LINUX_SHA256: ${{ needs.build-linux.outputs.archive-sha256 }}
       MACOS_SHA256: ${{ needs.package-macos.outputs.dmg-sha256 }}
+      SOURCES_SHA256: ${{ needs.lgpl-sources.outputs.sha256 }}
 
     permissions:
       contents: write
@@ -974,10 +1205,12 @@ jobs:
 
           linux="mercury-browser-linux-x86_64.tar.gz"
           macos="Mercury-Browser-${VERSION}-macos-arm64.dmg"
+          sources="Mercury-Browser-${VERSION}-lgpl-sources.tar"
           cd dist
 
-          # Exactly these four files, nothing else.
-          expected="$(printf '%s\n' "${linux}" "${linux}.sha256" "${macos}" "${macos}.sha256" | sort)"
+          # Exactly these files, nothing else.
+          expected="$(printf '%s\n' "${linux}" "${linux}.sha256" "${macos}" "${macos}.sha256" \
+            "${sources}" "${sources}.sha256" update.json update.json.minisig | sort)"
           present="$(find . -mindepth 1 -printf '%P\n' | sort)"
           if [ "${present}" != "${expected}" ]; then
             printf 'expected:\n%s\nfound:\n%s\n' "${expected}" "${present}" >&2
@@ -1000,10 +1233,16 @@ jobs:
           }
           check "${linux}" "${LINUX_SHA256}"
           check "${macos}" "${MACOS_SHA256}"
+          check "${sources}" "${SOURCES_SHA256}"
+          # update.json names the downloads by the same recorded digests; the
+          # signing job has verified its signature with the committed key.
+          grep -qF "\"sha256\": \"${LINUX_SHA256}\"" update.json
+          grep -qF "\"sha256\": \"${MACOS_SHA256}\"" update.json
+          grep -qF "trusted comment: mercury-browser update ${VERSION}" update.json.minisig
 
-          # One file covering every platform's artefacts, written outside the
-          # directory being listed and then moved in.
-          sha256sum -- "${linux}" "${macos}" > "${RUNNER_TEMP}/SHA256SUMS"
+          # One file covering every artefact, written outside the directory
+          # being listed and then moved in.
+          sha256sum -- "${linux}" "${macos}" "${sources}" update.json > "${RUNNER_TEMP}/SHA256SUMS"
           mv "${RUNNER_TEMP}/SHA256SUMS" SHA256SUMS
           cat SHA256SUMS
 
@@ -1048,6 +1287,16 @@ jobs:
               echo "https://thepigdestroyer.github.io/mercury-browser/user-guide/installation/"
               echo
               echo "**Linux x86-64:** \`mercury-browser-linux-x86_64.tar.gz\` (glibc 2.35 or newer)."
+              echo
+              echo "**Update check:** \`update.json\` and its minisign signature \`update.json.minisig\`"
+              echo "tell Mercury's once-a-day update check about this version."
+              echo
+              echo "**LGPL sources:** the macOS app bundles GStreamer, FFmpeg, GLib, proxy-libintl and"
+              echo "libnice as replaceable dynamic libraries. Their corresponding source, with the"
+              echo "cerbero build system that made them, is \`Mercury-Browser-${VERSION}-lgpl-sources.tar\`."
+              echo "We will also send it on request for at least three years (THIRD-PARTY-NOTICES.md)."
+              echo
+              echo "This software is based in part on the work of the Independent JPEG Group."
             } > "${notes}"
             gh release create \
               "${tag}" \

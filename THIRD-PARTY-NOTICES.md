@@ -82,8 +82,18 @@ and keep their own licences; the table below lists them.
     (the recipe's SHA-256 `f7a1cbd7579baaf575c66f9d99fb6295e9b0684a28b095967cfda17857595303`), with one patch
     from cerbero's `recipes/proxy-libintl/`.
 
+  These sources, with the whole of cerbero at that commit, are attached to every GitHub Release
+  as `Mercury-Browser-<version>-lgpl-sources.tar` (collected by `scripts/ci/lgpl-sources.sh`,
+  which checks each tarball against the SHA-256 above). **Written offer:** for at least three
+  years after a version was last distributed, anyone may ask for this source on a physical
+  medium, for no more than the cost of making and sending it, by opening an issue at
+  https://github.com/thepigdestroyer/mercury-browser/issues or writing to the copyright holder
+  named in `NOTICE`. libnice is used under its MPL-1.1 option.
+
   The other bundled projects are under permissive licences (see the table) with no source
   obligation.
+- **libjpeg-turbo (IJG).** This software is based in part on the work of the Independent JPEG
+  Group.
 - **Licence texts.** The LGPL version 2.1 is in `LICENSES/LGPL-2.1.txt` (the LGPL 2.1 permits use
   under any later version, which covers the "LGPL-2.0-or-later" projects too). Each project's
   own licence files, as the packages ship them under `share/licenses/<project>/`, are copied into
