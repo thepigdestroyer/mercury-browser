@@ -112,6 +112,24 @@ impl KeychainBackend {
         })
     }
 
+    /// Runs `operation` with Keychain user interaction switched off for the process, so a call
+    /// that would show an unlock or access dialog fails with [`PasswordError::Locked`] instead.
+    /// The setting is process-wide: call this only where every Keychain call of the process runs
+    /// on the same thread. If interaction is already off (as in tests), it stays off afterwards.
+    /// `Err(Locked)` if interaction could not be switched off; `operation` did not run then.
+    pub fn without_user_interaction<R>(operation: impl FnOnce() -> R) -> Result<R, PasswordError> {
+        let lock = match SecKeychain::user_interaction_allowed() {
+            Ok(false) => None,
+            Ok(true) => Some(
+                SecKeychain::disable_user_interaction().map_err(|_| PasswordError::Locked)?,
+            ),
+            Err(_) => return Err(PasswordError::Locked),
+        };
+        let result = operation();
+        drop(lock);
+        Ok(result)
+    }
+
     fn keychain(&self) -> Result<SecKeychain, PasswordError> {
         match &self.target {
             Target::Default => SecKeychain::default().map_err(map_error),

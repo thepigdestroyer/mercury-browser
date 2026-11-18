@@ -99,3 +99,44 @@ mod tests {
         assert!(shown.ends_with('…'));
     }
 }
+
+/// A saved password as the user reads it when they ask to see it: every character, so the
+/// generator's longest (128) and longer ones are shown whole; characters that cannot be shown
+/// (control characters, separators, bidirectional formatting) become U+FFFD. The flag says
+/// whether any was replaced, so the interface can say so.
+pub fn display_password(password: &str) -> (String, bool) {
+    let mut replaced = false;
+    let shown = password
+        .chars()
+        .map(|character| {
+            if is_unsafe(character) {
+                replaced = true;
+                '\u{fffd}'
+            } else {
+                character
+            }
+        })
+        .collect();
+    (shown, replaced)
+}
+
+#[cfg(test)]
+mod password_tests {
+    use super::*;
+
+    #[test]
+    fn a_shown_password_is_never_shortened() {
+        let long = "aB3#".repeat(32);
+
+        assert_eq!(display_password(&long), (long.clone(), false));
+        assert_eq!(display_password(&"x".repeat(4096)).0.chars().count(), 4096);
+    }
+
+    #[test]
+    fn characters_that_cannot_be_shown_are_replaced_and_reported() {
+        assert_eq!(
+            display_password("ab\tc\u{202e}"),
+            ("ab\u{fffd}c\u{fffd}".to_owned(), true)
+        );
+    }
+}

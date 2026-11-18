@@ -4,16 +4,22 @@ use std::fs::{self, OpenOptions};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
-use mercury_passwords::{Password, PasswordStore, SecretBackend, write_logins_csv};
+use mercury_passwords::{PasswordStore, SecretBackend, write_logins_csv};
 use zeroize::Zeroizing;
 
 use crate::ManagerError;
 
+/// Every saved login as CSV, and how many there are.
+pub struct ExportedCsv {
+    /// The file's text; passwords in clear text, wiped on drop.
+    pub text: Zeroizing<String>,
+    /// How many logins it holds.
+    pub count: usize,
+}
+
 /// Every saved login in Chrome's CSV format (see `write_logins_csv`), passwords in clear text.
 /// Reads every password, so on macOS the Keychain may ask the user about each one.
-pub fn export_csv<B: SecretBackend>(
-    store: &PasswordStore<B>,
-) -> Result<Zeroizing<String>, ManagerError> {
+pub fn export_csv<B: SecretBackend>(store: &PasswordStore<B>) -> Result<ExportedCsv, ManagerError> {
     let summaries = store.all()?;
     let mut logins = Vec::with_capacity(summaries.len());
     for summary in summaries {
@@ -22,11 +28,10 @@ pub fn export_csv<B: SecretBackend>(
             logins.push((summary.key, password));
         }
     }
-    Ok(write_logins_csv(
-        logins
-            .iter()
-            .map(|(key, password): &(_, Password)| (key, password)),
-    ))
+    Ok(ExportedCsv {
+        text: write_logins_csv(logins.iter().map(|(key, password)| (key, password))),
+        count: logins.len(),
+    })
 }
 
 /// Writes `contents` to `path` as a file only its owner can read and write (mode `0600`).
@@ -75,7 +80,7 @@ fn write_new(path: &PathBuf, contents: &[u8]) -> Result<(), ManagerError> {
 
 #[cfg(test)]
 mod tests {
-    use mercury_passwords::{LoginKey, MemoryBackend, Origin};
+    use mercury_passwords::{LoginKey, MemoryBackend, Origin, Password};
 
     use super::*;
 
@@ -96,7 +101,7 @@ mod tests {
             )
             .expect("saved");
 
-        let text = export_csv(&store).expect("exported");
+        let text = export_csv(&store).expect("exported").text;
 
         assert_eq!(
             text.as_str(),
@@ -149,5 +154,28 @@ mod tests {
 
         assert!(write_private_file(&path, b"x").is_err());
         assert_eq!(fs::read_dir(directory.path()).expect("listed").count(), 0);
+    }
+}
+
+#[cfg(test)]
+mod count_tests {
+    use mercury_passwords::{LoginKey, MemoryBackend, Origin, Password};
+
+    use super::*;
+
+    #[test]
+    fn the_export_counts_logins_not_lines() {
+        let store = PasswordStore::new(MemoryBackend::new());
+        store
+            .save(
+                &LoginKey::form(Origin::parse("https://a.test").expect("valid"), "alice"),
+                &Password::new("two\nlines".to_owned()),
+            )
+            .expect("saved");
+
+        let exported = export_csv(&store).expect("exported");
+
+        assert_eq!(exported.count, 1);
+        assert!(exported.text.contains("\"two\nlines\""));
     }
 }

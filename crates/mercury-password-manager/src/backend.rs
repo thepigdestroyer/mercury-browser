@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+use std::cell::Cell;
+
 #[cfg(target_os = "macos")]
 use mercury_passwords::KeychainBackend;
 use mercury_passwords::{
@@ -7,56 +9,97 @@ use mercury_passwords::{
 };
 
 /// The backend the browser chose for this run: the Keychain for the user's own profile, memory
-/// for temporary profiles, automated runs and tests.
-pub enum AnyBackend {
-    /// Logins that last until the browser quits.
+/// for other profiles, automated runs and tests.
+///
+/// While [`AnyBackend::set_quiet`] is on, Keychain calls run with user interaction switched off
+/// (see `KeychainBackend::without_user_interaction`): one that would show a dialog fails with
+/// `PasswordError::Locked`. Only the store worker sets it, on its own thread.
+pub struct AnyBackend {
+    kind: Kind,
+    quiet: Cell<bool>,
+}
+
+enum Kind {
     Memory(MemoryBackend),
-    /// The macOS Keychain.
     #[cfg(target_os = "macos")]
     Keychain(KeychainBackend),
 }
 
 impl AnyBackend {
+    /// Logins that last until the browser quits.
+    pub fn memory() -> Self {
+        Self {
+            kind: Kind::Memory(MemoryBackend::new()),
+            quiet: Cell::new(false),
+        }
+    }
+
+    /// The macOS Keychain.
+    #[cfg(target_os = "macos")]
+    pub fn keychain(backend: KeychainBackend) -> Self {
+        Self {
+            kind: Kind::Keychain(backend),
+            quiet: Cell::new(false),
+        }
+    }
+
     /// Whether logins outlive this run.
     pub fn is_persistent(&self) -> bool {
-        match self {
-            Self::Memory(_) => false,
+        match self.kind {
+            Kind::Memory(_) => false,
             #[cfg(target_os = "macos")]
-            Self::Keychain(_) => true,
+            Kind::Keychain(_) => true,
+        }
+    }
+
+    /// Whether calls may not ask the user from now on.
+    pub fn set_quiet(&self, quiet: bool) {
+        self.quiet.set(quiet);
+    }
+
+    #[cfg(target_os = "macos")]
+    fn keychain_call<R>(
+        &self,
+        operation: impl FnOnce() -> Result<R, PasswordError>,
+    ) -> Result<R, PasswordError> {
+        if self.quiet.get() {
+            KeychainBackend::without_user_interaction(operation)?
+        } else {
+            operation()
         }
     }
 }
 
 impl SecretBackend for AnyBackend {
     fn put(&self, key: &LoginKey, password: &Password) -> Result<SaveOutcome, PasswordError> {
-        match self {
-            Self::Memory(backend) => backend.put(key, password),
+        match &self.kind {
+            Kind::Memory(backend) => backend.put(key, password),
             #[cfg(target_os = "macos")]
-            Self::Keychain(backend) => backend.put(key, password),
+            Kind::Keychain(backend) => self.keychain_call(|| backend.put(key, password)),
         }
     }
 
     fn get(&self, key: &LoginKey) -> Result<Option<Password>, PasswordError> {
-        match self {
-            Self::Memory(backend) => backend.get(key),
+        match &self.kind {
+            Kind::Memory(backend) => backend.get(key),
             #[cfg(target_os = "macos")]
-            Self::Keychain(backend) => backend.get(key),
+            Kind::Keychain(backend) => self.keychain_call(|| backend.get(key)),
         }
     }
 
     fn delete(&self, key: &LoginKey) -> Result<bool, PasswordError> {
-        match self {
-            Self::Memory(backend) => backend.delete(key),
+        match &self.kind {
+            Kind::Memory(backend) => backend.delete(key),
             #[cfg(target_os = "macos")]
-            Self::Keychain(backend) => backend.delete(key),
+            Kind::Keychain(backend) => self.keychain_call(|| backend.delete(key)),
         }
     }
 
     fn list(&self) -> Result<Vec<LoginSummary>, PasswordError> {
-        match self {
-            Self::Memory(backend) => backend.list(),
+        match &self.kind {
+            Kind::Memory(backend) => backend.list(),
             #[cfg(target_os = "macos")]
-            Self::Keychain(backend) => backend.list(),
+            Kind::Keychain(backend) => self.keychain_call(|| backend.list()),
         }
     }
 }

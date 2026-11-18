@@ -34,7 +34,7 @@ fn logins_survive_import_edit_and_export_through_a_temporary_keychain() {
         TEST_KEYCHAIN_PASSWORD,
     )
     .expect("the test keychain");
-    let store = PasswordStore::new(AnyBackend::Keychain(backend));
+    let store = PasswordStore::new(AnyBackend::keychain(backend));
     assert!(store.backend().is_persistent());
 
     let report = import_csv(
@@ -50,9 +50,14 @@ fn logins_survive_import_edit_and_export_through_a_temporary_keychain() {
     assert_eq!(rows.len(), 2);
     update_login(&store, &rows[1].key, "bobby", None).expect("renamed");
 
+    // Quiet mode (no dialog may appear) still reads what this program saved.
+    store.backend().set_quiet(true);
+    assert_eq!(store.all().expect("listed quietly").len(), 2);
+    store.backend().set_quiet(false);
+
     let exported = export_csv(&store).expect("exported");
     assert_eq!(
-        exported.as_str(),
+        exported.text.as_str(),
         "name,url,username,password,note\n\
          a.test,https://a.test,alice,fake-a,\n\
          b.test,https://b.test,bobby,fake-b,\n"

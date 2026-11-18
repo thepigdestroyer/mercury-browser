@@ -183,3 +183,60 @@ mod tests {
         assert!(import_csv(&store, "a,b,c\n1,2,3\n").is_err());
     }
 }
+
+/// The largest login file read for an import: far beyond any real export.
+pub const MAX_IMPORT_BYTES: u64 = 8 * 1024 * 1024;
+
+/// Reads a login file for [`import_csv`]: at most [`MAX_IMPORT_BYTES`], UTF-8, wiped on drop.
+pub fn read_import_file(path: &std::path::Path) -> Result<zeroize::Zeroizing<String>, ManagerError> {
+    use std::io::Read;
+
+    let file = std::fs::File::open(path)
+        .map_err(|error| ManagerError::File(format!("The file could not be read: {error}.")))?;
+    let mut bytes = zeroize::Zeroizing::new(Vec::new());
+    file.take(MAX_IMPORT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| ManagerError::File(format!("The file could not be read: {error}.")))?;
+    if u64::try_from(bytes.len()).unwrap_or(u64::MAX) > MAX_IMPORT_BYTES {
+        return Err(ManagerError::File(
+            "This file is too large to be a login export.".to_owned(),
+        ));
+    }
+    let text = std::str::from_utf8(&bytes)
+        .map_err(|_| ManagerError::File("This file is not a text file.".to_owned()))?;
+    Ok(zeroize::Zeroizing::new(text.to_owned()))
+}
+
+#[cfg(test)]
+mod file_tests {
+    use super::*;
+
+    #[test]
+    fn a_file_is_read_whole_up_to_the_limit() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let path = directory.path().join("logins.csv");
+        std::fs::write(&path, "name,url,username,password\n").expect("written");
+
+        assert_eq!(
+            read_import_file(&path).expect("read").as_str(),
+            "name,url,username,password\n"
+        );
+    }
+
+    #[test]
+    fn a_huge_file_or_one_that_is_not_text_is_refused() {
+        let directory = tempfile::tempdir().expect("a directory");
+        let huge = directory.path().join("huge.csv");
+        let file = std::fs::File::create(&huge).expect("created");
+        file.set_len(MAX_IMPORT_BYTES + 1).expect("sized");
+        let binary = directory.path().join("binary.csv");
+        std::fs::write(&binary, [0xff, 0xfe, 0x00]).expect("written");
+
+        assert!(matches!(read_import_file(&huge), Err(ManagerError::File(_))));
+        assert!(matches!(read_import_file(&binary), Err(ManagerError::File(_))));
+        assert!(matches!(
+            read_import_file(&directory.path().join("missing.csv")),
+            Err(ManagerError::File(_))
+        ));
+    }
+}
