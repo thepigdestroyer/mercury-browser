@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! When the next automatic update check is due, as a pure function of times.
 //!
 //! Automatic checks run at most once every [`UPDATE_INTERVAL`] (24 hours), counted from the

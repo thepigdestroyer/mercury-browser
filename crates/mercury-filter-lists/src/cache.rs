@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The profile's filter-list cache: updated copies of the lists, the compiled engine, and a
 //! small state file that says which copy is which.
 //!

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Downloading one list: HTTPS only (or a loopback server named by a diagnostic option),
 //! conditional requests, a size cap and time limits, cancellable at any moment.
 

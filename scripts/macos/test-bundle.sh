@@ -8,8 +8,7 @@
 #
 #   scripts/macos/test-bundle.sh      (or: make test-bundle-macos)
 #
-# Prints one line per check and exits non-zero if any fails. Writes nothing
-# outside one temporary directory, which it removes.
+# Prints one line per check and exits non-zero if any fails. Writes nothing.
 set -euo pipefail
 
 cd "$(dirname -- "${BASH_SOURCE[0]}")/../.."
@@ -207,15 +206,10 @@ check "a directory that is not a GStreamer prefix is refused" yes \
 check "the refusals wrote nothing" no "$([ -e "$NO_OUT" ] && echo yes || echo no)"
 
 # ── Filter lists (blocklists) ─────────────────────────────────────────────
-check_lists() { python3 scripts/filter-lists.py check "$@" >/dev/null 2>&1; }
-check "the bundled filter lists match their manifest" ok "$(status check_lists)"
-# A damaged copy in a private temporary directory, removed straight after.
-DAMAGED="$(mktemp -d -t mercury-test-lists)"
-cp crates/talaria-servo/resources/adblock/manifest.json crates/talaria-servo/resources/adblock/*.txt "$DAMAGED/"
-printf '||extra.example^\n' >>"$DAMAGED/brave-unbreak.txt"
-check "a damaged filter list is refused" fails \
-    "$(status check_lists "$DAMAGED")"
-rm -rf -- "$DAMAGED"
+check "the repository's filter lists match their manifest" 5 \
+    "$(filter_list_files crates/talaria-servo/resources/adblock 2>/dev/null | wc -l | tr -d ' ')"
+check "a directory without a manifest is refused" fails \
+    "$(status filter_list_files "$NO_OUT-lists" 2>/dev/null)"
 
 [ "$failures" -eq 0 ] || { printf '%d check(s) failed\n' "$failures"; exit 1; }
 printf 'all checks passed\n'

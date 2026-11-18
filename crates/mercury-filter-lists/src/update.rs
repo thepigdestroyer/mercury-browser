@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! One update check: fetch every list, keep what passes its checks, record the outcome.
 //!
 //! The updater is generic over the kind of list: a [`ListKind`] says how many usable rules a

@@ -2,21 +2,11 @@
   "format_version": 1,
   "lists": [
     {
-      "id": "ublock-filters",
-      "name": "uBlock filters",
-      "file": "ublock-filters.txt",
-      "source_url": "https://raw.githubusercontent.com/uBlockOrigin/uAssets/master/filters/filters.txt",
-      "licence": "GPL-3.0",
-      "version": null,
-      "date": "2026-11-15T20:46:51Z",
-      "sha256": "73d674807c88016fef58ba055381efea22585faab1a262a6d5fbab3a0bb62ccd"
-    },
-    {
       "id": "easylist",
       "name": "EasyList",
       "file": "easylist.txt",
       "source_url": "https://easylist.to/easylist/easylist.txt",
-      "licence": "GPL-3.0-or-later OR CC-BY-SA-3.0 (or later)",
+      "licence": "CC-BY-SA-3.0",
       "version": "202611152034",
       "date": "2026-11-15T20:46:51Z",
       "sha256": "ca554da776cd140d0a4803bc6a298c5d2251595e13ddbdcad888c347ee7ad1f8"
@@ -26,7 +16,7 @@
       "name": "EasyPrivacy",
       "file": "easyprivacy.txt",
       "source_url": "https://easylist.to/easylist/easyprivacy.txt",
-      "licence": "GPL-3.0-or-later OR CC-BY-SA-3.0 (or later)",
+      "licence": "CC-BY-SA-3.0",
       "version": "202611152034",
       "date": "2026-11-15T20:46:51Z",
       "sha256": "6b4e1f32bfd3363c5dfd1afa5a0bb50277352843b7df469556d335e96f53e275"

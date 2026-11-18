@@ -87,6 +87,8 @@ for tool in codesign file lipo otool plutil; do
 done
 
 REPO="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+# shellcheck source=scripts/macos/lib.sh
+. "$REPO/scripts/macos/lib.sh"
 for script in scripts/macos/bundle.sh scripts/macos/test-bundle.sh; do
     [ -x "$REPO/$script" ] || die "$script is missing from $REPO; this check uses it"
 done
@@ -355,7 +357,7 @@ fi
 # ── Filter lists (blocklists) ─────────────────────────────────────────────
 # Data files beside the program, not compiled into it.
 LISTS="$APP/Contents/Resources/filter-lists"
-if python3 "$REPO/scripts/filter-lists.py" check "$LISTS" >"$TMP" 2>&1; then
+if filter_list_files "$LISTS" >"$TMP" 2>&1; then
     pass "Contents/Resources/filter-lists matches its manifest"
 else
     fail "Contents/Resources/filter-lists: $(tr '\n' ' ' <"$TMP")"

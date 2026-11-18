@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The manifest that ships beside the bundled lists: which lists there are, where each one is
 //! published, its licence, its version or date, and the SHA-256 of the bundled file.
 
@@ -265,7 +268,7 @@ mod tests {
         let text = std::fs::read_to_string(directory.join(MANIFEST_FILE)).expect("the manifest");
         let manifest = parse_manifest(&text).expect("a valid manifest");
 
-        assert_eq!(manifest.lists.len(), 6);
+        assert_eq!(manifest.lists.len(), 5);
         for list in &manifest.lists {
             let bytes = std::fs::read(directory.join(&list.file)).expect("the list");
             assert_eq!(crate::sha256_hex(&bytes), list.sha256, "{}", list.file);

@@ -191,7 +191,14 @@ cp "$RESOURCES_SRC/AppIcon.icns" "$RES_DIR/AppIcon.icns"
 cp LICENSE THIRD-PARTY-NOTICES.md "$RES_DIR/"
 ditto LICENSES "$RES_DIR/LICENSES"
 # The ad and tracker filter lists: data files the browser reads at start-up (blocklists).
-python3 scripts/filter-lists.py install "$RES_DIR/filter-lists" >&2 || die "the filter lists do not match their manifest"
+# Exactly the manifest and the lists it names, each checked against its SHA-256.
+LIST_SOURCE="crates/talaria-servo/resources/adblock"
+LIST_FILES="$(filter_list_files "$LIST_SOURCE")" || die "the filter lists in $LIST_SOURCE do not match their manifest"
+mkdir -p "$RES_DIR/filter-lists"
+cp "$LIST_SOURCE/manifest.json" "$RES_DIR/filter-lists/"
+while IFS= read -r list_file; do
+    cp "$LIST_SOURCE/$list_file" "$RES_DIR/filter-lists/"
+done <<<"$LIST_FILES"
 
 # ── Media libraries ───────────────────────────────────────────────────────
 # Servo looks for its GStreamer libraries and plugins in <executable dir>/lib.

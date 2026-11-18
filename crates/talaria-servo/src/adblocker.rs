@@ -208,7 +208,6 @@ mod tests {
         let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/adblock");
         let mut filter_set = FilterSet::new(false);
         for file in [
-            "ublock-filters.txt",
             "easylist.txt",
             "easyprivacy.txt",
             "brave-firstparty.txt",

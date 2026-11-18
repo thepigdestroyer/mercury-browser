@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The filter-list service: one background thread that builds the engine at start-up and
 //! updates the lists on schedule or on request.
 //!

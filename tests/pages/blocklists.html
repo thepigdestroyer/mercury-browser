@@ -1,7 +1,9 @@
 <!doctype html>
 <!-- blocklists: requests the bundled filter lists block, one they allow, and one that only an
-     updated list (served by scripts/serve-tests.py at /filter-lists/) blocks. Serve with
-     scripts/serve-tests.py; nothing here leaves 127.0.0.1. -->
+     updated list blocks: tests/filter-lists/brave-unbreak.txt, fetched by a run with
+     --filter-list-server http://127.0.0.1:<port>/filter-lists/ (the other lists are not there,
+     so only that one updates). Serve tests/ with scripts/serve-tests.py; nothing here leaves
+     127.0.0.1. -->
 <html>
 <head>
 <meta charset="utf-8">

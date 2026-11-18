@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! blocklists: the filter-list service of this run. It builds the content blocker's engine off
 //! the UI thread from the list files beside the executable (or their updated copies in the
 //! profile), updates them in the background, and reports to the settings window.
@@ -419,7 +422,7 @@ mod tests {
         let status = Status {
             lists: vec![
                 list("EasyList", Some("202611152034"), false),
-                list("uBlock filters", None, true),
+                list("Brave Specific", None, true),
             ],
             ..Status::default()
         };
@@ -432,7 +435,7 @@ mod tests {
                 format!(
                     "EasyList: version 202611152034, from t{NOV_17_0800_UTC} (included with Mercury Browser)"
                 ),
-                format!("uBlock filters: from t{NOV_17_0800_UTC} (updated)"),
+                format!("Brave Specific: from t{NOV_17_0800_UTC} (updated)"),
             ]
         );
         assert_eq!(

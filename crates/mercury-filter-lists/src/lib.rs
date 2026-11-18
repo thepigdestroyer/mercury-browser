@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Mercury Browser's ad and tracker filter lists as data files.
 //!
 //! The lists ship beside the executable with a manifest (`manifest.json`). At start-up the
@@ -6,6 +9,7 @@
 //! so later starts are fast. Updated copies are fetched in the background from each list's
 //! publisher. Only network rules are used; cosmetic (element-hiding) rules are not.
 
+pub mod bundle;
 pub mod cache;
 pub mod engine;
 pub mod fetch;

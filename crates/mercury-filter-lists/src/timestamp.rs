@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! UTC timestamps in the one form the manifest uses, `YYYY-MM-DDTHH:MM:SSZ`.
 
 /// Seconds since the Unix epoch for `text` in the form `2026-11-15T20:46:51Z`, or `None` for

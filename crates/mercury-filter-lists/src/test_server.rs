@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! A tiny HTTP/1.1 server on `127.0.0.1:0` for the tests. Nothing in the tests contacts any
 //! other host: every URL they fetch points here.
 

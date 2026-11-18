@@ -195,7 +195,8 @@ jobs:
           cargo build \
             --locked \
             --release \
-            --package mercury-desktop
+            --package mercury-desktop \
+            --package mercury-filter-lists
 
       - name: Verify Linux compatibility
         shell: bash
@@ -267,7 +268,7 @@ jobs:
           fi
 
           # The ad and tracker filter lists, read by the browser at start-up.
-          python3 scripts/filter-lists.py install \
+          target/release/mercury-filter-lists install \
             "${output_directory}/filter-lists"
 
           tar \

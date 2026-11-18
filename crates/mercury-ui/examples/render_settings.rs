@@ -126,7 +126,6 @@ fn sample_settings_window() -> Result<SettingsWindow, Box<dyn Error>> {
             .into(),
     );
     window.set_filter_lists(strings(&[
-        "uBlock filters: from 17 Nov 2026, 09:12 (updated)",
         "EasyList: version 202611170805, from 17 Nov 2026, 09:12 (updated)",
         "EasyPrivacy: version 202611152034, from 15 Nov 2026, 21:46 (included with Mercury Browser)",
         "Brave Firstparty specific filters: from 15 Nov 2026, 21:46 (included with Mercury Browser)",
