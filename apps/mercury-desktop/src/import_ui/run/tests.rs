@@ -43,6 +43,7 @@ impl Service {
                 let _sent = wake.send(());
             }),
             Timing::default(),
+            None,
         );
         Self {
             data: Rc::new(RefCell::new(Some(data))),

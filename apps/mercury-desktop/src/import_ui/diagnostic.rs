@@ -95,6 +95,7 @@ fn next() {
             let diagnostic = DIAGNOSTIC.with(|diagnostic| diagnostic.borrow_mut().take());
             // Let the last page lay out and draw before it is captured.
             slint::Timer::single_shot(Duration::from_millis(300), move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
                 if let Some(path) = diagnostic.as_ref().and_then(|d| d.snapshot.as_ref()) {
                     save_snapshot(&window, path);
                 }

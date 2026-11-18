@@ -39,6 +39,7 @@ impl Harness {
                 let _sent = wake.send(());
             }),
             Timing::default(),
+            None,
         );
         Self {
             data,

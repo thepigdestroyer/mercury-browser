@@ -393,10 +393,10 @@ fn apply_plan(
             controller.select_tab(tab_id);
         }
     }
-    if let Some(blank) = plan.replace {
-        if controller.close_tab(blank) != CloseTabOutcome::Closed {
-            log::warn!("the blank start tab could not be replaced");
-        }
+    if let Some(blank) = plan.replace
+        && controller.close_tab(blank) != CloseTabOutcome::Closed
+    {
+        log::warn!("the blank start tab could not be replaced");
     }
     tracker.append_closed(&plan.closed_tabs);
 }

@@ -480,6 +480,14 @@ impl BrowserController {
 
         let mut tab = Tab::new(tab_id, BrowserState::default());
         tab.defer_load();
+        if let Some(url) = url {
+            // history: the restored page is not a new visit.
+            self.visits
+                .set_origin(tab_id, NavigationOrigin::Restored, Some(&url));
+            tab.set_initial_url(url.clone());
+            tab.state_mut().apply(BrowserEvent::AddressChanged { url });
+        }
+        // After the address, which shows a placeholder title for a new document.
         let state = tab.state_mut();
         state.apply(BrowserEvent::PageTitleChanged {
             title: Some(restored.title.clone()),
@@ -489,13 +497,6 @@ impl BrowserController {
                 .zoom_percent
                 .clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]),
         );
-        if let Some(url) = url {
-            // history: the restored page is not a new visit.
-            self.visits
-                .set_origin(tab_id, NavigationOrigin::Restored, Some(&url));
-            tab.set_initial_url(url.clone());
-            tab.state_mut().apply(BrowserEvent::AddressChanged { url });
-        }
         self.tabs.insert(index.min(self.tabs.len()), tab);
         Ok(tab_id)
     }

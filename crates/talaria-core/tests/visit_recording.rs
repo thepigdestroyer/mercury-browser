@@ -6,8 +6,8 @@ mod common;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use talaria_core::{
-    BrowserCommand, BrowserController, BrowserEvent, LoadState, NavigationOrigin, TabActivation,
-    TabId, VisitUpdate,
+    BrowserCommand, BrowserController, BrowserEvent, CloseTabOutcome, LoadState, NavigationOrigin,
+    RestoredTab, TabActivation, TabId, VisitUpdate,
 };
 
 const ERROR_TITLE: &str = "Error loading page";
@@ -762,6 +762,31 @@ fn a_restored_tab_records_nothing_for_its_restored_page() {
 }
 
 #[test]
+fn a_tab_the_session_restores_records_nothing_for_its_restored_page() {
+    let mut controller = BrowserController::default();
+    let tab_id = controller
+        .open_restored_tab(
+            1,
+            &RestoredTab {
+                url: Some("https://a.test/".to_owned()),
+                title: "A".to_owned(),
+                zoom_percent: 100,
+            },
+        )
+        .unwrap();
+    controller.take_initial_url(tab_id);
+
+    commit(&mut controller, tab_id, "https://a.test/");
+    assert!(controller.take_visit_updates().is_empty());
+
+    commit(&mut controller, tab_id, "https://b.test/");
+    assert_eq!(
+        visits(&controller.take_visit_updates()),
+        vec![("https://b.test/", NavigationOrigin::Link)]
+    );
+}
+
+#[test]
 fn a_restored_page_that_redirects_is_not_recorded_either() {
     let mut controller = BrowserController::default();
     let tab_id = controller
@@ -801,7 +826,7 @@ fn a_closed_tab_records_nothing_more() {
     commit(&mut controller, second, "https://a.test/");
     controller.take_visit_updates();
 
-    assert!(controller.close_tab(second));
+    assert_eq!(controller.close_tab(second), CloseTabOutcome::Closed);
     commit(&mut controller, second, "https://b.test/");
     title_at(&mut controller, second, "https://b.test/", Some("B"));
 
