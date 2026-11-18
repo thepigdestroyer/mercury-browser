@@ -1197,7 +1197,9 @@ mod tests {
         let quit = matched(Shortcut(ShortcutAction::Quit), true);
         let close = matched(Shortcut(ShortcutAction::CloseTab), true);
         let hide = matched(System(SystemAction::Hide), true);
-        let history = matched(ShowHistory, false);
+        // Stop is the one item that is always disabled (no engine API in Servo 0.8.0). Find and
+        // Show All History are real, enabled shortcut items now.
+        let stop = matched(Stop, false);
         let copy_disabled = matched(Edit(EditCommand::Copy), false);
         let undo_disabled = matched(Edit(EditCommand::Undo), false);
 
@@ -1210,8 +1212,8 @@ mod tests {
             ("h", CMD, Browser, false, hide, Perform),
             ("h", CMD, Browser, true, hide, Swallow),
             // A disabled item: press, repeats and release all reach the window, as before.
-            ("y", CMD, Browser, false, history, Decline),
-            ("y", CMD, Browser, true, history, Decline),
+            (".", CMD, Browser, false, stop, Decline),
+            (".", CMD, Browser, true, stop, Decline),
             // Another Mercury window (About, settings): the menu performs the item once.
             ("t", CMD, OtherMercury, false, new_tab, Perform),
             ("t", CMD, OtherMercury, true, new_tab, Swallow),
@@ -1232,7 +1234,7 @@ mod tests {
             // A disabled Edit item with the About window key: the key goes to that window.
             ("c", CMD, OtherMercury, false, copy_disabled, Decline),
             // A disabled item that is not an Edit item stays disabled in a native panel.
-            ("y", CMD, Native, false, history, Decline),
+            (".", CMD, Native, false, stop, Decline),
             // Repeats of keys no item of ours shows: AppKit as usual.
             ("k", CMD, Native, true, Option::None, Perform),
             ("k", CMD, OtherMercury, true, Option::None, Perform),
