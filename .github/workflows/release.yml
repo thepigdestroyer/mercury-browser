@@ -69,6 +69,51 @@ jobs:
           fi
           echo "version=${version}" >> "${GITHUB_OUTPUT}"
 
+      # Fails a release in the first minute instead of after the builds, which
+      # take hours. The signing job below repeats this check on its own runner.
+      - name: Check the committed update keys
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          key="apps/mercury-desktop/resources/update-key.pub"
+          if [ ! -s "${key}" ]; then
+            echo "::error::${key} is missing. Generate the update key pair and commit its public half first (docs/developer-guide/releases.md, \"The update signing key\")."
+            exit 1
+          fi
+
+          # No file of the tree may look like a minisign SECRET key. Matches are
+          # reported by file name only, never the matching line, which would be
+          # the key and would go to a public log. [y] and [ ] each stand for one
+          # character, so that this file does not match its own patterns.
+          #   - the base64 start of a secret key's second line: the algorithm
+          #     identifiers "Ed" "Sc" "B2" (encrypted) or "Ed", two NULs, "B2"
+          #     (not encrypted);
+          #   - the comment line of a secret key, outside docs/ and crates/,
+          #     which describe and test the format.
+          # git grep exits 1 for no match and 2 or more for an error; an error
+          # stops the job rather than counting as "nothing found".
+          hits=""
+          collect() {
+            local status=0 found
+            found="$(git grep -lIE "$@")" || status=$?
+            if [ "${status}" -gt 1 ]; then
+              echo "git grep failed with status ${status}" >&2
+              exit 1
+            fi
+            if [ -n "${found}" ]; then
+              hits="${hits}${found}"$'\n'
+            fi
+          }
+          collect 'RWRTY0I[y]|RWQAAEI[y]'
+          collect 'untrusted comment: .*(secret|signing)[ ]key' -- . ':!docs' ':!crates'
+          if [ -n "${hits}" ]; then
+            printf '%s' "${hits}" | sort -u >&2
+            echo "::error::A minisign secret key is committed (the files are listed above). A committed key is public: remove it and replace the key pair (docs/developer-guide/releases.md, \"The update signing key\")."
+            exit 1
+          fi
+
   build-linux:
     name: Linux x86-64
     needs: version
@@ -502,6 +547,8 @@ jobs:
     outputs:
       dmg-sha256: ${{ steps.shipped.outputs.sha256 }}
       dmg-size: ${{ steps.shipped.outputs.size }}
+      # none, api-key or apple-id: whether the published image is notarised.
+      notarize: ${{ steps.signing.outputs.notarize }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       EXECUTABLE_SHA256: ${{ needs.build-macos.outputs.executable-sha256 }}
@@ -1033,8 +1080,8 @@ jobs:
 
   # Writes update.json (the version and every download's SHA-256 and size,
   # from the digests the jobs that made them recorded) and signs it with the
-  # update key. Mercury's update check verifies the signature against the
-  # public key in apps/mercury-desktop/resources/update-key.pub. Like the
+  # update key. Mercury's update check (not built yet) is to verify it against
+  # the public key in apps/mercury-desktop/resources/update-key.pub. Like the
   # macOS signing job: the `release` environment, only for v* tags, a fresh
   # runner, no build step, no cache, and the key only in the signing step.
   sign-update:
@@ -1048,6 +1095,11 @@ jobs:
     runs-on: ubuntu-24.04
     environment: release
     timeout-minutes: 10
+    # The signed files' digests, recorded after their signature was verified
+    # here; the publishing job checks the files it downloads against them.
+    outputs:
+      manifest-sha256: ${{ steps.digests.outputs.manifest }}
+      signature-sha256: ${{ steps.digests.outputs.signature }}
     env:
       VERSION: ${{ needs.version.outputs.version }}
       TOOL_SHA256: ${{ needs.release-tool.outputs.sha256 }}
@@ -1063,7 +1115,9 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Check that the public key is committed
+      # The same check as in the version job, which ran it hours ago. Repeated
+      # here because this is the job that holds the key.
+      - name: Check the committed update keys
         shell: bash
         run: |
           set -euo pipefail
@@ -1071,6 +1125,37 @@ jobs:
           key="apps/mercury-desktop/resources/update-key.pub"
           if [ ! -s "${key}" ]; then
             echo "::error::${key} is missing. Generate the update key pair and commit its public half first (docs/developer-guide/releases.md, \"The update signing key\")."
+            exit 1
+          fi
+
+          # No file of the tree may look like a minisign SECRET key. Matches are
+          # reported by file name only, never the matching line, which would be
+          # the key and would go to a public log. [y] and [ ] each stand for one
+          # character, so that this file does not match its own patterns.
+          #   - the base64 start of a secret key's second line: the algorithm
+          #     identifiers "Ed" "Sc" "B2" (encrypted) or "Ed", two NULs, "B2"
+          #     (not encrypted);
+          #   - the comment line of a secret key, outside docs/ and crates/,
+          #     which describe and test the format.
+          # git grep exits 1 for no match and 2 or more for an error; an error
+          # stops the job rather than counting as "nothing found".
+          hits=""
+          collect() {
+            local status=0 found
+            found="$(git grep -lIE "$@")" || status=$?
+            if [ "${status}" -gt 1 ]; then
+              echo "git grep failed with status ${status}" >&2
+              exit 1
+            fi
+            if [ -n "${found}" ]; then
+              hits="${hits}${found}"$'\n'
+            fi
+          }
+          collect 'RWRTY0I[y]|RWQAAEI[y]'
+          collect 'untrusted comment: .*(secret|signing)[ ]key' -- . ':!docs' ':!crates'
+          if [ -n "${hits}" ]; then
+            printf '%s' "${hits}" | sort -u >&2
+            echo "::error::A minisign secret key is committed (the files are listed above). A committed key is public: remove it and replace the key pair (docs/developer-guide/releases.md, \"The update signing key\")."
             exit 1
           fi
 
@@ -1152,6 +1237,15 @@ jobs:
             --version "${VERSION}"
           cat dist/update.json.minisig
 
+      - name: Record the signed files' digests
+        id: digests
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "manifest=$(sha256sum dist/update.json | cut -d ' ' -f 1)" >> "${GITHUB_OUTPUT}"
+          echo "signature=$(sha256sum dist/update.json.minisig | cut -d ' ' -f 1)" >> "${GITHUB_OUTPUT}"
+
       - name: Upload the signed manifest
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
@@ -1182,6 +1276,9 @@ jobs:
       LINUX_SHA256: ${{ needs.build-linux.outputs.archive-sha256 }}
       MACOS_SHA256: ${{ needs.package-macos.outputs.dmg-sha256 }}
       SOURCES_SHA256: ${{ needs.lgpl-sources.outputs.sha256 }}
+      MANIFEST_SHA256: ${{ needs.sign-update.outputs.manifest-sha256 }}
+      SIGNATURE_SHA256: ${{ needs.sign-update.outputs.signature-sha256 }}
+      MACOS_NOTARIZE: ${{ needs.package-macos.outputs.notarize }}
 
     permissions:
       contents: write
@@ -1191,12 +1288,35 @@ jobs:
       attestations: write
 
     steps:
-      - name: Download release artifacts
+      # Four downloads by exact name, each into a directory of its own. A
+      # pattern with merge-multiple would put the files of every artefact whose
+      # name starts mercury-browser- into one directory, where a file of an
+      # artefact that a build job uploaded under another such name could take
+      # the place of update.json or its signature. Nothing here is named by
+      # pattern, so such an artefact is never downloaded.
+      - name: Download the Linux archive
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          pattern: mercury-browser-*
-          path: dist
-          merge-multiple: true
+          name: mercury-browser-linux-x86_64
+          path: ${{ runner.temp }}/artefacts/linux
+
+      - name: Download the macOS disk image
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mercury-browser-macos-arm64
+          path: ${{ runner.temp }}/artefacts/macos
+
+      - name: Download the LGPL sources
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mercury-browser-lgpl-sources
+          path: ${{ runner.temp }}/artefacts/sources
+
+      - name: Download the signed update manifest
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: mercury-browser-update-manifest
+          path: ${{ runner.temp }}/artefacts/manifest
 
       - name: Verify the artefacts and write SHA256SUMS
         shell: bash
@@ -1206,20 +1326,32 @@ jobs:
           linux="mercury-browser-linux-x86_64.tar.gz"
           macos="Mercury-Browser-${VERSION}-macos-arm64.dmg"
           sources="Mercury-Browser-${VERSION}-lgpl-sources.tar"
-          cd dist
+          incoming="${RUNNER_TEMP}/artefacts"
 
-          # Exactly these files, nothing else.
-          expected="$(printf '%s\n' "${linux}" "${linux}.sha256" "${macos}" "${macos}.sha256" \
-            "${sources}" "${sources}.sha256" update.json update.json.minisig | sort)"
-          present="$(find . -mindepth 1 -printf '%P\n' | sort)"
+          # Exactly these directories and files, nothing else, and only plain
+          # files and directories (no symbolic link).
+          expected="$(printf '%s\n' \
+            linux "linux/${linux}" "linux/${linux}.sha256" \
+            macos "macos/${macos}" "macos/${macos}.sha256" \
+            sources "sources/${sources}" "sources/${sources}.sha256" \
+            manifest manifest/update.json manifest/update.json.minisig | sort)"
+          present="$(cd "${incoming}" && find . -mindepth 1 -printf '%P\n' | sort)"
           if [ "${present}" != "${expected}" ]; then
             printf 'expected:\n%s\nfound:\n%s\n' "${expected}" "${present}" >&2
             exit 1
           fi
+          odd="$(find "${incoming}" -mindepth 1 ! -type f ! -type d -print)"
+          if [ -n "${odd}" ]; then
+            printf 'neither a file nor a directory:\n%s\n' "${odd}" >&2
+            exit 1
+          fi
 
-          # Each artefact against the digest its job recorded, then against
-          # the .sha256 file that travelled with it.
-          check() {
+          mkdir dist
+          mv -- "${incoming}"/*/* dist/
+          cd dist
+
+          # Each artefact against the digest its job recorded.
+          pin() {
             local file="$1" want="$2" got
             case "${want}" in
               "" | *[!0-9a-f]*) echo "no usable recorded digest for ${file}" >&2; exit 1 ;;
@@ -1229,16 +1361,34 @@ jobs:
               echo "${file}: ${got}, but its job recorded ${want}" >&2
               exit 1
             fi
-            sha256sum --check "${file}.sha256"
+          }
+          # The three downloads also against the .sha256 file that travelled
+          # with each.
+          check() {
+            pin "$1" "$2"
+            sha256sum --check "$1.sha256"
           }
           check "${linux}" "${LINUX_SHA256}"
           check "${macos}" "${MACOS_SHA256}"
           check "${sources}" "${SOURCES_SHA256}"
-          # update.json names the downloads by the same recorded digests; the
-          # signing job has verified its signature with the committed key.
-          grep -qF "\"sha256\": \"${LINUX_SHA256}\"" update.json
-          grep -qF "\"sha256\": \"${MACOS_SHA256}\"" update.json
-          grep -qF "trusted comment: mercury-browser update ${VERSION}" update.json.minisig
+          # The manifest and its signature are the files the signing job
+          # verified with the committed public key, byte for byte.
+          pin update.json "${MANIFEST_SHA256}"
+          pin update.json.minisig "${SIGNATURE_SHA256}"
+          # update.json names this version and the downloads' recorded digests,
+          # and the signature's trusted comment is exactly the expected line.
+          require() {
+            # require <file> <what it must hold> <grep option letters> <text>
+            if ! grep -q"$3" -- "$4" "$1"; then
+              echo "$1 does not hold $2" >&2
+              exit 1
+            fi
+          }
+          require update.json "the version ${VERSION}" xF "  \"version\": \"${VERSION}\","
+          require update.json "the Linux archive's digest" F "\"sha256\": \"${LINUX_SHA256}\""
+          require update.json "the macOS disk image's digest" F "\"sha256\": \"${MACOS_SHA256}\""
+          require update.json.minisig "the trusted comment for ${VERSION}" xF \
+            "trusted comment: mercury-browser update ${VERSION}"
 
           # One file covering every artefact, written outside the directory
           # being listed and then moved in.
@@ -1278,18 +1428,23 @@ jobs:
               echo "Mercury Browser is source-available, free for non-commercial use."
               echo "Mercury's own files are under the PolyForm Noncommercial License 1.0.0; files from"
               echo "Hermes Browser and other projects stay under the MPL-2.0. See LICENSE and NOTICE,"
-              echo "which every download carries."
+              echo "which the macOS and Linux downloads carry."
               echo
-              echo "**macOS (Apple Silicon):** \`Mercury-Browser-${VERSION}-macos-arm64.dmg\`. The app"
-              echo "is not notarised by Apple, so macOS blocks its first launch. Allow it once with"
-              echo "right-click → Open (macOS 13 and 14) or System Settings → Privacy & Security →"
-              echo "Open Anyway (every version):"
-              echo "https://thepigdestroyer.github.io/mercury-browser/user-guide/installation/"
+              echo "**macOS (Apple Silicon):** \`Mercury-Browser-${VERSION}-macos-arm64.dmg\`."
+              if [ "${MACOS_NOTARIZE:-none}" = none ]; then
+                echo "The app is not notarised by Apple, so macOS blocks its first launch. Allow it"
+                echo "once with right-click → Open (macOS 13 and 14) or System Settings → Privacy &"
+                echo "Security → Open Anyway (every version):"
+                echo "https://thepigdestroyer.github.io/mercury-browser/user-guide/installation/"
+              else
+                echo "Signed with a Developer ID and notarised by Apple."
+              fi
               echo
               echo "**Linux x86-64:** \`mercury-browser-linux-x86_64.tar.gz\` (glibc 2.35 or newer)."
               echo
-              echo "**Update check:** \`update.json\` and its minisign signature \`update.json.minisig\`"
-              echo "tell Mercury's once-a-day update check about this version."
+              echo "**Update manifest:** \`update.json\` names this version and the SHA-256 and size of"
+              echo "each download; \`update.json.minisig\` is its minisign signature. They are for"
+              echo "Mercury's update check, which is not built yet."
               echo
               echo "**LGPL sources:** the macOS app bundles GStreamer, FFmpeg, GLib, proxy-libintl and"
               echo "libnice as replaceable dynamic libraries. Their corresponding source, with the"

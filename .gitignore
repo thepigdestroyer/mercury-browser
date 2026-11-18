@@ -28,3 +28,11 @@
 
 # Local scratch
 /humanize/
+
+# Signing keys and signatures made by hand (docs/developer-guide/releases.md): a generated key is
+# never committed by accident. The public key, apps/mercury-desktop/resources/update-key.pub, is
+# the one file of the kind that is tracked, and none of these patterns matches it.
+*.key
+mercury-update-key*
+update.json.minisig
+/update.json
