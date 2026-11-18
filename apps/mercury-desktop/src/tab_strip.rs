@@ -155,14 +155,18 @@ pub(crate) fn step_off_pinned_tab(
 pub(crate) enum TabStripCommand {
     PinTab,
     UnpinTab,
+    /// Pins the active tab, or unpins it (the browser menu's one row).
+    TogglePinTab,
     CloseOtherTabs,
 }
 
 impl TabStripCommand {
-    const fn tab_menu_command(self) -> TabMenuCommand {
+    const fn tab_menu_command(self, active_tab_pinned: bool) -> TabMenuCommand {
         match self {
             Self::PinTab => TabMenuCommand::Pin,
             Self::UnpinTab => TabMenuCommand::Unpin,
+            Self::TogglePinTab if active_tab_pinned => TabMenuCommand::Unpin,
+            Self::TogglePinTab => TabMenuCommand::Pin,
             Self::CloseOtherTabs => TabMenuCommand::CloseOthers,
         }
     }
@@ -174,10 +178,14 @@ pub(crate) fn run_strip_command(
     command: TabStripCommand,
 ) {
     let active_tab_id = controller.borrow().active_tab_id();
+    let active_tab_pinned = controller
+        .borrow()
+        .tabs()
+        .any(|tab| tab.id() == active_tab_id && tab.is_pinned());
     let outcome = run_menu_command(
         &mut controller.borrow_mut(),
         active_tab_id,
-        command.tab_menu_command(),
+        command.tab_menu_command(active_tab_pinned),
     );
     if outcome == MenuOutcome::Changed {
         sync_ui(window, &controller.borrow());

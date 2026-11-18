@@ -418,6 +418,8 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
             title: "File",
             items: vec![
                 action("New Tab", key('t', CMD), Shortcut(A::NewTab)),
+                // tabs-plus: the session lane's duplicate
+                action("Duplicate Tab", None, Shortcut(A::DuplicateTab)),
                 action(
                     "Open Location…",
                     key('l', CMD),
@@ -667,6 +669,11 @@ pub(crate) enum BrowserMenuItem {
     About,
     Help,
     Quit,
+    // tabs-plus
+    SearchTabs,
+    DuplicateTab,
+    TogglePinTab,
+    CloseOtherTabs,
 }
 
 impl BrowserMenuItem {
@@ -681,6 +688,15 @@ impl BrowserMenuItem {
             Self::About => MenuCommand::About,
             Self::Help => MenuCommand::OpenDocument(Document::Help),
             Self::Quit => MenuCommand::Shortcut(ShortcutAction::Quit),
+            // tabs-plus
+            Self::SearchTabs => MenuCommand::Shortcut(ShortcutAction::SearchTabs),
+            Self::DuplicateTab => MenuCommand::Shortcut(ShortcutAction::DuplicateTab),
+            Self::TogglePinTab => {
+                MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::TogglePinTab)
+            }
+            Self::CloseOtherTabs => {
+                MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::CloseOtherTabs)
+            }
         }
     }
 }
@@ -1073,6 +1089,10 @@ mod tests {
             labels(Platform::MacOs),
             vec![
                 ("New Tab", "⌘T".to_owned()),
+                ("Search Tabs…", "⇧⌘A".to_owned()),
+                ("Duplicate Tab", String::new()),
+                ("Pin Tab", String::new()),
+                ("Close Other Tabs", "⌥⌘W".to_owned()),
                 ("Find…", String::new()),
                 ("Settings…", "⌘,".to_owned()),
                 ("About Mercury Browser", String::new()),
@@ -1084,6 +1104,10 @@ mod tests {
             labels(Platform::Other),
             vec![
                 ("New Tab", "Ctrl+T".to_owned()),
+                ("Search Tabs…", "Ctrl+Shift+A".to_owned()),
+                ("Duplicate Tab", String::new()),
+                ("Pin Tab", String::new()),
+                ("Close Other Tabs", String::new()),
                 ("Find…", String::new()),
                 ("Settings…", "Ctrl+,".to_owned()),
                 ("About Mercury Browser", String::new()),

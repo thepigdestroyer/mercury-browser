@@ -54,6 +54,9 @@ pub(crate) enum ShortcutAction {
     /// Moves the active tab one place left or right within its group.
     MoveTabLeft,
     MoveTabRight,
+    /// Opens the browser menu (Alt+F, Alt+E or F10 off macOS, as other browsers), the
+    /// keyboard path to the tab commands where there is no menu bar.
+    ShowBrowserMenu,
     // history
     ShowHistory,
     ClearBrowsingData,
@@ -67,11 +70,8 @@ pub(crate) enum ShortcutAction {
     // session
     /// Brings back the most recently closed tab where it was.
     ReopenClosedTab,
-    /// Opens the active tab's address again in a new tab just after it. No default shortcut.
-    #[cfg_attr(
-        not(test),
-        expect(dead_code, reason = "run from the tab context menu once it exists")
-    )]
+    /// Opens the active tab's address again in a new tab just after it. No default shortcut;
+    /// File ▸ "Duplicate Tab", the browser menu and the tab menu.
     DuplicateTab,
     /// Restores the last run's tabs when they were not restored at start-up. No default shortcut;
     /// History ▸ "Restore Previous Session".
@@ -415,6 +415,7 @@ pub(crate) fn run_shortcut(
         ShortcutAction::ShowSettings => window.invoke_show_settings(),
         // tabs-plus
         ShortcutAction::SearchTabs => crate::tab_strip::show_tab_search(window),
+        ShortcutAction::ShowBrowserMenu => window.invoke_show_browser_menu(),
         ShortcutAction::MoveTabLeft | ShortcutAction::MoveTabRight => {
             let delta = if action == ShortcutAction::MoveTabLeft {
                 -1
@@ -713,6 +714,7 @@ mod tests {
             (SearchTabs, false),
             (MoveTabLeft, false),
             (MoveTabRight, false),
+            (ShowBrowserMenu, false),
             (ShowHistory, false),
             (ClearBrowsingData, false),
             (BookmarkPage, false),
@@ -751,7 +753,8 @@ mod tests {
                 | RestorePreviousSession
                 | SearchTabs
                 | MoveTabLeft
-                | MoveTabRight => {}
+                | MoveTabRight
+                | ShowBrowserMenu => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -890,6 +893,16 @@ mod tests {
         assert_eq!(other(character("A"), CTRL | SHIFT), Some(SearchTabs));
         // Cmd+A stays Select All.
         assert_eq!(mac(character("a"), CMD), None);
+    }
+
+    #[test]
+    fn the_browser_menu_opens_from_the_keyboard_off_macos() {
+        assert_eq!(other(character("f"), ALT), Some(ShowBrowserMenu));
+        assert_eq!(other(character("e"), ALT), Some(ShowBrowserMenu));
+        assert_eq!(other(named(NamedKey::F10), NONE), Some(ShowBrowserMenu));
+        // macOS has the menu bar; Option+F types a character there.
+        assert_eq!(mac(character("f"), ALT), None);
+        assert_eq!(mac(named(NamedKey::F10), NONE), None);
     }
 
     #[test]

@@ -59,6 +59,7 @@ pub(crate) fn restored_tab(tab: &TabSnapshot) -> RestoredTab {
         url: (!is_new_tab_page(&tab.url)).then(|| tab.url.clone()),
         title: tab.title.clone(),
         zoom_percent: tab.zoom_percent,
+        pinned: false,
     }
 }
 
@@ -272,6 +273,7 @@ pub(crate) fn duplicate_of_active(controller: &BrowserController) -> (usize, Res
             url: (!state.url().is_empty()).then(|| state.url().to_owned()),
             title: state.page_title().to_owned(),
             zoom_percent: state.zoom_percent(),
+            pinned: false,
         },
     )
 }
@@ -496,6 +498,7 @@ mod tests {
                 },
                 TabSnapshot {
                     zoom_percent: 110,
+                    pinned: false,
                     ..saved_tab("https://a.test/", "A")
                 },
                 saved_tab("https://b.test/", "B"),
@@ -872,9 +875,37 @@ mod tests {
                     url: Some("https://b.test/".to_owned()),
                     title: "B".to_owned(),
                     zoom_percent: 110,
+                    pinned: false,
                 }
             )
         );
+    }
+
+    // tabs-plus
+    #[test]
+    fn pinned_tabs_are_saved_restored_and_duplicated_pinned() {
+        let mut controller = BrowserController::default();
+        let a = page(&mut controller, "https://a.test/", "A");
+        page(&mut controller, "https://b.test/", "B");
+        assert!(controller.set_tab_pinned(a, true));
+        controller.select_tab(a);
+        let saved = controller
+            .tabs()
+            .map(tab_snapshot)
+            .map(|tab| tab.pinned)
+            .collect::<Vec<_>>();
+        assert_eq!(saved, [true, false, false]);
+
+        let tab = TabSnapshot {
+            pinned: true,
+            ..saved_tab("https://a.test/", "A")
+        };
+        assert!(restored_tab(&tab).pinned);
+
+        // The copy of a pinned tab opens right after it, pinned.
+        let (index, copy) = duplicate_of_active(&controller);
+        assert_eq!(index, 1);
+        assert!(copy.pinned);
     }
 
     // --- the restore plan ---
@@ -997,6 +1028,7 @@ mod tests {
                 url: Some("https://a.test/".to_owned()),
                 title: "A".to_owned(),
                 zoom_percent: 150,
+                pinned: false,
             }
         );
         for url in ["about:blank", "about:newtab", "about:home"] {

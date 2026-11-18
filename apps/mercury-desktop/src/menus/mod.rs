@@ -275,6 +275,11 @@ const fn browser_menu_item(command: BrowserMenuCommand) -> BrowserMenuItem {
         BrowserMenuCommand::About => BrowserMenuItem::About,
         BrowserMenuCommand::Help => BrowserMenuItem::Help,
         BrowserMenuCommand::Quit => BrowserMenuItem::Quit,
+        // tabs-plus
+        BrowserMenuCommand::SearchTabs => BrowserMenuItem::SearchTabs,
+        BrowserMenuCommand::DuplicateTab => BrowserMenuItem::DuplicateTab,
+        BrowserMenuCommand::TogglePinTab => BrowserMenuItem::TogglePinTab,
+        BrowserMenuCommand::CloseOtherTabs => BrowserMenuItem::CloseOtherTabs,
     }
 }
 
@@ -289,6 +294,11 @@ const fn browser_menu_command(item: BrowserMenuItem) -> BrowserMenuCommand {
         BrowserMenuItem::About => BrowserMenuCommand::About,
         BrowserMenuItem::Help => BrowserMenuCommand::Help,
         BrowserMenuItem::Quit => BrowserMenuCommand::Quit,
+        // tabs-plus
+        BrowserMenuItem::SearchTabs => BrowserMenuCommand::SearchTabs,
+        BrowserMenuItem::DuplicateTab => BrowserMenuCommand::DuplicateTab,
+        BrowserMenuItem::TogglePinTab => BrowserMenuCommand::TogglePinTab,
+        BrowserMenuItem::CloseOtherTabs => BrowserMenuCommand::CloseOtherTabs,
     }
 }
 
@@ -338,6 +348,10 @@ mod tests {
             BrowserMenuItem::About,
             BrowserMenuItem::Help,
             BrowserMenuItem::Quit,
+            BrowserMenuItem::SearchTabs,
+            BrowserMenuItem::DuplicateTab,
+            BrowserMenuItem::TogglePinTab,
+            BrowserMenuItem::CloseOtherTabs,
         ] {
             assert_eq!(browser_menu_item(browser_menu_command(item)), item);
         }

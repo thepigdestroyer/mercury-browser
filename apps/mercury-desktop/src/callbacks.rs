@@ -230,4 +230,48 @@ mod tests {
 
         assert_eq!(consumed, vec![true, false]);
     }
+
+    // tabs-plus
+    /// A suggestion, the history window, Home and bookmarks navigate without the field's
+    /// Return; Back, Forward and Reload too. After any of them the field follows the page again.
+    #[test]
+    fn navigating_any_other_way_ends_the_address_draft() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        use mercury_ui::MainWindow;
+        use talaria_core::{BrowserController, BrowserEvent};
+
+        crate::settings::tests::init_slint();
+        let window = MainWindow::new().expect("the main window can be created");
+        let controller = Rc::new(RefCell::new(BrowserController::default()));
+        super::connect_ui_callbacks(&window, Rc::clone(&controller), Rc::new(Cell::new(false)));
+        let tab = controller.borrow().active_tab_id();
+        let commit = |url: &str| {
+            controller.borrow_mut().handle_event(
+                tab,
+                BrowserEvent::AddressChanged {
+                    url: url.to_owned(),
+                },
+            );
+            crate::ui_sync::sync_ui(&window, &controller.borrow());
+        };
+        commit("https://a.test/");
+
+        // The user leaves text in the field, which then loses focus.
+        window.set_address("exa".into());
+        window.invoke_navigate("https://example.test/".into());
+        commit("https://example.test/");
+        assert_eq!(window.get_address(), "https://example.test/");
+
+        window.set_address("half typed".into());
+        window.invoke_go_back();
+        commit("https://a.test/");
+        assert_eq!(window.get_address(), "https://a.test/");
+
+        window.set_address("half typed".into());
+        window.invoke_reload();
+        commit("https://a.test/#reloaded");
+        assert_eq!(window.get_address(), "https://a.test/#reloaded");
+    }
 }
