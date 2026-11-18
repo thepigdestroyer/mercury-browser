@@ -646,3 +646,74 @@ fn check_fails_when_the_recorded_licence_is_not_the_declared_one() {
         Some("Kept by upgrade and export.")
     );
 }
+
+#[test]
+fn check_fails_when_a_patch_removes_a_licence_notice() {
+    let f = fixture();
+    f.vendor_demo();
+    f.write(
+        "third_party/demo/src/lib.rs",
+        &format!("// Mercury: notice moved down\n{LIB_V1}"),
+    );
+    f.export();
+    f.check().unwrap();
+    // Notices that were already in the crate must survive a change.
+    let with_notice = |notice: &str| {
+        format!("// Copyright © Upstream\n// SPDX-License-Identifier: MPL-2.0\n{notice}")
+    };
+    let cache = f
+        ._dir
+        .path()
+        .join("cargo-home/registry/cache/index.crates.io-0000");
+    let archive = pack(
+        "notice",
+        "1.0.0",
+        &[
+            (
+                "Cargo.toml",
+                &cargo_toml("notice", "1.0.0", "https://github.com/servo/servo"),
+            ),
+            ("src/lib.rs", &with_notice("fn a() {}\n")),
+        ],
+    );
+    fs::write(cache.join("notice-1.0.0.crate"), &archive).unwrap();
+    f.write(
+        "Cargo.lock",
+        &format!(
+            "{}\n[[package]]\nname = \"notice\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n",
+            f.read("Cargo.lock"),
+            sha256_hex(&archive)
+        ),
+    );
+    f.repo.vendor("notice@1.0.0", &mut Vec::new()).unwrap();
+    f.write(
+        "Cargo.lock",
+        &f.read("Cargo.lock").replace(
+            &format!("source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n", sha256_hex(&archive)),
+            "",
+        ),
+    );
+    f.write(
+        "third_party/notice/src/lib.rs",
+        "// SPDX-License-Identifier: MIT\n// Mercury: relicensed\nfn a() {}\n",
+    );
+    f.export();
+    let error = f.check().unwrap_err();
+    assert!(
+        error.contains(
+            "notice/src/lib.rs: removes or alters the licence notice \"// Copyright © Upstream\""
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("\"// SPDX-License-Identifier: MPL-2.0\""),
+        "{error}"
+    );
+    // Moving a notice is fine: the same line is added back.
+    f.write(
+        "third_party/notice/src/lib.rs",
+        &with_notice("// Mercury: a changed\nfn a2() {}\n"),
+    );
+    f.export();
+    f.check().unwrap();
+}

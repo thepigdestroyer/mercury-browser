@@ -21,6 +21,9 @@ pub const MARKER: &str = "Mercury:";
 pub const PATCHES_DIR: &str = "third_party/patches";
 const THIRD_PARTY: &str = "third_party";
 const CONFLICT_MARKERS: [&str; 3] = ["<<<<<<<", "|||||||", ">>>>>>>"];
+/// Lines a patch to a changed file must not remove: the licences of vendored
+/// crates (MPL-2.0, MIT, Apache-2.0, Slint's) require notices to stay intact.
+const LICENCE_NOTICES: [&str; 3] = ["SPDX-License-Identifier", "Copyright", "©"];
 
 /// A repository checkout and how to reach the outside world from it.
 pub struct Repo {
@@ -694,6 +697,21 @@ impl Repo {
                     "{name}/{}: changed without a `{MARKER}` comment in the changed lines",
                     change.path
                 ));
+            }
+            let kept: BTreeSet<&str> = added.iter().map(|line| line.trim()).collect();
+            for removed in change.removed_lines()? {
+                let removed = String::from_utf8_lossy(&removed);
+                let removed = removed.trim();
+                if LICENCE_NOTICES
+                    .iter()
+                    .any(|notice| removed.contains(notice))
+                    && !kept.contains(removed)
+                {
+                    problems.push(format!(
+                        "{name}/{}: removes or alters the licence notice {removed:?}; vendored licences require notices to stay intact",
+                        change.path
+                    ));
+                }
             }
         }
         Ok(problems)
