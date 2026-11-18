@@ -15,10 +15,11 @@ use slint::{ComponentHandle, LogicalPosition, ModelRc, PhysicalSize, VecModel};
 
 slint::slint! {
     import { DownloadsButton, DownloadsPopover, DownloadsPanel, QuitDownloadsPrompt, DownloadOfferBar, DownloadsPalette, DownloadRow, DownloadAction } from "../ui/downloads/downloads.slint";
+    import { ChromePalette, ChromeTheme } from "../ui/theme/chrome-palette.slint";
 
-    export { DownloadsPalette, DownloadRow, DownloadAction }
+    export { ChromePalette, ChromeTheme, DownloadsPalette, DownloadRow, DownloadAction }
 
-    // A stand-in for the browser window: tab strip, toolbar with the downloads button, a white
+    // A stand-in for the browser window: tab strip, toolbar with the downloads button, a grey
     // page, and the downloads UI over it as the main window places it.
     export component Harness inherits Window {
         in property <[DownloadRow]> rows;
@@ -81,7 +82,7 @@ slint::slint! {
         Rectangle {
             y: 108px;
             height: parent.height - 108px;
-            background: #ffffff;
+            background: #808080;
 
             Text {
                 x: 24px;
@@ -278,7 +279,9 @@ impl Fixture {
     }
 
     fn reset(&self, dark: bool) {
-        self.harness.global::<DownloadsPalette>().set_dark(dark);
+        self.harness
+            .global::<ChromePalette>()
+            .set_theme(if dark { ChromeTheme::Dark } else { ChromeTheme::Light });
         self.harness.set_popover_open(false);
         self.harness.set_panel_open(false);
         self.harness.set_prompt_open(false);
@@ -373,7 +376,7 @@ fn the_downloads_components_render_and_answer_clicks() {
         // The popover's surface covers the page under it.
         let surface = Fixture::pixel(&pixels, 700.0, 200.0);
         let page = Fixture::pixel(&pixels, 100.0, 300.0);
-        assert_eq!(page, (255, 255, 255));
+        assert_eq!(page, (128, 128, 128));
         assert_ne!(surface, page, "{theme}");
 
         fixture.harness.set_popover_open(false);

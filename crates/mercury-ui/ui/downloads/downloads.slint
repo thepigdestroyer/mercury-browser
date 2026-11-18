@@ -4,25 +4,27 @@
 // downloads, the panel with every download, and the question before quitting with downloads
 // running.
 
-// Every colour of these components, in one place until the chrome palette is merged; then each
-// becomes a `ChromePalette` role. `dark` follows the chrome, which is dark today.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// Every colour of these components, in one place: each is a `ChromePalette` role, so the
+// components follow the appearance setting and the brand accent like the rest of the chrome.
 export global DownloadsPalette {
-    in-out property <bool> dark: true;
-    out property <color> surface: dark ? #161e28 : #f8f9fb;
-    out property <color> surface-raised: dark ? #1d2733 : #f3f5f8;
-    out property <color> border: dark ? #2b3644 : #d5dbe3;
-    out property <color> text: dark ? #edf4fa : #17202b;
-    out property <color> muted: dark ? #8c99a9 : #5d6a7a;
-    out property <color> accent: dark ? #62bfff : #1d6fd6;
-    out property <color> accent-text: dark ? #09131c : #ffffff;
-    out property <color> danger: dark ? #ff8a80 : #c62828;
-    out property <color> track: dark ? #2b3644 : #dde3ea;
-    out property <color> hover: dark ? #222d39 : #e7ecf2;
-    out property <color> scrim: dark ? #000000a0 : #00000060;
-    out property <color> button-idle: dark ? #9aa6b5 : #4a5868;
-    out property <color> focus-ring: dark ? #9ad7ff : #0b57d0;
+    out property <bool> dark: ChromePalette.dark;
+    out property <color> surface: ChromePalette.popup-background;
+    out property <color> surface-raised: ChromePalette.item-hover;
+    out property <color> border: ChromePalette.popup-border;
+    out property <color> text: ChromePalette.text;
+    out property <color> muted: ChromePalette.text-secondary;
+    out property <color> accent: ChromePalette.accent;
+    out property <color> accent-text: ChromePalette.primary-button-text;
+    out property <color> danger: ChromePalette.danger;
+    out property <color> track: ChromePalette.separator;
+    out property <color> hover: ChromePalette.button-hover;
+    out property <color> scrim: ChromePalette.scrim;
+    out property <color> button-idle: ChromePalette.button-label;
+    out property <color> focus-ring: ChromePalette.focus-ring;
     out property <color> shadow: dark ? #00000060 : #00000030;
-    out property <color> shadow-strong: dark ? #00000080 : #00000040;
+    out property <color> shadow-strong: ChromePalette.shadow;
 }
 
 export struct DownloadRow {
