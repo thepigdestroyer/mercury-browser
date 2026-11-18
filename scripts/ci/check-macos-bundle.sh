@@ -25,6 +25,9 @@
 #   - `codesign --verify --deep --strict` passes and the hardened runtime is on;
 #   - the signature is the kind asked for, and the entitlements are exactly the
 #     set scripts/macos/bundle.sh uses for it (the ad-hoc set for ad hoc);
+#   - Contents/Resources holds LICENSE, NOTICE, THIRD-PARTY-NOTICES.md (the IJG
+#     credit and the offer of the LGPL sources are in them) and
+#     LICENSES/LGPL-2.1.txt;
 #   - scripts/macos/test-bundle.sh passes.
 #
 # With --require-media, also:
@@ -39,7 +42,9 @@
 #     fails);
 #   - every library any Mach-O in the bundle loads is a system library or an
 #     @rpath/@loader_path/@executable_path name whose file is in
-#     Contents/MacOS/lib/: nothing points back at the machine it was built on.
+#     Contents/MacOS/lib/: nothing points back at the machine it was built on;
+#   - Contents/Resources/gstreamer-licenses/ holds the bundled libraries'
+#     licence files.
 #
 # Runs every check even after a failure, then exits 1 if any failed. Reads the
 # bundle; writes nothing except a temporary file it removes. macOS only.
@@ -347,6 +352,28 @@ if [ "$REQUIRE_MEDIA" = 1 ]; then
     done
     if [ "$outside" = 0 ]; then
         pass "every Mach-O file loads only system libraries and libraries in Contents/MacOS/lib"
+    fi
+fi
+
+# ── Licence files ─────────────────────────────────────────────────────────
+# They must stay with the application when it is dragged out of the disk image: the
+# licence terms and Required Notice, the notices that carry the IJG credit and the offer of
+# the LGPL sources, and the LGPL text the bundled libraries are replaceable under.
+RESOURCES="$APP/Contents/Resources"
+missing_licence_files=""
+for licence_file in LICENSE NOTICE THIRD-PARTY-NOTICES.md LICENSES/LGPL-2.1.txt; do
+    [ -s "$RESOURCES/$licence_file" ] || missing_licence_files="$missing_licence_files $licence_file"
+done
+if [ -z "$missing_licence_files" ]; then
+    pass "Contents/Resources holds LICENSE, NOTICE, THIRD-PARTY-NOTICES.md and LICENSES/LGPL-2.1.txt"
+else
+    fail "Contents/Resources lacks:$missing_licence_files"
+fi
+if [ "$REQUIRE_MEDIA" = 1 ]; then
+    if [ -d "$RESOURCES/gstreamer-licenses" ] && [ -n "$(ls -A "$RESOURCES/gstreamer-licenses")" ]; then
+        pass "Contents/Resources/gstreamer-licenses holds the bundled libraries' licence files"
+    else
+        fail "Contents/Resources/gstreamer-licenses is missing or empty: the bundled libraries' licence files are not in the application"
     fi
 fi
 

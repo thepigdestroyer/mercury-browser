@@ -47,15 +47,22 @@ and keep their own licences; the table below lists them.
   `mercury-browser`. The executable loads `libgstreamer`, `libgstplay` and the other libraries it
   names through the rpath `@executable_path/lib/`, and Servo loads the GStreamer plugins at run
   time from the same directory. Any of them can be replaced by a compatible arm64 build with the
-  same file name: copy it into `Contents/MacOS/lib`. Because the application is signed, changing
-  a file invalidates its signature, so the application then has to be signed again, for example
-  ad hoc:
+  same file name: copy the application out of the disk image (which is read-only) into a folder
+  you can write to, then copy the new file over the old one in
+  `Mercury Browser.app/Contents/MacOS/lib`. Because the application is signed, changing a file
+  invalidates its signature, so the application then has to be signed again, for example ad hoc:
   `codesign --force --sign - "<path to the library>"`, then
   `codesign --force --sign - --options runtime --entitlements apps/mercury-desktop/resources/macos/entitlements-adhoc.plist "Mercury Browser.app/Contents/MacOS/mercury-browser"`
-  and the same for `"Mercury Browser.app"`. The ad-hoc entitlements turn library validation off,
-  so libraries signed by someone else load. A Developer ID build has library validation on and
-  loads only libraries signed by its own team; to use a replaced library with it, sign the whole
+  (the entitlements file is in the source tree of the same version) and the same for
+  `"Mercury Browser.app"`. The ad-hoc entitlements turn library validation off, so libraries
+  signed by someone else load. A Developer ID build has library validation on and loads only
+  libraries signed by its own team; to use a replaced library with it, sign the whole
   application ad hoc as above (it then loses its Developer ID signature and notarisation).
+  Finally remove the quarantine flag that macOS puts on downloaded files, from the application
+  and from any library you downloaded: `xattr -dr com.apple.quarantine "Mercury Browser.app"`.
+  Without that, macOS blocks the first launch of the re-signed (and so not notarised)
+  application, and may refuse a quarantined library. `codesign --verify --deep --strict "Mercury Browser.app"`
+  checks the result.
 - **Corresponding source.** Every bundled library was built by GStreamer's build system,
   cerbero, at commit `efda998b6e8032a8ed785a70000a63d337898f82` ("Build 1.28.9 release",
   https://gitlab.freedesktop.org/gstreamer/cerbero/-/tree/efda998b6e8032a8ed785a70000a63d337898f82);
@@ -72,8 +79,8 @@ and keep their own licences; the table below lists them.
     `37dd0877fe964cd15e9a2710b044a1830fb1bd93652a6d0cb6b8b2dff187c709`), **with 14 patches** from
     cerbero's `recipes/glib/` (GIO module paths, platform build fixes).
   - FFmpeg 7.1: https://ffmpeg.org/releases/ffmpeg-7.1.tar.xz (the recipe's SHA-256
-    `40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6`), **with the patches** in
-    cerbero's `recipes/ffmpeg/` (among them a Meson build). The bundled build records
+    `40973d44970dbc83ef302b0609f2e74982be2d85916dd2ee7472d30678a7abe6`), **with 2 patches** in
+    cerbero's `recipes/ffmpeg/` (the Meson build and `fix-textrels.patch`). The bundled build records
     `-Dnonfree=disabled -Dversion3=disabled` and reports its licence as "LGPL version 2.1 or later".
   - libnice 0.1.24 (LGPL-2.1-or-later or MPL-1.1):
     https://libnice.freedesktop.org/releases/libnice-0.1.24.tar.gz (the recipe's SHA-256
@@ -97,7 +104,9 @@ and keep their own licences; the table below lists them.
 - **Licence texts.** The LGPL version 2.1 is in `LICENSES/LGPL-2.1.txt` (the LGPL 2.1 permits use
   under any later version, which covers the "LGPL-2.0-or-later" projects too). Each project's
   own licence files, as the packages ship them under `share/licenses/<project>/`, are copied into
-  `Contents/Resources/gstreamer-licenses/<project>/` of the application.
+  `Contents/Resources/gstreamer-licenses/<project>/` of the application. `LICENSE`, `NOTICE`,
+  this file and `LICENSES/` are in `Contents/Resources` too, and `LICENSE` and `NOTICE` are also
+  next to the application in the disk image.
 
 Bundled libraries by project (generated from the collected set; the collector fails if this
 table does not match what it collected):

@@ -188,7 +188,9 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null || die "Info.plist does not v
 printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 cp "$RESOURCES_SRC/AppIcon.icns" "$RES_DIR/AppIcon.icns"
-cp LICENSE THIRD-PARTY-NOTICES.md "$RES_DIR/"
+# The licence, its Required Notice (with the IJG credit and the LGPL offer) and the notices
+# stay with the application when it is dragged out of the disk image.
+cp LICENSE NOTICE THIRD-PARTY-NOTICES.md "$RES_DIR/"
 ditto LICENSES "$RES_DIR/LICENSES"
 
 # ── Media libraries ───────────────────────────────────────────────────────
@@ -318,7 +320,7 @@ if [ "$MAKE_DMG" = 1 ]; then
     ditto "$APP" "$STAGE/$APP_NAME.app"
     ln -s /Applications "$STAGE/Applications"
     # The licence and its Required Notice travel with every copy, next to the
-    # app; the full texts are in the app's Contents/Resources.
+    # app; they and the full texts are in the app's Contents/Resources too.
     cp LICENSE NOTICE "$STAGE/"
 
     say "creating $DMG"

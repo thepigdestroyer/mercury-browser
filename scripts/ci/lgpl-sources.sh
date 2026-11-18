@@ -69,16 +69,27 @@ mkdir -p "$STAGE"
 while read -r file digest url; do
     [ -n "$file" ] || continue
     printf 'lgpl-sources: %s\n' "$url" >&2
-    curl --fail --silent --show-error --location --retry 3 --proto '=https' --tlsv1.2 \
-        --output "$STAGE/$file" "$url"
+    # https only, also across redirects; the digest check below is what makes the file trusted.
+    curl --fail --silent --show-error --location --proto '=https' --tlsv1.2 \
+        --retry 3 --retry-delay 5 --retry-all-errors --connect-timeout 30 --max-time 300 \
+        --output "$STAGE/$file" "$url" || die "cannot download $url"
     actual="$(sha256 "$STAGE/$file")"
     [ "$actual" = "$digest" ] || die "$file has SHA-256 $actual, expected $digest"
 done <<<"$SOURCES"
 
 # cerbero by commit: git checks every object against the commit's hash.
 printf 'lgpl-sources: %s at %s\n' "$CERBERO_URL" "$CERBERO_COMMIT" >&2
-git init --quiet "$WORK/cerbero"
-git -C "$WORK/cerbero" fetch --quiet --depth 1 "$CERBERO_URL" "$CERBERO_COMMIT"
+git init --quiet "$WORK/cerbero" || die "cannot create a git repository in $WORK/cerbero"
+fetched=0
+for attempt in 1 2 3; do
+    if GIT_TERMINAL_PROMPT=0 git -C "$WORK/cerbero" fetch --quiet --depth 1 "$CERBERO_URL" "$CERBERO_COMMIT"; then
+        fetched=1
+        break
+    fi
+    printf 'lgpl-sources: fetching cerbero failed (attempt %s of 3)\n' "$attempt" >&2
+    sleep 5
+done
+[ "$fetched" = 1 ] || die "cannot fetch commit $CERBERO_COMMIT from $CERBERO_URL"
 [ "$(git -C "$WORK/cerbero" rev-parse FETCH_HEAD)" = "$CERBERO_COMMIT" ] ||
     die "cerbero fetch did not return commit $CERBERO_COMMIT"
 git -C "$WORK/cerbero" archive --format=tar.gz --prefix="cerbero-${CERBERO_COMMIT:0:8}/" \
@@ -94,9 +105,11 @@ $GSTREAMER_VERSION macOS packages, built by GStreamer's build system cerbero at 
 $CERBERO_COMMIT.
 
   GStreamer $GSTREAMER_VERSION (LGPL-2.0-or-later / LGPL-2.1-or-later):
-    gstreamer, gst-plugins-base, gst-plugins-good, gst-plugins-bad and gst-libav tarballs
-  FFmpeg 7.1 (LGPL-2.1-or-later):    ffmpeg-7.1.tar.xz, with the patches in
-                                     cerbero's recipes/ffmpeg/ (a Meson build among them)
+    gstreamer, gst-plugins-base, gst-plugins-good, gst-plugins-bad and gst-libav tarballs,
+    without patches
+  FFmpeg 7.1 (LGPL-2.1-or-later):    ffmpeg-7.1.tar.xz, with the 2 patches in
+                                     cerbero's recipes/ffmpeg/ (the Meson build and
+                                     fix-textrels.patch)
   GLib 2.82.4 (LGPL-2.0-or-later):   glib-2.82.4.tar.xz, with the 14 patches in
                                      cerbero's recipes/glib/
   proxy-libintl 0.5 (LGPL-2.0-or-later): proxy-libintl-0.5.tar.gz, with the patch in
@@ -107,7 +120,8 @@ $CERBERO_COMMIT.
 cerbero-${CERBERO_COMMIT:0:8}.tar.gz is the whole build system at that commit: each
 recipes/<project>.recipe names the source, its checksum, the configure options and the patches
 used, and cerbero/ holds the scripts that control the build. The tarballs are the projects'
-release files, checked against the SHA-256 sums in SHA256SUMS.
+release files, each checked when this archive was made against the SHA-256 published by the
+project or in cerbero's recipe; SHA256SUMS lists the SHA-256 of every file in this archive.
 
 How to replace a library in the application: see "Bundled libraries" in THIRD-PARTY-NOTICES.md
 (https://github.com/thepigdestroyer/mercury-browser/blob/v$VERSION/THIRD-PARTY-NOTICES.md).
@@ -118,16 +132,23 @@ it, by opening an issue at https://github.com/thepigdestroyer/mercury-browser/is
 to the copyright holder named in NOTICE.
 EOF
 
+# The digest goes into a variable first: a failure inside "$(...)" in printf's arguments would
+# not stop the script (set -e), and would write a line with an empty digest.
 (
     cd "$STAGE"
     for file in *; do
-        printf '%s  %s\n' "$(sha256 "$file")" "$file"
+        digest="$(sha256 "$file")"
+        printf '%s  %s\n' "$digest" "$file"
     done >"$WORK/SHA256SUMS"
 )
 mv -- "$WORK/SHA256SUMS" "$STAGE/SHA256SUMS"
 
-# Already-compressed files, so a plain tar.
+# Already-compressed files, so a plain tar. Built beside the staging directory and moved into
+# the output directory last, so that a failure leaves nothing half-written there.
+tar -cf "$WORK/$NAME.tar" -C "$WORK" "$NAME"
+tar_digest="$(sha256 "$WORK/$NAME.tar")"
+printf '%s  %s\n' "$tar_digest" "$NAME.tar" >"$WORK/$NAME.tar.sha256"
 rm -f -- "$OUT/$NAME.tar" "$OUT/$NAME.tar.sha256"
-tar -cf "$OUT/$NAME.tar" -C "$WORK" "$NAME"
-(cd "$OUT" && printf '%s  %s\n' "$(sha256 "$NAME.tar")" "$NAME.tar" >"$NAME.tar.sha256")
+mv -- "$WORK/$NAME.tar" "$OUT/$NAME.tar"
+mv -- "$WORK/$NAME.tar.sha256" "$OUT/$NAME.tar.sha256"
 printf 'lgpl-sources: wrote %s\n' "$OUT/$NAME.tar" >&2
