@@ -34,8 +34,7 @@ pub(crate) fn tab_snapshot(tab: &Tab) -> TabSnapshot {
         },
         title: state.page_title().to_owned(),
         zoom_percent: state.zoom_percent(),
-        // Tabs cannot be pinned yet.
-        pinned: false,
+        pinned: tab.is_pinned(),
     }
 }
 
@@ -59,7 +58,7 @@ pub(crate) fn restored_tab(tab: &TabSnapshot) -> RestoredTab {
         url: (!is_new_tab_page(&tab.url)).then(|| tab.url.clone()),
         title: tab.title.clone(),
         zoom_percent: tab.zoom_percent,
-        pinned: false,
+        pinned: tab.pinned,
     }
 }
 
@@ -273,7 +272,8 @@ pub(crate) fn duplicate_of_active(controller: &BrowserController) -> (usize, Res
             url: (!state.url().is_empty()).then(|| state.url().to_owned()),
             title: state.page_title().to_owned(),
             zoom_percent: state.zoom_percent(),
-            pinned: false,
+            // tabs-plus: a copy of a pinned tab opens pinned, right after it
+            pinned: tab.is_pinned(),
         },
     )
 }

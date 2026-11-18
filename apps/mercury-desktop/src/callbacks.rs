@@ -29,6 +29,13 @@ pub(crate) fn connect_ui_callbacks(
             return;
         };
 
+        // tabs-plus: a navigation from anywhere ends the address draft; text that could not be
+        // opened stays for the user to fix.
+        if result.is_ok() {
+            window.invoke_accept_address_draft();
+        } else {
+            window.invoke_keep_address_draft();
+        }
         if let Err(error) = result {
             let tab_id = navigate_controller.borrow().active_tab_id();
             navigate_controller.borrow_mut().handle_event(
@@ -52,6 +59,7 @@ pub(crate) fn connect_ui_callbacks(
             .borrow_mut()
             .queue_command(BrowserCommand::GoBack);
         if let Some(window) = back_window.upgrade() {
+            window.invoke_accept_address_draft(); // tabs-plus
             window.window().request_redraw();
         }
     });
@@ -64,6 +72,7 @@ pub(crate) fn connect_ui_callbacks(
             .borrow_mut()
             .queue_command(BrowserCommand::GoForward);
         if let Some(window) = forward_window.upgrade() {
+            window.invoke_accept_address_draft(); // tabs-plus
             window.window().request_redraw();
         }
     });
@@ -76,6 +85,7 @@ pub(crate) fn connect_ui_callbacks(
             .borrow_mut()
             .queue_command(BrowserCommand::Reload);
         if let Some(window) = reload_window.upgrade() {
+            window.invoke_accept_address_draft(); // tabs-plus
             window.window().request_redraw();
         }
     });
@@ -273,5 +283,11 @@ mod tests {
         window.invoke_reload();
         commit("https://a.test/#reloaded");
         assert_eq!(window.get_address(), "https://a.test/#reloaded");
+
+        // Return on text that is no address (no search engine here): the text stays to fix.
+        window.set_address("not an address".into());
+        window.invoke_navigate("not an address".into());
+        crate::ui_sync::sync_ui(&window, &controller.borrow());
+        assert_eq!(window.get_address(), "not an address");
     }
 }

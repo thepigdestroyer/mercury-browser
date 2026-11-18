@@ -6,7 +6,7 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 
-use mercury_ui::{BrowserTab, MainWindow, TabMenuCommand, TabSearchRow};
+use mercury_ui::{BrowserMenuCommand, BrowserTab, MainWindow, TabMenuCommand, TabSearchRow};
 use slint::{ComponentHandle, Image, Model, ModelRc, VecModel};
 use talaria_core::{BrowserController, LoadState, PinnedCloseOutcome, TabId};
 
@@ -47,20 +47,14 @@ pub(crate) fn strip_rows(controller: &BrowserController) -> Vec<BrowserTab> {
         .collect()
 }
 
-/// Updates the window's tabs in place, so the strip's tab items (and a drag in progress) survive
-/// a sync; only a change in the number of tabs replaces them.
+/// Updates the window's tabs in place by tab id, so the strip's tab items (and a drag in progress)
+/// survive a sync, tabs opening and closing included.
 pub(crate) fn sync(window: &MainWindow, controller: &BrowserController) {
     let rows = strip_rows(controller);
     let model = window.get_tabs();
     match model.as_any().downcast_ref::<VecModel<BrowserTab>>() {
-        Some(tabs) if tabs.row_count() == rows.len() => {
-            for (index, row) in rows.into_iter().enumerate() {
-                if tabs.row_data(index).as_ref() != Some(&row) {
-                    tabs.set_row_data(index, row);
-                }
-            }
-        }
-        Some(tabs) => tabs.set_vec(rows),
+        // By tab id, never a reset: a drag in progress keeps its tab item.
+        Some(tabs) => mercury_ui::update_tab_rows(tabs, rows),
         None => window.set_tabs(ModelRc::new(VecModel::from(rows))),
     }
     let active_tab_id = controller.active_tab_id();
@@ -70,7 +64,37 @@ pub(crate) fn sync(window: &MainWindow, controller: &BrowserController) {
         .unwrap_or(0);
     window.set_active_tab_index(i32::try_from(active_index).unwrap_or(i32::MAX));
     window.set_pinned_tab_count(i32::try_from(controller.pinned_tab_count()).unwrap_or(0));
+    sync_browser_menu(window, controller);
     window.invoke_reveal_active_tab();
+}
+
+/// The browser menu's tab rows follow the active tab: "Pin Tab" or "Unpin Tab", and "Close Other
+/// Tabs" only when there is another unpinned tab.
+fn sync_browser_menu(window: &MainWindow, controller: &BrowserController) {
+    let active_tab_id = controller.active_tab_id();
+    let pinned = controller
+        .tabs()
+        .any(|tab| tab.id() == active_tab_id && tab.is_pinned());
+    let can_close_others = controller
+        .tabs()
+        .any(|tab| tab.id() != active_tab_id && !tab.is_pinned());
+    let entries = window.get_browser_menu_top_entries();
+    for index in 0..entries.row_count() {
+        let Some(mut entry) = entries.row_data(index) else {
+            continue;
+        };
+        let before = entry.clone();
+        match entry.command {
+            BrowserMenuCommand::TogglePinTab => {
+                entry.title = if pinned { "Unpin Tab" } else { "Pin Tab" }.into();
+            }
+            BrowserMenuCommand::CloseOtherTabs => entry.enabled = can_close_others,
+            _ => continue,
+        }
+        if entry != before {
+            entries.set_row_data(index, entry);
+        }
+    }
 }
 
 /// The rows tab search shows for `query`.
@@ -106,6 +130,8 @@ pub(crate) enum MenuOutcome {
     Unchanged,
     /// The tab was closed (or was the last tab): finish as any close.
     Closed(talaria_core::CloseTabOutcome),
+    /// Duplicate the tab: the session lane opens the copy (`session::duplicate_tab`).
+    Duplicate,
 }
 
 pub(crate) fn run_menu_command(
@@ -126,6 +152,7 @@ pub(crate) fn run_menu_command(
         // The menu closes a pinned tab too: it is the explicit way to.
         TabMenuCommand::Close => MenuOutcome::Closed(controller.close_tab(tab_id)),
         TabMenuCommand::CloseOthers => changed(controller.close_other_tabs(tab_id) > 0),
+        TabMenuCommand::Duplicate => MenuOutcome::Duplicate,
     }
 }
 
@@ -230,6 +257,12 @@ pub(crate) fn connect(window: &MainWindow, controller: Rc<RefCell<BrowserControl
         match outcome {
             MenuOutcome::Changed => sync_ui(&window, &menu_controller.borrow()),
             MenuOutcome::Unchanged => {}
+            MenuOutcome::Duplicate => {
+                // The copy follows the tab the menu belongs to; the session lane opens it.
+                if menu_controller.borrow_mut().select_tab(tab_id) {
+                    crate::session::duplicate_tab(&window, &menu_controller);
+                }
+            }
             MenuOutcome::Closed(outcome) => {
                 crate::tab_close::finish_closing_tab(&window, &menu_controller.borrow(), outcome);
             }
@@ -329,6 +362,71 @@ mod tests {
     }
 
     #[test]
+    fn the_window_gets_the_pinned_count_and_rows_by_id() {
+        crate::settings::tests::init_slint();
+        let window = MainWindow::new().expect("the main window can be created");
+        let (mut controller, ids) = controller_with_tabs(3);
+        assert!(controller.set_tab_pinned(ids[2], true));
+
+        sync(&window, &controller);
+
+        assert_eq!(window.get_pinned_tab_count(), 1);
+        let rows = window.get_tabs();
+        let pinned = rows.iter().filter(|row| row.pinned).count();
+        assert_eq!(pinned, 1);
+        assert_eq!(
+            rows.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [ids[2], ids[0], ids[1]].map(id_for_ui)
+        );
+
+        // A tab closes and another opens: the model is the same one, updated.
+        let before = rows.clone();
+        assert_eq!(controller.close_tab(ids[0]), CloseTabOutcome::Closed);
+        controller.open_tab();
+        sync(&window, &controller);
+        assert!(before == window.get_tabs(), "the same model, not a new one");
+        assert_eq!(window.get_tabs().row_count(), 3);
+    }
+
+    #[test]
+    fn the_browser_menu_says_unpin_for_a_pinned_tab() {
+        crate::settings::tests::init_slint();
+        let window = MainWindow::new().expect("the main window can be created");
+        let row = |command| mercury_ui::BrowserMenuEntry {
+            title: "Pin Tab".into(),
+            enabled: true,
+            command,
+            ..Default::default()
+        };
+        window.set_browser_menu_top_entries(ModelRc::new(VecModel::from(vec![
+            row(BrowserMenuCommand::TogglePinTab),
+            row(BrowserMenuCommand::CloseOtherTabs),
+        ])));
+        let (mut controller, ids) = controller_with_tabs(2);
+        assert!(controller.set_tab_pinned(ids[1], true));
+        assert!(controller.select_tab(ids[1]));
+
+        sync(&window, &controller);
+
+        let entries = window.get_browser_menu_top_entries();
+        assert_eq!(
+            entries.row_data(0).map(|entry| entry.title),
+            Some("Unpin Tab".into())
+        );
+        assert_eq!(entries.row_data(1).map(|entry| entry.enabled), Some(true));
+
+        assert!(controller.set_tab_pinned(ids[1], false));
+        assert_eq!(controller.close_other_tabs(ids[1]), 1);
+        sync(&window, &controller);
+        let entries = window.get_browser_menu_top_entries();
+        assert_eq!(
+            entries.row_data(0).map(|entry| entry.title),
+            Some("Pin Tab".into())
+        );
+        assert_eq!(entries.row_data(1).map(|entry| entry.enabled), Some(false));
+    }
+
+    #[test]
     fn the_tab_menu_pins_unpins_and_closes() {
         let (mut controller, ids) = controller_with_tabs(3);
 
@@ -339,6 +437,10 @@ mod tests {
         assert_eq!(
             run_menu_command(&mut controller, ids[2], TabMenuCommand::Pin),
             MenuOutcome::Unchanged
+        );
+        assert_eq!(
+            run_menu_command(&mut controller, ids[1], TabMenuCommand::Duplicate),
+            MenuOutcome::Duplicate
         );
         assert_eq!(
             run_menu_command(&mut controller, ids[0], TabMenuCommand::CloseOthers),

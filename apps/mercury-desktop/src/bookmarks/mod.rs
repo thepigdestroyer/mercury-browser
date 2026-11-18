@@ -251,6 +251,9 @@ impl Bookmarks {
             return;
         }
         if let Some(window) = self.window.upgrade() {
+            if !new_tab {
+                window.invoke_accept_address_draft(); // tabs-plus: it navigated this tab
+            }
             sync_ui(&window, &self.controller.borrow());
             window.window().request_redraw();
         }

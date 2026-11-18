@@ -720,7 +720,15 @@ pub(crate) fn browser_menu(platform: Platform) -> (Vec<BrowserMenuRow>, Vec<Brow
         separator_before,
     };
     (
-        vec![row("New Tab", BrowserMenuItem::NewTab, false)],
+        vec![
+            row("New Tab", BrowserMenuItem::NewTab, false),
+            // tabs-plus: the active tab's commands, so they have a keyboard path everywhere
+            row("Search Tabs…", BrowserMenuItem::SearchTabs, false),
+            row("Duplicate Tab", BrowserMenuItem::DuplicateTab, false),
+            // Retitled "Unpin Tab" while the active tab is pinned (`tab_strip::sync`).
+            row("Pin Tab", BrowserMenuItem::TogglePinTab, false),
+            row("Close Other Tabs", BrowserMenuItem::CloseOtherTabs, false),
+        ],
         vec![
             row("Find…", BrowserMenuItem::Find, false),
             row("Settings…", BrowserMenuItem::Settings, true),
@@ -1054,9 +1062,18 @@ mod tests {
         let bar = actions();
         let (top, bottom) = browser_menu(Platform::MacOs);
         for row in top.iter().chain(&bottom) {
+            // tabs-plus: one browser-menu row toggles; the menu bar has "Pin Tab" and "Unpin Tab".
+            let commands = match row.item.command() {
+                MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::TogglePinTab) => vec![
+                    MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::PinTab),
+                    MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::UnpinTab),
+                ],
+                command => vec![command],
+            };
             assert!(
-                bar.iter()
-                    .any(|(_, _, command)| *command == row.item.command()),
+                commands
+                    .iter()
+                    .all(|wanted| bar.iter().any(|(_, _, command)| command == wanted)),
                 "{:?}",
                 row.item
             );

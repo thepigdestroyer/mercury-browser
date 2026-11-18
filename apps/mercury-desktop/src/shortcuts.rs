@@ -249,6 +249,9 @@ pub(crate) fn shortcut_action(
     }
     match (key, character, alt) {
         (Key::Named(NamedKey::ArrowLeft), _, true) => Some(Back),
+        // tabs-plus: the browser menu, as other browsers open theirs
+        (_, Some("f" | "e"), true) => Some(ShowBrowserMenu),
+        (Key::Named(NamedKey::F10), _, false) => Some(ShowBrowserMenu),
         (Key::Named(NamedKey::ArrowRight), _, true) => Some(Forward),
         (_, Some("d"), true) => Some(FocusAddressBar),
         (Key::Named(NamedKey::F5), _, false) => Some(Reload),
@@ -379,15 +382,16 @@ pub(crate) fn run_shortcut(
             controller.borrow_mut().select_last_tab();
             sync_ui(window, &controller.borrow());
         }
-        ShortcutAction::Back => controller
-            .borrow_mut()
-            .queue_command(BrowserCommand::GoBack),
-        ShortcutAction::Forward => controller
-            .borrow_mut()
-            .queue_command(BrowserCommand::GoForward),
-        ShortcutAction::Reload => controller
-            .borrow_mut()
-            .queue_command(BrowserCommand::Reload),
+        // tabs-plus: these navigate, so the address draft ends
+        ShortcutAction::Back | ShortcutAction::Forward | ShortcutAction::Reload => {
+            window.invoke_accept_address_draft();
+            let command = match action {
+                ShortcutAction::Back => BrowserCommand::GoBack,
+                ShortcutAction::Forward => BrowserCommand::GoForward,
+                _ => BrowserCommand::Reload,
+            };
+            controller.borrow_mut().queue_command(command);
+        }
         ShortcutAction::FocusAddressBar => {
             unfocus_web_view(controller, web_view_focused);
             window.invoke_focus_address_bar();

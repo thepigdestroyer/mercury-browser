@@ -458,6 +458,11 @@ export component MainWindow inherits Window {
     public function accept-address-draft() {
         root.synced-address = root.address;
     }
+    // The field's text could not be opened (it is no address and no search was possible): it
+    // stays, as a draft, for the user to fix.
+    public function keep-address-draft() {
+        root.synced-address = root.committed-address;
+    }
     // How many of `tabs` are pinned; they come first.
     in property <int> pinned-tab-count: 0;
     // Tab search: the rows matching the query, set by the application.
