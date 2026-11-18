@@ -1,0 +1,71 @@
+# Mercury's changes to servo-media-gstreamer 0.8.0, against the crate as published on crates.io
+# (SHA-256 7bb5bc60a53436a224a57f23059a494bf84296119f1c6e8f5bbba8a2af3fa96f). Written by `mercury-servo-patches export`; do not edit by hand.
+# The changed files stay under the licence of servo-media-gstreamer.
+diff --git a/media_capture.rs b/media_capture.rs
+--- a/media_capture.rs
++++ b/media_capture.rs
+@@ -65,7 +65,8 @@
+     ) -> Option<gstreamer::caps::Builder<NoFeature>> {
+         match self {
+             Constrain::Value(v) => {
+-                Some(builder.field("name", gstreamer::Fraction::approximate_f64(*v)?))
++                // Mercury: the field is `name`, not the literal "name".
++                Some(builder.field(name, gstreamer::Fraction::approximate_f64(*v)?))
+             },
+             Constrain::Range(r) => {
+                 let min = r
+diff --git a/media_stream.rs b/media_stream.rs
+--- a/media_stream.rs
++++ b/media_stream.rs
+@@ -52,6 +52,31 @@
+     fn ty(&self) -> MediaStreamType {
+         self.type_
+     }
++
++    /// Mercury: takes the source element out (the device is closed in the NULL state), so that
++    /// a consumer that attaches this stream later cannot start the device again.
++    fn stop(&mut self) {
++        // Mercury: releasing the device is what this must not fail at silently.
++        if let Some(pipeline) = &self.pipeline {
++            if let Err(error) = pipeline.set_state(gstreamer::State::Null) {
++                log::warn!("capture stream: stopping the pipeline failed: {error:?}");
++            }
++        }
++        if self.elements.len() < 2 {
++            return;
++        }
++        let source = self.elements.remove(0);
++        if let Some(pipeline) = &self.pipeline {
++            if let Err(error) = pipeline.remove(&source) {
++                log::warn!(
++                    "capture stream: taking the source out of its pipeline failed: {error:?}"
++                );
++            }
++        }
++        if let Err(error) = source.set_state(gstreamer::State::Null) {
++            log::warn!("capture stream: stopping the device source failed: {error:?}");
++        }
++    }
+ }
+
+ impl GStreamerMediaStream {
+@@ -141,13 +166,17 @@
+             MediaStreamType::Video => {
+                 let vp8enc = gstreamer::ElementFactory::make("vp8enc")
+                     .property("deadline", 1i64)
+-                    .property("error-resilient", "default")
++                    // Mercury: `error-resilient` is a flags property (GstVPXEncErFlags) in the
++                    // GStreamer Mercury bundles; setting it from a string panicked the script
++                    // thread as soon as a camera stream was shown in a <video>.
++                    .property_from_str("error-resilient", "default")
+                     .property("cpu-used", -16i32)
+                     .property("lag-in-frames", 0i32)
+                     .build()?;
+
+                 let rtpvp8pay = gstreamer::ElementFactory::make("rtpvp8pay")
+-                    .property("picture-id-mode", "15-bit")
++                    // Mercury: an enum (GstVP8RTPPayMode), set from its nick; see above.
++                    .property_from_str("picture-id-mode", "15-bit")
+                     .property("mtu", 1200u32)
+                     .build()?;
+                 let queue2 = gstreamer::ElementFactory::make("queue").build()?;

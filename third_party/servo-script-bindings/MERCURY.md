@@ -8,8 +8,8 @@ headers); the bundled PLY (`third_party/ply`) is BSD-3-Clause (licence text in
 published on crates.io (checksum
 `75f9bbcb6eb03e96610c1cbd9e71a26869874178e4f109a9a1c3f810bce88f81`), built from
 https://github.com/servo/servo at commit
-`4e136d8ef31b7c4748fbfac606ca463f3efd7537`, path `components/script_bindings`,
-added unchanged in commit `ea292e9`.
+`4e136d8ef31b7c4748fbfac606ca463f3efd7537`, path `components/script_bindings`. `third_party/patches/servo-script-bindings.patch` is the difference from the
+published crate, and `make servo-patches-check` fails if the two disagree.
 
 It is part of the media-capture patch described in
 `third_party/servo-script/MERCURY.md`. Every change is marked `Mercury:`.

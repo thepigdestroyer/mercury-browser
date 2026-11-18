@@ -1,0 +1,167 @@
+# Mercury's changes to servo-script-bindings 0.8.0, against the crate as published on crates.io
+# (SHA-256 75f9bbcb6eb03e96610c1cbd9e71a26869874178e4f109a9a1c3f810bce88f81). Written by `mercury-servo-patches export`; do not edit by hand.
+# The changed files stay under the licence of servo-script-bindings.
+diff --git a/webidls/MediaDevices.webidl b/webidls/MediaDevices.webidl
+--- a/webidls/MediaDevices.webidl
++++ b/webidls/MediaDevices.webidl
+@@ -13,7 +13,8 @@
+
+ partial interface Navigator {
+     // [SameObject, SecureContext]
+-    [Pref="dom_webrtc_enabled"] readonly        attribute MediaDevices mediaDevices;
++    // Mercury: SecureContext, so that the attribute is absent where the interface is.
++    [SecureContext, Pref="dom_webrtc_enabled"] readonly        attribute MediaDevices mediaDevices;
+ };
+
+ partial interface MediaDevices {
+diff --git a/webidls/MediaStreamTrack.webidl b/webidls/MediaStreamTrack.webidl
+--- a/webidls/MediaStreamTrack.webidl
++++ b/webidls/MediaStreamTrack.webidl
+@@ -13,12 +13,19 @@
+     // readonly        attribute boolean muted;
+     //                 attribute EventHandler onmute;
+     //                 attribute EventHandler onunmute;
+-    // readonly        attribute MediaStreamTrackState readyState;
+     //                 attribute EventHandler onended;
+     MediaStreamTrack clone();
+-    // void stop();
++    // Mercury: readyState and stop(), so that a page can release a camera or microphone.
++    readonly        attribute MediaStreamTrackState readyState;
++    undefined stop();
+     // MediaTrackCapabilities getCapabilities();
+     // MediaTrackConstraints getConstraints();
+     // MediaTrackSettings getSettings();
+     // Promise<void> applyConstraints(optional MediaTrackConstraints constraints);
+ };
++
++// Mercury: added with readyState.
++enum MediaStreamTrackState {
++    "live",
++    "ended"
++};
+diff --git a/webidls/RTCDataChannel.webidl b/webidls/RTCDataChannel.webidl
+--- a/webidls/RTCDataChannel.webidl
++++ b/webidls/RTCDataChannel.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#dom-rtcdatachannel
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCDataChannel : EventTarget {
+   readonly attribute USVString label;
+   readonly attribute boolean ordered;
+diff --git a/webidls/RTCDataChannelEvent.webidl b/webidls/RTCDataChannelEvent.webidl
+--- a/webidls/RTCDataChannelEvent.webidl
++++ b/webidls/RTCDataChannelEvent.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#dom-rtcdatachannelevent
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCDataChannelEvent : Event {
+   constructor(DOMString type, RTCDataChannelEventInit eventInitDict);
+   readonly attribute RTCDataChannel channel;
+diff --git a/webidls/RTCError.webidl b/webidls/RTCError.webidl
+--- a/webidls/RTCError.webidl
++++ b/webidls/RTCError.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#dom-rtcerror
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCError : DOMException {
+   constructor(RTCErrorInit init, optional DOMString message = "");
+   readonly attribute RTCErrorDetailType errorDetail;
+diff --git a/webidls/RTCErrorEvent.webidl b/webidls/RTCErrorEvent.webidl
+--- a/webidls/RTCErrorEvent.webidl
++++ b/webidls/RTCErrorEvent.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#dom-rtcerrorevent
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCErrorEvent : Event {
+   constructor(DOMString type, RTCErrorEventInit eventInitDict);
+   [SameObject] readonly attribute RTCError error;
+diff --git a/webidls/RTCIceCandidate.webidl b/webidls/RTCIceCandidate.webidl
+--- a/webidls/RTCIceCandidate.webidl
++++ b/webidls/RTCIceCandidate.webidl
+@@ -5,7 +5,9 @@
+ // https://w3c.github.io/webrtc-pc/#rtcicecandidate-interface
+
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCIceCandidate {
+     [Throws] constructor(optional RTCIceCandidateInit candidateInitDict = {});
+     readonly attribute DOMString               candidate;
+diff --git a/webidls/RTCPeerConnection.webidl b/webidls/RTCPeerConnection.webidl
+--- a/webidls/RTCPeerConnection.webidl
++++ b/webidls/RTCPeerConnection.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#interface-definition
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCPeerConnection : EventTarget {
+     [Throws] constructor(optional RTCConfiguration configuration = {});
+     Promise<RTCSessionDescriptionInit> createOffer(optional RTCOfferOptions options = {});
+diff --git a/webidls/RTCPeerConnectionIceEvent.webidl b/webidls/RTCPeerConnectionIceEvent.webidl
+--- a/webidls/RTCPeerConnectionIceEvent.webidl
++++ b/webidls/RTCPeerConnectionIceEvent.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#rtcpeerconnectioniceevent
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCPeerConnectionIceEvent : Event {
+     [Throws] constructor(DOMString type, optional RTCPeerConnectionIceEventInit eventInitDict = {});
+     readonly attribute RTCIceCandidate? candidate;
+diff --git a/webidls/RTCSessionDescription.webidl b/webidls/RTCSessionDescription.webidl
+--- a/webidls/RTCSessionDescription.webidl
++++ b/webidls/RTCSessionDescription.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#rtcsessiondescription-class
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCSessionDescription {
+     [Throws] constructor(RTCSessionDescriptionInit descriptionInitDict);
+     readonly attribute RTCSdpType type;
+diff --git a/webidls/RTCTrackEvent.webidl b/webidls/RTCTrackEvent.webidl
+--- a/webidls/RTCTrackEvent.webidl
++++ b/webidls/RTCTrackEvent.webidl
+@@ -4,7 +4,9 @@
+
+ // https://w3c.github.io/webrtc-pc/#dom-rtctrackevent
+
+-[Exposed=Window, Pref="dom_webrtc_enabled"]
++// Mercury: WebRTC is gated by dom_webrtc_transceiver_enabled, not dom_webrtc_enabled,
++// so that dom_webrtc_enabled exposes camera and microphone capture only (third_party/servo-script-bindings/MERCURY.md).
++[Exposed=Window, Pref="dom_webrtc_transceiver_enabled"]
+ interface RTCTrackEvent : Event {
+     [Throws] constructor(DOMString type, RTCTrackEventInit eventInitDict);
+     // readonly attribute RTCRtpReceiver           receiver;

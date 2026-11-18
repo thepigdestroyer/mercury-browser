@@ -9,20 +9,19 @@ https://github.com/servo/servo at commit
 
 The crate was published without a licence file. Its `Cargo.toml` declares
 `license = "MPL-2.0"` and every source file carries the MPL-2.0 header; the
-repository's MPL-2.0 `LICENSE` file applies to this directory.
+MPL-2.0 text in the repository's `LICENSES/MPL-2.0.txt` applies to this
+directory.
 
 It is the home of Mercury's engine patches. The first one, camera and
-microphone capture, spans four vendored crates that were added together in
-commit `ea292e9` (each byte-identical to its published `.crate`), so
-
-    git diff ea292e9 -- third_party/servo-script third_party/servo-script-bindings \
-        third_party/servo-media-streams third_party/servo-media-gstreamer \
-        ':(exclude)third_party/*/MERCURY.md'
-
-shows every change, and only the changes listed here and in the other three
-directories' `MERCURY.md`. Every change is marked with a `Mercury:` comment
-(`grep -rn "Mercury:" third_party/servo-script`). How to re-vendor on a Servo
-upgrade: `docs/developer-guide/vendored-patches.md`. The design and the engine
+microphone capture, spans four vendored crates: this one,
+`servo-script-bindings`, `servo-media-streams` and `servo-media-gstreamer`.
+`third_party/patches/<crate>.patch` is each crate's difference from the
+published crate (`mercury-servo-patches diff <crate>` prints it from the
+directory as it is now), and `make servo-patches-check` fails if the two
+disagree. Together they hold every change, and only the changes listed here and
+in the other three directories' `MERCURY.md`. Every changed file is marked with
+a `Mercury:` comment (`grep -rn "Mercury:" third_party/servo-script`). How to
+re-vendor on a Servo upgrade: `docs/developer-guide/vendored-patches.md`. The design and the engine
 facts behind it: `.superpowers/research/R8-media-capture.md`.
 
 ## Changes: camera and microphone (`getUserMedia`)
@@ -46,8 +45,11 @@ with these changes.
   opened for the other kind. The tracks are "capture tracks", registered with
   the document's `MediaDevices`. An answer that arrives after the document
   stopped being fully active, or after its capture was stopped (unload or
-  teardown; `MediaDevices::capture_generation`), opens nothing and rejects
-  with `AbortError`.
+  teardown; `MediaDevices::capture_generation`), opens nothing, records
+  nothing in the permission results `stop_all_capture` cleared (a document
+  restored from the history would otherwise capture without asking and
+  without the browser's marks), and rejects with `AbortError`
+  (`settle_answer`, with a unit test in the same file).
 - **Upstream:** `mediadevices.rs:49-72`.
 - **Drop when:** Servo asks for permission in `getUserMedia`.
 
@@ -99,6 +101,11 @@ with these changes.
   `Window`. A worker may belong to a frame of another origin, and the rule
   above looks only at documents; without this, a cross-origin frame's worker
   could prompt (`navigator.permissions.request`) in the top-level page's name.
+  Same-origin dedicated and shared workers are refused too: their `query()`
+  says `denied` where the spec would say `prompt` or `granted`. That is
+  deliberate and harmless (workers cannot call `getUserMedia`); a worker
+  cannot tell which frame it serves, so do not narrow the gate to
+  cross-origin workers.
 - **Upstream:** `document.rs:3608-3625`; `permissions.rs:288-337`.
 - **Drop when:** Servo implements Permissions Policy and reports the asking frame.
 

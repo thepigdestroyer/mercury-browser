@@ -103,11 +103,11 @@ The removal commit should explain which upstream release absorbed the patch.
 
 ## The Servo engine patches (`servo-script` and friends)
 
-`third_party/servo-script`, `servo-script-bindings`, `servo-media-streams` and `servo-media-gstreamer` were vendored together (commit `ea292e9`, each crate byte-identical to its published `.crate`) for camera and microphone capture. `servo-script` is also where later engine patches go. Each crate's `MERCURY.md` lists its changes; `third_party/servo-script/MERCURY.md` describes the capture patch as a whole and the rustc warnings the vendored crate shows with Mercury's feature set and how each is silenced at its own site.
+`third_party/servo-script`, `servo-script-bindings`, `servo-media-streams` and `servo-media-gstreamer` were vendored together for camera and microphone capture, each as its published `.crate` plus `third_party/patches/<crate>.patch` (checked by `make servo-patches-check`, like every crate in `third_party/vendor.toml`). `servo-script` is also where later engine patches go. Each crate's `MERCURY.md` lists its changes; `third_party/servo-script/MERCURY.md` describes the capture patch as a whole and the rustc warnings the vendored crate shows with Mercury's feature set and how each is silenced at its own site.
 
 Rules on top of the general ones:
 
-- **Mark every change** with a `// Mercury:` comment (also in WebIDL) at the changed lines, and list it in that crate's `MERCURY.md` with the upstream file and line it changes. `grep -rn "Mercury:" third_party/servo-script` must find every hunk of `git diff ea292e9 -- third_party/servo-script`.
+- **Mark every change** with a `// Mercury:` comment (also in WebIDL) at the changed lines, and list it in that crate's `MERCURY.md` with the upstream file and line it changes. Every changed file must carry one (`make servo-patches-check` enforces that); mark each hunk where a comment fits.
 - **No formatting churn.** The vendored files follow Servo's rustfmt settings, which differ from Mercury's; `cargo fmt --all` does not touch `third_party/`. Format new code with `rustfmt --edition 2024 --config match_block_trailing_comma=true,binop_separator=Back,imports_granularity=Module,group_imports=StdExternalCrate,style_edition=2024 <file>` (these leave the upstream files unchanged).
 - **Zero warnings.** Cargo does not cap lints for path dependencies, so warnings from the vendored crates appear in `cargo build`. Silence one only at its own site and record it in `MERCURY.md`; never with a crate-wide `[lints]` entry, which would hide warnings in Mercury's own changes.
 
