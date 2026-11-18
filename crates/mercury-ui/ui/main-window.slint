@@ -756,12 +756,12 @@ export component MainWindow inherits Window {
                                 height: 36px;
                                 border-radius: 8px;
                                 background: search-touch.pressed
-                                    ? #45a9ed
-                                    : search-touch.has-hover ? #78caff : #62bfff;
+                                    ? ChromePalette.primary-button-pressed
+                                    : search-touch.has-hover ? ChromePalette.primary-button-hover : ChromePalette.primary-button-background;
 
                                 Text {
                                     text: "→";
-                                    color: #09131c;
+                                    color: ChromePalette.primary-button-text;
                                     font-size: 20px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
