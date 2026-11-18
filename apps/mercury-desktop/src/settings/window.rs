@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The settings window: a separate native window built from `SettingsWindow`, created when it
 //! is opened and dropped when it is closed.
 
@@ -211,6 +213,8 @@ fn commit_text(handle: &SettingsHandle, window: &SettingsWindow, name: &str, tex
 
 fn connect(window: &SettingsWindow, handle: Weak<SettingsHandle>) {
     // menus lane: reinstall Mercury's menu when this window becomes key
+    #[cfg(target_os = "macos")]
+    crate::menus::reinstall_when_key(window.window(), "the settings window became key");
     let toggled_handle = handle.clone();
     window.on_toggled(move |name, on| {
         let _slint = crate::callback_scope::InSlintCallback::enter();

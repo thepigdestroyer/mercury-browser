@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The one sequence that ends a run once its event loop is over: the exit code, the final
 //! saves, the engine's ordered shutdown, the window, the media buffers, the temporary profile
 //! and the log. `main` runs it after the event loop returns; the macOS terminate handler runs
@@ -244,8 +246,8 @@ impl EndOfRun for Steps {
     }
 
     fn release_window(&mut self) {
-        // Slot (menus): drops the About window and the menus' handle on the controller.
-        // crate::menus::release();
+        // menus: drops the About window and the menus' handle on the controller.
+        crate::menus::release();
         drop(self.window.take());
     }
 

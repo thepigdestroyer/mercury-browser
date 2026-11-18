@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 mod address;
 mod browser;
 mod controller;
@@ -15,15 +16,17 @@ pub use address::{
 };
 pub use browser::{
     BrowserCommand, BrowserEvent, BrowserState, LoadState, PointerButton, PointerButtonAction,
+    display_origin, placeholder_title,
 };
-pub use controller::BrowserController;
+pub use controller::{BrowserController, CloseTabOutcome};
 pub use controls::{
     ContextMenuAction, ContextMenuEntry, ControlAnswer, ControlId, ControlRect, ControlRequest,
     Rgb, SelectEntry, SelectOption,
 };
 pub use cursor::{ColorScheme, PointerCursor};
 pub use input::{
-    CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers,
+    ClipboardCommand, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
+    KeyboardModifiers,
 };
 pub use page_icon::PageIcon;
 pub use page_request::{

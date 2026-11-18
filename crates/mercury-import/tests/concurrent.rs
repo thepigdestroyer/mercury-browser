@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! A browser writing while it is imported from. A writer thread commits continuously to a fixture
 //! database while the importer reads it in a loop; every read must fail or be consistent.
 //!

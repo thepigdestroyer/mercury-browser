@@ -1,28 +1,29 @@
-use std::cell::{Cell, RefCell};
+// SPDX-License-Identifier: MPL-2.0
+use std::cell::Cell;
 use std::rc::Rc;
 
 use dpi::PhysicalSize;
 use euclid::{Point2D, Scale};
 use servo::{
-    Code, CompositionEvent as ServoCompositionEvent, CompositionState as ServoCompositionState,
-    DevicePoint, ImeEvent as ServoImeEvent, InputEvent, Key, KeyState as ServoKeyState,
-    KeyboardEvent as ServoKeyboardEvent, Location, Modifiers,
+    ClipboardAction, Code, CompositionEvent as ServoCompositionEvent,
+    CompositionState as ServoCompositionState, DevicePoint, ImeEvent as ServoImeEvent, InputEvent,
+    Key, KeyState as ServoKeyState, KeyboardEvent as ServoKeyboardEvent, Location, Modifiers,
     MouseButtonAction as ServoMouseButtonAction, MouseButtonEvent, MouseLeftViewportEvent,
     MouseMoveEvent, NamedKey, Theme, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
 };
 use talaria_core::{
-    ColorScheme, CompositionState, ControlAnswer, ControlId, ImeInput, KeyLocation, KeyState,
-    KeyboardInput, PointerButton, PointerButtonAction, TabId, WebView as TalariaWebView,
+    ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId, ImeInput,
+    KeyLocation, KeyState, KeyboardInput, PointerButton, PointerButtonAction, TabId,
+    WebView as TalariaWebView,
 };
 use talaria_core::{PageRequestAnswer, PageRequestId};
 use url::Url;
 
+use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::EmbedderControls;
 use crate::frame_ready::FrameReadySignal;
-use crate::page_requests::{
-    ClosesOnDrop, DocumentStartTracker, EngineRequest, Navigation, ServoPageRequest,
-    arms_document_start,
-};
+use crate::page_feedback::{DOCUMENT_TITLE_SCRIPT, PageFeedback};
+use crate::page_requests::{ClosesOnDrop, EngineRequest, Navigation, ServoPageRequest};
 use crate::session_data::{AfterEngineCleanup, HandleThenCleanup};
 use crate::{ServoWebViewError, ViewportSize};
 
@@ -39,19 +40,34 @@ pub struct ServoWebView {
     // dialogs: closes the delegate's store when the web view goes, which gives every
     // unanswered request the engine's default.
     page_requests: ClosesOnDrop<ServoPageRequest>,
-    document_start: Rc<RefCell<DocumentStartTracker>>,
+    document_start: Rc<DocumentStarts>,
+    // tabs
+    page_feedback: Rc<PageFeedback>,
+}
+
+/// What a tab's web view shares with its delegate.
+pub(crate) struct TabParts {
+    pub(crate) frame_ready: FrameReadySignal,
+    pub(crate) controls: EmbedderControls,
+    pub(crate) page_requests: ClosesOnDrop<ServoPageRequest>,
+    pub(crate) document_start: Rc<DocumentStarts>,
+    pub(crate) page_feedback: Rc<PageFeedback>,
 }
 
 impl ServoWebView {
     pub(crate) fn new(
         inner: HandleThenCleanup<servo::WebView, AfterEngineCleanup>,
-        frame_ready: FrameReadySignal,
         tab_id: TabId,
         scale_factor: f32,
-        controls: EmbedderControls,
-        page_requests: ClosesOnDrop<ServoPageRequest>,
-        document_start: Rc<RefCell<DocumentStartTracker>>,
+        parts: TabParts,
     ) -> Self {
+        let TabParts {
+            frame_ready,
+            controls,
+            page_requests,
+            document_start,
+            page_feedback,
+        } = parts;
         Self {
             inner,
             frame_ready,
@@ -60,14 +76,24 @@ impl ServoWebView {
             controls,
             page_requests,
             document_start,
+            page_feedback,
         }
     }
 
     // dialogs: the navigation's document may start without a `Started` Servo reports.
+    // tabs: the tab's user activation is forgotten as the navigation is sent.
     fn arm_document_start(&self, navigation: Navigation) {
-        if arms_document_start(navigation, self.inner.load_status()) {
-            self.document_start.borrow_mut().arm();
-        }
+        self.document_start
+            .navigation_sent(navigation, self.inner.load_status());
+    }
+
+    /// Starts a title read that was owed while another was in flight. Cheap when none is owed;
+    /// call once per engine pump.
+    pub fn refresh_page_feedback(&self) {
+        self.page_feedback.refresh_title(|callback| {
+            self.inner
+                .evaluate_javascript(DOCUMENT_TITLE_SCRIPT, callback);
+        });
     }
 
     pub fn resize(&self, size: ViewportSize) {
@@ -91,6 +117,18 @@ impl ServoWebView {
 
         self.inner.paint();
         true
+    }
+
+    /// Paints the shared rendering context now, whether or not a new frame was announced.
+    pub fn paint(&self) {
+        self.inner.paint();
+    }
+
+    /// Forgets a frame announced before now. A hidden web view is told about every frame of the
+    /// shared rendering context, including frames drawn while another tab was shown; after
+    /// `show()` only a frame announced later contains this web view.
+    pub fn discard_ready_frame(&self) {
+        let _was_ready = self.frame_ready.take_ready();
     }
 
     pub fn show(&self) {
@@ -263,7 +301,7 @@ impl TalariaWebView for ServoWebView {
         if matches!(request, Some(ServoPageRequest::Unload(_)))
             && answer == PageRequestAnswer::Decline
         {
-            self.document_start.borrow_mut().disarm();
+            self.document_start.navigation_cancelled();
         }
         match request {
             Some(request) => request.respond(answer),
@@ -274,6 +312,23 @@ impl TalariaWebView for ServoWebView {
             ),
         }
         Ok(())
+    }
+
+    // menus
+    fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error> {
+        let _event_id = self
+            .inner
+            .notify_input_event(InputEvent::EditingAction(servo_clipboard_action(command)));
+        Ok(())
+    }
+}
+
+/// The same editing Servo performs for Cmd/Ctrl+X, C and V in the page.
+fn servo_clipboard_action(command: ClipboardCommand) -> ClipboardAction {
+    match command {
+        ClipboardCommand::Cut => ClipboardAction::Cut,
+        ClipboardCommand::Copy => ClipboardAction::Copy,
+        ClipboardCommand::Paste => ClipboardAction::Paste,
     }
 }
 
@@ -373,6 +428,22 @@ fn servo_mouse_button(button: PointerButton) -> servo::MouseButton {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clipboard_commands_become_servo_editing_actions() {
+        assert_eq!(
+            servo_clipboard_action(ClipboardCommand::Cut),
+            ClipboardAction::Cut
+        );
+        assert_eq!(
+            servo_clipboard_action(ClipboardCommand::Copy),
+            ClipboardAction::Copy
+        );
+        assert_eq!(
+            servo_clipboard_action(ClipboardCommand::Paste),
+            ClipboardAction::Paste
+        );
+    }
 
     #[test]
     fn logical_coordinates_become_device_coordinates() {

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use mercury_settings::{
     ClosedTab, MAX_CLOSED_TABS, MAX_RESTORED_TABS, MAX_TITLE_BYTES, MAX_URL_BYTES, SessionSnapshot,
     TabSnapshot, WindowBounds, WindowSnapshot,

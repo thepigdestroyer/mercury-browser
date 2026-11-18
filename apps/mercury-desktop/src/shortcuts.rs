@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
@@ -120,6 +121,13 @@ impl ShortcutKeys {
     /// Forgets every pressed shortcut key, for when key-ups can no longer be relied on.
     pub(crate) fn clear(&mut self) {
         self.consumed.clear();
+    }
+
+    // menus
+    /// The native menu bar ran an action for this key's press, which therefore never reached
+    /// the window: swallow its release as if the press had run a shortcut here.
+    pub(crate) fn claim(&mut self, key: PhysicalKey) {
+        self.consumed.insert(key);
     }
 }
 
@@ -263,7 +271,7 @@ pub(crate) fn handle_browser_shortcut(
     }
 }
 
-fn run_shortcut(
+pub(crate) fn run_shortcut(
     window: &MainWindow,
     controller: &RefCell<BrowserController>,
     web_view_focused: &Cell<bool>,
@@ -278,8 +286,9 @@ fn run_shortcut(
         }
         ShortcutAction::CloseTab => {
             let active_tab_id = controller.borrow().active_tab_id();
-            controller.borrow_mut().close_tab(active_tab_id);
-            sync_ui(window, &controller.borrow());
+            let outcome = controller.borrow_mut().close_tab(active_tab_id);
+            // tabs: closing the last tab quits
+            crate::tab_close::finish_closing_tab(window, &controller.borrow(), outcome);
         }
         ShortcutAction::NextTab | ShortcutAction::PreviousTab => {
             controller
@@ -668,6 +677,26 @@ mod tests {
             KeyDisposition::Forward
         );
         assert_eq!(keys.release(KEY_R), KeyDisposition::Forward);
+    }
+
+    // menus
+    #[test]
+    fn a_key_the_native_menu_claimed_has_its_release_swallowed() {
+        let mut keys = ShortcutKeys::default();
+
+        keys.claim(KEY_T);
+
+        assert_eq!(keys.release(KEY_T), KeyDisposition::Consume);
+        assert_eq!(keys.release(KEY_T), KeyDisposition::Forward);
+    }
+
+    #[test]
+    fn a_later_press_of_a_claimed_key_is_handled_normally() {
+        let mut keys = ShortcutKeys::default();
+        keys.claim(KEY_T);
+
+        assert_eq!(keys.press(KEY_T, false, None), KeyDisposition::Forward);
+        assert_eq!(keys.release(KEY_T), KeyDisposition::Forward);
     }
 
     #[test]

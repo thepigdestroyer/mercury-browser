@@ -1,7 +1,8 @@
+// SPDX-License-Identifier: MPL-2.0
 use talaria_core::{
-    BrowserCommand, ColorScheme, CompositionState, ControlAnswer, ControlId, ImeInput, KeyLocation,
-    KeyState, KeyboardInput, KeyboardModifiers, PointerButton, PointerButtonAction, WebView,
-    dispatch_command,
+    BrowserCommand, ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId,
+    ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, PointerButton,
+    PointerButtonAction, WebView, dispatch_command,
 };
 use talaria_core::{PageRequestAnswer, PageRequestId};
 
@@ -42,6 +43,8 @@ enum FakeCall {
     AnswerControl(ControlId, ControlAnswer),
     // dialogs
     AnswerPageRequest(PageRequestId, PageRequestAnswer),
+    // menus
+    Clipboard(ClipboardCommand),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -160,6 +163,11 @@ impl WebView for FakeWebView {
         answer: PageRequestAnswer,
     ) -> Result<(), Self::Error> {
         self.record(FakeCall::AnswerPageRequest(id, answer))
+    }
+
+    // menus
+    fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error> {
+        self.record(FakeCall::Clipboard(command))
     }
 }
 
@@ -451,4 +459,20 @@ fn answer_page_request_command_forwards_the_id_and_answer() {
             PageRequestAnswer::PromptText("typed".to_owned())
         )]
     );
+}
+
+#[test]
+fn clipboard_commands_reach_the_page_editing() {
+    for command in [
+        ClipboardCommand::Cut,
+        ClipboardCommand::Copy,
+        ClipboardCommand::Paste,
+    ] {
+        let mut web_view = FakeWebView::default();
+
+        let result = dispatch_command(&mut web_view, BrowserCommand::Clipboard(command));
+
+        assert_eq!(result, Ok(()));
+        assert_eq!(web_view.calls, vec![FakeCall::Clipboard(command)]);
+    }
 }

@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # The GStreamer plugins a macOS build of Mercury Browser ships: one definition,
 # read by scripts/macos/collect-gstreamer.sh (what to copy) and by the bundle
 # checks (what must be there).

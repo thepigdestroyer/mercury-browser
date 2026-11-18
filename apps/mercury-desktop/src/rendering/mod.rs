@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #[cfg(target_os = "macos")]
 mod metal;
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
