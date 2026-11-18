@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use crate::page_request::PageRequests;
 use crate::{BrowserCommand, BrowserEvent, BrowserState};
 
@@ -34,6 +35,8 @@ pub struct Tab {
     state: BrowserState,
     initial_url: InitialUrl,
     engine_ready: bool,
+    /// A restored tab whose page is not created until the tab is first selected.
+    load_deferred: bool,
     opened_by_page: bool,
     // dialogs
     page_requests: PageRequests,
@@ -48,6 +51,7 @@ impl Tab {
             state,
             initial_url: InitialUrl::Pending(None),
             engine_ready: false,
+            load_deferred: false,
             opened_by_page: false,
             page_requests: PageRequests::default(),
             pinned: false,
@@ -144,6 +148,30 @@ impl Tab {
     pub(crate) fn set_pinned(&mut self, pinned: bool) {
         self.pinned = pinned;
     }
+
+    /// Whether the tab was restored and its page has not been created yet.
+    pub(crate) const fn is_load_deferred(&self) -> bool {
+        self.load_deferred
+    }
+
+    pub(crate) fn defer_load(&mut self) {
+        self.load_deferred = true;
+    }
+
+    /// The engine is about to create the tab's page; from now on it loads like any other tab.
+    pub(crate) fn end_load_deferral(&mut self) {
+        self.load_deferred = false;
+    }
+}
+
+/// A tab to put back from a saved session or the list of closed tabs.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RestoredTab {
+    /// The address to load; `None` for a new-tab page.
+    pub url: Option<String>,
+    /// Shown in the tab strip until the page reports its own title.
+    pub title: String,
+    pub zoom_percent: u16,
 }
 
 #[derive(Debug, Clone, PartialEq)]

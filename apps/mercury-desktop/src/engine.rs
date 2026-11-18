@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
@@ -194,6 +195,12 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
         }
     }
     state.shut_down(window.as_ref(), exit_code_if_stuck);
+}
+
+// session: lets a newly selected restored tab get its web view without waiting for a redraw
+/// Asks for a pump from the event loop, as Servo's waker does.
+pub(crate) fn request_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
 }
 
 /// Whether the engine's state is borrowed right now (a pump or a render is running).
@@ -411,6 +418,7 @@ impl EngineState {
         for web_view in self.web_views.values() {
             web_view.refresh_page_feedback();
         }
+        crate::profile_data::record_visits(&mut self.controller.borrow_mut()); // history lane
         let active_became_ready = !ready_before && {
             let controller = self.controller.borrow();
             is_engine_ready(&controller, controller.active_tab_id())
@@ -451,6 +459,10 @@ impl EngineState {
         self.event_receivers
             .retain(|tab_id, _| tab_ids.contains(tab_id));
         for tab_id in tab_ids {
+            // session: a restored tab gets its web view when it is first selected
+            if self.controller.borrow().is_load_deferred(tab_id) {
+                continue;
+            }
             let initial_url = self.controller.borrow_mut().take_initial_url(tab_id);
             let url = match plan_web_view(self.web_views.contains_key(&tab_id), initial_url) {
                 WebViewPlan::Keep => continue,
@@ -814,6 +826,21 @@ pub(crate) fn dispatch_pending_commands<W: TalariaWebView>(
     }
 
     Ok(controller.borrow().has_pending_commands())
+}
+
+/// Clears the engine's cookies, site data and cache as `kinds` says (history lane: "Clear
+/// browsing data"). Returns false if there is no engine, it is busy, or it did not answer.
+pub(crate) fn clear_site_data(kinds: talaria_servo::SiteDataKinds) -> bool {
+    let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
+        return false;
+    };
+    let Ok(state) = engine.state.try_borrow() else {
+        return false;
+    };
+    state
+        .as_ref()
+        .and_then(|state| state.runtime.as_ref())
+        .is_some_and(|runtime| runtime.clear_site_data(kinds))
 }
 
 #[cfg(test)]

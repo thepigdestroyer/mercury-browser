@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Zephium, https://github.com/zephium-browser/Zephium, commit
 // 9026a1fffad74d6e201ef97fe8c02c1b01403cd2, crates/zephium-import/src/chromium.rs
 // (lines 16-19, 214-343), licensed under MPL-2.0: reading `Bookmarks` and `AccountBookmarks`
@@ -16,10 +17,10 @@ use std::path::{Path, PathBuf};
 use serde_json::Value;
 
 use crate::model::{
-    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_TREE_DEPTH, VisitCollector,
-    keep_importable, push_unique, without_empty_roots,
+    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_TITLE_CHARS, MAX_TREE_DEPTH,
+    MAX_URL_BYTES, ReadContext, VisitCollector, keep_importable, push_unique, without_empty_roots,
 };
-use crate::snapshot;
+use crate::snapshot::{self, file_name};
 
 /// Milliseconds between 1601-01-01 (Chromium's epoch) and 1970-01-01.
 const EPOCH_OFFSET_MS: i64 = 11_644_473_600_000;
@@ -131,9 +132,14 @@ fn profile_order(dir_name: &str) -> Option<u64> {
 ///
 /// Arc keeps its bookmarks in its own sidebar file (`StorableSidebar.json`), not here, so for an
 /// Arc profile this returns [`ImportError::NotFound`] or nothing; its history reads as usual.
-pub fn read_chromium_bookmarks(profile: &Path) -> Result<Vec<ImportedNode>, ImportError> {
+/// `context` is checked for cancellation; nothing is copied (the file is read once, bounded).
+pub fn read_chromium_bookmarks(
+    profile: &Path,
+    context: &ReadContext,
+) -> Result<Vec<ImportedNode>, ImportError> {
     let mut files = Vec::new();
     for name in BOOKMARK_FILES {
+        context.check()?;
         let path = profile.join(name);
         match read_bounded(&path) {
             Ok(bytes) => files.push((path, bytes)),
@@ -151,7 +157,7 @@ pub fn read_chromium_bookmarks(profile: &Path) -> Result<Vec<ImportedNode>, Impo
     ];
     for (path, bytes) in &files {
         let malformed =
-            |detail: &str| ImportError::Malformed(format!("{}: {detail}", path.display()));
+            |detail: &str| ImportError::Malformed(format!("{}: {detail}", file_name(path)));
         let file: Value =
             serde_json::from_slice(bytes).map_err(|error| malformed(&error.to_string()))?;
         let file_roots = file
@@ -170,7 +176,7 @@ pub fn read_chromium_bookmarks(profile: &Path) -> Result<Vec<ImportedNode>, Impo
     let nodes = roots.into_iter().map(Root::into_node).collect();
     Ok(without_empty_roots(keep_importable(
         nodes,
-        &profile.display().to_string(),
+        BOOKMARK_FILES[0],
         0,
     )))
 }
@@ -180,7 +186,11 @@ fn read_bounded(path: &Path) -> Result<Vec<u8>, ImportError> {
         path: path.to_owned(),
         limit: MAX_BOOKMARKS_BYTES,
     };
-    let metadata = std::fs::metadata(path).map_err(|error| ImportError::io(path, error))?;
+    // Links are never followed.
+    let metadata = std::fs::symlink_metadata(path).map_err(|error| ImportError::io(path, error))?;
+    if !metadata.file_type().is_file() {
+        return Err(ImportError::NotARegularFile(path.to_owned()));
+    }
     if metadata.len() > MAX_BOOKMARKS_BYTES {
         return Err(too_large());
     }
@@ -308,19 +318,26 @@ fn chrome_time_to_unix_ms(micros: i64) -> Option<i64> {
 pub fn read_chromium_history(
     profile: &Path,
     limit: usize,
+    context: &ReadContext,
 ) -> Result<Vec<ImportedVisit>, ImportError> {
     let path = profile.join("History");
-    let snapshot = snapshot::open(&path)?;
+    let snapshot = snapshot::open(&path, context)?;
     snapshot.require("urls", &["id", "url", "title"])?;
     snapshot.require("visits", &["id", "url", "visit_time"])?;
     let mut collector = VisitCollector::new(limit);
     if collector.is_full() {
         return Ok(Vec::new());
     }
+    // Over-long addresses are left out and titles cut in SQL, so that a hostile file cannot
+    // fill memory.
     snapshot.rows(
-        "SELECT u.url, u.title, v.visit_time FROM visits v JOIN urls u ON u.id = v.url
-         ORDER BY v.visit_time DESC, v.id DESC",
+        &format!(
+            "SELECT u.url, substr(u.title, 1, {MAX_TITLE_CHARS}), v.visit_time
+             FROM visits v JOIN urls u ON u.id = v.url
+             WHERE length(CAST(u.url AS BLOB)) <= {MAX_URL_BYTES}
+             ORDER BY v.visit_time DESC, v.id DESC"
+        ),
         |row| Ok(collector.push_row(row, chrome_time_to_unix_ms)),
     )?;
-    Ok(collector.finish(&path.display().to_string()))
+    Ok(collector.finish(&file_name(&path)))
 }

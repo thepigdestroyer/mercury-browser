@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Servo, https://github.com/servo/servo, tag v0.8.0,
 // ports/servoshell/platform/macos/mod.rs (the `INFO_PLIST` static), MPL-2.0.
 
@@ -48,6 +49,21 @@ mod tests {
         assert!(embedded().contains(&format!(
             "<key>LSMinimumSystemVersion</key>\n\t<string>{target}</string>"
         )));
+    }
+
+    #[test]
+    fn embedded_info_plist_explains_location_access() {
+        for key in [
+            "NSLocationUsageDescription",
+            "NSLocationWhenInUseUsageDescription",
+        ] {
+            assert!(
+                embedded().contains(&format!(
+                    "<key>{key}</key>\n\t<string>Websites you allow can ask for your location.</string>"
+                )),
+                "{key}"
+            );
+        }
     }
 
     #[test]

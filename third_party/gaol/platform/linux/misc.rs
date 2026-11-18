@@ -14,7 +14,7 @@ use libc;
 use std::io;
 
 pub fn activate() -> Result<(), libc::c_int> {
-    // Do not set RLIMIT_FSIZE to zero here. Modern Servo IPC creates anonymous
+    // Mercury: do not set RLIMIT_FSIZE to zero here. Modern Servo IPC creates anonymous
     // shared-memory files with memfd_create() and sizes them with ftruncate().
     // RLIMIT_FSIZE also applies to those descriptors, so a zero limit makes a
     // normal page load fail with EFBIG and terminates the content process with

@@ -1,12 +1,14 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Download records. The transfer itself is done elsewhere; this only persists its state.
 
 use rusqlite::params;
 
-use crate::Store;
 use crate::error::{Result, StoreError};
 use crate::limits::{
     MAX_ERROR_CHARS, MAX_MIME_TYPE_CHARS, MAX_VALIDATOR_BYTES, check_path, check_url, cut,
 };
+use crate::{ClearRange, Store};
 
 /// Identifies one download record.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
@@ -303,6 +305,22 @@ impl Store {
             .conn
             .prepare_cached("DELETE FROM downloads WHERE state != ?1")?
             .execute([DownloadState::InProgress as u8])?;
+        Ok(removed as u64)
+    }
+
+    // history lane
+    /// "Clear browsing history" for downloads: removes the records in `range` (by when they
+    /// started) that are not in progress, and returns how many were removed. A download still
+    /// running keeps its record, which its transfer goes on updating.
+    pub fn clear_downloads(&mut self, range: ClearRange) -> Result<u64> {
+        let from = match range {
+            ClearRange::All => i64::MIN,
+            ClearRange::Since { from_ms } => from_ms,
+        };
+        let removed = self
+            .conn
+            .prepare_cached("DELETE FROM downloads WHERE state != ?1 AND started_at >= ?2")?
+            .execute(params![DownloadState::InProgress as u8, from])?;
         Ok(removed as u64)
     }
 

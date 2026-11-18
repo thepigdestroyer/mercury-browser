@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 SHELL := /bin/sh
 
 .DEFAULT_GOAL := help
@@ -57,6 +58,7 @@ endif
 	qa-fast \
 	ci-tools \
 	lint-scripts \
+	servo-patches-check \
 	deny \
 	build \
 	build-release \
@@ -92,7 +94,8 @@ help:
 		'qa' 'Run formatting, linting, and tests.' \
 		'qa-fast' 'Check formatting, lint and test the crates that need no engine.' \
 		'ci-tools' 'Download the pinned shellcheck, actionlint and cargo-deny.' \
-		'lint-scripts' 'Lint scripts/ (shellcheck, py_compile) and the workflows (actionlint).' \
+		'lint-scripts' 'Lint scripts/ (shellcheck, py_compile), the workflows (actionlint), licence headers and vendored crates.' \
+		'servo-patches-check' 'Check that each crate in third_party/ is the published crate plus its exported patch.' \
 		'deny' 'Check dependencies against the policy in deny.toml.' \
 		'build' 'Build the complete workspace in debug mode.' \
 		'build-release' 'Build the complete workspace in release mode.' \
@@ -211,7 +214,7 @@ lint:
 test:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) "$(CARGO)" build $(CARGO_FLAGS) --package "$(APP_PACKAGE)")
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) $(COLLECT_GSTREAMER) target/$(PROFILE_DIR)/lib)
-	$(GSTREAMER_ENV) $(TEST_LIBRARY_PATH) "$(CARGO)" test $(CARGO_FLAGS) --workspace
+	$(GSTREAMER_ENV) $(TEST_LIBRARY_PATH) "$(CARGO)" test $(CARGO_FLAGS) --workspace --all-features
 	"$(CARGO)" test --target-dir target --manifest-path third_party/gaol/Cargo.toml --test shared-memory
 
 qa:
@@ -250,7 +253,14 @@ lint-scripts:
 	find scripts -type f -name '*.py' -print0 | \
 		PYTHONPYCACHEPREFIX="$(abspath target)/pycache" xargs -0 "$(PYTHON)" -m py_compile && \
 	actionlint && \
-	printf '%s\n' 'scripts and workflows: no findings'
+	scripts/ci/check-license-headers.sh && \
+	"$(MAKE)" servo-patches-check && \
+	printf '%s\n' 'scripts, workflows, licence headers and vendored crates: no findings'
+
+# Engine-free: builds only the small mercury-servo-patches tool. It downloads a published
+# crate from crates.io when Cargo's cache lacks it (vendored crates never are in it).
+servo-patches-check:
+	"$(CARGO)" run --locked --quiet $(CARGO_FLAGS) --package mercury-servo-patches -- check
 
 deny:
 	@$(CI_TOOLS_PATH); export PATH; \

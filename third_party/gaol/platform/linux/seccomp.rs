@@ -23,6 +23,7 @@ use libc::{self, CLONE_CHILD_CLEARTID, CLONE_FILES, CLONE_FS,
            CLONE_THREAD, CLONE_VM};
 use libc::{AF_INET, AF_INET6, AF_UNIX, AF_NETLINK};
 use libc::{c_char, c_int, c_ulong, c_ushort, c_void};
+// Mercury: O_DIRECTORY and TCGETS for the read-only open rules and ioctls below.
 use libc::{O_NONBLOCK, O_RDONLY, O_NOCTTY, O_CLOEXEC, O_DIRECTORY, FIONREAD, FIOCLEX, TCGETS};
 use libc::{MADV_NORMAL, MADV_RANDOM, MADV_SEQUENTIAL, MADV_WILLNEED, MADV_DONTNEED};
 use std::ffi::CString;
@@ -48,6 +49,7 @@ const ARCH_NR: u32 = AUDIT_ARCH_PPC64;
 const ARCH_NR: u32 = AUDIT_ARCH_PPC64LE;
 
 const SECCOMP_RET_KILL: u32 = 0;
+// Mercury: lets a rule fail a system call with an error instead of killing the process.
 const SECCOMP_RET_ERRNO: u32 = 0x0005_0000;
 const SECCOMP_RET_ALLOW: u32 = 0x7fff_0000;
 
@@ -70,6 +72,7 @@ const ARG_1_OFFSET: u32 = 24;
 const ARG_2_OFFSET: u32 = 32;
 
 const NETLINK_ROUTE: c_int = 0;
+// Mercury: the prctl operations allowed below.
 const PR_SET_NAME: u32 = 15;
 const PR_SET_VMA: u32 = 0x5356_4d41;
 
@@ -116,6 +119,8 @@ static FILTER_EPILOGUE: [sock_filter; 1] = [
 ];
 
 /// Syscalls that are always allowed.
+// Mercury: slices instead of fixed-size arrays, and the system calls current Rust, glibc,
+// SpiderMonkey and Servo need.
 pub static ALLOWED_SYSCALLS: &'static [u32] = &[
     libc::SYS_brk as u32,
     libc::SYS_close as u32,
@@ -191,6 +196,7 @@ const KILL_PROCESS: sock_filter = sock_filter {
     jf: 0,
 };
 
+// Mercury: filter results that fail a system call with ENOSYS or EACCES.
 const RETURN_ENOSYS: sock_filter = sock_filter {
     code: RET + K,
     k: SECCOMP_RET_ERRNO | libc::ENOSYS as u32,
@@ -275,7 +281,7 @@ impl Filter {
                                          |filter| filter.allow_this_syscall())
             });
 
-            // `openat` superseded `open` in modern libc. The mount namespace
+            // Mercury: `openat` superseded `open` in modern libc. The mount namespace
             // and chroot still define what can be reached; seccomp ensures the
             // descriptor can only be opened for reading.
             filter.if_syscall_is(libc::SYS_openat as u32, |filter| {
@@ -299,7 +305,7 @@ impl Filter {
             }
         });
 
-        // Unix sockets are needed by libc and by Servo's IPC channels. With
+        // Mercury: Unix sockets are needed by libc and by Servo's IPC channels. With
         // no NetworkOutbound operation, other socket families fail cleanly
         // instead of terminating the entire renderer; the separate network
         // namespace remains the primary network boundary.
@@ -324,7 +330,7 @@ impl Filter {
             })
         }
 
-        // glibc first attempts clone3 when creating a thread. Returning
+        // Mercury: glibc first attempts clone3 when creating a thread. Returning
         // ENOSYS makes it use clone, whose flags we validate below, instead of
         // granting the much broader clone3 API.
         filter.if_syscall_is(libc::SYS_clone3 as u32, |filter| {
@@ -345,7 +351,7 @@ impl Filter {
                               |filter| filter.allow_this_syscall())
         });
 
-        // Rust and SpiderMonkey query this process' resource limits; Rust may
+        // Mercury: Rust and SpiderMonkey query this process' resource limits; Rust may
         // also raise its soft descriptor limit when initializing IPC. Keep
         // all operations scoped to the caller and only permit mutation of
         // RLIMIT_NOFILE.
@@ -357,7 +363,7 @@ impl Filter {
             })
         });
 
-        // Thread names aid diagnostics. PR_SET_VMA is used by SpiderMonkey to
+        // Mercury: thread names aid diagnostics. PR_SET_VMA is used by SpiderMonkey to
         // label anonymous mappings and does not relax the sandbox.
         filter.if_syscall_is(libc::SYS_prctl as u32, |filter| {
             filter.if_arg0_is(PR_SET_NAME, |filter| filter.allow_this_syscall());
@@ -430,6 +436,7 @@ impl Filter {
         self.program.push(ALLOW_SYSCALL)
     }
 
+    // Mercury: helpers for the rules above.
     fn return_enosys(&mut self) {
         self.program.push(RETURN_ENOSYS)
     }

@@ -189,7 +189,7 @@ fn drop_capabilities() -> Result<(),c_int> {
 
 /// Sets up the user namespace.
 unsafe fn prepare_user_namespace(parent_uid: uid_t, parent_gid: gid_t) -> io::Result<()> {
-    // Servo uses the OS PID to pair content processes with their memory
+    // Mercury: Servo uses the OS PID to pair content processes with their memory
     // reporters. Hiding the host PID here makes every child report itself as
     // PID 1 and breaks process lifecycle tracking. User, mount, IPC, UTS and
     // (when applicable) network namespaces still isolate the content process.
@@ -241,11 +241,11 @@ pub fn start(profile: &Profile, command: &mut Command) -> io::Result<Process> {
             // Close the reading end of the pipe.
             libc::close(pipe_fds[0]);
 
-            // Set up our user namespace. A second fork keeps the parent able
+            // Mercury: set up our user namespace. A second fork keeps the parent able
             // to track and reap the final content process by its real PID.
             prepare_user_namespace(parent_uid, parent_gid).unwrap();
 
-            // Fork again so the intermediate namespace setup process can
+            // Mercury: fork again so the intermediate namespace setup process can
             // report the final content-process PID to the browser.
             match libc::fork() {
                 0 => {

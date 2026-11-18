@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Adapted from Zervo, https://github.com/Goddv/Zervo, commit 86cb7126,
 # scripts/make-icns.sh, MPL-2.0. Changed: the iconset is rendered from the
 # project's SVG logo (scripts/macos/render-icon.swift) instead of scaled from a

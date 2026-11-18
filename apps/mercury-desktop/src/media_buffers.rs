@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! A private directory for each run, where GLib and GStreamer write (download buffers among
 //! them: copies of the media being played). It is removed when the run ends, and leftovers of
 //! runs that were killed are removed at the next start.

@@ -1,0 +1,479 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+import { Button, ComboBox, LineEdit, ListView, Palette } from "std-widgets.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { BookmarkIcon, BookmarkMenuRow, BookmarkRowKind } from "bar.slint";
+
+component ToolButton inherits Button {
+    height: 30px;
+}
+
+// The bookmarks manager: the folder tree on the left, the selected folder's contents (or the
+// search results) on the right, and an editor for the selected entry under them. Rust owns all
+// the data; the lists are `ListView`s, which create rows only for what is on screen.
+export component BookmarksManager inherits Window {
+    in property <ColorScheme> forced-color-scheme: ColorScheme.unknown;
+    in property <[BookmarkMenuRow]> folders;
+    in property <int> folder-index: -1;
+    in property <[BookmarkMenuRow]> rows;
+    in-out property <int> row-index: -1;
+    in property <string> heading;
+    in-out property <string> search-text;
+    in property <bool> searching;
+    in property <bool> editing;
+    in property <bool> editing-bookmark;
+    in-out property <string> edit-name;
+    in-out property <string> edit-url;
+    in property <string> problem;
+    in property <string> status;
+    in property <bool> can-undo;
+    in property <string> undo-label: "Undo delete";
+    in property <[string]> move-targets;
+    in-out property <int> move-index: 0;
+    in property <bool> can-move-up;
+    in property <bool> can-move-down;
+    in property <bool> can-add: true;
+    in property <bool> busy;
+
+    callback folder-selected(int);
+    callback row-selected(int);
+    // Opens a row: a bookmark in the current tab (or a new background tab), a folder in the
+    // manager itself.
+    callback row-opened(int, bool);
+    callback search-edited(string);
+    callback save-edits();
+    callback new-folder();
+    callback new-separator();
+    callback delete-selected();
+    callback undo-delete();
+    callback move-up();
+    callback move-down();
+    callback move-to(int);
+    callback import-file();
+    callback export-file();
+
+    title: "Bookmarks — Mercury Browser";
+    icon: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
+    preferred-width: 920px;
+    preferred-height: 620px;
+    min-width: 640px;
+    min-height: 420px;
+    background: ChromePalette.window-background;
+
+    // For renderings: the scheme of the std widgets (Rust sets `ChromePalette`'s theme).
+    init => {
+        if root.forced-color-scheme != ColorScheme.unknown {
+            Palette.color-scheme = root.forced-color-scheme;
+        }
+    }
+
+    changed forced-color-scheme => {
+        Palette.color-scheme = root.forced-color-scheme;
+    }
+
+    // Keeps Slint from installing its default macOS menu bar when this window becomes active (a
+    // window that declares a `MenuBar` never gets the default one, and a hidden one installs no
+    // menu); Mercury's own menu is reinstalled when this window becomes key.
+    MenuBar {
+        visible: false;
+        Menu { }
+    }
+
+    public function focus-list() {
+        list-focus.focus();
+    }
+
+    function select-row(index: int) {
+        if index >= 0 && index < root.rows.length {
+            root.row-index = index;
+            root.row-selected(index);
+        }
+    }
+
+    VerticalLayout {
+        padding: 12px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            search := LineEdit {
+                horizontal-stretch: 1;
+                placeholder-text: "Search bookmarks";
+                text <=> root.search-text;
+                accessible-label: "Search bookmarks";
+                edited(text) => {
+                    root.search-edited(text);
+                }
+            }
+
+            ToolButton {
+                text: "New folder";
+                enabled: root.can-add;
+                clicked => {
+                    root.new-folder();
+                }
+            }
+
+            ToolButton {
+                text: "New separator";
+                enabled: root.can-add;
+                clicked => {
+                    root.new-separator();
+                }
+            }
+
+            ToolButton {
+                text: "Import bookmarks from file…";
+                enabled: !root.busy;
+                clicked => {
+                    root.import-file();
+                }
+            }
+
+            ToolButton {
+                text: "Export bookmarks…";
+                enabled: !root.busy;
+                clicked => {
+                    root.export-file();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            vertical-stretch: 1;
+
+            // The folder tree, flattened with indentation.
+            Rectangle {
+                width: 240px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: ChromePalette.field-border;
+                background: ChromePalette.content-background;
+
+                ListView {
+                    x: 1px;
+                    y: 4px;
+                    width: parent.width - 2px;
+                    height: parent.height - 8px;
+
+                    for folder[index] in root.folders: Rectangle {
+                        height: 28px;
+                        background: index == root.folder-index && !root.searching
+                            ? ChromePalette.item-selected
+                            : folder-touch.has-hover ? ChromePalette.item-hover : transparent;
+                        accessible-role: list-item;
+                        accessible-label: folder.title;
+                        accessible-item-selected: index == root.folder-index;
+
+                        HorizontalLayout {
+                            padding-left: 8px + folder.depth * 16px;
+                            padding-right: 8px;
+                            spacing: 8px;
+
+                            VerticalLayout {
+                                alignment: center;
+
+                                BookmarkIcon {
+                                    folder: true;
+                                    stroke: ChromePalette.text;
+                                }
+                            }
+
+                            Text {
+                                text: folder.title == "" ? "(untitled)" : folder.title;
+                                color: ChromePalette.text;
+                                font-size: 13px;
+                                font-weight: folder.depth == 0 ? 600 : 400;
+                                vertical-alignment: center;
+                                overflow: elide;
+                                horizontal-stretch: 1;
+                            }
+                        }
+
+                        folder-touch := TouchArea {
+                            clicked => {
+                                root.folder-selected(index);
+                            }
+                        }
+                    }
+                }
+            }
+
+            VerticalLayout {
+                spacing: 8px;
+                horizontal-stretch: 1;
+
+                HorizontalLayout {
+                    spacing: 6px;
+
+                    Text {
+                        horizontal-stretch: 1;
+                        text: root.heading;
+                        color: ChromePalette.text;
+                        font-size: 15px;
+                        font-weight: 600;
+                        vertical-alignment: center;
+                        overflow: elide;
+                    }
+
+                    ToolButton {
+                        text: "Move up";
+                        enabled: root.can-move-up;
+                        clicked => {
+                            root.move-up();
+                        }
+                    }
+
+                    ToolButton {
+                        text: "Move down";
+                        enabled: root.can-move-down;
+                        clicked => {
+                            root.move-down();
+                        }
+                    }
+
+                    ToolButton {
+                        text: "Delete";
+                        enabled: root.row-index >= 0;
+                        clicked => {
+                            root.delete-selected();
+                        }
+                    }
+
+                    if root.can-undo: ToolButton {
+                        text: root.undo-label;
+                        clicked => {
+                            root.undo-delete();
+                        }
+                    }
+                }
+
+                // The contents. Arrows select, Return opens (Cmd/Ctrl+Return in a new tab),
+                // Delete or Backspace deletes, Alt+arrows move.
+                list-focus := FocusScope {
+                    vertical-stretch: 1;
+                    // Fixed hints: taken from the `ListView`, they would grow with every row it
+                    // creates and the layout would never settle.
+                    min-height: 120px;
+                    preferred-height: 240px;
+
+                    key-pressed(event) => {
+                        if event.text == Key.UpArrow && event.modifiers.alt {
+                            root.move-up();
+                            return accept;
+                        }
+                        if event.text == Key.DownArrow && event.modifiers.alt {
+                            root.move-down();
+                            return accept;
+                        }
+                        if event.text == Key.UpArrow {
+                            root.select-row(Math.max(0, root.row-index - 1));
+                            return accept;
+                        }
+                        if event.text == Key.DownArrow {
+                            root.select-row(Math.min(root.rows.length - 1, root.row-index + 1));
+                            return accept;
+                        }
+                        if event.text == Key.Return && root.row-index >= 0 {
+                            root.row-opened(root.row-index, event.modifiers.control);
+                            return accept;
+                        }
+                        if (event.text == Key.Delete || event.text == Key.Backspace) && root.row-index >= 0 {
+                            root.delete-selected();
+                            return accept;
+                        }
+                        reject
+                    }
+
+                    Rectangle {
+                        border-radius: 6px;
+                        border-width: 1px;
+                        border-color: list-focus.has-focus ? ChromePalette.accent : ChromePalette.field-border;
+                        background: ChromePalette.content-background;
+
+                        if root.rows.length == 0: Text {
+                            text: root.searching ? "No bookmarks match." : "This folder is empty.";
+                            color: ChromePalette.text-secondary;
+                            font-size: 13px;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        ListView {
+                            x: 1px;
+                            y: 4px;
+                            width: parent.width - 2px;
+                            height: parent.height - 8px;
+
+                            for row[index] in root.rows: Rectangle {
+                                height: 30px;
+                                background: index == root.row-index
+                                    ? ChromePalette.item-selected
+                                    : row-touch.has-hover ? ChromePalette.item-hover : transparent;
+                                accessible-role: list-item;
+                                accessible-label: row.kind == BookmarkRowKind.separator ? "Separator" : row.title;
+                                accessible-item-selected: index == root.row-index;
+
+                                if row.kind == BookmarkRowKind.separator: Rectangle {
+                                    x: 12px;
+                                    y: parent.height / 2;
+                                    width: parent.width - 24px;
+                                    height: 1px;
+                                    background: ChromePalette.separator;
+                                }
+
+                                if row.kind != BookmarkRowKind.separator: HorizontalLayout {
+                                    padding-left: 10px;
+                                    padding-right: 10px;
+                                    spacing: 10px;
+
+                                    VerticalLayout {
+                                        alignment: center;
+
+                                        BookmarkIcon {
+                                            folder: row.kind == BookmarkRowKind.folder;
+                                            stroke: ChromePalette.text;
+                                        }
+                                    }
+
+                                    Text {
+                                        horizontal-stretch: 2;
+                                        min-width: 0px;
+                                        preferred-width: 0px;
+                                        text: row.title == "" ? "(untitled)" : row.title;
+                                        color: ChromePalette.text;
+                                        font-size: 13px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+
+                                    Text {
+                                        horizontal-stretch: 3;
+                                        min-width: 0px;
+                                        preferred-width: 0px;
+                                        text: row.url;
+                                        color: ChromePalette.text-secondary;
+                                        font-size: 12px;
+                                        vertical-alignment: center;
+                                        overflow: elide;
+                                    }
+                                }
+
+                                row-touch := TouchArea {
+                                    clicked => {
+                                        list-focus.focus();
+                                        root.select-row(index);
+                                    }
+                                    double-clicked => {
+                                        root.row-opened(index, false);
+                                    }
+                                    pointer-event(event) => {
+                                        if event.kind == PointerEventKind.up && event.button == PointerEventButton.middle {
+                                            root.row-opened(index, true);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // The editor of the selected entry.
+                if root.editing: VerticalLayout {
+                    spacing: 8px;
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            width: 70px;
+                            text: "Name";
+                            color: ChromePalette.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            text <=> root.edit-name;
+                            accessible-label: "Name";
+                            accepted => {
+                                root.save-edits();
+                            }
+                        }
+                    }
+
+                    if root.editing-bookmark: HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            width: 70px;
+                            text: "Address";
+                            color: ChromePalette.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        LineEdit {
+                            text <=> root.edit-url;
+                            accessible-label: "Address";
+                            accepted => {
+                                root.save-edits();
+                            }
+                        }
+                    }
+
+                    HorizontalLayout {
+                        spacing: 8px;
+
+                        Text {
+                            width: 70px;
+                            text: "Move to";
+                            color: ChromePalette.text;
+                            font-size: 13px;
+                            vertical-alignment: center;
+                        }
+
+                        ComboBox {
+                            horizontal-stretch: 1;
+                            model: root.move-targets;
+                            current-index <=> root.move-index;
+                            accessible-label: "Folder to move to";
+                        }
+
+                        ToolButton {
+                            text: "Move";
+                            clicked => {
+                                root.move-to(root.move-index);
+                            }
+                        }
+
+                        ToolButton {
+                            text: "Save";
+                            primary: true;
+                            clicked => {
+                                root.save-edits();
+                            }
+                        }
+                    }
+                }
+
+                if root.problem != "": Text {
+                    text: root.problem;
+                    color: ChromePalette.danger;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+            }
+        }
+
+        Text {
+            text: root.status;
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            overflow: elide;
+        }
+    }
+}

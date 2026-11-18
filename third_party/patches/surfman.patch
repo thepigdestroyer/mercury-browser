@@ -1,0 +1,35 @@
+# Mercury's changes to surfman 0.14.0, against the crate as published on crates.io
+# (SHA-256 7fe194717def845ecb64e7aeda3e2108c4b3b1584a01aa6e545e702cedca2a00). Written by `mercury-servo-patches export`; do not edit by hand.
+# The changed files stay under the licence of surfman.
+diff --git a/src/mesa_surfaceless/device.rs b/src/mesa_surfaceless/device.rs
+--- a/src/mesa_surfaceless/device.rs
++++ b/src/mesa_surfaceless/device.rs
+@@ -40,7 +40,12 @@
+ impl Adapter {
+     #[inline]
+     pub(crate) fn hardware() -> Adapter {
+-        Adapter::HardwarePrime
++        // Mercury: let Mesa select the system's default adapter. HardwarePrime would
++        // implement this preference by writing DRI_PRIME=1 into the process
++        // environment immediately before every context creation. Apart from
++        // assuming that a second GPU exists, that global mutation races with
++        // GStreamer and every other GL user in a multithreaded browser.
++        Adapter::Hardware
+     }
+
+     #[inline]
+@@ -65,12 +70,10 @@
+
+         match *self {
+             Adapter::Software => {}
+-            Adapter::Hardware => {
++            // Mercury: never set DRI_PRIME, a process-global variable.
++            Adapter::Hardware | Adapter::HardwarePrime => {
+                 env::remove_var(MESA_DRI_PRIME_ENV_VAR);
+             }
+-            Adapter::HardwarePrime => {
+-                env::set_var(MESA_DRI_PRIME_ENV_VAR, "1");
+-            }
+         }
+     }
+ }
