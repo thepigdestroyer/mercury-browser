@@ -349,13 +349,14 @@ mod worker_tests {
 
         assert_eq!(
             passwords.worker.last_interaction(),
-            Some(Interaction::Never)
+            Some(Interaction::Allowed)
         );
         passwords.worker.run_queued();
         assert_eq!(
             saved_sign_in_username(ORIGIN, false).as_deref(),
             Some("bob")
         );
+        assert_eq!(save_problem(), None);
     }
 }
 
