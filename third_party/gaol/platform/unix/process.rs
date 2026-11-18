@@ -76,6 +76,7 @@ impl Process {
             }
         }
 
+        // Mercury: the wait-status functions are safe; the unsafe block only warned.
         if WIFEXITED(stat) {
             Ok(ExitStatus::Code(WEXITSTATUS(stat) as i32))
         } else {

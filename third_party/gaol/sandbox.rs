@@ -76,6 +76,7 @@ impl Command {
 
     /// Constructs a new `Command` for launching the current executable.
     pub fn me() -> io::Result<Command> {
+        // Mercury: `?` instead of the deprecated `try!`.
         Ok(Command::new(env::current_exe()?))
     }
 
