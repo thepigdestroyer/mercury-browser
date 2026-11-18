@@ -523,3 +523,25 @@ mod worker_tests {
         assert!(passwords.fill.borrow().is_none());
     }
 }
+
+// passwords-ui (review round 2): written before the fix.
+#[cfg(test)]
+mod locked_list_tests {
+    use mercury_password_manager::Interaction;
+
+    use super::*;
+    use crate::passwords::tests::install_deferred;
+
+    #[test]
+    fn a_list_that_could_not_be_read_is_read_again_on_the_next_right_click() {
+        let (passwords, _, _) = install_deferred();
+        passwords.list_unavailable.set(true);
+
+        assert!(fill_menu(TabId::new(1), ControlId::new(1), "https://example.com/").is_none());
+
+        assert_eq!(passwords.worker.pending(), 1);
+        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Allowed));
+        passwords.worker.run_queued();
+        assert!(!passwords.list_unavailable.get());
+    }
+}

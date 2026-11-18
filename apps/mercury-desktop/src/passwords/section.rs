@@ -902,3 +902,32 @@ mod worker_tests {
         assert_eq!(ui(&window).get_shown_password(), long.as_str());
     }
 }
+
+// passwords-ui (review round 2): written before the fix.
+#[cfg(test)]
+mod failure_tests {
+    use mercury_password_manager::Interaction;
+
+    use super::*;
+    use crate::passwords::tests::install_deferred;
+    use crate::settings::tests::init_slint;
+
+    #[test]
+    fn a_job_that_fails_clears_waiting_and_says_so() {
+        init_slint();
+        let (passwords, _, _) = install_deferred();
+        let window = SettingsWindow::new().expect("a window");
+        connect_settings_window(&window);
+        passwords.worker.run_queued();
+        set_status(WAITING_FOR_KEYCHAIN);
+
+        passwords.worker.run(
+            Interaction::Allowed,
+            |_| -> u8 { panic!("a job failed (expected in this test)") },
+            |_| {},
+        );
+        passwords.worker.run_queued();
+
+        assert_eq!(ui(&window).get_status(), STORE_FAILED);
+    }
+}

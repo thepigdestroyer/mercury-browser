@@ -331,7 +331,7 @@ mod worker_tests {
     }
 
     #[test]
-    fn a_sign_in_that_worked_is_saved_without_asking_the_user() {
+    fn a_sign_in_that_worked_is_saved_and_may_ask_because_the_user_asked() {
         crate::settings::tests::init_slint();
         let _settings = crate::settings::SettingsHandle::start(None);
         let (passwords, _, _) = install_deferred();
@@ -356,5 +356,44 @@ mod worker_tests {
             saved_sign_in_username(ORIGIN, false).as_deref(),
             Some("bob")
         );
+    }
+}
+
+// passwords-ui (review round 2): written before the fix.
+#[cfg(test)]
+mod save_problem_tests {
+    use mercury_password_manager::Interaction;
+
+    use super::*;
+    use crate::passwords::tests::install_fakes;
+
+    #[test]
+    fn a_save_that_fails_says_so_and_can_be_retried_or_dismissed() {
+        crate::settings::tests::init_slint();
+        let _settings = crate::settings::SettingsHandle::start(None);
+        let (passwords, _, _) = install_fakes();
+        let tab = TabId::new(1);
+
+        // A control character in the user name: the store refuses it.
+        sign_in_sent(tab, "https://example.com", "bob\u{1}", "fake-b");
+        observe_event(&passwords, tab, &BrowserEvent::PageLoadStarted);
+        observe_event(
+            &passwords,
+            tab,
+            &BrowserEvent::LoadStateChanged {
+                state: LoadState::Loaded,
+            },
+        );
+        assert_eq!(
+            save_problem().as_deref(),
+            Some("Couldn't save the login for example.com.")
+        );
+
+        retry_failed_save();
+        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Allowed));
+        assert!(save_problem().is_some(), "it failed again");
+
+        dismiss_save_problem();
+        assert_eq!(save_problem(), None);
     }
 }

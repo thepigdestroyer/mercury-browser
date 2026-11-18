@@ -847,3 +847,86 @@ mod password_tests {
         assert_eq!(view.choice_label, crate::passwords::REMEMBER_SIGN_IN_CHOICE);
     }
 }
+
+// passwords-ui (review round 2): written before the fix.
+#[cfg(test)]
+mod saved_password_tests {
+    use std::time::Duration;
+
+    use mercury_password_manager::Interaction;
+    use mercury_passwords::{LoginKey, Origin, Password};
+    use talaria_core::{BrowserEvent, PageRequest, PageRequestId, TabId};
+
+    use super::*;
+    use crate::passwords::tests::{install_deferred, install_fakes, save_login};
+
+    const ORIGIN: &str = "https://example.com";
+
+    fn alice() -> LoginKey {
+        LoginKey::http_auth(Origin::parse(ORIGIN).expect("valid"), "", "alice")
+    }
+
+    fn controller() -> (Rc<RefCell<BrowserController>>, TabId) {
+        let mut controller = BrowserController::default();
+        let tab_id = controller.active_tab_id();
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::PageRequested(PageRequest {
+                id: PageRequestId::new(3),
+                url: format!("{ORIGIN}/private"),
+                kind: PageRequestKind::Authentication { for_proxy: false },
+                received_at: Duration::ZERO,
+            }),
+        );
+        (Rc::new(RefCell::new(controller)), tab_id)
+    }
+
+    #[test]
+    fn the_sheet_says_when_the_saved_password_could_not_be_read() {
+        let (passwords, _, _) = install_fakes();
+        save_login(&passwords, alice(), Password::new("fake".to_owned()));
+        // Removed by another program since it was listed.
+        passwords.worker.run(Interaction::Allowed, |store| store.remove(&alice()), |_| {});
+        let (controller, tab_id) = controller();
+
+        sign_in_with_saved_password(
+            &controller,
+            &slint::Weak::default(),
+            tab_id,
+            PageRequestId::new(3),
+            ORIGIN,
+            "alice",
+        );
+
+        let pending = controller
+            .borrow()
+            .pending_page_request(tab_id)
+            .expect("still waiting");
+        assert!(sign_in_view(&pending).warning.contains(SAVED_PASSWORD_UNREADABLE));
+    }
+
+    #[test]
+    fn a_list_that_could_not_be_read_is_read_again_on_sign_in() {
+        let (passwords, _, _) = install_deferred();
+        save_login(&passwords, alice(), Password::new("fake".to_owned()));
+        passwords.logins.borrow_mut().clear();
+        passwords.list_unavailable.set(true);
+        let (controller, tab_id) = controller();
+
+        sign_in_with_saved_password(
+            &controller,
+            &slint::Weak::default(),
+            tab_id,
+            PageRequestId::new(3),
+            ORIGIN,
+            "alice",
+        );
+        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Allowed));
+        passwords.worker.run_queued();
+
+        assert!(
+            controller.borrow().pending_page_request(tab_id).is_none(),
+            "answered with the saved password"
+        );
+    }
+}
