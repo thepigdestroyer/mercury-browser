@@ -6,6 +6,7 @@ use std::rc::Rc;
 use servo::LoadStatus;
 use talaria_core::TabId;
 
+use crate::geolocation::PageGeolocation;
 use crate::page_feedback::PageFeedback;
 use crate::page_requests::{DocumentStartTracker, Navigation, arms_document_start};
 use crate::page_tabs::DocumentStartedListener;
@@ -27,6 +28,8 @@ pub(crate) struct DocumentStarts {
     tracker: RefCell<DocumentStartTracker>,
     page_feedback: Rc<PageFeedback>,
     listener: SharedDocumentStartedListener,
+    /// geolocation: told when a navigation's start will be swallowed, as it is sent.
+    geolocation: Option<Rc<dyn PageGeolocation>>,
 }
 
 impl DocumentStarts {
@@ -34,12 +37,14 @@ impl DocumentStarts {
         tab_id: TabId,
         page_feedback: Rc<PageFeedback>,
         listener: SharedDocumentStartedListener,
+        geolocation: Option<Rc<dyn PageGeolocation>>,
     ) -> Rc<Self> {
         Rc::new(Self {
             tab_id,
             tracker: RefCell::new(DocumentStartTracker::default()),
             page_feedback,
             listener,
+            geolocation,
         })
     }
 
@@ -47,6 +52,12 @@ impl DocumentStarts {
     pub(crate) fn navigation_sent(&self, navigation: Navigation, status: LoadStatus) {
         if arms_document_start(navigation, status) {
             self.tracker.borrow_mut().arm();
+            // geolocation: Servo will not report this start, and the one inferred at
+            // `HeadParsed` comes after the new document's first scripts; the document being
+            // left ends its requests and parks its watches now.
+            if let Some(geolocation) = &self.geolocation {
+                geolocation.document_started();
+            }
         }
         self.notify_listener();
     }
@@ -83,6 +94,7 @@ mod tests {
     use talaria_core::{BrowserEvent, TabEvent};
 
     use super::*;
+    use crate::geolocation::PageGeolocation;
     use crate::page_feedback::TitleCallback;
 
     const TAB: TabId = TabId::new(5);
@@ -93,6 +105,28 @@ mod tests {
         events: Receiver<TabEvent>,
         forgotten: Rc<RefCell<Vec<TabId>>>,
         evaluations: Rc<RefCell<Vec<TitleCallback>>>,
+        geolocation: Rc<CountingGeolocation>,
+    }
+
+    // geolocation
+    #[derive(Default)]
+    struct CountingGeolocation {
+        documents_started: std::cell::Cell<u32>,
+    }
+
+    impl PageGeolocation for CountingGeolocation {
+        fn document_started(&self) {
+            self.documents_started.set(self.documents_started.get() + 1);
+        }
+
+        fn history_changed(&self, _entries: &[url::Url], _current: usize) {}
+
+        fn answer_permission_in_diagnostic(
+            &self,
+            request: servo::PermissionRequest,
+        ) -> Option<servo::PermissionRequest> {
+            Some(request)
+        }
     }
 
     impl Fixture {
@@ -103,10 +137,12 @@ mod tests {
             let record = Rc::clone(&forgotten);
             let listener: DocumentStartedListener =
                 Rc::new(move |tab_id| record.borrow_mut().push(tab_id));
+            let geolocation = Rc::new(CountingGeolocation::default());
             let starts = DocumentStarts::new(
                 TAB,
                 Rc::clone(&feedback),
                 Rc::new(RefCell::new(Some(listener))),
+                Some(Rc::clone(&geolocation) as Rc<dyn PageGeolocation>),
             );
             Self {
                 starts,
@@ -114,6 +150,7 @@ mod tests {
                 events,
                 forgotten,
                 evaluations: Rc::default(),
+                geolocation,
             }
         }
 
@@ -199,5 +236,28 @@ mod tests {
         fixture.starts.navigation_cancelled();
 
         assert!(!fixture.starts.load_status_changed(LoadStatus::HeadParsed));
+    }
+
+    // geolocation
+    #[test]
+    fn only_a_navigation_whose_start_servo_will_swallow_ends_the_pages_geolocation_at_once() {
+        let fixture = Fixture::new();
+        let started = || fixture.geolocation.documents_started.get();
+
+        // Servo will report this one's start itself.
+        fixture
+            .starts
+            .navigation_sent(Navigation::Load, LoadStatus::Complete);
+        assert_eq!(started(), 0);
+
+        // A reload's start is swallowed: the document being left ends its watches now.
+        fixture
+            .starts
+            .navigation_sent(Navigation::Reload, LoadStatus::Complete);
+        assert_eq!(started(), 1);
+
+        // The start inferred at `HeadParsed` is not used: it would retire the new document.
+        assert!(fixture.starts.load_status_changed(LoadStatus::HeadParsed));
+        assert_eq!(started(), 1);
     }
 }

@@ -14,10 +14,12 @@
   between at signs below: VERSION, the workspace version from Cargo.toml, and
   MINIMUM_SYSTEM_VERSION, MACOSX_DEPLOYMENT_TARGET from .cargo/config.toml.
 
-  There are deliberately no camera, microphone, location or Bluetooth usage
-  descriptions: those web features are off. Add the matching string here in
-  the same change that turns one on, or macOS will end the process when a page
-  first uses it.
+  Location: macOS shows NSLocationUsageDescription (and, on newer releases,
+  NSLocationWhenInUseUsageDescription) in its prompt the first time a page the
+  user allowed in Mercury asks for its position. There are deliberately no
+  camera, microphone or Bluetooth usage descriptions: those web features are
+  off. Add the matching string here in the same change that turns one on, or
+  macOS will end the process when a page first uses it.
 -->
 <plist version="1.0">
 <dict>
@@ -53,6 +55,10 @@
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>NSLocationUsageDescription</key>
+	<string>Websites you allow can ask for your location.</string>
+	<key>NSLocationWhenInUseUsageDescription</key>
+	<string>Websites you allow can ask for your location.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>Copyright © 2026 Kayk Caputo and Mercury Browser contributors. Licensed under MPL-2.0.</string>
 	<!-- Lets macOS list Mercury Browser as a web browser for http and https links. -->

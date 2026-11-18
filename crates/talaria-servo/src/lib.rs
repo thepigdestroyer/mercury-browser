@@ -7,6 +7,7 @@ mod error;
 mod error_pages;
 mod exit_clearing;
 mod frame_ready;
+mod geolocation;
 mod history_events;
 mod http_disk_cache;
 mod load_metrics;
@@ -29,6 +30,9 @@ pub use content_process::{
 pub use error::ServoWebViewError;
 pub use error_pages::error_page_titles;
 pub use exit_clearing::{EngineSwitches, ExitClearing};
+pub use geolocation::{
+    FakeLocation, FixedPosition, GeolocationDiagnostic, GeolocationSetup, LocationError,
+};
 pub use http_disk_cache::remove_http_disk_cache;
 pub use opengl_context::ViewportSize;
 pub use page_requests::page_request_clock;

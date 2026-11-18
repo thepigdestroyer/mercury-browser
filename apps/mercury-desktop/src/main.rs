@@ -27,6 +27,7 @@ mod cli;
 mod controls;
 mod crash_handler;
 mod engine;
+mod geolocation;
 mod history_ui;
 mod import_ui; // import-ui lane
 mod keyboard;
@@ -254,6 +255,8 @@ fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeO
         gpu_canvas: options.gpu_canvas,
         config_dir: profile.servo_config_dir(),
         experimental_web_features: options.experimental_web_features,
+        // geolocation: the system's in normal runs; off or MERCURY_FAKE_GEOLOCATION when automated
+        geolocation: geolocation::setup_for_this_run(options.is_automated()),
         http_disk_cache_dir: profile.http_cache_dir(),
         // settings-ui: filled in by `settings::with_privacy`.
         ..RuntimeOptions::default()
