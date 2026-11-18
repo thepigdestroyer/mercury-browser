@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::Cell;
 use std::rc::Rc;
 
@@ -23,6 +24,7 @@ use crate::clipboard::TabClipboard;
 use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::EmbedderControls;
 use crate::frame_ready::FrameReadySignal;
+use crate::geolocation::WebViewGeolocation;
 use crate::page_feedback::{DOCUMENT_TITLE_SCRIPT, PageFeedback};
 use crate::page_requests::{ClosesOnDrop, EngineRequest, Navigation, ServoPageRequest};
 use crate::session_data::{AfterEngineCleanup, HandleThenCleanup};
@@ -46,6 +48,8 @@ pub struct ServoWebView {
     page_feedback: Rc<PageFeedback>,
     // clipboard: the user's Cut, Copy and Paste in this tab's page
     clipboard: TabClipboard,
+    // geolocation: told when the web view is shown or hidden
+    geolocation: Option<Rc<WebViewGeolocation>>,
 }
 
 /// What a tab's web view shares with its delegate.
@@ -56,6 +60,8 @@ pub(crate) struct TabParts {
     pub(crate) document_start: Rc<DocumentStarts>,
     pub(crate) page_feedback: Rc<PageFeedback>,
     pub(crate) clipboard: TabClipboard, // clipboard
+    /// The tab's geolocation (also Servo's geolocation delegate); `None` while it is off.
+    pub(crate) geolocation: Option<Rc<WebViewGeolocation>>,
 }
 
 impl ServoWebView {
@@ -72,6 +78,7 @@ impl ServoWebView {
             document_start,
             page_feedback,
             clipboard,
+            geolocation,
         } = parts;
         Self {
             inner,
@@ -83,6 +90,7 @@ impl ServoWebView {
             document_start,
             page_feedback,
             clipboard,
+            geolocation,
         }
     }
 
@@ -139,10 +147,16 @@ impl ServoWebView {
 
     pub fn show(&self) {
         self.inner.show();
+        if let Some(geolocation) = &self.geolocation {
+            geolocation.set_visible(true); // geolocation
+        }
     }
 
     pub fn hide(&self) {
         self.inner.hide();
+        if let Some(geolocation) = &self.geolocation {
+            geolocation.set_visible(false); // geolocation
+        }
     }
 }
 

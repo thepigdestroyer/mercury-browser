@@ -1,0 +1,195 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+import { Button, ComboBox, LineEdit } from "std-widgets.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// The bookmark popover's content: name, folder and the two buttons. Its own component so that a
+// rendering can show it without opening a popup.
+export component BookmarkPopoverContent inherits Rectangle {
+    in property <bool> is-new;
+    in-out property <string> name;
+    in property <[string]> folders;
+    in-out property <int> folder-index;
+    callback done();
+    callback remove();
+
+    width: 340px;
+    height: 196px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+    background: ChromePalette.popup-background;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: ChromePalette.shadow;
+
+    public function focus-name() {
+        name-field.focus();
+        name-field.select-all();
+    }
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        Text {
+            text: root.is-new ? "Bookmark added" : "Edit bookmark";
+            color: ChromePalette.text;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            Text {
+                width: 56px;
+                text: "Name";
+                color: ChromePalette.text-secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+
+            name-field := LineEdit {
+                text <=> root.name;
+                accessible-label: "Bookmark name";
+                accepted => {
+                    root.done();
+                }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+
+            Text {
+                width: 56px;
+                text: "Folder";
+                color: ChromePalette.text-secondary;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+
+            ComboBox {
+                model: root.folders;
+                current-index <=> root.folder-index;
+                accessible-label: "Bookmark folder";
+            }
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 8px;
+
+            Button {
+                text: "Remove";
+                clicked => {
+                    root.remove();
+                }
+            }
+
+            Button {
+                text: "Done";
+                primary: true;
+                clicked => {
+                    root.done();
+                }
+            }
+        }
+    }
+}
+
+// The star at the end of the address field, with its popover.
+export component BookmarkStar inherits Rectangle {
+    in property <bool> enabled: false;
+    in property <bool> filled: false;
+    in property <bool> popover-is-new;
+    in-out property <string> popover-name;
+    in property <[string]> popover-folders;
+    in-out property <int> popover-folder-index;
+    // The popover's width, so that it can be right-aligned with the star.
+    in property <length> popover-width: 340px;
+    callback clicked();
+    callback popover-done();
+    callback popover-remove();
+    // The popover closed without Done or Remove (a click outside, Escape).
+    callback popover-dismissed();
+
+    property <bool> popover-open: popover.is-open;
+    property <bool> closing-by-button;
+
+    public function open-popover() {
+        root.closing-by-button = false;
+        popover.show();
+    }
+
+    public function close-popover() {
+        root.closing-by-button = true;
+        popover.close();
+    }
+
+    changed popover-open => {
+        if !self.popover-open && !self.closing-by-button {
+            root.popover-dismissed();
+        }
+    }
+
+    width: 30px;
+    height: 30px;
+    border-radius: 6px;
+    background: star-touch.pressed && root.enabled
+        ? ChromePalette.button-pressed
+        : star-touch.has-hover && root.enabled ? ChromePalette.button-hover : transparent;
+    opacity: root.enabled ? 1 : 0.32;
+    accessible-role: button;
+    accessible-label: root.filled ? "Edit bookmark for this page" : "Bookmark this page";
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    Text {
+        text: root.filled ? "★" : "☆";
+        color: root.filled ? ChromePalette.accent : ChromePalette.button-label;
+        font-size: 17px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    star-touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    popover := PopupWindow {
+        x: root.width - root.popover-width;
+        y: root.height + 8px;
+        width: root.popover-width;
+        height: content.height;
+        close-policy: PopupClosePolicy.close-on-click-outside;
+
+        content := BookmarkPopoverContent {
+            x: 0px;
+            y: 0px;
+            width: root.popover-width;
+            is-new: root.popover-is-new;
+            name <=> root.popover-name;
+            folders: root.popover-folders;
+            folder-index <=> root.popover-folder-index;
+            init => {
+                self.focus-name();
+            }
+            done => {
+                root.close-popover();
+                root.popover-done();
+            }
+            remove => {
+                root.close-popover();
+                root.popover-remove();
+            }
+        }
+    }
+}

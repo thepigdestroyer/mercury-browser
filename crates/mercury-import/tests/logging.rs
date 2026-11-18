@@ -1,14 +1,24 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What the readers log about rows they leave out: rows that could not be read at `warn`,
-//! ordinary omissions (visits without a usable time, refused addresses) at `debug`.
+//! ordinary omissions (visits without a usable time, refused addresses) at `debug`. Records
+//! name the file ("History"), never its full path, which would carry the user's name.
 
 use std::path::Path;
 use std::sync::{Mutex, Once};
+use std::thread::ThreadId;
 
 use log::{Level, LevelFilter, Log, Metadata, Record};
-use mercury_import::{read_chromium_history, read_firefox_bookmarks};
+use mercury_import::{ReadContext, read_chromium_history, read_firefox_bookmarks};
 use rusqlite::Connection;
 
-struct Capture(Mutex<Vec<(Level, String)>>);
+/// Copies go to the system temporary directory in these tests; each is removed when its read
+/// ends.
+fn ctx() -> ReadContext {
+    ReadContext::new(std::env::temp_dir())
+}
+
+struct Capture(Mutex<Vec<(ThreadId, Level, String)>>);
 
 impl Log for Capture {
     fn enabled(&self, _: &Metadata<'_>) -> bool {
@@ -17,10 +27,11 @@ impl Log for Capture {
 
     fn log(&self, record: &Record<'_>) {
         if record.target().starts_with("mercury_import") {
-            self.0
-                .lock()
-                .unwrap()
-                .push((record.level(), record.args().to_string()));
+            self.0.lock().unwrap().push((
+                std::thread::current().id(),
+                record.level(),
+                record.args().to_string(),
+            ));
         }
     }
 
@@ -29,22 +40,29 @@ impl Log for Capture {
 
 static CAPTURE: Capture = Capture(Mutex::new(Vec::new()));
 
-/// The records that name `dir`, so tests running at the same time do not see each other's.
+/// The records made on this thread (the readers log on the thread that calls them), so tests
+/// running at the same time do not see each other's. None may name `dir`.
 fn records_about(dir: &Path) -> Vec<(Level, String)> {
     static INSTALL: Once = Once::new();
     INSTALL.call_once(|| {
         log::set_logger(&CAPTURE).unwrap();
         log::set_max_level(LevelFilter::Trace);
     });
-    let dir = dir.display().to_string();
-    CAPTURE
+    let this_thread = std::thread::current().id();
+    let records: Vec<(Level, String)> = CAPTURE
         .0
         .lock()
         .unwrap()
         .iter()
-        .filter(|(_, message)| message.contains(&dir))
-        .cloned()
-        .collect()
+        .filter(|(thread, _, _)| *thread == this_thread)
+        .map(|(_, level, message)| (*level, message.clone()))
+        .collect();
+    let dir = dir.display().to_string();
+    assert!(
+        records.iter().all(|(_, message)| !message.contains(&dir)),
+        "no record names the profile's path: {records:?}"
+    );
+    records
 }
 
 fn levels_and_counts(records: &[(Level, String)]) -> Vec<(Level, String)> {
@@ -78,7 +96,12 @@ fn unreadable_history_rows_warn_and_visits_without_a_time_do_not() {
     .unwrap();
     drop(conn);
 
-    assert_eq!(read_chromium_history(profile.path(), 10).unwrap().len(), 1);
+    assert_eq!(
+        read_chromium_history(profile.path(), 10, &ctx())
+            .unwrap()
+            .len(),
+        1
+    );
 
     assert_eq!(
         levels_and_counts(&records_about(profile.path())),
@@ -120,7 +143,12 @@ fn a_bookmark_whose_address_cannot_be_read_is_counted_like_a_refused_one() {
     .unwrap();
     drop(conn);
 
-    assert_eq!(read_firefox_bookmarks(profile.path()).unwrap().len(), 1);
+    assert_eq!(
+        read_firefox_bookmarks(profile.path(), &ctx())
+            .unwrap()
+            .len(),
+        1
+    );
 
     assert_eq!(
         levels_and_counts(&records_about(profile.path())),

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Policy in `PasswordStore`: validation and exact-origin lookup. All passwords are fake.
 
 use mercury_passwords::{

@@ -28,11 +28,18 @@
   signed with the hardened runtime but without them cannot start its
   JavaScript engine (servo-script panics with InitFailed) and loads no page.
 
+    com.apple.security.personal-information.location
+      the hardened runtime's resource-access entitlement for Location
+      Services. Without it macOS never lets the process read the location,
+      even after the user allows it. Pages get a position only after the
+      user allows the site in Mercury, and macOS asks once more with the
+      NSLocationUsageDescription string in Info.plist.
+
   Deliberately absent: com.apple.security.cs.disable-library-validation (with
   a Developer ID, the libraries in Contents/MacOS/lib carry the same team
   identifier as the executable, so validation passes and stays on) and
-  every App Sandbox key (Mercury Browser is not sandboxed). Camera, microphone
-  and location would need Info.plist usage strings, not entitlements, and those
+  every App Sandbox key (Mercury Browser is not sandboxed). Camera and
+  microphone would need their own entitlements and usage strings, and those
   features are off.
 -->
 <plist version="1.0">
@@ -40,6 +47,8 @@
 	<key>com.apple.security.cs.allow-jit</key>
 	<true/>
 	<key>com.apple.security.cs.allow-unsigned-executable-memory</key>
+	<true/>
+	<key>com.apple.security.personal-information.location</key>
 	<true/>
 </dict>
 </plist>

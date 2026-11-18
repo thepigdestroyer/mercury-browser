@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Servo's servoshell, https://github.com/servo/servo, tag `v0.8.0` (commit
 // `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), file `ports/servoshell/panic_hook.rs`.
 // Licensed under the Mozilla Public License 2.0. Servo's options are read through

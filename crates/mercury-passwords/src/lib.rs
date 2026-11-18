@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Saved website logins for Mercury Browser.
 //!
 //! Logins are kept in the operating system's credential store, one item per login: on macOS the

@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Adapted from Zervo, https://github.com/Goddv/Zervo, commit 86cb7126,
 # scripts/bundle-macos.sh (deployment target :70-75, Info.plist :192-251,
 # signing :272-327, disk image :333-434), MPL-2.0; and from Servo,
@@ -272,9 +273,9 @@ done
 
 say "signing with identity '$IDENTITY'"
 if [ "$IDENTITY" = "-" ]; then
-    say "entitlements: ad-hoc set (JIT, library validation off): ${ENTITLEMENTS#"$REPO/"}"
+    say "entitlements: ad-hoc set (JIT, location, library validation off): ${ENTITLEMENTS#"$REPO/"}"
 else
-    say "entitlements: strict set (JIT, library validation on): ${ENTITLEMENTS#"$REPO/"}"
+    say "entitlements: strict set (JIT, location, library validation on): ${ENTITLEMENTS#"$REPO/"}"
 fi
 # Every library gets the app's identity, so with a Developer ID they share its
 # team identifier and pass library validation.

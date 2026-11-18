@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Instant;
@@ -51,6 +52,10 @@ pub(crate) fn connect_native_keyboard_input(
                     // controls: an open popup takes the keys; the page keeps its focus.
                     if crate::controls::handle_key(&window, event, modifiers) {
                         window.window().request_redraw();
+                        return EventResult::PreventDefault;
+                    }
+                    // history lane: the suggestion list's keys come before everything else.
+                    if crate::history_ui::handle_key(&window, event) {
                         return EventResult::PreventDefault;
                     }
                     if handle_browser_shortcut(
@@ -135,8 +140,11 @@ pub(crate) fn connect_native_keyboard_input(
                     window.window().request_redraw();
                 }
                 // settings-ui: the settings window closes with the browser window, so the
-                // event loop can end.
-                WindowEvent::CloseRequested => crate::settings::main_window_closing(),
+                // event loop can end; import-ui lane: the import window too.
+                WindowEvent::CloseRequested => {
+                    crate::settings::main_window_closing();
+                    crate::import_ui::main_window_closing();
+                }
                 WindowEvent::Focused(false) => {
                     // Key-ups that happen while another window has focus never arrive.
                     shortcut_keys.clear();

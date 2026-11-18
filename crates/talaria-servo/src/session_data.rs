@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Data that must end with the browsing session even though Servo saves it in the profile:
 //! session cookies (no expiry) and the HTTP-authentication cache.
 //!

@@ -1,11 +1,12 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::time::Duration;
 
 use talaria_core::{
-    BrowserCommand, BrowserController, BrowserEvent, CloseTabOutcome, HttpCredentials, KeyLocation,
-    KeyState, KeyboardInput, KeyboardModifiers, LoadState, PagePermission, PageRequest,
-    PageRequestAnswer, PageRequestId, PageRequestKind, PageRequestReply, PermissionDecision,
-    PermissionDecisions, PointerButton, PointerButtonAction, SessionPermissionDecisions,
-    TabCommand, TabId,
+    BrowserCommand, BrowserController, BrowserEvent, CloseTabOutcome, GEOLOCATION_OFFERED,
+    HttpCredentials, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, LoadState,
+    PagePermission, PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind,
+    PageRequestReply, PermissionDecision, PermissionDecisions, PointerButton, PointerButtonAction,
+    SessionPermissionDecisions, TabCommand, TabId,
 };
 
 const PAGE: &str = "https://example.com/form";
@@ -618,10 +619,10 @@ fn a_remembered_permission_decision_answers_later_requests_from_the_site() {
     receive(
         &mut controller,
         tab_id,
-        permission(4, PAGE, PagePermission::Geolocation),
+        permission(4, PAGE, PagePermission::Notifications),
     );
 
-    // Request 4 is for geolocation, which is denied without a prompt anyway.
+    // Request 4 is for notifications, which are denied without a prompt anyway.
     assert_eq!(
         drain(&mut controller),
         vec![
@@ -862,17 +863,18 @@ const EVERY_PERMISSION: [PagePermission; 14] = [
 ];
 
 #[test]
-fn only_persistent_storage_is_asked_and_every_other_permission_is_denied_without_asking() {
+fn persistent_storage_and_geolocation_are_asked_and_every_other_permission_is_denied_without_asking()
+ {
     for (index, feature) in EVERY_PERMISSION.into_iter().enumerate() {
         let (mut controller, tab_id) = ready_controller();
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
         // clipboard: reading the clipboard is asked too.
-        if matches!(
-            feature,
-            PagePermission::PersistentStorage | PagePermission::ClipboardRead
-        ) {
+        if feature == PagePermission::PersistentStorage
+            || feature == PagePermission::ClipboardRead
+            || (feature == PagePermission::Geolocation && GEOLOCATION_OFFERED)
+        {
             assert!(feature.is_promptable());
             assert_eq!(pending_id(&controller, tab_id), Some(id), "{feature:?}");
             assert!(drain(&mut controller).is_empty(), "{feature:?}");
@@ -1372,4 +1374,14 @@ fn a_new_sites_head_alert_after_a_stuck_page_is_shown_in_the_measured_order() {
             "document start reported first: {document_start_reported_first}"
         );
     }
+}
+
+#[test]
+fn geolocation_is_asked_about_only_while_it_is_offered() {
+    assert_eq!(
+        PagePermission::Geolocation.is_promptable(),
+        GEOLOCATION_OFFERED
+    );
+    // Until the same-origin frame gate is in the vendored `servo-script`, it is not.
+    assert!(!PagePermission::Geolocation.is_promptable());
 }

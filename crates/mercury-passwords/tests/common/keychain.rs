@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Temporary keychains for tests. Every Keychain call in a test goes to a keychain file created
 //! here, inside its own temporary directory, and removed when the guard drops — on success and on
 //! panic alike. User interaction is switched off for the whole test process before the first

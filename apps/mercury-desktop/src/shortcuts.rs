@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 
@@ -47,6 +48,28 @@ pub(crate) enum ShortcutAction {
     ExitFullscreen,
     // settings-ui
     ShowSettings,
+    // history
+    ShowHistory,
+    ClearBrowsingData,
+    // bookmarks
+    /// Cmd+D (Ctrl+D): the star.
+    BookmarkPage,
+    /// Cmd+Shift+B (Ctrl+Shift+B).
+    ToggleBookmarksBar,
+    /// Cmd+Alt+B on macOS, as Safari and Chrome; Ctrl+Shift+O elsewhere, as Chrome.
+    ShowBookmarksManager,
+    // session
+    /// Brings back the most recently closed tab where it was.
+    ReopenClosedTab,
+    /// Opens the active tab's address again in a new tab just after it. No default shortcut.
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "run from the tab context menu once it exists")
+    )]
+    DuplicateTab,
+    /// Restores the last run's tabs when they were not restored at start-up. No default shortcut;
+    /// History ▸ "Restore Previous Session".
+    RestorePreviousSession,
 }
 
 impl ShortcutAction {
@@ -162,9 +185,16 @@ pub(crate) fn shortcut_action(
     };
     let character = character.as_deref();
 
+    // bookmarks lane
+    if let Some(action) = bookmark_shortcut(character, primary, shift, alt, platform) {
+        return Some(action);
+    }
+
     if primary && !alt {
         let common = match (character, shift) {
             (Some("t"), false) => Some(NewTab),
+            // session
+            (Some("t"), true) => Some(ReopenClosedTab),
             (Some("w"), false) => Some(CloseTab),
             (Some("r"), false) => Some(Reload),
             (Some("l"), false) => Some(FocusAddressBar),
@@ -194,6 +224,11 @@ pub(crate) fn shortcut_action(
             (Platform::MacOs, Key::Named(NamedKey::ArrowRight), _, false) => Some(Forward),
             (Platform::Other, Key::Named(NamedKey::PageDown), _, false) => Some(NextTab),
             (Platform::Other, Key::Named(NamedKey::PageUp), _, false) => Some(PreviousTab),
+            // history lane
+            (Platform::MacOs, _, Some("y"), false) => Some(ShowHistory),
+            (Platform::Other, _, Some("h"), false) => Some(ShowHistory),
+            (Platform::MacOs, Key::Named(NamedKey::Backspace), _, true) => Some(ClearBrowsingData),
+            (Platform::Other, Key::Named(NamedKey::Delete), _, true) => Some(ClearBrowsingData),
             _ => None,
         };
     }
@@ -206,6 +241,26 @@ pub(crate) fn shortcut_action(
         (Key::Named(NamedKey::ArrowRight), _, true) => Some(Forward),
         (_, Some("d"), true) => Some(FocusAddressBar),
         (Key::Named(NamedKey::F5), _, false) => Some(Reload),
+        _ => None,
+    }
+}
+
+/// The bookmarks lane's shortcuts.
+fn bookmark_shortcut(
+    character: Option<&str>,
+    primary: bool,
+    shift: bool,
+    alt: bool,
+    platform: Platform,
+) -> Option<ShortcutAction> {
+    if !primary {
+        return None;
+    }
+    match (platform, character, shift, alt) {
+        (_, Some("d"), false, false) => Some(ShortcutAction::BookmarkPage),
+        (_, Some("b"), true, false) => Some(ShortcutAction::ToggleBookmarksBar),
+        (Platform::MacOs, Some("b"), false, true) => Some(ShortcutAction::ShowBookmarksManager),
+        (Platform::Other, Some("o"), true, false) => Some(ShortcutAction::ShowBookmarksManager),
         _ => None,
     }
 }
@@ -338,6 +393,19 @@ pub(crate) fn run_shortcut(
             .queue_command(BrowserCommand::ExitFullscreen),
         // settings-ui
         ShortcutAction::ShowSettings => window.invoke_show_settings(),
+        // history lane
+        ShortcutAction::ShowHistory => crate::history_ui::show_history(),
+        ShortcutAction::ClearBrowsingData => crate::history_ui::show_clear_dialog(),
+        // bookmarks lane
+        ShortcutAction::BookmarkPage => crate::bookmarks::bookmark_this_page(),
+        ShortcutAction::ToggleBookmarksBar => crate::bookmarks::toggle_bookmarks_bar(),
+        ShortcutAction::ShowBookmarksManager => crate::bookmarks::show_bookmarks_manager(),
+        // session
+        ShortcutAction::ReopenClosedTab => crate::session::reopen_closed_tab(window, controller),
+        ShortcutAction::DuplicateTab => crate::session::duplicate_tab(window, controller),
+        ShortcutAction::RestorePreviousSession => {
+            crate::session::restore_previous_session(window, controller)
+        }
     }
 }
 
@@ -542,9 +610,24 @@ mod tests {
 
     #[test]
     fn extra_modifiers_turn_a_shortcut_off() {
-        assert_eq!(mac(character("t"), CMD | SHIFT), None);
+        assert_eq!(mac(character("r"), CMD | SHIFT), None);
         assert_eq!(mac(character("t"), CMD | ALT), None);
         assert_eq!(other(character("w"), CTRL | SHIFT), None);
+    }
+
+    #[test]
+    fn reopen_closed_tab_on_macos() {
+        assert_eq!(mac(character("t"), CMD | SHIFT), Some(ReopenClosedTab));
+        // macOS may report the shifted letter.
+        assert_eq!(mac(character("T"), CMD | SHIFT), Some(ReopenClosedTab));
+        assert_eq!(mac(character("t"), CTRL | SHIFT), None);
+    }
+
+    #[test]
+    fn reopen_closed_tab_elsewhere() {
+        assert_eq!(other(character("t"), CTRL | SHIFT), Some(ReopenClosedTab));
+        assert_eq!(other(character("T"), CTRL | SHIFT), Some(ReopenClosedTab));
+        assert_eq!(other(character("t"), CTRL | SHIFT | ALT), None);
     }
 
     #[test]
@@ -591,16 +674,65 @@ mod tests {
             (Quit, false),
             (ExitFullscreen, false),
             (ShowSettings, false),
+            (ShowHistory, false),
+            (ClearBrowsingData, false),
+            (BookmarkPage, false),
+            (ToggleBookmarksBar, false),
+            (ShowBookmarksManager, false),
+            (ReopenClosedTab, false),
+            (DuplicateTab, false),
+            (RestorePreviousSession, false),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
-                NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
-                | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen | ShowSettings => {}
+                NewTab
+                | CloseTab
+                | NextTab
+                | PreviousTab
+                | SelectTab(_)
+                | SelectLastTab
+                | Back
+                | Forward
+                | Reload
+                | FocusAddressBar
+                | ZoomIn
+                | ZoomOut
+                | ZoomReset
+                | Quit
+                | ExitFullscreen
+                | ShowSettings
+                | ShowHistory
+                | ClearBrowsingData
+                | BookmarkPage
+                | ToggleBookmarksBar
+                | ShowBookmarksManager
+                | ReopenClosedTab
+                | DuplicateTab
+                | RestorePreviousSession => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
+    }
+
+    // history lane
+    #[test]
+    fn history_and_clearing_browsing_data() {
+        assert_eq!(mac(character("y"), CMD), Some(ShowHistory));
+        assert_eq!(other(character("h"), CTRL), Some(ShowHistory));
+        assert_eq!(other(character("y"), CTRL), None);
+        assert_eq!(mac(character("h"), CMD), None);
+        // The Mac keyboard's Delete is Backspace.
+        assert_eq!(
+            mac(named(NamedKey::Backspace), CMD | SHIFT),
+            Some(ClearBrowsingData)
+        );
+        assert_eq!(
+            other(named(NamedKey::Delete), CTRL | SHIFT),
+            Some(ClearBrowsingData)
+        );
+        assert_eq!(mac(named(NamedKey::Backspace), CMD), None);
+        assert_eq!(other(named(NamedKey::Delete), CTRL), None);
     }
 
     const KEY_R: PhysicalKey = PhysicalKey::Code(KeyCode::KeyR);
@@ -706,6 +838,33 @@ mod tests {
         keys.clear();
 
         assert_eq!(keys.release(KEY_R), KeyDisposition::Forward);
+    }
+
+    #[test]
+    fn bookmark_shortcuts_on_macos() {
+        assert_eq!(mac(character("d"), CMD), Some(BookmarkPage));
+        assert_eq!(mac(character("B"), CMD | SHIFT), Some(ToggleBookmarksBar));
+        // winit reports Cmd+Option+B as "b" (Option is ignored while Cmd is held).
+        assert_eq!(mac(character("b"), CMD | ALT), Some(ShowBookmarksManager));
+        assert_eq!(mac(character("O"), CMD | SHIFT), None);
+        assert_eq!(mac(character("d"), CTRL), None);
+        assert_eq!(mac(character("b"), CMD), None);
+    }
+
+    #[test]
+    fn bookmark_shortcuts_elsewhere() {
+        assert_eq!(other(character("d"), CTRL), Some(BookmarkPage));
+        assert_eq!(
+            other(character("B"), CTRL | SHIFT),
+            Some(ToggleBookmarksBar)
+        );
+        assert_eq!(
+            other(character("O"), CTRL | SHIFT),
+            Some(ShowBookmarksManager)
+        );
+        assert_eq!(other(character("b"), CTRL | ALT), None);
+        // Alt+D still focuses the address bar.
+        assert_eq!(other(character("d"), ALT), Some(FocusAddressBar));
     }
 
     #[test]

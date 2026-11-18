@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::sync::mpsc::Receiver;
@@ -8,6 +10,7 @@ use crate::ServoWebView;
 use crate::adblocker::ContentBlocker;
 use crate::document_starts::SharedDocumentStartedListener;
 use crate::embedder_controls::ControlIds;
+use crate::geolocation::GeolocationService;
 use crate::screen::ScreenMetrics;
 use crate::session_data::AfterEngineCleanup;
 
@@ -39,6 +42,8 @@ pub(crate) struct PageTabs {
     pub(crate) after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
     // clipboard: the clipboard and activation check every tab's delegate uses.
     pub(crate) clipboard: Rc<crate::clipboard::ClipboardAccess>,
+    /// geolocation: gives every tab its `WebViewGeolocation`; `None` while geolocation is off.
+    pub(crate) geolocation: Option<Rc<GeolocationService>>,
 }
 
 impl PageTabs {

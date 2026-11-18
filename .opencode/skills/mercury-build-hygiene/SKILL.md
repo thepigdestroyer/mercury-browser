@@ -51,7 +51,9 @@ Spend them carefully.
   `mercury-passwords`, `mercury-downloads`, `mercury-import` (and any new crate without `servo` or
   `talaria-servo` in its dependencies) build and test in minutes. Iterate there freely:
   `cargo test --release -p talaria-core -p mercury-ui …`. Put logic in these crates where you can, so it
-  can be tested without Servo.
+  can be tested without Servo. Name the packages with `-p`: such builds go to a separate pool of four
+  light slots and never wait behind a Servo build (a command that also builds a Servo crate, uses `make`,
+  `--workspace` or no `-p` counts as heavy).
 - **Only `talaria-servo` and `apps/mercury-desktop` need Servo.** Finish all of the round's edits first,
   then build once: `cargo check --release -p mercury-desktop --all-targets --all-features` catches compile
   errors; then the narrow tests you need. Run the full `make` gates and the screenshot runs **once per
@@ -86,5 +88,13 @@ Spend them carefully.
    started from `target/` keeps that folder from being deleted.
 7. **Don't fight the guard.** Do not rename build folders, hide builds from it or run builds outside it.
    If it refuses or waits too long, tell the lead.
+8. **Never create a GitHub repository.** Code goes to `thepigdestroyer/mercury-browser`, on your
+   `lane/<name>` branch. Anything else worth keeping goes to a branch of the private
+   `thepigdestroyer/mercury-browser-archive`, and only the lead decides what that is.
+9. **Leave the Mac clean when your lane ends.** Once your last report is written and everything is pushed,
+   delete your scratch folder `$TMPDIR/opencode/lanes/<lane>/`. The lead removes your worktree and local
+   branch after the merge and moves the branch to the archive. Never leave clones, downloads, caches or
+   copies anywhere else on the Mac. The only shared caches are `~/Library/Caches/mercury-browser/` and
+   cargo's registry.
 
 Check usage with `du -sh ~/mercury-worktrees/* 2>/dev/null` and `df -h ~`.

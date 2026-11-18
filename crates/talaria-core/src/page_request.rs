@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Requests a page makes that wait for the user: JavaScript dialogs, the "leave this page?"
 //! prompt, HTTP sign-in and permission prompts.
 //!
@@ -69,25 +70,41 @@ pub enum PagePermission {
     ClipboardRead,
 }
 
+/// The switch for geolocation in normal runs. Off until the vendored `servo-script` refuses
+/// geolocation to a document that is not same-origin with its top-level document (the
+/// "geolocation frame gate" engine patch, Chromium's default `'self'` policy). Servo 0.8.0 has no
+/// Permissions Policy (`Document::allowed_to_use_feature` always allows) and its permission
+/// request names no frame, so without the patch a cross-origin frame (an advert) would get the
+/// location under the top-level site's name. Turn on in the change that lands the patch.
+pub const GEOLOCATION_FRAME_GATE: bool = false;
+
+/// Whether normal runs offer pages the location: with the frame gate, and where Mercury has a
+/// location source (macOS; other platforms have none).
+pub const GEOLOCATION_OFFERED: bool = GEOLOCATION_FRAME_GATE && cfg!(target_os = "macos");
+
 impl PagePermission {
     /// Whether the user is asked. Everything else is denied without a prompt, including any
-    /// variant added later. Only persistent storage does something in Mercury today:
+    /// variant added later. Only persistent storage does something in Mercury today, and
+    /// geolocation while it is offered (`GEOLOCATION_OFFERED`; automated runs keep it off):
     /// - notifications, push, background sync: no notification or service-worker UI yet;
     /// - camera, microphone, speaker, device info: WebRTC and `getUserMedia` are off;
     /// - MIDI, Bluetooth, gamepad: no device support is built or exposed;
-    /// - geolocation and screen wake lock: their engine preferences (`dom_geolocation_enabled`,
-    ///   `dom_wakelock_enabled`) are off. Add them here when they are turned on.
+    /// - screen wake lock: its engine preference (`dom_wakelock_enabled`) is off. Add it here
+    ///   when it is turned on.
     ///
     /// Clipboard reading is asked as well (clipboard lane); Servo never asks for it itself.
     ///
     /// A page can still name any of these in `navigator.permissions.request()`.
     pub const fn is_promptable(self) -> bool {
         matches!(self, Self::PersistentStorage | Self::ClipboardRead)
+            || (GEOLOCATION_OFFERED && matches!(self, Self::Geolocation))
     }
 
     /// Completes "<site> wants to …".
     pub const fn description(self) -> &'static str {
         match self {
+            // Only the top-level document's own origin can ask (the frame gate), so naming
+            // the site is honest.
             Self::Geolocation => "know your location",
             Self::Notifications => "show notifications",
             Self::Push => "send you push messages",

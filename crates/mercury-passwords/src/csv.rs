@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Login CSV files: reading the exports of other browsers and writing Chrome's format.
 //!
 //! **An exported file holds every password in clear text.** Write one only when the user has
