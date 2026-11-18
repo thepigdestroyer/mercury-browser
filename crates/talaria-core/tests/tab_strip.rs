@@ -477,10 +477,10 @@ fn new_blank_tabs_go_after_the_pinned_tabs_even_when_all_are_pinned() {
 fn closing_other_tabs_when_there_is_none_changes_no_selection() {
     let (mut controller, ids) = controller_with_tabs(2);
     assert!(controller.set_tab_pinned(ids[0], true));
-    assert!(controller.select_tab(ids[1]));
+    assert!(controller.select_tab(ids[0]));
 
-    // Only the pinned tab is "other": nothing closes, and the selection stays.
-    assert_eq!(controller.close_other_tabs(ids[0]), 0);
+    // The only other tab is pinned: nothing closes, and the selection stays.
+    assert_eq!(controller.close_other_tabs(ids[1]), 0);
 
-    assert_eq!(controller.active_tab_id(), ids[1]);
+    assert_eq!(controller.active_tab_id(), ids[0]);
 }
