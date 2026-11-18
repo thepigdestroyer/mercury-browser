@@ -121,9 +121,10 @@ EOF
 (
     cd "$STAGE"
     for file in *; do
-        [ "$file" = SHA256SUMS ] || printf '%s  %s\n' "$(sha256 "$file")" "$file"
-    done >SHA256SUMS
+        printf '%s  %s\n' "$(sha256 "$file")" "$file"
+    done >"$WORK/SHA256SUMS"
 )
+mv -- "$WORK/SHA256SUMS" "$STAGE/SHA256SUMS"
 
 # Already-compressed files, so a plain tar.
 rm -f -- "$OUT/$NAME.tar" "$OUT/$NAME.tar.sha256"
