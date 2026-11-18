@@ -73,6 +73,10 @@ pub(crate) enum ShortcutAction {
     // media-session lane
     /// Cmd+Shift+M on macOS (Cmd+M stays Minimize), Ctrl+M elsewhere (as Firefox and Edge).
     ToggleMute,
+    // find
+    Find,
+    FindNext,
+    FindPrevious,
 }
 
 impl ShortcutAction {
@@ -81,7 +85,13 @@ impl ShortcutAction {
     pub(crate) const fn repeats(self) -> bool {
         matches!(
             self,
-            Self::ZoomIn | Self::ZoomOut | Self::NextTab | Self::PreviousTab
+            Self::ZoomIn
+                | Self::ZoomOut
+                | Self::NextTab
+                | Self::PreviousTab
+                // find
+                | Self::FindNext
+                | Self::FindPrevious
         )
     }
 }
@@ -211,6 +221,10 @@ pub(crate) fn shortcut_action(
             // media-session lane
             (Some("m"), true) if platform == Platform::MacOs => Some(ToggleMute),
             (Some("m"), false) if platform == Platform::Other => Some(ToggleMute),
+            // find
+            (Some("f"), false) => Some(Find),
+            (Some("g"), false) => Some(FindNext),
+            (Some("g"), true) => Some(FindPrevious),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -237,6 +251,11 @@ pub(crate) fn shortcut_action(
             (Platform::Other, Key::Named(NamedKey::Delete), _, true) => Some(ClearBrowsingData),
             _ => None,
         };
+    }
+
+    // find: F3 / Shift+F3 outside macOS
+    if platform == Platform::Other && !primary && !alt && matches!(key, Key::Named(NamedKey::F3)) {
+        return Some(if shift { FindPrevious } else { FindNext });
     }
 
     if platform != Platform::Other || primary || shift {
@@ -417,6 +436,14 @@ pub(crate) fn run_shortcut(
             let active_tab_id = controller.borrow().active_tab_id();
             crate::media_session::toggle_mute(window, controller, active_tab_id);
         }
+        // find
+        ShortcutAction::Find => crate::find::open_find_bar(window, controller, web_view_focused),
+        ShortcutAction::FindNext | ShortcutAction::FindPrevious => crate::find::step_find(
+            window,
+            controller,
+            web_view_focused,
+            action == ShortcutAction::FindNext,
+        ),
     }
 }
 
@@ -694,6 +721,9 @@ mod tests {
             (DuplicateTab, false),
             (RestorePreviousSession, false),
             (ToggleMute, false),
+            (Find, false),
+            (FindNext, true),
+            (FindPrevious, true),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
@@ -722,7 +752,10 @@ mod tests {
                 | ReopenClosedTab
                 | DuplicateTab
                 | RestorePreviousSession
-                | ToggleMute => {}
+                | ToggleMute
+                | Find
+                | FindNext
+                | FindPrevious => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -746,6 +779,28 @@ mod tests {
         );
         assert_eq!(mac(named(NamedKey::Backspace), CMD), None);
         assert_eq!(other(named(NamedKey::Delete), CTRL), None);
+    }
+
+    // find
+    #[test]
+    fn find_on_macos() {
+        assert_eq!(mac(character("f"), CMD), Some(Find));
+        assert_eq!(mac(character("g"), CMD), Some(FindNext));
+        assert_eq!(mac(character("g"), CMD | SHIFT), Some(FindPrevious));
+        // macOS reports the shifted character while Cmd is held.
+        assert_eq!(mac(character("G"), CMD | SHIFT), Some(FindPrevious));
+        assert_eq!(mac(character("f"), CTRL), None);
+        assert_eq!(mac(named(NamedKey::F3), NONE), None);
+    }
+
+    #[test]
+    fn find_elsewhere() {
+        assert_eq!(other(character("f"), CTRL), Some(Find));
+        assert_eq!(other(character("g"), CTRL), Some(FindNext));
+        assert_eq!(other(character("g"), CTRL | SHIFT), Some(FindPrevious));
+        assert_eq!(other(named(NamedKey::F3), NONE), Some(FindNext));
+        assert_eq!(other(named(NamedKey::F3), SHIFT), Some(FindPrevious));
+        assert_eq!(other(character("f"), CMD), None);
     }
 
     const KEY_R: PhysicalKey = PhysicalKey::Code(KeyCode::KeyR);

@@ -59,4 +59,6 @@ objc2-foundation = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+# find: runs the find-in-page script's tests in a JavaScript engine written in Rust.
+boa_engine.workspace = true
 tempfile.workspace = true

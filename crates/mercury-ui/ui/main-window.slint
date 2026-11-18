@@ -22,6 +22,7 @@ export { ImportPage, ImportProfileRow, ImportSummaryLine, ImportWindow } from "i
 // session
 import { SessionBar } from "session/session-bar.slint";
 import { TabAudioButton, TabAudioState } from "media/tab-audio.slint";
+import { FindBar } from "find/find-bar.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -235,7 +236,7 @@ export component MainWindow inherits Window {
     in property <string> status-text: "";
     // The page is fullscreen: the tab strip and toolbar are hidden.
     in property <bool> chrome-hidden: false;
-    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused) || root.history-search-focused;
+    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused) || root.history-search-focused || find-bar.field-focused;
     out property <bool> web-view-hovered: web-view-input.has-hover;
     out property <float> web-view-pointer-x: web-view-input.mouse-x / 1px;
     out property <float> web-view-pointer-y: web-view-input.mouse-y / 1px;
@@ -575,6 +576,27 @@ export component MainWindow inherits Window {
         }
     }
     // --- end menus ---
+    // --- find ---
+    in property <bool> find-open: false;
+    in-out property <string> find-query: "";
+    in property <string> find-status: "";
+    in property <bool> find-no-matches: false;
+    in property <bool> find-match-case: false;
+    out property <bool> find-field-focused: find-bar.field-focused;
+    callback find-edited(string);
+    callback find-next();
+    callback find-previous();
+    callback find-close();
+    callback find-toggle-match-case();
+
+    public function find-focus-field() {
+        find-bar.focus-field();
+    }
+
+    public function find-select-all() {
+        find-bar.select-all();
+    }
+    // --- end find ---
 
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
@@ -856,6 +878,32 @@ export component MainWindow inherits Window {
             }
             dismiss-notice => {
                 root.dismiss-session-notice();
+            }
+        }
+
+        // find: the find bar, a row of its own under the toolbar
+        find-bar := FindBar {
+            height: root.find-open && !root.chrome-hidden ? 42px : 0px;
+            shown: root.find-open && !root.chrome-hidden;
+            query <=> root.find-query;
+            status: root.find-status;
+            no-matches: root.find-no-matches;
+            match-case: root.find-match-case;
+            edited(text) => {
+                root.find-edited(text);
+            }
+            next => {
+                root.find-next();
+            }
+            previous => {
+                root.find-previous();
+            }
+            close => {
+                root.find-close();
+                web-view-focus.focus();
+            }
+            toggle-match-case => {
+                root.find-toggle-match-case();
             }
         }
 

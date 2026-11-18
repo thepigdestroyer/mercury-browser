@@ -13,17 +13,18 @@ use servo::{
     MouseMoveEvent, NamedKey, Theme, WebViewPoint, WheelDelta, WheelEvent, WheelMode,
 };
 use talaria_core::{
-    ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId, ImeInput,
-    KeyLocation, KeyState, KeyboardInput, PointerButton, PointerButtonAction, TabId,
-    WebView as TalariaWebView,
+    BrowserEvent, ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId,
+    EndFindRequest, FindRequest, ImeInput, KeyLocation, KeyState, KeyboardInput, PointerButton,
+    PointerButtonAction, TabEvent, TabId, WebView as TalariaWebView,
 };
 use talaria_core::{PageRequestAnswer, PageRequestId};
 // media session
-use talaria_core::{BrowserEvent, MediaSessionAction, TabEvent};
+use talaria_core::MediaSessionAction;
 use url::Url;
 
 use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::EmbedderControls;
+use crate::find_in_page;
 use crate::frame_ready::FrameReadySignal;
 use crate::geolocation::WebViewGeolocation;
 // media session
@@ -53,8 +54,9 @@ pub struct ServoWebView {
     page_feedback: Rc<PageFeedback>,
     // geolocation: told when the web view is shown or hidden
     geolocation: Option<Rc<WebViewGeolocation>>,
-    // media session
-    /// Where script results (the media probe) are reported.
+    // media session, find
+    /// Where script results (the media probe, the find script's answers) are reported, as
+    /// events of this web view's tab.
     browser_event_sender: Sender<TabEvent>,
 }
 
@@ -135,6 +137,24 @@ impl ServoWebView {
         self.page_feedback.refresh_title(|callback| {
             self.inner
                 .evaluate_javascript(DOCUMENT_TITLE_SCRIPT, callback);
+        });
+    }
+
+    // find
+    fn evaluate_for_find(
+        &self,
+        script: String,
+        answer: impl FnOnce(
+            Result<servo::JSValue, servo::JavaScriptEvaluationError>,
+        ) -> Option<BrowserEvent>
+        + 'static,
+    ) {
+        let sender = self.browser_event_sender.clone();
+        let tab_id = self.tab_id;
+        self.inner.evaluate_javascript(script, move |result| {
+            if let Some(event) = answer(result) {
+                let _send_result = sender.send(TabEvent::new(tab_id, event));
+            }
         });
     }
 
@@ -407,6 +427,33 @@ impl TalariaWebView for ServoWebView {
                     log::debug!("tab {}: media probe failed: {error:?}", tab_id.value());
                 }
             });
+        Ok(())
+    }
+
+    // find
+    fn begin_find(&mut self, request_id: u64) -> Result<(), Self::Error> {
+        self.evaluate_for_find(find_in_page::begin_script(), move |result| {
+            Some(BrowserEvent::FindSelectionRead {
+                request_id,
+                selection: find_in_page::selection_read(result),
+            })
+        });
+        Ok(())
+    }
+
+    fn find(&mut self, request: FindRequest) -> Result<(), Self::Error> {
+        let request_id = request.id;
+        self.evaluate_for_find(find_in_page::find_script(&request), move |result| {
+            Some(BrowserEvent::FindResult {
+                request_id,
+                outcome: find_in_page::find_outcome(result),
+            })
+        });
+        Ok(())
+    }
+
+    fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error> {
+        self.evaluate_for_find(find_in_page::end_script(&request), |_result| None);
         Ok(())
     }
 }

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 use talaria_core::{
     BrowserCommand, ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId,
-    ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, PointerButton,
-    PointerButtonAction, WebView, dispatch_command,
+    EndFindRequest, FindRequest, FindStep, ImeInput, KeyLocation, KeyState, KeyboardInput,
+    KeyboardModifiers, PointerButton, PointerButtonAction, WebView, dispatch_command,
 };
 // media session
 use talaria_core::MediaSessionAction;
@@ -51,6 +51,10 @@ enum FakeCall {
     SetAudioMuted(bool),
     MediaSessionAction(MediaSessionAction, bool),
     ProbeMedia,
+    // find
+    BeginFind(u64),
+    Find(FindRequest),
+    EndFind(EndFindRequest),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -191,6 +195,19 @@ impl WebView for FakeWebView {
 
     fn probe_media(&mut self) -> Result<(), Self::Error> {
         self.record(FakeCall::ProbeMedia)
+    }
+
+    // find
+    fn begin_find(&mut self, request_id: u64) -> Result<(), Self::Error> {
+        self.record(FakeCall::BeginFind(request_id))
+    }
+
+    fn find(&mut self, request: FindRequest) -> Result<(), Self::Error> {
+        self.record(FakeCall::Find(request))
+    }
+
+    fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error> {
+        self.record(FakeCall::EndFind(request))
     }
 }
 
@@ -528,6 +545,47 @@ fn media_session_commands_reach_the_web_view() {
             FakeCall::MediaSessionAction(MediaSessionAction::Pause, false),
             FakeCall::MediaSessionAction(MediaSessionAction::NextTrack, true),
             FakeCall::ProbeMedia,
+        ]
+    );
+}
+
+#[test]
+fn find_commands_reach_the_web_view() {
+    let mut web_view = FakeWebView::default();
+    let request = FindRequest {
+        id: 2,
+        query: "needle".to_owned(),
+        match_case: true,
+        step: FindStep::Previous,
+        repeat: 2,
+        thorough: true,
+        current: Some(3),
+    };
+    let end = EndFindRequest {
+        query: "needle".to_owned(),
+        match_case: true,
+        restore_selection: None,
+        caret_left: true,
+    };
+
+    for command in [
+        BrowserCommand::BeginFind { request_id: 1 },
+        BrowserCommand::Find(request.clone()),
+        BrowserCommand::EndFind(end.clone()),
+    ] {
+        assert_eq!(dispatch_command(&mut web_view, command), Ok(()));
+    }
+
+    assert_eq!(
+        web_view.calls,
+        vec![
+            FakeCall::SetAudioMuted(true),
+            FakeCall::SetAudioMuted(false),
+            FakeCall::MediaSessionAction(MediaSessionAction::Pause, false),
+            FakeCall::MediaSessionAction(MediaSessionAction::NextTrack, true),
+            FakeCall::BeginFind(1),
+            FakeCall::Find(request),
+            FakeCall::EndFind(end),
         ]
     );
 }

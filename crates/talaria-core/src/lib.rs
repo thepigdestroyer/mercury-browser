@@ -4,6 +4,7 @@ mod browser;
 mod controller;
 mod controls;
 mod cursor;
+mod find;
 mod input;
 mod media;
 // openurl
@@ -28,6 +29,10 @@ pub use controls::{
     Rgb, SelectEntry, SelectOption,
 };
 pub use cursor::{ColorScheme, PointerCursor};
+pub use find::{
+    CONTINUATION_ROUNDS, EndFindRequest, FindMatches, FindOutcome, FindRequest, FindSelection,
+    FindState, FindStatus, FindStep,
+};
 pub use input::{
     ClipboardCommand, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
     KeyboardModifiers,

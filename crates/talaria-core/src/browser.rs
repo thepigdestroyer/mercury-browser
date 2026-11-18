@@ -5,6 +5,7 @@ use crate::{
     ClipboardCommand, ColorScheme, ControlAnswer, ControlId, ControlRect, ControlRequest,
     DEFAULT_ZOOM_PERCENT, ImeInput, KeyboardInput, PageIcon, PointerCursor,
 };
+use crate::{EndFindRequest, FindOutcome, FindRequest, FindSelection, FindState};
 use crate::{PageRequest, PageRequestAnswer, PageRequestId};
 // media session
 use crate::{
@@ -171,6 +172,14 @@ pub enum BrowserCommand {
     },
     /// Looks into the page's document; the engine answers with `BrowserEvent::MediaProbed`.
     ProbeMedia,
+    // find
+    /// The find bar opened: read the page's selection (answered by `FindSelectionRead`).
+    BeginFind {
+        request_id: u64,
+    },
+    /// Search the page and select a match (answered by `FindResult`).
+    Find(FindRequest),
+    EndFind(EndFindRequest),
 }
 
 impl BrowserCommand {
@@ -299,6 +308,16 @@ pub enum BrowserEvent {
     MediaProbed {
         probe: MediaProbe,
     },
+    // find
+    FindResult {
+        request_id: u64,
+        outcome: FindOutcome,
+    },
+    /// The answer to `BeginFind`; `None` if the page has no selection or could not be read.
+    FindSelectionRead {
+        request_id: u64,
+        selection: Option<FindSelection>,
+    },
 }
 
 impl BrowserEvent {
@@ -330,6 +349,8 @@ pub struct BrowserState {
     media: MediaState,
     /// The user's choice; kept across navigations in the tab.
     audio_muted: bool,
+    // find
+    find: FindState,
 }
 
 impl Default for BrowserState {
@@ -350,6 +371,8 @@ impl Default for BrowserState {
             // media session
             media: MediaState::default(),
             audio_muted: false,
+            // find
+            find: FindState::default(),
         }
     }
 }
@@ -389,6 +412,15 @@ impl BrowserState {
 
     pub(crate) fn set_page_title(&mut self, title: String) {
         self.page_title = title;
+    }
+
+    // find
+    pub const fn find(&self) -> &FindState {
+        &self.find
+    }
+
+    pub(crate) fn find_mut(&mut self) -> &mut FindState {
+        &mut self.find
     }
 
     pub(crate) fn set_zoom_percent(&mut self, percent: u16) {
@@ -469,6 +501,8 @@ impl BrowserState {
                     if !same_document(&self.url, &url) {
                         self.page_title = placeholder_title(&url);
                         self.page_icon = None;
+                        // find
+                        self.find.page_changed();
                     }
                     self.url = url;
                 }
@@ -491,6 +525,12 @@ impl BrowserState {
                     // The engine dropped every request of the crashed page.
                     self.pending_control = None;
                     self.input_method = None;
+                    // find
+                    self.find.page_changed();
+                }
+                // find: a load starting (a reload too) replaces the document
+                if state == LoadState::Loading && self.load_state != LoadState::Loading {
+                    self.find.page_changed();
                 }
                 self.load_state = state;
             }
@@ -544,6 +584,15 @@ impl BrowserState {
             BrowserEvent::MediaMetadataChanged { metadata } => self.media.set_metadata(metadata),
             BrowserEvent::MediaPositionChanged { position } => self.media.set_position(position),
             BrowserEvent::MediaProbed { probe } => self.media.set_probe(probe),
+            // find
+            BrowserEvent::FindResult {
+                request_id,
+                outcome,
+            } => self.find.apply_result(request_id, outcome),
+            BrowserEvent::FindSelectionRead {
+                request_id,
+                selection,
+            } => self.find.apply_selection(request_id, selection),
         }
     }
 }

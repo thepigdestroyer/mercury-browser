@@ -1,0 +1,32 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find in page</title>
+<style>
+  body { font: 18px/1.5 sans-serif; margin: 24px; }
+  .far { margin-top: 1400px; }
+  .hidden { display: none; }
+</style>
+<script>var inScript = "needle";</script>
+</head>
+<body>
+<!-- Expected: `--find needle` 7 matches; `--find needle --find-steps 2` "3 of 7" with the far
+     third match selected and scrolled into view; `--find zanzibar` "1 of 1"; `--find absent` and
+     `--find "foo bar"` "No matches". -->
+<h1>Find in page test</h1>
+<p>1. A plain needle in a haystack.</p>
+<p>2. Mixed case: Needle.</p>
+<p class="far">3. Far down the page: the third NEEDLE, scrolled into view.</p>
+<p>4. Split across elements: nee<b>dl</b><i>e</i>.</p>
+<p>5. Two on one line: needle and needle.</p>
+<p>6. (the sixth is the second one on line 5)</p>
+<p>7. Last: needles.</p>
+<p class="hidden">Not counted: a needle in an element that is not rendered.</p>
+<p hidden>Not counted: a needle in a hidden element.</p>
+<template><p>Not counted: a needle in a template.</p></template>
+<textarea>Not counted: a needle in a text field.</textarea>
+<p>Unique word: zanzibar.</p>
+<p>Across blocks: foo</p><p>bar, which does not continue the line above.</p>
+</body>
+</html>

@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find: shadow DOM</title>
+<style>body { font: 18px/1.5 sans-serif; margin: 24px; }</style>
+</head>
+<body>
+<p>Light DOM: wombat.</p>
+<div id="host"><span>Slotted light content: wombat.</span></div>
+<script>
+  const root = document.getElementById("host").attachShadow({ mode: "open" });
+  root.innerHTML = "<p>Inside an open shadow root: wombat.</p><slot></slot>";
+</script>
+<!-- Expected with `--find wombat`: 3 matches, each counted once. -->
+</body>
+</html>

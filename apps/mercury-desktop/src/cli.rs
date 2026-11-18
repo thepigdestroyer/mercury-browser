@@ -16,6 +16,9 @@ pub(crate) struct LaunchOptions {
     pub import_from: Option<PathBuf>,
     pub import_snapshot: Option<PathBuf>,
     pub exit_request: Option<ExitRequest>,
+    // find: diagnostics build only
+    #[cfg(feature = "diagnostics")]
+    pub find: Option<FindDiagnostic>,
 }
 
 /// Diagnostics: a quit the browser requests of itself, so that quit paths can be exercised
@@ -40,6 +43,16 @@ pub(crate) enum ExitBy {
     LogOut,
 }
 
+/// `--find`: a diagnostic that opens the find bar once the first page has loaded.
+#[cfg(feature = "diagnostics")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FindDiagnostic {
+    /// Searched as if typed; empty opens the bar as Cmd+F does (the page's selection, if any).
+    pub query: String,
+    /// Next (positive) or Previous (negative) presses after the first search.
+    pub steps: i32,
+}
+
 impl Default for LaunchOptions {
     fn default() -> Self {
         Self {
@@ -53,6 +66,8 @@ impl Default for LaunchOptions {
             import_from: None,
             import_snapshot: None,
             exit_request: None,
+            #[cfg(feature = "diagnostics")]
+            find: None,
         }
     }
 }
@@ -135,7 +150,7 @@ Exit status:
   On SIGTERM, SIGINT or SIGHUP the browser quits in order and then ends by that same
   signal (a shell reports 128 + its number: 143, 130, 129); a second one ends it at once.";
 
-// import-ui lane: diagnostic options, only in builds with the `diagnostics` feature.
+// import-ui lane, find: diagnostic options, only in builds with the `diagnostics` feature.
 #[cfg(feature = "diagnostics")]
 const DIAGNOSTIC_USAGE: &str = "
 
@@ -145,7 +160,10 @@ Diagnostic options (this build has the `diagnostics` feature):
                                    application-support directory) into the profile, print
                                    what was imported, then exit
   --import-snapshot <file.png>     With --import-from, save the import window as a PNG
-                                   before exiting";
+                                   before exiting
+  --find <text>                    Once the page has loaded, open the find bar, search for
+                                   <text> (empty: use the page's selection) and print the result
+  --find-steps <n>                 Then press Next n times (Previous if negative)";
 #[cfg(not(feature = "diagnostics"))]
 const DIAGNOSTIC_USAGE: &str = "";
 
@@ -205,6 +223,10 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut import_snapshot = None;
     let mut exit_after = None;
     let mut exit_by = None;
+    #[cfg(feature = "diagnostics")]
+    let mut find_query = None;
+    #[cfg(feature = "diagnostics")]
+    let mut find_steps = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -256,6 +278,15 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--import-snapshot", "<file.png>")?;
                 import_snapshot = Some(PathBuf::from(value));
             }
+            #[cfg(feature = "diagnostics")]
+            "--find" => find_query = Some(option_value(&mut arguments, "--find", "<text>")?),
+            #[cfg(feature = "diagnostics")]
+            "--find-steps" => {
+                let value = option_value(&mut arguments, "--find-steps", "<n>")?;
+                find_steps = Some(value.parse::<i32>().map_err(|_| {
+                    format!("invalid --find-steps '{value}': expected a whole number")
+                })?);
+            }
             "--exit-after" => {
                 let value = option_value(&mut arguments, "--exit-after", "<milliseconds>")?;
                 let milliseconds = value.parse::<u64>().map_err(|_| {
@@ -305,6 +336,16 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, None) => None,
     };
 
+    #[cfg(feature = "diagnostics")]
+    let find = match (find_query, find_steps) {
+        (Some(query), steps) => Some(FindDiagnostic {
+            query,
+            steps: steps.unwrap_or(0),
+        }),
+        (None, Some(_)) => return Err("--find-steps requires --find".to_owned()),
+        (None, None) => None,
+    };
+
     Ok(CliOutcome::Run(LaunchOptions {
         urls,
         screenshot,
@@ -316,6 +357,8 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         import_from,
         import_snapshot,
         exit_request,
+        #[cfg(feature = "diagnostics")]
+        find,
     }))
 }
 
@@ -401,6 +444,8 @@ mod tests {
                 import_from: None,
                 import_snapshot: None,
                 exit_request: None,
+                #[cfg(feature = "diagnostics")]
+                find: None,
             })
         );
     }
@@ -831,6 +876,18 @@ mod tests {
         assert!(!text.contains("--import-from"));
     }
 
+    // find
+    #[cfg(not(feature = "diagnostics"))]
+    #[test]
+    fn without_the_diagnostics_feature_find_is_unknown() {
+        assert_eq!(exit_code(&parse(&["--find", "needle"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--find-steps", "1"])), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(!text.contains("--find"));
+    }
+
     #[cfg(feature = "diagnostics")]
     #[test]
     fn import_from_is_a_diagnostic_that_makes_the_run_automated() {
@@ -855,5 +912,42 @@ mod tests {
             panic!("--help should not run the browser");
         };
         assert!(text.contains("--import-from <directory>"));
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn the_find_diagnostic_takes_a_query_and_optional_steps() {
+        let CliOutcome::Run(options) = parse(&["--find", "needle", "--find-steps", "-2"]) else {
+            panic!("--find with steps should be accepted");
+        };
+        assert_eq!(
+            options.find,
+            Some(FindDiagnostic {
+                query: "needle".to_owned(),
+                steps: -2,
+            })
+        );
+
+        let CliOutcome::Run(options) = parse(&["--find", ""]) else {
+            panic!("an empty --find query should be accepted");
+        };
+        assert_eq!(
+            options.find,
+            Some(FindDiagnostic {
+                query: String::new(),
+                steps: 0,
+            })
+        );
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn find_steps_need_find_and_a_number() {
+        assert_eq!(exit_code(&parse(&["--find-steps", "2"])), Some(2));
+        assert_eq!(
+            exit_code(&parse(&["--find", "x", "--find-steps", "two"])),
+            Some(2)
+        );
+        assert_eq!(exit_code(&parse(&["--find"])), Some(2));
     }
 }

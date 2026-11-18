@@ -1,0 +1,23 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find: page selection becomes the query</title>
+<style>body { font: 18px/1.5 sans-serif; margin: 24px; }</style>
+</head>
+<body>
+<p id="first">The word quokka appears here,</p>
+<p id="second">and quokka appears again here, where the page selected it.</p>
+<p>A third quokka.</p>
+<script>
+  // Selects the second "quokka" on load, as a user would before pressing Cmd+F.
+  const text = document.getElementById("second").firstChild;
+  const start = text.data.indexOf("quokka");
+  const range = document.createRange();
+  range.setStart(text, start);
+  range.setEnd(text, start + 6);
+  document.getSelection().addRange(range);
+</script>
+<!-- Expected with `--find ""`: the field shows the selected word and the bar "2 of 3". -->
+</body>
+</html>

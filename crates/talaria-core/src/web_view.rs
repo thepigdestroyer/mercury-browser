@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::browser::{BrowserCommand, PointerButton, PointerButtonAction};
 use crate::{ClipboardCommand, ColorScheme, ControlAnswer, ControlId, ImeInput, KeyboardInput};
-use crate::{PageRequestAnswer, PageRequestId};
+use crate::{EndFindRequest, FindRequest, PageRequestAnswer, PageRequestId};
 // media session
 use crate::MediaSessionAction;
 
@@ -47,6 +47,12 @@ pub trait WebView {
         through_engine: bool,
     ) -> Result<(), Self::Error>;
     fn probe_media(&mut self) -> Result<(), Self::Error>;
+    // find
+    /// Reads the page's selection; the answer arrives as `BrowserEvent::FindSelectionRead`.
+    fn begin_find(&mut self, request_id: u64) -> Result<(), Self::Error>;
+    /// Searches the page; the answer arrives as `BrowserEvent::FindResult`.
+    fn find(&mut self, request: FindRequest) -> Result<(), Self::Error>;
+    fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error>;
 }
 
 pub fn dispatch_command<W>(web_view: &mut W, command: BrowserCommand) -> Result<(), W::Error>
@@ -91,5 +97,9 @@ where
             through_engine,
         } => web_view.media_session_action(action, through_engine),
         BrowserCommand::ProbeMedia => web_view.probe_media(),
+        // find
+        BrowserCommand::BeginFind { request_id } => web_view.begin_find(request_id),
+        BrowserCommand::Find(request) => web_view.find(request),
+        BrowserCommand::EndFind(request) => web_view.end_find(request),
     }
 }

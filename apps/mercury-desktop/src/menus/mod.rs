@@ -202,7 +202,7 @@ fn run_command(
         MenuCommand::System(_) => {}
         MenuCommand::ImportBrowserData => crate::import_ui::show_import_window(window),
         MenuCommand::OpenBookmark(id) => seams::open_bookmark(window, id),
-        MenuCommand::Find | MenuCommand::Stop => {}
+        MenuCommand::Stop => {}
     }
 }
 

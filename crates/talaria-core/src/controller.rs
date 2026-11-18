@@ -449,8 +449,13 @@ impl BrowserController {
         let reapply_mute = tab.state().is_audio_muted()
             && (reaches_a_new_document(&event) || shows_unmuted_media(&event));
         tab.state_mut().apply(event);
+        // find: an answer or a selection read can ask for the next search
+        let find_follow_up = tab.state_mut().find_mut().take_follow_up();
         if reapply_mute {
             self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted: true });
+        }
+        if let Some(command) = find_follow_up {
+            self.queue_command_for(tab_id, command);
         }
         true
     }
@@ -649,6 +654,68 @@ impl BrowserController {
     /// The pages' requests to open links in other apps, oldest first, each returned once.
     pub fn take_external_link_requests(&mut self) -> Vec<(TabId, ExternalLinkRequest)> {
         std::mem::take(&mut self.external_link_requests)
+    }
+
+    // find
+    /// Opens the active tab's find bar; false if it was already open.
+    pub fn open_find(&mut self) -> bool {
+        let command = self.active_find_mut().open();
+        let opened = command.is_some();
+        self.queue_find_command(command);
+        opened
+    }
+
+    /// Records the text in the active tab's find field; `run_due_find` searches it.
+    pub fn set_find_query(&mut self, query: &str) {
+        self.active_find_mut().set_query(query);
+    }
+
+    /// Searches the active tab's query if it changed since its last search (the end of the
+    /// typing debounce).
+    pub fn run_due_find(&mut self) {
+        let command = self.active_find_mut().due_search();
+        self.queue_find_command(command);
+    }
+
+    pub fn find_next(&mut self) {
+        let command = self.active_find_mut().step(true);
+        self.queue_find_command(command);
+    }
+
+    pub fn find_previous(&mut self) {
+        let command = self.active_find_mut().step(false);
+        self.queue_find_command(command);
+    }
+
+    pub fn toggle_find_match_case(&mut self) {
+        let command = self.active_find_mut().toggle_match_case();
+        self.queue_find_command(command);
+    }
+
+    /// The page has not answered find request `request_id` in time (a desktop timer decides).
+    pub fn find_answer_overdue(&mut self, tab_id: TabId, request_id: u64) {
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.state_mut().find_mut().answer_overdue(request_id);
+        }
+    }
+
+    pub fn close_find(&mut self) {
+        let command = self.active_find_mut().close();
+        self.queue_find_command(command);
+    }
+
+    fn active_find_mut(&mut self) -> &mut crate::FindState {
+        let tab_id = self.active_tab_id;
+        self.tab_mut(tab_id)
+            .expect("the controller always owns an active tab")
+            .state_mut()
+            .find_mut()
+    }
+
+    fn queue_find_command(&mut self, command: Option<BrowserCommand>) {
+        if let Some(command) = command {
+            self.queue_command(command);
+        }
     }
 
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {

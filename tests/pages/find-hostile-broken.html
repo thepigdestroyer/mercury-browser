@@ -1,0 +1,18 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find: page that breaks the built-ins find needs</title>
+<style>body { font: 18px/1.5 sans-serif; margin: 24px; }</style>
+<script>
+  // Replaces the built-ins find reads, before it runs: find can only fail or miscount here.
+  Document.prototype.getSelection = function () { return null; };
+  RegExp.prototype.exec = function () { throw new Error("page: exec"); };
+</script>
+</head>
+<body>
+<h1>Broken built-ins</h1>
+<p>needle one, needle two.</p>
+<!-- Expected with `--find needle`: "Search failed"; the browser keeps working. -->
+</body>
+</html>

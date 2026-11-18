@@ -176,6 +176,8 @@ pub(crate) fn with_runtime(work: impl FnOnce(&ServoRuntime)) -> bool {
 /// If Servo has not finished shutting down within `ENGINE_SHUTDOWN_TIMEOUT`, the process exits
 /// with `exit_code_if_stuck` rather than hang.
 pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
+    // find: how long the engine takes to shut down (`RUST_LOG=mercury_browser::engine=debug`).
+    let started = std::time::Instant::now();
     // Queued re-pumps and Servo's waker reach the engine only through this; from now on they
     // find nothing.
     let Some(engine) = ENGINE.with(|current| current.replace(Weak::new()).upgrade()) else {
@@ -195,6 +197,8 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
         }
     }
     state.shut_down(window.as_ref(), exit_code_if_stuck);
+    // `shut_down` returns right after the watchdog is disarmed.
+    log::debug!("engine shut down in {} ms", started.elapsed().as_millis());
 }
 
 // session: lets a newly selected restored tab get its web view without waiting for a redraw
@@ -214,8 +218,8 @@ pub(crate) fn engine_busy() -> bool {
     })
 }
 
-// media-session lane: media keys arrive outside a pump and need their command dispatched.
-// openurl
+// media-session lane, openurl, find: commands queued outside a render (media keys, links from
+// other apps, find's debounce timer, the `--find` diagnostic) need their command dispatched.
 /// Asks for a pump soon, even while the window is covered and skips its renders.
 pub(crate) fn request_pump() {
     let _queued = slint::invoke_from_event_loop(pump_after_wake);
@@ -968,6 +972,16 @@ mod tests {
             Ok(())
         }
         fn probe_media(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        // find
+        fn begin_find(&mut self, _request_id: u64) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn find(&mut self, _request: talaria_core::FindRequest) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn end_find(&mut self, _request: talaria_core::EndFindRequest) -> Result<(), Self::Error> {
             Ok(())
         }
     }

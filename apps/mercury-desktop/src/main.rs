@@ -27,6 +27,7 @@ mod cli;
 mod controls;
 mod crash_handler;
 mod engine;
+mod find;
 mod geolocation;
 mod history_ui;
 mod import_ui; // import-ui lane
@@ -230,8 +231,16 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         media_session::uses_system_services(&options),
     );
 
+    // find
+    find::connect_find_bar(&window, Rc::clone(&controller));
+
     let mut timers = Vec::new();
     timers.extend(session_timer); // session
+    // find: the `--find` diagnostic's timer stops with the others, before the engine shuts down.
+    #[cfg(feature = "diagnostics")]
+    timers.extend(options.find.map(|diagnostic| {
+        find::start_find_diagnostic(&window, Rc::clone(&controller), diagnostic)
+    }));
     let screenshot_result = options.screenshot.map(|screenshot| {
         let result = Rc::new(Cell::new(ScreenshotResult::Pending));
         timers.push(start_screenshot(

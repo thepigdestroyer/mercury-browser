@@ -6,6 +6,7 @@ mod embedder_controls;
 mod error;
 mod error_pages;
 mod exit_clearing;
+mod find_in_page;
 mod frame_ready;
 mod geolocation;
 mod history_events;

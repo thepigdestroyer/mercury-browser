@@ -121,6 +121,8 @@ quit-diagnostics = []
 menu-diagnostics = []
 # import-ui lane: `--import-from` and `--import-snapshot` (docs in `cli.rs`). Never in a
 # released build; `make lint`, `make check` and `make test` turn it on (`--all-features`).
+# find lane: diagnostic command-line options (`--find`, `--find-steps`), never in released builds;
+# `make lint` and `make test` turn them on with `--all-features`.
 diagnostics = []
 
 [build-dependencies]
