@@ -18,16 +18,46 @@ pub struct IconSize {
 
 /// The ten files of a macOS iconset.
 pub const ICONSET: [IconSize; 10] = [
-    IconSize { pixels: 16, name: "icon_16x16" },
-    IconSize { pixels: 32, name: "icon_16x16@2x" },
-    IconSize { pixels: 32, name: "icon_32x32" },
-    IconSize { pixels: 64, name: "icon_32x32@2x" },
-    IconSize { pixels: 128, name: "icon_128x128" },
-    IconSize { pixels: 256, name: "icon_128x128@2x" },
-    IconSize { pixels: 256, name: "icon_256x256" },
-    IconSize { pixels: 512, name: "icon_256x256@2x" },
-    IconSize { pixels: 512, name: "icon_512x512" },
-    IconSize { pixels: 1024, name: "icon_512x512@2x" },
+    IconSize {
+        pixels: 16,
+        name: "icon_16x16",
+    },
+    IconSize {
+        pixels: 32,
+        name: "icon_16x16@2x",
+    },
+    IconSize {
+        pixels: 32,
+        name: "icon_32x32",
+    },
+    IconSize {
+        pixels: 64,
+        name: "icon_32x32@2x",
+    },
+    IconSize {
+        pixels: 128,
+        name: "icon_128x128",
+    },
+    IconSize {
+        pixels: 256,
+        name: "icon_128x128@2x",
+    },
+    IconSize {
+        pixels: 256,
+        name: "icon_256x256",
+    },
+    IconSize {
+        pixels: 512,
+        name: "icon_256x256@2x",
+    },
+    IconSize {
+        pixels: 512,
+        name: "icon_512x512",
+    },
+    IconSize {
+        pixels: 1024,
+        name: "icon_512x512@2x",
+    },
 ];
 
 /// Why rendering failed.
@@ -68,18 +98,62 @@ pub enum Error {
     Png(String),
 }
 
+/// The largest size drawn from the small artwork. At 16 and 32 px the full icon's detail turns to
+/// mush, so a simplified drawing is used there, as Apple's own small icons do.
+pub const SMALL_ARTWORK_MAX_PIXELS: u32 = 32;
+
 /// Whether an icon of `pixels` uses the simplified small artwork.
-pub fn uses_small_artwork(_pixels: u32) -> bool {
-    unimplemented!()
+pub fn uses_small_artwork(pixels: u32) -> bool {
+    pixels <= SMALL_ARTWORK_MAX_PIXELS
 }
 
 /// Renders the whole canvas of a square SVG to a `size` x `size` PNG with a transparent background.
-pub fn render_png(_svg: &[u8], _size: u32) -> Result<Vec<u8>, Error> {
-    unimplemented!()
+pub fn render_png(svg: &[u8], size: u32) -> Result<Vec<u8>, Error> {
+    if size == 0 {
+        return Err(Error::ZeroSize);
+    }
+    let tree = resvg::usvg::Tree::from_data(svg, &resvg::usvg::Options::default())
+        .map_err(|error| Error::Svg(error.to_string()))?;
+    let canvas = tree.size();
+    let (width, height) = (canvas.width(), canvas.height());
+    if (width - height).abs() > width.max(height) * 1e-4 {
+        return Err(Error::NotSquare { width, height });
+    }
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(size, size).ok_or(Error::ZeroSize)?;
+    let scale = size as f32 / width;
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    pixmap
+        .encode_png()
+        .map_err(|error| Error::Png(error.to_string()))
 }
 
 /// Writes the ten PNGs of an iconset into `dir`, creating it if needed: sizes up to 32 px from
 /// `small`, the rest from `large`.
-pub fn write_iconset(_large: &Path, _small: &Path, _dir: &Path) -> Result<(), Error> {
-    unimplemented!()
+pub fn write_iconset(large: &Path, small: &Path, dir: &Path) -> Result<(), Error> {
+    let read = |path: &Path| {
+        std::fs::read(path).map_err(|source| Error::Read {
+            path: path.to_owned(),
+            source,
+        })
+    };
+    let (large, small) = (read(large)?, read(small)?);
+    std::fs::create_dir_all(dir).map_err(|source| Error::Write {
+        path: dir.to_owned(),
+        source,
+    })?;
+    for icon in ICONSET {
+        let artwork = if uses_small_artwork(icon.pixels) {
+            &small
+        } else {
+            &large
+        };
+        let png = render_png(artwork, icon.pixels)?;
+        let path = dir.join(format!("{}.png", icon.name));
+        std::fs::write(&path, png).map_err(|source| Error::Write { path, source })?;
+    }
+    Ok(())
 }

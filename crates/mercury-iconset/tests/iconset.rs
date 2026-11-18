@@ -11,7 +11,10 @@ const CIRCLE: &str = r##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10
 
 fn rgba(png: &[u8], x: u32, y: u32) -> (u8, u8, u8, u8) {
     let pixmap = Pixmap::decode_png(png).expect("a valid PNG");
-    let pixel = pixmap.pixel(x, y).expect("a pixel inside the image").demultiply();
+    let pixel = pixmap
+        .pixel(x, y)
+        .expect("a pixel inside the image")
+        .demultiply();
     (pixel.red(), pixel.green(), pixel.blue(), pixel.alpha())
 }
 
@@ -22,7 +25,10 @@ fn dimensions(png: &[u8]) -> (u32, u32) {
 
 #[test]
 fn iconset_lists_the_ten_files_iconutil_expects() {
-    let names: Vec<(u32, &str)> = ICONSET.iter().map(|icon| (icon.pixels, icon.name)).collect();
+    let names: Vec<(u32, &str)> = ICONSET
+        .iter()
+        .map(|icon| (icon.pixels, icon.name))
+        .collect();
     assert_eq!(
         names,
         [
@@ -77,10 +83,7 @@ fn rejects_an_svg_that_is_not_square() {
 
 #[test]
 fn rejects_input_that_is_not_svg() {
-    assert!(matches!(
-        render_png(b"not an svg", 32),
-        Err(Error::Svg(_))
-    ));
+    assert!(matches!(render_png(b"not an svg", 32), Err(Error::Svg(_))));
 }
 
 #[test]
@@ -107,15 +110,27 @@ fn writes_ten_pngs_with_the_small_artwork_for_the_small_sizes() {
         .map(|entry| entry.unwrap().file_name().into_string().unwrap())
         .collect();
     written.sort();
-    let mut expected: Vec<String> = ICONSET.iter().map(|icon| format!("{}.png", icon.name)).collect();
+    let mut expected: Vec<String> = ICONSET
+        .iter()
+        .map(|icon| format!("{}.png", icon.name))
+        .collect();
     expected.sort();
     assert_eq!(written, expected);
 
     for icon in ICONSET {
         let png = std::fs::read(iconset.join(format!("{}.png", icon.name))).unwrap();
-        assert_eq!(dimensions(&png), (icon.pixels, icon.pixels), "{}", icon.name);
+        assert_eq!(
+            dimensions(&png),
+            (icon.pixels, icon.pixels),
+            "{}",
+            icon.name
+        );
         let colour = rgba(&png, icon.pixels / 2, icon.pixels / 2);
-        let want = if icon.pixels <= 32 { (255, 0, 0, 255) } else { (0, 0, 255, 255) };
+        let want = if icon.pixels <= 32 {
+            (255, 0, 0, 255)
+        } else {
+            (0, 0, 255, 255)
+        };
         assert_eq!(colour, want, "{}", icon.name);
     }
 }
