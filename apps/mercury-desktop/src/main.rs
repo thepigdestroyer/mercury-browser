@@ -78,7 +78,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     }
     // With the early environment changes: before any thread exists, and only in the browser.
     record_browser_process_id();
-    talaria_servo::record_error_page_secret(); // site-security: before any thread, like the line above
+    // site-security: before any thread, like the line above
+    talaria_servo::record_error_page_secret(mercury_site_security::is_automated_run(
+        std::env::args_os().map(|argument| argument.to_string_lossy().into_owned()),
+    ));
 
     // (5) Media: GLib's user directories, where GStreamer writes its download buffers (copies of
     // the media being played), point into a private directory of this run under Mercury's cache;

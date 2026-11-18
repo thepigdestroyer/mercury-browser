@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 
+mod environment;
 mod error_pages;
 mod exception_request;
 mod idn;
 mod site;
 
+pub use environment::{ErrorPageEnvironment, automatic_continue_requested, is_automated_run};
 pub use error_pages::{
     CERTIFICATE_EXCEPTION_SCHEME, ERROR_PAGE_PROBE_SCRIPT, ErrorPage, certificate_error_page,
     crash_page, network_error_page, parse_error_page_marker,

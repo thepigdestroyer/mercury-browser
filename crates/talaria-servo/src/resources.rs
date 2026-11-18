@@ -14,6 +14,7 @@
 use std::path::PathBuf;
 use std::sync::OnceLock;
 
+use mercury_site_security::{ErrorPageEnvironment, automatic_continue_requested};
 use servo::resources::{Resource, ResourceReaderMethods};
 use servo_default_resources::DefaultResourceReader;
 
@@ -21,7 +22,7 @@ use servo_default_resources::DefaultResourceReader;
 const SECRET_VARIABLE: &str = "MERCURY_ERROR_PAGE_SECRET";
 
 /// For automated tests only: the certificate page continues to the site as soon as it loads,
-/// as if the user had pressed "Continue". Read in the content process.
+/// as if the user had pressed "Continue". Read by the browser process, in automated runs only.
 const PROCEED_VARIABLE: &str = "MERCURY_TEST_PROCEED_ON_CERTIFICATE_ERROR";
 
 struct MercuryResources;
@@ -62,40 +63,63 @@ fn mercury_resource(resource: &Resource) -> Option<String> {
 }
 
 /// Makes this run's error-page secret and records it for the content processes Servo will
-/// start. Call it in `main`, in the browser process only, before any other thread exists
+/// start, overwriting any inherited value. `automated` says whether this is a `--screenshot` or
+/// `--background` run: only then is the test switch `MERCURY_TEST_PROCEED_ON_CERTIFICATE_ERROR`
+/// honoured. Call it in `main`, in the browser process only, before any other thread exists
 /// (next to `record_browser_process_id`).
-pub fn record_error_page_secret() {
+pub fn record_error_page_secret(automated: bool) {
     let mut bytes = [0_u8; 16];
-    if let Err(error) = getrandom::fill(&mut bytes) {
-        // Without a secret no error page is recognised and no certificate exception is
-        // accepted; pages still show.
-        log::error!("no random source for the error-page secret: {error}");
-        return;
+    let secret = match getrandom::fill(&mut bytes) {
+        Ok(()) => bytes
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>(),
+        Err(error) => {
+            // Without a secret no error page is recognised and no certificate exception is
+            // accepted; pages still show.
+            log::error!("no random source for the error-page secret: {error}");
+            String::new()
+        }
+    };
+    let requested = std::env::var(PROCEED_VARIABLE).ok();
+    let continue_automatically = automatic_continue_requested(automated, requested.as_deref());
+    if continue_automatically {
+        log::warn!("{PROCEED_VARIABLE}: certificate pages continue by themselves in this run");
+    } else if requested.is_some() {
+        log::warn!("{PROCEED_VARIABLE} is ignored: it applies to automated runs only");
     }
-    let secret = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let value = ErrorPageEnvironment {
+        secret,
+        continue_automatically,
+    }
+    .encode();
     // SAFETY: called on the main thread before any other thread has been started, so nothing
     // can read the environment concurrently.
     unsafe {
-        std::env::set_var(SECRET_VARIABLE, secret);
+        std::env::set_var(SECRET_VARIABLE, value);
     }
+}
+
+/// What the browser process recorded, or None (then nothing matches the secret and nothing
+/// continues automatically).
+fn recorded_environment() -> Option<&'static ErrorPageEnvironment> {
+    static RECORDED: OnceLock<Option<ErrorPageEnvironment>> = OnceLock::new();
+    RECORDED
+        .get_or_init(|| {
+            std::env::var(SECRET_VARIABLE)
+                .ok()
+                .and_then(|value| ErrorPageEnvironment::decode(&value))
+        })
+        .as_ref()
 }
 
 /// This run's error-page secret, or "" if none was recorded (then nothing matches it).
 pub(crate) fn error_page_secret() -> &'static str {
-    static SECRET: OnceLock<String> = OnceLock::new();
-    SECRET.get_or_init(|| {
-        std::env::var(SECRET_VARIABLE)
-            .ok()
-            .filter(|secret| secret.len() == 32 && secret.bytes().all(|b| b.is_ascii_hexdigit()))
-            .unwrap_or_default()
-    })
+    recorded_environment().map_or("", |recorded| recorded.secret.as_str())
 }
 
 fn proceeds_automatically() -> bool {
-    std::env::var_os(PROCEED_VARIABLE).is_some_and(|value| value == "1")
+    recorded_environment().is_some_and(|recorded| recorded.continue_automatically)
 }
 
 #[cfg(test)]
