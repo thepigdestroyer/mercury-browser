@@ -98,3 +98,68 @@ fn continue_is_offered_only_in_the_top_level_page_and_for_local_names() {
     let click = automatic.find("proceed.click()").expect("the click");
     assert!(gate < click);
 }
+
+/// The page's `isLocalName` mirrors `talaria_core::is_local_host`, which decides in the browser.
+/// The table pins the edge cases; the page must give the same answers (a mismatch fails safe,
+/// but then "Continue anyway" shows and does nothing).
+#[test]
+fn the_page_and_the_browser_agree_on_local_names() {
+    let table = [
+        ("localhost", true),
+        ("app.localhost", true),
+        ("printer.local.", true),
+        ("nas", true),
+        ("nas..", true),
+        ("my-host.lan", true),
+        ("router.home.arpa", true),
+        ("home.arpa", false),
+        ("intranet.example.com", false),
+        ("127.8.9.10", true),
+        ("0.0.0.0", true),
+        ("0.1.2.3", false),
+        ("0.0.0.10", false),
+        ("192.168.1.1", true),
+        ("192.169.1.1", false),
+        ("169.255.0.1", false),
+        ("255.255.255.255", false),
+        ("10.0.0.1", true),
+        ("172.16.0.1", true),
+        ("172.32.0.1", false),
+        ("100.64.0.1", true),
+        ("100.128.0.1", false),
+        ("169.254.1.1", true),
+        ("8.8.8.8", false),
+        ("[::1]", true),
+        ("[::]", true),
+        ("[fc00::1]", true),
+        ("[fd12:3456::1]", true),
+        ("[fc::1]", false),
+        ("[fd00::]", true),
+        ("[fe80::]", true),
+        ("[fe80::1]", true),
+        ("[febf::1]", true),
+        ("[fe00::]", false),
+        ("[::2]", false),
+        ("[::ffff:a00:1]", false),
+        ("[fec0::1]", false),
+        ("[fe8::1]", false),
+        ("[2001:db8::1]", false),
+        ("example.com", false),
+    ];
+    for (host, local) in table {
+        assert_eq!(talaria_core::is_local_host(host), local, "{host}");
+    }
+    let page = certificate_error_page(SECRET, false);
+    // Every trailing dot is ignored, as `is_local_name` trims them.
+    assert!(
+        page.contains("host.toLowerCase().replace(/[.]+$/, '')"),
+        "{page}"
+    );
+    // Of 0.0.0.0/8 only 0.0.0.0, as `Ipv4Addr::is_unspecified`.
+    assert!(page.contains("host === '0.0.0.0'"), "{page}");
+    assert!(!page.contains("a === 0 "), "{page}");
+    // IPv6 ranges by the first group's value, not by text ("[fc::1]" is 00fc::1).
+    assert!(page.contains("(first & 0xfe00) === 0xfc00"), "{page}");
+    assert!(page.contains("(first & 0xffc0) === 0xfe80"), "{page}");
+    assert!(!page.contains("/^f[cd]/"), "{page}");
+}

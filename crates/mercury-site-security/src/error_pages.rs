@@ -111,22 +111,27 @@ pub fn certificate_error_page(secret: &str, proceed_automatically: bool) -> Stri
 // The browser accepts exceptions only for names on this computer or the local network
 // (`talaria_core::is_local_host`, checked again where the request arrives); this mirrors it.
 function isLocalName(host) {{
-  host = host.toLowerCase();
-  if (host.slice(-1) === '.') {{ host = host.slice(0, -1); }}
+  // A name may end in dots (`nas..` is valid); the browser's rule ignores all of them.
+  host = host.toLowerCase().replace(/[.]+$/, '');
   if (host === 'localhost') {{ return true; }}
   var suffixes = ['.localhost', '.local', '.internal', '.lan', '.home.arpa'];
   if (suffixes.some(function (suffix) {{ return host.slice(-suffix.length) === suffix; }})) {{
     return true;
   }}
   var parts = host.split('.');
-  if (parts.length === 4 && parts.every(function (part) {{ return part !== '' && !isNaN(part); }})) {{
+  if (parts.length === 4 && parts.every(function (part) {{ return /^[0-9]+$/.test(part); }})) {{
+    // Loopback, private, link-local and shared (100.64/10) ranges; of 0.0.0.0/8 only 0.0.0.0.
     var a = +parts[0], b = +parts[1];
-    return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
+    return host === '0.0.0.0' || a === 127 || a === 10 || (a === 172 && b >= 16 && b <= 31) ||
       (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
   }}
   if (host.charAt(0) === '[') {{
+    // The serialised address: `::` for zero groups, no leading zeros. Compare the first group's
+    // value (fc00::/7 unique local, fe80::/10 link-local), not its text.
     var v6 = host.slice(1, -1);
-    return v6 === '::1' || v6 === '::' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6);
+    var first = parseInt(v6.split(':')[0] || '0', 16);
+    return v6 === '::1' || v6 === '::' || (first & 0xfe00) === 0xfc00 ||
+      (first & 0xffc0) === 0xfe80;
   }}
   return host.indexOf('.') < 0;
 }}
