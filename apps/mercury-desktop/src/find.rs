@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Find in page: connects the find bar to the active tab's find state, and the `--find` diagnostic.
 //! The search itself is a script run in the page (`talaria-servo`'s `find_in_page`).
 

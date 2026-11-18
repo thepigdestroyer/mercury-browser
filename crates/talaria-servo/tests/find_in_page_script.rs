@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The find script's tests (`src/find_in_page.js`), run in boa_engine, a JavaScript engine written in
 //! Rust, so no Node.js is needed. Each case (`find_in_page/cases.js`) runs in a fresh `Context`, a
 //! realm of its own, with the fake DOM of `find_in_page/fake_dom.js`; the script is called exactly
@@ -83,7 +85,7 @@ cases! {
     a_page_that_replaces_regexp_prototype_exec_gets_a_wrong_answer_not_an_exception => "a page that replaces RegExp.prototype.exec gets a wrong answer, not an exception",
     opening_reads_a_short_selection_and_where_it_is => "opening reads a short selection and where it is",
     opening_ignores_long_or_multi_line_selections_and_reports_none => "opening ignores long or multi-line selections and reports none",
-    closing_puts_the_page_s_selection_back_only_while_a_match_is_selected => "closing puts the page"s selection back only while a match is selected",
+    closing_puts_the_page_s_selection_back_only_while_a_match_is_selected => "closing puts the page's selection back only while a match is selected",
     closing_rejects_a_saved_position_that_no_longer_exists => "closing rejects a saved position that no longer exists",
     several_presses_at_once_move_that_many_matches => "several presses at once move that many matches",
     previous_with_no_selection_goes_to_the_match_just_above_the_view => "previous with no selection goes to the match just above the view",
@@ -98,7 +100,7 @@ cases! {
     setting_up_the_walk_does_not_run_through_every_sibling_of_the_start => "setting up the walk does not run through every sibling of the start",
     a_match_that_runs_across_the_start_point_is_found => "a match that runs across the start point is found",
     only_an_explicit_search_leaves_a_caret_where_it_stopped => "only an explicit search leaves a caret where it stopped",
-    closing_after_a_caret_puts_the_page_s_own_selection_back => "closing after a caret puts the page"s own selection back",
+    closing_after_a_caret_puts_the_page_s_own_selection_back => "closing after a caret puts the page's own selection back",
     in_a_tall_element_the_place_is_estimated_from_the_offset_in_the_whole_element => "in a tall element the place is estimated from the offset in the whole element",
     a_page_that_wraps_regexp_and_reflect_apply_sees_the_query_as_the_header_says => "a page that wraps RegExp and Reflect.apply sees the query, as the header says",
     rounds_make_progress_inside_one_long_block_of_inline_content => "rounds make progress inside one long block of inline content",

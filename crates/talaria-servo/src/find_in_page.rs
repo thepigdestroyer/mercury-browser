@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Find in page. Servo 0.8.0 has no find API, so the search is `find_in_page.js`, run through
 //! `WebView::evaluate_javascript` in the top-level document's own world. The page can observe and
 //! disturb it (see the comment at the top of the script); its answer is a short string, parsed

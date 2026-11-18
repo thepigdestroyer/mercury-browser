@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // The find script's cases, run one per Rust test by `find_in_page_script.rs` in boa_engine. Each
 // case builds a page in the fake DOM (`fake_dom.js`), runs the script and checks its answer.
 

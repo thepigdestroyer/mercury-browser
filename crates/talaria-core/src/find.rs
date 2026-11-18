@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Find in page: the find bar's state for one tab.
 //!
 //! The engine has no find API, so the search runs as a script in the page (see

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Renders the find bar headlessly with Slint's software renderer and checks how it answers keys
 //! and clicks. Set `MERCURY_UI_RENDER_DIR` to also save each rendering as a PNG.
 

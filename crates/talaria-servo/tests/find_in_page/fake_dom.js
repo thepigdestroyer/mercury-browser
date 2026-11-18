@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // Test fixture for `find_in_page_script.rs`, run in boa_engine (no Node.js): a small fake DOM, the
 // helpers the cases use, and the cases' registry. Not product code: the product's only page script
 // is `src/find_in_page.js`, which `__findSource` holds.
