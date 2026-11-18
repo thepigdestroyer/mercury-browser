@@ -65,7 +65,10 @@ mod tests {
 
     #[test]
     fn only_form_logins_of_exactly_the_pages_origin_are_offered() {
-        let (origin, found) = fill_candidates(&store().all().expect("listed"), "https://example.com/login?next=/");
+        let (origin, found) = fill_candidates(
+            &store().all().expect("listed"),
+            "https://example.com/login?next=/",
+        );
 
         assert_eq!(
             origin.map(|origin| origin.as_str().to_owned()).as_deref(),

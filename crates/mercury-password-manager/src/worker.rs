@@ -58,7 +58,10 @@ pub struct StoreWorker {
 impl StoreWorker {
     /// Runs jobs inline. For the memory store.
     pub fn inline(backend: AnyBackend) -> Self {
-        Self::with_mode(backend.is_persistent(), Mode::Inline(PasswordStore::new(backend)))
+        Self::with_mode(
+            backend.is_persistent(),
+            Mode::Inline(PasswordStore::new(backend)),
+        )
     }
 
     /// Queues jobs until [`StoreWorker::run_queued`]. For tests.
@@ -239,7 +242,11 @@ mod tests {
         let order = Rc::new(RefCell::new(Vec::new()));
         for number in [1, 2] {
             let order = Rc::clone(&order);
-            worker.run(Interaction::Never, move |_| number, move |n| order.borrow_mut().push(n));
+            worker.run(
+                Interaction::Never,
+                move |_| number,
+                move |n| order.borrow_mut().push(n),
+            );
         }
         assert_eq!(worker.pending(), 2);
         assert!(order.borrow().is_empty());

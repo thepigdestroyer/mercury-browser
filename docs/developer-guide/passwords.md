@@ -196,10 +196,11 @@ interface; `apps/mercury-desktop/src/passwords/` connects it to the windows, the
 
 | Part | Where | What it does |
 | --- | --- | --- |
-| Backend choice | `passwords::start` | The login keychain only in a normal interactive run of the default profile. `--screenshot`, `--background`, `--profile-dir` and tests keep logins in memory (`AnyBackend::Memory`), authenticate with `RefusingAuthenticator` and copy to an in-memory pasteboard: they never touch the login keychain, show a system prompt or change the real clipboard. |
+| Backend choice | `passwords::start` | The login keychain only in a normal interactive run of the default profile. `--screenshot`, `--background`, `--profile-dir` and tests keep logins in memory (`AnyBackend::memory`), authenticate with `RefusingAuthenticator` and copy to an in-memory pasteboard: they never touch the login keychain, show a system prompt or change the real clipboard. |
 | Settings section | `passwords/section.rs`, `ui/passwords/passwords-section.slint` | List (`login_rows`, untrusted text made safe by `display_text`), search (`filter_rows`), open, copy the user name, show or copy the password, edit (`update_login`: a new user name saves the new key before removing the old), delete (asks first), the generator, CSV import (`import_csv`: never overwrites or reads a saved password) and export (`export_csv` + `write_private_file`: a new `0600` file renamed over the chosen path). The Slint side talks only through the `PasswordManagerUi` global. |
-| Authentication | `Authenticator`, `AuthGate`, `passwords/local_auth.rs` | Showing, copying and exporting a password first asks `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (Touch ID or the login password). One success lasts `AUTH_GRACE_PERIOD` (60 s) or until the settings window closes. |
-| Copying | `Pasteboard`, `CopiedSecret`, `passwords/system_pasteboard.rs` | A password is copied with the `org.nspasteboard.ConcealedType` marker and removed after `CLIPBOARD_CLEAR_DELAY` (60 s) if the pasteboard has not changed since. |
+| Store worker | `StoreWorker`, `passwords/mod.rs` | No Keychain call runs on the interface thread. One thread owns the store; replies come back through `slint::invoke_from_event_loop`, and each checks again that what it was for (the opened login, the focused field, the waiting sign-in) is still there. The section shows "Waiting for your keychain…" meanwhile. Jobs after a gesture in Mercury's own interface run with `Interaction::Allowed` (macOS may ask); start-up and saving a sign-in that worked run with `Interaction::Never`: Keychain user interaction is switched off for the job (`KeychainBackend::without_user_interaction`, process-wide, safe because only this thread calls the Keychain), so a call that would show a dialog fails with `Locked`. The list of saved logins (no passwords) is kept in memory, so search, the fill menu and the sign-in sheet never call the Keychain. The memory store runs jobs inline, so tests stay synchronous; `StoreWorker::deferred` tests what happens while a job waits. |
+| Authentication | `Authenticator`, `AuthGate`, `passwords/local_auth.rs` | Showing, copying and exporting a password first asks `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (Touch ID or the login password). One success lasts `AUTH_GRACE_PERIOD` (60 s of wall-clock time, so sleep counts) or until the settings window closes. |
+| Copying | `Pasteboard`, `CopiedSecret`, `passwords/system_pasteboard.rs` | A password is copied for this Mac only (`NSPasteboardContentsCurrentHostOnly`: never to Universal Clipboard), with the `org.nspasteboard.ConcealedType` and `TransientType` markers declared before the data is set, and removed after `CLIPBOARD_CLEAR_DELAY` (60 s) or at quit (`post_run`) if the pasteboard has not changed since. |
 | Manual fill | `passwords/fill.rs`, `controls/context_menu.rs`, `talaria_core::LoginFill` | See below. |
 | HTTP sign-in | `passwords/sign_in.rs`, `SignInSaves`, `page_requests.rs` | See below. |
 
@@ -236,12 +237,25 @@ user had picked it. `tests/pages/login-form.html` and `login-iframe.html` (see
 
 ### HTTP sign-in
 
-The sign-in sheet starts filled with the most recently changed HTTP login saved for the exact
-origin that asked (realm `""`: Servo 0.8 does not report it); the store is read once per request.
+A page can raise the sign-in sheet without a gesture, so the sheet starts with the **user name**
+only of the most recently changed HTTP login saved for the exact origin that asked (realm `""`:
+Servo 0.8 does not report it), from the in-memory list. The saved password is read when the user
+presses Sign in with that user name and the password field empty; the request is answered when the
+keychain replies, if it is still waiting.
+
+**Never for a proxy:** a proxy's challenge carries the destination's URL, so filling it would hand
+the destination's login to the proxy. Proxy sheets start empty and offer nothing to save.
+
 Unless the settings turn saving off or list the origin under "Never save passwords for", the sheet
-offers "Save the user name and password in Mercury Browser" (not for proxies). With it chosen, the
-login is saved once the sign-in has worked: the tab starts a new document and finishes loading it
-without asking the same origin again (`SignInSaves`; with wrong credentials Servo asks again first).
+offers "Save the user name and password in Mercury Browser" (in memory-only runs: "Remember the user
+name and password until Mercury Browser quits"). With it ticked and a password typed, the login is
+saved once the sign-in has worked: the tab starts a new document and finishes loading it without
+asking the same origin again (`SignInSaves`; with wrong credentials Servo asks again first). That
+save runs with `Interaction::Never`.
+
+**Follow-up:** Keychain items are not per profile (one service name), which is why `--profile-dir`
+profiles keep logins in memory. Per-profile items (a profile id in the account prefix or the
+service name, in `mercury-passwords`) would let them persist.
 
 ## Other platforms
 

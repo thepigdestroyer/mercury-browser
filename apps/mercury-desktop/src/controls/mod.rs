@@ -401,10 +401,12 @@ impl Controls {
         }
         // passwords-ui: after the engine's menu was answered
         if let Some(index) = fill_login {
-            crate::passwords::fill_chosen(&self.controller, index);
-            if let Some(window) = self.window.upgrade() {
-                window.window().request_redraw();
-            }
+            let window = self.window.clone();
+            crate::passwords::fill_chosen(&self.controller, index, move || {
+                if let Some(window) = window.upgrade() {
+                    window.window().request_redraw();
+                }
+            });
         }
         true
     }
@@ -443,10 +445,12 @@ impl Controls {
         }
         // passwords-ui: after the engine's menu was answered
         if let Some(index) = fill_login {
-            crate::passwords::fill_chosen(&self.controller, index);
-            if let Some(window) = self.window.upgrade() {
-                window.window().request_redraw();
-            }
+            let window = self.window.clone();
+            crate::passwords::fill_chosen(&self.controller, index, move || {
+                if let Some(window) = window.upgrade() {
+                    window.window().request_redraw();
+                }
+            });
         }
     }
 

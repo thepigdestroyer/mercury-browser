@@ -4,18 +4,20 @@
 //!
 //! The page context menu gets "Fill login…" only when Servo opened it in the same frame as the
 //! focused password field (`BrowserState::password_field_menu`) and logins are saved for the
-//! exact origin of the tab's top-level page. "Fill login…" turns the menu into a list of those
-//! logins; picking one (a click or Return in the browser's own menu: the user gesture) queues
-//! one `BrowserCommand::FillLogin` after checking that the same field still has focus and the
-//! page still has that origin. The script then fills only if the top-level document has that
-//! origin and the focused element is one of its own password inputs: never a field in another
-//! frame or origin (focus inside any frame makes the frame element the active element).
+//! exact origin of the tab's top-level page (from the in-memory list: no Keychain call).
+//! "Fill login…" turns the menu into a list of those logins; picking one (a click or Return in
+//! the browser's own menu: the user gesture) reads its password on the store worker. When the
+//! keychain answers, the browser checks again that the same field of the active tab still has
+//! focus and the page still has that origin, and only then queues one
+//! `BrowserCommand::FillLogin`. The script fills only if the top-level document has that origin
+//! and the focused element is one of its own password inputs: never a field in another frame or
+//! origin (focus inside any frame makes the frame element the active element).
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
-use mercury_password_manager::{display_text, fill_candidates, site_label};
-use mercury_passwords::{LoginKey, Origin};
+use mercury_password_manager::{Interaction, display_text, fill_candidates, site_label};
+use mercury_passwords::{LoginKey, Origin, Password, PasswordError};
 use talaria_core::{BrowserCommand, BrowserController, ControlId, LoginFill, TabId};
 
 use super::current;
@@ -37,12 +39,12 @@ pub(crate) struct FillMenu {
 
 /// For a context menu opened over the focused password `field` of the tab's top-level page at
 /// `page_url`: the logins to offer, or `None` (nothing saved, or a page that cannot hold
-/// logins). Remembers the offer until the next menu.
+/// logins). Any older offer is dropped first; this one is kept until the next menu.
 pub(crate) fn fill_menu(tab_id: TabId, field: ControlId, page_url: &str) -> Option<FillMenu> {
     let passwords = current()?;
-    let (origin, logins) = fill_candidates(&passwords.store, page_url);
-    let origin = origin?;
     *passwords.fill.borrow_mut() = None;
+    let (origin, logins) = fill_candidates(&passwords.logins.borrow(), page_url);
+    let origin = origin?;
     if logins.is_empty() {
         return None;
     }
@@ -68,48 +70,84 @@ pub(crate) fn fill_menu(tab_id: TabId, field: ControlId, page_url: &str) -> Opti
     Some(menu)
 }
 
-/// The user picked login `index` of the last offer. Fills it if the offered field of the active
-/// tab still has focus and the page still has the offered origin.
-pub(crate) fn fill_chosen(controller: &Rc<RefCell<BrowserController>>, index: usize) {
+/// Whether the offered field of the active tab still has focus and its page still has the
+/// offered origin.
+fn still_offered(
+    controller: &BrowserController,
+    tab_id: TabId,
+    field: ControlId,
+    origin: &Origin,
+) -> bool {
+    let state = controller.active_state();
+    controller.active_tab_id() == tab_id
+        && state.input_method_id() == Some(field)
+        && Origin::parse(state.url()).ok().as_ref() == Some(origin)
+}
+
+/// The user picked login `index` of the last offer. Reads its password on the store worker
+/// and fills it if, when the keychain answers, the offered field of the active tab still has
+/// focus and the page still has the offered origin; then calls `queued` (to wake the engine).
+pub(crate) fn fill_chosen(
+    controller: &Rc<RefCell<BrowserController>>,
+    index: usize,
+    queued: impl FnOnce() + 'static,
+) {
     let Some(passwords) = current() else {
         return;
     };
     let Some(offer) = passwords.fill.borrow_mut().take() else {
         return;
     };
-    let Some(key) = offer.logins.get(index) else {
+    let Some(key) = offer.logins.get(index).cloned() else {
         return;
     };
-    {
-        let controller = controller.borrow();
-        let state = controller.active_state();
-        let same_page = Origin::parse(state.url()).ok().as_ref() == Some(&offer.origin);
-        if controller.active_tab_id() != offer.tab_id
-            || state.input_method_id() != Some(offer.field)
-            || !same_page
-        {
-            log::info!("passwords: not filling: the field lost focus or the page changed");
-            return;
-        }
-    }
-    let password = match passwords.store.password(key) {
-        Ok(Some(password)) => password,
-        Ok(None) => {
-            log::info!("passwords: not filling: the login is no longer saved");
-            return;
-        }
-        Err(error) => {
-            log::warn!("passwords: not filling: the password could not be read: {error}");
-            return;
-        }
-    };
-    controller.borrow_mut().queue_command_for(
+    if !still_offered(
+        &controller.borrow(),
         offer.tab_id,
-        BrowserCommand::FillLogin(LoginFill::new(
-            offer.origin.as_str().to_owned(),
-            key.username.clone(),
-            password.expose().to_owned(),
-        )),
+        offer.field,
+        &offer.origin,
+    ) {
+        log::info!("passwords: not filling: the field lost focus or the page changed");
+        return;
+    }
+    let controller = Rc::clone(controller);
+    let username = key.username.clone();
+    passwords.worker.run(
+        Interaction::Allowed,
+        move |store| store.password(&key),
+        move |result: Result<Option<Password>, PasswordError>| {
+            let password = match result {
+                Ok(Some(password)) => password,
+                Ok(None) => {
+                    log::info!("passwords: not filling: the login is no longer saved");
+                    return;
+                }
+                Err(error) => {
+                    log::warn!("passwords: not filling: the password could not be read: {error}");
+                    return;
+                }
+            };
+            if !still_offered(
+                &controller.borrow(),
+                offer.tab_id,
+                offer.field,
+                &offer.origin,
+            ) {
+                log::info!(
+                    "passwords: not filling: the field lost focus while the keychain answered"
+                );
+                return;
+            }
+            controller.borrow_mut().queue_command_for(
+                offer.tab_id,
+                BrowserCommand::FillLogin(LoginFill::new(
+                    offer.origin.as_str().to_owned(),
+                    username,
+                    password.expose().to_owned(),
+                )),
+            );
+            queued();
+        },
     );
 }
 
@@ -119,13 +157,12 @@ pub(crate) fn fill_chosen(controller: &Rc<RefCell<BrowserController>>, index: us
 /// tab finishes loading. Lets `--screenshot` runs check the fill script without input.
 #[cfg(feature = "passwords-diagnostics")]
 pub(super) mod diagnostics {
-    use mercury_passwords::Password;
     use talaria_core::{BrowserEvent, LoadState};
 
     use super::*;
     use crate::passwords::Passwords;
 
-    const VARIABLE: &str = "MERCURY_PASSWORDS_DIAG_FILL";
+    pub(crate) const VARIABLE: &str = "MERCURY_PASSWORDS_DIAG_FILL";
 
     pub(crate) fn seed_from_environment() {
         let Some(passwords) = current() else {
@@ -145,23 +182,26 @@ pub(super) mod diagnostics {
             eprintln!("mercury-passwords-diag: not an origin for logins");
             return;
         };
-        let saved = passwords.store.save(
-            &LoginKey::form(origin, username),
-            &Password::new(password.to_owned()),
+        let key = LoginKey::form(origin, username);
+        let password = Password::new(password.to_owned());
+        passwords.worker.run(
+            Interaction::Never,
+            move |store| store.save(&key, &password).is_ok(),
+            |saved| eprintln!("mercury-passwords-diag: seeded one login: {saved}"),
         );
-        eprintln!(
-            "mercury-passwords-diag: seeded one login: {}",
-            saved.is_ok()
-        );
+        passwords.reload_logins(Interaction::Never, |_| {});
     }
 
+    /// `variable`: the value of `VARIABLE`, if set. Only automated runs act on it.
     pub(crate) fn observe_event(
         passwords: &Rc<Passwords>,
         controller: &mut BrowserController,
         tab_id: TabId,
         event: &BrowserEvent,
+        variable: Option<&str>,
     ) {
-        if std::env::var_os(VARIABLE).is_none()
+        if !passwords.automated
+            || variable.is_none()
             || *event
                 != (BrowserEvent::LoadStateChanged {
                     state: LoadState::Loaded,
@@ -172,12 +212,21 @@ pub(super) mod diagnostics {
         let Some(tab) = controller.tabs().find(|tab| tab.id() == tab_id) else {
             return;
         };
-        let (origin, logins) = fill_candidates(&passwords.store, tab.state().url());
+        let (origin, logins) = fill_candidates(&passwords.logins.borrow(), tab.state().url());
         let (Some(origin), Some(login)) = (origin, logins.first()) else {
             eprintln!("mercury-passwords-diag: no saved login for this page");
             return;
         };
-        let Ok(Some(password)) = passwords.store.password(&login.key) else {
+        // Memory store only (automated run): the job runs at once.
+        let key = login.key.clone();
+        let read = Rc::new(RefCell::new(None));
+        let seen = Rc::clone(&read);
+        passwords.worker.run(
+            Interaction::Never,
+            move |store| store.password(&key).ok().flatten(),
+            move |password| *seen.borrow_mut() = password,
+        );
+        let Some(password) = read.take() else {
             return;
         };
         eprintln!("mercury-passwords-diag: filling on {origin}");
@@ -190,6 +239,45 @@ pub(super) mod diagnostics {
             )),
         );
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use crate::passwords::tests::{install_fakes, save_login};
+
+        #[test]
+        fn the_diagnostics_fill_never_runs_outside_automated_runs() {
+            let (passwords, _, _) = install_fakes();
+            let alice = || LoginKey::form(Origin::parse("https://a.test").expect("valid"), "alice");
+            save_login(&passwords, alice(), Password::new("fake".to_owned()));
+            let interactive = Passwords::new(
+                mercury_password_manager::StoreWorker::inline(
+                    mercury_password_manager::AnyBackend::memory(),
+                ),
+                false,
+                Rc::new(mercury_password_manager::RefusingAuthenticator),
+                Rc::new(mercury_password_manager::testing::FakePasteboard::default()),
+            );
+            save_login(&interactive, alice(), Password::new("fake".to_owned()));
+            let mut controller = BrowserController::default();
+            let tab_id = controller.active_tab_id();
+            controller.handle_event(
+                tab_id,
+                BrowserEvent::AddressChanged {
+                    url: "https://a.test/".to_owned(),
+                },
+            );
+            let loaded = BrowserEvent::LoadStateChanged {
+                state: LoadState::Loaded,
+            };
+
+            observe_event(&interactive, &mut controller, tab_id, &loaded, Some("x"));
+            assert!(controller.next_command().is_none());
+
+            observe_event(&passwords, &mut controller, tab_id, &loaded, Some("x"));
+            assert!(controller.next_command().is_some());
+        }
+    }
 }
 
 #[cfg(test)]
@@ -198,7 +286,7 @@ mod tests {
     use talaria_core::{BrowserEvent, ControlRect, ControlRequest, TabCommand};
 
     use super::*;
-    use crate::passwords::tests::install_fakes;
+    use crate::passwords::tests::{install_fakes, save_login};
 
     const RECT: ControlRect = ControlRect {
         x: 0,
@@ -238,17 +326,14 @@ mod tests {
     }
 
     fn save(username: &str) {
-        let passwords = current().expect("installed");
-        passwords
-            .store
-            .save(
-                &LoginKey::form(
-                    Origin::parse("https://example.com").expect("valid"),
-                    username,
-                ),
-                &Password::new(format!("fake-{username}")),
-            )
-            .expect("saved");
+        save_login(
+            &current().expect("installed"),
+            LoginKey::form(
+                Origin::parse("https://example.com").expect("valid"),
+                username,
+            ),
+            Password::new(format!("fake-{username}")),
+        );
     }
 
     fn fills(controller: &Rc<RefCell<BrowserController>>) -> Vec<String> {
@@ -284,7 +369,7 @@ mod tests {
                 .answer_control(menu_id, talaria_core::ControlAnswer::Dismiss)
         );
 
-        fill_chosen(&controller, 1);
+        fill_chosen(&controller, 1, || {});
 
         let scripts = fills(&controller);
         assert_eq!(scripts.len(), 1);
@@ -319,7 +404,7 @@ mod tests {
                 id: ControlId::new(1),
             },
         );
-        fill_chosen(&controller, 0);
+        fill_chosen(&controller, 0, || {});
         assert!(fills(&controller).is_empty());
 
         let (controller, tab_id) = controller_with_password_menu("https://example.com/login");
@@ -330,7 +415,7 @@ mod tests {
                 url: "https://evil.test/".to_owned(),
             },
         );
-        fill_chosen(&controller, 0);
+        fill_chosen(&controller, 0, || {});
         assert!(fills(&controller).is_empty());
     }
 
@@ -341,8 +426,8 @@ mod tests {
         let (controller, tab_id) = controller_with_password_menu("https://example.com/login");
         fill_menu(tab_id, ControlId::new(1), "https://example.com/login").expect("offered");
 
-        fill_chosen(&controller, 0);
-        fill_chosen(&controller, 0);
+        fill_chosen(&controller, 0, || {});
+        fill_chosen(&controller, 0, || {});
 
         assert_eq!(fills(&controller).len(), 1);
     }
@@ -391,7 +476,10 @@ mod worker_tests {
     }
 
     fn alice() -> LoginKey {
-        LoginKey::form(Origin::parse("https://example.com").expect("valid"), "alice")
+        LoginKey::form(
+            Origin::parse("https://example.com").expect("valid"),
+            "alice",
+        )
     }
 
     fn fills(controller: &Rc<RefCell<BrowserController>>) -> usize {

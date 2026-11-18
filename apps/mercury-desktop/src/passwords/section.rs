@@ -2,26 +2,30 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The Passwords section of the settings window, through its `PasswordManagerUi` global.
 //!
-//! The list never holds a password. One is read from the store only to show or copy it (after
-//! the user authenticated), to move a login to a new user name, or to export; a shown password
-//! is forgotten when the login is closed, another is opened, or the window closes.
+//! The list comes from the manager's in-memory list of saved logins (no passwords); searching
+//! never calls the Keychain. Every store call is a worker job: the section shows "Waiting for
+//! your keychain…" until its reply, and a reply for a login that is no longer open is dropped.
+//! A password is read only after the user asked for it and authenticated; a shown password is
+//! forgotten when the login is closed, another is opened, or the window closes.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
 use mercury_password_manager::{
-    LoginRow, display_text, export_csv, filter_rows, import_csv, login_rows, site_label,
-    update_login, write_private_file,
+    Interaction, LoginRow, ManagerError, display_password, display_text, export_csv, filter_rows,
+    import_csv, login_rows, read_import_file, site_label, update_login, write_private_file,
 };
 use mercury_passwords::{
     GENERATOR_MAX_LENGTH, GENERATOR_MIN_LENGTH, GeneratorOptions, LoginKey, OsRandom, Password,
-    generate_password,
+    PasswordError, generate_password,
 };
 use mercury_ui::{LoginListRow, PasswordManagerUi, SettingsWindow};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use zeroize::Zeroizing;
 
 use super::{Passwords, current};
+
+/// Shown while a store job runs (macOS may be asking the user about the keychain).
+pub(crate) const WAITING_FOR_KEYCHAIN: &str = "Waiting for your keychain…";
 
 /// What the section shows, kept between the window's callbacks.
 #[derive(Default)]
@@ -48,6 +52,15 @@ pub(super) fn set_status(text: &str) {
     }
 }
 
+/// Clears "Waiting for your keychain…" once a job's reply has arrived.
+fn clear_waiting() {
+    if let Some(window) = current().as_deref().and_then(window_of)
+        && ui(&window).get_status() == WAITING_FOR_KEYCHAIN
+    {
+        ui(&window).set_status(SharedString::new());
+    }
+}
+
 /// Connects a newly created settings window and fills the section. Called once per window.
 pub(crate) fn connect_settings_window(window: &SettingsWindow) {
     let Some(passwords) = current() else {
@@ -59,7 +72,7 @@ pub(crate) fn connect_settings_window(window: &SettingsWindow) {
     };
     let section_ui = ui(window);
     section_ui.set_storage_note(
-        if passwords.store.backend().is_persistent() {
+        if passwords.worker.is_persistent() {
             "Saved in your login keychain."
         } else {
             "This session's logins are kept only until Mercury Browser quits."
@@ -112,6 +125,12 @@ pub(crate) fn connect_settings_window(window: &SettingsWindow) {
     section_ui.on_import_logins(on(choose_import));
     section_ui.on_export_logins(on(choose_export));
     refresh(&passwords);
+    // Opening the settings is the user's own action: listing may unlock the keychain.
+    set_status(WAITING_FOR_KEYCHAIN);
+    passwords.reload_logins(Interaction::Allowed, |passwords| {
+        clear_waiting();
+        refresh(passwords);
+    });
 }
 
 /// The settings window closed: the grace period ends and nothing it showed is kept.
@@ -122,21 +141,14 @@ pub(crate) fn settings_window_closed() {
     }
 }
 
-/// Lists the logins again, keeping the opened one open if it is still saved and still matches.
+/// Shows the in-memory list again, keeping the opened login open if it is still saved and still
+/// matches the search. Never calls the store.
 fn refresh(passwords: &Rc<Passwords>) {
     let Some(window) = window_of(passwords) else {
         return;
     };
     let ui = ui(&window);
-    let all = match passwords.store.all() {
-        Ok(all) => all,
-        Err(error) => {
-            log::warn!("passwords: the saved logins could not be listed: {error}");
-            ui.set_status("The saved logins could not be read.".into());
-            Vec::new()
-        }
-    };
-    let rows = login_rows(&all);
+    let rows = login_rows(&passwords.logins.borrow());
     let shown = filter_rows(&rows, &ui.get_search())
         .into_iter()
         .cloned()
@@ -165,6 +177,14 @@ fn refresh(passwords: &Rc<Passwords>) {
     } else {
         ui.set_selected(selected.map_or(-1, |index| i32::try_from(index).unwrap_or(-1)));
     }
+}
+
+/// Lists the logins again after a write, then shows them and `status`.
+fn reload_then_status(passwords: &Rc<Passwords>, status: String) {
+    passwords.reload_logins(Interaction::Allowed, move |passwords| {
+        refresh(passwords);
+        set_status(&status);
+    });
 }
 
 fn show_closed(window: &SettingsWindow) {
@@ -211,7 +231,8 @@ fn close(passwords: &Rc<Passwords>) {
     }
 }
 
-/// Reads the opened login's password after authentication and hands it to `then`.
+/// After authentication, reads the opened login's password on the worker and hands it to
+/// `then`, if the same login is still open when the keychain answers.
 fn with_password(passwords: &Rc<Passwords>, reason: &str, then: fn(&Rc<Passwords>, Password)) {
     let Some(key) = selected(passwords) else {
         return;
@@ -225,23 +246,46 @@ fn with_password(passwords: &Rc<Passwords>, reason: &str, then: fn(&Rc<Passwords
         if selected(&passwords).as_ref() != Some(&key) {
             return;
         }
-        match passwords.store.password(&key) {
-            Ok(Some(password)) => then(&passwords, password),
-            Ok(None) => set_status("This login is no longer saved."),
-            Err(error) => {
-                log::warn!("passwords: a saved password could not be read: {error}");
-                set_status("Mercury Browser was not allowed to read the saved password.");
-            }
-        }
+        set_status(WAITING_FOR_KEYCHAIN);
+        let weak = Rc::downgrade(&passwords);
+        let read = key.clone();
+        passwords.worker.run(
+            Interaction::Allowed,
+            move |store| store.password(&read),
+            move |result: Result<Option<Password>, PasswordError>| {
+                let Some(passwords) = weak.upgrade() else {
+                    return;
+                };
+                clear_waiting();
+                if selected(&passwords).as_ref() != Some(&key) {
+                    return;
+                }
+                match result {
+                    Ok(Some(password)) => then(&passwords, password),
+                    Ok(None) => set_status("This login is no longer saved."),
+                    Err(error) => {
+                        log::warn!("passwords: a saved password could not be read: {error}");
+                        set_status("Mercury Browser was not allowed to read the saved password.");
+                    }
+                }
+            },
+        );
     });
 }
 
 fn show_password(passwords: &Rc<Passwords>) {
     with_password(passwords, "show a saved password", |passwords, password| {
         if let Some(window) = window_of(passwords) {
+            let (shown, replaced) = display_password(password.expose());
             let ui = ui(&window);
-            ui.set_shown_password(display_text(password.expose()).into());
+            ui.set_shown_password(shown.into());
             ui.set_password_shown(true);
+            if replaced {
+                ui.set_status(
+                    "Characters that cannot be shown appear as \u{fffd}; copying keeps them."
+                        .into(),
+                );
+            }
         }
     });
 }
@@ -325,28 +369,51 @@ fn save_edit(passwords: &Rc<Passwords>) {
     let (Some(window), Some(key)) = (window_of(passwords), selected(passwords)) else {
         return;
     };
-    let ui = ui(&window);
-    let typed = ui.get_edit_password();
+    let form = ui(&window);
+    let typed = form.get_edit_password();
     let password = (!typed.is_empty()).then(|| Password::new(typed.as_str().to_owned()));
-    match update_login(&passwords.store, &key, &ui.get_edit_username(), password) {
-        Ok(new_key) => {
-            passwords.section.borrow_mut().selected = Some(new_key.clone());
-            ui.set_editing(false);
-            ui.set_edit_password(SharedString::new());
-            ui.set_edit_problem(SharedString::new());
-            ui.set_detail_username(
-                if new_key.username.is_empty() {
-                    "No user name".to_owned()
-                } else {
-                    display_text(&new_key.username)
+    let username = form.get_edit_username().to_string();
+    set_status(WAITING_FOR_KEYCHAIN);
+    let weak = Rc::downgrade(passwords);
+    let edited = key.clone();
+    passwords.worker.run(
+        Interaction::Allowed,
+        move |store| update_login(store, &edited, &username, password),
+        move |result: Result<LoginKey, ManagerError>| {
+            let Some(passwords) = weak.upgrade() else {
+                return;
+            };
+            clear_waiting();
+            let Some(window) = window_of(&passwords) else {
+                return;
+            };
+            let ui = ui(&window);
+            match result {
+                Ok(new_key) => {
+                    // Only the login being edited follows its new name.
+                    if selected(&passwords).as_ref() == Some(&key) {
+                        passwords.section.borrow_mut().selected = Some(new_key.clone());
+                        ui.set_editing(false);
+                        ui.set_edit_password(SharedString::new());
+                        ui.set_edit_problem(SharedString::new());
+                        ui.set_detail_username(
+                            if new_key.username.is_empty() {
+                                "No user name".to_owned()
+                            } else {
+                                display_text(&new_key.username)
+                            }
+                            .into(),
+                        );
+                    }
+                    reload_then_status(&passwords, "Saved the login.".to_owned());
                 }
-                .into(),
-            );
-            refresh(passwords);
-            ui.set_status("Saved the login.".into());
-        }
-        Err(error) => ui.set_edit_problem(error.message().into()),
-    }
+                Err(error) if selected(&passwords).as_ref() == Some(&key) => {
+                    ui.set_edit_problem(error.message().into());
+                }
+                Err(error) => set_status(&error.message()),
+            }
+        },
+    );
 }
 
 fn ask_to_delete(passwords: &Rc<Passwords>) {
@@ -362,19 +429,30 @@ fn cancel_delete(passwords: &Rc<Passwords>) {
 }
 
 fn confirm_delete(passwords: &Rc<Passwords>) {
-    let (Some(window), Some(key)) = (window_of(passwords), selected(passwords)) else {
+    let Some(key) = selected(passwords) else {
         return;
     };
-    let status = match passwords.store.remove(&key) {
-        Ok(_) => format!("Deleted the login for {}.", site_label(&key.origin)),
-        Err(error) => {
-            log::warn!("passwords: a login could not be deleted: {error}");
-            "The login could not be deleted.".to_owned()
-        }
-    };
-    passwords.section.borrow_mut().selected = None;
-    refresh(passwords);
-    ui(&window).set_status(status.into());
+    set_status(WAITING_FOR_KEYCHAIN);
+    let weak = Rc::downgrade(passwords);
+    let site = site_label(&key.origin);
+    passwords.worker.run(
+        Interaction::Allowed,
+        move |store| store.remove(&key),
+        move |result: Result<bool, PasswordError>| {
+            let Some(passwords) = weak.upgrade() else {
+                return;
+            };
+            let status = match result {
+                Ok(_) => format!("Deleted the login for {site}."),
+                Err(error) => {
+                    log::warn!("passwords: a login could not be deleted: {error}");
+                    "The login could not be deleted.".to_owned()
+                }
+            };
+            passwords.section.borrow_mut().selected = None;
+            reload_then_status(&passwords, status);
+        },
+    );
 }
 
 fn generate(passwords: &Rc<Passwords>) {
@@ -413,7 +491,7 @@ fn choose_import(passwords: &Rc<Passwords>) {
                 slint::Timer::single_shot(std::time::Duration::ZERO, move || {
                     let _slint = crate::callback_scope::InSlintCallback::enter();
                     if let (Some(passwords), Some(path)) = (weak.upgrade(), path) {
-                        import_file(&passwords, &path);
+                        import_file(&passwords, path);
                     }
                 });
             }),
@@ -426,26 +504,31 @@ fn choose_import(passwords: &Rc<Passwords>) {
     }
 }
 
-/// Imports the logins of a CSV file and says what happened.
-pub(super) fn import_file(passwords: &Rc<Passwords>, path: &Path) {
-    let status = match std::fs::read(path) {
-        Ok(bytes) => {
-            let bytes = Zeroizing::new(bytes);
-            match std::str::from_utf8(&bytes) {
-                Ok(text) => match import_csv(&passwords.store, text) {
-                    Ok(report) => report.message(),
-                    Err(error) => format!(
-                        "This file is not a login export from Chrome, Edge, Brave, Firefox or \
-                         Safari ({error})."
-                    ),
-                },
-                Err(_) => "This file is not a text file.".to_owned(),
+/// Imports the logins of a CSV file on the worker and says what happened.
+pub(super) fn import_file(passwords: &Rc<Passwords>, path: PathBuf) {
+    set_status(WAITING_FOR_KEYCHAIN);
+    let weak = Rc::downgrade(passwords);
+    passwords.worker.run(
+        Interaction::Allowed,
+        move |store| {
+            let text = match read_import_file(&path) {
+                Ok(text) => text,
+                Err(error) => return error.message(),
+            };
+            match import_csv(store, &text) {
+                Ok(report) => report.message(),
+                Err(error) => format!(
+                    "This file is not a login export from Chrome, Edge, Brave, Firefox or \
+                     Safari ({error})."
+                ),
             }
-        }
-        Err(error) => format!("The file could not be read: {error}."),
-    };
-    refresh(passwords);
-    set_status(&status);
+        },
+        move |status: String| {
+            if let Some(passwords) = weak.upgrade() {
+                reload_then_status(&passwords, status);
+            }
+        },
+    );
 }
 
 fn choose_export(passwords: &Rc<Passwords>) {
@@ -466,7 +549,7 @@ fn choose_export(passwords: &Rc<Passwords>) {
                     slint::Timer::single_shot(std::time::Duration::ZERO, move || {
                         let _slint = crate::callback_scope::InSlintCallback::enter();
                         if let (Some(passwords), Some(path)) = (weak.upgrade(), path) {
-                            export_file(&passwords, &path);
+                            export_file(&passwords, path);
                         }
                     });
                 }),
@@ -480,25 +563,35 @@ fn choose_export(passwords: &Rc<Passwords>) {
     });
 }
 
-/// Writes every login to `path` (mode `0600`) and says what happened.
-pub(super) fn export_file(passwords: &Rc<Passwords>, path: &Path) {
-    let status = export_csv(&passwords.store)
-        .and_then(|text| {
-            write_private_file(path, text.as_bytes())?;
-            Ok(text.lines().count().saturating_sub(1))
-        })
-        .map_or_else(
-            |error| error.message(),
-            |count| {
-                format!(
-                    "Exported {count} logins to {}. The file holds every password in clear \
-                     text: delete it once you no longer need it.",
-                    path.file_name()
-                        .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+/// Writes every login to `path` (mode `0600`) on the worker and says what happened.
+pub(super) fn export_file(passwords: &Rc<Passwords>, path: PathBuf) {
+    set_status(WAITING_FOR_KEYCHAIN);
+    passwords.worker.run(
+        Interaction::Allowed,
+        move |store| {
+            export_csv(store)
+                .and_then(|exported| {
+                    write_private_file(&path, exported.text.as_bytes())?;
+                    Ok(exported.count)
+                })
+                .map_or_else(
+                    |error| error.message(),
+                    |count| export_message(count, &path),
                 )
-            },
-        );
-    set_status(&status);
+        },
+        |status: String| set_status(&status),
+    );
+}
+
+fn export_message(count: usize, path: &Path) -> String {
+    let name = path
+        .file_name()
+        .map_or_else(String::new, |name| name.to_string_lossy().into_owned());
+    let logins = if count == 1 { "login" } else { "logins" };
+    format!(
+        "Exported {count} {logins} to {name}. The file holds every password in clear text: \
+         delete it once you no longer need it."
+    )
 }
 
 #[cfg(test)]
@@ -509,18 +602,32 @@ mod tests {
     use slint::Model;
 
     use super::*;
-    use crate::passwords::tests::install_fakes;
+    use crate::passwords::tests::{install_fakes, save_login};
     use crate::settings::tests::init_slint;
 
     fn key(origin: &str, username: &str) -> LoginKey {
         LoginKey::form(Origin::parse(origin).expect("valid"), username)
     }
 
-    fn save(passwords: &Passwords, origin: &str, username: &str, password: &str) {
-        passwords
-            .store
-            .save(&key(origin, username), &Password::new(password.to_owned()))
-            .expect("saved");
+    fn save(passwords: &Rc<Passwords>, origin: &str, username: &str, password: &str) {
+        save_login(
+            passwords,
+            key(origin, username),
+            Password::new(password.to_owned()),
+        );
+    }
+
+    fn read(passwords: &Passwords, key: LoginKey) -> Option<String> {
+        let read = Rc::new(std::cell::RefCell::new(None));
+        let seen = Rc::clone(&read);
+        passwords.worker.run(
+            Interaction::Allowed,
+            move |store| store.password(&key).expect("readable"),
+            move |password| {
+                *seen.borrow_mut() = password.map(|password| password.expose().to_owned());
+            },
+        );
+        read.take()
     }
 
     fn section() -> (
@@ -651,21 +758,10 @@ mod tests {
         assert!(!ui.get_editing());
         assert_eq!(ui.get_detail_username(), "alice2");
         assert_eq!(
-            passwords
-                .store
-                .password(&key("https://a.test", "alice2"))
-                .expect("readable")
-                .expect("saved")
-                .expose(),
-            "fake-new"
+            read(&passwords, key("https://a.test", "alice2")).as_deref(),
+            Some("fake-new")
         );
-        assert!(
-            passwords
-                .store
-                .password(&key("https://a.test", "alice"))
-                .expect("readable")
-                .is_none()
-        );
+        assert_eq!(read(&passwords, key("https://a.test", "alice")), None);
     }
 
     #[test]
@@ -674,10 +770,10 @@ mod tests {
         element(&window, "a.test, alice").invoke_accessible_default_action();
 
         element(&window, "Delete the login").invoke_accessible_default_action();
-        assert_eq!(passwords.store.all().expect("listed").len(), 2);
+        assert_eq!(passwords.logins.borrow().len(), 2);
         element(&window, "Delete the login now").invoke_accessible_default_action();
 
-        assert_eq!(passwords.store.all().expect("listed").len(), 1);
+        assert_eq!(passwords.logins.borrow().len(), 1);
         let ui = ui(&window);
         assert_eq!(ui.get_selected(), -1);
         assert_eq!(ui.get_status(), "Deleted the login for a.test.");
@@ -708,12 +804,12 @@ mod tests {
         )
         .expect("a file");
 
-        import_file(&passwords, &import);
+        import_file(&passwords, import.clone());
         assert_eq!(ui(&window).get_status(), "Imported 1 login.");
         assert_eq!(ui(&window).get_total(), 3);
 
         let export = directory.path().join("out.csv");
-        export_file(&passwords, &export);
+        export_file(&passwords, export.clone());
         let written = std::fs::read_to_string(&export).expect("written");
         assert!(written.contains("c.test,https://c.test,carol,fake-c"));
         assert!(
@@ -732,7 +828,12 @@ mod tests {
 
         settings_window_closed();
 
-        assert!(!passwords.gate.borrow().is_open(std::time::Instant::now()));
+        assert!(
+            !passwords
+                .gate
+                .borrow()
+                .is_open(std::time::SystemTime::now())
+        );
     }
 }
 

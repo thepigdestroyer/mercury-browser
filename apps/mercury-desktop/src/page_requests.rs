@@ -65,16 +65,37 @@ thread_local! {
     static PROTECTOR: RefCell<InputProtector> = RefCell::default();
 }
 
-/// The password manager's seam: credentials saved for a site's sign-in, used to fill the sheet
-/// in. `origin` is the serialised origin (`https://example.com`); `realm` is the sign-in realm,
-/// which Servo 0.8 does not report, so it is always `None` for now.
-pub(crate) fn saved_http_credentials(
-    id: PageRequestId,
-    origin: &str,
-    realm: Option<&str>,
-) -> Option<HttpCredentials> {
-    crate::passwords::saved_http_credentials(id, origin, realm) // passwords-ui
+/// The view of a page request. For a sign-in, the password manager's seam: the user name saved for a site's sign-in, used to fill the sheet
+/// in, and the save choice. A page can raise the sheet without a gesture, so no password is read
+/// here: it is read when the user signs in with the field empty (see the answer callback). A
+/// proxy's challenge names the destination's URL, so nothing is filled or offered for a proxy.
+pub(crate) fn sign_in_view(pending: &PendingPageRequest) -> PageRequestView {
+    let PageRequestKind::Authentication { for_proxy } = pending.kind() else {
+        return page_request_view(pending, None);
+    };
+    let origin = pending.origin().key();
+    // passwords-ui
+    let username =
+        origin.and_then(|origin| crate::passwords::saved_sign_in_username(origin, *for_proxy));
+    let saved = username
+        .as_ref()
+        .map(|username| HttpCredentials::new(username.clone(), String::new()));
+    let view = page_request_view(pending, saved.as_ref());
+    let choice = crate::passwords::save_sign_in_choice(origin, *for_proxy);
+    PageRequestView {
+        detail: if saved.is_some() {
+            SAVED_PASSWORD_DETAIL.into()
+        } else {
+            view.detail.clone()
+        },
+        choice_label: choice.unwrap_or_default().into(),
+        ..view
+    }
 }
+
+/// Under a sign-in sheet that starts with a saved user name.
+const SAVED_PASSWORD_DETAIL: &str =
+    "Leave the password empty to sign in with the saved password for this user name.";
 
 /// Shows the active tab's oldest unanswered request, or nothing.
 pub(crate) fn sync_page_request(window: &MainWindow, controller: &BrowserController) {
@@ -86,31 +107,7 @@ pub(crate) fn sync_page_request(window: &MainWindow, controller: &BrowserControl
         );
     });
     let view = pending
-        .map(|pending| {
-            let saved = match pending.kind() {
-                PageRequestKind::Authentication { .. } => pending
-                    .origin()
-                    .key()
-                    .and_then(|origin| saved_http_credentials(pending.id(), origin, None)),
-                _ => None,
-            };
-            let view = page_request_view(&pending, saved.as_ref());
-            // passwords-ui: the sign-in sheet offers to save what is typed.
-            match pending.kind() {
-                PageRequestKind::Authentication { for_proxy }
-                    if crate::passwords::offers_to_save_sign_in(
-                        pending.origin().key(),
-                        *for_proxy,
-                    ) =>
-                {
-                    PageRequestView {
-                        choice_label: crate::passwords::SAVE_SIGN_IN_CHOICE.into(),
-                        ..view
-                    }
-                }
-                _ => view,
-            }
-        })
+        .map(|pending| sign_in_view(&pending))
         .unwrap_or_default();
     if window.get_page_request() != view {
         window.set_page_request(view);
@@ -141,23 +138,66 @@ pub(crate) fn connect_page_request_callbacks(
             );
             return;
         }
+        // passwords-ui: Sign in with the saved user name and an empty password uses the saved
+        // password, read now (the user's gesture) on the store worker; the request is answered
+        // when it arrives, if it is still waiting.
+        if accepted
+            && password.is_empty()
+            && let PageRequestKind::Authentication { for_proxy: false } = pending.kind()
+            && let Some(origin) = pending.origin().key()
+            && crate::passwords::saved_sign_in_username(origin, false).as_deref()
+                == Some(text.as_str())
+        {
+            let controller = Rc::clone(&controller);
+            let weak_window = weak_window.clone();
+            let username = text.to_string();
+            crate::passwords::read_saved_sign_in(origin, &text, move |password| {
+                let Some(password) = password else {
+                    return;
+                };
+                let waiting = controller
+                    .borrow()
+                    .pending_page_request(tab_id)
+                    .is_some_and(|pending| pending.id() == id);
+                if waiting {
+                    let reply = PageRequestReply::new(PageRequestAnswer::Credentials(
+                        HttpCredentials::new(username, password),
+                    ));
+                    answer_and_show(&controller, &weak_window, tab_id, id, reply);
+                }
+            });
+            return;
+        }
         let reply = reply_for(pending.kind(), accepted, &text, &password, checked);
-        // passwords-ui: "save" chosen on a sign-in; saved once the sign-in has worked.
+        // passwords-ui: the save choice ticked (only shown where saving is offered); saved once
+        // the sign-in has worked.
         if accepted
             && checked
-            && matches!(pending.kind(), PageRequestKind::Authentication { .. })
+            && !password.is_empty()
+            && let PageRequestKind::Authentication { for_proxy } = pending.kind()
             && let Some(origin) = pending.origin().key()
+            && crate::passwords::save_sign_in_choice(Some(origin), *for_proxy).is_some()
         {
             crate::passwords::sign_in_sent(tab_id, origin, &text, &password);
         }
-        controller
-            .borrow_mut()
-            .answer_page_request(tab_id, id, reply, now);
-        if let Some(window) = weak_window.upgrade() {
-            sync_ui(&window, &controller.borrow());
-            window.window().request_redraw();
-        }
+        answer_and_show(&controller, &weak_window, tab_id, id, reply);
     });
+}
+
+fn answer_and_show(
+    controller: &RefCell<BrowserController>,
+    window: &slint::Weak<MainWindow>,
+    tab_id: talaria_core::TabId,
+    id: PageRequestId,
+    reply: PageRequestReply,
+) {
+    controller
+        .borrow_mut()
+        .answer_page_request(tab_id, id, reply, page_request_clock());
+    if let Some(window) = window.upgrade() {
+        sync_ui(&window, &controller.borrow());
+        window.window().request_redraw();
+    }
 }
 
 /// Whether the active tab shows a sheet over its page (anything but a permission prompt): its
@@ -459,10 +499,13 @@ mod tests {
     #[test]
     fn nothing_is_filled_into_a_sign_in_without_a_saved_login() {
         crate::passwords::tests::install_fakes();
-        assert_eq!(
-            saved_http_credentials(PageRequestId::new(1), "https://example.com", None),
-            None
-        );
+        let view = sign_in_view(&pending(
+            "https://example.com/",
+            PageRequestKind::Authentication { for_proxy: false },
+        ));
+
+        assert_eq!(view.value, "");
+        assert_eq!(view.secret, "");
     }
 
     // passwords-ui
@@ -758,7 +801,11 @@ mod password_tests {
         let (passwords, _, _) = install_fakes();
         save_login(
             &passwords,
-            LoginKey::http_auth(Origin::parse("https://example.com").expect("valid"), "", "alice"),
+            LoginKey::http_auth(
+                Origin::parse("https://example.com").expect("valid"),
+                "",
+                "alice",
+            ),
             Password::new("fake-pw".to_owned()),
         );
     }
@@ -771,7 +818,10 @@ mod password_tests {
 
         assert_eq!(view.value, "");
         assert_eq!(view.secret, "");
-        assert_eq!(view.choice_label, "", "nothing is offered to save for a proxy");
+        assert_eq!(
+            view.choice_label, "",
+            "nothing is offered to save for a proxy"
+        );
     }
 
     #[test]
@@ -781,7 +831,10 @@ mod password_tests {
         let view = sign_in_view(&sign_in(false));
 
         assert_eq!(view.value, "alice");
-        assert_eq!(view.secret, "", "the password is read only when the user signs in");
+        assert_eq!(
+            view.secret, "",
+            "the password is read only when the user signs in"
+        );
         assert!(view.detail.contains("saved password"));
     }
 

@@ -188,7 +188,9 @@ mod tests {
 pub const MAX_IMPORT_BYTES: u64 = 8 * 1024 * 1024;
 
 /// Reads a login file for [`import_csv`]: at most [`MAX_IMPORT_BYTES`], UTF-8, wiped on drop.
-pub fn read_import_file(path: &std::path::Path) -> Result<zeroize::Zeroizing<String>, ManagerError> {
+pub fn read_import_file(
+    path: &std::path::Path,
+) -> Result<zeroize::Zeroizing<String>, ManagerError> {
     use std::io::Read;
 
     let file = std::fs::File::open(path)
@@ -232,8 +234,14 @@ mod file_tests {
         let binary = directory.path().join("binary.csv");
         std::fs::write(&binary, [0xff, 0xfe, 0x00]).expect("written");
 
-        assert!(matches!(read_import_file(&huge), Err(ManagerError::File(_))));
-        assert!(matches!(read_import_file(&binary), Err(ManagerError::File(_))));
+        assert!(matches!(
+            read_import_file(&huge),
+            Err(ManagerError::File(_))
+        ));
+        assert!(matches!(
+            read_import_file(&binary),
+            Err(ManagerError::File(_))
+        ));
         assert!(matches!(
             read_import_file(&directory.path().join("missing.csv")),
             Err(ManagerError::File(_))

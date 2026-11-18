@@ -8,7 +8,17 @@
 //! Where logins live: the login keychain only in a normal interactive run of the default
 //! profile. Automated runs (`--screenshot`, `--background`), runs with `--profile-dir` and
 //! tests keep them in memory for the run, authenticate with a refusing fake (never a system
-//! prompt) and copy to an in-memory pasteboard.
+//! prompt) and copy to an in-memory pasteboard. (A default profile whose data folder is missing
+//! or unwritable still uses the keychain.)
+//!
+//! **No Keychain call runs on this thread.** The store belongs to a `StoreWorker` thread; a
+//! job's reply comes back through `slint::invoke_from_event_loop`, and every reply checks again
+//! that what it was for (the opened login, the focused field, the sign-in request) is still
+//! there. Jobs that follow a gesture in Mercury's own interface may make macOS ask the user
+//! (`Interaction::Allowed`); everything else (start-up, a page's sign-in that worked) runs with
+//! Keychain user interaction off (`Interaction::Never`) and fails instead of asking. The list of
+//! saved logins (no passwords) is kept here, so searching, the fill menu and the sign-in sheet
+//! never call the Keychain; a password is read only after the user asked for it.
 
 mod fill;
 mod section;
@@ -23,24 +33,30 @@ mod system_pasteboard;
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
-use std::time::Instant;
+use std::time::SystemTime;
 
 use mercury_password_manager::testing::FakePasteboard;
 use mercury_password_manager::{
     AnyBackend, AuthGate, AuthOutcome, Authenticator, CLIPBOARD_CLEAR_DELAY, CopiedSecret,
-    Pasteboard, RefusingAuthenticator, SignInSaves,
+    Interaction, Pasteboard, RefusingAuthenticator, SignInSaves, StoreWorker,
 };
-use mercury_passwords::{MemoryBackend, PasswordStore};
+use mercury_passwords::LoginSummary;
 
 pub(crate) use fill::{fill_chosen, fill_menu};
 pub(crate) use section::{connect_settings_window, settings_window_closed};
 pub(crate) use sign_in::{
-    SAVE_SIGN_IN_CHOICE, offers_to_save_sign_in, saved_http_credentials, sign_in_sent,
+    REMEMBER_SIGN_IN_CHOICE, read_saved_sign_in, save_sign_in_choice, saved_sign_in_username,
+    sign_in_sent,
 };
 
 /// Everything the password manager keeps for the run, on the UI thread.
 pub(crate) struct Passwords {
-    store: PasswordStore<AnyBackend>,
+    worker: StoreWorker,
+    /// Every saved login, without passwords, as last listed.
+    logins: RefCell<Vec<LoginSummary>>,
+    /// An automated run: the diagnostics fill may run.
+    #[cfg_attr(not(feature = "passwords-diagnostics"), allow(dead_code))]
+    automated: bool,
     authenticator: Rc<dyn Authenticator>,
     pasteboard: Rc<dyn Pasteboard>,
     gate: RefCell<AuthGate>,
@@ -49,7 +65,6 @@ pub(crate) struct Passwords {
     clear_timer: slint::Timer,
     section: RefCell<section::SectionState>,
     fill: RefCell<Option<fill::FillOffer>>,
-    http_fill: RefCell<Option<sign_in::CachedCredentials>>,
 }
 
 thread_local! {
@@ -58,12 +73,15 @@ thread_local! {
 
 impl Passwords {
     fn new(
-        backend: AnyBackend,
+        worker: StoreWorker,
+        automated: bool,
         authenticator: Rc<dyn Authenticator>,
         pasteboard: Rc<dyn Pasteboard>,
     ) -> Rc<Self> {
         Rc::new(Self {
-            store: PasswordStore::new(backend),
+            worker,
+            logins: RefCell::default(),
+            automated,
             authenticator,
             pasteboard,
             gate: RefCell::default(),
@@ -72,14 +90,38 @@ impl Passwords {
             clear_timer: slint::Timer::default(),
             section: RefCell::default(),
             fill: RefCell::default(),
-            http_fill: RefCell::default(),
         })
+    }
+
+    /// Lists the saved logins again on the worker, then runs `then`.
+    fn reload_logins(
+        self: &Rc<Self>,
+        interaction: Interaction,
+        then: impl FnOnce(&Rc<Self>) + 'static,
+    ) {
+        let weak = Rc::downgrade(self);
+        self.worker.run(
+            interaction,
+            |store| store.all(),
+            move |result| {
+                let Some(this) = weak.upgrade() else {
+                    return;
+                };
+                match result {
+                    Ok(logins) => *this.logins.borrow_mut() = logins,
+                    Err(error) => {
+                        log::warn!("passwords: the saved logins could not be listed: {error}")
+                    }
+                }
+                then(&this);
+            },
+        );
     }
 
     /// Runs `then` with `true` once the user has authenticated (now, or within the grace
     /// period), or with `false` after showing why not.
     fn after_authentication(self: &Rc<Self>, reason: &str, then: impl FnOnce(bool) + 'static) {
-        if self.gate.borrow().is_open(Instant::now()) {
+        if self.gate.borrow().is_open(SystemTime::now()) {
             then(true);
             return;
         }
@@ -90,7 +132,7 @@ impl Passwords {
                 let Some(this) = this.upgrade() else {
                     return;
                 };
-                this.gate.borrow_mut().record(outcome, Instant::now());
+                this.gate.borrow_mut().record(outcome, SystemTime::now());
                 if outcome != AuthOutcome::Allowed {
                     section::set_status(match outcome {
                         AuthOutcome::Denied => "Mercury Browser could not confirm that it is you.",
@@ -105,8 +147,8 @@ impl Passwords {
         );
     }
 
-    /// Copies a secret as a concealed item and removes it from the pasteboard after
-    /// `CLIPBOARD_CLEAR_DELAY`, unless something else was copied since.
+    /// Copies a secret as a concealed, this-Mac-only item and removes it from the pasteboard
+    /// after `CLIPBOARD_CLEAR_DELAY` or at quit, unless something else was copied since.
     fn copy_secret(self: &Rc<Self>, text: &str) -> bool {
         let Some(copied) = CopiedSecret::copy(self.pasteboard.as_ref(), text) else {
             return false;
@@ -118,14 +160,18 @@ impl Passwords {
             CLIPBOARD_CLEAR_DELAY,
             move || {
                 let _slint = crate::callback_scope::InSlintCallback::enter();
-                if let Some(this) = this.upgrade()
-                    && let Some(copied) = this.copied.take()
-                {
-                    copied.clear_if_unchanged(this.pasteboard.as_ref());
+                if let Some(this) = this.upgrade() {
+                    this.clear_copied_secret();
                 }
             },
         );
         true
+    }
+
+    fn clear_copied_secret(&self) {
+        if let Some(copied) = self.copied.take() {
+            copied.clear_if_unchanged(self.pasteboard.as_ref());
+        }
     }
 }
 
@@ -134,15 +180,36 @@ impl Passwords {
 pub(crate) fn start(automated: bool, default_profile: bool) {
     #[cfg(target_os = "macos")]
     if !automated && default_profile {
-        install(Passwords::new(
-            AnyBackend::Keychain(mercury_passwords::KeychainBackend::login()),
-            Rc::new(local_auth::LocalAuthentication),
-            Rc::new(system_pasteboard::SystemPasteboard),
-        ));
-        return;
+        let deliver: mercury_password_manager::Deliver = std::sync::Arc::new(|id, result| {
+            let _queued = slint::invoke_from_event_loop(move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
+                if let Some(passwords) = current() {
+                    passwords.worker.finish(id, result);
+                }
+            });
+        });
+        match StoreWorker::spawn(
+            AnyBackend::keychain(mercury_passwords::KeychainBackend::login()),
+            deliver,
+        ) {
+            Ok(worker) => {
+                install(Passwords::new(
+                    worker,
+                    automated,
+                    Rc::new(local_auth::LocalAuthentication),
+                    Rc::new(system_pasteboard::SystemPasteboard),
+                ));
+                return;
+            }
+            Err(error) => {
+                log::error!("passwords: no store thread ({error}); logins are kept in memory");
+            }
+        }
     }
-    let _ = (automated, default_profile);
-    install(in_memory(
+    let _ = default_profile;
+    install(Passwords::new(
+        StoreWorker::inline(AnyBackend::memory()),
+        automated,
         Rc::new(RefusingAuthenticator),
         Rc::new(FakePasteboard::default()),
     ));
@@ -152,19 +219,11 @@ pub(crate) fn start(automated: bool, default_profile: bool) {
     }
 }
 
-fn in_memory(
-    authenticator: Rc<dyn Authenticator>,
-    pasteboard: Rc<dyn Pasteboard>,
-) -> Rc<Passwords> {
-    Passwords::new(
-        AnyBackend::Memory(MemoryBackend::new()),
-        authenticator,
-        pasteboard,
-    )
-}
-
 fn install(passwords: Rc<Passwords>) {
-    PASSWORDS.with(|current| *current.borrow_mut() = Some(passwords));
+    PASSWORDS.with(|current| *current.borrow_mut() = Some(Rc::clone(&passwords)));
+    // Page-independent, but not a gesture: never asks (a locked keychain lists nothing until
+    // the settings window opens).
+    passwords.reload_logins(Interaction::Never, |_| {});
 }
 
 fn current() -> Option<Rc<Passwords>> {
@@ -181,24 +240,63 @@ pub(crate) fn observe_event(
     if let Some(passwords) = current() {
         sign_in::observe_event(&passwords, tab_id, event);
         #[cfg(feature = "passwords-diagnostics")]
-        fill::diagnostics::observe_event(&passwords, controller, tab_id, event);
+        fill::diagnostics::observe_event(
+            &passwords,
+            controller,
+            tab_id,
+            event,
+            std::env::var(fill::diagnostics::VARIABLE).ok().as_deref(),
+        );
     }
     let _ = controller;
+}
+
+/// At quit (`post_run`): a password copied less than `CLIPBOARD_CLEAR_DELAY` ago leaves the
+/// pasteboard. Uses AppKit only, never Slint.
+pub(crate) fn finish_run() {
+    if let Some(passwords) = current() {
+        passwords.clear_copied_secret();
+    }
 }
 
 #[cfg(test)]
 pub(crate) mod tests {
     use mercury_password_manager::testing::{FakeAuthenticator, FakePasteboard};
+    use mercury_passwords::{LoginKey, Password};
 
     use super::*;
 
-    /// A manager with fakes for this test thread; the returned fakes are the ones it uses.
-    pub(crate) fn install_fakes() -> (Rc<Passwords>, Rc<FakeAuthenticator>, Rc<FakePasteboard>) {
+    type Fakes = (Rc<Passwords>, Rc<FakeAuthenticator>, Rc<FakePasteboard>);
+
+    fn install_with(worker: StoreWorker) -> Fakes {
         let authenticator = Rc::new(FakeAuthenticator::default());
         let pasteboard = Rc::new(FakePasteboard::default());
-        let passwords = in_memory(authenticator.clone(), pasteboard.clone());
+        let passwords = Passwords::new(worker, true, authenticator.clone(), pasteboard.clone());
         install(Rc::clone(&passwords));
+        passwords.worker.run_queued();
         (passwords, authenticator, pasteboard)
+    }
+
+    /// A manager with fakes for this test thread whose store jobs run at once.
+    pub(crate) fn install_fakes() -> Fakes {
+        install_with(StoreWorker::inline(AnyBackend::memory()))
+    }
+
+    /// The same, but store jobs wait for `passwords.worker.run_queued()`, as on the worker
+    /// thread.
+    pub(crate) fn install_deferred() -> Fakes {
+        install_with(StoreWorker::deferred(AnyBackend::memory()))
+    }
+
+    /// Saves a login and lists the logins again, at once.
+    pub(crate) fn save_login(passwords: &Rc<Passwords>, key: LoginKey, password: Password) {
+        passwords.worker.run(
+            Interaction::Allowed,
+            move |store| store.save(&key, &password).map(|_| ()),
+            |result| result.expect("saved"),
+        );
+        passwords.reload_logins(Interaction::Allowed, |_| {});
+        passwords.worker.run_queued();
     }
 
     #[test]
@@ -206,7 +304,7 @@ pub(crate) mod tests {
         start(true, true);
         let passwords = current().expect("started");
 
-        assert!(!passwords.store.backend().is_persistent());
+        assert!(!passwords.worker.is_persistent());
         let asked = Rc::new(Cell::new(None));
         let seen = Rc::clone(&asked);
         passwords
@@ -219,7 +317,7 @@ pub(crate) mod tests {
     fn a_profile_dir_run_keeps_logins_in_memory_too() {
         start(false, false);
 
-        assert!(!current().expect("started").store.backend().is_persistent());
+        assert!(!current().expect("started").worker.is_persistent());
     }
 
     #[test]
@@ -237,7 +335,6 @@ pub(crate) mod tests {
         assert_eq!(pasteboard.contents(), None);
     }
 }
-
 // passwords-ui (review): written before the fix.
 #[cfg(test)]
 mod quit_tests {

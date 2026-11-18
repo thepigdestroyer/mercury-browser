@@ -214,6 +214,7 @@ impl EndOfRun for Steps {
     fn begin_saves(&mut self) {
         // Slot (session): starts the final session write on the session worker.
         // crate::session::begin_final_save();
+        crate::passwords::finish_run(); // passwords-ui: a copied password leaves the pasteboard
     }
 
     fn shut_down_profile_data(&mut self, deadline: Instant) {

@@ -4,27 +4,43 @@
 //! normal interactive runs use it; tests and automated runs use an in-memory fake.
 
 use mercury_password_manager::Pasteboard;
-use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-use objc2_foundation::NSString;
+use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardTypeString};
+use objc2_foundation::{NSArray, NSString};
 
-/// The marker clipboard managers that follow nspasteboard.org skip and do not keep in their
-/// history.
+/// Markers that clipboard managers following nspasteboard.org honour: a concealed item is kept
+/// out of their history, a transient one is not kept at all.
 const CONCEALED_TYPE: &str = "org.nspasteboard.ConcealedType";
+const TRANSIENT_TYPE: &str = "org.nspasteboard.TransientType";
 
 pub(crate) struct SystemPasteboard;
 
 impl Pasteboard for SystemPasteboard {
     fn write_text(&self, text: &str, concealed: bool) -> Option<i64> {
         let pasteboard = NSPasteboard::generalPasteboard();
-        pasteboard.clearContents();
         // SAFETY: an AppKit constant, valid for the life of the process.
         let string_type = unsafe { NSPasteboardTypeString };
+        if concealed {
+            // This Mac only: never handed to Universal Clipboard.
+            pasteboard
+                .prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
+            // Every type is declared, markers included, before any data is set, so a clipboard
+            // manager that looks in between already sees the markers.
+            let types = NSArray::from_retained_slice(&[
+                NSString::from_str(&string_type.to_string()),
+                NSString::from_str(CONCEALED_TYPE),
+                NSString::from_str(TRANSIENT_TYPE),
+            ]);
+            // SAFETY: no owner object.
+            unsafe { pasteboard.declareTypes_owner(&types, None) };
+            let _concealed = pasteboard
+                .setString_forType(&NSString::from_str(""), &NSString::from_str(CONCEALED_TYPE));
+            let _transient = pasteboard
+                .setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT_TYPE));
+        } else {
+            pasteboard.clearContents();
+        }
         if !pasteboard.setString_forType(&NSString::from_str(text), string_type) {
             return None;
-        }
-        if concealed {
-            let _marked = pasteboard
-                .setString_forType(&NSString::from_str(""), &NSString::from_str(CONCEALED_TYPE));
         }
         Some(i64::try_from(pasteboard.changeCount()).unwrap_or_default())
     }
