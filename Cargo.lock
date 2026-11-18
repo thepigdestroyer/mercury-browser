@@ -5443,6 +5443,7 @@ dependencies = [
 name = "mercury-password-manager"
 version = "0.2.0"
 dependencies = [
+ "log",
  "mercury-passwords",
  "security-framework",
  "tempfile",

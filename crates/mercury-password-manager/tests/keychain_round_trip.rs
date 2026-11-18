@@ -35,6 +35,7 @@ fn logins_survive_import_edit_and_export_through_a_temporary_keychain() {
     )
     .expect("the test keychain");
     let store = PasswordStore::new(AnyBackend::keychain(backend));
+    store.backend().bind_to_current_thread();
     assert!(store.backend().is_persistent());
 
     let report = import_csv(

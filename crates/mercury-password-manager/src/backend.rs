@@ -17,6 +17,7 @@ use mercury_passwords::{
 pub struct AnyBackend {
     kind: Kind,
     quiet: Cell<bool>,
+    owner: Cell<Option<std::thread::ThreadId>>,
 }
 
 enum Kind {
@@ -31,6 +32,7 @@ impl AnyBackend {
         Self {
             kind: Kind::Memory(MemoryBackend::new()),
             quiet: Cell::new(false),
+            owner: Cell::new(None),
         }
     }
 
@@ -40,6 +42,7 @@ impl AnyBackend {
         Self {
             kind: Kind::Keychain(backend),
             quiet: Cell::new(false),
+            owner: Cell::new(None),
         }
     }
 
@@ -52,6 +55,22 @@ impl AnyBackend {
         }
     }
 
+    /// Whether calls may not ask the user now.
+    pub fn is_quiet(&self) -> bool {
+        self.quiet.get()
+    }
+
+    /// Makes the calling thread the only one that may call the Keychain through this backend
+    /// (the store worker's thread; a test's own thread). Debug builds assert it on every call.
+    pub fn bind_to_current_thread(&self) {
+        self.owner.set(Some(std::thread::current().id()));
+    }
+
+    /// Whether the calling thread owns this backend.
+    pub fn on_owner_thread(&self) -> bool {
+        self.owner.get() == Some(std::thread::current().id())
+    }
+
     /// Whether calls may not ask the user from now on.
     pub fn set_quiet(&self, quiet: bool) {
         self.quiet.set(quiet);
@@ -62,6 +81,10 @@ impl AnyBackend {
         &self,
         operation: impl FnOnce() -> Result<R, PasswordError>,
     ) -> Result<R, PasswordError> {
+        debug_assert!(
+            self.on_owner_thread(),
+            "every Keychain call runs on the store worker's thread"
+        );
         if self.quiet.get() {
             KeychainBackend::without_user_interaction(operation)?
         } else {
@@ -101,5 +124,28 @@ impl SecretBackend for AnyBackend {
             #[cfg(target_os = "macos")]
             Kind::Keychain(backend) => self.keychain_call(|| backend.list()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_backend_knows_the_thread_that_owns_it() {
+        let backend = AnyBackend::memory();
+        assert!(!backend.on_owner_thread(), "unbound");
+
+        backend.bind_to_current_thread();
+        assert!(backend.on_owner_thread());
+
+        let elsewhere = std::thread::spawn(|| {
+            let backend = AnyBackend::memory();
+            backend.bind_to_current_thread();
+            backend
+        })
+        .join()
+        .expect("joined");
+        assert!(!elsewhere.on_owner_thread());
     }
 }
