@@ -34,29 +34,40 @@
 # adding directories in front. DYLD_* variables are refused with an
 # explanation: macOS strips them whenever a SIP-protected program such as
 # /bin/bash starts, so they could not reach any later command.
+#
+# The comparison is `github-env` (Rust, crates/mercury-devtools), built in
+# release mode before the command runs; cargo's messages go to standard error.
 set -euo pipefail
 
 usage() {
     sed -n '/^# Run `scripts\/macos/,/^# \/bin\/bash starts/p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
 }
 
-PRINT=0
+PRINT=()
 case "${1:-}" in
-    --print) PRINT=1; shift ;;
+    --print) PRINT=(--print); shift ;;
     -h | --help) usage; exit 0 ;;
 esac
 [ "$#" -gt 0 ] || { usage >&2; exit 2; }
-if [ "$PRINT" = 0 ]; then
+if [ "${#PRINT[@]}" = 0 ]; then
     [ -n "${GITHUB_ENV:-}" ] && [ -n "${GITHUB_PATH:-}" ] ||
         { printf 'github-env: GITHUB_ENV and GITHUB_PATH are not set (use --print outside Actions)\n' >&2; exit 2; }
 fi
-command -v python3 >/dev/null 2>&1 || { printf 'github-env: python3 not found\n' >&2; exit 1; }
+
+REPOSITORY="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+devtools() {
+    "${CARGO:-cargo}" "$1" --locked --release --quiet --manifest-path "$REPOSITORY/Cargo.toml" \
+        --package mercury-devtools --bin github-env "${@:2}"
+}
+# Built first, so that a build failure stops here before the command runs.
+devtools build >&2
 
 BEFORE="$(mktemp)"
-trap 'rm -f -- "$BEFORE"' EXIT
+AFTER="$(mktemp)"
+trap 'rm -f -- "$BEFORE" "$AFTER"' EXIT
 
-# DYLD_* variables, listed by bash itself: /usr/bin/python3 is SIP-protected
-# and would never see them.
+# DYLD_* variables, listed by bash itself: /usr/bin/env is SIP-protected and
+# would never see them.
 dyld_variables() {
     local name
     for name in $(compgen -e); do
@@ -67,78 +78,21 @@ dyld_variables() {
 }
 
 # Snapshot the environment, run the command (its failure stops the script
-# through set -e), then evaluate its output here.
-python3 -c 'import json, os, sys; json.dump(dict(os.environ), open(sys.argv[1], "w"))' "$BEFORE"
+# through set -e), then evaluate its output exactly as a shell would and
+# snapshot the result. The evaluation happens in a subshell, so that cargo,
+# below, runs with the environment this script started with.
+/usr/bin/env -0 >"$BEFORE"
 DYLD_BEFORE="$(dyld_variables)"
 OUTPUT="$("$@")"
-eval "$OUTPUT"
+(
+    eval "$OUTPUT"
+    DYLD_AFTER="$(dyld_variables)"
+    if [ "$DYLD_AFTER" != "$DYLD_BEFORE" ]; then
+        names="$(printf '%s\n' "$DYLD_AFTER" | sed -n 's/=.*//p' | tr '\n' ' ')"
+        printf 'github-env: refused: %s(macOS strips DYLD_* variables when a SIP-protected shell starts, so they cannot pass between steps; set them on the command line that needs them)\n' "$names" >&2
+        exit 1
+    fi
+    /usr/bin/env -0 >"$AFTER"
+)
 
-DYLD_AFTER="$(dyld_variables)"
-if [ "$DYLD_AFTER" != "$DYLD_BEFORE" ]; then
-    names="$(printf '%s\n' "$DYLD_AFTER" | sed -n 's/=.*//p' | tr '\n' ' ')"
-    printf 'github-env: refused: %s(macOS strips DYLD_* variables when a SIP-protected shell starts, so they cannot pass between steps; set them on the command line that needs them)\n' "$names" >&2
-    exit 1
-fi
-
-python3 - "$BEFORE" "$PRINT" <<'PY'
-import json
-import os
-import sys
-import uuid
-
-MUST_SET = ("MERCURY_GSTREAMER_PREFIX", "PKG_CONFIG", "PKG_CONFIG_LIBDIR", "PATH")
-MAY_UNSET = ("PKG_CONFIG_PATH",)
-
-
-def refuse(message):
-    sys.exit("github-env: refused: " + message)
-
-
-before = json.load(open(sys.argv[1]))
-print_only = sys.argv[2] == "1"
-after = dict(os.environ)
-for name in ("_", "SHLVL", "PWD", "OLDPWD"):
-    before.pop(name, None)
-    after.pop(name, None)
-
-removed = sorted(set(before) - set(after))
-changed = sorted(name for name in after if before.get(name) != after[name])
-unexpected = [n for n in changed if n not in MUST_SET] + [n for n in removed if n not in MAY_UNSET]
-if unexpected:
-    refuse("the command changed %s, which is not on the allow-list" % ", ".join(sorted(unexpected)))
-missing = [n for n in MUST_SET if n not in changed]
-if missing:
-    refuse("the command did not set %s" % ", ".join(missing))
-
-old_path = before.get("PATH", "")
-new_path = after["PATH"]
-if not old_path or not new_path.endswith(":" + old_path):
-    refuse("PATH is not the old PATH with directories added in front")
-path_prefix = new_path[: -len(old_path) - 1].split(":")
-if not all(entry and "\n" not in entry for entry in path_prefix):
-    refuse("PATH gains an empty directory or one containing a newline")
-
-values = [(name, after[name]) for name in changed if name != "PATH"]
-values += [(name, "") for name in removed]
-env_entries = []
-for name, value in values:
-    delimiter = "MERCURY_ENV_" + uuid.uuid4().hex
-    if delimiter in value.split("\n"):
-        refuse("delimiter collision for %s" % name)
-    env_entries.append("%s<<%s\n%s\n%s\n" % (name, delimiter, value, delimiter))
-# The runner puts the most recently added line first, so write them
-# last-to-first to keep the order the command chose.
-path_entries = [entry + "\n" for entry in reversed(path_prefix)]
-
-for name, _ in values:
-    sys.stderr.write("github-env: exporting %s\n" % name)
-sys.stderr.write("github-env: adding to PATH: %s\n" % ":".join(path_prefix))
-if print_only:
-    sys.stdout.write("# for $GITHUB_ENV\n" + "".join(env_entries))
-    sys.stdout.write("# for $GITHUB_PATH\n" + "".join(path_entries))
-else:
-    with open(os.environ["GITHUB_ENV"], "a", encoding="utf-8") as handle:
-        handle.write("".join(env_entries))
-    with open(os.environ["GITHUB_PATH"], "a", encoding="utf-8") as handle:
-        handle.write("".join(path_entries))
-PY
+devtools run -- "$BEFORE" "$AFTER" ${PRINT[@]+"${PRINT[@]}"}

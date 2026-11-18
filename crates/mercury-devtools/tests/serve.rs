@@ -9,7 +9,6 @@ use std::net::{Shutdown, TcpStream};
 use std::path::Path;
 use std::time::Duration;
 
-use mercury_devtools::httpdate;
 use mercury_devtools::serve::Server;
 
 struct Response {
@@ -120,7 +119,7 @@ fn assert_common_headers(response: &Response) {
     assert_eq!(response.header("Accept-Ranges"), Some("bytes"));
     assert_eq!(response.header("Cache-Control"), Some("no-store"));
     let date = response.header("Date").expect("Date");
-    assert!(httpdate::parse(date).is_some(), "{date}");
+    assert!(httpdate::parse_http_date(date).is_ok(), "{date}");
 }
 
 #[test]
@@ -140,10 +139,12 @@ fn serves_a_file_whole() {
         .unwrap()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap()
-        .as_secs() as i64;
+        .as_secs();
     assert_eq!(
         response.header("Last-Modified"),
-        Some(httpdate::format(modified).as_str())
+        Some(
+            httpdate::fmt_http_date(std::time::UNIX_EPOCH + Duration::from_secs(modified)).as_str()
+        )
     );
     assert_eq!(response.text(), PAGE);
     assert_eq!(
@@ -448,7 +449,10 @@ fn not_found_pages_and_traversal() {
 #[test]
 fn if_modified_since() {
     let (_dir, port) = fixture();
-    let future = format!("If-Modified-Since: {}", httpdate::format(4_102_444_800));
+    let future = format!(
+        "If-Modified-Since: {}",
+        httpdate::fmt_http_date(std::time::UNIX_EPOCH + Duration::from_secs(4_102_444_800))
+    );
     let not_modified = get(port, "GET", "/pages/page.html", &[&future]);
     assert_eq!(not_modified.status_line, "HTTP/1.0 304 Not Modified");
     assert_eq!(

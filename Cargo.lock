@@ -5410,8 +5410,10 @@ dependencies = [
 name = "mercury-devtools"
 version = "0.2.0"
 dependencies = [
+ "getrandom 0.4.3",
+ "httpdate",
+ "image",
  "libc",
- "miniz_oxide 0.8.9",
  "percent-encoding",
  "serde_json",
  "tempfile",

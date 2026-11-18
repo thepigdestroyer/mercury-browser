@@ -34,11 +34,11 @@ futures-util = "0.3.34"
 getrandom = "0.4"
 gleam = "0.15"
 glow = "0.17"
+httpdate = "1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2.191"
 log = "0.4"
 mime_guess = "2.0.5"
-miniz_oxide = "0.8"
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false }
 percent-encoding = "2.3"

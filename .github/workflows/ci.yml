@@ -386,7 +386,8 @@ jobs:
             --screenshot dist/smoke/colors.png \
             --window-size 900x700 \
             "file://${GITHUB_WORKSPACE}/tests/pages/colors.html"
-          # The checker is Rust (crates/mercury-devtools) and builds in seconds.
+          # The checker is Rust (crates/mercury-devtools, which has no Servo
+          # dependency), so building it adds little to this job.
           cargo run --locked --release --package mercury-devtools \
             --bin check-colors-screenshot -- dist/smoke/colors.png
 
@@ -461,8 +462,9 @@ jobs:
         run: scripts/ci/check-license-headers.sh
 
       - name: Byte-compile the Python scripts
-        # Only scripts/serve-tests.py is left, kept until the lanes in progress
-        # have moved to scripts/serve-tests.sh (Rust); then this step goes too.
+        # The only Python of ours is scripts/serve-tests.py, replaced by
+        # scripts/serve-tests.sh (Rust) and kept only until the lanes in
+        # progress have merged. This step goes away together with that file.
         shell: bash
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache

@@ -15,7 +15,7 @@ use std::fs::File;
 use std::io::Read;
 use std::path::Path;
 
-use crate::png::{self, Image, PngError};
+use crate::png::{self, Image};
 
 // Geometry of tests/pages/colors.html, in CSS pixels.
 const SQUARE: f64 = 160.0;
@@ -223,7 +223,7 @@ fn read_limited(path: &Path) -> Result<Vec<u8>, String> {
         .read_to_end(&mut data)
         .map_err(|error| error.to_string())?;
     if data.len() as u64 > png::MAX_FILE_BYTES {
-        return Err(PngError(format!("file is larger than {} bytes", png::MAX_FILE_BYTES)).0);
+        return Err(format!("file is larger than {} bytes", png::MAX_FILE_BYTES));
     }
     Ok(data)
 }
@@ -318,26 +318,20 @@ mod tests {
             }
         }
 
-        fn png(&self, colour_type: u8) -> Vec<u8> {
+        fn png(&self, channels: usize) -> Vec<u8> {
             let data: Vec<u8> = self
                 .pixels
                 .iter()
-                .flat_map(|&[r, g, b]| match colour_type {
-                    6 => vec![r, g, b, 255],
+                .flat_map(|&[r, g, b]| match channels {
+                    4 => vec![r, g, b, 255],
                     _ => vec![r, g, b],
                 })
                 .collect();
-            png::encode(
-                self.width as u32,
-                self.height as u32,
-                colour_type,
-                &data,
-                None,
-            )
+            png::encode(self.width as u32, self.height as u32, channels, &data)
         }
 
         fn image(&self) -> Image {
-            png::decode(&self.png(2)).expect("decodes")
+            png::decode(&self.png(3)).expect("decodes")
         }
     }
 
@@ -372,7 +366,7 @@ mod tests {
     #[test]
     fn reads_rgba_screenshots() {
         let window = Window::new(900.0, 620.0, 2.0, 100);
-        let image = png::decode(&window.png(6)).expect("decodes");
+        let image = png::decode(&window.png(4)).expect("decodes");
         assert!(all_pass(&check(&image)));
     }
 
@@ -430,7 +424,7 @@ mod tests {
     fn command_reports_and_exits() {
         let dir = tempfile::tempdir().expect("temporary directory");
         let good = dir.path().join("good.png");
-        std::fs::write(&good, Window::new(900.0, 620.0, 2.0, 150).png(2)).expect("write");
+        std::fs::write(&good, Window::new(900.0, 620.0, 2.0, 150).png(3)).expect("write");
         let good_text = good.display().to_string();
         let (status, out, err) = run("check", std::slice::from_ref(&good_text));
         assert_eq!((status, err.as_str()), (0, ""));
@@ -440,7 +434,7 @@ mod tests {
         let wrong = dir.path().join("wrong.png");
         let mut window = Window::new(900.0, 620.0, 1.0, 80);
         window.fill(400, 120, 100, 80, BLACK);
-        std::fs::write(&wrong, window.png(2)).expect("write");
+        std::fs::write(&wrong, window.png(3)).expect("write");
         let (status, out, _) = run("check", &[wrong.display().to_string()]);
         assert_eq!(status, 1);
         assert!(out.contains("FAIL white everywhere else: not white at (450,160)=rgb(0, 0, 0)"));
@@ -453,7 +447,7 @@ mod tests {
             run("check", std::slice::from_ref(&broken_text)),
             (
                 2,
-                format!("FAIL {broken_text}: not a usable PNG: no IHDR chunk\n"),
+                format!("FAIL {broken_text}: not a usable PNG: unexpected end of file\n"),
                 String::new()
             )
         );

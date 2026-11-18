@@ -86,7 +86,7 @@ flowchart TB
 | `crates/mercury-passwords` | Saved logins in the macOS Keychain, a password generator, CSV import and export |
 | `crates/mercury-downloads` | The download engine: fetching files, resuming after an interruption, stopping cleanly at quit |
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |
-| `crates/mercury-devtools` | Development and CI tools: the loopback server for `tests/` and the smoke test's screenshot checker |
+| `crates/mercury-devtools` | Development and CI tools: the loopback server for `tests/`, the smoke test's screenshot checker and the CI scripts' helpers |
 | `third_party/` | Patched copies of a few dependencies, each with a `MERCURY.md` explaining the change |
 
 ## Where things stand
