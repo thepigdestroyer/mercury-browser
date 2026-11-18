@@ -84,7 +84,24 @@ zeroize = "1.9"
 # clippy lints members. `make servo-patches-check` fails if either happens.
 [patch.crates-io]
 gaol = { path = "third_party/gaol" }
+i-slint-backend-winit = { path = "third_party/i-slint-backend-winit" }
+servo = { path = "third_party/servo" }
 servo-canvas = { path = "third_party/servo-canvas" }
+servo-config = { path = "third_party/servo-config" }
+servo-constellation = { path = "third_party/servo-constellation" }
+servo-constellation-traits = { path = "third_party/servo-constellation-traits" }
+servo-embedder-traits = { path = "third_party/servo-embedder-traits" }
+servo-layout = { path = "third_party/servo-layout" }
+servo-layout-api = { path = "third_party/servo-layout-api" }
+servo-media = { path = "third_party/servo-media" }
+servo-media-player = { path = "third_party/servo-media-player" }
+servo-media-webrtc = { path = "third_party/servo-media-webrtc" }
+servo-net = { path = "third_party/servo-net" }
+servo-net-traits = { path = "third_party/servo-net-traits" }
+servo-storage = { path = "third_party/servo-storage" }
+servo-storage-traits = { path = "third_party/servo-storage-traits" }
+servo-webgl = { path = "third_party/servo-webgl" }
+stylo_static_prefs = { path = "third_party/stylo_static_prefs" }
 surfman = { path = "third_party/surfman" }
 
 # Keep the controller easy to debug while optimizing the browser-engine, frame-transfer, and media

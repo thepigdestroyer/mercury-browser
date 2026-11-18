@@ -192,6 +192,8 @@ fn vendor_unpacks_the_crate_unchanged_and_records_it() {
     );
     assert_eq!(entry.commit.as_deref(), Some("1111"));
     assert_eq!(entry.path.as_deref(), Some("components/demo"));
+    assert_eq!(entry.license.as_deref(), Some("MPL-2.0"));
+    assert_eq!(entry.license_note, None);
 
     assert_eq!(
         f.read("Cargo.toml"),
@@ -615,4 +617,103 @@ fn workspace_problems_catch_members_and_path_dependencies_in_third_party() {
     assert_eq!(problems.len(), 2, "{problems:?}");
     assert!(problems[0].contains("depends on servo-canvas by path"));
     assert!(problems[1].contains("gaol in third_party/ is a workspace member"));
+}
+
+#[test]
+fn check_fails_when_the_recorded_licence_is_not_the_declared_one() {
+    let f = fixture();
+    f.vendor_demo();
+    let mut manifest = Manifest::parse(&f.read("third_party/vendor.toml")).unwrap();
+    manifest.crates[0].license = Some("MIT".into());
+    manifest.crates[0].license_note = Some("Kept by upgrade and export.".into());
+    f.write("third_party/vendor.toml", &manifest.render());
+    assert_eq!(
+        f.check().unwrap_err(),
+        "third_party/vendor.toml: demo records the licence MIT, but the crate declares MPL-2.0"
+    );
+    manifest.crates[0].license = None;
+    f.write("third_party/vendor.toml", &manifest.render());
+    assert!(f.check().unwrap_err().contains("records the licence none"));
+    manifest.crates[0].license = Some("MPL-2.0".into());
+    f.write("third_party/vendor.toml", &manifest.render());
+    f.check().unwrap();
+    f.repo
+        .upgrade(UpgradeTarget::Crate("demo@1.1.0".into()), &mut Vec::new())
+        .unwrap();
+    let upgraded = Manifest::parse(&f.read("third_party/vendor.toml")).unwrap();
+    assert_eq!(
+        upgraded.crates[0].license_note.as_deref(),
+        Some("Kept by upgrade and export.")
+    );
+}
+
+#[test]
+fn check_fails_when_a_patch_removes_a_licence_notice() {
+    let f = fixture();
+    f.vendor_demo();
+    f.write(
+        "third_party/demo/src/lib.rs",
+        &format!("// Mercury: notice moved down\n{LIB_V1}"),
+    );
+    f.export();
+    f.check().unwrap();
+    // Notices that were already in the crate must survive a change.
+    let with_notice = |notice: &str| {
+        format!("// Copyright © Upstream\n// SPDX-License-Identifier: MPL-2.0\n{notice}")
+    };
+    let cache = f
+        ._dir
+        .path()
+        .join("cargo-home/registry/cache/index.crates.io-0000");
+    let archive = pack(
+        "notice",
+        "1.0.0",
+        &[
+            (
+                "Cargo.toml",
+                &cargo_toml("notice", "1.0.0", "https://github.com/servo/servo"),
+            ),
+            ("src/lib.rs", &with_notice("fn a() {}\n")),
+        ],
+    );
+    fs::write(cache.join("notice-1.0.0.crate"), &archive).unwrap();
+    f.write(
+        "Cargo.lock",
+        &format!(
+            "{}\n[[package]]\nname = \"notice\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n",
+            f.read("Cargo.lock"),
+            sha256_hex(&archive)
+        ),
+    );
+    f.repo.vendor("notice@1.0.0", &mut Vec::new()).unwrap();
+    f.write(
+        "Cargo.lock",
+        &f.read("Cargo.lock").replace(
+            &format!("source = \"registry+https://github.com/rust-lang/crates.io-index\"\nchecksum = \"{}\"\n", sha256_hex(&archive)),
+            "",
+        ),
+    );
+    f.write(
+        "third_party/notice/src/lib.rs",
+        "// SPDX-License-Identifier: MIT\n// Mercury: relicensed\nfn a() {}\n",
+    );
+    f.export();
+    let error = f.check().unwrap_err();
+    assert!(
+        error.contains(
+            "notice/src/lib.rs: removes or alters the licence notice \"// Copyright © Upstream\""
+        ),
+        "{error}"
+    );
+    assert!(
+        error.contains("\"// SPDX-License-Identifier: MPL-2.0\""),
+        "{error}"
+    );
+    // Moving a notice is fine: the same line is added back.
+    f.write(
+        "third_party/notice/src/lib.rs",
+        &with_notice("// Mercury: a changed\nfn a2() {}\n"),
+    );
+    f.export();
+    f.check().unwrap();
 }

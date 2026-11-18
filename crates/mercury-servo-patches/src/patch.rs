@@ -91,6 +91,15 @@ impl FilePatch {
 
     /// The lines this file's patch adds.
     pub fn added_lines(&self) -> Result<Vec<Vec<u8>>> {
+        self.lines(true)
+    }
+
+    /// The lines this file's patch removes.
+    pub fn removed_lines(&self) -> Result<Vec<Vec<u8>>> {
+        self.lines(false)
+    }
+
+    fn lines(&self, added: bool) -> Result<Vec<Vec<u8>>> {
         let Some(patch) = self.parsed()? else {
             return Ok(Vec::new());
         };
@@ -99,7 +108,8 @@ impl FilePatch {
             .iter()
             .flat_map(|hunk| hunk.lines())
             .filter_map(|line| match line {
-                Line::Insert(text) => Some(text.to_vec()),
+                Line::Insert(text) if added => Some(text.to_vec()),
+                Line::Delete(text) if !added => Some(text.to_vec()),
                 _ => None,
             })
             .collect())
