@@ -84,3 +84,17 @@ fn markers_are_recognised_only_with_the_secret() {
     assert_eq!(parse_error_page_marker("network ", ""), None);
     assert!(ERROR_PAGE_PROBE_SCRIPT.contains("mercury-error-page"));
 }
+
+#[test]
+fn continue_is_offered_only_in_the_top_level_page_and_for_local_names() {
+    let page = certificate_error_page(SECRET, false);
+    // Hidden until the script decides; a framed page (clickjacking) never shows it.
+    assert!(page.contains("<div id=\"advanced\" hidden>"), "{page}");
+    assert!(page.contains("window.top === window"), "{page}");
+    assert!(page.contains("isLocalName(location.hostname)"), "{page}");
+    // Automatic continuation (tests) obeys the same gate.
+    let automatic = certificate_error_page(SECRET, true);
+    let gate = automatic.find("if (!offered)").expect("the gate");
+    let click = automatic.find("proceed.click()").expect("the click");
+    assert!(gate < click);
+}

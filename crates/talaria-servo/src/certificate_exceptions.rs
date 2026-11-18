@@ -12,7 +12,9 @@
 //! its list of accepted certificates, and adds the certificate there.
 //!
 //! Servo accepts an exception for the certificate wherever it is presented, not only for the
-//! host it was accepted for; the host is recorded so the address bar can warn on that host.
+//! host it was accepted for. Until an engine patch binds exceptions to a host, the handler
+//! accepts them only for names on this computer or the local network
+//! (`ExceptionRefusal::PublicHost`); the host is recorded so the address bar warns on it.
 
 use std::future::{Future, ready};
 use std::pin::Pin;
@@ -60,7 +62,7 @@ impl ProtocolHandler for CertificateExceptionHandler {
         let url = request.current_url();
         let response = match parse_certificate_exception_request(url.as_url(), error_page_secret())
         {
-            Some(exception) => {
+            Ok(exception) => {
                 context
                     .state
                     .override_manager
@@ -75,8 +77,8 @@ impl ProtocolHandler for CertificateExceptionHandler {
                 response.status = HttpStatus::default();
                 response
             }
-            None => {
-                log::warn!("refused a certificate exception that did not come from Mercury");
+            Err(refusal) => {
+                log::warn!("refused a certificate exception: {refusal:?}");
                 Response::network_error(NetworkError::ResourceLoadError("refused".to_owned()))
             }
         };

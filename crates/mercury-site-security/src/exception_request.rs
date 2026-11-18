@@ -15,14 +15,28 @@ pub struct CertificateException {
     pub certificate: Vec<u8>,
 }
 
-/// The exception `url` asks for, if it is `<scheme>:allow?…` carrying `secret`, a host and a
+/// Why a request for an exception was refused.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExceptionRefusal {
+    /// Not `<scheme>:allow?…` with this run's secret: it did not come from Mercury's page.
+    NotFromMercury,
+    /// The host or the certificate is missing or does not decode.
+    Malformed,
+    /// The host is on the public internet. Servo 0.8 accepts an exception for the certificate
+    /// on every host, so one accepted for a public site would let whoever holds its key pass
+    /// for any site; until the engine binds exceptions to a host, only names on this computer
+    /// or the local network (`talaria_core::is_local_host`) get one.
+    PublicHost(String),
+}
+
+/// The exception `url` asks for: `<scheme>:allow?…` carrying `secret`, a local host and a
 /// certificate that decodes.
 pub fn parse_certificate_exception_request(
     url: &Url,
     secret: &str,
-) -> Option<CertificateException> {
+) -> Result<CertificateException, ExceptionRefusal> {
     if url.scheme() != crate::CERTIFICATE_EXCEPTION_SCHEME || url.path() != "allow" {
-        return None;
+        return Err(ExceptionRefusal::NotFromMercury);
     }
     let mut request_secret = None;
     let mut host = None;
@@ -35,7 +49,7 @@ pub fn parse_certificate_exception_request(
             _ => {}
         }
     }
-    let request_secret = request_secret?;
+    let request_secret = request_secret.ok_or(ExceptionRefusal::NotFromMercury)?;
     if secret.is_empty()
         || request_secret.len() != secret.len()
         || request_secret
@@ -44,11 +58,20 @@ pub fn parse_certificate_exception_request(
             .fold(0_u8, |difference, (a, b)| difference | (a ^ b))
             != 0
     {
-        return None;
+        return Err(ExceptionRefusal::NotFromMercury);
     }
-    let host = host.filter(|host| !host.is_empty())?.to_ascii_lowercase();
-    let certificate = decode_base64(&certificate?).filter(|bytes| !bytes.is_empty())?;
-    Some(CertificateException { host, certificate })
+    let host = host
+        .filter(|host| !host.is_empty())
+        .ok_or(ExceptionRefusal::Malformed)?
+        .to_ascii_lowercase();
+    let certificate = certificate
+        .and_then(|certificate| decode_base64(&certificate))
+        .filter(|bytes| !bytes.is_empty())
+        .ok_or(ExceptionRefusal::Malformed)?;
+    if !talaria_core::is_local_host(&host) {
+        return Err(ExceptionRefusal::PublicHost(host));
+    }
+    Ok(CertificateException { host, certificate })
 }
 
 /// Standard base64, with or without padding; None for anything else.

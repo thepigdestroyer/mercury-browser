@@ -108,6 +108,28 @@ pub fn certificate_error_page(secret: &str, proceed_automatically: bool) -> Stri
 {STYLE}
 {FILL_SCRIPT}
 <script>
+// The browser accepts exceptions only for names on this computer or the local network
+// (`talaria_core::is_local_host`, checked again where the request arrives); this mirrors it.
+function isLocalName(host) {{
+  host = host.toLowerCase();
+  if (host.slice(-1) === '.') {{ host = host.slice(0, -1); }}
+  if (host === 'localhost') {{ return true; }}
+  var suffixes = ['.localhost', '.local', '.internal', '.lan', '.home.arpa'];
+  if (suffixes.some(function (suffix) {{ return host.slice(-suffix.length) === suffix; }})) {{
+    return true;
+  }}
+  var parts = host.split('.');
+  if (parts.length === 4 && parts.every(function (part) {{ return part !== '' && !isNaN(part); }})) {{
+    var a = +parts[0], b = +parts[1];
+    return a === 127 || a === 10 || a === 0 || (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) || (a === 169 && b === 254) || (a === 100 && b >= 64 && b <= 127);
+  }}
+  if (host.charAt(0) === '[') {{
+    var v6 = host.slice(1, -1);
+    return v6 === '::1' || v6 === '::' || /^f[cd]/.test(v6) || /^fe[89ab]/.test(v6);
+  }}
+  return host.indexOf('.') < 0;
+}}
 document.addEventListener('DOMContentLoaded', function () {{
   var certificate = document.querySelector('meta[name=\"mercury-certificate\"]').content;
   var secret = document.querySelector('meta[name=\"mercury-error-page\"]').content.split(' ')[1];
@@ -118,10 +140,11 @@ document.addEventListener('DOMContentLoaded', function () {{
   }} else {{
     back.hidden = true;
   }}
-  if (!certificate) {{
-    document.getElementById('advanced').hidden = true;
-    return;
-  }}
+  // Never in a frame (a page could hide this one and lure the clicks), never for a public
+  // site, and never without the certificate.
+  var offered = !!certificate && window.top === window && isLocalName(location.hostname);
+  if (!offered) {{ return; }}
+  document.getElementById('advanced').hidden = false;
   proceed.onclick = function () {{
     proceed.disabled = true;
     var query = new URLSearchParams({{ secret: secret, host: location.hostname,
@@ -140,15 +163,15 @@ document.addEventListener('DOMContentLoaded', function () {{
 trying to read or change what you send to and receive from it, such as passwords or card
 numbers.</p>
 <div class=\"actions\"><button id=\"back\" class=\"primary\">Go back</button></div>
-<details id=\"advanced\">
-<summary>Advanced</summary>
-<p>The certificate the site sent cannot be trusted. If you know why, for example because it is
-your own test server, you can continue for the rest of this session.</p>
-<div class=\"actions\"><button id=\"proceed\">Continue to the site (not secure)</button></div>
-</details>
 <details>
 <summary>Details</summary>
 <p id=\"reason\"></p>
+<div id=\"advanced\" hidden>
+<p>This site is on your computer or your local network. If you know why its certificate is not
+valid, for example because it is your own test server, you can continue anyway for the rest of
+this session.</p>
+<div class=\"actions\"><button id=\"proceed\">Continue anyway (not secure)</button></div>
+</div>
 </details>
 </main>
 <plaintext hidden>${{reason}}"

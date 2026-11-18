@@ -39,7 +39,7 @@ pub use page_request::{
 // site security
 pub use site_security::{
     ErrorPageKind, HttpsOnlyInterstitial, HttpsPolicy, HttpsUpgradeChain, MainFrameLoad,
-    SecurityIndicator, main_frame_load, security_indicator, typed_https_upgrade,
+    SecurityIndicator, is_local_host, main_frame_load, security_indicator, typed_https_upgrade,
 };
 pub use tab::{Tab, TabActivation, TabCommand, TabEvent, TabId};
 pub use web_view::{WebView, dispatch_command};

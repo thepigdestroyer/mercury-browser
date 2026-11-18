@@ -272,6 +272,18 @@ fn is_loopback(host: &Host<&str>) -> bool {
     }
 }
 
+/// Whether `host` (ASCII, IPv6 addresses in brackets) names this computer or the local network:
+/// loopback and private addresses, `localhost`, single-label names, `.local`, `.internal`,
+/// `.home.arpa`, `.lan`. Text that is not a host is not local.
+pub fn is_local_host(host: &str) -> bool {
+    match Host::parse(host) {
+        Ok(Host::Domain(name)) => is_local_name(&Host::Domain(name.as_str())),
+        Ok(Host::Ipv4(address)) => is_local_name(&Host::Ipv4(address)),
+        Ok(Host::Ipv6(address)) => is_local_name(&Host::Ipv6(address)),
+        Err(_) => false,
+    }
+}
+
 /// Names and addresses that only make sense on a local network, where HTTPS is rare.
 fn is_local_name(host: &Host<&str>) -> bool {
     if is_loopback(host) {

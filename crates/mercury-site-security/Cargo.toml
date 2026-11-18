@@ -13,6 +13,7 @@ license.workspace = true
 [dependencies]
 # Already in the graph through Servo and Slint; the Unicode Script and Script_Extensions data.
 unicode-script = "0.5.9"
+talaria-core = { path = "../talaria-core" }
 url.workspace = true
 
 # Only for `examples/tls_test_server.rs`, a loopback HTTPS server with a self-signed certificate
