@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::Cell;
 
 use mercury_ui::{BrowserTab, MainWindow, WebViewCursor, WebViewPointerButton};

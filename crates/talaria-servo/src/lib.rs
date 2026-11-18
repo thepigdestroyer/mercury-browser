@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 mod adblocker;
 mod content_process;
 mod document_starts;

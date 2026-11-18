@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Why a transfer failed. Turned into the `error` text of `DownloadEvent::Failed`.
 
 use std::time::Duration;

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Where popups for page controls go in the window.
 //!
 //! Pointer input goes the other way: a position relative to the `web-view-input` area, in

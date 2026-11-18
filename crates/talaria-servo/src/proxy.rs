@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The system's proxy settings, mapped onto Servo's proxy preferences.
 
 /// A proxy server named by the system settings.

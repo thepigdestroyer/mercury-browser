@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! A small HTTP/1.1 server on `127.0.0.1:0`, a temporary download folder, and helpers for
 //! collecting a download's events. Nothing here touches the network beyond loopback.
 

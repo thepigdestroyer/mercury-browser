@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Peak heap use while hostile files are read. A binary of its own, because it replaces the
 //! global allocator with one that counts; it holds a single test so nothing else allocates
 //! while it measures.

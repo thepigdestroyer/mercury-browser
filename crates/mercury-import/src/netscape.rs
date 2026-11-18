@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // The writer (`escape`, `write_netscape_bookmarks`, `write_list`) is adapted from Zephium,
 // https://github.com/zephium-browser/Zephium, commit 9026a1fffad74d6e201ef97fe8c02c1b01403cd2,
 // crates/zephium-core/src/export.rs lines 28-92, licensed under MPL-2.0. The parser is new.

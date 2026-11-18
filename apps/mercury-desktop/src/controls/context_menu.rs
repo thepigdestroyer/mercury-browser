@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The page context menu: Servo's items with the browser's own link and image items.
 //!
 //! Servo builds the list (`document_embedder_controls.rs`, `show_context_menu`: link items,

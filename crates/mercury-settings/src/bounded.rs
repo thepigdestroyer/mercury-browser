@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Limits applied while a file is decoded, so that a hostile file never makes the browser build
 //! more than the documented number of items.
 //!

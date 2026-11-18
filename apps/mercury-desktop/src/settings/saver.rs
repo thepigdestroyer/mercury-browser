@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! When the settings are written: after a quiet period following the last change, never more
 //! than one write at a time, and never after the file turned out to be from a newer version.
 //! The clock is passed in, so the rules are tested without waiting.
