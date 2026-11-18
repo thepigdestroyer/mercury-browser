@@ -7,10 +7,13 @@ use std::cell::{Cell, RefCell};
 
 use crate::{AuthOutcome, Authenticator, Pasteboard};
 
+/// A started authentication: its reason and who waits for the answer.
+type Waiting = (String, Box<dyn FnOnce(AuthOutcome)>);
+
 /// An authenticator that keeps each request until the test answers it.
 #[derive(Default)]
 pub struct FakeAuthenticator {
-    waiting: RefCell<Vec<(String, Box<dyn FnOnce(AuthOutcome)>)>>,
+    waiting: RefCell<Vec<Waiting>>,
     asked: Cell<usize>,
 }
 
