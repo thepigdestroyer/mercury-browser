@@ -28,7 +28,7 @@ impl ServoRuntime {
     /// threads did not answer (the failure is logged).
     pub fn clear_site_data(&self, kinds: SiteDataKinds) -> bool {
         let servo = self.servo();
-        let cleared = std::panic::catch_unwind(AssertUnwindSafe(|| {
+        contained("clearing site data", || {
             if kinds.cookies_and_site_data {
                 let manager = servo.site_data_manager();
                 manager.clear_cookies(None);
@@ -44,10 +44,18 @@ impl ServoRuntime {
             if kinds.cache {
                 servo.network_manager().clear_cache();
             }
-        }));
-        if cleared.is_err() {
-            log::error!("clearing site data failed (the engine's resource threads did not answer)");
-        }
-        cleared.is_ok()
+            true
+        })
     }
+}
+
+/// Runs `call`, which talks to the engine's site-data or network manager. Those calls are
+/// synchronous round trips to the resource threads and panic when the threads do not answer
+/// (during shutdown, or after the network process has gone). Such a failure is logged as
+/// "`what` failed" and gives `T::default()`, so the browser carries on.
+pub(crate) fn contained<T: Default>(what: &str, call: impl FnOnce() -> T) -> T {
+    std::panic::catch_unwind(AssertUnwindSafe(call)).unwrap_or_else(|_| {
+        log::error!("{what} failed (the engine's resource threads did not answer)");
+        T::default()
+    })
 }
