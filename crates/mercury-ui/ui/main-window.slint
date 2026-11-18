@@ -993,7 +993,8 @@ export component MainWindow inherits Window {
             // dialogs
             if root.page-request.style == PageRequestStyle.permission: PermissionPrompt {
                 request: root.page-request;
-                anchor-x: address-input.absolute-position.x - 14px - web-view-area.absolute-position.x;
+                // site-security: the address field's left edge, where the site-information icon sits
+                anchor-x: address-input.absolute-position.x - address-input.x - web-view-area.absolute-position.x;
                 answered(id, accepted) => {
                     root.page-request-answered(id, accepted, "", "", false);
                 }
