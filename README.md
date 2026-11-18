@@ -4,8 +4,8 @@
 
 <p align="center">
   <a href="https://github.com/thepigdestroyer/mercury-browser/actions/workflows/ci.yml?query=branch%3Amercury"><img src="https://github.com/thepigdestroyer/mercury-browser/actions/workflows/ci.yml/badge.svg?branch=mercury" alt="Continuous integration on the mercury branch"></a>
-  <img src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-0a47b3" alt="Platform: macOS on Apple Silicon">
-  <img src="https://img.shields.io/badge/engine-Servo%200.8-5cb8ff" alt="Engine: Servo 0.8">
+  <img src="https://img.shields.io/badge/platform-macOS%20(Apple%20Silicon)-2a1f4f" alt="Platform: macOS on Apple Silicon">
+  <img src="https://img.shields.io/badge/engine-Servo%200.8-ff8a2f" alt="Engine: Servo 0.8">
   <img src="https://img.shields.io/badge/status-preview-orange" alt="Status: preview">
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-PolyForm%20Noncommercial%20%2B%20MPL--2.0-blue" alt="License: PolyForm Noncommercial 1.0.0 and MPL-2.0"></a>
 </p>
@@ -86,6 +86,7 @@ flowchart TB
 | `crates/mercury-passwords` | Saved logins in the macOS Keychain, a password generator, CSV import and export |
 | `crates/mercury-downloads` | The download engine: fetching files, resuming after an interruption, stopping cleanly at quit |
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |
+| `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset (`scripts/macos/make-icns.sh`) |
 | `third_party/` | Patched copies of a few dependencies, each with a `MERCURY.md` explaining the change |
 
 ## Where things stand
