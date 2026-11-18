@@ -20,9 +20,9 @@ slint.workspace = true
 # pop-up indicator), `examples/render_bookmarks.rs` (the bookmarks bar, star popover and
 # manager), `examples/render_import.rs` (the import window), `tests/page_request_render.rs`
 # (the dialog components, which also uses talaria-core's message cleaning), `tests/render_menus.rs`
-# (the browser menu and the About window), and the history lane's `examples/render_history.rs`
-# and `tests/suggestion_click.rs` (which also need system fonts). Dev-only, so the
-# application's Slint features are unchanged.
+# (the browser menu and the About window), the history lane's `examples/render_history.rs`
+# and `tests/suggestion_click.rs` (which also need system fonts), and `tests/session_bar.rs`
+# (the session bar). Dev-only, so the application's Slint features are unchanged.
 [dev-dependencies]
 image.workspace = true
 slint = { workspace = true, features = ["renderer-software", "software-renderer-systemfonts"] }

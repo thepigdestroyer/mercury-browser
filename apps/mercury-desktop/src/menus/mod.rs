@@ -117,6 +117,9 @@ pub(crate) fn sync(controller: &BrowserController) {
             .position(|tab| tab.id() == active_tab_id)
             .unwrap_or(0),
         bookmarks_bar: seams::bookmarks_bar_items(controller),
+        // session
+        can_reopen_closed_tab: crate::session::can_reopen_closed_tab(),
+        can_restore_previous_session: crate::session::can_restore_previous_session(),
     };
     STATE.with(|menu_state| {
         if *menu_state.snapshot.borrow() != snapshot {
@@ -197,8 +200,6 @@ fn run_command(
         }
         // Performed by AppKit itself; never dispatched.
         MenuCommand::System(_) => {}
-        MenuCommand::ReopenClosedTab => seams::reopen_closed_tab(window),
-        MenuCommand::RestorePreviousSession => seams::restore_previous_session(window),
         MenuCommand::OpenBookmark(id) => seams::open_bookmark(window, id),
         MenuCommand::Find | MenuCommand::Stop => {}
     }

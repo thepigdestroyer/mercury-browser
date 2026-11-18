@@ -125,7 +125,6 @@ impl SettingsHandle {
 
     /// What the browser shows at start-up. The session work reads this to decide whether to
     /// restore the previous session.
-    #[allow(dead_code, reason = "read by the session work")]
     pub(crate) fn startup_behavior(&self) -> StartupBehavior {
         self.settings.borrow().startup
     }

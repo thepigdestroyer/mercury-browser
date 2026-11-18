@@ -7,22 +7,12 @@
 use mercury_ui::MainWindow;
 use talaria_core::BrowserController;
 
-/// Session lane: File ▸ "Reopen Closed Tab" (Shift+Cmd+T). When the lane adds a
-/// `ShortcutAction` for it, change the item's command to `MenuCommand::Shortcut(…)` in
-/// `model.rs`; the table test then checks that `shortcuts.rs` owns the key.
-pub(crate) const REOPEN_CLOSED_TAB_AVAILABLE: bool = false;
-/// Session lane: History ▸ "Restore Previous Session".
-pub(crate) const RESTORE_PREVIOUS_SESSION_AVAILABLE: bool = false;
+// Session lane: File ▸ "Reopen Closed Tab" and History ▸ "Restore Previous Session" run
+// `ShortcutAction::ReopenClosedTab` and `ShortcutAction::RestorePreviousSession` (`model.rs`).
 
 /// Bookmarks lane: the Bookmarks menu's bar entries ("Bookmark This Page…" Cmd+D, "Show
 /// Bookmarks Bar" Shift+Cmd+B and "Bookmarks Manager" Option+Cmd+B run the lane's shortcuts).
 pub(crate) const BOOKMARKS_AVAILABLE: bool = true;
-
-/// Session lane: reopen the most recently closed tab.
-pub(crate) fn reopen_closed_tab(_window: &MainWindow) {}
-
-/// Session lane: `restore-previous-session`.
-pub(crate) fn restore_previous_session(_window: &MainWindow) {}
 
 /// Bookmarks lane: a bookmark's stable id in its store, so a menu item still names the same
 /// bookmark if the bar changes after the menu opened.

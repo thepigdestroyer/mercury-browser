@@ -37,7 +37,7 @@ pub use page_request::{
     PermissionDecision, PermissionDecisions, SIGN_IN_RETRY_INTERVAL, SUCCESSIVE_DIALOG_INTERVAL,
     SessionPermissionDecisions, sanitize_page_text, strip_user_info,
 };
-pub use tab::{Tab, TabActivation, TabCommand, TabEvent, TabId};
+pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
 pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};

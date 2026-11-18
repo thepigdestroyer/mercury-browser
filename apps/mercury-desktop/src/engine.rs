@@ -197,6 +197,12 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
     state.shut_down(window.as_ref(), exit_code_if_stuck);
 }
 
+// session: lets a newly selected restored tab get its web view without waiting for a redraw
+/// Asks for a pump from the event loop, as Servo's waker does.
+pub(crate) fn request_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
 /// Whether the engine's state is borrowed right now (a pump or a render is running).
 #[cfg(target_os = "macos")]
 pub(crate) fn engine_busy() -> bool {
@@ -453,6 +459,10 @@ impl EngineState {
         self.event_receivers
             .retain(|tab_id, _| tab_ids.contains(tab_id));
         for tab_id in tab_ids {
+            // session: a restored tab gets its web view when it is first selected
+            if self.controller.borrow().is_load_deferred(tab_id) {
+                continue;
+            }
             let initial_url = self.controller.borrow_mut().take_initial_url(tab_id);
             let url = match plan_web_view(self.web_views.contains_key(&tab_id), initial_url) {
                 WebViewPlan::Keep => continue,

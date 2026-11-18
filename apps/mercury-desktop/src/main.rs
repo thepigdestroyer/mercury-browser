@@ -54,6 +54,7 @@ mod quit;
 mod rendering;
 mod screen_metrics;
 mod screenshot;
+mod session;
 mod settings;
 mod shortcuts;
 mod shutdown;
@@ -155,6 +156,14 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         profile.paths.as_ref().map(|paths| paths.root.clone()),
         options.profile_dir.is_none() && !options.is_automated(),
     ); // import-ui lane
+    // session: begin the run, restore the saved tabs if asked to, and start saving
+    let session_timer = session::start(
+        &window,
+        &controller,
+        &profile,
+        &settings,
+        options.window_size.is_some(),
+    );
     let web_view_focused = Rc::new(Cell::new(false));
 
     connect_servo_runtime(
@@ -204,6 +213,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
 
     let mut timers = Vec::new();
+    timers.extend(session_timer); // session
     let screenshot_result = options.screenshot.map(|screenshot| {
         let result = Rc::new(Cell::new(ScreenshotResult::Pending));
         timers.push(start_screenshot(

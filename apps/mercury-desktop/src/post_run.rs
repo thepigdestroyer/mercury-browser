@@ -213,7 +213,7 @@ impl EndOfRun for Steps {
 
     fn begin_saves(&mut self) {
         // Slot (session): starts the final session write on the session worker.
-        // crate::session::begin_final_save();
+        crate::session::begin_final_save();
     }
 
     fn shut_down_profile_data(&mut self, deadline: Instant) {
@@ -228,8 +228,7 @@ impl EndOfRun for Steps {
 
     fn collect_saves(&mut self, deadline: Instant) {
         // Slot (session): waits for the final session write.
-        // crate::session::collect_final_save(deadline);
-        let _ = deadline;
+        crate::session::collect_final_save(deadline);
     }
 
     fn finish_settings(&mut self, deadline: Instant) {

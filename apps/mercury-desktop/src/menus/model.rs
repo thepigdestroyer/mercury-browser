@@ -19,8 +19,6 @@ pub(crate) enum MenuCommand {
     /// Handled entirely by AppKit (standard selectors, macOS only).
     System(SystemAction),
     // Seams other lanes fill in (`seams.rs`); disabled until they do.
-    ReopenClosedTab,
-    RestorePreviousSession,
     /// An entry of the bookmarks bar's first level, by its stable id.
     OpenBookmark(super::seams::BookmarkId),
     // No engine API in Servo 0.8.0: always disabled.
@@ -421,7 +419,12 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 ),
                 Separator,
                 action("Close Tab", key('w', CMD), Shortcut(A::CloseTab)),
-                action("Reopen Closed Tab", key('t', SHIFT_CMD), ReopenClosedTab),
+                // Session lane.
+                action(
+                    "Reopen Closed Tab",
+                    key('t', SHIFT_CMD),
+                    Shortcut(A::ReopenClosedTab),
+                ),
             ],
         },
         Menu {
@@ -473,7 +476,11 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 ),
                 Separator,
                 // Session lane.
-                action("Restore Previous Session", None, RestorePreviousSession),
+                action(
+                    "Restore Previous Session",
+                    None,
+                    Shortcut(A::RestorePreviousSession),
+                ),
             ],
         },
         Menu {
@@ -538,8 +545,6 @@ pub(crate) const fn is_available(command: MenuCommand) -> bool {
     use MenuCommand::*;
     match command {
         Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) => true,
-        ReopenClosedTab => super::seams::REOPEN_CLOSED_TAB_AVAILABLE,
-        RestorePreviousSession => super::seams::RESTORE_PREVIOUS_SESSION_AVAILABLE,
         OpenBookmark(_) => super::seams::BOOKMARKS_AVAILABLE,
         Find | Stop => false,
     }
@@ -582,6 +587,11 @@ pub(crate) struct MenuSnapshot {
     /// The bookmarks bar's first level, in order: each entry's stable id and title (bookmarks
     /// lane).
     pub(crate) bookmarks_bar: Vec<(super::seams::BookmarkId, String)>,
+    // session
+    /// A closed tab can be reopened.
+    pub(crate) can_reopen_closed_tab: bool,
+    /// The last run's session was kept and not yet restored.
+    pub(crate) can_restore_previous_session: bool,
 }
 
 pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: EditTarget) -> bool {
@@ -595,6 +605,9 @@ pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: Ed
         Shortcut(ShortcutAction::NextTab | ShortcutAction::PreviousTab) => {
             snapshot.tab_titles.len() > 1
         }
+        // session
+        Shortcut(ShortcutAction::ReopenClosedTab) => snapshot.can_reopen_closed_tab,
+        Shortcut(ShortcutAction::RestorePreviousSession) => snapshot.can_restore_previous_session,
         Edit(command) => match edit {
             EditTarget::AddressBar => true,
             EditTarget::Page => {
@@ -833,7 +846,6 @@ mod tests {
             vec![
                 ("Hide Mercury Browser", "⌘H".to_owned()),
                 ("Hide Others", "⌥⌘H".to_owned()),
-                ("Reopen Closed Tab", "⇧⌘T".to_owned()),
                 ("Find…", "⌘F".to_owned()),
                 ("Enter Full Screen", "⌃⌘F".to_owned()),
                 ("Minimize", "⌘M".to_owned()),
@@ -860,14 +872,36 @@ mod tests {
     }
 
     #[test]
+    fn the_session_items_run_the_session_shortcuts_and_follow_what_they_can_do() {
+        let items = menu_bar()
+            .into_iter()
+            .flat_map(|menu| menu.items)
+            .filter_map(|item| match item {
+                MenuItem::Action { title, command, .. } => Some((title, command)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let reopen = MenuCommand::Shortcut(ShortcutAction::ReopenClosedTab);
+        let restore = MenuCommand::Shortcut(ShortcutAction::RestorePreviousSession);
+        assert!(items.contains(&("Reopen Closed Tab", reopen)));
+        assert!(items.contains(&("Restore Previous Session", restore)));
+
+        let nothing = MenuSnapshot::default();
+        assert!(!is_enabled(reopen, &nothing, EditTarget::None));
+        assert!(!is_enabled(restore, &nothing, EditTarget::None));
+        let something = MenuSnapshot {
+            can_reopen_closed_tab: true,
+            can_restore_previous_session: true,
+            ..MenuSnapshot::default()
+        };
+        assert!(is_enabled(reopen, &something, EditTarget::None));
+        assert!(is_enabled(restore, &something, EditTarget::None));
+    }
+
+    #[test]
     fn actions_that_do_not_exist_yet_are_disabled() {
         let snapshot = MenuSnapshot::default();
-        for command in [
-            MenuCommand::ReopenClosedTab,
-            MenuCommand::RestorePreviousSession,
-            MenuCommand::Find,
-            MenuCommand::Stop,
-        ] {
+        for command in [MenuCommand::Find, MenuCommand::Stop] {
             assert!(
                 !is_enabled(command, &snapshot, EditTarget::AddressBar),
                 "{command:?}"
