@@ -1,6 +1,6 @@
 ---
 title: Vendored Patches
-description: Maintain and eventually remove Mercury's focused gaol, Surfman and servo-canvas compatibility patches.
+description: Maintain and eventually remove Mercury's focused gaol, Surfman, servo-canvas and servo-default-resources patches.
 ---
 
 # Vendored patches
@@ -14,8 +14,9 @@ Mercury vendors code when a pinned Servo dependency needs a small, reviewable co
 | `third_party/gaol` | 0.2.1 | Modern Linux syscall compatibility and a non-zero file-size limit for Servo shared-memory IPC |
 | `third_party/surfman` | 0.14.0 | Avoid process-global `DRI_PRIME=1` selection and its race with media initialization |
 | `third_party/servo-canvas` | 0.8.0 | Make Servo's GPU 2D-canvas backend (`vello` feature) build against wgpu 30, fall back to the CPU backend when it cannot start, survive failed renders and read-backs, share one GPU device, and fix GPU drawing defects (lost drawing, clips, oversized canvases, shapes with shadows) |
+| `third_party/servo-default-resources` | 0.8.0 | Stop it registering Servo's default resource reader, so that Mercury's own reader (its error and certificate-error pages, Servo's files for everything else) is the only one; see its `MERCURY.md` |
 
-The gaol and Surfman patches were introduced by [Hermes Browser](https://github.com/KaykCaputo/hermes-browser), the project Mercury is derived from, and Mercury continues to carry them. Mercury added the servo-canvas patch.
+The gaol and Surfman patches were introduced by [Hermes Browser](https://github.com/KaykCaputo/hermes-browser), the project Mercury is derived from, and Mercury continues to carry them. Mercury added the servo-canvas and servo-default-resources patches.
 
 The root `[patch.crates-io]` section redirects Servo's dependency graph to these directories.
 

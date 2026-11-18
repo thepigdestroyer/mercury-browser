@@ -37,6 +37,11 @@ use crate::session_data::{
 };
 use crate::web_view::TabParts;
 use crate::{ServoWebView, ServoWebViewError};
+// site security
+use crate::certificate_exceptions::{AcceptedHosts, mercury_protocols};
+use crate::site_data::{self, SiteDataSummary};
+use crate::site_security::{TabHttpsUpgrades, probe_error_page};
+use talaria_core::HttpsPolicy;
 
 type WakeCallback = dyn Fn() + Send + Sync + 'static;
 
@@ -132,6 +137,9 @@ pub struct ServoRuntime {
     after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
     /// Content blocking and what to clear at quit, shared with the browser.
     switches: EngineSwitches,
+    // site security
+    /// Hosts whose invalid certificate the user accepted, until the browser takes them.
+    accepted_certificates: AcceptedHosts,
 }
 
 impl ServoRuntime {
@@ -161,10 +169,13 @@ impl ServoRuntime {
         let options = mercury_options(runtime_options.config_dir.clone());
         let multiprocess_enabled = options.multiprocess;
         let sandbox_enabled = options.sandbox;
+        // site security: certificate exceptions from Mercury's certificate page
+        let accepted_certificates = AcceptedHosts::default();
         let inner = ServoBuilder::default()
             .opts(options)
             .preferences(mercury_preferences(&runtime_options))
             .event_loop_waker(Box::new(event_loop_waker))
+            .protocol_registry(mercury_protocols(&accepted_certificates))
             .build();
         inner.setup_logging();
         log_proxy_settings(runtime_options.system_proxy.as_ref());
@@ -208,6 +219,7 @@ impl ServoRuntime {
             screen_metrics: Rc::clone(&screen_metrics),
             user_content: Rc::clone(&user_content),
             after_engine_cleanup: after_engine_cleanup.clone(),
+            https_policy: Rc::default(), // site security
         });
 
         Self {
@@ -218,7 +230,33 @@ impl ServoRuntime {
             page_tabs,
             after_engine_cleanup,
             switches,
+            accepted_certificates,
         }
+    }
+
+    // site security
+
+    /// HTTPS-only mode and its exceptions, as the browser's controller has them. Applies to
+    /// loads that start from now on, in every tab.
+    pub fn set_https_policy(&self, policy: &HttpsPolicy) {
+        if *self.page_tabs.https_policy.borrow() != *policy {
+            self.page_tabs.https_policy.replace(policy.clone());
+        }
+    }
+
+    /// The hosts whose invalid certificate the user accepted since the last call (ASCII).
+    pub fn take_certificate_exceptions(&self) -> Vec<String> {
+        self.accepted_certificates.take()
+    }
+
+    /// The cookies and web storage the engine keeps for the site of `url`.
+    pub fn site_data_summary(&self, url: &Url) -> SiteDataSummary {
+        site_data::site_data_summary(&self.inner, url)
+    }
+
+    /// Clears the cookies and web storage of the site of `url`; returns how many sites.
+    pub fn clear_site_data(&self, url: &Url) -> usize {
+        site_data::clear_site_data(&self.inner, url)
     }
 
     // settings
@@ -491,6 +529,8 @@ struct BrowserDelegate {
     /// The tab's one document-start signal (dialogs, tabs); shared with the tab's `ServoWebView`,
     /// which arms it when it navigates.
     document_start: Rc<DocumentStarts>,
+    // site security
+    https_upgrades: TabHttpsUpgrades,
 }
 
 /// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
@@ -523,6 +563,7 @@ fn new_tab_delegate(
         controls: parts.controls.clone(),
         page_requests: parts.page_requests.shared(),
         document_start: Rc::clone(&parts.document_start),
+        https_upgrades: TabHttpsUpgrades::new(Rc::clone(&shared.https_policy)),
     });
     (delegate, parts)
 }
@@ -574,6 +615,12 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn load_web_resource(&self, web_view: servo::WebView, load: servo::WebResourceLoad) {
+        // site security: HTTPS-only mode, before content blocking
+        let Some(load) = self.https_upgrades.intercept(load, |event| {
+            self.send_browser_event(event);
+        }) else {
+            return;
+        };
         self.content_blocker
             .handle_web_resource_load(Some(&web_view), load);
     }
@@ -639,6 +686,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // differs from its cached one
         if status == LoadStatus::Complete {
             self.page_feedback.load_completed();
+            // site security: one of Mercury's error pages?
+            probe_error_page(&web_view, self.tab_id, self.browser_event_sender.clone());
         }
         if reads_title_at(status) {
             self.read_document_title(&web_view);

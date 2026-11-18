@@ -36,4 +36,7 @@ impl ResourceReaderMethods for DefaultResourceReader {
     }
 }
 
-embedder_traits::submit_resource_reader!(&DefaultResourceReader);
+// Mercury: not registered here. Servo allows one resource reader per process and picks one at
+// random when there are two (`servo-embedder-traits` `resources.rs`); Mercury registers its own
+// (`talaria-servo` `resources.rs`), which serves these files for every resource it does not
+// replace. Upstream registered `DefaultResourceReader` with `submit_resource_reader!` here.

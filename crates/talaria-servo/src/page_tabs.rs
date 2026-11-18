@@ -37,6 +37,8 @@ pub(crate) struct PageTabs {
     pub(crate) screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,
     pub(crate) user_content: Rc<servo::UserContentManager>,
     pub(crate) after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
+    // site security
+    pub(crate) https_policy: crate::site_security::SharedHttpsPolicy,
 }
 
 impl PageTabs {

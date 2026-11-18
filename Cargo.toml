@@ -6,6 +6,7 @@ members = [
     "crates/mercury-import",
     "crates/mercury-passwords",
     "crates/mercury-settings",
+    "crates/mercury-site-security",
     "crates/mercury-store",
     "crates/mercury-ui",
     "crates/talaria-core",
@@ -80,6 +81,8 @@ zeroize = "1.9"
 [patch.crates-io]
 gaol = { path = "third_party/gaol" }
 servo-canvas = { path = "third_party/servo-canvas" }
+# site-security: Mercury registers its own resource reader (third_party/servo-default-resources/MERCURY.md).
+servo-default-resources = { path = "third_party/servo-default-resources" }
 surfman = { path = "third_party/surfman" }
 
 # Keep the controller easy to debug while optimizing the browser-engine, frame-transfer, and media

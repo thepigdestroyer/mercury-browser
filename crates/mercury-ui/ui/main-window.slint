@@ -11,6 +11,9 @@ import { PopUpBlockedIndicator } from "tabs/pop-up-blocked.slint";
 // menus
 import { AddressBarEdit, BrowserMenu, BrowserMenuCommand, BrowserMenuEntry } from "menus/browser-menu.slint";
 export { AboutLink, AboutWindow } from "about/about-window.slint";
+// site-security
+import { HttpsOnlyInterstitial, SecurityIndicatorButton, SiteInfo, SiteInfoPopover, SiteSecurityIcon } from "site-security/site-security.slint";
+export { SiteInfo, SitePermissionRow, SiteSecurityIcon } from "site-security/site-security.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -444,6 +447,27 @@ export component MainWindow inherits Window {
         }
     }
     // --- end menus ---
+    // --- site-security ---
+    // The indicator before the address (none on a new tab) and its accessible name.
+    in property <SiteSecurityIcon> security-icon: SiteSecurityIcon.none;
+    in property <string> security-label: "";
+    // What the site-information popover shows; filled when it is asked for.
+    in property <SiteInfo> site-info;
+    // The active tab's HTTPS-only interstitial; the host as the address bar shows it.
+    in property <bool> https-only-interstitial-shown: false;
+    in property <string> https-only-interstitial-host: "";
+    in property <bool> https-only-interstitial-tried-https: false;
+    // The indicator was clicked: fill `site-info`; the popover opens right after.
+    callback site-info-requested();
+    callback site-permission-reset(int);
+    callback site-data-clear();
+    callback site-https-exception-remove();
+    callback https-only-go-back();
+    callback https-only-continue();
+    public function show-site-info() {
+        site-info-popover.show();
+    }
+    // --- end site-security ---
 
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
@@ -557,9 +581,37 @@ export component MainWindow inherits Window {
                     border-color: address-input.has-focus ? ChromePalette.accent : ChromePalette.field-border;
                     background: ChromePalette.field-background;
 
+                    // site-security: the indicator, and the popover it opens
+                    site-security-button := SecurityIndicatorButton {
+                        x: 6px;
+                        y: (parent.height - self.height) / 2;
+                        visible: root.security-icon != SiteSecurityIcon.none;
+                        icon: root.security-icon;
+                        label: root.security-label;
+                        clicked => {
+                            root.site-info-requested();
+                            site-info-popover.show();
+                        }
+
+                        site-info-popover := SiteInfoPopover {
+                            x: 0px;
+                            y: site-security-button.height + 10px;
+                            info: root.site-info;
+                            reset-permission(index) => {
+                                root.site-permission-reset(index);
+                            }
+                            clear-site-data => {
+                                root.site-data-clear();
+                            }
+                            remove-https-exception => {
+                                root.site-https-exception-remove();
+                            }
+                        }
+                    }
+
                     address-input := TextInput {
-                        x: 14px;
-                        width: parent.width - 28px;
+                        x: root.security-icon == SiteSecurityIcon.none ? 14px : 36px;
+                        width: parent.width - self.x - 14px;
                         height: parent.height;
                         text <=> root.address;
                         color: ChromePalette.text;
@@ -914,6 +966,18 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                     overflow: elide;
                     wrap: no-wrap;
+                }
+            }
+
+            // site-security: HTTPS-only mode would not load the page
+            if root.https-only-interstitial-shown: HttpsOnlyInterstitial {
+                host: root.https-only-interstitial-host;
+                tried-https: root.https-only-interstitial-tried-https;
+                go-back => {
+                    root.https-only-go-back();
+                }
+                continue-to-site => {
+                    root.https-only-continue();
                 }
             }
 

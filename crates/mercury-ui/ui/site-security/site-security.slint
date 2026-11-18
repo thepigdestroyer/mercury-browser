@@ -1,0 +1,468 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+// Site security: the indicator before the address, the site-information popover it opens, and
+// the HTTPS-only interstitial. All three are browser chrome; colours come only from
+// `ChromePalette`.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export enum SiteSecurityIcon {
+    none,
+    // HTTPS with a valid certificate.
+    padlock,
+    // Not secure: plain HTTP, or a certificate that is not valid.
+    warning,
+    // Neither: a file, a page on this computer, one of Mercury Browser's own pages.
+    info,
+}
+
+export struct SitePermissionRow {
+    // "Store data permanently on this device"
+    name: string,
+    // "Allowed" or "Blocked"
+    state: string,
+}
+
+export struct SiteInfo {
+    // The host as the address bar shows it (punycode when it could pass for another name).
+    host: string,
+    icon: SiteSecurityIcon,
+    heading: string,
+    detail: string,
+    permissions: [SitePermissionRow],
+    // "3 cookies, local storage", "None", or "" while it is being looked up.
+    site-data: string,
+    can-clear-site-data: bool,
+    // HTTPS-only mode lets this site load over HTTP.
+    https-exception: bool,
+    // The user accepted this site's invalid certificate for the session.
+    certificate-exception: bool,
+}
+
+component SecurityGlyph inherits Rectangle {
+    in property <SiteSecurityIcon> icon;
+    in property <color> tint;
+    width: 16px;
+    height: 16px;
+
+    if root.icon == SiteSecurityIcon.padlock: Path {
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        stroke: root.tint;
+        stroke-width: 1.6px;
+        commands: "M 5 7.5 L 5 5.5 A 3 3 0 0 1 11 5.5 L 11 7.5";
+    }
+
+    if root.icon == SiteSecurityIcon.padlock: Rectangle {
+        x: 3px;
+        y: 7px;
+        width: 10px;
+        height: 7.5px;
+        border-radius: 1.5px;
+        background: root.tint;
+    }
+
+    if root.icon == SiteSecurityIcon.warning: Path {
+        width: 16px;
+        height: 16px;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        fill: root.tint;
+        commands: "M 8 1.5 L 15 14.5 L 1 14.5 Z";
+    }
+
+    if root.icon == SiteSecurityIcon.warning: Rectangle {
+        x: 7.2px;
+        y: 6px;
+        width: 1.6px;
+        height: 4.6px;
+        background: ChromePalette.field-background;
+    }
+
+    if root.icon == SiteSecurityIcon.warning: Rectangle {
+        x: 7.2px;
+        y: 11.6px;
+        width: 1.6px;
+        height: 1.6px;
+        background: ChromePalette.field-background;
+    }
+
+    if root.icon == SiteSecurityIcon.info: Rectangle {
+        width: 14px;
+        height: 14px;
+        x: 1px;
+        y: 1px;
+        border-radius: 7px;
+        border-width: 1.5px;
+        border-color: root.tint;
+    }
+
+    if root.icon == SiteSecurityIcon.info: Rectangle {
+        x: 7.25px;
+        y: 7px;
+        width: 1.5px;
+        height: 4.5px;
+        background: root.tint;
+    }
+
+    if root.icon == SiteSecurityIcon.info: Rectangle {
+        x: 7.25px;
+        y: 4.5px;
+        width: 1.5px;
+        height: 1.5px;
+        background: root.tint;
+    }
+}
+
+// The button before the address. Its accessible name is what the popover's heading says.
+export component SecurityIndicatorButton inherits Rectangle {
+    in property <SiteSecurityIcon> icon;
+    in property <string> label;
+    callback clicked();
+
+    width: 26px;
+    height: 26px;
+    border-radius: 6px;
+    background: touch.pressed ? ChromePalette.button-pressed : touch.has-hover ? ChromePalette.button-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.label == "" ? "Site information" : "Site information: " + root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    SecurityGlyph {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        icon: root.icon;
+        tint: root.icon == SiteSecurityIcon.warning ? ChromePalette.danger : ChromePalette.button-label;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component TextButton inherits Rectangle {
+    in property <string> text;
+    in property <bool> enabled: true;
+    in property <bool> primary: false;
+    callback clicked();
+
+    height: 28px;
+    min-width: label.preferred-width + 24px;
+    border-radius: 7px;
+    border-width: root.primary ? 0px : 1px;
+    border-color: ChromePalette.popup-border;
+    background: root.primary ? ChromePalette.primary-button-background : touch.pressed && root.enabled ? ChromePalette.button-pressed : touch.has-hover && root.enabled ? ChromePalette.button-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.text;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    label := Text {
+        text: root.text;
+        color: !root.enabled ? ChromePalette.disabled-text : root.primary ? ChromePalette.primary-button-text : ChromePalette.text;
+        font-size: 12px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component SectionTitle inherits Text {
+    color: ChromePalette.text;
+    font-size: 12px;
+    font-weight: 600;
+}
+
+component Separator inherits Rectangle {
+    height: 1px;
+    background: ChromePalette.separator;
+}
+
+// The panel inside the popover, separate so it can be rendered on its own.
+export component SiteInfoPanel inherits Rectangle {
+    in property <SiteInfo> info;
+    callback reset-permission(int);
+    callback clear-site-data();
+    callback remove-https-exception();
+
+    background: ChromePalette.popup-background;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: ChromePalette.shadow;
+
+    VerticalLayout {
+        padding: 14px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            SecurityGlyph {
+                y: 2px;
+                icon: root.info.icon;
+                tint: root.info.icon == SiteSecurityIcon.warning ? ChromePalette.danger : ChromePalette.button-label;
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.info.host;
+                color: ChromePalette.text;
+                font-size: 14px;
+                font-weight: 600;
+                wrap: char-wrap;
+            }
+        }
+
+        Text {
+            text: root.info.heading;
+            color: root.info.icon == SiteSecurityIcon.warning ? ChromePalette.danger : ChromePalette.text;
+            font-size: 13px;
+            font-weight: 600;
+            wrap: word-wrap;
+        }
+
+        if root.info.detail != "": Text {
+            text: root.info.detail;
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        if root.info.certificate-exception: Text {
+            text: "You chose to continue although the certificate is not valid. Mercury Browser accepts it until it quits.";
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        Separator { }
+
+        SectionTitle {
+            text: "Permissions";
+        }
+
+        if root.info.permissions.length == 0: Text {
+            text: "This site has not asked for any permission.";
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            wrap: word-wrap;
+        }
+
+        for permission[index] in root.info.permissions: HorizontalLayout {
+            spacing: 8px;
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+
+                Text {
+                    text: permission.name;
+                    color: ChromePalette.text;
+                    font-size: 12px;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: permission.state;
+                    color: ChromePalette.text-secondary;
+                    font-size: 11px;
+                }
+            }
+
+            TextButton {
+                text: "Reset";
+                accessible-label: "Reset permission: " + permission.name;
+                clicked => {
+                    root.reset-permission(index);
+                }
+            }
+        }
+
+        Separator { }
+
+        SectionTitle {
+            text: "Cookies and site data";
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.info.site-data == "" ? "Looking…" : root.info.site-data;
+                color: ChromePalette.text-secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            TextButton {
+                text: "Clear";
+                accessible-label: "Clear cookies and site data";
+                enabled: root.info.can-clear-site-data;
+                clicked => {
+                    root.clear-site-data();
+                }
+            }
+        }
+
+        if root.info.https-exception: Separator { }
+
+        if root.info.https-exception: SectionTitle {
+            text: "Site settings";
+        }
+
+        if root.info.https-exception: HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: "HTTPS-only mode lets this site load without HTTPS.";
+                color: ChromePalette.text-secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            TextButton {
+                text: "Remove";
+                accessible-label: "Remove the HTTPS-only exception";
+                clicked => {
+                    root.remove-https-exception();
+                }
+            }
+        }
+    }
+}
+
+// The site-information popover, under the indicator. Escape and a click outside close it.
+export component SiteInfoPopover inherits PopupWindow {
+    in property <SiteInfo> info;
+    callback reset-permission(int);
+    callback clear-site-data();
+    callback remove-https-exception();
+
+    close-policy: close-on-click-outside;
+    width: 320px;
+
+    SiteInfoPanel {
+        width: root.width;
+        info: root.info;
+        reset-permission(index) => {
+            root.reset-permission(index);
+        }
+        clear-site-data => {
+            root.clear-site-data();
+        }
+        remove-https-exception => {
+            root.remove-https-exception();
+        }
+    }
+}
+
+// Covers the page area when HTTPS-only mode would not load a page. "Go back" is the safe
+// default: Escape and Return choose it while the interstitial has focus. It never takes focus
+// by itself, so typing in the address bar is not interrupted.
+export component HttpsOnlyInterstitial inherits Rectangle {
+    in property <string> host;
+    // An HTTPS address was tried and failed (rather than a load that could not be upgraded).
+    in property <bool> tried-https;
+    callback go-back();
+    callback continue-to-site();
+
+    background: ChromePalette.content-background;
+    accessible-role: groupbox;
+    accessible-label: "HTTPS-only mode";
+
+    keys := FocusScope {
+        key-pressed(event) => {
+            if event.text == Key.Escape || event.text == Key.Return {
+                root.go-back();
+                return accept;
+            }
+            reject
+        }
+
+        TouchArea {
+            clicked => {
+                keys.focus();
+            }
+        }
+
+        card := Rectangle {
+            width: Math.min(parent.width - 48px, 520px);
+            height: card-layout.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: Math.max(24px, (parent.height - self.height) / 3);
+            background: ChromePalette.sheet-background;
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+
+            card-layout := VerticalLayout {
+                padding: 28px;
+                spacing: 12px;
+
+                SecurityGlyph {
+                    icon: SiteSecurityIcon.warning;
+                    tint: ChromePalette.danger;
+                }
+
+                Text {
+                    text: root.tried-https ? "The secure version of this site is not available" : "This page cannot be opened securely";
+                    color: ChromePalette.text;
+                    font-size: 20px;
+                    font-weight: 600;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.tried-https
+                        ? "HTTPS-only mode is on, and " + root.host + " did not answer over HTTPS. If you continue, what you send to and receive from the site is not encrypted and others on the network can read or change it."
+                        : "HTTPS-only mode is on, and this request to " + root.host + " can only be sent without HTTPS. If you continue, others on the network can read or change it.";
+                    color: ChromePalette.text-secondary;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+
+                    TextButton {
+                        text: "Go back";
+                        primary: true;
+                        clicked => {
+                            root.go-back();
+                        }
+                    }
+
+                    TextButton {
+                        text: "Continue to " + root.host + " (not secure)";
+                        clicked => {
+                            root.continue-to-site();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}

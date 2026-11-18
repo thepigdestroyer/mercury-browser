@@ -59,14 +59,15 @@ pub(crate) fn zoom_choices(current: u16) -> Vec<u16> {
     choices
 }
 
-/// Applies a check box. Returns false for a name it does not know. HTTPS-only and search
-/// suggestions are not among them: the window shows them switched off and disabled.
+/// Applies a check box. Returns false for a name it does not know. Search suggestions are not
+/// among them: the window shows them switched off and disabled.
 pub(crate) fn apply_toggle(settings: &mut Settings, name: &str, on: bool) -> bool {
     let field = match name {
         "show-home-button" => &mut settings.appearance.show_home_button,
         "show-bookmarks-bar" => &mut settings.appearance.show_bookmarks_bar,
         "block-ads-and-trackers" => &mut settings.privacy.block_ads_and_trackers,
         "block-popups" => &mut settings.privacy.block_popups,
+        "https-only" => &mut settings.privacy.https_only, // site-security
         "clear-history-on-exit" => &mut settings.privacy.clear_on_exit.history,
         "clear-cookies-on-exit" => &mut settings.privacy.clear_on_exit.cookies,
         "clear-cache-on-exit" => &mut settings.privacy.clear_on_exit.cache,
@@ -321,6 +322,7 @@ mod tests {
                 s.web.experimental_web_features
             }),
             ("gpu-canvas", |s| s.web.gpu_canvas),
+            ("https-only", |s| s.privacy.https_only), // site-security
         ] {
             for value in [true, false] {
                 assert!(apply_toggle(&mut settings, name, value), "{name}");
@@ -328,16 +330,13 @@ mod tests {
             }
         }
         assert!(!apply_toggle(&mut settings, "no-such-setting", true));
-        assert!(!settings.privacy.https_only);
     }
 
     #[test]
-    fn https_only_and_suggestions_cannot_be_turned_on_from_the_window() {
+    fn suggestions_cannot_be_turned_on_from_the_window() {
         let mut settings = Settings::default();
 
-        assert!(!apply_toggle(&mut settings, "https-only", true));
         assert!(!apply_toggle(&mut settings, "search-suggestions", true));
-        assert!(!settings.privacy.https_only);
         assert!(!settings.search.suggestions);
     }
 

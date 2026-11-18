@@ -1,4 +1,5 @@
 use crate::page_request::PageRequests;
+use crate::site_security::TabSiteSecurity;
 use crate::{BrowserCommand, BrowserEvent, BrowserState};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -37,6 +38,8 @@ pub struct Tab {
     opened_by_page: bool,
     // dialogs
     page_requests: PageRequests,
+    // site security
+    site_security: TabSiteSecurity,
 }
 
 impl Tab {
@@ -48,6 +51,7 @@ impl Tab {
             engine_ready: false,
             opened_by_page: false,
             page_requests: PageRequests::default(),
+            site_security: TabSiteSecurity::default(),
         }
     }
 
@@ -130,6 +134,15 @@ impl Tab {
 
     pub(crate) fn page_requests_mut(&mut self) -> &mut PageRequests {
         &mut self.page_requests
+    }
+
+    // site security
+    pub(crate) const fn site_security(&self) -> &TabSiteSecurity {
+        &self.site_security
+    }
+
+    pub(crate) fn site_security_mut(&mut self) -> &mut TabSiteSecurity {
+        &mut self.site_security
     }
 }
 

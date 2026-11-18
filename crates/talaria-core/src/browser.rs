@@ -235,6 +235,22 @@ pub enum BrowserEvent {
     PageRequested(PageRequest),
     /// A new document started loading in the tab (not a same-document navigation).
     PageLoadStarted,
+    // site security
+    /// The tab shows one of Mercury's own error pages for `url`.
+    ErrorPageShown {
+        kind: crate::ErrorPageKind,
+        url: String,
+    },
+    /// HTTPS-only mode: the engine replaced a top-level load of `from` with one of `to`.
+    HttpsUpgraded {
+        from: String,
+        to: String,
+    },
+    /// HTTPS-only mode: the engine refused a top-level load of `url`, which it could not
+    /// upgrade (a form submission, or a site that sends its HTTPS address back to HTTP).
+    HttpsOnlyBlocked {
+        url: String,
+    },
 }
 
 impl BrowserEvent {
@@ -424,6 +440,10 @@ impl BrowserState {
             }
             // dialogs: kept by the tab's page requests, not here.
             BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
+            // site security: kept by the tab's site security, not here.
+            BrowserEvent::ErrorPageShown { .. }
+            | BrowserEvent::HttpsUpgraded { .. }
+            | BrowserEvent::HttpsOnlyBlocked { .. } => {}
         }
     }
 }

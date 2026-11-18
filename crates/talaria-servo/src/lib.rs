@@ -18,6 +18,14 @@ mod runtime;
 mod screen;
 mod session_data;
 mod web_view;
+// site security
+mod certificate_exceptions;
+mod resources;
+mod site_data;
+mod site_security;
+
+pub use resources::record_error_page_secret;
+pub use site_data::SiteDataSummary;
 
 pub use content_process::{
     ContentProcessArgumentError, record_browser_process_id, run_content_process_if_requested,

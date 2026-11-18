@@ -407,6 +407,7 @@ impl EngineState {
         for receiver in self.event_receivers.values() {
             state_changed |= apply_pending_browser_events(&self.controller, receiver);
         }
+        state_changed |= crate::site_security::sync_engine(runtime, &self.controller); // site-security
         // tabs: title reads owed while another was in flight
         for web_view in self.web_views.values() {
             web_view.refresh_page_feedback();

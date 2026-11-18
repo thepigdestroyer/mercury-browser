@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-site-security"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Site security that needs no engine: how host names are shown (internationalised names), and
+# Mercury's error and certificate-error pages.
+[dependencies]
+# Already in the graph through Servo and Slint; the Unicode Script and Script_Extensions data.
+unicode-script = "0.5.9"
+url.workspace = true
+
+# Only for `examples/tls_test_server.rs`, a loopback HTTPS server with a self-signed certificate
+# made at start, for the certificate-error checks. Nothing is added to any trust store.
+[dev-dependencies]
+rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "crypto"] }
+rustls.workspace = true

@@ -6,6 +6,7 @@ mod cursor;
 mod input;
 mod page_icon;
 mod page_request;
+mod site_security;
 mod tab;
 mod web_view;
 mod zoom;
@@ -34,6 +35,11 @@ pub use page_request::{
     PageRequestReply, PendingPageRequest, PermissionDecision, PermissionDecisions,
     SIGN_IN_RETRY_INTERVAL, SUCCESSIVE_DIALOG_INTERVAL, SessionPermissionDecisions,
     sanitize_page_text, strip_user_info,
+};
+// site security
+pub use site_security::{
+    ErrorPageKind, HttpsOnlyInterstitial, HttpsPolicy, MainFrameLoad, SecurityIndicator,
+    main_frame_load, security_indicator, typed_https_upgrade,
 };
 pub use tab::{Tab, TabActivation, TabCommand, TabEvent, TabId};
 pub use web_view::{WebView, dispatch_command};
