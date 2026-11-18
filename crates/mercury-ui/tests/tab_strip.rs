@@ -458,6 +458,32 @@ fn a_drag_whose_tab_closes_is_cancelled() {
     window.hide().expect("the window can be hidden");
 }
 
+// tabs-plus review I2: the application's sync closes one tab and opens another (same count, ids
+// shift) while a tab is dragged.
+fn a_drag_survives_a_sync_that_closes_and_opens_tabs() {
+    let window = window_with(ChromeTheme::Dark, sample_tabs(), 2);
+    let moves = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&moves);
+    window.on_move_tab(move |id, index, pinned| recorded.borrow_mut().push((id, index, pinned)));
+
+    press_at(window.window(), tab_x(2), PointerEventButton::Left);
+    move_to(window.window(), tab_x(2) - 40.0);
+    let mut rows = sample_tabs();
+    rows.remove(3);
+    rows.push(tab(9, "Opened", false, false));
+    with_rows(&window, |model| mercury_ui::update_tab_rows(model, rows));
+    move_to(window.window(), tab_x(0));
+    release_at(window.window(), tab_x(0));
+
+    assert_eq!(*moves.borrow(), [(5, 2, false)]);
+    let ids = tabs_model(&window)
+        .iter()
+        .map(|row| row.id)
+        .collect::<Vec<_>>();
+    assert_eq!(ids, [1, 2, 3, 5, 9]);
+    window.hide().expect("the window can be hidden");
+}
+
 // tabs-plus review M1: with no pinned tabs, a drop left of the strip does not pin.
 fn a_drop_left_of_the_strip_does_not_pin() {
     let tabs = vec![
@@ -535,6 +561,7 @@ fn the_tab_strip_renders_and_responds() {
     dragging_reorders_and_pins();
     a_drag_survives_a_tab_opening_elsewhere();
     a_drag_whose_tab_closes_is_cancelled();
+    a_drag_survives_a_sync_that_closes_and_opens_tabs();
     a_drop_left_of_the_strip_does_not_pin();
     the_close_button_of_a_narrow_tab_can_be_clicked();
     the_tab_menu_duplicates();
