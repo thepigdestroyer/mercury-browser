@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # shellcheck shell=bash
 # Helpers shared by scripts/macos/bundle.sh and scripts/macos/test-bundle.sh.
 # Sourced, not run. The parsing helpers read the text they parse from standard

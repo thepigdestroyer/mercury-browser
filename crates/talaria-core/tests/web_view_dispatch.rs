@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use talaria_core::{
     BrowserCommand, ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId,
     ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, PointerButton,

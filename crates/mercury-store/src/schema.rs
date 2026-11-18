@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Connection setup and the `PRAGMA user_version` migration ladder.
 //!
 //! Adapted in part from Zephium, <https://github.com/zephium-browser/Zephium>, commit

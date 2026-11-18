@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Renders the session bar on its own, through Slint's software renderer, to PNG files in
 //! `MERCURY_UI_RENDER_DIR` (when set), so that its states that need a click can be looked at.
 

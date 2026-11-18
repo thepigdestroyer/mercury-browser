@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use talaria_core::{
-    BrowserCommand, BrowserController, BrowserEvent, LoadState, RestoredTab, TabCommand, TabId,
+    BrowserCommand, BrowserController, BrowserEvent, CloseTabOutcome, LoadState, RestoredTab,
+    TabCommand, TabId,
 };
 
 fn restored(url: Option<&str>, title: &str, zoom_percent: u16) -> RestoredTab {
@@ -237,7 +240,7 @@ fn a_waiting_restored_tab_can_be_closed() {
         .open_restored_tab(1, &restored(Some("https://a.test/"), "A", 100))
         .unwrap();
 
-    assert!(controller.close_tab(restored_id));
+    assert_eq!(controller.close_tab(restored_id), CloseTabOutcome::Closed);
     assert_eq!(tab_ids(&controller), vec![first]);
 }
 

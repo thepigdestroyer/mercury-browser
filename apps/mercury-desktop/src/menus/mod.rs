@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! The macOS menu bar, the browser menu behind the toolbar's "⋮" button, and the routing from
 //! both to the existing actions.
 //!

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! A panic inside a transfer — injected here through the public `on_event` callback, which the
 //! transfer calls from inside its task — must still end the download properly.
 

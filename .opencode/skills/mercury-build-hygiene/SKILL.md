@@ -16,12 +16,20 @@ whatever you do. Follow the rules below so that it never deletes something you s
 
 - **Every shell command** gets `CARGO_INCREMENTAL=0` and no debug info (`CARGO_PROFILE_*_DEBUG=0`).
   Builds are smaller and start cold; that is expected.
+- **`CARGO_FLAGS=--release`** is set unless you set it yourself, so `make lint`, `make test` and
+  `make build-release` share one release build: a round compiles Servo once, not twice. Binaries are in
+  `target/release/`. Use the same profile for any `cargo` command you run by hand (`--release`).
 - **Every build command** (`cargo build|test|clippy|check|run|doc`, `make lint|test|build|build-release|check|app-macos|run`,
-  `scripts/macos/bundle.sh`) runs through `scripts/dev/build-slot.sh`. It waits until one of the five
+  `scripts/macos/bundle.sh`) runs through `scripts/dev/build-slot.sh`. It waits until one of the three
   build slots is free and at least 40 GB of disk is free, shares the cores between the builds running
   (`CARGO_BUILD_JOBS`, at least 2), then runs your command unchanged and returns
   its exit status. While it waits it prints `mercury-disk-guard: waiting …`. Exit status 75 means it gave
   up after six hours.
+- **Running a script file** (`sh x.sh`, `./x.sh`) counts as a build when the script contains a build
+  command, so it takes a slot too.
+- **The pinned checking tools** (`make ci-tools`: cargo-deny, shellcheck, actionlint) are shared by
+  all worktrees (`CI_TOOLS_DIR` points to `~/Library/Caches/mercury-browser/ci-tools`). Run
+  `make ci-tools` once if `make deny` or `make lint-scripts` says they are missing.
 - **Copying build output** (`cp`/`rsync`/`ditto` of a `…/target`) is refused.
 - **`target/` and `dist/` of a worktree are deleted:**
   - seconds after a successful `git push` from that worktree;
@@ -33,6 +41,27 @@ whatever you do. Follow the rules below so that it never deletes something you s
   whenever no Mercury is running. The exception is the unpacked GStreamer in `…/mercury-browser/gstreamer/`,
   which every build needs (about 1 GB); only its installer packages are deleted once unpacked. **Scratch files** in `$TMPDIR/opencode/lanes/` are deleted after 24 hours.
 - Everything it does is logged in `~/mercury-browser/.superpowers/disk-guard/guard.log`.
+
+## Build budget: get many fixes out of one build
+
+Servo builds are the bottleneck: a cold one takes 20–60 minutes, and only three can run at once.
+Spend them carefully.
+
+- **Most crates don't need Servo.** `talaria-core`, `mercury-ui`, `mercury-store`, `mercury-settings`,
+  `mercury-passwords`, `mercury-downloads`, `mercury-import` (and any new crate without `servo` or
+  `talaria-servo` in its dependencies) build and test in minutes. Iterate there freely:
+  `cargo test --release -p talaria-core -p mercury-ui …`. Put logic in these crates where you can, so it
+  can be tested without Servo. Name the packages with `-p`: such builds go to a separate pool of four
+  light slots and never wait behind a Servo build (a command that also builds a Servo crate, uses `make`,
+  `--workspace` or no `-p` counts as heavy).
+- **Only `talaria-servo` and `apps/mercury-desktop` need Servo.** Finish all of the round's edits first,
+  then build once: `cargo check --release -p mercury-desktop --all-targets --all-features` catches compile
+  errors; then the narrow tests you need. Run the full `make` gates and the screenshot runs **once per
+  round**, at the end, in a single command.
+- **Merge rounds don't run full gates.** When you merge `mercury` into an approved lane, check that it
+  compiles and that your narrow tests pass, push, and reply. The lead verifies several approved lanes
+  together in one integration build (a merge train) and sends back anything that fails.
+- **Review rounds batch everything.** Fix all findings, merge `mercury` if asked, and verify once.
 
 ## Rules for you
 
@@ -59,5 +88,13 @@ whatever you do. Follow the rules below so that it never deletes something you s
    started from `target/` keeps that folder from being deleted.
 7. **Don't fight the guard.** Do not rename build folders, hide builds from it or run builds outside it.
    If it refuses or waits too long, tell the lead.
+8. **Never create a GitHub repository.** Code goes to `thepigdestroyer/mercury-browser`, on your
+   `lane/<name>` branch. Anything else worth keeping goes to a branch of the private
+   `thepigdestroyer/mercury-browser-archive`, and only the lead decides what that is.
+9. **Leave the Mac clean when your lane ends.** Once your last report is written and everything is pushed,
+   delete your scratch folder `$TMPDIR/opencode/lanes/<lane>/`. The lead removes your worktree and local
+   branch after the merge and moves the branch to the archive. Never leave clones, downloads, caches or
+   copies anywhere else on the Mac. The only shared caches are `~/Library/Caches/mercury-browser/` and
+   cargo's registry.
 
 Check usage with `du -sh ~/mercury-worktrees/* 2>/dev/null` and `df -h ~`.

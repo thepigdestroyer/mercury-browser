@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Carries out the session's writes off the UI thread, one at a time, in order.
 
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender};

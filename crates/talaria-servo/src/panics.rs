@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What a process-wide panic hook needs to know about Servo.
 
 /// Servo catches some panics on purpose (for example while decoding a broken image); a panic

@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Saving the open tabs, restoring them after a restart or a crash, and reopening closed tabs.
 //!
 //! This is the application side of the contract in `mercury-settings`' `lib.rs`:
@@ -34,7 +36,7 @@ use slint::winit_030::WinitWindowAccessor;
 use slint::{
     ComponentHandle, LogicalPosition, LogicalSize, ModelRc, SharedString, Timer, VecModel,
 };
-use talaria_core::BrowserController;
+use talaria_core::{BrowserController, CloseTabOutcome};
 
 use crate::profile::ActiveProfile;
 use crate::settings::SettingsHandle;
@@ -392,7 +394,9 @@ fn apply_plan(
         }
     }
     if let Some(blank) = plan.replace {
-        controller.close_tab(blank);
+        if controller.close_tab(blank) != CloseTabOutcome::Closed {
+            log::warn!("the blank start tab could not be replaced");
+        }
     }
     tracker.append_closed(&plan.closed_tabs);
 }

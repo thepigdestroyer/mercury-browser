@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The pure part of session saving and restoring: what is saved from the controller, when the
 //! session counts as changed, which closed tab comes back, and how a saved session is put back.
 
@@ -416,7 +418,7 @@ pub(crate) fn recovery_label(snapshot: &SessionSnapshot) -> String {
 
 #[cfg(test)]
 mod tests {
-    use talaria_core::{BrowserEvent, TabActivation};
+    use talaria_core::{BrowserEvent, CloseTabOutcome, TabActivation};
 
     use super::*;
     use crate::shortcuts::Platform;
@@ -557,7 +559,7 @@ mod tests {
         controller.zoom_in();
         assert!(tracker.observe_tabs(&controller, NOW), "zoomed");
 
-        controller.close_tab(second);
+        assert_eq!(controller.close_tab(second), CloseTabOutcome::Closed);
         assert!(tracker.observe_tabs(&controller, NOW), "tab closed");
     }
 
@@ -721,9 +723,9 @@ mod tests {
         let b = page(&mut controller, "https://b.test/", "B");
         tracker.observe_tabs(&controller, NOW);
 
-        controller.close_tab(a);
+        assert_eq!(controller.close_tab(a), CloseTabOutcome::Closed);
         tracker.observe_tabs(&controller, NOW + 1);
-        controller.close_tab(b);
+        assert_eq!(controller.close_tab(b), CloseTabOutcome::Closed);
         tracker.observe_tabs(&controller, NOW + 2);
 
         let first = tracker.pop_closed().unwrap();
@@ -749,7 +751,7 @@ mod tests {
         tracker.observe_tabs(&controller, NOW);
 
         for tab_id in [b, a, c] {
-            controller.close_tab(tab_id);
+            assert_eq!(controller.close_tab(tab_id), CloseTabOutcome::Closed);
         }
         tracker.observe_tabs(&controller, NOW);
         while let Some(closed) = tracker.pop_closed() {
@@ -799,7 +801,7 @@ mod tests {
         page(&mut controller, "https://a.test/", "A");
         tracker.observe_tabs(&controller, NOW);
 
-        controller.close_tab(blank);
+        assert_eq!(controller.close_tab(blank), CloseTabOutcome::Closed);
         tracker.observe_tabs(&controller, NOW);
 
         assert!(!tracker.has_closed_tabs());
@@ -811,7 +813,7 @@ mod tests {
         let mut tracker = SessionTracker::default();
         let a = page(&mut controller, "https://a.test/", "A");
         tracker.observe_tabs(&controller, NOW);
-        controller.close_tab(a);
+        assert_eq!(controller.close_tab(a), CloseTabOutcome::Closed);
         tracker.observe_tabs(&controller, NOW);
 
         let snapshot = tracker.snapshot(&controller, NOW);
@@ -838,7 +840,7 @@ mod tests {
         let mut tracker = SessionTracker::default();
         let a = page(&mut controller, "https://a.test/", "A");
         tracker.observe_tabs(&controller, NOW);
-        controller.close_tab(a);
+        assert_eq!(controller.close_tab(a), CloseTabOutcome::Closed);
         tracker.observe_tabs(&controller, NOW);
 
         tracker.append_closed(&[ClosedTab {

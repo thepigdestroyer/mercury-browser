@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! When and in what order the session is written, and when the recovery list may be changed:
 //! the part of the `mercury-settings` contract (items 5, 8, 9, 11) that is about ordering. Pure:
 //! the writer, the time and the deadlines are given, so every rule is tested with a fake.

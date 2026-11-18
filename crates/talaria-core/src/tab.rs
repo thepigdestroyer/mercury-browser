@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use crate::page_request::PageRequests;
 use crate::{BrowserCommand, BrowserEvent, BrowserState};
 
@@ -36,6 +37,7 @@ pub struct Tab {
     engine_ready: bool,
     /// A restored tab whose page is not created until the tab is first selected.
     load_deferred: bool,
+    opened_by_page: bool,
     // dialogs
     page_requests: PageRequests,
 }
@@ -48,8 +50,21 @@ impl Tab {
             initial_url: InitialUrl::Pending(None),
             engine_ready: false,
             load_deferred: false,
+            opened_by_page: false,
             page_requests: PageRequests::default(),
         }
+    }
+
+    pub(crate) fn opened_by_page(id: TabId, state: BrowserState) -> Self {
+        Self {
+            opened_by_page: true,
+            ..Self::new(id, state)
+        }
+    }
+
+    /// True for a tab a page opened (`window.open`, `target=_blank`).
+    pub const fn is_opened_by_page(&self) -> bool {
+        self.opened_by_page
     }
 
     pub const fn id(&self) -> TabId {
