@@ -23,10 +23,8 @@ impl Pasteboard for SystemPasteboard {
             return None;
         }
         if concealed {
-            let _marked = pasteboard.setString_forType(
-                &NSString::from_str(""),
-                &NSString::from_str(CONCEALED_TYPE),
-            );
+            let _marked = pasteboard
+                .setString_forType(&NSString::from_str(""), &NSString::from_str(CONCEALED_TYPE));
         }
         Some(i64::try_from(pasteboard.changeCount()).unwrap_or_default())
     }

@@ -57,8 +57,8 @@ pub(crate) fn connect_settings_window(window: &SettingsWindow) {
         window: window.as_weak(),
         ..SectionState::default()
     };
-    let ui = ui(window);
-    ui.set_storage_note(
+    let section_ui = ui(window);
+    section_ui.set_storage_note(
         if passwords.store.backend().is_persistent() {
             "Saved in your login keychain."
         } else {
@@ -77,7 +77,7 @@ pub(crate) fn connect_settings_window(window: &SettingsWindow) {
             }
         }
     };
-    ui.on_search_edited({
+    section_ui.on_search_edited({
         let weak = weak.clone();
         move |_| {
             let _slint = crate::callback_scope::InSlintCallback::enter();
@@ -86,7 +86,7 @@ pub(crate) fn connect_settings_window(window: &SettingsWindow) {
             }
         }
     });
-    ui.on_open_login({
+    section_ui.on_open_login({
         let weak = weak.clone();
         move |index| {
             let _slint = crate::callback_scope::InSlintCallback::enter();
@@ -95,30 +95,22 @@ pub(crate) fn connect_settings_window(window: &SettingsWindow) {
             }
         }
     });
-    ui.on_close_login(on(close));
-    ui.on_show_password(on(show_password));
-    ui.on_hide_password(on(hide_password));
-    ui.on_copy_username(on(copy_username));
-    ui.on_copy_password(on(copy_password));
-    ui.on_edit_login(on(edit));
-    ui.on_generate_for_edit(on(generate_for_edit));
-    ui.on_save_edit(on(save_edit));
-    ui.on_cancel_edit(on(cancel_edit));
-    ui.on_delete_login(on(|passwords| {
-        if let Some(window) = window_of(passwords) {
-            ui(&window).set_confirming_delete(true);
-        }
-    }));
-    ui.on_confirm_delete(on(confirm_delete));
-    ui.on_cancel_delete(on(|passwords| {
-        if let Some(window) = window_of(passwords) {
-            ui(&window).set_confirming_delete(false);
-        }
-    }));
-    ui.on_generate(on(generate));
-    ui.on_copy_generated(on(copy_generated));
-    ui.on_import_logins(on(choose_import));
-    ui.on_export_logins(on(choose_export));
+    section_ui.on_close_login(on(close));
+    section_ui.on_show_password(on(show_password));
+    section_ui.on_hide_password(on(hide_password));
+    section_ui.on_copy_username(on(copy_username));
+    section_ui.on_copy_password(on(copy_password));
+    section_ui.on_edit_login(on(edit));
+    section_ui.on_generate_for_edit(on(generate_for_edit));
+    section_ui.on_save_edit(on(save_edit));
+    section_ui.on_cancel_edit(on(cancel_edit));
+    section_ui.on_delete_login(on(ask_to_delete));
+    section_ui.on_confirm_delete(on(confirm_delete));
+    section_ui.on_cancel_delete(on(cancel_delete));
+    section_ui.on_generate(on(generate));
+    section_ui.on_copy_generated(on(copy_generated));
+    section_ui.on_import_logins(on(choose_import));
+    section_ui.on_export_logins(on(choose_export));
     refresh(&passwords);
 }
 
@@ -274,7 +266,10 @@ fn copy_username(passwords: &Rc<Passwords>) {
     let Some(key) = selected(passwords) else {
         return;
     };
-    let copied = passwords.pasteboard.write_text(&key.username, false).is_some();
+    let copied = passwords
+        .pasteboard
+        .write_text(&key.username, false)
+        .is_some();
     set_status(if copied {
         "Copied the user name."
     } else {
@@ -351,6 +346,18 @@ fn save_edit(passwords: &Rc<Passwords>) {
             ui.set_status("Saved the login.".into());
         }
         Err(error) => ui.set_edit_problem(error.message().into()),
+    }
+}
+
+fn ask_to_delete(passwords: &Rc<Passwords>) {
+    if let Some(window) = window_of(passwords) {
+        ui(&window).set_confirming_delete(true);
+    }
+}
+
+fn cancel_delete(passwords: &Rc<Passwords>) {
+    if let Some(window) = window_of(passwords) {
+        ui(&window).set_confirming_delete(false);
     }
 }
 
@@ -709,7 +716,11 @@ mod tests {
         export_file(&passwords, &export);
         let written = std::fs::read_to_string(&export).expect("written");
         assert!(written.contains("c.test,https://c.test,carol,fake-c"));
-        assert!(ui(&window).get_status().starts_with("Exported 3 logins to out.csv."));
+        assert!(
+            ui(&window)
+                .get_status()
+                .starts_with("Exported 3 logins to out.csv.")
+        );
     }
 
     #[test]

@@ -665,7 +665,10 @@ mod tests {
     #[test]
     fn fill_login_comes_first_and_opens_the_list_of_logins() {
         let mut model = password_field_menu();
-        assert_eq!(labels(model.rows()), vec!["Fill login…", "—", "Cut", "Paste"]);
+        assert_eq!(
+            labels(model.rows()),
+            vec!["Fill login…", "—", "Cut", "Paste"]
+        );
 
         assert_eq!(model.click(0), MenuOutcome::Replaced);
 
@@ -674,7 +677,11 @@ mod tests {
             vec!["Fill a login for a.test", "—", "alice", "bob"]
         );
         assert_eq!(model.highlighted(), Some(2), "the first login");
-        assert_eq!(model.click(0), MenuOutcome::Stay, "the heading does nothing");
+        assert_eq!(
+            model.click(0),
+            MenuOutcome::Stay,
+            "the heading does nothing"
+        );
         assert_eq!(
             model.click(3),
             MenuOutcome::Close(Some(MenuCommand::FillLogin(1)))

@@ -32,7 +32,7 @@ use mercury_password_manager::{
 };
 use mercury_passwords::{MemoryBackend, PasswordStore};
 
-pub(crate) use fill::{FillMenu, fill_chosen, fill_menu};
+pub(crate) use fill::{fill_chosen, fill_menu};
 pub(crate) use section::{connect_settings_window, settings_window_closed};
 pub(crate) use sign_in::{
     SAVE_SIGN_IN_CHOICE, offers_to_save_sign_in, saved_http_credentials, sign_in_sent,
@@ -113,15 +113,18 @@ impl Passwords {
         };
         self.copied.set(Some(copied));
         let this = Rc::downgrade(self);
-        self.clear_timer
-            .start(slint::TimerMode::SingleShot, CLIPBOARD_CLEAR_DELAY, move || {
+        self.clear_timer.start(
+            slint::TimerMode::SingleShot,
+            CLIPBOARD_CLEAR_DELAY,
+            move || {
                 let _slint = crate::callback_scope::InSlintCallback::enter();
                 if let Some(this) = this.upgrade()
                     && let Some(copied) = this.copied.take()
                 {
                     copied.clear_if_unchanged(this.pasteboard.as_ref());
                 }
-            });
+            },
+        );
         true
     }
 }
@@ -149,7 +152,10 @@ pub(crate) fn start(automated: bool, default_profile: bool) {
     }
 }
 
-fn in_memory(authenticator: Rc<dyn Authenticator>, pasteboard: Rc<dyn Pasteboard>) -> Rc<Passwords> {
+fn in_memory(
+    authenticator: Rc<dyn Authenticator>,
+    pasteboard: Rc<dyn Pasteboard>,
+) -> Rc<Passwords> {
     Passwords::new(
         AnyBackend::Memory(MemoryBackend::new()),
         authenticator,
@@ -213,13 +219,7 @@ pub(crate) mod tests {
     fn a_profile_dir_run_keeps_logins_in_memory_too() {
         start(false, false);
 
-        assert!(
-            !current()
-                .expect("started")
-                .store
-                .backend()
-                .is_persistent()
-        );
+        assert!(!current().expect("started").store.backend().is_persistent());
     }
 
     #[test]
@@ -230,7 +230,7 @@ pub(crate) mod tests {
         assert!(passwords.copy_secret("fake-pw"));
         assert_eq!(pasteboard.contents(), Some(("fake-pw".to_owned(), true)));
         i_slint_backend_testing::mock_elapsed_time(
-            u64::try_from(CLIPBOARD_CLEAR_DELAY.as_millis()).expect("fits") + 10,
+            CLIPBOARD_CLEAR_DELAY + std::time::Duration::from_millis(10),
         );
         slint::platform::update_timers_and_animations();
 

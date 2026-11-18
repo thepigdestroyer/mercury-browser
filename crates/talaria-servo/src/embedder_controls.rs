@@ -146,16 +146,18 @@ impl EmbedderControls {
             return None;
         };
         let store = self.store.borrow();
-        let field = password_field_in_frame(&store.entries, *menu, |control| match control {
-            EmbedderControl::InputMethod(input_method) => {
-                input_method.input_method_type() == servo::InputMethodType::Password
-            }
-            _ => false,
-        }, |a, b| a.pipeline_id == b.pipeline_id)?;
-        Some(BrowserEvent::PasswordFieldMenu {
-            menu: *menu,
-            field,
-        })
+        let field = password_field_in_frame(
+            &store.entries,
+            *menu,
+            |control| match control {
+                EmbedderControl::InputMethod(input_method) => {
+                    input_method.input_method_type() == servo::InputMethodType::Password
+                }
+                _ => false,
+            },
+            |a, b| a.pipeline_id == b.pipeline_id,
+        )?;
+        Some(BrowserEvent::PasswordFieldMenu { menu: *menu, field })
     }
 
     /// Drops every pending control with the engine's default answer and returns the events that

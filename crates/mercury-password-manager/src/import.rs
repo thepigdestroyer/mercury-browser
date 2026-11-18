@@ -128,7 +128,11 @@ mod tests {
         assert_eq!(report.added, 1);
         assert_eq!(report.already_saved, 2);
         assert_eq!(report.failed, 0);
-        assert_eq!(report.skipped.len(), 1, "plain http is not a site for logins");
+        assert_eq!(
+            report.skipped.len(),
+            1,
+            "plain http is not a site for logins"
+        );
         assert_eq!(report.skipped[0].line, 5);
         assert_eq!(
             store

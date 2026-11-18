@@ -8,7 +8,9 @@ use std::path::PathBuf;
 
 use block2::RcBlock;
 use objc2::rc::Retained;
-use objc2_app_kit::{NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSavePanel, NSView, NSWindow};
+use objc2_app_kit::{
+    NSModalResponse, NSModalResponseOK, NSOpenPanel, NSSavePanel, NSView, NSWindow,
+};
 use objc2_foundation::{MainThreadMarker, NSArray, NSString};
 use slint::winit_030::WinitWindowAccessor;
 use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
@@ -52,7 +54,12 @@ pub(crate) fn choose_import_file(window: &slint::Window, done: Chosen) {
     let done = Cell::new(Some(done));
     let handler = RcBlock::new(move |response: NSModalResponse| {
         let path = (response == NSModalResponseOK)
-            .then(|| chosen_panel.URLs().iter().find_map(|url| url.to_file_path()))
+            .then(|| {
+                chosen_panel
+                    .URLs()
+                    .iter()
+                    .find_map(|url| url.to_file_path())
+            })
             .flatten();
         if let Some(done) = done.take() {
             done(path);

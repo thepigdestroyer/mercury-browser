@@ -99,10 +99,7 @@ mod tests {
         assert_eq!(literal("a\"b\\c"), "\"a\\\"b\\\\c\"");
         assert_eq!(literal("x\ny\r\u{0}"), "\"x\\u000ay\\u000d\\u0000\"");
         assert_eq!(literal("</script>"), "\"\\u003c/script\\u003e\"");
-        assert_eq!(
-            literal("p\u{2028}q\u{2029}"),
-            "\"p\\u2028q\\u2029\""
-        );
+        assert_eq!(literal("p\u{2028}q\u{2029}"), "\"p\\u2028q\\u2029\"");
         assert_eq!(literal("Zoë ✓"), "\"Zoë ✓\"");
     }
 

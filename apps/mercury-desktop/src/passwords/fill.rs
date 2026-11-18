@@ -149,7 +149,10 @@ pub(super) mod diagnostics {
             &LoginKey::form(origin, username),
             &Password::new(password.to_owned()),
         );
-        eprintln!("mercury-passwords-diag: seeded one login: {}", saved.is_ok());
+        eprintln!(
+            "mercury-passwords-diag: seeded one login: {}",
+            saved.is_ok()
+        );
     }
 
     pub(crate) fn observe_event(

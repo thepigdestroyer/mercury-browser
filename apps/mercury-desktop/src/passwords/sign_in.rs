@@ -9,7 +9,9 @@ use std::rc::Rc;
 use std::time::Instant;
 
 use mercury_passwords::{Origin, Password};
-use talaria_core::{BrowserEvent, HttpCredentials, LoadState, PageRequestId, PageRequestKind, TabId};
+use talaria_core::{
+    BrowserEvent, HttpCredentials, LoadState, PageRequestId, PageRequestKind, TabId,
+};
 
 use super::{Passwords, current};
 
@@ -176,8 +178,8 @@ mod tests {
         observe_event(&passwords, tab, &BrowserEvent::PageLoadStarted);
         observe_event(&passwords, tab, &loaded());
 
-        let saved = saved_http_credentials(PageRequestId::new(2), ORIGIN, None)
-            .expect("saved and found");
+        let saved =
+            saved_http_credentials(PageRequestId::new(2), ORIGIN, None).expect("saved and found");
         assert_eq!(saved.username(), "alice");
         assert_eq!(saved.password(), "fake-pw");
         assert!(
@@ -215,7 +217,10 @@ mod tests {
         install_fakes();
 
         assert!(offers_to_save_sign_in(Some(ORIGIN), false));
-        assert!(!offers_to_save_sign_in(Some(ORIGIN), true), "not for a proxy");
+        assert!(
+            !offers_to_save_sign_in(Some(ORIGIN), true),
+            "not for a proxy"
+        );
         assert!(!offers_to_save_sign_in(Some("http://example.com"), false));
         assert!(!offers_to_save_sign_in(None, false));
 

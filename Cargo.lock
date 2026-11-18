@@ -5373,6 +5373,8 @@ dependencies = [
  "image",
  "libc",
  "log",
+ "mercury-password-manager",
+ "mercury-passwords",
  "mercury-settings",
  "mercury-ui",
  "objc2 0.6.5",
@@ -5389,6 +5391,7 @@ dependencies = [
  "talaria-servo",
  "tempfile",
  "thiserror 2.0.21",
+ "zeroize",
 ]
 
 [[package]]

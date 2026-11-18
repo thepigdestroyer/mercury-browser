@@ -87,7 +87,11 @@ fn sample_settings_window(scheme: ColorScheme) -> Result<SettingsWindow, Box<dyn
         row("accounts.example", "alice@example.com", ""),
         row("http://127.0.0.1:8123", "bob", "HTTP sign-in"),
         row("mail.example", "No user name", ""),
-        row("shop.test", "a.very.long.user.name.that.does.not.fit@example.org", ""),
+        row(
+            "shop.test",
+            "a.very.long.user.name.that.does.not.fit@example.org",
+            "",
+        ),
     ])));
     ui.set_total(4);
     ui.set_generated("vH7#qP2-kZ9wT4mX@cE6".into());

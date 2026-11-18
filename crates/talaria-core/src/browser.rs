@@ -458,12 +458,9 @@ impl BrowserState {
     /// (in its frame) and the field still has focus.
     pub fn password_field_menu(&self) -> Option<ControlId> {
         let (menu, field) = self.password_field_menu?;
-        let menu_pending = self
-            .pending_control
-            .as_ref()
-            .is_some_and(|(id, request)| {
-                *id == menu && matches!(request, ControlRequest::ContextMenu { .. })
-            });
+        let menu_pending = self.pending_control.as_ref().is_some_and(|(id, request)| {
+            *id == menu && matches!(request, ControlRequest::ContextMenu { .. })
+        });
         (menu_pending && self.input_method_id() == Some(field)).then_some(field)
     }
 }

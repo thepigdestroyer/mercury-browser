@@ -11,9 +11,9 @@ use std::collections::HashMap;
 
 use block2::RcBlock;
 use mercury_password_manager::{AuthOutcome, Authenticator};
+use objc2::msg_send;
 use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, Bool};
-use objc2::msg_send;
 use objc2_foundation::NSString;
 
 #[link(name = "LocalAuthentication", kind = "framework")]
@@ -60,9 +60,7 @@ impl Authenticator for LocalAuthentication {
             next.get()
         });
         WAITING.with(|waiting| {
-            waiting
-                .borrow_mut()
-                .insert(id, (context.clone(), done));
+            waiting.borrow_mut().insert(id, (context.clone(), done));
         });
         // Called once, on a private queue of the framework; the answer goes to the UI thread.
         let reply = RcBlock::new(move |success: Bool, _error: *mut AnyObject| {
