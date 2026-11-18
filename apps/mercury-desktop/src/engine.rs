@@ -204,7 +204,10 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
 }
 
 // session: lets a newly selected restored tab get its web view without waiting for a redraw
-/// Asks for a pump from the event loop, as Servo's waker does.
+// media-session lane, openurl, find: commands queued outside a render (media keys, links from
+// other apps, find's debounce timer, the `--find` diagnostic) need their command dispatched.
+/// Asks for a pump from the event loop, as Servo's waker does: soon, even while the window is
+/// covered and skips its renders.
 pub(crate) fn request_pump() {
     let _queued = slint::invoke_from_event_loop(pump_after_wake);
 }
@@ -218,13 +221,6 @@ pub(crate) fn engine_busy() -> bool {
             .upgrade()
             .is_some_and(|engine| engine.state.try_borrow_mut().is_err())
     })
-}
-
-// media-session lane, openurl, find: commands queued outside a render (media keys, links from
-// other apps, find's debounce timer, the `--find` diagnostic) need their command dispatched.
-/// Asks for a pump soon, even while the window is covered and skips its renders.
-pub(crate) fn request_pump() {
-    let _queued = slint::invoke_from_event_loop(pump_after_wake);
 }
 
 fn pump_after_wake() {
@@ -581,10 +577,11 @@ impl EngineState {
             self.current_viewport_size = Some(viewport_size);
         }
 
-        // media-session lane
+        // media-session lane: `runtime` is the `&ServoRuntime` taken from `self.runtime` at the
+        // top of this function (the field is an `Option` since `take_parts`).
         crate::media_session::after_pump(
             &mut self.controller.borrow_mut(),
-            self.runtime.engine_media_session_tab(),
+            runtime.engine_media_session_tab(),
         );
         match dispatch_pending_commands(&self.controller, &mut self.web_views) {
             Ok(has_pending_commands) => {
