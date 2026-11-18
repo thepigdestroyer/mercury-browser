@@ -1,8 +1,7 @@
 # Which licence each file is under, for files that cannot carry a licence comment (Markdown with
 # front matter, HTML, JSON, images, XML). Code files say it in their own SPDX header.
 # Format: https://reuse.software/spec-3.3/#reusetoml. Vendored code in third_party/ keeps its own
-# licence files and is not listed here. The application icon is drawn from the Hermes Browser logo,
-# so it and every image made from it stay under the MPL-2.0.
+# licence files and is not listed here.
 version = 1
 
 [[annotations]]
@@ -11,6 +10,7 @@ path = [
   ".opencode/skills/mercury-build-hygiene/SKILL.md",
   "AGENTS.md",
   "apps/mercury-desktop/resources/macos/entitlements-adhoc.plist",
+  "apps/mercury-desktop/resources/mercury-browser.svg",
   "CONTRIBUTING.md",
   "crates/mercury-import/tests/fixtures/chrome_export.html",
   "crates/mercury-import/tests/fixtures/chromium_Bookmarks.json",
@@ -18,6 +18,9 @@ path = [
   "crates/mercury-import/tests/fixtures/safari_export.html",
   "crates/talaria-servo/resources/page-defaults.css",
   "crates/talaria-servo/tests/fixtures/servo-0.8.0-cookie_jar.json",
+  "docs/assets/brand/social-preview.png",
+  "docs/assets/mercury-browser.svg",
+  "docs/assets/readme-banner.svg",
   "docs/developer-guide/continuous-integration.md",
   "docs/developer-guide/hands-on-checklist.md",
   "docs/developer-guide/passwords.md",
@@ -83,7 +86,6 @@ path = [
   "apps/mercury-desktop/resources/macos/AppIcon.iconset/icon_512x512@2x.png",
   "apps/mercury-desktop/resources/macos/entitlements.plist",
   "apps/mercury-desktop/resources/macos/Info.plist.in",
-  "apps/mercury-desktop/resources/mercury-browser.svg",
   "crates/talaria-servo/resources/adblock/brave-firstparty.txt",
   "crates/talaria-servo/resources/adblock/brave-specific.txt",
   "crates/talaria-servo/resources/adblock/brave-unbreak.txt",
@@ -91,8 +93,6 @@ path = [
   "crates/talaria-servo/resources/adblock/easyprivacy.txt",
   "crates/talaria-servo/resources/adblock/README.md",
   "crates/talaria-servo/resources/adblock/ublock-filters.txt",
-  "docs/assets/mercury-browser.svg",
-  "docs/assets/readme-banner.svg",
   "docs/developer-guide/architecture.md",
   "docs/developer-guide/contributing.md",
   "docs/developer-guide/index.md",

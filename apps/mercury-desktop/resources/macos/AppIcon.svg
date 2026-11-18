@@ -1,0 +1,38 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1024 1024" width="1024" height="1024" role="img" aria-label="Mercury Browser">
+  <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+  <!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+  <!-- Mercury Browser app icon: the M sigil crossing the Sun's disc, like Mercury in transit.
+       Drawn on Apple's macOS icon grid: an 824 px plate centred on the 1024 px canvas (100 px
+       margin, corner radius 185.4). Sizes up to 32 px use AppIcon-small.svg instead.
+       scripts/macos/make-icns.sh renders both into AppIcon.iconset and AppIcon.icns. -->
+  <defs>
+    <linearGradient id="plate" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="924">
+      <stop offset="0" stop-color="#2A1F4F"/>
+      <stop offset="1" stop-color="#0C0819"/>
+    </linearGradient>
+    <linearGradient id="sheen" gradientUnits="userSpaceOnUse" x1="0" y1="100" x2="0" y2="600">
+      <stop offset="0" stop-color="#FFFFFF" stop-opacity="0.12"/>
+      <stop offset="1" stop-color="#FFFFFF" stop-opacity="0"/>
+    </linearGradient>
+    <radialGradient id="halo" gradientUnits="userSpaceOnUse" cx="512" cy="512" r="300">
+      <stop offset="0.7" stop-color="#FF9A3C" stop-opacity="0.45"/>
+      <stop offset="1" stop-color="#FF9A3C" stop-opacity="0"/>
+    </radialGradient>
+    <radialGradient id="sun" gradientUnits="userSpaceOnUse" cx="482" cy="462" r="290">
+      <stop offset="0" stop-color="#FFF3C4"/>
+      <stop offset="0.45" stop-color="#FFC857"/>
+      <stop offset="0.85" stop-color="#FF8A2F"/>
+      <stop offset="1" stop-color="#EC5B27"/>
+    </radialGradient>
+  </defs>
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="url(#plate)"/>
+  <rect x="100" y="100" width="824" height="824" rx="185.4" fill="url(#sheen)"/>
+  <rect x="101" y="101" width="822" height="822" rx="184.4" fill="none" stroke="#FFFFFF" stroke-opacity="0.1" stroke-width="2"/>
+  <circle cx="512" cy="512" r="300" fill="url(#halo)"/>
+  <circle cx="512" cy="512" r="232" fill="url(#sun)"/>
+  <g fill="none" stroke="#1E1233" stroke-width="34.7" stroke-linecap="round">
+    <path d="M405.4,648 V400 C405.4,459.5 447.5,510.4 482.2,543.8"/>
+    <path d="M618.6,648 V400 C618.6,459.5 576.5,510.4 541.8,543.8"/>
+    <circle cx="512" cy="579.8" r="42.2"/>
+  </g>
+</svg>
