@@ -94,8 +94,13 @@ pub(crate) struct ScreenshotOptions {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CliOutcome {
-    Run(LaunchOptions),
-    PrintAndExit { text: String, code: i32 },
+    /// Boxed: the options hold every lane's diagnostics too, and are far larger than the other
+    /// variant.
+    Run(Box<LaunchOptions>),
+    PrintAndExit {
+        text: String,
+        code: i32,
+    },
 }
 
 /// `--exit-by logout` sends the browser a log-out quit event; only builds with the
@@ -389,7 +394,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, None) => None,
     };
 
-    Ok(CliOutcome::Run(LaunchOptions {
+    Ok(CliOutcome::Run(Box::new(LaunchOptions {
         urls,
         screenshot,
         window_size,
@@ -405,7 +410,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         exit_request,
         #[cfg(feature = "diagnostics")]
         find,
-    }))
+    })))
 }
 
 fn option_value(
@@ -441,6 +446,10 @@ mod tests {
         parse_arguments(arguments.iter().map(|argument| (*argument).to_owned()))
     }
 
+    fn run(options: LaunchOptions) -> CliOutcome {
+        CliOutcome::Run(Box::new(options))
+    }
+
     fn exit_code(outcome: &CliOutcome) -> Option<i32> {
         match outcome {
             CliOutcome::Run(_) => None,
@@ -450,14 +459,14 @@ mod tests {
 
     #[test]
     fn no_arguments_run_with_no_urls() {
-        assert_eq!(parse(&[]), CliOutcome::Run(LaunchOptions::default()));
+        assert_eq!(parse(&[]), run(LaunchOptions::default()));
     }
 
     #[test]
     fn urls_are_kept_in_order() {
         assert_eq!(
             parse(&["https://a.test", "b.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned(), "b.test".to_owned()],
                 ..LaunchOptions::default()
             })
@@ -476,7 +485,7 @@ mod tests {
                 "800x600",
                 "https://a.test",
             ]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 screenshot: Some(ScreenshotOptions {
                     path: PathBuf::from("out.png"),
@@ -611,7 +620,7 @@ mod tests {
 
         assert_eq!(
             parse(&["--background", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 background: true,
                 ..LaunchOptions::default()
@@ -638,7 +647,7 @@ mod tests {
 
         assert_eq!(
             parse(&["--disable-gpu-canvas", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 gpu_canvas: false,
                 ..LaunchOptions::default()
@@ -660,7 +669,7 @@ mod tests {
     fn profile_dir_is_parsed() {
         assert_eq!(
             parse(&["--profile-dir", "/x", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 profile_dir: Some(PathBuf::from("/x")),
                 ..LaunchOptions::default()
@@ -772,7 +781,7 @@ mod tests {
 
         assert_eq!(
             parse(&["--disable-experimental-web-features", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 experimental_web_features: false,
                 ..LaunchOptions::default()
@@ -908,7 +917,7 @@ mod tests {
     fn macos_process_serial_number_is_ignored() {
         assert_eq!(
             parse(&["-psn_0_123", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 ..LaunchOptions::default()
             })

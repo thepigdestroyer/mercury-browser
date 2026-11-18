@@ -106,7 +106,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         )
     });
     let options = match parsed {
-        CliOutcome::Run(options) => options,
+        CliOutcome::Run(options) => *options,
         CliOutcome::PrintAndExit { text, code } => {
             if code == 0 {
                 println!("{text}");
