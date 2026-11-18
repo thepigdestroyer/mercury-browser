@@ -102,7 +102,7 @@ pub(crate) fn connect_site_security_callbacks(
         };
         if let Ok(url) = Url::parse(clear_controller.borrow().active_state().url()) {
             crate::engine::with_runtime(|runtime| {
-                runtime.clear_site_data(&url);
+                runtime.clear_data_for_site(&url);
             });
         }
         refresh_site_info(&window, &clear_controller.borrow());

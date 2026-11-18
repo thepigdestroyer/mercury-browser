@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Marks the code Mercury runs from Slint's callbacks, so that code reached from outside Slint
 //! (an AppKit callback dispatched from a nested run loop, such as a modal panel's, opened by a
 //! Slint callback) can tell that Slint is in the middle of a callback and may hold its state

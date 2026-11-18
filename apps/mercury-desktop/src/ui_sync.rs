@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use std::cell::Cell;
 
 use mercury_ui::{BrowserTab, MainWindow, WebViewCursor, WebViewPointerButton};
@@ -125,8 +126,11 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     crate::site_security::sync_window(window, controller); // site-security
     // controls
     crate::controls::sync(window, controller);
+    // session: every change the window shows may need saving (before the menus read it)
+    crate::session::observe(window, controller);
     // menus lane: what the native menus show (Back/Forward, the tab list).
     crate::menus::sync(controller);
+    crate::bookmarks::sync(window, controller); // bookmarks lane
 }
 
 /// Only page-requested fullscreen is mirrored, so a window the user made fullscreen is left

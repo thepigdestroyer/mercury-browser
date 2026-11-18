@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Servo's servoshell, https://github.com/servo/servo, tag `v0.8.0` (commit
 // `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), files `ports/servoshell/crash_handler.rs` and
 // `ports/servoshell/backtrace.rs` (the latter as the `backtrace` module below, without its

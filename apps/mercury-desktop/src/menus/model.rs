@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! What the menus contain and who owns each key: the macOS menu bar and the browser menu are
 //! both built from this table, and the tests check it against `shortcuts.rs`.
 
@@ -16,14 +18,9 @@ pub(crate) enum MenuCommand {
     OpenDocument(Document),
     /// Handled entirely by AppKit (standard selectors, macOS only).
     System(SystemAction),
+    /// import-ui: File ▸ "Import…", the import window.
+    ImportBrowserData,
     // Seams other lanes fill in (`seams.rs`); disabled until they do.
-    ReopenClosedTab,
-    RestorePreviousSession,
-    ShowHistory,
-    ClearBrowsingData,
-    BookmarkThisPage,
-    ToggleBookmarksBar,
-    ShowBookmarksManager,
     /// An entry of the bookmarks bar's first level, by its stable id.
     OpenBookmark(super::seams::BookmarkId),
     // No engine API in Servo 0.8.0: always disabled.
@@ -424,7 +421,15 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 ),
                 Separator,
                 action("Close Tab", key('w', CMD), Shortcut(A::CloseTab)),
-                action("Reopen Closed Tab", key('t', SHIFT_CMD), ReopenClosedTab),
+                // Session lane.
+                action(
+                    "Reopen Closed Tab",
+                    key('t', SHIFT_CMD),
+                    Shortcut(A::ReopenClosedTab),
+                ),
+                Separator,
+                // import-ui: other browsers' bookmarks and history.
+                action("Import…", None, ImportBrowserData),
             ],
         },
         Menu {
@@ -467,29 +472,42 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 action("Back", key('[', CMD), Shortcut(A::Back)),
                 action("Forward", key(']', CMD), Shortcut(A::Forward)),
                 Separator,
-                // History lane: these two open its window and its dialog (see `seams.rs`).
-                action("Show All History", key('y', CMD), ShowHistory),
+                // History lane: its window and its dialog, through its shortcuts.
+                action("Show All History", key('y', CMD), Shortcut(A::ShowHistory)),
                 action(
                     "Clear Browsing Data…",
                     key(DELETE_KEY, SHIFT_CMD),
-                    ClearBrowsingData,
+                    Shortcut(A::ClearBrowsingData),
                 ),
                 Separator,
                 // Session lane.
-                action("Restore Previous Session", None, RestorePreviousSession),
+                action(
+                    "Restore Previous Session",
+                    None,
+                    Shortcut(A::RestorePreviousSession),
+                ),
             ],
         },
         Menu {
             title: "Bookmarks",
             items: vec![
-                // Bookmarks lane (see `seams.rs`).
-                action("Bookmark This Page…", key('d', CMD), BookmarkThisPage),
+                // Bookmarks lane: its actions, through its shortcuts; the bar's entries through
+                // `seams.rs`.
+                action(
+                    "Bookmark This Page…",
+                    key('d', CMD),
+                    Shortcut(A::BookmarkPage),
+                ),
                 action(
                     "Show Bookmarks Bar",
                     key('b', SHIFT_CMD),
-                    ToggleBookmarksBar,
+                    Shortcut(A::ToggleBookmarksBar),
                 ),
-                action("Bookmarks Manager", None, ShowBookmarksManager),
+                action(
+                    "Bookmarks Manager",
+                    key('b', OPTION_CMD),
+                    Shortcut(A::ShowBookmarksManager),
+                ),
                 Separator,
                 BookmarksBarFolder,
             ],
@@ -531,14 +549,8 @@ pub(crate) fn tab_key(index: usize) -> Option<KeyEquivalent> {
 pub(crate) const fn is_available(command: MenuCommand) -> bool {
     use MenuCommand::*;
     match command {
-        Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) => true,
-        ReopenClosedTab => super::seams::REOPEN_CLOSED_TAB_AVAILABLE,
-        RestorePreviousSession => super::seams::RESTORE_PREVIOUS_SESSION_AVAILABLE,
-        ShowHistory => super::seams::SHOW_HISTORY_AVAILABLE,
-        ClearBrowsingData => super::seams::CLEAR_BROWSING_DATA_AVAILABLE,
-        BookmarkThisPage | ToggleBookmarksBar | ShowBookmarksManager | OpenBookmark(_) => {
-            super::seams::BOOKMARKS_AVAILABLE
-        }
+        Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) | ImportBrowserData => true,
+        OpenBookmark(_) => super::seams::BOOKMARKS_AVAILABLE,
         Find | Stop => false,
     }
 }
@@ -580,6 +592,11 @@ pub(crate) struct MenuSnapshot {
     /// The bookmarks bar's first level, in order: each entry's stable id and title (bookmarks
     /// lane).
     pub(crate) bookmarks_bar: Vec<(super::seams::BookmarkId, String)>,
+    // session
+    /// A closed tab can be reopened.
+    pub(crate) can_reopen_closed_tab: bool,
+    /// The last run's session was kept and not yet restored.
+    pub(crate) can_restore_previous_session: bool,
 }
 
 pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: EditTarget) -> bool {
@@ -593,6 +610,9 @@ pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: Ed
         Shortcut(ShortcutAction::NextTab | ShortcutAction::PreviousTab) => {
             snapshot.tab_titles.len() > 1
         }
+        // session
+        Shortcut(ShortcutAction::ReopenClosedTab) => snapshot.can_reopen_closed_tab,
+        Shortcut(ShortcutAction::RestorePreviousSession) => snapshot.can_restore_previous_session,
         Edit(command) => match edit {
             EditTarget::AddressBar => true,
             EditTarget::Page => {
@@ -831,13 +851,8 @@ mod tests {
             vec![
                 ("Hide Mercury Browser", "⌘H".to_owned()),
                 ("Hide Others", "⌥⌘H".to_owned()),
-                ("Reopen Closed Tab", "⇧⌘T".to_owned()),
                 ("Find…", "⌘F".to_owned()),
                 ("Enter Full Screen", "⌃⌘F".to_owned()),
-                ("Show All History", "⌘Y".to_owned()),
-                ("Clear Browsing Data…", "⇧⌘⌫".to_owned()),
-                ("Bookmark This Page…", "⌘D".to_owned()),
-                ("Show Bookmarks Bar", "⇧⌘B".to_owned()),
                 ("Minimize", "⌘M".to_owned()),
             ]
         );
@@ -862,20 +877,58 @@ mod tests {
     }
 
     #[test]
+    fn the_session_items_run_the_session_shortcuts_and_follow_what_they_can_do() {
+        let items = menu_bar()
+            .into_iter()
+            .flat_map(|menu| menu.items)
+            .filter_map(|item| match item {
+                MenuItem::Action { title, command, .. } => Some((title, command)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        let reopen = MenuCommand::Shortcut(ShortcutAction::ReopenClosedTab);
+        let restore = MenuCommand::Shortcut(ShortcutAction::RestorePreviousSession);
+        assert!(items.contains(&("Reopen Closed Tab", reopen)));
+        assert!(items.contains(&("Restore Previous Session", restore)));
+
+        let nothing = MenuSnapshot::default();
+        assert!(!is_enabled(reopen, &nothing, EditTarget::None));
+        assert!(!is_enabled(restore, &nothing, EditTarget::None));
+        let something = MenuSnapshot {
+            can_reopen_closed_tab: true,
+            can_restore_previous_session: true,
+            ..MenuSnapshot::default()
+        };
+        assert!(is_enabled(reopen, &something, EditTarget::None));
+        assert!(is_enabled(restore, &something, EditTarget::None));
+    }
+
+    #[test]
+    fn the_file_menu_opens_the_import_window() {
+        let file = menu_bar()
+            .into_iter()
+            .find(|menu| menu.title == "File")
+            .expect("a File menu");
+        let import = file.items.into_iter().find_map(|item| match item {
+            MenuItem::Action {
+                title: "Import…",
+                key,
+                command,
+            } => Some((key, command)),
+            _ => None,
+        });
+        assert_eq!(import, Some((None, MenuCommand::ImportBrowserData)));
+        assert!(is_enabled(
+            MenuCommand::ImportBrowserData,
+            &MenuSnapshot::default(),
+            EditTarget::None
+        ));
+    }
+
+    #[test]
     fn actions_that_do_not_exist_yet_are_disabled() {
         let snapshot = MenuSnapshot::default();
-        for command in [
-            MenuCommand::ReopenClosedTab,
-            MenuCommand::RestorePreviousSession,
-            MenuCommand::ShowHistory,
-            MenuCommand::ClearBrowsingData,
-            MenuCommand::BookmarkThisPage,
-            MenuCommand::ToggleBookmarksBar,
-            MenuCommand::ShowBookmarksManager,
-            MenuCommand::OpenBookmark(crate::menus::seams::BookmarkId::default()),
-            MenuCommand::Find,
-            MenuCommand::Stop,
-        ] {
+        for command in [MenuCommand::Find, MenuCommand::Stop] {
             assert!(
                 !is_enabled(command, &snapshot, EditTarget::AddressBar),
                 "{command:?}"
@@ -884,6 +937,15 @@ mod tests {
         assert!(is_enabled(
             MenuCommand::Shortcut(ShortcutAction::NewTab),
             &snapshot,
+            EditTarget::None
+        ));
+    }
+
+    #[test]
+    fn the_bookmarks_bar_entries_are_enabled() {
+        assert!(is_enabled(
+            MenuCommand::OpenBookmark(crate::menus::seams::BookmarkId(7)),
+            &MenuSnapshot::default(),
             EditTarget::None
         ));
     }
@@ -1047,7 +1109,7 @@ mod tests {
         );
         assert_eq!(
             item_for_key(&key_from_appkit_characters("\u{7f}"), SHIFT_CMD, 1),
-            Some(ClearBrowsingData)
+            Some(Shortcut(ShortcutAction::ClearBrowsingData))
         );
         // AppKit reports Shift+Cmd+] as "}".
         assert_eq!(

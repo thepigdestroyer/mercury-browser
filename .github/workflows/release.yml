@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 # The macOS job, the signing steps and the publishing job are adapted from
 # Zervo, https://github.com/Goddv/Zervo, commit 86cb7126,
 # .github/workflows/macos.yml and .github/workflows/release.yml, MPL-2.0.

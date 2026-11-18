@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use servo::{DeviceIntPoint, DeviceIntRect, DeviceIntSize, ScreenGeometry};
 
 /// Screen and window geometry in device pixels, as the page's `window.screen` and

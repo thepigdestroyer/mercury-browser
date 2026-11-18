@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The user's settings: loaded at start, saved off the UI thread, applied to the browser, and
 //! edited in the settings window.
 //!
@@ -123,7 +125,6 @@ impl SettingsHandle {
 
     /// What the browser shows at start-up. The session work reads this to decide whether to
     /// restore the previous session.
-    #[allow(dead_code, reason = "read by the session work")]
     pub(crate) fn startup_behavior(&self) -> StartupBehavior {
         self.settings.borrow().startup
     }
@@ -135,12 +136,32 @@ impl SettingsHandle {
     }
 
     /// The engine address-bar searches go to (DuckDuckGo when the chosen one no longer exists).
-    #[allow(
-        dead_code,
-        reason = "read by the history work (the search row of suggestions)"
-    )]
     pub(crate) fn default_search_engine(&self) -> SearchEngine {
         self.settings.borrow().search.default_engine()
+    }
+
+    // history lane
+    /// The name of the engine a search for `text` goes to: a keyword's engine when `text` starts
+    /// with one, as in `apply::search_url_builder`, the default engine otherwise.
+    pub(crate) fn search_engine_name(&self, text: &str) -> String {
+        let keyword_engine = self
+            .settings
+            .borrow()
+            .search
+            .match_keyword(text)
+            .map(|(engine, _)| engine);
+        keyword_engine
+            .unwrap_or_else(|| self.default_search_engine())
+            .name
+    }
+
+    /// "Clear history on exit", for the quit sequence: run once, before the history database
+    /// closes (`post_run`'s `shut_down_profile_data` slot).
+    pub(crate) fn clear_history_on_exit_if_asked(&self) {
+        let settings = self.settings.borrow();
+        if settings.privacy.clear_on_exit.history {
+            exit::clear_history_on_exit(&settings);
+        }
     }
 
     /// A copy of every setting.
@@ -327,10 +348,8 @@ impl SettingsHandle {
                 );
             }
         }
-        let settings = self.settings.borrow();
-        if settings.privacy.clear_on_exit.history {
-            exit::clear_history_on_exit(&settings);
-        }
+        // history lane: clearing history on exit runs earlier, before the history database
+        // closes (`clear_history_on_exit_if_asked`).
     }
 }
 
@@ -372,6 +391,15 @@ impl SaveWorker {
             })?;
         Ok(Self { sender, thread })
     }
+}
+
+// history lane
+/// The name of the engine a search for `text` goes to (see
+/// [`SettingsHandle::search_engine_name`]); `None` before the settings are loaded.
+pub(crate) fn search_engine_name(text: &str) -> Option<String> {
+    HANDLE
+        .with(|current| current.borrow().upgrade())
+        .map(|handle| handle.search_engine_name(text))
 }
 
 /// The browser window is closing: close the settings window with it, so that the event loop,

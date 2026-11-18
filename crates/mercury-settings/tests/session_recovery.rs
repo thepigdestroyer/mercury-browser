@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Every crashed session stays recoverable until the application says the user dealt with it.
 //! Each test walks a sequence of runs and checks what `begin_run` returns and what is on disk
 //! after every step.
@@ -462,4 +464,109 @@ fn the_recovery_file_bounds_each_session_on_its_own() {
         vec![500, 500, 500],
         "a shared tab budget would have starved the older entries"
     );
+}
+
+/// Three crashes in a row: the list holds `five`, `ten` and `forty`, newest first.
+fn three_pending(profile: &Profile) -> Vec<SessionSnapshot> {
+    let five = session_of("five", 5);
+    profile.save(&forty(), false);
+    let _ = profile.start();
+    profile.save(&ten(), false);
+    let _ = profile.start();
+    profile.save(&five, false);
+    let recovery = profile.start().recovery;
+    assert_eq!(recovery, vec![five, ten(), forty()]);
+    recovery
+}
+
+#[test]
+fn removing_one_session_keeps_the_others_in_order() {
+    let profile = Profile::new();
+    let pending = three_pending(&profile);
+
+    assert!(profile.store.remove_recovery(&ten()).expect("remove"));
+
+    assert_eq!(
+        profile.recovery(),
+        Some(listed(&[pending[0].clone(), forty()]))
+    );
+    assert_eq!(profile.start().recovery, vec![pending[0].clone(), forty()]);
+}
+
+#[test]
+fn removing_the_last_session_removes_the_file() {
+    let profile = Profile::new();
+    profile.save(&forty(), false);
+    assert_eq!(profile.start().recovery, vec![forty()]);
+
+    assert!(profile.store.remove_recovery(&forty()).expect("remove"));
+
+    assert_eq!(profile.recovery(), None);
+    assert!(!profile.path("session.recovery.json").exists());
+}
+
+#[test]
+fn the_session_is_found_by_its_tabs_wherever_it_now_is_in_the_file() {
+    let profile = Profile::new();
+    let pending = three_pending(&profile);
+    // The file no longer matches the list the run started with: its first entry is gone.
+    assert!(profile.store.remove_recovery(&pending[0]).expect("remove"));
+
+    // Removing by what was the start-up list's index 1 would now hit `forty`.
+    assert!(profile.store.remove_recovery(&ten()).expect("remove"));
+
+    assert_eq!(profile.recovery(), Some(listed(&[forty()])));
+}
+
+#[test]
+fn a_session_that_is_not_in_the_file_removes_nothing() {
+    let profile = Profile::new();
+    let pending = three_pending(&profile);
+    let before = fs::read(profile.path("session.recovery.json")).expect("the list");
+
+    // As after a start whose write of the list failed: the run offers a crash that the file
+    // does not hold.
+    assert!(
+        !profile
+            .store
+            .remove_recovery(&session_of("unlisted", 3))
+            .expect("nothing to remove")
+    );
+
+    assert_eq!(
+        fs::read(profile.path("session.recovery.json")).expect("the list"),
+        before
+    );
+    assert_eq!(profile.recovery(), Some(listed(&pending)));
+    let empty = Profile::new();
+    assert!(!empty.store.remove_recovery(&forty()).expect("no file"));
+}
+
+#[test]
+fn a_session_equal_in_its_windows_is_the_one_removed() {
+    let profile = Profile::new();
+    profile.save(&forty(), false);
+    let _ = profile.start();
+    let restored = SessionSnapshot {
+        saved_at_ms: 12_345,
+        ..forty()
+    };
+
+    assert!(profile.store.remove_recovery(&restored).expect("remove"));
+
+    assert_eq!(profile.recovery(), None);
+}
+
+#[test]
+fn removing_from_a_newer_recovery_file_is_refused_and_leaves_it_alone() {
+    let profile = Profile::new();
+    let slot = profile.path("session.recovery.json");
+    let newer = format!(r#"{{"format_version": {}}}"#, SESSION_FORMAT_VERSION + 1);
+    fs::write(&slot, &newer).expect("seed");
+
+    assert!(matches!(
+        profile.store.remove_recovery(&forty()),
+        Err(SettingsError::NewerVersion { .. })
+    ));
+    assert_eq!(fs::read_to_string(&slot).expect("untouched"), newer);
 }

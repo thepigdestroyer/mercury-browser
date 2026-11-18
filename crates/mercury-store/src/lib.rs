@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The Mercury Browser profile database: browsing history, bookmarks and download records in one
 //! SQLite file (`places.sqlite`).
 //!
@@ -66,6 +68,32 @@ impl Store {
         schema::user_version(&self.conn)
     }
 
+    /// Copies what it can of the write-ahead log into the database file without waiting for
+    /// readers or writers (`PRAGMA wal_checkpoint(PASSIVE)`), so the log does not keep growing
+    /// between SQLite's automatic checkpoints. Returns the frames in the log and how many of
+    /// them are now in the database file (both -1 when the database is not in WAL mode).
+    pub fn checkpoint(&self) -> Result<(i64, i64)> {
+        Ok(self
+            .conn
+            .query_row("PRAGMA wal_checkpoint(PASSIVE)", [], |row| {
+                Ok((row.get(1)?, row.get(2)?))
+            })?)
+    }
+
+    /// Makes deleted rows unrecoverable from the files: merges the full-text indexes (whose
+    /// segments keep the words of deleted rows until merged), then checkpoints the write-ahead
+    /// log and truncates it. Freed pages are already zeroed (`secure_delete`). Its cost grows
+    /// with the size of the indexes; run it after clearing, not after every deletion.
+    pub fn purge_deleted(&self) -> Result<()> {
+        self.conn.execute_batch(
+            "INSERT INTO places_fts(places_fts) VALUES ('optimize');
+             INSERT INTO bookmarks_fts(bookmarks_fts) VALUES ('optimize');",
+        )?;
+        self.conn
+            .query_row("PRAGMA wal_checkpoint(TRUNCATE)", [], |_| Ok(()))?;
+        Ok(())
+    }
+
     fn init(mut conn: Connection) -> Result<Self> {
         conn.busy_timeout(BUSY_TIMEOUT)?;
         conn.set_prepared_statement_cache_capacity(STATEMENT_CACHE_CAPACITY);
@@ -93,6 +121,28 @@ mod tests {
             .pragma_query_value(None, "busy_timeout", |row| row.get(0))
             .unwrap();
         assert_eq!(ms, 5000);
+    }
+
+    #[test]
+    fn writes_sync_at_checkpoints_only() {
+        // `synchronous = NORMAL` (1) with WAL: a commit is durable once the WAL is synced at a
+        // checkpoint; a power loss can lose the last commits but never corrupts the file.
+        let store = Store::open_in_memory().unwrap();
+        let synchronous: i64 = store
+            .conn
+            .pragma_query_value(None, "synchronous", |row| row.get(0))
+            .unwrap();
+        assert_eq!(synchronous, 1);
+    }
+
+    #[test]
+    fn deleted_rows_are_overwritten() {
+        let store = Store::open_in_memory().unwrap();
+        let secure: i64 = store
+            .conn
+            .pragma_query_value(None, "secure_delete", |row| row.get(0))
+            .unwrap();
+        assert_eq!(secure, 1);
     }
 
     #[test]

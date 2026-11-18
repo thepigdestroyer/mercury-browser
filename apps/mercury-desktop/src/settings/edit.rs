@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Turning what the user does in the settings window into settings. Every value is checked
 //! with the settings crate's own validators first; a refused value changes nothing and comes
 //! back as a message for the field.

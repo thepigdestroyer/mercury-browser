@@ -1,3 +1,4 @@
+# SPDX-License-Identifier: MPL-2.0
 [package]
 name = "talaria-servo"
 publish = false
@@ -38,6 +39,26 @@ servo = { workspace = true, features = ["media-gstreamer"] }
 
 [build-dependencies]
 adblock.workspace = true
+
+# The location source for pages (`geolocation/core_location.rs`): CoreLocation's
+# `CLLocationManager`, in the objc2 0.6 generation the desktop app already uses.
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2.workspace = true
+objc2-core-location = { version = "0.3.2", default-features = false, features = [
+    "std",
+    "CLError",
+    "CLErrorDomain",
+    "CLLocation",
+    "CLLocationManager",
+    "CLLocationManagerDelegate",
+] }
+objc2-foundation = { workspace = true, features = [
+    "std",
+    "NSArray",
+    "NSError",
+    "NSObject",
+    "NSString",
+] }
 
 [dev-dependencies]
 tempfile.workspace = true

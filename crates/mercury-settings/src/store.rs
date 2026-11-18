@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Loading and saving the files in the profile directory.
 //!
 //! Each file is one pretty-printed JSON object whose first member is `"format_version"`.
@@ -441,8 +443,9 @@ pub struct PreviousSession {
 ///
 /// - `recovery` is "restore after a crash": every session from a run that did not quit in
 ///   order and that the user has not yet restored or dismissed, newest first. Offer it
-///   whenever it is not empty, whatever the start-up setting, until
-///   [`SessionStore::resolve_recovery`] is called.
+///   whenever it is not empty, whatever the start-up setting, until the user deals with it:
+///   [`SessionStore::resolve_recovery`] clears the list, [`SessionStore::remove_recovery`]
+///   takes out one session the user restored.
 /// - `last` is "continue where you left off". Act on it only when `exited_cleanly` is true:
 ///   restore it if the start-up setting asks for the previous session, otherwise keep it for
 ///   "restore previous session". When `last` did not quit in order it is already the first
@@ -471,7 +474,8 @@ enum Slot {
 /// - `session.previous.json`: a copy of the last run's session, made by
 ///   [`begin_run`](Self::begin_run), used if `session.json` is damaged or missing;
 /// - `session.recovery.json`: the recovery list — sessions from runs that did not quit in
-///   order, kept until [`resolve_recovery`](Self::resolve_recovery).
+///   order, kept until [`resolve_recovery`](Self::resolve_recovery) clears it or
+///   [`remove_recovery`](Self::remove_recovery) takes one out.
 #[derive(Clone, Debug)]
 pub struct SessionStore {
     path: PathBuf,
@@ -591,6 +595,55 @@ impl SessionStore {
                 Err(error) => Err(SettingsError::io("remove", &self.recovery_path, error)),
             },
         }
+    }
+
+    /// Removes one session from the recovery list, once the user has restored it (and its
+    /// tabs have been saved), and keeps the others for later. The entry removed is the first
+    /// whose windows equal `restored`'s — the same equality that keeps duplicates out of the
+    /// list — wherever it now is in the file, so a list on disk that no longer matches the one
+    /// [`begin_run`](Self::begin_run) returned (a write of it failed) never loses another
+    /// session. Returns whether an entry was removed: none matching, or no file, removes
+    /// nothing.
+    ///
+    /// The list left is written privately and atomically; when it becomes empty the file is
+    /// removed. A recovery file from a newer version is refused ([`SettingsError::NewerVersion`])
+    /// and left alone; a damaged one is moved aside (it held nothing usable).
+    pub fn remove_recovery(&self, restored: &SessionSnapshot) -> Result<bool, SettingsError> {
+        if let Peek::Version(found) = peek(&self.recovery_path, &RECOVERY_FORMAT)?
+            && found > RECOVERY_FORMAT.current_version()
+        {
+            return Err(SettingsError::NewerVersion {
+                path: self.recovery_path.clone(),
+                found,
+                supported: RECOVERY_FORMAT.current_version(),
+            });
+        }
+        let Slot::List(mut list) = self.read_slot()? else {
+            return Ok(false);
+        };
+        // The list holds sanitized sessions; compare like with like.
+        let restored = restored.clone().sanitized();
+        let Some(index) = list
+            .iter()
+            .position(|held| held.windows == restored.windows)
+        else {
+            return Ok(false);
+        };
+        list.remove(index);
+        if list.is_empty() {
+            return match std::fs::remove_file(&self.recovery_path) {
+                Ok(()) => Ok(true),
+                Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(true),
+                Err(error) => Err(SettingsError::io("remove", &self.recovery_path, error)),
+            };
+        }
+        write_document(
+            &self.recovery_path,
+            &RECOVERY_FORMAT,
+            None,
+            &RecoveryBody { sessions: &list },
+        )?;
+        Ok(true)
     }
 
     /// Saves the running session. `exited_cleanly` is false while running and true only for

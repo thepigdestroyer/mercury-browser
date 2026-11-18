@@ -1,4 +1,5 @@
 #!/bin/bash
+# SPDX-License-Identifier: MPL-2.0
 # Copy the GStreamer libraries and plugins that Servo loads at run time into a
 # flat directory next to the executable (Servo looks in `<exe dir>/lib` on macOS).
 #

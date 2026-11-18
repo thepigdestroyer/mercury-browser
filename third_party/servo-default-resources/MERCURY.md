@@ -5,14 +5,13 @@ resource reader (the public-suffix list, the HSTS preload list, the built-in pag
 original MPL-2.0 license. It is the crate exactly as published on crates.io (checksum
 `8bd5df0724a6b49aba27fbfaeb124abd646cc8c362a013c6bf87d9cc8d2315b4`), built from
 https://github.com/servo/servo at commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`, path
-`components/default-resources`. The repository's MPL-2.0 `LICENSE` file applies to this
-directory.
+`components/default-resources`. The MPL-2.0 text in the repository's `LICENSES/MPL-2.0.txt`
+applies to this directory.
 
-The first commit that added this directory (`ee0e5b5`) holds the crate as published, so
-
-    git diff ee0e5b5 -- third_party/servo-default-resources ':(exclude)third_party/servo-default-resources/MERCURY.md'
-
-shows every change, and only the change listed below, marked with a `Mercury:` comment.
+`third_party/patches/servo-default-resources.patch` is the difference from the published crate
+(`mercury-servo-patches diff servo-default-resources` prints it from the directory as it is
+now), and `make servo-patches-check` fails if the two disagree. It holds every change, and only
+the change listed below, marked with a `Mercury:` comment.
 
 ## Changes
 

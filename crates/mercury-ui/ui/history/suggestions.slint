@@ -1,0 +1,142 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// One row under the address field: the search row, or a page from history or bookmarks. The
+// title and the URL are each split around the part that matches what was typed.
+export struct SuggestionRow {
+    is-search: bool,
+    is-bookmark: bool,
+    title-before: string,
+    title-match: string,
+    title-after: string,
+    url-before: string,
+    url-match: string,
+    url-after: string,
+}
+
+// A line of text with its middle part emphasised.
+component EmphasisedText inherits HorizontalLayout {
+    in property <string> before;
+    in property <string> match;
+    in property <string> after;
+    in property <color> color;
+    in property <length> size;
+
+    spacing: 0px;
+
+    if root.before != "": Text {
+        text: root.before;
+        color: root.color;
+        font-size: root.size;
+        overflow: elide;
+        horizontal-stretch: 0;
+        max-width: self.preferred-width;
+    }
+
+    if root.match != "": Text {
+        text: root.match;
+        color: root.color;
+        font-size: root.size;
+        font-weight: 700;
+        horizontal-stretch: 0;
+        max-width: self.preferred-width;
+    }
+
+    Text {
+        text: root.after;
+        color: root.color;
+        font-size: root.size;
+        overflow: elide;
+        horizontal-stretch: 1;
+    }
+}
+
+export component SuggestionList inherits Rectangle {
+    in property <[SuggestionRow]> rows;
+    in property <int> selected: -1;
+    callback chosen(int);
+
+    property <length> row-height: 46px;
+
+    height: root.rows.length * root.row-height + 12px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+    background: ChromePalette.popup-background;
+    drop-shadow-blur: 18px;
+    drop-shadow-offset-y: 6px;
+    drop-shadow-color: ChromePalette.shadow;
+
+    VerticalLayout {
+        padding: 6px;
+
+        for row[index] in root.rows: Rectangle {
+            height: root.row-height;
+            border-radius: 7px;
+            background: index == root.selected
+                ? ChromePalette.item-selected
+                : touch.has-hover ? ChromePalette.item-hover : transparent;
+
+            HorizontalLayout {
+                padding-left: 12px;
+                padding-right: 12px;
+                spacing: 12px;
+
+                Rectangle {
+                    width: 18px;
+
+                    if row.is-bookmark: Text {
+                        text: "★";
+                        color: ChromePalette.accent;
+                        font-size: 15px;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    // A magnifier for the search row, a clock for history.
+                    if !row.is-bookmark: Path {
+                        width: 14px;
+                        height: 14px;
+                        viewbox-width: 14;
+                        viewbox-height: 14;
+                        commands: row.is-search
+                            ? "M 6 1.5 A 4.5 4.5 0 1 1 5.99 1.5 Z M 9.3 9.3 L 13 13"
+                            : "M 7 1 A 6 6 0 1 1 6.99 1 Z M 7 3.6 L 7 7 L 9.4 8.4";
+                        stroke: ChromePalette.text-secondary;
+                        stroke-width: 1.5px;
+                        fill: transparent;
+                    }
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+
+                    EmphasisedText {
+                        before: row.title-before;
+                        match: row.title-match;
+                        after: row.title-after;
+                        color: ChromePalette.text;
+                        size: 13px;
+                    }
+
+                    if !row.is-search: EmphasisedText {
+                        before: row.url-before;
+                        match: row.url-match;
+                        after: row.url-after;
+                        color: ChromePalette.text-secondary;
+                        size: 12px;
+                    }
+                }
+            }
+
+            touch := TouchArea {
+                clicked => {
+                    root.chosen(index);
+                }
+            }
+        }
+    }
+}
