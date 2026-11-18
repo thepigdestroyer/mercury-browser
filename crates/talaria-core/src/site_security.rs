@@ -157,16 +157,10 @@ pub enum MainFrameLoad {
     Block,
 }
 
-/// The decision for a top-level load of `url` under `policy`. `is_get` is false for a form
-/// submission (its body cannot be resent elsewhere); `last_upgraded` is the `http` URL the tab
-/// upgraded last, so that a site that sends its HTTPS address back to HTTP is not upgraded in
-/// a loop.
-pub fn main_frame_load(
-    policy: &HttpsPolicy,
-    url: &Url,
-    is_get: bool,
-    last_upgraded: Option<&Url>,
-) -> MainFrameLoad {
+/// The decision for one top-level load of `url` under `policy`. `is_get` is false for a form
+/// submission (its body cannot be resent elsewhere). The engine applies it through a tab's
+/// `HttpsUpgradeChain`, which also stops loops.
+pub fn main_frame_load(policy: &HttpsPolicy, url: &Url, is_get: bool) -> MainFrameLoad {
     if url.scheme() != "http" || !policy.https_only {
         return MainFrameLoad::Allow;
     }
@@ -176,10 +170,68 @@ pub fn main_frame_load(
     if policy.has_exception(&host.to_string()) || !policy.may_upgrade(&host) {
         return MainFrameLoad::Allow;
     }
-    if !is_get || last_upgraded == Some(url) {
+    if !is_get {
         return MainFrameLoad::Block;
     }
     https_version(url, true).map_or(MainFrameLoad::Block, MainFrameLoad::Upgrade)
+}
+
+/// One tab's HTTPS-only upgrades since its last finished load. Every upgrade cancels a load and
+/// starts a new navigation, so the engine's own redirect limit never stops a site whose HTTPS
+/// pages send the browser back to HTTP; this does. An `http` address that was already upgraded
+/// in the chain, or more than `MAX_UPGRADES` upgrades without a finished load, is blocked.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct HttpsUpgradeChain {
+    upgraded: Vec<Url>,
+}
+
+impl HttpsUpgradeChain {
+    pub const MAX_UPGRADES: usize = 5;
+
+    /// The decision for a load the engine is about to make, recording an upgrade.
+    /// `is_main_frame` is false for frames, which are never upgraded.
+    pub fn decide(
+        &mut self,
+        policy: &HttpsPolicy,
+        url: &Url,
+        is_get: bool,
+        is_main_frame: bool,
+    ) -> MainFrameLoad {
+        if !is_main_frame {
+            return MainFrameLoad::Allow;
+        }
+        match main_frame_load(policy, url, is_get) {
+            MainFrameLoad::Upgrade(_)
+                if self.upgraded.contains(url) || self.upgraded.len() >= Self::MAX_UPGRADES =>
+            {
+                MainFrameLoad::Block
+            }
+            MainFrameLoad::Upgrade(https) => {
+                self.upgraded.push(url.clone());
+                MainFrameLoad::Upgrade(https)
+            }
+            other => other,
+        }
+    }
+
+    /// A load finished in the tab (the engine's "complete"): a new chain starts.
+    pub fn load_finished(&mut self) {
+        self.upgraded.clear();
+    }
+
+    /// What the browser is told about a decision for `url`.
+    pub fn event_for(url: &Url, decision: &MainFrameLoad) -> Option<crate::BrowserEvent> {
+        match decision {
+            MainFrameLoad::Allow => None,
+            MainFrameLoad::Upgrade(https) => Some(crate::BrowserEvent::HttpsUpgraded {
+                from: url.to_string(),
+                to: https.to_string(),
+            }),
+            MainFrameLoad::Block => Some(crate::BrowserEvent::HttpsOnlyBlocked {
+                url: url.to_string(),
+            }),
+        }
+    }
 }
 
 /// The HTTPS address to try first for a typed `http://` address, if any.

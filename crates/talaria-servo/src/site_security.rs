@@ -10,10 +10,7 @@ use std::sync::mpsc::Sender;
 
 use mercury_site_security::{ERROR_PAGE_PROBE_SCRIPT, ErrorPage, parse_error_page_marker};
 use servo::{JSValue, WebResourceLoad, WebResourceResponse};
-use talaria_core::{
-    BrowserEvent, ErrorPageKind, HttpsPolicy, MainFrameLoad, TabEvent, TabId, main_frame_load,
-};
-use url::Url;
+use talaria_core::{BrowserEvent, ErrorPageKind, HttpsPolicy, HttpsUpgradeChain, TabEvent, TabId};
 
 use crate::resources::error_page_secret;
 
@@ -23,17 +20,21 @@ pub(crate) type SharedHttpsPolicy = Rc<RefCell<HttpsPolicy>>;
 /// One tab's part.
 pub(crate) struct TabHttpsUpgrades {
     policy: SharedHttpsPolicy,
-    /// The `http` address this tab upgraded last, so a site that sends its HTTPS address back
-    /// to HTTP is refused rather than upgraded in a loop.
-    last_upgraded: RefCell<Option<Url>>,
+    /// Upgrades since the tab's last finished load (loop protection; see `HttpsUpgradeChain`).
+    chain: RefCell<HttpsUpgradeChain>,
 }
 
 impl TabHttpsUpgrades {
     pub(crate) fn new(policy: SharedHttpsPolicy) -> Self {
         Self {
             policy,
-            last_upgraded: RefCell::default(),
+            chain: RefCell::default(),
         }
+    }
+
+    /// A load finished in the tab; the next upgrade starts a new chain.
+    pub(crate) fn load_finished(&self) {
+        self.chain.borrow_mut().load_finished();
     }
 
     /// Applies HTTPS-only mode to a load. Returns the load if it goes ahead unchanged; a load
@@ -45,38 +46,20 @@ impl TabHttpsUpgrades {
         send: impl Fn(BrowserEvent),
     ) -> Option<WebResourceLoad> {
         let request = load.request();
-        if !request.is_for_main_frame {
-            return Some(load);
-        }
         let url = request.url.as_url().clone();
-        let is_get = request.method.as_str() == "GET";
-        let decision = main_frame_load(
+        let decision = self.chain.borrow_mut().decide(
             &self.policy.borrow(),
             &url,
-            is_get,
-            self.last_upgraded.borrow().as_ref(),
+            request.method.as_str() == "GET",
+            request.is_for_main_frame,
         );
-        match decision {
-            MainFrameLoad::Allow => return Some(load),
-            MainFrameLoad::Upgrade(https) => {
-                load.intercept(WebResourceResponse::new(url.clone()))
-                    .cancel();
-                log::info!("HTTPS-only mode: loading {https} instead of {url}");
-                send(BrowserEvent::HttpsUpgraded {
-                    from: url.to_string(),
-                    to: https.to_string(),
-                });
-                self.last_upgraded.replace(Some(url));
-            }
-            MainFrameLoad::Block => {
-                load.intercept(WebResourceResponse::new(url.clone()))
-                    .cancel();
-                log::info!("HTTPS-only mode: refused {url}");
-                send(BrowserEvent::HttpsOnlyBlocked {
-                    url: url.to_string(),
-                });
-            }
-        }
+        let Some(event) = HttpsUpgradeChain::event_for(&url, &decision) else {
+            return Some(load);
+        };
+        load.intercept(WebResourceResponse::new(url.clone()))
+            .cancel();
+        log::info!("HTTPS-only mode: {decision:?} for {url}");
+        send(event);
         None
     }
 }

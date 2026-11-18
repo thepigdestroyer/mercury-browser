@@ -5,9 +5,9 @@ mod common;
 
 use common::test_search;
 use talaria_core::{
-    BrowserCommand, BrowserController, BrowserEvent, ErrorPageKind, HttpsPolicy, MainFrameLoad,
-    PagePermission, PageRequestReply, PermissionDecision, SecurityIndicator, TabCommand, TabId,
-    main_frame_load, security_indicator, typed_https_upgrade,
+    BrowserCommand, BrowserController, BrowserEvent, ErrorPageKind, HttpsPolicy, HttpsUpgradeChain,
+    MainFrameLoad, PagePermission, PageRequestReply, PermissionDecision, SecurityIndicator,
+    TabCommand, TabId, main_frame_load, security_indicator, typed_https_upgrade,
 };
 use url::Url;
 
@@ -220,7 +220,7 @@ fn local_names_are_not_upgraded() {
             "{address}"
         );
         assert_eq!(
-            main_frame_load(&strict(), &url(address), true, None),
+            main_frame_load(&strict(), &url(address), true),
             MainFrameLoad::Allow,
             "{address}"
         );
@@ -331,31 +331,20 @@ fn addresses_without_a_scheme_and_https_addresses_are_left_alone() {
 #[test]
 fn https_only_mode_upgrades_top_level_http_loads() {
     assert_eq!(
-        main_frame_load(
-            &HttpsPolicy::default(),
-            &url("http://example.com/"),
-            true,
-            None
-        ),
+        main_frame_load(&HttpsPolicy::default(), &url("http://example.com/"), true,),
         MainFrameLoad::Allow
     );
     assert_eq!(
-        main_frame_load(&strict(), &url("http://example.com:8080/a"), true, None),
+        main_frame_load(&strict(), &url("http://example.com:8080/a"), true),
         MainFrameLoad::Upgrade(url("https://example.com:8080/a"))
     );
     assert_eq!(
-        main_frame_load(&strict(), &url("https://example.com/"), true, None),
+        main_frame_load(&strict(), &url("https://example.com/"), true),
         MainFrameLoad::Allow
     );
     // A form submission cannot be resent over HTTPS.
     assert_eq!(
-        main_frame_load(&strict(), &url("http://example.com/"), false, None),
-        MainFrameLoad::Block
-    );
-    // The HTTPS version sent it back to HTTP: no loop.
-    let looped = url("http://example.com/");
-    assert_eq!(
-        main_frame_load(&strict(), &looped, true, Some(&looped)),
+        main_frame_load(&strict(), &url("http://example.com/"), false),
         MainFrameLoad::Block
     );
 }
@@ -365,7 +354,7 @@ fn exceptions_let_a_site_load_over_http() {
     let mut policy = strict();
     assert!(policy.add_exception("Example.com"));
     assert_eq!(
-        main_frame_load(&policy, &url("http://example.com/"), false, None),
+        main_frame_load(&policy, &url("http://example.com/"), false),
         MainFrameLoad::Allow
     );
     assert_eq!(
@@ -586,4 +575,123 @@ fn remembered_permissions_can_be_listed_and_forgotten() {
     assert_eq!(controller.site_permissions("https://other.example"), vec![]);
     controller.forget_site_permission("https://example.com", PagePermission::PersistentStorage);
     assert_eq!(controller.site_permissions("https://example.com"), vec![]);
+}
+
+// The HTTPS-only upgrade chain of one tab (applied by the engine's load interception)
+
+fn chain_decides(
+    chain: &mut HttpsUpgradeChain,
+    policy: &HttpsPolicy,
+    address: &str,
+) -> MainFrameLoad {
+    chain.decide(policy, &url(address), true, true)
+}
+
+#[test]
+fn the_chain_upgrades_the_same_link_again_after_a_finished_load() {
+    let policy = strict();
+    let mut chain = HttpsUpgradeChain::default();
+    assert_eq!(
+        chain_decides(&mut chain, &policy, "http://example.com/a"),
+        MainFrameLoad::Upgrade(url("https://example.com/a"))
+    );
+    chain.load_finished();
+    // The user clicks the same http:// link again later.
+    assert_eq!(
+        chain_decides(&mut chain, &policy, "http://example.com/a"),
+        MainFrameLoad::Upgrade(url("https://example.com/a"))
+    );
+}
+
+#[test]
+fn the_chain_blocks_a_redirect_ping_pong() {
+    let policy = strict();
+    let mut chain = HttpsUpgradeChain::default();
+    // https://a/1 sends to http://a/2, https://a/2 sends to http://a/1, and no load finishes.
+    assert!(matches!(
+        chain_decides(&mut chain, &policy, "http://a.example/1"),
+        MainFrameLoad::Upgrade(_)
+    ));
+    assert!(matches!(
+        chain_decides(&mut chain, &policy, "http://a.example/2"),
+        MainFrameLoad::Upgrade(_)
+    ));
+    assert_eq!(
+        chain_decides(&mut chain, &policy, "http://a.example/1"),
+        MainFrameLoad::Block
+    );
+}
+
+#[test]
+fn the_chain_blocks_after_too_many_upgrades_without_a_finished_load() {
+    let policy = strict();
+    let mut chain = HttpsUpgradeChain::default();
+    for step in 0..HttpsUpgradeChain::MAX_UPGRADES {
+        assert!(
+            matches!(
+                chain_decides(&mut chain, &policy, &format!("http://a.example/{step}")),
+                MainFrameLoad::Upgrade(_)
+            ),
+            "{step}"
+        );
+    }
+    assert_eq!(
+        chain_decides(&mut chain, &policy, "http://a.example/last"),
+        MainFrameLoad::Block
+    );
+    chain.load_finished();
+    assert!(matches!(
+        chain_decides(&mut chain, &policy, "http://a.example/last"),
+        MainFrameLoad::Upgrade(_)
+    ));
+}
+
+#[test]
+fn the_chain_leaves_frames_and_allowed_loads_alone() {
+    let policy = strict();
+    let mut chain = HttpsUpgradeChain::default();
+    // A frame's load is never upgraded or counted.
+    assert_eq!(
+        chain.decide(&policy, &url("http://example.com/"), true, false),
+        MainFrameLoad::Allow
+    );
+    assert_eq!(
+        chain.decide(
+            &HttpsPolicy::default(),
+            &url("http://example.com/"),
+            true,
+            true
+        ),
+        MainFrameLoad::Allow
+    );
+    // A form submission is blocked.
+    assert_eq!(
+        chain.decide(&policy, &url("http://example.com/"), false, true),
+        MainFrameLoad::Block
+    );
+}
+
+#[test]
+fn the_chain_says_what_to_tell_the_browser() {
+    let address = url("http://example.com/");
+    assert_eq!(
+        HttpsUpgradeChain::event_for(&address, &MainFrameLoad::Allow),
+        None
+    );
+    assert_eq!(
+        HttpsUpgradeChain::event_for(
+            &address,
+            &MainFrameLoad::Upgrade(url("https://example.com/"))
+        ),
+        Some(BrowserEvent::HttpsUpgraded {
+            from: "http://example.com/".to_owned(),
+            to: "https://example.com/".to_owned(),
+        })
+    );
+    assert_eq!(
+        HttpsUpgradeChain::event_for(&address, &MainFrameLoad::Block),
+        Some(BrowserEvent::HttpsOnlyBlocked {
+            url: "http://example.com/".to_owned(),
+        })
+    );
 }

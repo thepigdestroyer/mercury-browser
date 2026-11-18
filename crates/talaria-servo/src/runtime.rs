@@ -686,7 +686,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // differs from its cached one
         if status == LoadStatus::Complete {
             self.page_feedback.load_completed();
-            // site security: one of Mercury's error pages?
+            // site security: a new HTTPS-only upgrade chain; one of Mercury's error pages?
+            self.https_upgrades.load_finished();
             probe_error_page(&web_view, self.tab_id, self.browser_event_sender.clone());
         }
         if reads_title_at(status) {
