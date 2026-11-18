@@ -185,16 +185,123 @@ Before pushing a tag:
 The release gets these files:
 
 ```text
-mercury-browser-linux-x86_64.tar.gz
+mercury-browser-linux-x86_64.tar.gz          LICENSE, NOTICE, LICENSES/ and THIRD-PARTY-NOTICES.md inside
 mercury-browser-linux-x86_64.tar.gz.sha256
-Mercury-Browser-0.2.0-macos-arm64.dmg
+Mercury-Browser-0.2.0-macos-arm64.dmg        LICENSE and NOTICE next to the app
 Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
-SHA256SUMS
+Mercury-Browser-0.2.0-lgpl-sources.tar       source of the bundled LGPL libraries
+Mercury-Browser-0.2.0-lgpl-sources.tar.sha256
+update.json                                  the update manifest
+update.json.minisig                          its minisign signature
+SHA256SUMS                                   the downloads, the sources and update.json
 ```
 
-The signing job runs in the `release` environment, so if the owner has set required reviewers there, the release waits for an approval in the run's page. Without Developer ID secrets the disk image is signed ad hoc and not notarised; the job summary says so, and [Install Mercury](../user-guide/installation.md#the-first-launch-allowing-mercury-past-gatekeeper) tells users how to open it the first time.
+The release notes start with the licence ("source-available, free for non-commercial use"), the first-launch steps, the LGPL source offer and the Independent JPEG Group credit, followed by GitHub's generated notes.
 
-Manual workflow runs (`workflow_dispatch`) publish nothing. They keep the Linux archive (`mercury-browser-linux-x86_64`), the ad-hoc macOS disk image (`adhoc-macos-arm64-dmg`) and the unsigned executable as Actions artefacts for 14 days.
+Two jobs run in the `release` environment: the macOS signing job and the update-manifest signing job. If the owner has set required reviewers there, each waits for an approval in the run's page. Without Developer ID secrets the disk image is signed ad hoc and not notarised; the job summary says so, and [Install Mercury](../user-guide/installation.md#the-first-launch-allowing-mercury-past-gatekeeper) tells users how to open it the first time. Without the update signing key, or without its public half committed, the release fails before anything is published.
+
+Manual workflow runs (`workflow_dispatch`) publish nothing. They keep the Linux archive (`mercury-browser-linux-x86_64`), the ad-hoc macOS disk image (`adhoc-macos-arm64-dmg`), the LGPL sources (`mercury-browser-lgpl-sources`), the unsigned executable and the signer as Actions artefacts for 14 days.
+
+### The update manifest
+
+Mercury checks once a day whether a newer version exists. It fetches `update.json` and `update.json.minisig` from `https://github.com/thepigdestroyer/mercury-browser/releases/latest/download/`, verifies the signature against the public key compiled into the browser (`apps/mercury-desktop/resources/update-key.pub`) and compares the versions itself. The manifest looks like this:
+
+```json
+{
+  "product": "mercury-browser",
+  "version": "0.3.0",
+  "published": "2026-12-01",
+  "platforms": {
+    "macos-arm64": {
+      "asset": "Mercury-Browser-0.3.0-macos-arm64.dmg",
+      "sha256": "…",
+      "size": 123456789
+    },
+    "linux-x86_64": {
+      "asset": "mercury-browser-linux-x86_64.tar.gz",
+      "sha256": "…",
+      "size": 45678901
+    }
+  }
+}
+```
+
+The signature's trusted comment, which the signature covers, is `mercury-browser update <version>`; a verifier refuses a manifest whose comment names another version. Pre-release versions (`0.3.0-rc.1`) are refused when the manifest is written, so they are never offered.
+
+The manifest is written and signed by `mercury-release`, a small Rust tool in `crates/mercury-release` built on the `minisign` crate (MIT):
+
+```bash
+mercury-release update-manifest --version V --published YYYY-MM-DD \
+    --platform macos-arm64=FILE:SHA256:SIZE --platform linux-x86_64=FILE:SHA256:SIZE --out update.json
+mercury-release sign --manifest update.json --version V --out update.json.minisig
+mercury-release verify --manifest update.json --signature update.json.minisig \
+    --public-key apps/mercury-desktop/resources/update-key.pub --version V
+mercury-release keygen --public-key FILE --secret-key FILE
+```
+
+`sign` reads the secret key from `MINISIGN_SECRET_KEY` and its password from `MINISIGN_PASSWORD`, never from the command line, and refuses a key without a password. In the workflow, the "Update-manifest signer (build)" job builds and tests the tool with no secrets; "Sign the update manifest" runs in the `release` environment on a fresh runner, checks the tool against the build's digest, writes the manifest from the digests and sizes the packaging jobs recorded, signs it, and verifies the signature with the committed public key. The signing step is the only one that receives the key.
+
+### The update signing key
+
+The owner does this once, before the first release with update checks. Use an Apple Silicon Mac with a clone of the repository on the `mercury` branch.
+
+1. **Generate the key pair** with Mercury's own signer (it asks for the password twice; choose a long one and keep it in your password manager):
+
+    ```bash
+    cargo run --release -p mercury-release -- keygen \
+        --public-key apps/mercury-desktop/resources/update-key.pub \
+        --secret-key ~/Documents/mercury-update-key.key
+    ```
+
+    The secret key is written with mode 600 outside the repository; the tool refuses to overwrite an existing key. (`minisign -G -p … -s …` from the minisign command-line tool makes compatible keys, if you prefer it.)
+
+2. **Back up the secret key and its password offline**, for example on an encrypted USB stick kept apart from the Mac, plus the password in your password manager. Without them no future release can be signed with this key, and browsers already installed would stop accepting update manifests.
+
+3. **Add the two secrets to the `release` environment** (not as repository secrets): on GitHub, **Settings → Environments → release → Environment secrets → Add environment secret**:
+    - `MINISIGN_SECRET_KEY`: the whole content of `mercury-update-key.key`, both lines;
+    - `MINISIGN_PASSWORD`: the password.
+
+    Or with the GitHub CLI, from the clone:
+
+    ```bash
+    gh secret set MINISIGN_SECRET_KEY --env release < ~/Documents/mercury-update-key.key
+    gh secret set MINISIGN_PASSWORD --env release    # pastes the password at the prompt
+    ```
+
+4. **Commit the public key.** Add `"apps/mercury-desktop/resources/update-key.pub",` to the PolyForm list in `REUSE.toml` (a `.pub` file cannot hold a licence comment; `make lint-scripts` checks this), then:
+
+    ```bash
+    git add apps/mercury-desktop/resources/update-key.pub REUSE.toml
+    git commit -m "chore(release): add the update signing public key"
+    git push origin mercury
+    ```
+
+5. **Check the pair** before relying on it, without the secret leaving the Mac:
+
+    ```bash
+    cargo run --release -p mercury-release -- update-manifest --version 0.0.1 --published 2026-01-01 \
+        --platform test=test.bin:0000000000000000000000000000000000000000000000000000000000000000:1 \
+        --out /tmp/update-test.json
+    read -rs "MINISIGN_PASSWORD?Password: " && export MINISIGN_PASSWORD   # zsh; not echoed
+    MINISIGN_SECRET_KEY="$(cat ~/Documents/mercury-update-key.key)" \
+        cargo run --release -p mercury-release -- sign --manifest /tmp/update-test.json \
+        --version 0.0.1 --out /tmp/update-test.json.minisig
+    unset MINISIGN_PASSWORD
+    cargo run --release -p mercury-release -- verify --manifest /tmp/update-test.json \
+        --signature /tmp/update-test.json.minisig \
+        --public-key apps/mercury-desktop/resources/update-key.pub --version 0.0.1
+    rm /tmp/update-test.json /tmp/update-test.json.minisig
+    ```
+
+    The last command prints `update manifest for 0.0.1: signature good`.
+
+**Rotating the key** later: generate a new pair, ship a release whose browser trusts both public keys, and switch the secrets to the new key only from the release after that, so that every installed copy can verify the manifest it receives.
+
+### LGPL sources and credits
+
+The macOS app bundles GStreamer, FFmpeg, GLib, proxy-libintl and libnice as separate dynamic libraries. Each release publishes their corresponding source as `Mercury-Browser-<version>-lgpl-sources.tar`, collected by `scripts/ci/lgpl-sources.sh`: each project's release tarball, checked against a pinned SHA-256, and the whole of cerbero, GStreamer's build system, at the commit that built the bundled binaries (its recipes name every source, option and patch). A `README.txt` inside explains it and repeats the written offer from `THIRD-PARTY-NOTICES.md`. When `scripts/macos/gstreamer.sh` moves to a new GStreamer, update the versions, URLs, checksums and cerbero commit in `lgpl-sources.sh` too; the script refuses to run while the GStreamer versions differ.
+
+`NOTICE`, which every download carries, the release notes and `THIRD-PARTY-NOTICES.md` include the credit libjpeg-turbo's IJG licence requires: "This software is based in part on the work of the Independent JPEG Group."
 
 ## Documentation site
 
