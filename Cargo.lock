@@ -5360,6 +5360,7 @@ dependencies = [
 name = "mercury-desktop"
 version = "0.2.0"
 dependencies = [
+ "arboard",
  "ash",
  "backtrace",
  "block2 0.6.2",

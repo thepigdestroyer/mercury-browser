@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Which of a page's clipboard requests reach the clipboard.
 //!
 //! Servo 0.8.0 sends every clipboard access of a page to the embedder the same way, whether the

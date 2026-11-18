@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 // The clipboard pages use (clipboard lane).
 //
 // A normal run gives pages the system clipboard, behind the engine's gate (`talaria_core::
