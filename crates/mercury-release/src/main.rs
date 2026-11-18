@@ -13,6 +13,10 @@
 //! mercury-release keygen --public-key update-key.pub --secret-key update-key.key
 //!     (asks for the password twice)
 //! ```
+//!
+//! Every failure prints `mercury-release: <reason>` on stderr and exits with status 2; success
+//! is status 0. The key and the password are read only from the environment (or, for `keygen`,
+//! typed at the terminal) and are never printed or taken from the command line.
 
 use std::collections::HashMap;
 use std::fs::{self, OpenOptions};
@@ -69,7 +73,13 @@ fn read(path: &str) -> Result<String, String> {
     fs::read_to_string(path).map_err(|error| format!("cannot read {path}: {error}"))
 }
 
+/// The manifest as bytes: the signature covers exactly the bytes of the file.
+fn read_bytes(path: &str) -> Result<Vec<u8>, String> {
+    fs::read(path).map_err(|error| format!("cannot read {path}: {error}"))
+}
+
 /// Writes a new file; refuses to replace one, so a key or a manifest is never overwritten.
+/// A file that could not be written completely is removed again (this call created it).
 fn write_new(path: &str, contents: &str, private: bool) -> Result<(), String> {
     let mut options = OpenOptions::new();
     options.write(true).create_new(true);
@@ -83,9 +93,35 @@ fn write_new(path: &str, contents: &str, private: bool) -> Result<(), String> {
     let mut file = options
         .open(Path::new(path))
         .map_err(|error| format!("cannot create {path}: {error}"))?;
-    file.write_all(contents.as_bytes())
+    if let Err(error) = file
+        .write_all(contents.as_bytes())
         .and_then(|()| file.sync_all())
-        .map_err(|error| format!("cannot write {path}: {error}"))
+    {
+        drop(file);
+        let _ = fs::remove_file(path);
+        return Err(format!("cannot write {path}: {error}"));
+    }
+    Ok(())
+}
+
+/// Writes the secret key (mode 0600), then the public key. If the public key cannot be
+/// written the secret key is removed again, so a half-written pair is never left behind.
+fn write_key_pair(
+    secret_path: &str,
+    secret: &str,
+    public_path: &str,
+    public: &str,
+) -> Result<(), String> {
+    write_new(secret_path, secret, true)?;
+    if let Err(error) = write_new(public_path, public, false) {
+        let removed = fs::remove_file(secret_path).is_ok();
+        return Err(if removed {
+            format!("{error}; {secret_path} was removed again, so nothing was kept")
+        } else {
+            format!("{error}; remove {secret_path} yourself before running keygen again")
+        });
+    }
+    Ok(())
 }
 
 fn update_manifest(args: &[String]) -> Result<(), String> {
@@ -115,9 +151,9 @@ fn sign(args: &[String]) -> Result<(), String> {
         .ok()
         .filter(|password| !password.is_empty())
         .ok_or("MINISIGN_PASSWORD is not set; the release key must be password-protected")?;
-    let manifest = read(options.get("manifest")?)?;
+    let manifest = read_bytes(options.get("manifest")?)?;
     let signature = mercury_release::sign_manifest(
-        manifest.as_bytes(),
+        &manifest,
         options.get("version")?,
         &secret_key,
         Some(password),
@@ -128,11 +164,11 @@ fn sign(args: &[String]) -> Result<(), String> {
 
 fn verify(args: &[String]) -> Result<(), String> {
     let options = Options::parse(args, &["manifest", "signature", "public-key", "version"])?;
-    let manifest = read(options.get("manifest")?)?;
+    let manifest = read_bytes(options.get("manifest")?)?;
     let signature = read(options.get("signature")?)?;
     let public_key = read(options.get("public-key")?)?;
     let version = options.get("version")?;
-    mercury_release::verify_manifest(manifest.as_bytes(), &signature, &public_key, version)
+    mercury_release::verify_manifest(&manifest, &signature, &public_key, version)
         .map_err(|error| error.to_string())?;
     println!("update manifest for {version}: signature good");
     Ok(())
@@ -142,6 +178,9 @@ fn keygen(args: &[String]) -> Result<(), String> {
     let options = Options::parse(args, &["public-key", "secret-key"])?;
     let public_path = options.get("public-key")?;
     let secret_path = options.get("secret-key")?;
+    if public_path == secret_path {
+        return Err("the public and the secret key need different files".into());
+    }
     for path in [public_path, secret_path] {
         if Path::new(path).exists() {
             return Err(format!("{path} already exists; not replacing a key"));
@@ -157,7 +196,7 @@ fn keygen(args: &[String]) -> Result<(), String> {
     if again != password {
         return Err("the passwords differ".into());
     }
-    eprintln!("deriving the key from the password (a few seconds, about 1 GB of memory)...");
+    eprintln!("deriving the key from the password (a moment)...");
     let pair = minisign::KeyPair::generate_encrypted_keypair(Some(password))
         .map_err(|error| error.to_string())?;
     let public = pair
@@ -170,8 +209,7 @@ fn keygen(args: &[String]) -> Result<(), String> {
         .to_box(Some("Mercury Browser update signing key"))
         .map_err(|error| error.to_string())?
         .into_string();
-    write_new(secret_path, &secret, true)?;
-    write_new(public_path, &public, false)?;
+    write_key_pair(secret_path, &secret, public_path, &public)?;
     println!(
         "public key: {public_path}\nsecret key: {secret_path} (keep it offline; never commit it)"
     );
@@ -200,5 +238,137 @@ fn main() -> ExitCode {
             eprintln!("mercury-release: {message}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// A directory of its own under the system temporary directory, removed on drop.
+    struct Scratch(PathBuf);
+
+    impl Scratch {
+        fn new() -> Self {
+            static NEXT: AtomicU32 = AtomicU32::new(0);
+            let dir = std::env::temp_dir().join(format!(
+                "mercury-release-unit-{}-{}",
+                std::process::id(),
+                NEXT.fetch_add(1, Ordering::Relaxed)
+            ));
+            fs::create_dir(&dir).unwrap();
+            Self(dir)
+        }
+
+        fn path(&self, name: &str) -> String {
+            self.0.join(name).to_str().unwrap().to_owned()
+        }
+    }
+
+    impl Drop for Scratch {
+        fn drop(&mut self) {
+            let _ = fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn args(list: &[&str]) -> Vec<String> {
+        list.iter().map(|arg| (*arg).to_owned()).collect()
+    }
+
+    #[test]
+    fn options_are_strict() {
+        let allowed = ["version", "platform"];
+        let ok = Options::parse(
+            &args(&[
+                "--version",
+                "1.2.3",
+                "--platform",
+                "a=b",
+                "--platform",
+                "c=d",
+            ]),
+            &allowed,
+        )
+        .unwrap();
+        assert_eq!(ok.get("version").unwrap(), "1.2.3");
+        assert_eq!(ok.platforms.len(), 2);
+        assert!(ok.get("out").is_err());
+        for bad in [
+            &["--version"][..],
+            &["version", "1"],
+            &["--out", "x"],
+            &["--version", "1", "--version", "2"],
+            &["--platform", "no-equals-sign"],
+            &["--help"],
+        ] {
+            assert!(Options::parse(&args(bad), &allowed).is_err(), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn a_new_file_is_never_replaced() {
+        let scratch = Scratch::new();
+        let path = scratch.path("file");
+        write_new(&path, "first", false).unwrap();
+        assert!(write_new(&path, "second", false).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "first");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn the_secret_key_is_written_with_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let scratch = Scratch::new();
+        let secret = scratch.path("key");
+        let public = scratch.path("pub");
+        write_key_pair(&secret, "secret", &public, "public").unwrap();
+        let mode = |path: &str| fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&secret), 0o600);
+        assert_eq!(
+            mode(&public) & 0o022,
+            0,
+            "the public key is writable by others"
+        );
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "secret");
+        assert_eq!(fs::read_to_string(&public).unwrap(), "public");
+    }
+
+    #[test]
+    fn a_failed_public_write_leaves_no_secret_key_behind() {
+        let scratch = Scratch::new();
+        let secret = scratch.path("key");
+        // The public key's directory does not exist, so it cannot be created.
+        let public = scratch.path("missing-directory/pub");
+        let error = write_key_pair(&secret, "secret", &public, "public").unwrap_err();
+        assert!(error.contains("cannot create"), "{error}");
+        assert!(
+            !Path::new(&secret).exists(),
+            "the secret key was left behind"
+        );
+        assert!(!Path::new(&public).exists());
+    }
+
+    #[test]
+    fn an_existing_public_key_is_neither_replaced_nor_paired_with_a_new_secret() {
+        let scratch = Scratch::new();
+        let secret = scratch.path("key");
+        let public = scratch.path("pub");
+        fs::write(&public, "the committed key").unwrap();
+        assert!(write_key_pair(&secret, "secret", &public, "public").is_err());
+        assert_eq!(fs::read_to_string(&public).unwrap(), "the committed key");
+        assert!(!Path::new(&secret).exists());
+    }
+
+    #[test]
+    fn an_existing_secret_key_is_never_replaced() {
+        let scratch = Scratch::new();
+        let secret = scratch.path("key");
+        let public = scratch.path("pub");
+        fs::write(&secret, "the old secret").unwrap();
+        assert!(write_key_pair(&secret, "secret", &public, "public").is_err());
+        assert_eq!(fs::read_to_string(&secret).unwrap(), "the old secret");
+        assert!(!Path::new(&public).exists());
     }
 }
