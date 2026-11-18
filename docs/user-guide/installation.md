@@ -42,77 +42,38 @@ Only do either of these for a copy you downloaded from the project's own release
 
 ### Uninstall
 
-Quit Mercury Browser and move `/Applications/Mercury Browser.app` to the Trash. Mercury's media cache, if you want it gone too, is `~/Library/Caches/io.github.thepigdestroyer.mercury-browser`.
+Quit Mercury Browser and move `/Applications/Mercury Browser.app` to the Trash. To remove your data too, delete `~/Library/Application Support/Mercury Browser` (settings, cookies and site data) and `~/Library/Caches/io.github.thepigdestroyer.mercury-browser` (the HTTP cache and media files).
 
 ### Build the app yourself
 
-With the Xcode command-line tools and Rust installed, run `make gstreamer-macos` once (it downloads GStreamer, about 0.9 GB, and unpacks it into your user cache without `sudo`; see [Development setup](../developer-guide/setup.md#macos-media-set-up-gstreamer)). Then `make app-macos` builds `dist/Mercury Browser.app` from source, with audio and video, and `make package-macos` also makes the disk image. An app you build yourself is not marked as downloaded, so Gatekeeper does not block it. See [Releases](../developer-guide/releases.md#package-for-macos).
-
-## Linux
-
-The fastest supported route is a source build on Debian or Ubuntu. The repository includes a command that installs the native packages needed by Servo, Slint, graphics, and GStreamer.
-
-### Before you begin
-
-You need:
-
-- A 64-bit Linux system
-- Git
-- A current stable Rust toolchain managed by `rustup`
-- `sudo` access to install native packages
-- A working X11 or Wayland desktop session
-
-Packaged Linux builds target glibc 2.35 or newer.
-
-### Build from source
+You need a Mac with Apple silicon, the Xcode command-line tools (`xcode-select --install`) and [rustup](https://rustup.rs/). The Rust version is pinned in `rust-toolchain.toml` and installs itself on the first build. That build compiles all of Servo and needs 15–20 GB of free disk space while it runs.
 
 ```bash
 git clone https://github.com/thepigdestroyer/mercury-browser.git
 cd mercury-browser
-make install-linux-deps
+git checkout mercury
+make gstreamer-macos   # once: downloads GStreamer 1.28.9 (about 0.9 GB) into your user cache, no sudo
+make app-macos         # builds dist/Mercury Browser.app
+```
+
+Drag `dist/Mercury Browser.app` to **Applications**, or run it where it is. An app you build yourself is not marked as downloaded, so Gatekeeper does not block it. `make run` builds and starts the browser without making the app. [Development setup](../developer-guide/setup.md) explains the GStreamer step and the other commands.
+
+## Linux
+
+Linux builds from source and is tested in CI, but it gets less attention than macOS. On Debian or Ubuntu:
+
+```bash
+git clone https://github.com/thepigdestroyer/mercury-browser.git
+cd mercury-browser
+git checkout mercury
+make install-linux-deps   # installs the packages CI uses (needs sudo)
 make setup
 make run
 ```
 
-The first build compiles Servo and its native dependencies. It can take considerably longer than later builds and needs several gigabytes of free disk space.
+`make install-linux-deps` installs a C and C++ toolchain, Clang, CMake, `pkg-config`, Fontconfig, X11 and XKB libraries, and GStreamer with its development headers and the Base, Good, Bad, Ugly, libav and PulseAudio plugin sets. On another distribution, install the equivalent packages; once `pkg-config` finds GStreamer, continue with `make setup` and `make run`.
 
-### What the setup commands do
-
-`make install-linux-deps`
-: Installs the compiler, Fontconfig, X11 support, input libraries, GStreamer development headers, and common GStreamer plugin sets on apt-based distributions.
-
-`make setup`
-: Checks Rust tooling, installs `rustfmt` and Clippy, then downloads the locked Cargo dependency graph.
-
-`make run`
-: Builds and starts the optimized desktop application with useful default logging.
-
-### Run an optimized build
-
-`make run` already uses the optimized profile so that complex pages and media behave like the
-packaged application. `make run-release` remains an equivalent alias:
-
-```bash
-make run-release
-```
-
-Developers who need complete debug information can use `make run-debug`.
-
-### Other Linux distributions
-
-`make install-linux-deps` supports apt-based systems. On another distribution, install equivalent packages for:
-
-- A C and C++ build toolchain, CMake, Clang, and `pkg-config`
-- Fontconfig
-- X11, XCB, Xcursor, and XKB Common X11
-- GStreamer core, app, audio, video, WebRTC, and development headers
-- GStreamer Base, Good, Bad, Ugly, libav, and PulseAudio plugins
-
-Package names vary between distributions. Once `pkg-config` can find the required GStreamer modules, continue with `make setup` and `make run`.
-
-### Verify GStreamer
-
-If the browser starts but media does not play, check the runtime before debugging Mercury:
+Media uses the system's GStreamer. If the browser starts but media doesn't play, check the plugins:
 
 ```bash
 gst-inspect-1.0 playbin3
@@ -120,9 +81,8 @@ gst-inspect-1.0 autoaudiosink
 gst-inspect-1.0 avdec_h264
 ```
 
-All three commands should describe a plugin instead of reporting that it is missing.
+Each should describe a plugin rather than report that it is missing.
 
-## Windows status
+## Windows
 
-Mercury has a native Windows source-build configuration, but the project does not currently publish Windows release artifacts. Native GStreamer and its plugins are not bundled, so Windows builds use Servo's fallback media backend. Linux remains the complete supported path for the preview.
-
+Windows is not built at the moment.
