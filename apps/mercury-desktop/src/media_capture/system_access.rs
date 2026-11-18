@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Whether macOS lets Mercury Browser use the camera and the microphone at all.
 //!
 //! The answer comes from `+[AVCaptureDevice authorizationStatusForMediaType:]`, which reads the
@@ -5,7 +7,8 @@
 //! page actually asks, and never in automated runs: those assume "allowed", or simulate a refusal
 //! with `--fake-system-denies-capture`.
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::time::{Duration, Instant};
 
 use talaria_core::PagePermission;
 
@@ -42,11 +45,34 @@ pub(crate) fn system_access(permission: PagePermission) -> SystemAccess {
     match SOURCE.with(Cell::get) {
         SystemAccessSource::AssumeAllowed => SystemAccess::Allowed,
         SystemAccessSource::SimulateDenied => SystemAccess::Denied,
-        SystemAccessSource::Query => query(permission),
+        SystemAccessSource::Query => cached_query(permission),
     }
 }
 
+/// How long one answer from macOS is reused: the prompt is rebuilt on every UI update, and the
+/// setting changes only when the user goes to System Settings.
+const QUERY_REUSE: Duration = Duration::from_secs(3);
+
+thread_local! {
+    static CACHE: RefCell<Vec<(PagePermission, SystemAccess, Instant)>> = const { RefCell::new(Vec::new()) };
+}
+
+fn cached_query(permission: PagePermission) -> SystemAccess {
+    let now = Instant::now();
+    CACHE.with(|cache| {
+        let mut cache = cache.borrow_mut();
+        cache.retain(|(_, _, at)| now.duration_since(*at) < QUERY_REUSE);
+        if let Some((_, access, _)) = cache.iter().find(|(kind, _, _)| *kind == permission) {
+            return *access;
+        }
+        let access = query(permission);
+        cache.push((permission, access, now));
+        access
+    })
+}
+
 /// `AVAuthorizationStatus`: 0 not determined, 1 restricted, 2 denied, 3 authorized.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn access_from_status(status: Option<isize>) -> SystemAccess {
     match status {
         Some(1 | 2) => SystemAccess::Denied,

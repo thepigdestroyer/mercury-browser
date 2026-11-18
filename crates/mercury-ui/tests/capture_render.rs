@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Renders the camera and microphone UI (media-capture lane) headlessly with Slint's software
 //! renderer: the tab mark, the button beside the address bar with its bubble and Stop, and the
 //! permission prompt's camera and microphone form ("Remember for this site until you quit", and
@@ -237,6 +239,7 @@ fn capture(camera: bool, microphone: bool, heading: &str) -> CaptureView {
         camera,
         microphone,
         heading: heading.into(),
+        ..CaptureView::default()
     }
 }
 
@@ -392,6 +395,23 @@ fn render_and_answer(fixture: &Fixture) {
     fixture.click(100.0, 480.0);
     assert!(!fixture.harness.get_bubble_open());
     assert_eq!(*fixture.stops.borrow(), 0);
+
+    // A page that kept itself from being reloaded after Stop: the bubble says so.
+    fixture.harness.set_capture(CaptureView {
+        note: "The page did not reload, so it can still use your camera and microphone. Close \
+               the tab to stop it."
+            .into(),
+        ..capture(
+            true,
+            true,
+            "127.0.0.1:8123 can use your camera and microphone",
+        )
+    });
+    fixture.click(button_x + 6.0, button_y + 4.0);
+    assert!(fixture.harness.get_bubble_open());
+    fixture.save("06b-bubble-stop-refused");
+    fixture.click(100.0, 480.0);
+    assert!(!fixture.harness.get_bubble_open());
 
     // The microphone alone.
     fixture.harness.set_capture(capture(

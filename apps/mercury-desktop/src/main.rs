@@ -27,13 +27,13 @@ mod crash_handler;
 mod engine;
 mod keyboard;
 mod keyutils;
-// media-capture
 #[cfg(target_os = "macos")]
 mod macos_app_delegate;
 #[cfg(target_os = "macos")]
 mod macos_terminate;
 #[cfg(target_os = "macos")]
 mod media_buffers;
+// media-capture
 mod media_capture;
 #[cfg(target_os = "macos")]
 mod media_isolation;

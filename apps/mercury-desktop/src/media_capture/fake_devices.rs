@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The `--fake-media-devices` diagnostic (media-capture lane).
 
 use talaria_servo::{FAKE_MEDIA_DEVICES_VARIABLE, executable_lib_dir, fake_media_devices_problem};

@@ -20,8 +20,8 @@ use std::time::Duration;
 use mercury_ui::{MainWindow, PageRequestStyle, PageRequestView};
 use slint::ComponentHandle;
 use talaria_core::{
-    BrowserController, HttpCredentials, PageRequestAnswer, PageRequestId, PageRequestKind,
-    PageRequestReply, PendingPageRequest,
+    BrowserController, HttpCredentials, PagePermission, PageRequestAnswer, PageRequestId,
+    PageRequestKind, PageRequestReply, PendingPageRequest,
 };
 use talaria_servo::page_request_clock;
 
@@ -35,26 +35,46 @@ pub(crate) const INPUT_PROTECTION: Duration = Duration::from_millis(500);
 /// Remembers when the request on screen appeared. Time is passed in.
 #[derive(Debug, Default)]
 pub(crate) struct InputProtector {
-    shown: Option<(PageRequestId, Duration)>,
+    /// The request on screen, the permission shown together with it (media-capture: a camera
+    /// and a microphone request are asked in one prompt), and when it appeared like that.
+    shown: Option<(PageRequestId, Option<PagePermission>, Duration)>,
 }
 
 impl InputProtector {
-    /// Called whenever the window shows `shown` (or nothing); a new request restarts the time.
-    pub(crate) fn show(&mut self, shown: Option<PageRequestId>, now: Duration) {
+    /// Called whenever the window shows a request and the permission paired with it, or
+    /// nothing; a new request, or a change of what it asks for, restarts the time.
+    pub(crate) fn show_request(
+        &mut self,
+        shown: Option<(PageRequestId, Option<PagePermission>)>,
+        now: Duration,
+    ) {
         match shown {
             None => self.shown = None,
-            Some(id) if self.shown.map(|(current, _)| current) != Some(id) => {
-                self.shown = Some((id, now));
+            Some((id, paired))
+                if self
+                    .shown
+                    .map(|(current, current_paired, _)| (current, current_paired))
+                    != Some((id, paired)) =>
+            {
+                self.shown = Some((id, paired, now));
             }
             Some(_) => {}
         }
     }
 
-    /// Whether an answer to `id` given at `now` comes from the user rather than from input
-    /// that was meant for the page.
-    pub(crate) fn accepts(&self, id: PageRequestId, now: Duration) -> bool {
-        self.shown.is_some_and(|(shown, shown_at)| {
-            shown == id && now.saturating_sub(shown_at) >= INPUT_PROTECTION
+    /// Whether an answer to `id` (answered together with `paired`) given at `now` comes from the
+    /// user rather than from input that was meant for the page: only what has been on screen
+    /// for long enough is answered.
+    pub(crate) fn accepts_request(
+        &self,
+        id: PageRequestId,
+        paired: Option<PagePermission>,
+        now: Duration,
+    ) -> bool {
+        self.shown.is_some_and(|(shown, shown_paired, shown_at)| {
+            shown == id
+                && shown_paired == paired
+                && now.saturating_sub(shown_at) >= INPUT_PROTECTION
         })
     }
 }
@@ -78,8 +98,10 @@ pub(crate) fn saved_http_credentials(
 pub(crate) fn sync_page_request(window: &MainWindow, controller: &BrowserController) {
     let pending = controller.pending_page_request(controller.active_tab_id());
     PROTECTOR.with(|protector| {
-        protector.borrow_mut().show(
-            pending.as_ref().map(PendingPageRequest::id),
+        protector.borrow_mut().show_request(
+            pending
+                .as_ref()
+                .map(|pending| (pending.id(), pending.paired_permission())),
             page_request_clock(),
         );
     });
@@ -117,7 +139,11 @@ pub(crate) fn connect_page_request_callbacks(
             return;
         };
         let now = page_request_clock();
-        if !PROTECTOR.with(|protector| protector.borrow().accepts(id, now)) {
+        if !PROTECTOR.with(|protector| {
+            protector
+                .borrow()
+                .accepts_request(id, pending.paired_permission(), now)
+        }) {
             log::debug!(
                 "ignoring an answer to page request {} given too soon",
                 id.value()
@@ -685,20 +711,50 @@ mod tests {
         let second = PageRequestId::new(2);
         let at = |ms| Duration::from_millis(ms);
 
-        protector.show(Some(first), at(1_000));
-        assert!(!protector.accepts(first, at(1_000)));
-        assert!(!protector.accepts(first, at(1_499)));
-        assert!(protector.accepts(first, at(1_500)));
+        protector.show_request(Some((first, None)), at(1_000));
+        assert!(!protector.accepts_request(first, None, at(1_000)));
+        assert!(!protector.accepts_request(first, None, at(1_499)));
+        assert!(protector.accepts_request(first, None, at(1_500)));
         // Showing the same request again does not restart the time.
-        protector.show(Some(first), at(1_600));
-        assert!(protector.accepts(first, at(1_600)));
+        protector.show_request(Some((first, None)), at(1_600));
+        assert!(protector.accepts_request(first, None, at(1_600)));
         // A request that is not the one on screen is never answered.
-        assert!(!protector.accepts(second, at(5_000)));
+        assert!(!protector.accepts_request(second, None, at(5_000)));
 
-        protector.show(Some(second), at(2_000));
-        assert!(!protector.accepts(second, at(2_100)));
-        assert!(!protector.accepts(first, at(9_000)));
-        protector.show(None, at(3_000));
-        assert!(!protector.accepts(second, at(9_000)));
+        protector.show_request(Some((second, None)), at(2_000));
+        assert!(!protector.accepts_request(second, None, at(2_100)));
+        assert!(!protector.accepts_request(first, None, at(9_000)));
+        protector.show_request(None, at(3_000));
+        assert!(!protector.accepts_request(second, None, at(9_000)));
+    }
+
+    // media-capture: a camera prompt that a microphone request joins has changed: the time
+    // restarts, and an answer is taken only for the pair that was shown.
+    #[test]
+    fn a_request_joining_the_prompt_on_screen_restarts_the_protection() {
+        let mut protector = InputProtector::default();
+        let camera = PageRequestId::new(1);
+        let at = |ms| Duration::from_millis(ms);
+
+        protector.show_request(Some((camera, None)), at(1_000));
+        assert!(protector.accepts_request(camera, None, at(1_600)));
+        // The microphone request joins it before the click is handled.
+        assert!(!protector.accepts_request(
+            camera,
+            Some(PagePermission::Microphone),
+            at(1_600)
+        ));
+        protector.show_request(Some((camera, Some(PagePermission::Microphone))), at(1_700));
+        assert!(!protector.accepts_request(
+            camera,
+            Some(PagePermission::Microphone),
+            at(1_800)
+        ));
+        assert!(protector.accepts_request(
+            camera,
+            Some(PagePermission::Microphone),
+            at(2_200)
+        ));
+        assert!(!protector.accepts_request(camera, None, at(2_200)));
     }
 }

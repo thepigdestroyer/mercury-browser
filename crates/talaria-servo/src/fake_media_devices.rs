@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Fake camera and microphone for automated runs (`--fake-media-devices`).
 //!
 //! A run in this mode must not be able to reach a real device, so it is allowed only from an
@@ -267,6 +269,8 @@ mod gst {
             }
 
             fn probe(&self) -> Vec<gstreamer::Device> {
+                // The marker scripts/macos/test-capture.sh looks for: the engine listed devices.
+                eprintln!("mercury-browser: fake media devices: probed");
                 vec![
                     super::FakeDevice::new(Kind::Camera).upcast(),
                     super::FakeDevice::new(Kind::Microphone).upcast(),

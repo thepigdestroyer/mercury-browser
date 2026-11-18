@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // Camera and microphone (media-capture lane): the marks of a page that may use them, and the
 // bubble that names the site and offers Stop.
 
@@ -10,6 +12,9 @@ export struct CaptureView {
     microphone: bool,
     // "<site> can use your camera and microphone", empty when the page may use neither.
     heading: string,
+    // Shown in the bubble instead of the explanation of Stop: the page kept itself from being
+    // reloaded after Stop. Empty otherwise.
+    note: string,
 }
 
 // A camera drawn in `color`.
@@ -76,8 +81,8 @@ export component CaptureTabMark inherits Rectangle {
     background: ChromePalette.capture-indicator;
     accessible-role: image;
     accessible-label: root.camera && root.microphone
-        ? "Using your camera and microphone"
-        : root.camera ? "Using your camera" : "Using your microphone";
+        ? "Can use your camera and microphone"
+        : root.camera ? "Can use your camera" : "Can use your microphone";
 
     if root.camera: CameraGlyph {
         x: (parent.width - self.width) / 2;
@@ -197,7 +202,9 @@ export component CaptureBubble inherits Rectangle {
                 }
 
                 Text {
-                    text: "Stop takes the access away and reloads the page. It will have to ask again.";
+                    text: root.capture.note != ""
+                        ? root.capture.note
+                        : "Stop takes the access away and reloads the page. It will have to ask again.";
                     color: ChromePalette.text-secondary;
                     font-size: 12px;
                     wrap: word-wrap;

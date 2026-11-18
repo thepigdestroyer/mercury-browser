@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Camera and microphone (media-capture lane): the permission prompt's camera and microphone
 //! form (asked together, "Remember for this site until you quit", the notice when macOS refuses),
 //! the mark of a page that may capture with its Stop button, and the diagnostics of fake-device
@@ -33,7 +35,8 @@ use crate::cli::PromptAnswer;
 use crate::ui_sync::sync_ui;
 
 /// The choice under a camera or microphone prompt. Offered only because Mercury's engine refuses
-/// these permissions to frames of another origin, so the site named is the one that asks.
+/// these permissions to frames of another origin than the top-level page and to workers, so the
+/// site named is the one that asks.
 pub(crate) const REMEMBER_CHOICE: &str = "Remember for this site until you quit";
 
 /// Where the answer to "may Mercury use the camera" comes from in this run.
@@ -190,18 +193,28 @@ pub(crate) fn automatic_reply_to(
 }
 
 /// The mark of the tab whose page may use `access`, named by `site`.
-pub(crate) fn capture_view(access: CaptureAccess, site: Option<&str>) -> CaptureView {
+/// `stop_refused`: the page kept itself from being reloaded after Stop.
+pub(crate) fn capture_view(
+    access: CaptureAccess,
+    site: Option<&str>,
+    stop_refused: bool,
+) -> CaptureView {
     if access.is_empty() {
         return CaptureView::default();
     }
+    let devices = devices_phrase(access.camera, access.microphone);
     CaptureView {
         camera: access.camera,
         microphone: access.microphone,
-        heading: format!(
-            "{} can use your {}",
-            site.unwrap_or("This page"),
-            devices_phrase(access.camera, access.microphone)
-        )
+        heading: format!("{} can use your {devices}", site.unwrap_or("This page")).into(),
+        note: if stop_refused {
+            format!(
+                "The page did not reload, so it can still use your {devices}. Close the tab to \
+                 stop it."
+            )
+        } else {
+            String::new()
+        }
         .into(),
     }
 }
@@ -212,6 +225,7 @@ pub(crate) fn sync_capture(window: &MainWindow, controller: &BrowserController) 
         capture_view(
             controller.capture_access(tab_id),
             controller.capture_origin(tab_id).as_deref(),
+            controller.capture_stop_refused(tab_id),
         )
     };
     let active = view_of(controller.active_tab_id());
@@ -495,7 +509,7 @@ mod tests {
     #[test]
     fn the_mark_names_the_site_and_the_devices() {
         assert_eq!(
-            capture_view(CaptureAccess::default(), Some("a.example")),
+            capture_view(CaptureAccess::default(), Some("a.example"), false),
             CaptureView::default()
         );
         let view = capture_view(
@@ -504,6 +518,7 @@ mod tests {
                 microphone: true,
             },
             Some("meet.example"),
+            false,
         );
         assert!(view.camera && view.microphone);
         assert_eq!(
@@ -516,10 +531,26 @@ mod tests {
                     camera: false,
                     microphone: true,
                 },
-                None
+                None,
+                false
             )
             .heading,
             "This page can use your microphone"
+        );
+    }
+
+    #[test]
+    fn a_page_that_stayed_after_stop_is_said_to_still_have_access() {
+        let access = CaptureAccess {
+            camera: true,
+            microphone: false,
+        };
+        assert_eq!(capture_view(access, Some("meet.example"), false).note, "");
+        let view = capture_view(access, Some("meet.example"), true);
+        assert_eq!(view.heading, "meet.example can use your camera");
+        assert_eq!(
+            view.note,
+            "The page did not reload, so it can still use your camera. Close the tab to stop it."
         );
     }
 }
