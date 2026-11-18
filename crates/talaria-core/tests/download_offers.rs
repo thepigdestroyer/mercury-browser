@@ -3,7 +3,9 @@
 //! What the downloads work needs from the engine's events: top-level requests as they start,
 //! and pages the engine could not show, offered as downloads. Both are queued per tab, in order.
 
-use talaria_core::{BrowserController, BrowserEvent, DownloadOffer, DownloadSignal};
+use talaria_core::{
+    BrowserController, BrowserEvent, CloseTabOutcome, DownloadOffer, DownloadSignal,
+};
 
 fn offer(url: &str, posted: Option<bool>) -> BrowserEvent {
     BrowserEvent::DownloadOffered {
@@ -85,7 +87,7 @@ fn requests_and_offers_are_queued_per_tab_in_order_and_taken_once() {
 fn signals_for_a_closed_tab_are_dropped() {
     let mut controller = BrowserController::default();
     let second = controller.open_tab();
-    controller.close_tab(second);
+    assert_eq!(controller.close_tab(second), CloseTabOutcome::Closed);
     assert!(!controller.handle_event(second, offer("https://b.test/b.zip", Some(false))));
     assert!(!controller.handle_event(second, request("https://b.test/", false)));
     assert!(controller.take_download_signals().is_empty());
