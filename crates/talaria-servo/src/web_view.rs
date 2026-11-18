@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::mpsc::Sender;
 
 use dpi::PhysicalSize;
 use euclid::{Point2D, Scale};
@@ -17,12 +18,18 @@ use talaria_core::{
     WebView as TalariaWebView,
 };
 use talaria_core::{PageRequestAnswer, PageRequestId};
+// media session
+use talaria_core::{BrowserEvent, MediaSessionAction, TabEvent};
 use url::Url;
 
 use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::EmbedderControls;
 use crate::frame_ready::FrameReadySignal;
 use crate::geolocation::WebViewGeolocation;
+// media session
+use crate::media_session::{
+    ActionRoute, agent_key, mute_script, probe_from_js, probe_script, route_action,
+};
 use crate::page_feedback::{DOCUMENT_TITLE_SCRIPT, PageFeedback};
 use crate::page_requests::{ClosesOnDrop, EngineRequest, Navigation, ServoPageRequest};
 use crate::session_data::{AfterEngineCleanup, HandleThenCleanup};
@@ -46,6 +53,9 @@ pub struct ServoWebView {
     page_feedback: Rc<PageFeedback>,
     // geolocation: told when the web view is shown or hidden
     geolocation: Option<Rc<WebViewGeolocation>>,
+    // media session
+    /// Where script results (the media probe) are reported.
+    browser_event_sender: Sender<TabEvent>,
 }
 
 /// What a tab's web view shares with its delegate.
@@ -57,6 +67,8 @@ pub(crate) struct TabParts {
     pub(crate) page_feedback: Rc<PageFeedback>,
     /// The tab's geolocation (also Servo's geolocation delegate); `None` while it is off.
     pub(crate) geolocation: Option<Rc<WebViewGeolocation>>,
+    // media session
+    pub(crate) browser_event_sender: Sender<TabEvent>,
 }
 
 impl ServoWebView {
@@ -73,6 +85,7 @@ impl ServoWebView {
             document_start,
             page_feedback,
             geolocation,
+            browser_event_sender,
         } = parts;
         Self {
             inner,
@@ -84,7 +97,29 @@ impl ServoWebView {
             document_start,
             page_feedback,
             geolocation,
+            browser_event_sender,
         }
+    }
+
+    // media session
+    /// What the helper's name is derived from: the current page's origin, or for an opaque
+    /// origin this web view and document (see `agent_key`). A script built now can land in the
+    /// next document if a navigation commits before Servo runs it; it then installs a second
+    /// helper under this key, which the new document never looks up again (its own scripts use
+    /// its own key). That helper is inert apart from the one call it was built for, so this is
+    /// harmless.
+    fn origin(&self) -> String {
+        let (serial, generation) = self.document_start.identity();
+        agent_key(self.inner.url().as_ref(), serial, generation)
+    }
+
+    fn run_script(&self, script: String, what: &'static str) {
+        let tab_id = self.tab_id;
+        self.inner.evaluate_javascript(script, move |result| {
+            if let Err(error) = result {
+                log::info!("tab {}: {what} script failed: {error:?}", tab_id.value());
+            }
+        });
     }
 
     // dialogs: the navigation's document may start without a `Started` Servo reports.
@@ -332,6 +367,46 @@ impl TalariaWebView for ServoWebView {
         let _event_id = self
             .inner
             .notify_input_event(InputEvent::EditingAction(servo_clipboard_action(command)));
+        Ok(())
+    }
+
+    // media session
+    fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error> {
+        self.run_script(mute_script(muted, &self.origin()), "mute");
+        Ok(())
+    }
+
+    fn media_session_action(
+        &mut self,
+        action: MediaSessionAction,
+        through_engine: bool,
+    ) -> Result<(), Self::Error> {
+        match route_action(action, through_engine, &self.origin()) {
+            ActionRoute::Engine(action) => self.inner.notify_media_session_action_event(action),
+            ActionRoute::Script(script) => self.run_script(script, "media key"),
+            ActionRoute::Drop => log::info!(
+                "tab {}: {action:?} dropped: Servo's media session may be another tab's",
+                self.tab_id.value()
+            ),
+        }
+        Ok(())
+    }
+
+    fn probe_media(&mut self) -> Result<(), Self::Error> {
+        let tab_id = self.tab_id;
+        let sender = self.browser_event_sender.clone();
+        self.inner
+            .evaluate_javascript(probe_script(&self.origin()), move |result| match result {
+                Ok(value) => {
+                    if let Some(probe) = probe_from_js(&value) {
+                        let _send_result =
+                            sender.send(TabEvent::new(tab_id, BrowserEvent::MediaProbed { probe }));
+                    }
+                }
+                Err(error) => {
+                    log::debug!("tab {}: media probe failed: {error:?}", tab_id.value());
+                }
+            });
         Ok(())
     }
 }

@@ -1,0 +1,59 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// media-session lane: the sound indicator on a tab, which mutes or unmutes the tab when clicked.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export enum TabAudioState {
+    silent,
+    playing,
+    muted,
+}
+
+export component TabAudioButton inherits Rectangle {
+    in property <TabAudioState> state;
+    in property <bool> active-tab;
+    in property <string> tab-title;
+    callback clicked;
+
+    // Muting is done inside the page, which can undo it; the label says so.
+    property <string> action-text: root.state == TabAudioState.muted
+        ? "Unmute tab: " + root.tab-title
+        : "Mute tab: " + root.tab-title + " (the page can override this)";
+
+    // Colours: the chrome's palette, so the icon follows the theme.
+    property <color> icon-color: root.active-tab ? ChromePalette.text : ChromePalette.tab-title-inactive;
+    property <color> icon-hover-color: ChromePalette.button-label-hover;
+    property <color> muted-icon-color: ChromePalette.danger;
+    property <color> hover-background: ChromePalette.tab-close-hover;
+    property <color> pressed-background: ChromePalette.tab-close-pressed;
+
+    width: 22px;
+    height: 22px;
+    border-radius: 6px;
+    background: touch.pressed ? root.pressed-background : touch.has-hover ? root.hover-background : transparent;
+    accessible-role: button;
+    accessible-label: root.action-text;
+
+    Image {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 14px;
+        height: 14px;
+        source: root.state == TabAudioState.muted ? @image-url("speaker-muted.svg") : @image-url("speaker.svg");
+        colorize: touch.has-hover ? root.icon-hover-color : root.state == TabAudioState.muted ? root.muted-icon-color : root.icon-color;
+        image-fit: contain;
+    }
+
+    Tooltip {
+        // Fixed text only: no page text goes through markdown.
+        text: root.state == TabAudioState.muted ? @markdown("Unmute tab") : @markdown("Mute tab (the page can override this)");
+    }
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.clicked();
+        }
+    }
+}

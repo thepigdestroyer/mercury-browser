@@ -5,6 +5,7 @@ mod controller;
 mod controls;
 mod cursor;
 mod input;
+mod media;
 mod page_icon;
 mod page_request;
 mod tab;
@@ -28,6 +29,11 @@ pub use cursor::{ColorScheme, PointerCursor};
 pub use input::{
     ClipboardCommand, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
     KeyboardModifiers,
+};
+// media session
+pub use media::{
+    MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
+    TabAudio,
 };
 pub use page_icon::PageIcon;
 pub use page_request::{

@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use servo::LoadStatus;
 use talaria_core::TabId;
@@ -30,6 +31,11 @@ pub(crate) struct DocumentStarts {
     listener: SharedDocumentStartedListener,
     /// geolocation: told when a navigation's start will be swallowed, as it is sent.
     geolocation: Option<Rc<dyn PageGeolocation>>,
+    // media session
+    /// Unique to this web view in the run.
+    serial: u64,
+    /// Document starts so far.
+    generation: Cell<u64>,
 }
 
 impl DocumentStarts {
@@ -45,6 +51,12 @@ impl DocumentStarts {
             page_feedback,
             listener,
             geolocation,
+            // media session
+            serial: {
+                static NEXT_SERIAL: AtomicU64 = AtomicU64::new(1);
+                NEXT_SERIAL.fetch_add(1, Ordering::Relaxed)
+            },
+            generation: Cell::new(0),
         })
     }
 
@@ -74,8 +86,17 @@ impl DocumentStarts {
             return false;
         }
         self.page_feedback.document_started();
+        // media session
+        self.generation.set(self.generation.get() + 1);
         self.notify_listener();
         true
+    }
+
+    // media session
+    /// This web view's serial and its count of document starts: names the media helper of
+    /// opaque-origin documents (see `media_session::agent_key`).
+    pub(crate) fn identity(&self) -> (u64, u64) {
+        (self.serial, self.generation.get())
     }
 
     fn notify_listener(&self) {
@@ -259,5 +280,25 @@ mod tests {
         // The start inferred at `HeadParsed` is not used: it would retire the new document.
         assert!(fixture.starts.load_status_changed(LoadStatus::HeadParsed));
         assert_eq!(started(), 1);
+    }
+
+    // media session
+    #[test]
+    fn document_starts_are_counted_per_web_view() {
+        let first = Fixture::new();
+        let second = Fixture::new();
+        let (serial, generation) = first.starts.identity();
+        assert_ne!(serial, second.starts.identity().0);
+
+        assert!(!first.starts.load_status_changed(LoadStatus::Complete));
+        assert_eq!(first.starts.identity(), (serial, generation));
+        assert!(first.starts.load_status_changed(LoadStatus::Started));
+        assert_eq!(first.starts.identity(), (serial, generation + 1));
+        // A reload whose `Started` Servo swallows counts at its first milestone.
+        first
+            .starts
+            .navigation_sent(Navigation::Reload, LoadStatus::Complete);
+        assert!(first.starts.load_status_changed(LoadStatus::HeadParsed));
+        assert_eq!(first.starts.identity(), (serial, generation + 2));
     }
 }

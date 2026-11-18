@@ -6,6 +6,11 @@ use crate::{
     DEFAULT_ZOOM_PERCENT, ImeInput, KeyboardInput, PageIcon, PointerCursor,
 };
 use crate::{PageRequest, PageRequestAnswer, PageRequestId};
+// media session
+use crate::{
+    MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
+    TabAudio,
+};
 
 const DEFAULT_PAGE_TITLE: &str = "New Tab";
 const INITIAL_ADDRESS: &str = "";
@@ -152,6 +157,20 @@ pub enum BrowserCommand {
     // menus
     /// Cut, Copy or Paste chosen in the Edit menu while the page has focus.
     Clipboard(ClipboardCommand),
+    // media session
+    /// Mutes (or unmutes) the page's media elements from script; the page can undo it.
+    SetAudioMuted {
+        muted: bool,
+    },
+    /// `through_engine`: Servo's single media session is known to be this tab's, so the action
+    /// goes through Servo (page handlers, next/previous); otherwise play and pause are done from
+    /// script and other actions are dropped.
+    MediaSessionAction {
+        action: MediaSessionAction,
+        through_engine: bool,
+    },
+    /// Looks into the page's document; the engine answers with `BrowserEvent::MediaProbed`.
+    ProbeMedia,
 }
 
 impl BrowserCommand {
@@ -262,6 +281,19 @@ pub enum BrowserEvent {
         url: String,
         title: Option<String>,
     },
+    // media session
+    MediaPlaybackChanged {
+        state: MediaPlaybackState,
+    },
+    MediaMetadataChanged {
+        metadata: MediaMetadata,
+    },
+    MediaPositionChanged {
+        position: MediaPosition,
+    },
+    MediaProbed {
+        probe: MediaProbe,
+    },
 }
 
 impl BrowserEvent {
@@ -289,6 +321,10 @@ pub struct BrowserState {
     // controls
     pending_control: Option<(ControlId, ControlRequest)>,
     input_method: Option<(ControlId, ControlRect)>,
+    // media session
+    media: MediaState,
+    /// The user's choice; kept across navigations in the tab.
+    audio_muted: bool,
 }
 
 impl Default for BrowserState {
@@ -306,6 +342,9 @@ impl Default for BrowserState {
             fullscreen: false,
             pending_control: None,
             input_method: None,
+            // media session
+            media: MediaState::default(),
+            audio_muted: false,
         }
     }
 }
@@ -372,7 +411,47 @@ impl BrowserState {
         self.pending_control.take().map(|(id, _)| id)
     }
 
+    // media session
+    pub fn media(&self) -> &MediaState {
+        &self.media
+    }
+    pub fn is_audio_muted(&self) -> bool {
+        self.audio_muted
+    }
+    pub fn audio_indicator(&self) -> TabAudio {
+        if self.audio_muted {
+            TabAudio::Muted
+        } else if self.media.is_audible() {
+            TabAudio::Playing
+        } else {
+            TabAudio::Silent
+        }
+    }
+    pub(crate) fn set_audio_muted(&mut self, muted: bool) {
+        self.audio_muted = muted;
+    }
+    /// The tab's web view is about to be replaced by a new one.
+    pub(crate) fn forget_media(&mut self) {
+        self.media = MediaState::default();
+    }
+    /// Media belongs to a document: it is forgotten when a new document starts, and when the
+    /// page fails or crashes. Load states and address changes alone keep it (a page can send
+    /// `HeadParsed` by inserting a `<body>`; `pushState` changes the address).
+    fn forget_media_of_a_replaced_document(&mut self, event: &BrowserEvent) {
+        if matches!(
+            event,
+            BrowserEvent::PageLoadStarted
+                | BrowserEvent::LoadStateChanged {
+                    state: LoadState::Failed { .. }
+                }
+        ) {
+            self.forget_media();
+        }
+    }
+
     pub fn apply(&mut self, event: BrowserEvent) {
+        // media session
+        self.forget_media_of_a_replaced_document(&event);
         match event {
             BrowserEvent::AddressChanged { url } => {
                 // dialogs: Servo writes credentials typed into a sign-in into the request URL,
@@ -453,6 +532,11 @@ impl BrowserState {
             BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
             // history: read by the controller's visit tracker, not shown.
             BrowserEvent::PageCommitted { .. } | BrowserEvent::PageTitleAt { .. } => {}
+            // media session
+            BrowserEvent::MediaPlaybackChanged { state } => self.media.set_playback(state),
+            BrowserEvent::MediaMetadataChanged { metadata } => self.media.set_metadata(metadata),
+            BrowserEvent::MediaPositionChanged { position } => self.media.set_position(position),
+            BrowserEvent::MediaProbed { probe } => self.media.set_probe(probe),
         }
     }
 }

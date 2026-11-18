@@ -119,6 +119,8 @@ impl Tab {
         self.engine_ready = false;
         // dialogs: requests belonged to the web view being replaced.
         self.page_requests.forget_all();
+        // media session
+        self.state.forget_media();
         Some(initial_url)
     }
 

@@ -214,6 +214,11 @@ pub(crate) fn engine_busy() -> bool {
     })
 }
 
+// media-session lane: media keys arrive outside a pump and need their command dispatched.
+pub(crate) fn request_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
 fn pump_after_wake() {
     let _slint = crate::callback_scope::InSlintCallback::enter();
     let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
@@ -565,6 +570,11 @@ impl EngineState {
             self.current_viewport_size = Some(viewport_size);
         }
 
+        // media-session lane
+        crate::media_session::after_pump(
+            &mut self.controller.borrow_mut(),
+            self.runtime.engine_media_session_tab(),
+        );
         match dispatch_pending_commands(&self.controller, &mut self.web_views) {
             Ok(has_pending_commands) => {
                 if has_pending_commands {
@@ -940,6 +950,20 @@ mod tests {
             &mut self,
             _command: talaria_core::ClipboardCommand,
         ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        // media session
+        fn set_audio_muted(&mut self, _muted: bool) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn media_session_action(
+            &mut self,
+            _action: talaria_core::MediaSessionAction,
+            _through_engine: bool,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn probe_media(&mut self) -> Result<(), Self::Error> {
             Ok(())
         }
     }

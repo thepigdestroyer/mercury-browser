@@ -70,6 +70,8 @@ fn window_with_blocked_pop_up(theme: ChromeTheme) -> Result<MainWindow, Box<dyn 
         has_icon: false,
         active,
         loading: false,
+        // media-session lane
+        audio: mercury_ui::TabAudioState::Silent,
     };
     window.set_tabs(ModelRc::new(VecModel::from(vec![
         tab("Opener", true),

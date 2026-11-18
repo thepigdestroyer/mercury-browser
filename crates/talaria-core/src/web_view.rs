@@ -2,6 +2,8 @@
 use crate::browser::{BrowserCommand, PointerButton, PointerButtonAction};
 use crate::{ClipboardCommand, ColorScheme, ControlAnswer, ControlId, ImeInput, KeyboardInput};
 use crate::{PageRequestAnswer, PageRequestId};
+// media session
+use crate::MediaSessionAction;
 
 pub trait WebView {
     type Error;
@@ -37,6 +39,14 @@ pub trait WebView {
     ) -> Result<(), Self::Error>;
     // menus
     fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error>;
+    // media session
+    fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error>;
+    fn media_session_action(
+        &mut self,
+        action: MediaSessionAction,
+        through_engine: bool,
+    ) -> Result<(), Self::Error>;
+    fn probe_media(&mut self) -> Result<(), Self::Error>;
 }
 
 pub fn dispatch_command<W>(web_view: &mut W, command: BrowserCommand) -> Result<(), W::Error>
@@ -74,5 +84,12 @@ where
             web_view.answer_page_request(id, answer)
         }
         BrowserCommand::Clipboard(command) => web_view.clipboard(command),
+        // media session
+        BrowserCommand::SetAudioMuted { muted } => web_view.set_audio_muted(muted),
+        BrowserCommand::MediaSessionAction {
+            action,
+            through_engine,
+        } => web_view.media_session_action(action, through_engine),
+        BrowserCommand::ProbeMedia => web_view.probe_media(),
     }
 }

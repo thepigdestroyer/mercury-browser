@@ -1,0 +1,165 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mercury media session test page</title>
+<style>
+  html, body { margin: 0; background: #ffffff; color: #000000; font-family: sans-serif; }
+  #results { margin: 10px; font: bold 14px/1.3 monospace; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; }
+  .note { color: #555555; }
+</style>
+</head>
+<body>
+  <!-- The only source is ../media/silence.wav: digital silence (every sample is 0), so nothing is
+       heard although the element is not muted; it is also at volume 0.01. Not muting it is what
+       lets the browser count the tab as audible. -->
+  <audio id="tone" loop></audio>
+  <div id="results"></div>
+  <script>
+    "use strict";
+    // ?muted: the run starts with the tab muted (MERCURY_START_MUTED=1); the page checks that
+    // its media reports muted, including elements added or created later.
+    const expectMuted = new URLSearchParams(location.search).has("muted");
+    const results = document.getElementById("results");
+    const started = performance.now();
+    let finished = false;
+
+    function line(text, ok) {
+      if (finished) return;
+      const element = document.createElement("div");
+      element.className = ok === null ? "note" : ok ? "pass" : "fail";
+      const at = "[" + ((performance.now() - started) / 1000).toFixed(1) + "s] ";
+      element.textContent = at + (ok === null ? text : text + " " + (ok ? "PASS" : "FAIL"));
+      results.appendChild(element);
+      console.log(element.textContent);
+    }
+
+    const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+    function silentElement(element) {
+      element.src = "../media/silence.wav";
+      element.loop = true;
+      element.volume = 0.01;
+      return element;
+    }
+
+    async function run() {
+      line("expecting the tab to be " + (expectMuted ? "muted" : "unmuted"), null);
+      const session = navigator.mediaSession;
+      line("navigator.mediaSession is present", !!session);
+      if (session && typeof MediaMetadata === "function") {
+        session.metadata = new MediaMetadata({
+          title: "Mercury test silence",
+          artist: "Mercury Browser",
+          album: "Media session checks",
+        });
+        session.setActionHandler("pause", () => line("action handler: pause", null));
+        session.setActionHandler("nexttrack", () => line("action handler: nexttrack", null));
+        line("metadata set: " + session.metadata.title + " / " + session.metadata.artist, true);
+      } else {
+        line("MediaMetadata is available", false);
+      }
+
+      const tone = silentElement(document.getElementById("tone"));
+      try {
+        await tone.play();
+        const before = tone.currentTime;
+        await wait(1200);
+        line("in-document audio plays (currentTime " + before.toFixed(2) + " -> "
+          + tone.currentTime.toFixed(2) + ", paused=" + tone.paused + ")",
+          !tone.paused && tone.currentTime > before);
+      } catch (error) {
+        line("in-document audio plays", false);
+        line("play() failed: " + error.message, null);
+      }
+
+      // Created after load: one inserted into the document, one that never is.
+      const added = silentElement(document.createElement("audio"));
+      document.body.appendChild(added);
+      const detached = silentElement(new Audio());
+      await Promise.all([added.play().catch(() => {}), detached.play().catch(() => {})]);
+      await wait(800);
+
+      for (const [name, element] of [["in-document", tone], ["added later", added], ["never inserted", detached]]) {
+        line(name + " element reports muted=" + element.muted, element.muted === expectMuted);
+      }
+      // Keep only the first element playing for the screenshot.
+      added.pause();
+      detached.pause();
+    }
+
+    // ?reload: play, then reload the page once; the reloaded page plays nothing, so the tab must
+    // lose its speaker (checks that a reload counts as a new document).
+    async function reloadOnce() {
+      if (sessionStorage.getItem("media-session-reloaded")) {
+        line("reloaded; this document plays nothing (the tab should show no speaker)", null);
+        return;
+      }
+      const tone = silentElement(document.getElementById("tone"));
+      await tone.play();
+      await wait(1500);
+      line("playing before the reload: " + !tone.paused, !tone.paused);
+      sessionStorage.setItem("media-session-reloaded", "1");
+      location.reload();
+    }
+
+    // ?wait-for-reload: play, and wait for the browser to reload the tab (MERCURY_MEDIA_
+    // DIAGNOSTIC_COMMANDS=reload@…); the reloaded page plays nothing.
+    async function waitForReload() {
+      if (sessionStorage.getItem("media-session-reloaded")) {
+        line("reloaded by the browser; this document plays nothing (no speaker)", null);
+        return;
+      }
+      sessionStorage.setItem("media-session-reloaded", "1");
+      const tone = silentElement(document.getElementById("tone"));
+      await tone.play();
+      line("playing; waiting for the browser to reload", !tone.paused);
+    }
+
+    // ?hop: play, go to a page that plays nothing, and on coming back (the browser's Back,
+    // MERCURY_MEDIA_DIAGNOSTIC_COMMANDS=back@…) play again.
+    async function hop() {
+      const visits = Number(sessionStorage.getItem("media-session-hops") || "0") + 1;
+      sessionStorage.setItem("media-session-hops", String(visits));
+      const tone = silentElement(document.getElementById("tone"));
+      await tone.play();
+      if (visits > 1) {
+        line("back again (visit " + visits + ") and playing", !tone.paused);
+        return;
+      }
+      line("playing; leaving for a page without media", !tone.paused);
+      // Servo keeps the previous documents of a tab alive (session history) and Back shows this
+      // one again without reloading it; say what its media does then.
+      window.addEventListener("pageshow", (event) => {
+        if (!event.persisted && performance.now() - started < 5000) return;
+        line("shown again (persisted=" + event.persisted + "), paused=" + tone.paused, null);
+        tone.play().then(() => line("playing again after Back", !tone.paused),
+          (error) => line("play() after Back failed: " + error.message, false));
+      });
+      // What the tone is doing, refreshed every half second (after Back too).
+      const status = document.createElement("div");
+      status.className = "note";
+      results.after(status);
+      setInterval(() => {
+        status.textContent = "now: paused=" + tone.paused + ", currentTime=" + tone.currentTime.toFixed(2)
+          + " at " + ((performance.now() - started) / 1000).toFixed(1) + " s";
+      }, 500);
+      document.addEventListener("visibilitychange", () => {
+        line("visibility " + document.visibilityState + ", paused=" + tone.paused, null);
+      });
+      await wait(1500);
+      location.href = "unstyled.html";
+    }
+
+    const mode = new URLSearchParams(location.search);
+    (mode.has("reload") ? reloadOnce()
+      : mode.has("wait-for-reload") ? waitForReload()
+      : mode.has("hop") ? hop()
+      : run())
+      .catch((error) => line("unexpected: " + error.message, false))
+      .finally(() => { line("DONE", null); finished = true; });
+  </script>
+</body>
+</html>

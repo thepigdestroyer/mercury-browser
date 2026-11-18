@@ -432,7 +432,13 @@ impl BrowserController {
         if event.shows_engine_ready() {
             tab.mark_engine_ready();
         }
+        // media session
+        let reapply_mute = tab.state().is_audio_muted()
+            && (reaches_a_new_document(&event) || shows_unmuted_media(&event));
         tab.state_mut().apply(event);
+        if reapply_mute {
+            self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted: true });
+        }
         true
     }
 
@@ -613,6 +619,17 @@ impl BrowserController {
         }
         self.dismiss_control(tab_id);
         Some(event)
+    }
+
+    // media session
+    /// Flips the tab's mute choice and tells its page. Returns false if there is no such tab.
+    pub fn toggle_audio_muted(&mut self, tab_id: TabId) -> bool {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return false;
+        };
+        let muted = !tab.state().is_audio_muted();
+        tab.state_mut().set_audio_muted(muted);
+        self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted })
     }
 
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {
@@ -846,6 +863,29 @@ impl BrowserController {
             );
         }
     }
+}
+
+// media session
+/// Mute is applied by script, so each new document of a muted tab needs it again: when it
+/// commits, when it has loaded, and whenever media starts playing (also catching elements the
+/// page created or un-muted since).
+fn reaches_a_new_document(event: &BrowserEvent) -> bool {
+    matches!(
+        event,
+        BrowserEvent::AddressChanged { .. }
+            | BrowserEvent::PageLoadStarted
+            | BrowserEvent::LoadStateChanged {
+                state: LoadState::Loaded
+            }
+            | BrowserEvent::MediaPlaybackChanged {
+                state: crate::MediaPlaybackState::Playing
+            }
+    )
+}
+
+/// The page un-muted media of a muted tab (or added media the mute has not reached yet).
+fn shows_unmuted_media(event: &BrowserEvent) -> bool {
+    matches!(event, BrowserEvent::MediaProbed { probe } if probe.audible > 0)
 }
 
 fn set_tab_initial_url(tab: &mut Tab, url: String) -> bool {

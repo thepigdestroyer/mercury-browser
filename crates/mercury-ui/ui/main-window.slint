@@ -21,6 +21,7 @@ export { BookmarkRowKind, BookmarksManager, BookmarksPreview } from "bookmarks/b
 export { ImportPage, ImportProfileRow, ImportSummaryLine, ImportWindow } from "import/import-window.slint";
 // session
 import { SessionBar } from "session/session-bar.slint";
+import { TabAudioButton, TabAudioState } from "media/tab-audio.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -67,6 +68,8 @@ export struct BrowserTab {
     has-icon: bool,
     active: bool,
     loading: bool,
+    // media-session lane
+    audio: TabAudioState,
 }
 
 component ChromeButton inherits Rectangle {
@@ -119,6 +122,8 @@ component BrowserTabButton inherits Rectangle {
     in property <bool> closable;
     callback selected;
     callback closed;
+    // media-session lane
+    callback audio-clicked;
 
     min-width: 112px;
     max-width: 248px;
@@ -170,6 +175,20 @@ component BrowserTabButton inherits Rectangle {
             height: 6px;
             border-radius: 3px;
             background: ChromePalette.accent;
+        }
+
+        // media-session lane
+        if root.tab.audio != TabAudioState.silent: VerticalLayout {
+            alignment: center;
+
+            TabAudioButton {
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                tab-title: root.tab.title;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
         }
 
         if root.closable: Rectangle {
@@ -281,6 +300,9 @@ export component MainWindow inherits Window {
     callback dismiss-session-notice();
     callback restore-previous-session();
     // --- end session ---
+    // --- media-session ---
+    callback toggle-tab-muted(int);
+    // --- end media-session ---
 
     callback navigate(string);
     callback go-back;
@@ -599,6 +621,11 @@ export component MainWindow inherits Window {
 
                             closed => {
                                 root.close-tab(index);
+                            }
+
+                            // media-session lane
+                            audio-clicked => {
+                                root.toggle-tab-muted(index);
                             }
                         }
                     }

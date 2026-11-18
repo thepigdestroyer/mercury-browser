@@ -40,6 +40,7 @@ mod macos_terminate;
 mod media_buffers;
 #[cfg(target_os = "macos")]
 mod media_isolation;
+mod media_session;
 mod menus;
 mod page_requests; // dialogs
 mod panic_hook;
@@ -211,6 +212,12 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     controls::connect_controls(&window, Rc::clone(&controller));
     quit::quit_when_the_window_is_closed(&window);
     bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
+    // media-session lane: system Now Playing and power assertions only in interactive launches.
+    media_session::install(
+        &window,
+        Rc::clone(&controller),
+        media_session::uses_system_services(&options),
+    );
 
     let mut timers = Vec::new();
     timers.extend(session_timer); // session

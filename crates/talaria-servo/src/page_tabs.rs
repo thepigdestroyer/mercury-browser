@@ -35,6 +35,9 @@ pub(crate) struct PageTabs {
     pub(crate) allocator: RefCell<Option<NewTabAllocator>>,
     /// Shared with every tab's `DocumentStarts`.
     pub(crate) document_started_listener: SharedDocumentStartedListener,
+    // media session
+    /// The tab whose page last sent a media-session event: Servo's one active session.
+    pub(crate) engine_media_session: crate::media_session::EngineMediaSession,
     pub(crate) control_ids: ControlIds,
     pub(crate) content_blocker: Rc<ContentBlocker>,
     pub(crate) screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,

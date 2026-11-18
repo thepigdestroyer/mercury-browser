@@ -29,6 +29,8 @@ use crate::geolocation::{
 };
 use crate::http_disk_cache::{CacheCheck, http_disk_cache_database, repair_http_disk_cache};
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
+// media session
+use crate::media_session::{EngineMediaSession, browser_event_from_servo, describe_for_log};
 use crate::page_defaults::page_defaults_user_content;
 use crate::page_feedback::{DOCUMENT_TITLE_SCRIPT, PageFeedback, reads_title_at};
 use crate::page_requests::{
@@ -211,6 +213,8 @@ impl ServoRuntime {
             adopted: RefCell::default(),
             allocator: RefCell::default(),
             document_started_listener: Rc::default(),
+            // media session
+            engine_media_session: EngineMediaSession::default(),
             control_ids: ControlIds::default(),
             content_blocker,
             screen_metrics: Rc::clone(&screen_metrics),
@@ -297,6 +301,12 @@ impl ServoRuntime {
         self.page_tabs
             .document_started_listener
             .replace(Some(listener));
+    }
+
+    // media session
+    /// The tab whose page Servo sends media-session actions to (one for all web views).
+    pub fn engine_media_session_tab(&self) -> Option<TabId> {
+        self.page_tabs.engine_media_session.get()
     }
 
     /// Web views created by pages since the last call, in creation order, each with the channel
@@ -511,6 +521,8 @@ struct BrowserDelegate {
     document_start: Rc<DocumentStarts>,
     /// The tab's geolocation, also Servo's delegate for it; `None` while it is off.
     geolocation: Option<Rc<dyn PageGeolocation>>,
+    // media session
+    engine_media_session: EngineMediaSession,
 }
 
 /// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
@@ -540,6 +552,8 @@ fn new_tab_delegate(
         ),
         page_feedback,
         geolocation,
+        // media session
+        browser_event_sender: browser_event_sender.clone(),
     };
     let delegate = Rc::new(BrowserDelegate {
         tab_id,
@@ -554,6 +568,8 @@ fn new_tab_delegate(
         page_requests: parts.page_requests.shared(),
         document_start: Rc::clone(&parts.document_start),
         geolocation: page_geolocation,
+        // media session
+        engine_media_session: Rc::clone(&shared.engine_media_session),
     });
     (delegate, parts)
 }
@@ -842,6 +858,28 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // Servo does not say which frame asked; the request is shown for the tab's page.
         let kind = PageRequestKind::Permission(page_permission(request.feature()));
         self.forward_page_request(web_view.url(), kind, ServoPageRequest::Permission(request));
+    }
+
+    // media session
+    fn notify_media_session_event(
+        &self,
+        _web_view: servo::WebView,
+        event: servo::MediaSessionEvent,
+    ) {
+        // The constellation forwards an event only after making its sender the active session.
+        self.engine_media_session.set(Some(self.tab_id));
+        let event = browser_event_from_servo(event);
+        // Metadata and positions are the page's; playback changes are the browser's own.
+        if matches!(event, BrowserEvent::MediaPlaybackChanged { .. }) {
+            info!("tab {}: media session: {event:?}", self.tab_id.value());
+        } else {
+            log::debug!(
+                "tab {}: media session: {}",
+                self.tab_id.value(),
+                describe_for_log(&event)
+            );
+        }
+        self.send_browser_event(event);
     }
 }
 

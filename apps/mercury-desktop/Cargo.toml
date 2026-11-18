@@ -33,6 +33,7 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+# media-session lane: the page's host in Now Playing (url is already a workspace dependency).
 url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -45,6 +46,7 @@ ash.workspace = true
 # `<input type=file>` (`src/controls/file_panel.rs`) and the bookmark file panels
 # (`src/bookmarks/panel.rs`), shown as sheets with a completion block.
 [target.'cfg(target_os = "macos")'.dependencies]
+# media-session lane: `block2` also gives the `MPRemoteCommand` handlers their blocks.
 block2 = "0.6.2"
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [

@@ -244,6 +244,8 @@ impl EndOfRun for Steps {
     }
 
     fn shut_down_engine(&mut self, exit_code: u8) {
+        // media-session lane: clear Now Playing and release the display before the engine goes.
+        crate::media_session::shut_down();
         crate::engine::shut_down_engine(exit_code);
     }
 

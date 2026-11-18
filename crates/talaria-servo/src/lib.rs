@@ -11,6 +11,7 @@ mod geolocation;
 mod history_events;
 mod http_disk_cache;
 mod load_metrics;
+mod media_session;
 mod opengl_context;
 mod page_defaults;
 mod page_feedback;
