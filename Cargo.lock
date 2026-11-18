@@ -5373,6 +5373,7 @@ dependencies = [
  "image",
  "libc",
  "log",
+ "mercury-filter-lists",
  "mercury-settings",
  "mercury-ui",
  "objc2 0.6.5",
@@ -5387,6 +5388,7 @@ dependencies = [
  "talaria-servo",
  "tempfile",
  "thiserror 2.0.21",
+ "url",
 ]
 
 [[package]]
@@ -5401,6 +5403,23 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "percent-encoding",
  "reqwest",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "mercury-filter-lists"
+version = "0.2.0"
+dependencies = [
+ "adblock",
+ "log",
+ "mercury-settings",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "url",
