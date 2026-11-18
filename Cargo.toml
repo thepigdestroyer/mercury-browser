@@ -79,6 +79,9 @@ tokio = "1.54.1"
 url = "2.5"
 zeroize = "1.9"
 
+# The vendored crates (third_party/vendor.toml; `mercury-servo-patches vendor` adds entries here).
+# Never make them workspace members or path dependencies: `cargo fmt --all` formats both, and
+# clippy lints members. `make servo-patches-check` fails if either happens.
 [patch.crates-io]
 gaol = { path = "third_party/gaol" }
 servo-canvas = { path = "third_party/servo-canvas" }
