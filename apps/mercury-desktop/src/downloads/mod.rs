@@ -280,9 +280,24 @@ pub(crate) fn show_list() {
 
 /// The user typed `address` into the active tab's address bar: a download it leads to was
 /// asked for. Kept here, not in the shared activation record, so typing grants nothing else.
+///
+/// The address is resolved by the controller's own search builder, as `queue_navigation`
+/// resolves it, so the URL noted here is the one the tab then requests.
 pub(crate) fn note_typed_navigation(tab: TabId, address: &str) {
-    let (Some(downloads), Ok(url)) = (current(), talaria_core::resolve_address(address)) else {
+    let Some(downloads) = current() else {
         return;
+    };
+    let Some(controller) = downloads.controller.upgrade() else {
+        return;
+    };
+    let url = {
+        let Ok(controller) = controller.try_borrow() else {
+            return;
+        };
+        let Ok(url) = controller.resolve_address(address) else {
+            return;
+        };
+        url
     };
     downloads
         .navigations
