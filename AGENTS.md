@@ -18,7 +18,7 @@ Mercury's own files are under the PolyForm Noncommercial License 1.0.0; files fr
 
 - Every new file starts with `SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0` and `SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors`, as comments (`//` in Rust and Slint, `#` in shell, TOML, YAML and Makefiles, after any `#!` line). Files that cannot hold a comment (Markdown, JSON, images, HTML) go in the PolyForm list in `REUSE.toml`.
 - Never change the licence of an existing file. A file marked `MPL-2.0` stays MPL-2.0, whoever edits it.
-- A new file that copies or adapts code from another project takes `MPL-2.0`, names its source at the top and gets an entry in `THIRD-PARTY-NOTICES.md`. Do not paste Hermes or other MPL-2.0 code into a PolyForm file; put it in an MPL-2.0 file instead.
+- A new file that copies or adapts code from another project names its source at the top, gets an entry in `THIRD-PARTY-NOTICES.md`, and keeps the upstream licence: `MPL-2.0`, or a permissive one (`Apache-2.0`, `MIT`, `BSD-2-Clause`, `BSD-3-Clause`) with the upstream copyright notice kept and the licence text in `LICENSES/`. Never port GPL or LGPL code; ideas only. Do not paste outside code into a PolyForm file; put it in its own file instead.
 - When moving or splitting a file, the new files keep the original's licence.
 - Call Mercury "source-available", never "open source". `scripts/ci/check-license-headers.sh` (run by `make lint-scripts` and CI) fails when a file has no licence.
 
