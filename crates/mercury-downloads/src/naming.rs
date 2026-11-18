@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Zervo (https://github.com/Goddv/Zervo), commit
 // 86cb71267066f3b1f402abbd5c26faaf24ddf165, `src/downloads.rs` (`sanitize`, `filename_from_url`,
 // `unique_path`, `format_bytes` and their tests), licensed MPL-2.0.

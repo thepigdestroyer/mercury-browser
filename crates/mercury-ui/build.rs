@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 fn main() -> Result<(), slint_build::CompileError> {
     // With the `test-support` feature (tests only), debug info names the elements so tests can
     // find them through Slint's testing backend. Never in a normal build: it also turns off

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 //! Frecency, ported from application-services `components/places/src/frecency.rs`.
 //!
 //! The donor file has no tests of its own, so the worked examples below are derived by hand from

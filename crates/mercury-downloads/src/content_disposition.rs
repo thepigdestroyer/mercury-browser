@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Verso (https://github.com/versotile-org/verso), commit
 // eb719bdd6c7b4a22b640d33ea55c6d440a5a850d, `src/utils/content_disposition_parser.rs`,
 // licensed Apache-2.0 OR MIT (used here under MIT).

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Servo, https://github.com/servo/servo, tag v0.8.0,
 // ports/servoshell/platform/macos/mod.rs (the `INFO_PLIST` static), MPL-2.0.
 

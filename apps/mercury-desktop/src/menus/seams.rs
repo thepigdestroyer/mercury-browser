@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Menu items whose actions other lanes provide. Each item stays disabled until its lane sets
 //! the flag below to `true` and fills in the function, which the menus call through
 //! `MenuCommand`. Nothing else in the menus needs to change.
