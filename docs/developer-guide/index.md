@@ -47,6 +47,6 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 - Only `talaria-servo` names Servo types, apart from the rendering and keyboard glue in `mercury-desktop` that already does.
 - `talaria-core` depends on nothing but `url`, and does no I/O and never reads the clock.
 - Every new file names its licence: an SPDX header for PolyForm Noncommercial 1.0.0, or an entry in `REUSE.toml` for files that can't hold a comment. Never change an existing file's licence. `CONTRIBUTING.md` in the repository has the exact rules.
-- Code copied or adapted from another project goes in an MPL-2.0 file that names the source repository, tag or commit, path and licence at the top, and gets an entry in `THIRD-PARTY-NOTICES.md`. Only MPL-2.0, MIT, Apache-2.0, BSD or ISC sources may be copied.
+- Code copied or adapted from another project goes in a file of its own that names the source repository, tag or commit, path and licence at the top, gets an entry in `THIRD-PARTY-NOTICES.md`, and keeps the upstream licence: MPL-2.0, or a permissive one (Apache-2.0, MIT, BSD-2-Clause, BSD-3-Clause) with the upstream copyright notice kept and the licence text in `LICENSES/`. Never port GPL or LGPL code; take ideas only. Never paste outside code into a PolyForm file.
 - Build, lint and test in release mode, so that one set of Servo artefacts serves all three.
 - Make platform limits visible instead of claiming support that isn't there.

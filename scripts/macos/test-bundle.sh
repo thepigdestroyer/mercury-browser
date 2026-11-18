@@ -196,6 +196,8 @@ check "NOTICE carries the PolyForm Required Notice line" yes \
     "$(grep -q '^Required Notice: ' NOTICE && echo yes || echo no)"
 check "both licence texts are in LICENSES/" yes \
     "$([ -f LICENSES/PolyForm-Noncommercial-1.0.0.md ] && [ -f LICENSES/MPL-2.0.txt ] && echo yes || echo no)"
+# The pattern matches bundle.sh's literal text, so nothing in it is meant to expand.
+# shellcheck disable=SC2016
 check "bundle.sh copies LICENSES/ into Contents/Resources" yes \
     "$(grep -q '^ditto LICENSES "\$RES_DIR/LICENSES"$' scripts/macos/bundle.sh && echo yes || echo no)"
 check "a directory without them is reported" "LICENSE NOTICE THIRD-PARTY-NOTICES.md " \

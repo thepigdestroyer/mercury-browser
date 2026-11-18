@@ -7,6 +7,81 @@ description: Maintain and eventually remove Mercury's focused gaol, Surfman and 
 
 Mercury vendors code when a pinned Servo dependency needs a small, reviewable compatibility fix that cannot be expressed through the public API. Vendoring is a temporary maintenance cost, not a general fork strategy.
 
+## How vendored crates are carried
+
+Every crate Mercury changes lives in `third_party/<crate>/` as **the crate exactly as published on crates.io plus one patch**. Three files record it:
+
+- `third_party/vendor.toml` names each crate, its version, the SHA-256 of the published archive (the one `Cargo.lock` had before the crate was patched), and the upstream repository, commit and directory it was built from.
+- `third_party/patches/<crate>.patch` is Mercury's whole change to the crate, as a `git diff`-style patch against the published archive. It is committed, so the complete engine delta can be reviewed in one place.
+- `third_party/<crate>/MERCURY.md` explains each change: what it does, why, the upstream file and line, how it is tested and when it can be dropped.
+
+The root `Cargo.toml` `[patch.crates-io]` section redirects the dependency graph to these directories.
+
+The tool `mercury-servo-patches` (`crates/mercury-servo-patches`) maintains all of this. Run it from anywhere in the repository with `cargo run --release -p mercury-servo-patches -- <command>`.
+
+| Command | What it does |
+| --- | --- |
+| `vendor <crate>@<version>` | Unpacks the published crate unchanged into `third_party/<crate>/` after checking its SHA-256 against `Cargo.lock`. Then records it in `vendor.toml`, adds the `[patch.crates-io]` line, writes a `MERCURY.md` skeleton and an empty patch, and updates `Cargo.lock`. |
+| `diff <crate>` | Prints Mercury's changes to the crate as the directory is now, against the published archive. |
+| `export` | Rewrites `third_party/patches/<crate>.patch` for every vendored crate. |
+| `check` | Fails unless every vendored crate is the published crate plus its exported patch, byte for byte, with a `Mercury:` comment in every changed file, and is wired consistently in `vendor.toml`, `Cargo.toml` and `Cargo.lock`. |
+| `upgrade <crate>@<version>` | Moves a crate to a new version and merges Mercury's changes into it (see below). |
+| `upgrade --servo <version>` | Does the same for every vendored crate from Servo's repository. |
+
+`make servo-patches-check` runs `check`. So do `make lint-scripts` and the "Vendored crates" CI job.
+
+The published archives come from Cargo's download cache when it has them. Otherwise they are downloaded from crates.io into `target/mercury-servo-patches/crates/`; a patched crate is never in Cargo's cache, so this is usual on a fresh checkout. Every archive is checked against the recorded SHA-256 before use. Set `MERCURY_SERVO_PATCHES_OFFLINE=1` to forbid downloads.
+
+### Changing a vendored crate
+
+1. Reproduce the failure against the exact upstream version.
+2. Edit the files in `third_party/<crate>/`, keeping the diff limited to what Mercury needs. Mark every change with a comment containing `Mercury:`, saying why. `check` fails if a changed or new file has no `Mercury:` in its changed lines. A generated file that cannot hold a comment, such as a `Cargo.lock`, goes in the crate's `unmarked` list in `vendor.toml`.
+3. Run `mercury-servo-patches export` and commit the patch together with the change. `check` fails if the directory and the exported patch disagree.
+4. Add a regression test when the behaviour can be tested locally, and describe the change in the crate's `MERCURY.md`.
+5. Preserve the upstream licence files and attribution. The changed files stay under the crate's own licence.
+6. Prefer a fix that could be proposed upstream without Mercury-specific concepts.
+
+Avoid opportunistic formatting, dependency upgrades or unrelated cleanup inside a vendored crate: every byte ends up in the patch.
+
+Vendored crates are never workspace members and never path dependencies of one, so `cargo fmt --all` and `cargo clippy --workspace` leave them alone. `check` fails if that changes, and the licence-header check skips the directories under `third_party/`. Some crates ship a `.gitignore` that hides their own files (surfman's hides its `Cargo.lock`). `check` fails on such files; add them with `git add -f`.
+
+### Vendoring a new crate
+
+```bash
+cargo run --release -p mercury-servo-patches -- vendor servo-script@0.8.0
+```
+
+The crate must already be in `Cargo.lock`, taken from crates.io. Commit the unchanged crate on its own first, then make Mercury's changes in later commits.
+
+### Upgrading
+
+`upgrade` first refuses to run if a crate has edits that are not exported. It then takes the new published archive and, for each file Mercury changes, does a three-way merge of the old published file, Mercury's version and the new published file. It writes the merged crate in place and updates `vendor.toml`, then reports each file as:
+
+- applied cleanly;
+- already upstream: Mercury's change is no longer needed;
+- **CONFLICT**: diff3 conflict markers written into the file;
+- **GONE**: upstream removed a file Mercury changes.
+
+It exits with status 1 if anything conflicts. Then:
+
+1. For `--servo`, set the root `servo = "=<version>"` requirement.
+2. Resolve each conflict (search for `<<<<<<<`) and decide what each GONE change becomes.
+3. Run `export` and update each `MERCURY.md`.
+4. Run `cargo update -p <crate>…` and `make servo-patches-check`, then the full gates.
+
+`check` fails until the patch is exported again and no conflict marker is left. Git keeps the previous state if you need to start over.
+
+### Removing a crate
+
+When an equivalent fix reaches the Servo dependency graph Mercury uses:
+
+1. Update the pinned dependency version.
+2. In one commit, remove the `[patch.crates-io]` entry, the `vendor.toml` entry, `third_party/patches/<crate>.patch` and the directory.
+3. Regenerate `Cargo.lock` intentionally.
+4. Run the original regression test and full QA.
+
+The removal commit should say which upstream release absorbed the patch.
+
 ## Patch inventory
 
 | Directory | Upstream version | Why Mercury carries it |
@@ -16,19 +91,6 @@ Mercury vendors code when a pinned Servo dependency needs a small, reviewable co
 | `third_party/servo-canvas` | 0.8.0 | Make Servo's GPU 2D-canvas backend (`vello` feature) build against wgpu 30, fall back to the CPU backend when it cannot start, survive failed renders and read-backs, share one GPU device, and fix GPU drawing defects (lost drawing, clips, oversized canvases, shapes with shadows) |
 
 The gaol and Surfman patches date from before the fork and Mercury continues to carry them ([Origins and credits](origins.md)). Mercury added the servo-canvas patch. Both older patches concern Linux. The `gaol` patch adjusts the Linux sandbox profile (its seccomp allow-list and file-size limit), which takes effect only when Servo's `sandbox` option is on; Mercury keeps it off on every platform (see [Process isolation](servo-integration.md#process-isolation)). The Surfman patch changes how Mesa's GPU is chosen.
-
-The root `[patch.crates-io]` section redirects Servo's dependency graph to these directories.
-
-## Rules for changing a patch
-
-1. Reproduce the failure against the exact upstream version.
-2. Keep the diff limited to the behavior Mercury needs.
-3. Add a regression test when the behavior can be tested locally.
-4. Update the directory's `MERCURY.md` or `README.md` with the reason for the patch.
-5. Preserve the upstream license files and attribution.
-6. Prefer a fix that can be proposed upstream without Mercury-specific concepts.
-
-Avoid opportunistic formatting, dependency upgrades, or unrelated cleanup inside a vendored tree. They make future comparison and removal needlessly difficult.
 
 ## Validate the gaol patch
 
@@ -60,7 +122,7 @@ The vendored copy also makes the GPU backend robust:
 - The shared renderer holds about 175 MB of GPU memory from the first GPU canvas until the process exits. Fifty 200×100 canvases: about 0.45 GB process footprint against 0.28 GB on the CPU; two hundred: about 0.56 GB against 0.36 GB.
 - **Displaying a GPU canvas is a read-back.** WebRender receives canvases as CPU pixels, so every frame that changes a GPU canvas is rendered, copied back from the GPU and un-premultiplied on the Canvas thread: the same work as `getImageData`, `toDataURL` or `drawImage` from a canvas. Up to about 3 megapixels an animated canvas runs as fast on the GPU as on the CPU (52.9 against 57.1 frames per second for a full 2360×1304 window; 51.2 against 46.1 at 800×600); above that the GPU is about 35–40 % slower (3200×1800: 28.5 against 44.1).
 
-`third_party/servo-canvas/MERCURY.md` lists each change, why it is needed and when it can be dropped. The first commit that added the directory holds the crate exactly as published, so `git diff 60ee59f -- third_party/servo-canvas` shows the whole patch.
+`third_party/servo-canvas/MERCURY.md` lists each change, why it is needed and when it can be dropped. `third_party/patches/servo-canvas.patch` holds the whole patch against the published crate.
 
 Mercury draws 2D canvases on the GPU by default. `--disable-gpu-canvas` selects Servo's CPU backend instead. Check both modes with `tests/pages/canvas-readback.html`, whose read-back lines must all end in `PASS`:
 
@@ -85,14 +147,3 @@ Run it in both modes and compare line by line: `i` samples must be identical, `e
 
 `tests/pages/canvas-many.html` creates 50 canvases (`?n=200` for more), reads a pixel back from each and prints the timings; use it to compare the two backends' cost of creating canvases.
 
-## Remove a patch
-
-When an equivalent fix reaches the Servo dependency graph used by Mercury:
-
-1. Update the pinned dependency version.
-2. Remove the relevant `[patch.crates-io]` entry.
-3. Regenerate `Cargo.lock` intentionally.
-4. Run the original regression test and full QA.
-5. Remove the vendored directory in the same commit.
-
-The removal commit should explain which upstream release absorbed the patch.
