@@ -38,11 +38,12 @@ mod tests {
 
     #[test]
     fn servos_error_pages_are_recognised_by_title() {
+        // site-security: the pages are Mercury's own (`resources.rs`), read through the same reader.
         assert_eq!(
             error_page_titles(),
             vec![
-                "Error loading page".to_owned(),
-                "Certificate error".to_owned()
+                "Page not loaded".to_owned(),
+                "Certificate not valid".to_owned()
             ]
         );
     }
