@@ -317,7 +317,9 @@ fn now_playing_info(tab_id: TabId, state: &BrowserState, can_skip: bool) -> NowP
 
 #[cfg(test)]
 mod tests {
-    use talaria_core::{BrowserEvent, LoadState, MediaMetadata, MediaPosition, MediaProbe};
+    use talaria_core::{
+        BrowserEvent, CloseTabOutcome, LoadState, MediaMetadata, MediaPosition, MediaProbe,
+    };
 
     use std::cell::Cell;
     use std::time::Duration;
@@ -573,7 +575,7 @@ mod tests {
         start_audible(&mut controller, second);
         update(&mut policy, &controller);
 
-        assert!(controller.close_tab(second));
+        assert_eq!(controller.close_tab(second), CloseTabOutcome::Closed);
         assert_eq!(
             update(&mut policy, &controller),
             Some(NowPlayingChange::Clear)

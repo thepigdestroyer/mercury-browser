@@ -66,7 +66,7 @@ impl DisplaySleepPolicy {
 mod tests {
     use std::time::Duration;
 
-    use talaria_core::{BrowserEvent, MediaPlaybackState, MediaProbe, TabId};
+    use talaria_core::{BrowserEvent, CloseTabOutcome, MediaPlaybackState, MediaProbe, TabId};
 
     use super::*;
 
@@ -227,7 +227,7 @@ mod tests {
         assert_eq!(power.calls, ["prevent", "allow", "prevent"]);
 
         // Closing the tab that holds it.
-        assert!(controller.close_tab(tab_id));
+        assert_eq!(controller.close_tab(tab_id), CloseTabOutcome::Closed);
         assert_eq!(controller.active_tab_id(), other);
         run(&mut policy, &controller, &mut power);
         assert_eq!(power.calls, ["prevent", "allow", "prevent", "allow"]);
