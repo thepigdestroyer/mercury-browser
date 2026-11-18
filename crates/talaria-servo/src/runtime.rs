@@ -233,7 +233,7 @@ impl ServoRuntime {
     // blocklists
     /// Where compiled filter-list engines are handed to the content blocker.
     pub fn filter_engine_slot(&self) -> crate::FilterEngineSlot {
-        self.content_blocker.engine_slot()
+        self.page_tabs.content_blocker.engine_slot()
     }
 
     /// What pages see as the screen and window geometry; `None` lets Servo use its defaults.
