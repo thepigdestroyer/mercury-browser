@@ -1,0 +1,57 @@
+<!doctype html>
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<meta charset="utf-8">
+<title>Geolocation</title>
+<!--
+  Geolocation check. Serve with `python3 scripts/serve-tests.py` (loopback is a secure context)
+  and open /pages/geolocation.html in a run with MERCURY_FAKE_GEOLOCATION set, for example
+  `allow:51.5007,-0.1246,25` or `deny`. Calls getCurrentPosition, then watchPosition with high
+  accuracy, then clearWatch, and prints every answer.
+-->
+<style>
+  body { font: 20px/1.5 -apple-system, sans-serif; margin: 24px; }
+  li { font-family: ui-monospace, monospace; }
+</style>
+<h1>Geolocation</h1>
+<ul id="log"></ul>
+<script>
+  const log = (text) => {
+    const item = document.createElement("li");
+    item.textContent = text;
+    document.getElementById("log").append(item);
+  };
+  const describe = (position) => {
+    const c = position.coords;
+    return `latitude ${c.latitude}, longitude ${c.longitude}, accuracy ${c.accuracy} m`;
+  };
+  const failure = (error) => `error code ${error.code} (${
+    ["", "PERMISSION_DENIED", "POSITION_UNAVAILABLE", "TIMEOUT"][error.code]}): ${error.message}`;
+
+  log(`secure context: ${window.isSecureContext}`);
+  log(`navigator.geolocation: ${"geolocation" in navigator ? "present" : "absent"}`);
+  if ("geolocation" in navigator) {
+    navigator.geolocation.getCurrentPosition(
+      (position) => {
+        log(`getCurrentPosition: ${describe(position)}`);
+        startWatch();
+      },
+      (error) => {
+        log(`getCurrentPosition: ${failure(error)}`);
+        startWatch();
+      },
+      { timeout: 5000 });
+  }
+
+  function startWatch() {
+    let id = 0;
+    id = navigator.geolocation.watchPosition(
+      (position) => {
+        log(`watchPosition ${id}: ${describe(position)}`);
+        navigator.geolocation.clearWatch(id);
+        log(`clearWatch ${id}: done`);
+      },
+      (error) => log(`watchPosition ${id}: ${failure(error)}`),
+      { enableHighAccuracy: true, timeout: 5000 });
+  }
+</script>

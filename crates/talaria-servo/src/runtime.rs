@@ -23,6 +23,10 @@ use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::{ControlIds, EmbedderControls};
 use crate::exit_clearing::{EngineSwitches, ExitClearing, clear_at_exit};
 use crate::frame_ready::FrameReadySignal;
+use crate::geolocation::{
+    GeolocationService, GeolocationSetup, PageGeolocation, WithGeolocation, on_history_changed,
+    on_load_status,
+};
 use crate::http_disk_cache::{CacheCheck, http_disk_cache_database, repair_http_disk_cache};
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
 use crate::page_defaults::page_defaults_user_content;
@@ -101,6 +105,8 @@ pub struct RuntimeOptions {
     pub system_proxy: Option<SystemProxySettings>,
     /// Where Servo keeps its HTTP disk cache. `None` keeps the cache in memory only.
     pub http_disk_cache_dir: Option<PathBuf>,
+    /// Whether pages get `navigator.geolocation`, and where positions come from.
+    pub geolocation: GeolocationSetup,
 }
 
 impl Default for RuntimeOptions {
@@ -113,6 +119,7 @@ impl Default for RuntimeOptions {
             clear_on_exit: ExitClearing::default(),
             system_proxy: None,
             http_disk_cache_dir: None,
+            geolocation: GeolocationSetup::Off,
         }
     }
 }
@@ -209,6 +216,7 @@ impl ServoRuntime {
             screen_metrics: Rc::clone(&screen_metrics),
             user_content: Rc::clone(&user_content),
             after_engine_cleanup: after_engine_cleanup.clone(),
+            geolocation: GeolocationService::for_setup(&runtime_options.geolocation),
         });
 
         Self {
@@ -251,6 +259,7 @@ impl ServoRuntime {
             .hidpi_scale_factor(Scale::new(scale_factor))
             .delegate(delegate)
             .user_content_manager(Rc::clone(&self.user_content))
+            .with_geolocation(parts.geolocation.as_ref())
             .build();
 
         for event in new_web_view_feedback(inner.cursor(), inner.status_text()) {
@@ -263,6 +272,11 @@ impl ServoRuntime {
             scale_factor,
             parts,
         ))
+    }
+
+    /// The engine, for the crate's helpers (history lane: `site_data`).
+    pub(crate) fn servo(&self) -> &servo::Servo {
+        &self.inner
     }
 
     pub fn spin_event_loop(&self) {
@@ -360,6 +374,9 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
     // the embedder for permission (`mediadevices.rs`), so WebRTC must stay disabled until
     // Mercury can gate device access itself.
     preferences.dom_webrtc_enabled = false;
+    // Off unless geolocation is set up: positions then come from Mercury's own source, and
+    // Servo asks for the "geolocation" permission before every first request of a page.
+    preferences.dom_geolocation_enabled = runtime_options.geolocation.exposes_geolocation();
     // controls: always off. With it on, a page can call `selectFiles()` on a file input and have
     // Servo accept the paths it names without any file panel (`htmlinputelement.rs`); it exists
     // for Servo's own tests.
@@ -492,6 +509,8 @@ struct BrowserDelegate {
     /// The tab's one document-start signal (dialogs, tabs); shared with the tab's `ServoWebView`,
     /// which arms it when it navigates.
     document_start: Rc<DocumentStarts>,
+    /// The tab's geolocation, also Servo's delegate for it; `None` while it is off.
+    geolocation: Option<Rc<dyn PageGeolocation>>,
 }
 
 /// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
@@ -501,6 +520,14 @@ fn new_tab_delegate(
     browser_event_sender: &Sender<TabEvent>,
 ) -> (Rc<BrowserDelegate>, TabParts) {
     let page_feedback = PageFeedback::new(tab_id, browser_event_sender.clone());
+    // geolocation: one per tab, shared by Servo, the delegate, `DocumentStarts` and the web view
+    let geolocation = shared
+        .geolocation
+        .as_ref()
+        .map(GeolocationService::web_view);
+    let page_geolocation = geolocation
+        .clone()
+        .map(|geolocation| geolocation as Rc<dyn PageGeolocation>);
     let parts = TabParts {
         frame_ready: FrameReadySignal::default(),
         controls: EmbedderControls::new(shared.control_ids.clone()),
@@ -509,8 +536,10 @@ fn new_tab_delegate(
             tab_id,
             Rc::clone(&page_feedback),
             Rc::clone(&shared.document_started_listener),
+            page_geolocation.clone(),
         ),
         page_feedback,
+        geolocation,
     };
     let delegate = Rc::new(BrowserDelegate {
         tab_id,
@@ -524,6 +553,7 @@ fn new_tab_delegate(
         controls: parts.controls.clone(),
         page_requests: parts.page_requests.shared(),
         document_start: Rc::clone(&parts.document_start),
+        geolocation: page_geolocation,
     });
     (delegate, parts)
 }
@@ -589,14 +619,21 @@ impl servo::WebViewDelegate for BrowserDelegate {
         self.send_browser_event(BrowserEvent::AddressChanged {
             url: display_url(&url),
         });
+        // history
+        self.page_feedback.set_address(display_url(&url));
         // tabs: a same-document navigation keeps the document's title and icon
         if self.page_feedback.address_changed(web_view.load_status()) {
             self.read_document_title(&web_view);
         }
     }
 
-    fn notify_page_title_changed(&self, _web_view: servo::WebView, title: Option<String>) {
-        self.send_browser_event(BrowserEvent::PageTitleChanged { title });
+    fn notify_page_title_changed(&self, web_view: servo::WebView, title: Option<String>) {
+        self.send_browser_event(BrowserEvent::PageTitleChanged {
+            title: title.clone(),
+        });
+        // history
+        let url = web_view.url();
+        self.send_browser_event(crate::history_events::page_title_at(url.as_ref(), title));
     }
 
     fn notify_favicon_changed(&self, web_view: servo::WebView) {
@@ -615,6 +652,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn notify_load_status_changed(&self, web_view: servo::WebView, status: LoadStatus) {
+        // geolocation: a reported start ends the old document's requests and parks its watches
+        on_load_status(self.geolocation.as_deref(), status);
         // dialogs: a new document; the previous one's requests and page state no longer apply.
         // tabs: the same signal resets the title and icon and forgets the tab's activation,
         // synchronously, before any script of the new document runs.
@@ -647,7 +686,13 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn notify_history_changed(&self, _web_view: servo::WebView, entries: Vec<Url>, current: usize) {
+        // geolocation: back/forward may restore a cached document without a new start
+        on_history_changed(self.geolocation.as_deref(), &entries, current);
         self.send_browser_event(history_changed_event(entries.len(), current));
+        // history
+        if let Some(event) = crate::history_events::page_committed(&entries, current) {
+            self.send_browser_event(event);
+        }
     }
 
     fn notify_cursor_changed(&self, _web_view: servo::WebView, cursor: Cursor) {
@@ -705,10 +750,15 @@ impl servo::WebViewDelegate for BrowserDelegate {
             .hidpi_scale_factor(scale_factor)
             .delegate(delegate)
             .user_content_manager(Rc::clone(&page_tabs.user_content))
+            .with_geolocation(parts.geolocation.as_ref())
             .build();
         // Servo creates auxiliary web views visible, and all tabs share one rendering context:
         // the engine shows whichever tab becomes active.
         inner.hide();
+        // geolocation: hidden here without `ServoWebView::hide`, so told directly
+        if let Some(geolocation) = &parts.geolocation {
+            geolocation.set_visible(false);
+        }
 
         for event in new_web_view_feedback(inner.cursor(), inner.status_text()) {
             let _send_result = browser_event_sender.send(TabEvent::new(tab_id, event));
@@ -786,6 +836,14 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn request_permission(&self, web_view: servo::WebView, request: servo::PermissionRequest) {
+        // geolocation: a diagnostic run answers geolocation without a prompt
+        let request = match &self.geolocation {
+            Some(geolocation) => match geolocation.answer_permission_in_diagnostic(request) {
+                Some(request) => request,
+                None => return,
+            },
+            None => request,
+        };
         // Servo does not say which frame asked; the request is shown for the tab's page.
         let kind = PageRequestKind::Permission(page_permission(request.feature()));
         self.forward_page_request(web_view.url(), kind, ServoPageRequest::Permission(request));
@@ -900,7 +958,7 @@ fn pointer_cursor_from_servo(cursor: Cursor) -> PointerCursor {
     }
 }
 
-fn display_url(url: &Url) -> String {
+pub(crate) fn display_url(url: &Url) -> String {
     if url.as_str() == NEW_TAB_URL {
         String::new()
     } else {
@@ -1225,6 +1283,33 @@ mod tests {
             Preferences::default().network_http_disk_cache_size
         );
         assert_eq!(preferences.network_http_disk_cache_size, 100 * 1024 * 1024);
+    }
+
+    // geolocation
+    #[test]
+    fn geolocation_is_off_by_default() {
+        assert_eq!(RuntimeOptions::default().geolocation, GeolocationSetup::Off);
+        for enabled in [true, false] {
+            assert!(!preferences_with_experimental_web_features(enabled).dom_geolocation_enabled);
+        }
+    }
+
+    #[test]
+    fn geolocation_setups_that_answer_pages_turn_the_preference_on() {
+        for setup in [
+            GeolocationSetup::System,
+            GeolocationSetup::Diagnostic(crate::GeolocationDiagnostic::Deny),
+        ] {
+            let expected = setup.exposes_geolocation();
+            let preferences = mercury_preferences(&RuntimeOptions {
+                geolocation: setup,
+                ..RuntimeOptions::default()
+            });
+
+            assert_eq!(preferences.dom_geolocation_enabled, expected);
+            // Servo's own fixed test position stays off: positions come from Mercury's source.
+            assert!(!preferences.dom_geolocation_test_position_enabled);
+        }
     }
 
     #[test]

@@ -14,7 +14,7 @@
 
 mod color;
 mod context_menu;
-mod file_panel;
+pub(crate) mod file_panel; // bookmarks lane: its file panels are here too
 mod geometry;
 mod select;
 

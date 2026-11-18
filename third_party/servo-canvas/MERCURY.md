@@ -9,16 +9,16 @@ https://github.com/servo/servo at commit
 
 The crate was published without a licence file. Its `Cargo.toml` declares
 `license = "MPL-2.0"` and every source file carries the MPL-2.0 header; the
-repository's MPL-2.0 `LICENSE` file applies to this directory.
+MPL-2.0 text in the repository's `LICENSES/MPL-2.0.txt` applies to this
+directory.
 
 Mercury enables Servo's `vello` feature, the GPU 2D-canvas backend, and draws
 2D canvases on the GPU by default (`--disable-gpu-canvas` selects the CPU
-backend, `vello_cpu`). The first commit that added this directory (`60ee59f`)
-holds the crate as published, so
-
-    git diff 60ee59f -- third_party/servo-canvas ':(exclude)third_party/servo-canvas/MERCURY.md'
-
-shows every change, and only the changes listed below. Each is marked with a
+backend, `vello_cpu`). `third_party/patches/servo-canvas.patch` is the
+difference from the published crate (`mercury-servo-patches diff servo-canvas`
+prints it from the directory as it is now), and `make servo-patches-check`
+fails if the two disagree. It holds every change, and only the changes listed
+below. Each is marked with a
 `Mercury:` comment in the source. Line numbers marked "upstream" refer to the
 published files. "Parity case" means a case of
 `tests/pages/canvas-parity.html` (run it in both modes and compare, see

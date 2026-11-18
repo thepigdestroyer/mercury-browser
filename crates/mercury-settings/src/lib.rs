@@ -21,7 +21,8 @@
 //! 4. **Call [`SettingsStore::load`] before any settings save.**
 //! 5. **Offer [`StartupSessions::recovery`] whenever it is not empty**, whatever the start-up
 //!    setting. Call [`SessionStore::resolve_recovery`] only after the user has restored or
-//!    dismissed what it offers.
+//!    dismissed what it offers, and [`SessionStore::remove_recovery`] for one entry the user
+//!    restored; after a restore, only once the restored tabs have been saved.
 //! 6. **Restore a `last` that exited cleanly only when the start-up setting says so**
 //!    ([`StartupBehavior::RestoreSession`]); otherwise keep it for "restore previous session".
 //!    A `last` that did not exit cleanly is already in the recovery list.
