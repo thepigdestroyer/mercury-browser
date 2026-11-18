@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 use slint::winit_030::winit::window::Window;
 use talaria_servo::ScreenMetrics;
 
@@ -15,14 +17,16 @@ pub(crate) fn screen_metrics(window: &Window) -> Option<ScreenMetrics> {
     let window_origin = window.outer_position().unwrap_or_default();
     let window_size = window.outer_size();
 
-    #[cfg(target_os = "macos")]
-    let available = macos_available_area(&monitor, (screen_origin.x, screen_origin.y));
-    #[cfg(not(target_os = "macos"))]
-    let available = None;
-    let (available_origin, available_size) = available.unwrap_or((
+    let whole_screen = (
         (screen_origin.x, screen_origin.y),
         (screen_size.width, screen_size.height),
-    ));
+    );
+    // Only macOS reports the area outside the menu bar and Dock; elsewhere it is the whole screen.
+    #[cfg(target_os = "macos")]
+    let (available_origin, available_size) =
+        macos_available_area(&monitor, (screen_origin.x, screen_origin.y)).unwrap_or(whole_screen);
+    #[cfg(not(target_os = "macos"))]
+    let (available_origin, available_size) = whole_screen;
 
     Some(ScreenMetrics {
         screen_size: (screen_size.width, screen_size.height),

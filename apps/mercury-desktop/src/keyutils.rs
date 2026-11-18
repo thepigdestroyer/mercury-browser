@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Servo's servoshell, https://github.com/servo/servo, tag `v0.8.0`,
 // path `ports/servoshell/desktop/keyutils.rs`, licensed under MPL-2.0.
 // Changes: the conversions take winit's `Key` and `PhysicalKey` instead of a whole `KeyEvent`

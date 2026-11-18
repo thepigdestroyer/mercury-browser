@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Zephium, https://github.com/zephium-browser/Zephium, commit
 // 9026a1fffad74d6e201ef97fe8c02c1b01403cd2, crates/zephium-import/src/snapshot.rs (lines 1-45),
 // licensed under MPL-2.0: copying the database with its `-wal` and `-journal` to a temporary

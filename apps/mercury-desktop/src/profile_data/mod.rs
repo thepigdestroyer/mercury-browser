@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The one owner of the profile database (`places.sqlite`: history, bookmarks, download
 //! records) for the whole application.
 //!
@@ -155,6 +158,7 @@ pub(crate) fn shut_down(deadline: Instant) {
 }
 
 fn deliver_replies() {
+    let _slint = crate::callback_scope::InSlintCallback::enter();
     if let Some(data) = handle() {
         data.deliver_replies();
     }

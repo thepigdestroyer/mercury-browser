@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Bookmarks: the star button, the bookmarks bar, the bookmarks manager and bookmark files.
 //!
 //! Everything runs on the UI thread and talks to the profile database through the
@@ -16,7 +19,6 @@ pub(crate) mod import_plan;
 pub(crate) mod layout;
 pub(crate) mod manager;
 pub(crate) mod menu;
-mod panel;
 pub(crate) mod popover;
 pub(crate) mod star;
 pub(crate) mod tree;
@@ -25,7 +27,7 @@ pub(crate) mod tree;
 mod tests;
 
 use std::cell::{Cell, RefCell};
-use std::rc::Rc;
+use std::rc::{Rc, Weak};
 
 use mercury_store::{BookmarkId, BookmarkRoot};
 use mercury_ui::MainWindow;
@@ -33,6 +35,7 @@ use slint::ComponentHandle;
 use talaria_core::{BrowserController, LoadState, NavigationOrigin, TabActivation};
 
 use crate::profile_data::{self, Area};
+use crate::settings::SettingsHandle;
 use crate::ui_sync::sync_ui;
 
 /// The root new bookmarks from the star go into: "Other Bookmarks". The bar stays what the
@@ -48,6 +51,7 @@ thread_local! {
 pub(crate) struct Bookmarks {
     window: slint::Weak<MainWindow>,
     controller: Rc<RefCell<BrowserController>>,
+    settings: Weak<SettingsHandle>,
     star: RefCell<star::StarModel>,
     error_page_titles: Vec<String>,
     popover: RefCell<Option<popover::Popover>>,
@@ -62,28 +66,45 @@ pub(crate) fn with<R>(action: impl FnOnce(&Rc<Bookmarks>) -> R) -> Option<R> {
     Some(action(&bookmarks))
 }
 
-/// Whether the bookmarks bar is shown when the browser starts: the stored setting. The
-/// settings lane's loading is not merged yet, so this is the setting's stored default
-/// (`AppearanceSettings::default().show_bookmarks_bar`, true); its accessor replaces it.
-pub(crate) fn show_bookmarks_bar_setting() -> bool {
-    mercury_settings::AppearanceSettings::default().show_bookmarks_bar
+/// The appearance setting "show bookmarks bar".
+fn show_bookmarks_bar_setting(settings: &SettingsHandle) -> bool {
+    settings.settings().appearance.show_bookmarks_bar
+}
+
+/// Drops the bookmarks state, the manager window with it. Called at the end of the run, with
+/// the other windows (`post_run.rs`); it only drops.
+pub(crate) fn release() {
+    let bookmarks = BOOKMARKS.with(|current| current.borrow_mut().take());
+    if let Some(bookmarks) = bookmarks {
+        bookmarks.manager.borrow_mut().take();
+    }
 }
 
 /// Wires the star, the bar and their popups to the window, and starts listening for changes.
 /// Call once, after `profile_data::start` and the window's other callbacks.
-pub(crate) fn connect(window: &MainWindow, controller: Rc<RefCell<BrowserController>>) {
+pub(crate) fn connect(
+    window: &MainWindow,
+    controller: Rc<RefCell<BrowserController>>,
+    settings: &Rc<SettingsHandle>,
+) {
     let bookmarks = Rc::new(Bookmarks {
         window: window.as_weak(),
         controller,
+        settings: Rc::downgrade(settings),
         star: RefCell::new(star::StarModel::default()),
         error_page_titles: talaria_servo::error_page_titles(),
         popover: RefCell::new(None),
         bar: RefCell::new(bar::Bar::new()),
-        bar_shown: Cell::new(show_bookmarks_bar_setting()),
+        bar_shown: Cell::new(show_bookmarks_bar_setting(settings)),
         manager: RefCell::new(None),
     });
     BOOKMARKS.with(|current| *current.borrow_mut() = Some(Rc::clone(&bookmarks)));
     window.set_bookmarks_bar_shown(bookmarks.bar_shown.get());
+    // The bar follows the setting, whoever changes it (Cmd+Shift+B, the menu, the settings
+    // window). The listener reaches the state through `with`: it holds nothing itself.
+    settings.subscribe(|| {
+        with(|bookmarks| bookmarks.follow_bar_setting());
+    });
     popover::connect(window);
     bar::connect(window);
     if let Some(data) = profile_data::handle() {
@@ -110,23 +131,18 @@ pub(crate) fn bookmark_this_page() {
 }
 
 /// Cmd+Shift+B (Ctrl+Shift+B elsewhere) and the menu's "Show Bookmarks Bar".
+/// Saves the opposite of what the bar shows now; the bar follows when the setting changes.
 pub(crate) fn toggle_bookmarks_bar() {
     with(|bookmarks| {
-        bookmarks.bar_shown.set(!bookmarks.bar_shown.get());
-        if let Some(window) = bookmarks.window.upgrade() {
-            window.set_bookmarks_bar_shown(bookmarks.bar_shown.get());
-            window.window().request_redraw();
+        let show = !bookmarks.bar_shown.get();
+        match bookmarks.settings.upgrade() {
+            Some(settings) => settings.update(|settings| {
+                settings.appearance.show_bookmarks_bar = show;
+            }),
+            // No settings in this run: the bar changes for the session only.
+            None => bookmarks.show_bar(show),
         }
     });
-}
-
-/// Whether the bookmarks bar is shown now (the menu's check mark).
-#[expect(
-    dead_code,
-    reason = "called by the menus lane's Bookmarks seam, not merged yet"
-)]
-pub(crate) fn bookmarks_bar_shown() -> bool {
-    with(|bookmarks| bookmarks.bar_shown.get()).unwrap_or(false)
 }
 
 /// Cmd+Alt+B on macOS (Ctrl+Shift+O elsewhere) and the menu's "Bookmarks Manager".
@@ -135,6 +151,22 @@ pub(crate) fn show_bookmarks_manager() {
 }
 
 impl Bookmarks {
+    fn follow_bar_setting(&self) {
+        if let Some(settings) = self.settings.upgrade() {
+            self.show_bar(show_bookmarks_bar_setting(&settings));
+        }
+    }
+
+    fn show_bar(&self, show: bool) {
+        if self.bar_shown.replace(show) == show {
+            return;
+        }
+        if let Some(window) = self.window.upgrade() {
+            window.set_bookmarks_bar_shown(show);
+            window.window().request_redraw();
+        }
+    }
+
     /// The bookmarks changed; `folders` are the folders whose listing changed (`None`: any
     /// may have). An empty hint (a write that found nothing to change) refreshes nothing; the
     /// bar is read again only when its own folder is among those changed.

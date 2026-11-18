@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Every crashed session stays recoverable until the application says the user dealt with it.
 //! Each test walks a sequence of runs and checks what `begin_run` returns and what is on disk
 //! after every step.

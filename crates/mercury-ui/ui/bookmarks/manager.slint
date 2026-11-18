@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 import { Button, ComboBox, LineEdit, ListView, Palette } from "std-widgets.slint";
-import { BookmarkColors } from "colors.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 import { BookmarkIcon, BookmarkMenuRow, BookmarkRowKind } from "bar.slint";
 
 component ToolButton inherits Button {
@@ -56,27 +59,25 @@ export component BookmarksManager inherits Window {
     preferred-height: 620px;
     min-width: 640px;
     min-height: 420px;
-    background: Palette.background;
+    background: ChromePalette.window-background;
 
-    // The std widgets draw light when the scheme is unknown, so the lane's colours follow the
-    // scheme they actually use rather than defaulting to dark: one scheme for the whole window.
-    property <ColorScheme> widget-scheme: Palette.color-scheme == ColorScheme.dark
-        ? ColorScheme.dark
-        : ColorScheme.light;
-
+    // For renderings: the scheme of the std widgets (Rust sets `ChromePalette`'s theme).
     init => {
         if root.forced-color-scheme != ColorScheme.unknown {
             Palette.color-scheme = root.forced-color-scheme;
         }
-        BookmarkColors.forced = root.widget-scheme;
     }
 
     changed forced-color-scheme => {
         Palette.color-scheme = root.forced-color-scheme;
     }
 
-    changed widget-scheme => {
-        BookmarkColors.forced = root.widget-scheme;
+    // Keeps Slint from installing its default macOS menu bar when this window becomes active (a
+    // window that declares a `MenuBar` never gets the default one, and a hidden one installs no
+    // menu); Mercury's own menu is reinstalled when this window becomes key.
+    MenuBar {
+        visible: false;
+        Menu { }
     }
 
     public function focus-list() {
@@ -149,8 +150,8 @@ export component BookmarksManager inherits Window {
                 width: 240px;
                 border-radius: 6px;
                 border-width: 1px;
-                border-color: Palette.border;
-                background: Palette.alternate-background;
+                border-color: ChromePalette.field-border;
+                background: ChromePalette.content-background;
 
                 ListView {
                     x: 1px;
@@ -161,8 +162,8 @@ export component BookmarksManager inherits Window {
                     for folder[index] in root.folders: Rectangle {
                         height: 28px;
                         background: index == root.folder-index && !root.searching
-                            ? BookmarkColors.selection
-                            : folder-touch.has-hover ? BookmarkColors.button-hover : transparent;
+                            ? ChromePalette.item-selected
+                            : folder-touch.has-hover ? ChromePalette.item-hover : transparent;
                         accessible-role: list-item;
                         accessible-label: folder.title;
                         accessible-item-selected: index == root.folder-index;
@@ -177,13 +178,13 @@ export component BookmarksManager inherits Window {
 
                                 BookmarkIcon {
                                     folder: true;
-                                    stroke: Palette.foreground;
+                                    stroke: ChromePalette.text;
                                 }
                             }
 
                             Text {
                                 text: folder.title == "" ? "(untitled)" : folder.title;
-                                color: Palette.foreground;
+                                color: ChromePalette.text;
                                 font-size: 13px;
                                 font-weight: folder.depth == 0 ? 600 : 400;
                                 vertical-alignment: center;
@@ -211,7 +212,7 @@ export component BookmarksManager inherits Window {
                     Text {
                         horizontal-stretch: 1;
                         text: root.heading;
-                        color: Palette.foreground;
+                        color: ChromePalette.text;
                         font-size: 15px;
                         font-weight: 600;
                         vertical-alignment: center;
@@ -290,12 +291,12 @@ export component BookmarksManager inherits Window {
                     Rectangle {
                         border-radius: 6px;
                         border-width: 1px;
-                        border-color: list-focus.has-focus ? BookmarkColors.accent : Palette.border;
-                        background: Palette.alternate-background;
+                        border-color: list-focus.has-focus ? ChromePalette.accent : ChromePalette.field-border;
+                        background: ChromePalette.content-background;
 
                         if root.rows.length == 0: Text {
                             text: root.searching ? "No bookmarks match." : "This folder is empty.";
-                            color: BookmarkColors.text-secondary;
+                            color: ChromePalette.text-secondary;
                             font-size: 13px;
                             horizontal-alignment: center;
                             vertical-alignment: center;
@@ -310,8 +311,8 @@ export component BookmarksManager inherits Window {
                             for row[index] in root.rows: Rectangle {
                                 height: 30px;
                                 background: index == root.row-index
-                                    ? BookmarkColors.selection
-                                    : row-touch.has-hover ? BookmarkColors.button-hover : transparent;
+                                    ? ChromePalette.item-selected
+                                    : row-touch.has-hover ? ChromePalette.item-hover : transparent;
                                 accessible-role: list-item;
                                 accessible-label: row.kind == BookmarkRowKind.separator ? "Separator" : row.title;
                                 accessible-item-selected: index == root.row-index;
@@ -321,7 +322,7 @@ export component BookmarksManager inherits Window {
                                     y: parent.height / 2;
                                     width: parent.width - 24px;
                                     height: 1px;
-                                    background: Palette.border;
+                                    background: ChromePalette.separator;
                                 }
 
                                 if row.kind != BookmarkRowKind.separator: HorizontalLayout {
@@ -334,7 +335,7 @@ export component BookmarksManager inherits Window {
 
                                         BookmarkIcon {
                                             folder: row.kind == BookmarkRowKind.folder;
-                                            stroke: Palette.foreground;
+                                            stroke: ChromePalette.text;
                                         }
                                     }
 
@@ -343,7 +344,7 @@ export component BookmarksManager inherits Window {
                                         min-width: 0px;
                                         preferred-width: 0px;
                                         text: row.title == "" ? "(untitled)" : row.title;
-                                        color: Palette.foreground;
+                                        color: ChromePalette.text;
                                         font-size: 13px;
                                         vertical-alignment: center;
                                         overflow: elide;
@@ -354,7 +355,7 @@ export component BookmarksManager inherits Window {
                                         min-width: 0px;
                                         preferred-width: 0px;
                                         text: row.url;
-                                        color: BookmarkColors.text-secondary;
+                                        color: ChromePalette.text-secondary;
                                         font-size: 12px;
                                         vertical-alignment: center;
                                         overflow: elide;
@@ -390,7 +391,7 @@ export component BookmarksManager inherits Window {
                         Text {
                             width: 70px;
                             text: "Name";
-                            color: Palette.foreground;
+                            color: ChromePalette.text;
                             font-size: 13px;
                             vertical-alignment: center;
                         }
@@ -410,7 +411,7 @@ export component BookmarksManager inherits Window {
                         Text {
                             width: 70px;
                             text: "Address";
-                            color: Palette.foreground;
+                            color: ChromePalette.text;
                             font-size: 13px;
                             vertical-alignment: center;
                         }
@@ -430,7 +431,7 @@ export component BookmarksManager inherits Window {
                         Text {
                             width: 70px;
                             text: "Move to";
-                            color: Palette.foreground;
+                            color: ChromePalette.text;
                             font-size: 13px;
                             vertical-alignment: center;
                         }
@@ -461,7 +462,7 @@ export component BookmarksManager inherits Window {
 
                 if root.problem != "": Text {
                     text: root.problem;
-                    color: BookmarkColors.problem;
+                    color: ChromePalette.danger;
                     font-size: 12px;
                     wrap: word-wrap;
                 }
@@ -470,7 +471,7 @@ export component BookmarksManager inherits Window {
 
         Text {
             text: root.status;
-            color: BookmarkColors.text-secondary;
+            color: ChromePalette.text-secondary;
             font-size: 12px;
             overflow: elide;
         }

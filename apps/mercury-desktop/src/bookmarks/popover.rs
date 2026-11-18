@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The star's popover: name and folder of the page's bookmark, Done and Remove.
 
 use std::rc::Rc;
@@ -50,16 +53,20 @@ pub(crate) fn popover_edits(
 
 pub(crate) fn connect(window: &MainWindow) {
     window.on_bookmark_star_clicked(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(star_clicked);
     });
     window.on_bookmark_popover_done(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(finish);
     });
     // Closing it with a click outside or Escape keeps the edits, as Done does.
     window.on_bookmark_popover_dismissed(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(finish);
     });
     window.on_bookmark_popover_remove(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(remove);
     });
 }

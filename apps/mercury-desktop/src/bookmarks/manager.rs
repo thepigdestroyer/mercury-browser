@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The bookmarks manager: a separate window, like the settings window (a Slint window needs
 //! no web view, uses the same widgets, and can be rendered headless). The folder tree on the
 //! left, the selected folder's contents or the search results on the right, an editor under
@@ -77,10 +80,6 @@ pub(crate) fn show(bookmarks: &Rc<Bookmarks>) {
 }
 
 /// Opens the manager at a folder (a folder chosen in the Bookmarks menu).
-#[expect(
-    dead_code,
-    reason = "called by the menus lane's Bookmarks seam, not merged yet"
-)]
 pub(crate) fn show_folder(bookmarks: &Rc<Bookmarks>, folder: BookmarkId) {
     show(bookmarks);
     if let Some(manager) = bookmarks.manager.borrow().clone() {
@@ -175,6 +174,11 @@ pub(crate) fn heading(search: &str, results: usize, folder: Option<&str>) -> Str
 impl Manager {
     fn new(bookmarks: &Rc<Bookmarks>) -> Result<Rc<Self>, slint::PlatformError> {
         let window = BookmarksManager::new()?;
+        // Its own copy of `ChromePalette`, following the appearance setting.
+        crate::settings::apply_chrome_theme(&window);
+        // menus lane: reinstall Mercury's menu when this window becomes key
+        #[cfg(target_os = "macos")]
+        crate::menus::reinstall_when_key(window.window(), "the bookmarks manager became key");
         let manager = Rc::new(Self {
             window,
             bookmarks: Rc::downgrade(bookmarks),
@@ -195,24 +199,28 @@ impl Manager {
         let on = |manager: &Rc<Self>| Rc::downgrade(manager);
         let this = on(self);
         self.window.on_folder_selected(move |index| {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.select_folder(index);
             }
         });
         let this = on(self);
         self.window.on_row_selected(move |index| {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.select_row(index);
             }
         });
         let this = on(self);
         self.window.on_row_opened(move |index, new_tab| {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.open_row(index, new_tab);
             }
         });
         let this = on(self);
         self.window.on_search_edited(move |text| {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.view.borrow_mut().search = text.to_string();
                 // Searched once typing pauses, not on every key: each search walks the tree.
@@ -220,6 +228,7 @@ impl Manager {
                 manager
                     .search_timer
                     .start(slint::TimerMode::SingleShot, SEARCH_DELAY, move || {
+                        let _slint = crate::callback_scope::InSlintCallback::enter();
                         if let Some(manager) = later.upgrade() {
                             manager.load_rows();
                         }
@@ -228,60 +237,70 @@ impl Manager {
         });
         let this = on(self);
         self.window.on_save_edits(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.save_edits();
             }
         });
         let this = on(self);
         self.window.on_new_folder(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.add(true);
             }
         });
         let this = on(self);
         self.window.on_new_separator(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.add(false);
             }
         });
         let this = on(self);
         self.window.on_delete_selected(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.delete_selected();
             }
         });
         let this = on(self);
         self.window.on_undo_delete(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.undo_delete();
             }
         });
         let this = on(self);
         self.window.on_move_up(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.move_by(-1);
             }
         });
         let this = on(self);
         self.window.on_move_down(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.move_by(1);
             }
         });
         let this = on(self);
         self.window.on_move_to(move |index| {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 manager.move_to(index);
             }
         });
         let this = on(self);
         self.window.on_import_file(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 file::import_from_file(&manager);
             }
         });
         let this = on(self);
         self.window.on_export_file(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
             if let Some(manager) = this.upgrade() {
                 file::export_to_file(&manager);
             }

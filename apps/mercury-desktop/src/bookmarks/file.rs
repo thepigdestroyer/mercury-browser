@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! "Export bookmarks…" and "Import bookmarks from file…": Netscape bookmark files
 //! (`bookmarks.html`), through `mercury-import`'s writer and parser.
 //!
@@ -11,11 +14,12 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use mercury_store::{BookmarkId, BookmarkImport, BookmarkRoot};
+use slint::ComponentHandle;
 
 use super::import_plan::plan_import;
 use super::manager::{self, Manager};
-use super::panel;
 use super::tree;
+use crate::controls::file_panel;
 use crate::profile_data::bookmarks::FolderRef;
 use crate::profile_data::import::{IMPORT_CHUNK, ImportOutcome, ImportProgress, ImportSummary};
 use crate::profile_data::{self, ProfileData, ProfileDataError, new_guid, now_ms};
@@ -261,15 +265,15 @@ pub(crate) fn import_into_new_folder(
 }
 
 pub(crate) fn import_from_file(manager: &Rc<Manager>) {
-    if !panel::AVAILABLE {
+    if !file_panel::BOOKMARK_PANELS_AVAILABLE {
         manager.set_status("Importing a bookmarks file is not available on this platform yet.");
         return;
     }
     if manager.busy() {
         return;
     }
-    panel::choose_file_to_open(
-        manager.window(),
+    file_panel::choose_bookmarks_file(
+        manager.window().window(),
         Box::new(|path| {
             if let Some(path) = path {
                 read_in_background(path);
@@ -287,9 +291,13 @@ fn read_in_background(path: PathBuf) {
         .name("bookmarks file".to_owned())
         .spawn(move || {
             let read = read_bookmarks_file(&path);
-            let _queued = slint::invoke_from_event_loop(move || import_read(read));
+            let _queued = slint::invoke_from_event_loop(move || {
+                let _slint = crate::callback_scope::InSlintCallback::enter();
+                import_read(read);
+            });
         });
     if let Err(error) = spawned {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         import_read(Err(format!("the file could not be read: {error}")));
     }
 }
@@ -346,12 +354,12 @@ fn import_read(read: Result<(Vec<BookmarkImport>, u64), String>) {
 }
 
 pub(crate) fn export_to_file(manager: &Rc<Manager>) {
-    if !panel::AVAILABLE {
+    if !file_panel::BOOKMARK_PANELS_AVAILABLE {
         manager.set_status("Exporting a bookmarks file is not available on this platform yet.");
         return;
     }
-    panel::choose_file_to_save(
-        manager.window(),
+    file_panel::choose_bookmarks_export(
+        manager.window().window(),
         "bookmarks.html",
         Box::new(|path| {
             let (Some(path), Some(data)) = (path, profile_data::handle()) else {
@@ -380,6 +388,7 @@ pub(crate) fn export_to_file(manager: &Rc<Manager>) {
                             }
                         };
                         let _queued = slint::invoke_from_event_loop(move || {
+                            let _slint = crate::callback_scope::InSlintCallback::enter();
                             if let Some(manager) = manager::current() {
                                 manager.set_status(&status);
                             }

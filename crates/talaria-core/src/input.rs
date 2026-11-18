@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum KeyState {
     Down,
@@ -45,4 +46,13 @@ pub enum ImeInput {
         data: String,
     },
     Dismissed,
+}
+
+/// A clipboard edit performed on whatever has focus inside the page, as if its key had been
+/// pressed: Servo runs the same editing code for both.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardCommand {
+    Cut,
+    Copy,
+    Paste,
 }

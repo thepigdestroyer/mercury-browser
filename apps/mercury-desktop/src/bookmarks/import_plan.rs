@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! How a bookmarks file is imported in chunks of bounded size, whatever its shape.
 //!
 //! The service's stepwise import makes its chunks of whole top-level nodes, and real exports

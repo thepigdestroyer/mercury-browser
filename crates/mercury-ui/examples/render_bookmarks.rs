@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Renders the bookmarks UI (the bar with folders and overflow, the star and its popover, a
 //! folder popup, the manager) to PNG files without a display, through Slint's software
 //! renderer, in the light, dark and system colour schemes.
@@ -10,8 +13,8 @@ use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
 use mercury_ui::{
-    BookmarkBarItem, BookmarkColors, BookmarkMenuRow, BookmarkRowKind, BookmarksManager,
-    BookmarksPreview, MainWindow,
+    BookmarkBarItem, BookmarkMenuRow, BookmarkRowKind, BookmarksManager, BookmarksPreview,
+    ChromePalette, ChromeTheme, MainWindow,
 };
 use slint::language::ColorScheme;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
@@ -22,6 +25,15 @@ const SCALE: f32 = 2.0;
 /// The desktop app's `bookmarks::layout` constants.
 const SPACING: f32 = 4.0;
 const OVERFLOW_BUTTON: f32 = 28.0;
+
+/// The appearance setting a rendering stands for.
+fn chrome_theme(scheme: ColorScheme) -> ChromeTheme {
+    match scheme {
+        ColorScheme::Light => ChromeTheme::Light,
+        ColorScheme::Dark => ChromeTheme::Dark,
+        _ => ChromeTheme::System,
+    }
+}
 
 struct HeadlessPlatform;
 
@@ -192,6 +204,9 @@ fn measured_bar(
 fn preview(scheme: ColorScheme, output: &Path, name: &str) -> Result<(), Box<dyn Error>> {
     let window = BookmarksPreview::new()?;
     window.set_forced_color_scheme(scheme);
+    window
+        .global::<ChromePalette>()
+        .set_theme(chrome_theme(scheme));
     let items = bar_items();
     let measured = Rc::new(RefCell::new(vec![0.0; BAR.len()]));
     let report = Rc::clone(&measured);
@@ -219,7 +234,9 @@ fn preview(scheme: ColorScheme, output: &Path, name: &str) -> Result<(), Box<dyn
 
 fn main_window(scheme: ColorScheme, output: &Path, name: &str) -> Result<(), Box<dyn Error>> {
     let window = MainWindow::new()?;
-    window.global::<BookmarkColors>().set_forced(scheme);
+    window
+        .global::<ChromePalette>()
+        .set_theme(chrome_theme(scheme));
     let items = bar_items();
     let measured = Rc::new(RefCell::new(vec![0.0; BAR.len()]));
     let report = Rc::clone(&measured);
@@ -278,6 +295,9 @@ fn main_window(scheme: ColorScheme, output: &Path, name: &str) -> Result<(), Box
 fn manager(scheme: ColorScheme, output: &Path, name: &str) -> Result<(), Box<dyn Error>> {
     let window = BookmarksManager::new()?;
     window.set_forced_color_scheme(scheme);
+    window
+        .global::<ChromePalette>()
+        .set_theme(chrome_theme(scheme));
     window.set_folders(ModelRc::new(VecModel::from(vec![
         row("Bookmarks Bar", "", BookmarkRowKind::Folder, 0),
         row("News", "", BookmarkRowKind::Folder, 1),

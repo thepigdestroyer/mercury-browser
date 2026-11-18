@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 import { ListView } from "std-widgets.slint";
-import { BookmarkColors } from "colors.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 // One entry of the bookmarks bar. `x`, `width` and `shown` are the overflow layout's, computed
 // from the widths the buttons report (`measured`).
@@ -32,7 +35,7 @@ export struct BookmarkMenuRow {
 // A generic page or folder icon, drawn so that it needs no font glyph.
 export component BookmarkIcon inherits Rectangle {
     in property <bool> folder;
-    in property <color> stroke: BookmarkColors.button-label;
+    in property <color> stroke: ChromePalette.button-label;
 
     width: 16px;
     height: 16px;
@@ -85,8 +88,8 @@ component BarButton inherits Rectangle {
     height: 26px;
     border-radius: 6px;
     background: touch.pressed
-        ? BookmarkColors.button-pressed
-        : touch.has-hover ? BookmarkColors.button-hover : transparent;
+        ? ChromePalette.button-pressed
+        : touch.has-hover ? ChromePalette.button-hover : transparent;
     accessible-role: button;
     accessible-label: root.item.title;
     accessible-action-default => {
@@ -109,7 +112,7 @@ component BarButton inherits Rectangle {
 
         label := Text {
             text: root.item.title == "" ? "(untitled)" : root.item.title;
-            color: BookmarkColors.text;
+            color: ChromePalette.text;
             font-size: 12px;
             vertical-alignment: center;
             overflow: elide;
@@ -139,10 +142,10 @@ export component BookmarkMenuList inherits Rectangle {
     height: Math.min(420px, Math.max(1, root.rows.length) * 28px + 12px);
     border-radius: 8px;
     border-width: 1px;
-    border-color: BookmarkColors.popup-border;
-    background: BookmarkColors.popup-background;
+    border-color: ChromePalette.popup-border;
+    background: ChromePalette.popup-background;
     drop-shadow-blur: 10px;
-    drop-shadow-color: #00000040;
+    drop-shadow-color: ChromePalette.shadow;
     accessible-role: list;
 
     ListView {
@@ -154,7 +157,7 @@ export component BookmarkMenuList inherits Rectangle {
         for row[index] in root.rows: Rectangle {
             height: 28px;
             background: row-touch.has-hover && (row.kind == BookmarkRowKind.bookmark || row.kind == BookmarkRowKind.folder || row.kind == BookmarkRowKind.back)
-                ? BookmarkColors.button-hover
+                ? ChromePalette.item-hover
                 : transparent;
             accessible-role: button;
             accessible-label: row.title;
@@ -164,7 +167,7 @@ export component BookmarkMenuList inherits Rectangle {
                 y: parent.height / 2;
                 width: parent.width - 20px;
                 height: 1px;
-                background: BookmarkColors.divider;
+                background: ChromePalette.separator;
             }
 
             if row.kind != BookmarkRowKind.separator: HorizontalLayout {
@@ -182,7 +185,7 @@ export component BookmarkMenuList inherits Rectangle {
 
                 Text {
                     text: row.kind == BookmarkRowKind.back ? "‹  " + row.title : row.title == "" ? "(untitled)" : row.title;
-                    color: row.kind == BookmarkRowKind.empty ? BookmarkColors.text-secondary : BookmarkColors.text;
+                    color: row.kind == BookmarkRowKind.empty ? ChromePalette.text-secondary : ChromePalette.text;
                     font-size: 13px;
                     font-weight: row.kind == BookmarkRowKind.back ? 600 : 400;
                     vertical-alignment: center;
@@ -192,7 +195,7 @@ export component BookmarkMenuList inherits Rectangle {
 
                 if row.kind == BookmarkRowKind.folder: Text {
                     text: "›";
-                    color: BookmarkColors.text-secondary;
+                    color: ChromePalette.text-secondary;
                     font-size: 14px;
                     vertical-alignment: center;
                 }
@@ -249,7 +252,7 @@ export component BookmarksBar inherits Rectangle {
     }
 
     height: 34px;
-    background: BookmarkColors.bar-background;
+    background: ChromePalette.toolbar-background;
     accessible-role: groupbox;
     accessible-label: "Bookmarks bar";
 
@@ -257,7 +260,7 @@ export component BookmarksBar inherits Rectangle {
         x: root.side-padding + 4px;
         height: parent.height;
         text: "Bookmarks you put in the bookmarks bar appear here.";
-        color: BookmarkColors.text-secondary;
+        color: ChromePalette.text-secondary;
         font-size: 12px;
         vertical-alignment: center;
     }
@@ -287,14 +290,14 @@ export component BookmarksBar inherits Rectangle {
         height: 26px;
         border-radius: 6px;
         background: overflow-touch.pressed
-            ? BookmarkColors.button-pressed
-            : overflow-touch.has-hover ? BookmarkColors.button-hover : transparent;
+            ? ChromePalette.button-pressed
+            : overflow-touch.has-hover ? ChromePalette.button-hover : transparent;
         accessible-role: button;
         accessible-label: "More bookmarks";
 
         Text {
             text: "»";
-            color: BookmarkColors.button-label;
+            color: ChromePalette.button-label;
             font-size: 15px;
             horizontal-alignment: center;
             vertical-alignment: center;
@@ -311,7 +314,7 @@ export component BookmarksBar inherits Rectangle {
     Rectangle {
         y: parent.height - 1px;
         height: 1px;
-        background: BookmarkColors.divider;
+        background: ChromePalette.toolbar-divider;
     }
 
     menu := PopupWindow {

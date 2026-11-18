@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The bookmarks bar: the children of the bar root as buttons, laid out by
 //! [`layout::bar_layout`] from the widths the buttons report, with the rest behind "»", and a
 //! popup for folders. A folder inside a popup opens in the same popup, with a back row at the
@@ -188,10 +191,6 @@ impl Bar {
     }
 
     /// The entries of the bar root, in order (the Bookmarks menu lists them).
-    #[expect(
-        dead_code,
-        reason = "called by the menus lane's Bookmarks seam, not merged yet"
-    )]
     pub(crate) fn nodes(&self) -> &[BookmarkNode] {
         &self.nodes
     }
@@ -203,6 +202,7 @@ pub(crate) fn connect(window: &MainWindow) {
         window.set_bookmarks_bar_items(ModelRc::from(model));
     });
     window.on_bookmarks_bar_measured(|index, width| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(|bookmarks| {
             let mut bar = bookmarks.bar.borrow_mut();
             if let Some(slot) = usize::try_from(index)
@@ -216,6 +216,7 @@ pub(crate) fn connect(window: &MainWindow) {
                 bar.relayout_pending = true;
                 let bookmarks = Rc::downgrade(bookmarks);
                 slint::Timer::single_shot(Duration::ZERO, move || {
+                    let _slint = crate::callback_scope::InSlintCallback::enter();
                     if let Some(bookmarks) = bookmarks.upgrade() {
                         relayout(&bookmarks);
                     }
@@ -224,9 +225,11 @@ pub(crate) fn connect(window: &MainWindow) {
         });
     });
     window.on_bookmarks_bar_width_changed(|_| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(relayout);
     });
     window.on_bookmarks_bar_item_activated(|index, new_tab| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(|bookmarks| {
             let url = usize::try_from(index)
                 .ok()
@@ -241,6 +244,7 @@ pub(crate) fn connect(window: &MainWindow) {
         });
     });
     window.on_bookmarks_bar_folder_opened(|index, x| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(|bookmarks| {
             let node = usize::try_from(index)
                 .ok()
@@ -255,12 +259,14 @@ pub(crate) fn connect(window: &MainWindow) {
         });
     });
     window.on_bookmarks_bar_overflow_opened(|x| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(|bookmarks| {
             bookmarks.bar.borrow_mut().levels = vec![MenuLevel::Overflow];
             load_menu(bookmarks, Some(x));
         });
     });
     window.on_bookmarks_menu_row_activated(|index, new_tab| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         with(|bookmarks| {
             let entry = usize::try_from(index)
                 .ok()

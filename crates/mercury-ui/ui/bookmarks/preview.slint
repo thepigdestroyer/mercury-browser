@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 import { Palette } from "std-widgets.slint";
-import { BookmarkColors } from "colors.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 import { BookmarkPopoverContent } from "star.slint";
 import { BookmarkMenuList, BookmarkMenuRow, BookmarksBar, BookmarkBarItem } from "bar.slint";
 
@@ -16,19 +19,18 @@ export component BookmarksPreview inherits Window {
     in property <int> popover-folder-index;
     callback bar-measured(int, length);
 
+    // For renderings: the scheme of the std widgets (Rust sets `ChromePalette`'s theme).
     init => {
         Palette.color-scheme = root.forced-color-scheme;
-        BookmarkColors.forced = root.forced-color-scheme;
     }
 
     changed forced-color-scheme => {
         Palette.color-scheme = root.forced-color-scheme;
-        BookmarkColors.forced = root.forced-color-scheme;
     }
 
     width: 760px;
     height: 520px;
-    background: BookmarkColors.dark ? #0c1117 : #f4f6f8;
+    background: ChromePalette.content-background;
 
     bar := BookmarksBar {
         x: 0px;

@@ -1,5 +1,8 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 import { Button, ComboBox, LineEdit } from "std-widgets.slint";
-import { BookmarkColors } from "colors.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 // The bookmark popover's content: name, folder and the two buttons. Its own component so that a
 // rendering can show it without opening a popup.
@@ -15,10 +18,10 @@ export component BookmarkPopoverContent inherits Rectangle {
     height: 196px;
     border-radius: 10px;
     border-width: 1px;
-    border-color: BookmarkColors.popup-border;
-    background: BookmarkColors.popup-background;
+    border-color: ChromePalette.popup-border;
+    background: ChromePalette.popup-background;
     drop-shadow-blur: 12px;
-    drop-shadow-color: #00000040;
+    drop-shadow-color: ChromePalette.shadow;
 
     public function focus-name() {
         name-field.focus();
@@ -31,7 +34,7 @@ export component BookmarkPopoverContent inherits Rectangle {
 
         Text {
             text: root.is-new ? "Bookmark added" : "Edit bookmark";
-            color: BookmarkColors.text;
+            color: ChromePalette.text;
             font-size: 14px;
             font-weight: 600;
         }
@@ -42,7 +45,7 @@ export component BookmarkPopoverContent inherits Rectangle {
             Text {
                 width: 56px;
                 text: "Name";
-                color: BookmarkColors.text-secondary;
+                color: ChromePalette.text-secondary;
                 font-size: 13px;
                 vertical-alignment: center;
             }
@@ -62,7 +65,7 @@ export component BookmarkPopoverContent inherits Rectangle {
             Text {
                 width: 56px;
                 text: "Folder";
-                color: BookmarkColors.text-secondary;
+                color: ChromePalette.text-secondary;
                 font-size: 13px;
                 vertical-alignment: center;
             }
@@ -135,8 +138,8 @@ export component BookmarkStar inherits Rectangle {
     height: 30px;
     border-radius: 6px;
     background: star-touch.pressed && root.enabled
-        ? BookmarkColors.button-pressed
-        : star-touch.has-hover && root.enabled ? BookmarkColors.button-hover : transparent;
+        ? ChromePalette.button-pressed
+        : star-touch.has-hover && root.enabled ? ChromePalette.button-hover : transparent;
     opacity: root.enabled ? 1 : 0.32;
     accessible-role: button;
     accessible-label: root.filled ? "Edit bookmark for this page" : "Bookmark this page";
@@ -147,7 +150,7 @@ export component BookmarkStar inherits Rectangle {
 
     Text {
         text: root.filled ? "★" : "☆";
-        color: root.filled ? BookmarkColors.accent : BookmarkColors.button-label;
+        color: root.filled ? ChromePalette.accent : ChromePalette.button-label;
         font-size: 17px;
         horizontal-alignment: center;
         vertical-alignment: center;

@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Bookmark requests: reading and editing the tree. New nodes get a fresh GUID
 //! ([`new_guid`](super::new_guid)). Writes notify [`Area::Bookmarks`] with the folders whose
 //! listing changed (both folders for a move).
@@ -10,7 +13,12 @@
 
 use mercury_store::{BookmarkId, BookmarkImport, BookmarkKind, BookmarkNode, BookmarkRoot, Store};
 
-use super::{Area, Change, Database, ProfileData, ProfileDataError, guid_or_error};
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
+
+use super::import::{IMPORT_CHUNK, ImportOutcome, ImportProgress, ImportSummary};
+use super::jobs::{JobHandle, Step, Steps};
+use super::{Area, Change, Database, Payload, ProfileData, ProfileDataError, guid_or_error};
 
 /// The change hint for editing node `id`: the folder that lists it (the node itself for a
 /// root).
@@ -635,5 +643,205 @@ impl ProfileData {
             },
             reply,
         );
+    }
+}
+
+// The stepwise bookmark import (the service's visit import is in `import`). Chunks of whole
+// top-level trees, up to `IMPORT_CHUNK` nodes unless one tree is larger: importers split large
+// folders into sets of their own first (see `bookmarks::import_plan`). Each chunk is one
+// transaction; an entry the store refuses (a URL too long, nesting too deep, a GUID in use) is
+// left out with everything in it and its chunk is tried again.
+
+/// The nodes of one tree, counting its descendants.
+fn node_count(node: &BookmarkImport) -> usize {
+    let mut count = 0;
+    let mut stack = vec![node];
+    while let Some(node) = stack.pop() {
+        count += 1;
+        if let BookmarkImport::Folder { children, .. } = node {
+            stack.extend(children);
+        }
+    }
+    count
+}
+
+/// Removes the node at `index` in a pre-order walk of all the trees of `sets`, in order, with
+/// everything in it; returns how many nodes went.
+fn remove_in_pre_order(sets: &mut [(BookmarkId, Vec<BookmarkImport>)], index: usize) -> usize {
+    fn walk(nodes: &mut Vec<BookmarkImport>, index: &mut usize) -> Option<usize> {
+        let mut position = 0;
+        while position < nodes.len() {
+            if *index == 0 {
+                return Some(node_count(&nodes.remove(position)));
+            }
+            *index -= 1;
+            if let BookmarkImport::Folder { children, .. } = &mut nodes[position]
+                && let Some(removed) = walk(children, index)
+            {
+                return Some(removed);
+            }
+            position += 1;
+        }
+        None
+    }
+    let mut index = index;
+    sets.iter_mut()
+        .find_map(|(_, nodes)| walk(nodes, &mut index))
+        .unwrap_or(0)
+}
+
+struct BookmarkSteps {
+    /// Top-level nodes with their parents and sizes, in order, consumed from the front.
+    nodes: VecDeque<(BookmarkId, BookmarkImport, usize)>,
+    imported: u64,
+    skipped: u64,
+    total: u64,
+    resume_from: u64,
+    longest_chunk: Duration,
+}
+
+impl BookmarkSteps {
+    fn summary(&self, outcome: ImportOutcome) -> Payload {
+        Box::new(ImportSummary {
+            imported: self.imported,
+            skipped: self.skipped,
+            total: self.total,
+            resume_from: self.resume_from,
+            outcome,
+            longest_chunk: self.longest_chunk,
+        })
+    }
+}
+
+impl Steps for BookmarkSteps {
+    fn step(&mut self, database: &mut Database, now: i64) -> Step {
+        let started = Instant::now();
+        let mut chunk: Vec<(BookmarkId, Vec<BookmarkImport>)> = Vec::new();
+        let mut size = 0;
+        let mut top_level = 0;
+        while let Some((_, _, count)) = self.nodes.front() {
+            if size > 0 && size + count > IMPORT_CHUNK {
+                break;
+            }
+            let Some((parent, node, count)) = self.nodes.pop_front() else {
+                break;
+            };
+            size += count;
+            top_level += 1;
+            match chunk.last_mut() {
+                Some((last, nodes)) if *last == parent => nodes.push(node),
+                _ => chunk.push((parent, vec![node])),
+            }
+        }
+        let mut skipped = 0;
+        loop {
+            let sets = chunk
+                .iter()
+                .map(|(parent, nodes)| (*parent, nodes.as_slice()))
+                .collect::<Vec<_>>();
+            match database.store.import_bookmark_sets(&sets, now) {
+                Ok(imported) => {
+                    for (parent, _) in &chunk {
+                        database.changed(Change::folders([*parent]));
+                    }
+                    self.imported += imported;
+                    self.skipped += skipped as u64;
+                    self.resume_from += top_level;
+                    self.longest_chunk = self.longest_chunk.max(started.elapsed());
+                    let wrote = imported > 0;
+                    return if self.nodes.is_empty() {
+                        Step::Finished {
+                            summary: self.summary(ImportOutcome::Completed),
+                            wrote,
+                        }
+                    } else {
+                        Step::Continue {
+                            progress: Some(Box::new(ImportProgress {
+                                done: self.imported + self.skipped,
+                                skipped: self.skipped,
+                                total: self.total,
+                            })),
+                            wrote,
+                        }
+                    };
+                }
+                Err(mercury_store::StoreError::ImportEntryRefused { index, reason }) => {
+                    let removed = remove_in_pre_order(&mut chunk, index);
+                    log::debug!("import: bookmark node left out ({removed} with it): {reason}");
+                    if removed == 0 {
+                        return self.failed_chunk(
+                            started,
+                            mercury_store::StoreError::InvalidArgument(
+                                "a refused bookmark could not be found",
+                            ),
+                        );
+                    }
+                    skipped += removed;
+                }
+                Err(error) => return self.failed_chunk(started, error),
+            }
+        }
+    }
+
+    fn cancelled(&mut self) -> Payload {
+        self.summary(ImportOutcome::Cancelled)
+    }
+
+    fn failed(&mut self, error: ProfileDataError) -> Payload {
+        self.summary(ImportOutcome::Failed(error))
+    }
+
+    fn describe(&self) -> String {
+        format!(
+            "import of bookmarks, {} of {} imported, {} skipped",
+            self.imported, self.total, self.skipped
+        )
+    }
+}
+
+impl BookmarkSteps {
+    fn failed_chunk(&mut self, started: Instant, error: mercury_store::StoreError) -> Step {
+        self.longest_chunk = self.longest_chunk.max(started.elapsed());
+        Step::Finished {
+            summary: self.summary(ImportOutcome::Failed(ProfileDataError::Store(error))),
+            wrote: false,
+        }
+    }
+}
+
+impl ProfileData {
+    /// Appends each tree under its parent folder, in order, in chunks of whole top-level nodes
+    /// (see above). The trees carry their own GUIDs (make them with `new_guid`). Progress and
+    /// the summary count nodes; `resume_from` counts top-level nodes. Notifies
+    /// [`Area::Bookmarks`] with the parent folders when it ends, if anything was imported.
+    pub(crate) fn import_bookmarks(
+        &self,
+        sets: Vec<(BookmarkId, Vec<BookmarkImport>)>,
+        on_progress: impl Fn(ImportProgress) + 'static,
+        on_done: impl FnOnce(ImportSummary) + 'static,
+    ) -> JobHandle {
+        let nodes = sets
+            .into_iter()
+            .flat_map(|(parent, nodes)| {
+                nodes.into_iter().map(move |node| {
+                    let count = node_count(&node);
+                    (parent, node, count)
+                })
+            })
+            .collect::<VecDeque<_>>();
+        let total = nodes.iter().map(|(_, _, count)| *count as u64).sum();
+        self.start_job(
+            Some(Area::Bookmarks),
+            BookmarkSteps {
+                nodes,
+                imported: 0,
+                skipped: 0,
+                total,
+                resume_from: 0,
+                longest_chunk: Duration::ZERO,
+            },
+            on_progress,
+            on_done,
+        )
     }
 }

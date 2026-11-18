@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! Pure conversions of the bookmark tree: walks (pre-order lists with depths) into nested
 //! trees for a bookmarks file or for undo, imported trees into the store's import form, the
 //! folder list of the chooser, and search matching.

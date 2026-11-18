@@ -1,3 +1,6 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
 //! The star button's state: which page it is about, whether that page is bookmarked, and
 //! which lookup's answer is still wanted. Pure; the caller sends the lookups and delivers
 //! their answers.
