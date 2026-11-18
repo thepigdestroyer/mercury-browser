@@ -120,6 +120,11 @@ fn sample_settings_window() -> Result<SettingsWindow, Box<dyn Error>> {
     window.set_block_ads_and_trackers(true);
     // blocklists
     window.set_update_filter_lists(true);
+    window.set_filter_lists_publishers(
+        "Once a day, Mercury Browser asks easylist.to and raw.githubusercontent.com (GitHub) for \
+         newer versions of these lists."
+            .into(),
+    );
     window.set_filter_lists_status(
         "Last updated 17 Nov 2026, 09:12. The last check, 18 Nov 2026, 09:15, failed for \
          EasyList: network error: connection refused."

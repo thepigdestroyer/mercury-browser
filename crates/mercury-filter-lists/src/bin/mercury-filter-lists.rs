@@ -8,10 +8,13 @@
 //! mercury-filter-lists install <destination>
 //! ```
 //!
+//! Run it from the repository root: the default paths are relative to it.
+//!
 //! `check` verifies that the manifest in `<directory>` (default
-//! `crates/talaria-servo/resources/adblock`, from the repository root) is valid and that each list
+//! `crates/talaria-servo/resources/adblock`) is valid and that each list
 //! matches its SHA-256. `install` checks the repository's lists, then replaces `<destination>`
-//! with a directory holding exactly the manifest and those lists (the macOS bundle's
+//! with a directory holding exactly the manifest, those lists, `NOTICE.md` and the licence
+//! texts from `LICENSES/` that they need (the macOS bundle's
 //! `Contents/Resources/filter-lists`, the Linux archive's `filter-lists/`, or
 //! `target/<profile>/filter-lists` for local runs). Exit status 1 on a failed check (nothing is
 //! written), 2 on a usage error.
@@ -19,9 +22,9 @@
 use std::path::Path;
 use std::process::ExitCode;
 
-use mercury_filter_lists::bundle::{SOURCE_DIR, check_dir, install};
+use mercury_filter_lists::bundle::{LICENCES_DIR, SOURCE_DIR, check_dir, install};
 
-const USAGE: &str = "usage: mercury-filter-lists check [<directory>]\n       mercury-filter-lists install <destination>";
+const USAGE: &str = "usage (from the repository root):\n  mercury-filter-lists check [<directory>]\n  mercury-filter-lists install <destination>";
 
 fn main() -> ExitCode {
     let arguments = std::env::args().skip(1).collect::<Vec<_>>();
@@ -29,8 +32,12 @@ fn main() -> ExitCode {
     let result = match arguments.as_slice() {
         ["check"] => check(Path::new(SOURCE_DIR)),
         ["check", directory] => check(Path::new(directory)),
-        ["install", destination] => install(Path::new(SOURCE_DIR), Path::new(destination))
-            .map(|count| println!("filter-lists: installed {count} lists in {destination}")),
+        ["install", destination] => install(
+            Path::new(SOURCE_DIR),
+            Path::new(LICENCES_DIR),
+            Path::new(destination),
+        )
+        .map(|count| println!("filter-lists: installed {count} lists in {destination}")),
         _ => {
             eprintln!("{USAGE}");
             return ExitCode::from(2);

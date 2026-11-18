@@ -41,8 +41,11 @@ pub struct ListEntry {
     pub file: String,
     /// Where the publisher serves the current version. Always `https`.
     pub source_url: Url,
-    /// The licence, as an SPDX expression or a short description.
+    /// The licence the list is used under: one SPDX identifier, whose text ships as
+    /// `LICENSES/<licence>.txt` beside the lists.
     pub licence: String,
+    /// Whom the notice credits for the list.
+    pub credit: String,
     /// The list's own version header, if it has one.
     pub version: Option<String>,
     /// When the bundled copy was taken, in seconds since the Unix epoch.
@@ -83,6 +86,7 @@ struct RawEntry {
     file: String,
     source_url: String,
     licence: String,
+    credit: String,
     version: Option<String>,
     date: String,
     sha256: String,
@@ -148,8 +152,19 @@ fn checked_entry(raw: RawEntry) -> Result<ListEntry, String> {
         return Err("the name is empty, too long or has control characters".to_owned());
     }
     let licence = raw.licence.trim();
-    if licence.is_empty() || licence.len() > MAX_LICENCE_BYTES {
-        return Err("the licence is empty or too long".to_owned());
+    if licence.is_empty()
+        || licence.len() > MAX_LICENCE_BYTES
+        || licence.starts_with(['.', '-'])
+        || !licence
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-' | b'+'))
+    {
+        return Err("the licence is not one SPDX licence identifier".to_owned());
+    }
+    let credit = raw.credit.trim();
+    if credit.is_empty() || credit.len() > MAX_LICENCE_BYTES || credit.chars().any(char::is_control)
+    {
+        return Err("the credit is empty, too long or has control characters".to_owned());
     }
     if raw.source_url.len() > MAX_URL_BYTES {
         return Err("the source URL is too long".to_owned());
@@ -184,6 +199,7 @@ fn checked_entry(raw: RawEntry) -> Result<ListEntry, String> {
         file: raw.file,
         source_url,
         licence: licence.to_owned(),
+        credit: credit.to_owned(),
         version,
         date,
         sha256: raw.sha256,
@@ -206,7 +222,8 @@ mod tests {
     fn entry(id: &str, file: &str, url: &str) -> String {
         format!(
             r#"{{"id": "{id}", "name": "Name of {id}", "file": "{file}", "source_url": "{url}",
-                "licence": "MPL-2.0", "version": null, "date": "2026-11-15T20:46:51Z",
+                "licence": "MPL-2.0", "credit": "Credit of {id}", "version": null,
+                "date": "2026-11-15T20:46:51Z",
                 "sha256": "{HASH}"}}"#
         )
     }
@@ -231,7 +248,9 @@ mod tests {
             r#"{{"format_version": 1, "lists": [
                 {{"id": "easylist", "name": "EasyList", "file": "easylist.txt",
                   "source_url": "https://easylist.to/easylist/easylist.txt",
-                  "licence": "GPL-3.0-or-later OR CC-BY-SA-3.0", "version": "202611152034",
+                  "licence": "CC-BY-SA-3.0",
+                  "credit": "The EasyList authors (https://easylist.to/)",
+                  "version": "202611152034",
                   "date": "2026-11-15T20:46:51Z", "sha256": "{HASH}"}},
                 {}
             ]}}"#,
@@ -253,7 +272,8 @@ mod tests {
             first.source_url.as_str(),
             "https://easylist.to/easylist/easylist.txt"
         );
-        assert_eq!(first.licence, "GPL-3.0-or-later OR CC-BY-SA-3.0");
+        assert_eq!(first.licence, "CC-BY-SA-3.0");
+        assert_eq!(first.credit, "The EasyList authors (https://easylist.to/)");
         assert_eq!(first.version.as_deref(), Some("202611152034"));
         assert_eq!(first.date, 1_794_775_611);
         assert_eq!(first.sha256, HASH);
@@ -342,6 +362,17 @@ mod tests {
         assert!(!problem(&manifest(&[bad_date])).is_empty());
         let no_name = entry("easy", "easy.txt", ok).replace("Name of easy", "");
         assert!(!problem(&manifest(&[no_name])).is_empty());
+        let no_credit = entry("easy", "easy.txt", ok).replace("Credit of easy", " ");
+        assert!(problem(&manifest(&[no_credit])).contains("credit"));
+        for licence in [
+            "GPL-3.0-or-later OR CC-BY-SA-3.0",
+            "../MPL-2.0",
+            "MPL 2.0",
+            "",
+        ] {
+            let odd = entry("easy", "easy.txt", ok).replace("\"MPL-2.0\"", &format!("{licence:?}"));
+            assert!(problem(&manifest(&[odd])).contains("licence"), "{licence}");
+        }
     }
 
     #[test]

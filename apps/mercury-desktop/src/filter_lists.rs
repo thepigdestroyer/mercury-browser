@@ -129,6 +129,7 @@ const SHUT_DOWN_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 /// The filter-list part of the settings window's privacy section.
 pub(crate) fn fill_settings_window(window: &mercury_ui::SettingsWindow) {
     let view = settings_view(&status(), local_time);
+    window.set_filter_lists_publishers(view.publishers.into());
     window.set_filter_lists_status(view.status.into());
     window.set_filter_lists(slint::ModelRc::new(slint::VecModel::from(
         view.lists
@@ -193,9 +194,33 @@ fn find_bundled_dir(executable: &Path) -> Option<PathBuf> {
 
 /// What the settings window shows: a status line and one line per list.
 pub(crate) struct SettingsView {
+    /// Which hosts Mercury contacts for updates: they see the user's address.
+    pub publishers: String,
     pub status: String,
     pub lists: Vec<String>,
     pub can_update: bool,
+}
+
+/// "Once a day, Mercury Browser asks <hosts> for newer versions of these lists.", naming each
+/// host the lists are fetched from once; empty while no list is known.
+fn publishers_line(status: &Status) -> String {
+    let mut hosts: Vec<String> = Vec::new();
+    for list in &status.lists {
+        let host = match list.host.as_str() {
+            "" => continue,
+            "raw.githubusercontent.com" => "raw.githubusercontent.com (GitHub)".to_owned(),
+            other => other.to_owned(),
+        };
+        if !hosts.contains(&host) {
+            hosts.push(host);
+        }
+    }
+    let named = match hosts.as_slice() {
+        [] => return String::new(),
+        [only] => only.clone(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    };
+    format!("Once a day, Mercury Browser asks {named} for newer versions of these lists.")
 }
 
 pub(crate) fn settings_view(status: &Status, format_time: impl Fn(u64) -> String) -> SettingsView {
@@ -222,6 +247,7 @@ pub(crate) fn settings_view(status: &Status, format_time: impl Fn(u64) -> String
         .collect();
     if let Some(problem) = &status.problem {
         return SettingsView {
+            publishers: publishers_line(status),
             status: format!("Ad and tracker blocking is off: {problem}"),
             lists,
             can_update: false,
@@ -247,6 +273,7 @@ pub(crate) fn settings_view(status: &Status, format_time: impl Fn(u64) -> String
         line.push_str(reason);
     }
     SettingsView {
+        publishers: publishers_line(status),
         status: line,
         lists,
         can_update: !status.checking && status.updates_unavailable.is_none(),
@@ -323,7 +350,34 @@ mod tests {
             version: version.map(str::to_owned),
             date: NOV_17_0800_UTC,
             updated,
+            host: "easylist.to".to_owned(),
         }
+    }
+
+    fn hosted(name: &str, host: &str) -> ListStatus {
+        ListStatus {
+            host: host.to_owned(),
+            ..list(name, None, false)
+        }
+    }
+
+    #[test]
+    fn the_view_names_the_hosts_that_are_contacted() {
+        let status = Status {
+            lists: vec![
+                hosted("EasyList", "easylist.to"),
+                hosted("EasyPrivacy", "easylist.to"),
+                hosted("Brave Specific", "raw.githubusercontent.com"),
+            ],
+            ..Status::default()
+        };
+
+        assert_eq!(
+            settings_view(&status, utc).publishers,
+            "Once a day, Mercury Browser asks easylist.to and raw.githubusercontent.com (GitHub) \
+             for newer versions of these lists."
+        );
+        assert_eq!(settings_view(&Status::default(), utc).publishers, "");
     }
 
     #[test]

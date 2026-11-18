@@ -29,6 +29,10 @@ impl ListKind for NetworkRules {
     }
 }
 
+/// The usable rules of each bundled list, by id: a download must also keep at least half of
+/// these, so that a list cannot shrink by half on every update.
+pub type Baselines = std::collections::BTreeMap<String, usize>;
+
 /// What happened to one list.
 #[derive(Debug, PartialEq, Eq)]
 pub enum ListOutcome {
@@ -54,6 +58,17 @@ pub struct CheckReport {
 }
 
 impl CheckReport {
+    /// Whether every list reached its publisher: each was answered (a list, "not modified", or a
+    /// client error such as 404) or refused after download. False after a network error, a
+    /// time-out or a server error (5xx), when the updater retries sooner (see `schedule`).
+    pub fn reached_publishers(&self) -> bool {
+        !self.outcomes.iter().any(|(_, outcome)| match outcome {
+            ListOutcome::Failed(FetchError::Network(_) | FetchError::TimedOut) => true,
+            ListOutcome::Failed(FetchError::Status(status)) => *status >= 500,
+            _ => false,
+        })
+    }
+
     /// A short description of what went wrong, for the settings window; `None` if every list
     /// was reached and accepted.
     pub fn problem(&self, lists: &[ListInUse]) -> Option<String> {
@@ -83,6 +98,7 @@ impl CheckReport {
 pub fn check_lists(
     fetcher: &Fetcher,
     kind: &dyn ListKind,
+    baselines: &Baselines,
     lists: &[ListInUse],
     cache: &Cache,
     state: &mut CacheState,
@@ -90,7 +106,8 @@ pub fn check_lists(
 ) -> CheckReport {
     let mut report = CheckReport::default();
     for list in lists {
-        let outcome = check_one(fetcher, kind, list, cache, state, now);
+        let baseline = baselines.get(&list.entry.id).copied().unwrap_or(0);
+        let outcome = check_one(fetcher, kind, list, baseline, cache, state, now);
         if outcome == ListOutcome::Failed(FetchError::Cancelled) {
             report.cancelled = true;
             break;
@@ -105,6 +122,7 @@ fn check_one(
     fetcher: &Fetcher,
     kind: &dyn ListKind,
     list: &ListInUse,
+    baseline: usize,
     cache: &Cache,
     state: &mut CacheState,
     now: u64,
@@ -150,7 +168,8 @@ fn check_one(
                 Err(rejection) => return ListOutcome::Rejected(rejection),
             };
             let got = kind.usable_rules(&text);
-            if let Err(rejection) = check_shrink(got, kind.usable_rules(&list.text)) {
+            let current = kind.usable_rules(&list.text).max(baseline);
+            if let Err(rejection) = check_shrink(got, current) {
                 return ListOutcome::Rejected(rejection);
             }
             let (file, sha256) = match cache.write_list(&entry.id, &text) {
@@ -278,6 +297,7 @@ mod tests {
         let report = check_lists(
             &fetcher(&server),
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -311,6 +331,7 @@ mod tests {
         let report = check_lists(
             &fetcher(&server),
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -339,6 +360,7 @@ mod tests {
         check_lists(
             &fetcher,
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -350,6 +372,7 @@ mod tests {
         let report = check_lists(
             &fetcher,
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -388,6 +411,7 @@ mod tests {
         let report = check_lists(
             &fetcher(&server),
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -418,6 +442,7 @@ mod tests {
         let report = check_lists(
             &fetcher(&server),
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -451,6 +476,7 @@ mod tests {
         check_lists(
             &fetcher,
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -467,6 +493,7 @@ mod tests {
         let report = check_lists(
             &fetcher,
             &NetworkRules,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
@@ -507,12 +534,115 @@ mod tests {
         let report = check_lists(
             &fetcher(&server),
             &Lines,
+            &Baselines::new(),
             &lists,
             &setup.cache,
             &mut state,
             SNAPSHOT + 100,
         );
 
+        assert_eq!(report.outcomes[0].1, ListOutcome::Updated);
+    }
+
+    #[test]
+    fn network_errors_time_outs_and_server_errors_did_not_reach_the_publishers() {
+        let report = |outcome| CheckReport {
+            outcomes: vec![
+                ("a".to_owned(), ListOutcome::Unchanged),
+                ("b".to_owned(), outcome),
+            ],
+            ..CheckReport::default()
+        };
+        for transient in [
+            ListOutcome::Failed(FetchError::Network("refused".to_owned())),
+            ListOutcome::Failed(FetchError::TimedOut),
+            ListOutcome::Failed(FetchError::Status(503)),
+        ] {
+            assert!(!report(transient).reached_publishers());
+        }
+        for answered in [
+            ListOutcome::Updated,
+            ListOutcome::Unchanged,
+            ListOutcome::Failed(FetchError::Status(404)),
+            ListOutcome::Failed(FetchError::TooLarge),
+            ListOutcome::Rejected(Rejection::LooksLikeHtml),
+        ] {
+            assert!(report(answered).reached_publishers());
+        }
+    }
+
+    #[test]
+    fn a_download_must_keep_half_the_bundled_rules_too() {
+        let setup = Setup::new();
+        // The copy in use is an update with one rule; the bundled copy has two.
+        let mut state = CacheState::default();
+        let (file, sha256) = setup.cache.write_list("ads", "||ads.example^\n").unwrap();
+        state.lists.insert(
+            "ads".to_owned(),
+            CachedList {
+                file,
+                sha256,
+                source_url: "https://lists.example/ads.txt".to_owned(),
+                etag: None,
+                last_modified: None,
+                version: None,
+                current_as_of: SNAPSHOT + 50,
+            },
+        );
+        let files = files(vec![
+            (
+                "/lists/ads.txt",
+                Reply::ok("||x.example^\n! nothing else\n".repeat(0) + "! empty\n"),
+            ),
+            ("/lists/trackers.txt", Reply::ok(TRACKERS)),
+        ]);
+        let server = server(&files);
+        let lists = setup.lists(&state);
+        assert_eq!(lists[0].origin, Origin::Updated);
+        let baselines = Baselines::from([("ads".to_owned(), 4), ("trackers".to_owned(), 1)]);
+
+        let report = check_lists(
+            &fetcher(&server),
+            &NetworkRules,
+            &baselines,
+            &lists,
+            &setup.cache,
+            &mut state,
+            SNAPSHOT + 100,
+        );
+
+        assert_eq!(
+            report.outcomes[0].1,
+            ListOutcome::Rejected(Rejection::TooFewRules { got: 0, current: 4 })
+        );
+
+        // One rule against a copy in use of one and a bundled copy of two passes; against a
+        // bundled copy of four it does not.
+        files.lock().unwrap()[0].1 = Reply::ok("||y.example^\n");
+        let lists = setup.lists(&state);
+        let report = check_lists(
+            &fetcher(&server),
+            &NetworkRules,
+            &baselines,
+            &lists,
+            &setup.cache,
+            &mut state,
+            SNAPSHOT + 200,
+        );
+        assert_eq!(
+            report.outcomes[0].1,
+            ListOutcome::Rejected(Rejection::TooFewRules { got: 1, current: 4 })
+        );
+        let lenient = Baselines::from([("ads".to_owned(), 2)]);
+        let report = check_lists(
+            &fetcher(&server),
+            &NetworkRules,
+            &lenient,
+            &lists,
+            &setup.cache,
+            &mut state,
+            SNAPSHOT + 300,
+        );
         assert_eq!(report.outcomes[0].1, ListOutcome::Updated);
     }
 }

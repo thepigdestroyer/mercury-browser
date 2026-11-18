@@ -7,6 +7,7 @@
       "file": "easylist.txt",
       "source_url": "https://easylist.to/easylist/easylist.txt",
       "licence": "CC-BY-SA-3.0",
+      "credit": "The EasyList authors (https://easylist.to/)",
       "version": "202611152034",
       "date": "2026-11-15T20:46:51Z",
       "sha256": "ca554da776cd140d0a4803bc6a298c5d2251595e13ddbdcad888c347ee7ad1f8"
@@ -17,6 +18,7 @@
       "file": "easyprivacy.txt",
       "source_url": "https://easylist.to/easylist/easyprivacy.txt",
       "licence": "CC-BY-SA-3.0",
+      "credit": "The EasyList authors (https://easylist.to/)",
       "version": "202611152034",
       "date": "2026-11-15T20:46:51Z",
       "sha256": "6b4e1f32bfd3363c5dfd1afa5a0bb50277352843b7df469556d335e96f53e275"
@@ -27,6 +29,7 @@
       "file": "brave-firstparty.txt",
       "source_url": "https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-firstparty.txt",
       "licence": "MPL-2.0",
+      "credit": "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)",
       "version": null,
       "date": "2026-11-15T20:46:51Z",
       "sha256": "ea61ac33974c3f71712ad2862bb53da0d7de6638551fd3ba322b7f5f5f0f2135"
@@ -37,6 +40,7 @@
       "file": "brave-specific.txt",
       "source_url": "https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-specific.txt",
       "licence": "MPL-2.0",
+      "credit": "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)",
       "version": null,
       "date": "2026-11-15T20:46:51Z",
       "sha256": "f2fa61e972136c51b052cf1e832480cbba22adf03c1210eaff5a654b8e0935a1"
@@ -47,6 +51,7 @@
       "file": "brave-unbreak.txt",
       "source_url": "https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-unbreak.txt",
       "licence": "MPL-2.0",
+      "credit": "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)",
       "version": null,
       "date": "2026-11-15T20:46:51Z",
       "sha256": "63a1fdc6aeebbb93b8c15602b6180c85f9aadfddfab200b7c8f4e0cc8ee76159"

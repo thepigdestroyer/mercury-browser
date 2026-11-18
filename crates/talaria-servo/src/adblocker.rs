@@ -70,7 +70,14 @@ impl ContentBlocker {
     fn current_engine(&self) -> Option<Rc<Engine>> {
         if let Some(serialized) = self.incoming.take() {
             let mut engine = Engine::default();
-            match engine.deserialize(&serialized) {
+            let started = std::time::Instant::now();
+            let loaded = engine.deserialize(&serialized);
+            debug!(
+                "filter-list engine of {} bytes deserialised in {:.2} ms",
+                serialized.len(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            match loaded {
                 Ok(()) => {
                     let first = self.engine.borrow().is_none();
                     *self.engine.borrow_mut() = Some(Rc::new(engine));

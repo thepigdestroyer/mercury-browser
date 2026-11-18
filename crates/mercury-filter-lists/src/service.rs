@@ -80,6 +80,8 @@ pub struct ListStatus {
     /// When the copy was taken (bundled) or last confirmed current (updated).
     pub date: u64,
     pub updated: bool,
+    /// The host the list is fetched from (the publisher's, not a diagnostic server's).
+    pub host: String,
 }
 
 enum Command {
@@ -183,6 +185,20 @@ struct Loaded {
     state: CacheState,
     lists: Vec<ListInUse>,
     fetcher: Option<Fetcher>,
+    /// The usable rules of each bundled list, for the shrink rule.
+    baselines: crate::update::Baselines,
+}
+
+/// The usable rules of each bundled list that can be read.
+fn bundled_baselines(
+    manifest: &crate::manifest::Manifest,
+    bundled_dir: &std::path::Path,
+) -> crate::update::Baselines {
+    use crate::update::ListKind as _;
+    choose_lists(manifest, bundled_dir, None)
+        .iter()
+        .map(|list| (list.entry.id.clone(), NetworkRules.usable_rules(&list.text)))
+        .collect()
 }
 
 fn now_seconds() -> u64 {
@@ -221,6 +237,7 @@ impl Worker {
             let wait = (automatic && self.updates_possible()).then(|| {
                 wait_before_check(
                     loaded.state.last_check,
+                    loaded.state.consecutive_failures,
                     now_seconds(),
                     self.started.elapsed(),
                     settle_delay,
@@ -234,17 +251,23 @@ impl Worker {
                     .map_err(|_| RecvTimeoutError::Disconnected),
             };
             match command {
-                Ok(Command::CheckNow) => self.check(&mut loaded),
+                Ok(Command::CheckNow) => {
+                    self.check(&mut loaded);
+                    // "Update now" pressed during that check asks for nothing more.
+                    automatic = self.drain_check_requests(automatic);
+                }
                 Ok(Command::SetAutomatic(on)) => automatic = on,
                 Err(RecvTimeoutError::Timeout) => {
                     let due = wait_before_check(
                         loaded.state.last_check,
+                        loaded.state.consecutive_failures,
                         now_seconds(),
                         self.started.elapsed(),
                         settle_delay,
                     );
                     if due.is_zero() {
                         self.check(&mut loaded);
+                        automatic = self.drain_check_requests(automatic);
                     }
                 }
                 Err(RecvTimeoutError::Disconnected) => break,
@@ -253,6 +276,17 @@ impl Worker {
                 break;
             }
         }
+    }
+
+    /// Drops "check now" requests that queued up during a check, keeping the last switch
+    /// setting among them.
+    fn drain_check_requests(&self, mut automatic: bool) -> bool {
+        while let Ok(command) = self.commands.try_recv() {
+            if let Command::SetAutomatic(on) = command {
+                automatic = on;
+            }
+        }
+        automatic
     }
 
     fn updates_possible(&self) -> bool {
@@ -301,6 +335,7 @@ impl Worker {
             state,
             lists: Vec::new(),
             fetcher: None,
+            baselines: crate::update::Baselines::new(),
         };
         if !self.rebuild(&mut loaded) {
             self.fail("None of the filter lists could be read.");
@@ -360,6 +395,12 @@ impl Worker {
                 version: list.version.clone(),
                 date: list.date,
                 updated: list.origin == Origin::Updated,
+                host: list
+                    .entry
+                    .source_url
+                    .host_str()
+                    .unwrap_or_default()
+                    .to_owned(),
             })
             .collect();
         loaded.lists = lists;
@@ -390,7 +431,11 @@ impl Worker {
         let Some(fetcher) = &loaded.fetcher else {
             return;
         };
+        if loaded.baselines.is_empty() {
+            loaded.baselines = bundled_baselines(&loaded.manifest, &loaded.bundled_dir);
+        }
         let now = now_seconds();
+        let previous_check = loaded.state.last_check;
         loaded.state.last_check = Some(now);
         if let Err(error) = cache.save_state(&loaded.state) {
             log::warn!("filter lists: could not save the cache state: {error}");
@@ -406,6 +451,7 @@ impl Worker {
         let report = check_lists(
             fetcher,
             &NetworkRules,
+            &loaded.baselines,
             &loaded.lists,
             cache,
             &mut loaded.state,
@@ -413,10 +459,18 @@ impl Worker {
         );
         self.status.checking = false;
         if report.cancelled {
+            // Not a check: the next one is due as if this one had never started.
             log::info!("filter lists: the update check was cancelled");
+            loaded.state.last_check = previous_check;
+            self.status.last_check = previous_check;
             let _ = cache.save_state(&loaded.state);
             return;
         }
+        loaded.state.consecutive_failures = if report.reached_publishers() {
+            0
+        } else {
+            loaded.state.consecutive_failures.saturating_add(1)
+        };
         match report.problem(&loaded.lists) {
             None => {
                 loaded.state.last_success = Some(now_seconds());
@@ -454,6 +508,12 @@ impl Worker {
                 version: list.version.clone(),
                 date: list.date,
                 updated: list.origin == Origin::Updated,
+                host: list
+                    .entry
+                    .source_url
+                    .host_str()
+                    .unwrap_or_default()
+                    .to_owned(),
             })
             .collect();
         }
@@ -512,6 +572,10 @@ mod tests {
         }
     }
 
+    fn saved_state(cache: &Path) -> CacheState {
+        Cache::open(cache).unwrap().load_state()
+    }
+
     fn setup() -> (tempfile::TempDir, PathBuf, PathBuf) {
         let directory = tempfile::tempdir().unwrap();
         let bundled = directory.path().join("bundled");
@@ -558,6 +622,7 @@ mod tests {
         assert_eq!(status.lists[0].name, "List ads");
         assert!(!status.lists[0].updated);
         assert_eq!(status.lists[0].date, SNAPSHOT);
+        assert_eq!(status.lists[0].host, "lists.example");
         assert_eq!(status.updates_unavailable.as_deref(), Some("automated run"));
         assert_eq!(status.problem, None);
         assert!(
@@ -645,6 +710,8 @@ mod tests {
         assert!(status.last_error.unwrap().contains("503"));
         assert_eq!(status.last_success, None);
         assert_eq!(engines(&events).len(), 1);
+        // A server error reached no publisher: the next check backs off from one hour.
+        assert_eq!(saved_state(&cache).consecutive_failures, 1);
     }
 
     #[test]
@@ -674,5 +741,62 @@ mod tests {
 
         assert!(started.elapsed() < Duration::from_secs(2));
         assert_eq!(engines(&events).len(), 1);
+        // A cancelled check does not count as a check.
+        assert_eq!(saved_state(&cache).last_check, None);
+        assert_eq!(saved_state(&cache).consecutive_failures, 0);
+    }
+
+    #[test]
+    fn a_successful_check_resets_the_failure_count() {
+        let (_directory, bundled, cache) = setup();
+        let directory = Cache::open(&cache).unwrap();
+        directory
+            .save_state(&CacheState {
+                consecutive_failures: 3,
+                ..CacheState::default()
+            })
+            .unwrap();
+        let server = TestServer::start(|request| match request.path.as_str() {
+            "/lists/ads.txt" => Reply::ok(ADS),
+            _ => Reply::ok("! nothing\n"),
+        });
+        let (events, sink) = collect();
+
+        let mut service = FilterListService::start(local(&server, &bundled, &cache), sink).unwrap();
+        wait_until("the check to end", || {
+            last_status(&events).is_some_and(|status| status.last_success.is_some())
+        });
+        assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
+
+        assert_eq!(saved_state(&cache).consecutive_failures, 0);
+    }
+
+    #[test]
+    fn the_schedule_checks_when_due_and_only_while_automatic() {
+        let (_directory, bundled, cache) = setup();
+        let server =
+            TestServer::start(|_| Reply::ok("! nothing\n||ads.example^\n||ads2.example^\n"));
+        let (events, sink) = collect();
+        let config = ServiceConfig {
+            updates: Updates::On {
+                sources: Sources::local_server(&server.url("/lists/")).unwrap(),
+                automatic: false,
+                settle_delay: Duration::ZERO,
+                check_at_start: false,
+            },
+            ..off(&bundled, &cache)
+        };
+
+        let mut service = FilterListService::start(config, sink).unwrap();
+        wait_until("the engine", || !engines(&events).is_empty());
+        std::thread::sleep(Duration::from_millis(300));
+        assert!(server.requests().is_empty(), "not automatic: no check");
+
+        service.set_automatic(true);
+        wait_until("the scheduled check", || {
+            last_status(&events).is_some_and(|status| status.last_success.is_some())
+        });
+        assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
+        assert_eq!(server.requests().len(), 2);
     }
 }

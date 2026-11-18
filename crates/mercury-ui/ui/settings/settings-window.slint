@@ -192,6 +192,7 @@ export component SettingsWindow inherits Window {
 
     // --- blocklists ---
     in-out property <bool> update-filter-lists: true;
+    in property <string> filter-lists-publishers;
     in property <string> filter-lists-status;
     in property <[string]> filter-lists;
     in property <bool> filter-lists-can-update;
@@ -589,6 +590,7 @@ export component SettingsWindow inherits Window {
                         // blocklists
                         FilterListsGroup {
                             update-automatically <=> root.update-filter-lists;
+                            publishers: root.filter-lists-publishers;
                             status: root.filter-lists-status;
                             lists: root.filter-lists;
                             can-update: root.filter-lists-can-update;

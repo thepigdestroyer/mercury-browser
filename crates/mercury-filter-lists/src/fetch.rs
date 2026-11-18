@@ -56,7 +56,18 @@ impl Sources {
         self.allows(&url).then_some(url)
     }
 
-    /// Whether a request (or a redirect) may go to `url`.
+    /// Whether a redirect from a request first sent to `first` may go to `to`: publishers' lists
+    /// are followed only within the host they were asked of (and over https); the local server
+    /// only to loopback.
+    pub fn allows_redirect(&self, first: &Url, to: &Url) -> bool {
+        self.allows(to)
+            && match self {
+                Self::Publishers => first.host_str() == to.host_str(),
+                Self::LocalServer(_) => true,
+            }
+    }
+
+    /// Whether a request may go to `url`.
     pub fn allows(&self, url: &Url) -> bool {
         let no_credentials = url.username().is_empty() && url.password().is_none();
         no_credentials
@@ -165,7 +176,10 @@ impl Fetcher {
             reqwest::Client::builder()
                 .connect_timeout(timeouts.connect)
                 .redirect(reqwest::redirect::Policy::custom(move |attempt| {
-                    if attempt.previous().len() >= 5 || !redirect_sources.allows(attempt.url()) {
+                    let allowed = attempt.previous().first().is_some_and(|first| {
+                        redirect_sources.allows_redirect(first, attempt.url())
+                    });
+                    if attempt.previous().len() >= 5 || !allowed {
                         attempt.stop()
                     } else {
                         attempt.follow()
@@ -474,5 +488,65 @@ mod tests {
         let result = fetcher(&server).fetch(&publisher, &Validators::default());
 
         assert!(matches!(result, Err(FetchError::NotAllowed(_))));
+    }
+
+    #[test]
+    fn publisher_redirects_stay_on_the_host_they_were_asked_of() {
+        let sources = Sources::Publishers;
+        let first = Url::parse("https://easylist.to/easylist/easylist.txt").unwrap();
+        let same = Url::parse("https://easylist.to/mirror/easylist.txt").unwrap();
+        let other = Url::parse("https://cdn.example/easylist.txt").unwrap();
+        let plain = Url::parse("http://easylist.to/easylist/easylist.txt").unwrap();
+        assert!(sources.allows_redirect(&first, &same));
+        assert!(!sources.allows_redirect(&first, &other));
+        assert!(!sources.allows_redirect(&first, &plain));
+
+        let local = Sources::local_server(&Url::parse("http://127.0.0.1:9/l/").unwrap()).unwrap();
+        let loopback = Url::parse("http://127.0.0.1:9/a.txt").unwrap();
+        assert!(local.allows_redirect(&loopback, &Url::parse("http://localhost:9/b").unwrap()));
+        assert!(!local.allows_redirect(&loopback, &same));
+    }
+
+    #[test]
+    fn requests_carry_only_the_updater_user_agent_and_validators() {
+        let server = TestServer::start(|_| Reply::ok("||ads.example^\n"));
+        let validators = Validators {
+            etag: Some("\"v2\"".to_owned()),
+            last_modified: None,
+        };
+
+        fetcher(&server)
+            .fetch(&server.url("/lists/a.txt"), &validators)
+            .expect("fetched");
+
+        let request = &server.requests()[0];
+        assert_eq!(
+            request.headers.get("user-agent").map(String::as_str),
+            Some(concat!(
+                "MercuryBrowser/",
+                env!("CARGO_PKG_VERSION"),
+                " (filter-list updater)"
+            ))
+        );
+        for absent in [
+            "cookie",
+            "referer",
+            "accept-language",
+            "authorization",
+            "if-modified-since",
+        ] {
+            assert!(
+                !request.headers.contains_key(absent),
+                "{absent}: {:?}",
+                request.headers
+            );
+        }
+        let mut names = request
+            .headers
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>();
+        names.sort_unstable();
+        assert_eq!(names, ["accept", "host", "if-none-match", "user-agent"]);
     }
 }

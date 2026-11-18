@@ -58,7 +58,8 @@ dist/Mercury Browser.app/Contents/
   Resources/AppIcon.icns
   Resources/LICENSE
   Resources/THIRD-PARTY-NOTICES.md
-  Resources/LICENSES/   the licence texts the notices refer to (LGPL-2.1, GPL-3.0, …)
+  Resources/LICENSES/   the licence texts the notices refer to (LGPL-2.1, MPL-2.0, CC-BY-SA-3.0, …)
+  Resources/filter-lists/  the ad and tracker filter lists and their manifest (data, read at start-up)
   Resources/gstreamer-licenses/  each bundled library project's licence files, from the GStreamer packages
   _CodeSignature/
 dist/mercury-browser-0.2.0-macos-arm64.dmg         with --dmg

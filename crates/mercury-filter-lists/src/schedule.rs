@@ -3,9 +3,11 @@
 
 //! When the next automatic update check is due, as a pure function of times.
 //!
-//! Automatic checks run at most once every [`UPDATE_INTERVAL`] (24 hours), counted from the
-//! start of the last check whatever its outcome, and never before [`SETTLE_DELAY`] after
-//! start-up. A check is also due when the last one is recorded in the future (the clock was
+//! Automatic checks run at most once every [`UPDATE_INTERVAL`] (24 hours) after a check that
+//! reached the publishers, counted from its start, and never before [`SETTLE_DELAY`] after
+//! start-up. After a check that could not reach them (no network, a time-out, a server error),
+//! nothing was downloaded, so the next one comes sooner: 1 hour after the first such failure in
+//! a row, then 2, 4, 8 and 16 hours, and 24 hours from the sixth on ([`retry_interval`]). A check is also due when the last one is recorded in the future (the clock was
 //! set back), so a wrong clock cannot hold updates off for long. "Update now" ignores this.
 
 use std::time::Duration;
@@ -19,12 +21,25 @@ pub const SETTLE_DELAY: Duration = Duration::from_secs(60);
 /// slept through the due time checks soon after it wakes.
 pub const RECHECK_INTERVAL: Duration = Duration::from_secs(60 * 60);
 
+/// The time between the start of the last check and the next one, after `failures` checks in a
+/// row that could not reach the publishers (0: the last one reached them).
+pub fn retry_interval(failures: u32) -> Duration {
+    match failures {
+        0 => UPDATE_INTERVAL,
+        failures => {
+            let hours = 1_u64 << (failures - 1).min(5);
+            Duration::from_secs(hours * 60 * 60).min(UPDATE_INTERVAL)
+        }
+    }
+}
+
 /// How long to wait before the next automatic check, from `now` (seconds since the Unix
-/// epoch). `last_check` is when the last check started; `since_start` is how long this run has
-/// been going. `Duration::ZERO` means a check is due now. The result is never longer than
+/// epoch). `last_check` is when the last check started and `failures` how many checks in a row
+/// could not reach the publishers; `since_start` is how long this run has been going. `Duration::ZERO` means a check is due now. The result is never longer than
 /// [`RECHECK_INTERVAL`]: the caller asks again after waiting.
 pub fn wait_before_check(
     last_check: Option<u64>,
+    failures: u32,
     now: u64,
     since_start: Duration,
     settle_delay: Duration,
@@ -32,7 +47,7 @@ pub fn wait_before_check(
     let settling = settle_delay.saturating_sub(since_start);
     let until_due = match last_check {
         Some(last) if last <= now => {
-            UPDATE_INTERVAL.saturating_sub(Duration::from_secs(now - last))
+            retry_interval(failures).saturating_sub(Duration::from_secs(now - last))
         }
         // Never checked, or the clock moved back.
         _ => Duration::ZERO,
@@ -49,7 +64,7 @@ mod tests {
     const SETTLED: Duration = Duration::from_secs(600);
 
     fn wait(last_check: Option<u64>, now: u64, since_start: Duration) -> Duration {
-        wait_before_check(last_check, now, since_start, SETTLE_DELAY)
+        wait_before_check(last_check, 0, now, since_start, SETTLE_DELAY)
     }
 
     #[test]
@@ -84,7 +99,7 @@ mod tests {
             Duration::from_secs(1)
         );
         assert_eq!(
-            wait_before_check(Some(NOW - 2 * DAY), NOW, Duration::ZERO, Duration::ZERO),
+            wait_before_check(Some(NOW - 2 * DAY), 0, NOW, Duration::ZERO, Duration::ZERO),
             Duration::ZERO
         );
     }
@@ -115,5 +130,29 @@ mod tests {
         assert_eq!(checks.len(), 7);
         assert!(checks.windows(2).all(|pair| pair[1] - pair[0] >= DAY));
         assert_eq!(checks[0], NOW + SETTLE_DELAY.as_secs());
+    }
+
+    const HOUR: u64 = 60 * 60;
+
+    #[test]
+    fn failed_checks_are_retried_after_1_2_4_hours_up_to_a_day() {
+        let hours = (0..=8)
+            .map(|failures| retry_interval(failures).as_secs() / HOUR)
+            .collect::<Vec<_>>();
+        assert_eq!(hours, [24, 1, 2, 4, 8, 16, 24, 24, 24]);
+        assert_eq!(retry_interval(u32::MAX), UPDATE_INTERVAL);
+    }
+
+    #[test]
+    fn after_a_failure_the_next_check_is_due_after_the_back_off() {
+        let wait = |failures, since_last: u64| {
+            wait_before_check(Some(NOW - since_last), failures, NOW, SETTLED, SETTLE_DELAY)
+        };
+        assert_eq!(wait(1, HOUR), Duration::ZERO);
+        assert_eq!(wait(1, HOUR - 60), Duration::from_secs(60));
+        assert_eq!(wait(3, 3 * HOUR), Duration::from_secs(HOUR));
+        assert_eq!(wait(3, 4 * HOUR), Duration::ZERO);
+        // A check that reached the publishers waits the whole day.
+        assert_eq!(wait(0, 4 * HOUR), RECHECK_INTERVAL);
     }
 }

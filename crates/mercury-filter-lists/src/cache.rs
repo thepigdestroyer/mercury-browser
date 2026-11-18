@@ -38,6 +38,8 @@ pub struct CacheState {
     pub last_success: Option<u64>,
     /// Why the last check did not reach every list, for the settings window.
     pub last_error: Option<String>,
+    /// How many checks in a row could not reach the publishers (see `schedule`).
+    pub consecutive_failures: u32,
     /// Updated copies, by list id.
     pub lists: BTreeMap<String, CachedList>,
     /// The compiled engine of the copies in use.
@@ -51,6 +53,7 @@ impl Default for CacheState {
             last_check: None,
             last_success: None,
             last_error: None,
+            consecutive_failures: 0,
             lists: BTreeMap::new(),
             engine: None,
         }

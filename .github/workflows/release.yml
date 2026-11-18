@@ -267,7 +267,14 @@ jobs:
               "${output_directory}/LICENSE"
           fi
 
-          # The ad and tracker filter lists, read by the browser at start-up.
+          # The notices and the licence texts they refer to (the filter lists' too).
+          cp THIRD-PARTY-NOTICES.md \
+            "${output_directory}/THIRD-PARTY-NOTICES.md"
+          cp -R LICENSES \
+            "${output_directory}/LICENSES"
+
+          # The ad and tracker filter lists, read by the browser at start-up, with their
+          # NOTICE.md and licence texts.
           target/release/mercury-filter-lists install \
             "${output_directory}/filter-lists"
 

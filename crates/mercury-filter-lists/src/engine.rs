@@ -186,7 +186,7 @@ pub(crate) mod tests {
                 std::fs::write(directory.join(format!("{id}.txt")), text).unwrap();
                 format!(
                     r#"{{"id": "{id}", "name": "List {id}", "file": "{id}.txt",
-                        "source_url": "https://lists.example/{id}.txt", "licence": "CC0-1.0",
+                        "source_url": "https://lists.example/{id}.txt", "licence": "CC0-1.0", "credit": "Test lists",
                         "version": null, "date": "{}", "sha256": "{}"}}"#,
                     crate::timestamp::format_utc(SNAPSHOT),
                     sha256_hex(text.as_bytes())
