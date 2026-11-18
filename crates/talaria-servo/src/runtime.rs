@@ -724,7 +724,9 @@ impl servo::WebViewDelegate for BrowserDelegate {
             tab_id,
             scale_factor.get(),
             parts,
-        );
+        )
+        // find: a page-opened tab can be searched too
+        .with_find_answers(browser_event_sender);
         page_tabs
             .adopted
             .borrow_mut()
