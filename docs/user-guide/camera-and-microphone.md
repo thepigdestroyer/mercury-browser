@@ -38,3 +38,5 @@ The page has to ask again. Closing the tab or going to another page also closes 
 ## When macOS refuses
 
 The first time a site you allowed opens the camera or microphone, macOS asks whether Mercury Browser may use it. If you refused there, or your administrator restricts it, the bubble says so: "macOS does not allow Mercury Browser to use the camera". Its **Open Privacy Settings** button opens System Settings, Privacy & Security, at Camera or Microphone, where you can turn Mercury Browser on. The site is refused until you do.
+
+If you click **Don't Allow** on macOS's own prompt while a site is waiting, that site may still get a camera or microphone that sends nothing: the video stays black and the sound silent, though the site may look as if it is working. Allow Mercury Browser in System Settings as above, then reload the page.

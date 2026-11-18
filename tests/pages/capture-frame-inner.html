@@ -1,10 +1,21 @@
 <!doctype html>
 <meta charset="utf-8">
 <title>frame</title>
-<!-- Loaded by capture-frame.html; never attaches a track to any output. -->
+<!--
+  Loaded by capture-frame.html. ?keep=1: the camera track plays in a muted <video> and is never
+  stopped. ?worker=1: a worker asks for the camera instead (capture-worker.js).
+-->
 <p>Frame asking for the camera.</p>
+<video id="video" muted playsinline width="120" height="90"></video>
 <script>
+  const params = new URLSearchParams(location.search);
   (async () => {
+    if (params.has("worker")) {
+      const worker = new Worker("capture-worker.js");
+      worker.onmessage = (event) => parent.postMessage(`worker=yes; ${event.data}`, "*");
+      worker.onerror = (event) => parent.postMessage(`worker=error ${event.message}`, "*");
+      return;
+    }
     let state = "unknown";
     try {
       state = (await navigator.permissions.query({ name: "camera" })).state;
@@ -15,7 +26,16 @@
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true });
       result = "ok";
-      stream.getTracks().forEach((track) => track.stop());
+      if (params.has("keep")) {
+        const video = document.getElementById("video");
+        video.srcObject = stream;
+        await video.play().catch(() => {});
+        for (let i = 0; i < 50 && !(video.videoWidth > 0); i++) {
+          await new Promise((resolve) => setTimeout(resolve, 100));
+        }
+      } else {
+        stream.getTracks().forEach((track) => track.stop());
+      }
     } catch (error) {
       result = error.name;
     }

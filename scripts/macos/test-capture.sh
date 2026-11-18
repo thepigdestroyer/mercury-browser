@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # End-to-end checks of camera and microphone capture with fake devices only.
 #
 #   scripts/macos/test-capture.sh      (or: make test-capture-macos)
@@ -115,16 +117,31 @@ prompt_answered() { yes_no grep -q 'answering permission prompt' "$LOG"; }
 # Whether the camera source left its pipeline before the screenshot was saved: both processes
 # write to the same log in order, and the browser shuts down (which releases everything anyway)
 # only after the screenshot, so a release the page caused comes first.
+# $1: the source (default videotestsrc, the camera; audiotestsrc is the microphone).
 released_before_shutdown() {
     local removed saved
-    removed="$(grep -n 'removed child "videotestsrc' "$LOG" | head -n 1 | cut -d: -f1)"
-    saved="$(grep -n 'saved a .* screenshot' "$LOG" | head -n 1 | cut -d: -f1)"
+    removed="$(line_of "removed child \"${1:-videotestsrc}")"
+    saved="$(line_of 'saved a .* screenshot')"
     if [ -n "$removed" ] && [ -n "$saved" ] && [ "$removed" -lt "$saved" ]; then
         echo yes
     else
         echo no
     fi
 }
+line_of() { grep -n -- "$1" "$LOG" | head -n 1 | cut -d: -f1; }
+# Whether the first line matching $1 comes before the first matching $2 (both present).
+comes_before() {
+    local first second
+    first="$(line_of "$1")"
+    second="$(line_of "$2")"
+    if [ -n "$first" ] && [ -n "$second" ] && [ "$first" -lt "$second" ]; then
+        echo yes
+    else
+        echo no
+    fi
+}
+# The engine listed devices (the fake monitor's probe); it must not before a grant.
+probed() { yes_no grep -q 'fake media devices: probed' "$LOG"; }
 
 BASE="http://127.0.0.1:$PORT/pages"
 FRAME_BASE="http://127.0.0.1:$PORT/pages"
@@ -142,6 +159,7 @@ check "unanswered: before permission, one input of each kind without id or label
     "audioinput:-:-,videoinput:-:-" "$(field before)"
 check "unanswered: getUserMedia waits for the answer" "asked|" "$(field permission)|$(field getUserMedia)"
 check "unanswered: no device source is created before an answer" no "$(sources_created)"
+check "unanswered: no device is listed before an answer" no "$(probed)"
 
 run_page allow "$BASE/capture.html" --answer-permission-prompts allow
 check "allow: one prompt was answered for both kinds" 1 "$(grep -c 'answering permission prompt' "$LOG")"
@@ -154,14 +172,37 @@ check "allow: device names are shown after permission" \
 check "allow: the fake camera's frames move" "PASS" "$(field verdict)"
 check "allow: stop() ends both tracks" "ended,ended" "$(field stopped)"
 check "allow: stop() releases the source before the browser shuts down" yes "$(released_before_shutdown)"
+check "allow: stop() releases the microphone before the browser shuts down" yes \
+    "$(released_before_shutdown audiotestsrc)"
+check "allow: devices are listed only after the answer" yes \
+    "$(comes_before 'answering permission prompt' 'fake media devices: probed')"
+
+run_page none "$BASE/capture.html?none=1"
+check "none: asking for neither kind is a TypeError" TypeError "$(field none)"
+check "none: without a prompt or a device" "no|no" "$(prompt_answered)|$(probed)"
+
+run_page clone "$BASE/capture.html?clone=1" --answer-permission-prompts allow
+check "clone: a clone plays on after the original stops" "ended,live moving=true" "$(field clone)"
+check "clone: the camera is kept until the clone stops" yes \
+    "$(comes_before 'title="CAPTURE .*clone=ended,live' 'removed child "videotestsrc')"
+check "clone: stopping the clone releases the camera" "ended|yes" \
+    "$(field cloneStopped)|$(released_before_shutdown)"
 
 run_page deny "$BASE/capture.html" --answer-permission-prompts deny
 check "deny: getUserMedia is refused with NotAllowedError" NotAllowedError "$(field getUserMedia)"
 check "deny: no device source was created" no "$(sources_created)"
+check "deny: no device was listed" no "$(probed)"
 
 run_page leave "$BASE/capture.html?then=/pages/capture-after.html" --answer-permission-prompts allow
 check "leave: the page left with its devices open" after "$(field verdict)"
 check "leave: leaving the page releases the source" yes "$(released_before_shutdown)"
+check "leave: leaving the page releases the microphone" yes "$(released_before_shutdown audiotestsrc)"
+
+# Stop in the browser reloads the page; a reload must release what the old document had.
+run_page reload "$BASE/capture.html?then=reload" --answer-permission-prompts allow
+check "reload: the page reloaded with its devices open" reloaded "$(field verdict)"
+check "reload: reloading releases the camera and the microphone" "yes|yes" \
+    "$(released_before_shutdown)|$(released_before_shutdown audiotestsrc)"
 
 run_page cross-frame "$FRAME_BASE/capture-frame.html?frame=cross" --answer-permission-prompts allow
 check "cross-frame: a frame of another origin is refused" "denied|NotAllowedError" \
@@ -171,6 +212,17 @@ check "cross-frame: without a prompt" no "$(prompt_answered)"
 run_page same-frame "$FRAME_BASE/capture-frame.html?frame=same" --answer-permission-prompts allow
 check "same-frame: a frame of the page's own origin may ask" "yes|ok" \
     "$(prompt_answered)|$(field getUserMedia)"
+
+# A document torn down with its camera playing (closing a tab tears down its documents too).
+run_page frame-removed "$FRAME_BASE/capture-frame.html?frame=remove" --answer-permission-prompts allow
+check "frame-removed: the frame had the camera, then was removed" "ok|yes" \
+    "$(field getUserMedia)|$(field removed)"
+check "frame-removed: removing it releases the camera" yes "$(released_before_shutdown)"
+
+run_page worker "$FRAME_BASE/capture-frame.html?frame=cross&worker=1" --answer-permission-prompts allow
+check "worker: a cross-origin frame's worker is refused" "yes|denied|denied" \
+    "$(field worker)|$(field query)|$(field request)"
+check "worker: without a prompt" no "$(prompt_answered)"
 
 run_page system-denied "$BASE/capture.html" --answer-permission-prompts allow --fake-system-denies-capture
 check "system-denied: macOS's refusal refuses the page" NotAllowedError "$(field getUserMedia)"

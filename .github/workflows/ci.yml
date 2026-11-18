@@ -424,6 +424,15 @@ jobs:
           DYLD_FALLBACK_LIBRARY_PATH="${MERCURY_GSTREAMER_PREFIX}/lib:/usr/local/lib:/usr/lib" \
             cargo test --locked --release --workspace
 
+      # media-capture: getUserMedia end to end with fake devices only. The
+      # script runs a copy of the executable whose lib/ has no camera or
+      # microphone plugin (it checks that before running anything), so it can
+      # never reach a real device. Like the smoke test, it needs the runner to
+      # render a window; whether hosted runners do is not verified yet.
+      - name: Camera and microphone with fake devices
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: scripts/macos/test-capture.sh
+
   scripts:
     name: Scripts
     runs-on: ubuntu-24.04

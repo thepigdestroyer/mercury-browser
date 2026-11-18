@@ -5,7 +5,14 @@
   Camera and microphone test page (media-capture lane). Run only in fake-device mode:
   scripts/macos/test-capture.sh. Writes its verdict to the document title as
   "CAPTURE key=value; key=value; …", which the window-title log carries out of the browser.
-  The audio track is never attached to any output.
+  The audio track plays in a muted <audio> (so that it has a pipeline whose release shows in
+  GStreamer's log); the fake-device copy has no audio output plugin anyway.
+  Parameters:
+    ?none=1          getUserMedia({audio: false, video: false}), which must throw a TypeError.
+    ?then=<url>      leave the page with the devices still open.
+    ?then=reload     reload the page with the devices still open; the reloaded page asks for
+                     nothing and says "verdict=reloaded".
+    ?clone=1         stop the camera track while a clone of it plays on, then stop the clone.
 -->
 <style>
   body { font: 14px system-ui, sans-serif; margin: 16px; }
@@ -15,6 +22,7 @@
 <h1>Camera and microphone</h1>
 <p>Fake devices only. The verdict is in the title.</p>
 <video id="video" muted playsinline></video>
+<audio id="audio" muted></audio>
 <canvas id="canvas" width="160" height="120"></canvas>
 <pre id="out">waiting</pre>
 <script>
@@ -52,6 +60,22 @@
       note("verdict", "no-mediaDevices");
       return;
     }
+    const params = new URLSearchParams(location.search);
+    if (params.get("then") === "reload" && sessionStorage.getItem("capture-reloaded")) {
+      sessionStorage.removeItem("capture-reloaded");
+      note("verdict", "reloaded");
+      return;
+    }
+    if (params.has("none")) {
+      try {
+        await navigator.mediaDevices.getUserMedia({ audio: false, video: false });
+        note("none", "ok");
+      } catch (error) {
+        note("none", error.name);
+      }
+      note("verdict", "done");
+      return;
+    }
     note("before", describe(await navigator.mediaDevices.enumerateDevices()));
     note("permission", "asked");
     let stream;
@@ -77,6 +101,9 @@
     } catch (error) {
       note("play", error.name);
     }
+    const audio = document.getElementById("audio");
+    audio.srcObject = new MediaStream([audioTrack]);
+    audio.play().catch((error) => note("audioPlay", error.name));
     for (let i = 0; i < 50 && !(video.videoWidth > 0); i++) await delay(100);
     note("videoSize", `${video.videoWidth}x${video.videoHeight}`);
     const first = sample(video, canvas);
@@ -85,12 +112,33 @@
     note("frames", `colours=${first.colours},${second.colours} moving=${first.sum !== second.sum}`);
 
     const framesOk = first.colours > 1 && first.sum !== second.sum;
-    const params = new URLSearchParams(location.search);
     // ?then=<url>: leave the page with the devices still open (the engine must release them).
     if (params.has("then")) {
       note("verdict", framesOk ? "PASS-LEAVING" : "FAIL");
       await delay(300);
-      location.href = params.get("then");
+      if (params.get("then") === "reload") {
+        sessionStorage.setItem("capture-reloaded", "1");
+        location.reload();
+      } else {
+        location.href = params.get("then");
+      }
+      return;
+    }
+    // ?clone=1: the camera stays open while a clone of its track is live.
+    if (params.has("clone")) {
+      const clone = videoTrack.clone();
+      videoTrack.stop();
+      audioTrack.stop();
+      await delay(1500);
+      const third = sample(video, canvas);
+      await delay(500);
+      const fourth = sample(video, canvas);
+      note("clone", `${videoTrack.readyState},${clone.readyState} moving=${third.sum !== fourth.sum}`);
+      // test-capture.sh checks that the camera source is still there when this title is shown.
+      await delay(1500);
+      clone.stop();
+      note("cloneStopped", clone.readyState);
+      note("verdict", framesOk ? "PASS" : "FAIL");
       return;
     }
     videoTrack.stop();
