@@ -39,13 +39,20 @@ free_gb() { df -Pk "$HOME" | awk 'NR == 2 { print int($4 / 1048576) }'; }
 
 # A slot is a directory: mkdir is atomic, so two builds can never take the same one. Its owner file
 # names the process and the worktrees; a slot whose process has gone (killed, crashed) is reclaimed.
+# A process that has exited but was never reaped by its parent (a zombie, state Z) still answers
+# kill -0, yet holds nothing; it must not keep a slot.
+process_alive() {
+    kill -0 "$1" 2>/dev/null || return 1
+    case "$(ps -o stat= -p "$1" 2>/dev/null)" in Z*) return 1 ;; esac
+}
+
 reclaim_dead_slots() {
     local dir pid age
     for dir in "$slot_root"/*/; do
         [ -d "$dir" ] || continue
         if [ -f "$dir/owner" ]; then
             pid="$(head -n 1 "$dir/owner")"
-            if [ -n "$pid" ] && ! kill -0 "$pid" 2>/dev/null; then
+            if [ -n "$pid" ] && ! process_alive "$pid"; then
                 rm -rf "$dir"
             fi
         else

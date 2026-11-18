@@ -193,11 +193,18 @@ function addHolders(slots: string, holders: Set<string>) {
     try {
       const [pid, worktrees] = fs.readFileSync(path.join(slots, entry, "owner"), "utf8").split("\n")
       process.kill(Number(pid), 0)
+      if (isZombie(pid)) continue
       for (const wt of (worktrees ?? "").split(" ")) if (wt) holders.add(wt)
     } catch {
       // a slot being claimed, or one whose process has gone: build-slot.sh reclaims it
     }
   }
+}
+
+// An exited process its parent never reaped still answers kill(pid, 0) but holds nothing.
+function isZombie(pid: string): boolean {
+  const result = spawnSync("/bin/ps", ["-o", "stat=", "-p", pid], { encoding: "utf8" })
+  return result.status === 0 && result.stdout.trim().startsWith("Z")
 }
 
 function processesMention(text: string): boolean {
