@@ -15,10 +15,10 @@ use std::collections::{HashMap, HashSet};
 use std::path::{Component, Path, PathBuf};
 
 use crate::model::{
-    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_TREE_DEPTH, VisitCollector,
-    keep_importable, push_unique, without_empty_roots,
+    BrowserProfile, ImportError, ImportedNode, ImportedVisit, MAX_TITLE_CHARS, MAX_TREE_DEPTH,
+    MAX_URL_BYTES, ReadContext, VisitCollector, keep_importable, push_unique, without_empty_roots,
 };
-use crate::snapshot;
+use crate::snapshot::{self, file_name};
 use rusqlite::types::ValueRef;
 
 /// Each browser's profile tree (the directory holding `profiles.ini`) relative to the
@@ -49,8 +49,9 @@ const MAX_GROUPS: usize = 8;
 ///
 /// Profiles are those `profiles.ini` lists, and those in Firefox's profile-group databases
 /// (`Profile Groups/*.sqlite`), that hold a `places.sqlite`. In each tree the profile an install
-/// starts by default comes first; each directory is listed once.
-pub fn find_firefox_profiles(base_dirs: &[PathBuf]) -> Vec<BrowserProfile> {
+/// starts by default comes first; each directory is listed once. Profile-group databases are
+/// copied into `context`'s directory to be read.
+pub fn find_firefox_profiles(base_dirs: &[PathBuf], context: &ReadContext) -> Vec<BrowserProfile> {
     let mut found = Vec::new();
     for (browser, relative) in PROFILE_TREES {
         for base in base_dirs {
@@ -59,7 +60,7 @@ pub fn find_firefox_profiles(base_dirs: &[PathBuf]) -> Vec<BrowserProfile> {
                 continue;
             }
             let mut listed = ini_profiles(&tree);
-            listed.extend(grouped(&tree));
+            listed.extend(grouped(&tree, context));
             // A stable sort keeps the file's order within each kind.
             listed.sort_by_key(|listed| !listed.default);
             for listed in listed {
@@ -130,7 +131,7 @@ fn ini_profiles(tree: &Path) -> Vec<Listed> {
 /// Profiles made with Firefox's profile groups are kept in a database per group,
 /// `Profile Groups/<store id>.sqlite`; `profiles.ini` lists only the most recent profile of
 /// each group, with a path relative to the tree.
-fn grouped(tree: &Path) -> Vec<Listed> {
+fn grouped(tree: &Path, context: &ReadContext) -> Vec<Listed> {
     let mut stores: Vec<PathBuf> = std::fs::read_dir(tree.join("Profile Groups"))
         .into_iter()
         .flatten()
@@ -145,7 +146,7 @@ fn grouped(tree: &Path) -> Vec<Listed> {
     stores.truncate(MAX_GROUPS);
     let mut listed = Vec::new();
     for store in stores {
-        let Ok(snapshot) = snapshot::open(&store) else {
+        let Ok(snapshot) = snapshot::open(&store, context) else {
             continue;
         };
         let mut rows = Vec::new();
@@ -202,9 +203,12 @@ const TYPE_SEPARATOR: i64 = 3;
 /// - a row whose id, parent, type or date is not a number, or whose GUID is not text, fails the
 ///   import with [`ImportError::Database`]: Firefox never writes such rows, and the tree cannot
 ///   be built without them.
-pub fn read_firefox_bookmarks(profile: &Path) -> Result<Vec<ImportedNode>, ImportError> {
+pub fn read_firefox_bookmarks(
+    profile: &Path,
+    context: &ReadContext,
+) -> Result<Vec<ImportedNode>, ImportError> {
     let path = profile.join("places.sqlite");
-    let snapshot = snapshot::open(&path)?;
+    let snapshot = snapshot::open(&path, context)?;
     snapshot.require(
         "moz_bookmarks",
         &[
@@ -221,10 +225,17 @@ pub fn read_firefox_bookmarks(profile: &Path) -> Result<Vec<ImportedNode>, Impor
     snapshot.require("moz_places", &["id", "url"])?;
     let mut tree = Tree::default();
     let mut root_ids: HashMap<String, i64> = HashMap::new();
+    // Titles are cut and over-long addresses replaced by a blob (read as unreadable, so
+    // counted with the refused ones) in SQL, so that a hostile file cannot fill memory.
     snapshot.rows(
-        "SELECT b.id, b.parent, b.type, b.title, p.url, b.guid, b.dateAdded
-         FROM moz_bookmarks b LEFT JOIN moz_places p ON p.id = b.fk
-         ORDER BY b.parent, b.position, b.id",
+        &format!(
+            "SELECT b.id, b.parent, b.type, substr(b.title, 1, {MAX_TITLE_CHARS}),
+                 CASE WHEN length(CAST(p.url AS BLOB)) > {MAX_URL_BYTES} THEN X'00'
+                      ELSE p.url END,
+                 b.guid, b.dateAdded
+             FROM moz_bookmarks b LEFT JOIN moz_places p ON p.id = b.fk
+             ORDER BY b.parent, b.position, b.id"
+        ),
         |row| {
             let id: i64 = row.get(0)?;
             if let Some(guid) = row.get::<_, Option<String>>(5)?
@@ -254,7 +265,7 @@ pub fn read_firefox_bookmarks(profile: &Path) -> Result<Vec<ImportedNode>, Impor
     if !ROOTS.iter().any(|(guid, ..)| root_ids.contains_key(*guid)) {
         return Err(ImportError::Malformed(format!(
             "{} has none of the bookmark roots",
-            path.display()
+            snapshot.name()
         )));
     }
     // Roots are entered only as roots, so a damaged file cannot nest one in another.
@@ -275,7 +286,7 @@ pub fn read_firefox_bookmarks(profile: &Path) -> Result<Vec<ImportedNode>, Impor
     }
     Ok(without_empty_roots(keep_importable(
         nodes,
-        &path.display().to_string(),
+        &file_name(&path),
         tree.unreadable_addresses.get(),
     )))
 }
@@ -422,20 +433,25 @@ impl Tree {
 pub fn read_firefox_history(
     profile: &Path,
     limit: usize,
+    context: &ReadContext,
 ) -> Result<Vec<ImportedVisit>, ImportError> {
     let path = profile.join("places.sqlite");
-    let snapshot = snapshot::open(&path)?;
+    let snapshot = snapshot::open(&path, context)?;
     snapshot.require("moz_places", &["id", "url", "title"])?;
     snapshot.require("moz_historyvisits", &["id", "place_id", "visit_date"])?;
     let mut collector = VisitCollector::new(limit);
     if collector.is_full() {
         return Ok(Vec::new());
     }
+    // Over-long addresses are left out and titles cut in SQL: see `read_firefox_bookmarks`.
     snapshot.rows(
-        "SELECT p.url, p.title, v.visit_date
-         FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id
-         ORDER BY v.visit_date DESC, v.id DESC",
+        &format!(
+            "SELECT p.url, substr(p.title, 1, {MAX_TITLE_CHARS}), v.visit_date
+             FROM moz_historyvisits v JOIN moz_places p ON p.id = v.place_id
+             WHERE length(CAST(p.url AS BLOB)) <= {MAX_URL_BYTES}
+             ORDER BY v.visit_date DESC, v.id DESC"
+        ),
         |row| Ok(collector.push_row(row, |micros| Some(micros.div_euclid(1000)))),
     )?;
-    Ok(collector.finish(&path.display().to_string()))
+    Ok(collector.finish(&file_name(&path)))
 }

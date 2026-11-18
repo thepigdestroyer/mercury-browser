@@ -1,0 +1,215 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The bar under the toolbar that offers to restore tabs after Mercury Browser did not close
+// properly, or shows a one-time message about the session. Colours come from `ChromePalette`
+// (its information-bar role), so the bar follows the appearance setting.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+component SessionBarButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    callback clicked;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    width: label-text.preferred-width + 24px;
+    height: 28px;
+    border-radius: 7px;
+    border-width: focus.has-focus ? 2px : root.primary ? 0px : 1px;
+    border-color: focus.has-focus ? ChromePalette.focus-ring : ChromePalette.field-border;
+    background: root.primary
+        ? (touch.pressed
+            ? ChromePalette.primary-button-background.darker(15%)
+            : touch.has-hover
+                ? ChromePalette.primary-button-background.brighter(10%)
+                : ChromePalette.primary-button-background)
+        : (touch.pressed
+            ? ChromePalette.button-pressed
+            : touch.has-hover ? ChromePalette.button-hover : ChromePalette.field-background);
+
+    label-text := Text {
+        text: root.label;
+        color: root.primary ? ChromePalette.primary-button-text : ChromePalette.text;
+        font-size: 13px;
+        font-weight: root.primary ? 600 : 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    // Reached with Tab (never focused by a click, so typing elsewhere is not interrupted);
+    // Return or Space presses it.
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+
+        touch := TouchArea {
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+}
+
+component SessionChoice inherits Rectangle {
+    in property <string> label;
+    callback clicked;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    height: 32px;
+    border-radius: 6px;
+    background: touch.pressed
+        ? ChromePalette.item-selected
+        : touch.has-hover ? ChromePalette.item-hover : transparent;
+
+    Text {
+        x: 10px;
+        width: parent.width - 20px;
+        text: root.label;
+        color: touch.pressed ? ChromePalette.item-selected-text : ChromePalette.text;
+        font-size: 13px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component SessionBar inherits Rectangle {
+    // Sessions that did not close properly, newest first, as named for the chooser. While any
+    // are listed the bar offers to restore them; otherwise it shows `notice`.
+    in property <[string]> sessions;
+    in property <string> notice;
+    // Restore the session at this index of `sessions`.
+    callback restore(int);
+    callback dismiss();
+    callback dismiss-notice();
+
+    // Opens the list of sessions to choose from (when more than one is held).
+    public function open-chooser() {
+        chooser.show();
+    }
+
+    // Restores the session chosen in the list.
+    public function choose(index: int) {
+        chooser.close();
+        root.restore(index);
+    }
+
+    height: 44px;
+    background: ChromePalette.info-background;
+
+    Rectangle {
+        x: 0px;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: ChromePalette.info-border;
+    }
+
+    HorizontalLayout {
+        padding-left: 16px;
+        padding-right: 14px;
+        padding-top: 8px;
+        padding-bottom: 8px;
+        spacing: 8px;
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.sessions.length > 0
+                ? "Mercury Browser didn't close properly. Restore your tabs?"
+                : root.notice;
+            color: ChromePalette.info-text;
+            font-size: 13px;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+
+        if root.sessions.length > 1: SessionBarButton {
+            label: "Choose a session…";
+            clicked => {
+                root.open-chooser();
+            }
+        }
+
+        if root.sessions.length > 0: SessionBarButton {
+            label: "Restore";
+            primary: true;
+            clicked => {
+                root.restore(0);
+            }
+        }
+
+        if root.sessions.length > 0: SessionBarButton {
+            label: "Dismiss";
+            clicked => {
+                root.dismiss();
+            }
+        }
+
+        if root.sessions.length == 0: SessionBarButton {
+            label: "OK";
+            clicked => {
+                root.dismiss-notice();
+            }
+        }
+    }
+
+    chooser := PopupWindow {
+        x: root.width - self.width - 14px;
+        y: root.height - 4px;
+        width: 340px;
+
+        Rectangle {
+            border-radius: 9px;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+            background: ChromePalette.popup-background;
+            drop-shadow-blur: 12px;
+            drop-shadow-color: ChromePalette.shadow;
+
+            VerticalLayout {
+                padding: 6px;
+                spacing: 2px;
+
+                HorizontalLayout {
+                    padding-left: 10px;
+                    height: 26px;
+
+                    Text {
+                        text: "Restore which session?";
+                        color: ChromePalette.text-secondary;
+                        font-size: 12px;
+                        vertical-alignment: center;
+                    }
+                }
+
+                for label[index] in root.sessions: SessionChoice {
+                    label: label;
+                    clicked => {
+                        root.choose(index);
+                    }
+                }
+            }
+        }
+    }
+}

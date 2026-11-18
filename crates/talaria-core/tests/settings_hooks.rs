@@ -247,3 +247,21 @@ fn others_resolve_address_bar_text_through_the_controllers_own_builder() {
         "nothing navigates"
     );
 }
+
+// history
+
+#[test]
+fn the_search_row_searches_even_text_that_looks_like_an_address() {
+    let mut controller = BrowserController::default();
+    assert!(matches!(
+        controller.search_url("example.com"),
+        Err(AddressResolutionError::Search(_))
+    ));
+
+    controller.set_search_url_builder(test_search());
+
+    assert_eq!(
+        controller.search_url(" example.com ").unwrap().as_str(),
+        "https://search.test/?q=example.com"
+    );
+}

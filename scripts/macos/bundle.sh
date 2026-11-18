@@ -282,9 +282,9 @@ done
 
 say "signing with identity '$IDENTITY'"
 if [ "$IDENTITY" = "-" ]; then
-    say "entitlements: ad-hoc set (JIT, library validation off): ${ENTITLEMENTS#"$REPO/"}"
+    say "entitlements: ad-hoc set (JIT, location, library validation off): ${ENTITLEMENTS#"$REPO/"}"
 else
-    say "entitlements: strict set (JIT, library validation on): ${ENTITLEMENTS#"$REPO/"}"
+    say "entitlements: strict set (JIT, location, library validation on): ${ENTITLEMENTS#"$REPO/"}"
 fi
 # Every library gets the app's identity, so with a Developer ID they share its
 # team identifier and pass library validation.

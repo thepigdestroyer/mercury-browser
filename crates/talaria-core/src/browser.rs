@@ -177,6 +177,16 @@ impl BrowserCommand {
         )
     }
 
+    /// How a navigation this command starts was reached, when the command alone says so.
+    /// `Navigate` does not: `queue_navigation` and its callers name the origin.
+    pub(crate) const fn navigation_origin(&self) -> Option<crate::NavigationOrigin> {
+        match self {
+            Self::Reload => Some(crate::NavigationOrigin::Reload),
+            Self::GoBack | Self::GoForward => Some(crate::NavigationOrigin::History),
+            _ => None,
+        }
+    }
+
     /// Answers go to the web view that asked even before its first page has committed: a
     /// sign-in for that page holds the commit until it is answered.
     pub(crate) const fn is_dispatched_before_engine_ready(&self) -> bool {
@@ -236,6 +246,22 @@ pub enum BrowserEvent {
     PageRequested(PageRequest),
     /// A new document started loading in the tab (not a same-document navigation).
     PageLoadStarted,
+    // history
+    /// The tab's session history changed (a new document, a fragment change, `pushState` or
+    /// `replaceState`, a reload, back or forward, or a subframe navigating): `url` is the
+    /// top-level URL now shown, at `history_index` of `history_length` entries. Sent after the
+    /// matching `AddressChanged`; only history recording reads it.
+    PageCommitted {
+        url: String,
+        history_length: usize,
+        history_index: usize,
+    },
+    /// The page's title, with the URL the web view showed when the title was reported. Sent
+    /// after the matching `PageTitleChanged`; only history recording reads it.
+    PageTitleAt {
+        url: String,
+        title: Option<String>,
+    },
 }
 
 impl BrowserEvent {
@@ -425,6 +451,8 @@ impl BrowserState {
             }
             // dialogs: kept by the tab's page requests, not here.
             BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
+            // history: read by the controller's visit tracker, not shown.
+            BrowserEvent::PageCommitted { .. } | BrowserEvent::PageTitleAt { .. } => {}
         }
     }
 }

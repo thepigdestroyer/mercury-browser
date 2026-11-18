@@ -7,6 +7,7 @@ members = [
     "crates/mercury-filter-lists",
     "crates/mercury-import",
     "crates/mercury-passwords",
+    "crates/mercury-servo-patches",
     "crates/mercury-settings",
     "crates/mercury-store",
     "crates/mercury-ui",
@@ -80,6 +81,9 @@ tokio = "1.54.1"
 url = "2.5"
 zeroize = "1.9"
 
+# The vendored crates (third_party/vendor.toml; `mercury-servo-patches vendor` adds entries here).
+# Never make them workspace members or path dependencies: `cargo fmt --all` formats both, and
+# clippy lints members. `make servo-patches-check` fails if either happens.
 [patch.crates-io]
 gaol = { path = "third_party/gaol" }
 servo-canvas = { path = "third_party/servo-canvas" }

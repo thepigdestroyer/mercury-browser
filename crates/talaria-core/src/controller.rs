@@ -2,13 +2,14 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use crate::address::{AddressResolutionError, SearchUrlBuilder, resolve_address};
+use crate::address::{AddressResolutionError, NavigationTarget, SearchUrlBuilder, resolve_address};
 use crate::browser::LoadState;
 use crate::browser::{BrowserCommand, BrowserEvent, BrowserState, placeholder_title};
 use crate::page_request::decision_to_remember;
+use crate::visits::{NavigationOrigin, VisitTracker, VisitUpdate};
 use crate::{
-    ColorScheme, ControlAnswer, ControlId, ControlRequest, DEFAULT_ZOOM_PERCENT, Tab,
-    TabActivation, TabCommand, TabId,
+    ColorScheme, ControlAnswer, ControlId, ControlRequest, DEFAULT_ZOOM_PERCENT, RestoredTab, Tab,
+    TabActivation, TabCommand, TabId, ZOOM_STEPS,
 };
 use crate::{
     PageRequestAnswer, PageRequestId, PageRequestReply, PendingPageRequest, PermissionDecisions,
@@ -42,6 +43,7 @@ pub struct BrowserController {
     search: Option<SearchUrlBuilder>,
     // dialogs
     permission_decisions: Box<dyn PermissionDecisions>,
+    visits: VisitTracker,
 }
 
 impl BrowserController {
@@ -59,6 +61,7 @@ impl BrowserController {
             default_zoom_percent: DEFAULT_ZOOM_PERCENT,
             search: None,
             permission_decisions: Box::new(SessionPermissionDecisions::default()),
+            visits: VisitTracker::default(),
         }
     }
 
@@ -68,6 +71,8 @@ impl BrowserController {
     pub fn queue_navigation(&mut self, input: &str) -> Result<(), AddressResolutionError> {
         let url = self.resolve_address(input)?.to_string();
         let tab_id = self.active_tab_id;
+        self.visits
+            .set_origin(tab_id, NavigationOrigin::Typed, Some(&url));
         let tab = self
             .tab_mut(tab_id)
             .expect("the controller always owns an active tab");
@@ -146,8 +151,14 @@ impl BrowserController {
     /// Returns the tab's initial URL exactly once (None afterwards, and None for a blank tab),
     /// unless a navigation before the first commit made a new one pending. When it returns a
     /// URL the tab is no longer engine-ready and shows that URL as loading.
+    ///
+    /// A restored tab that has not been selected yet keeps its URL (see `is_load_deferred`).
     pub fn take_initial_url(&mut self, tab_id: TabId) -> Option<String> {
+        if self.is_load_deferred(tab_id) {
+            return None;
+        }
         let tab = self.tab_mut(tab_id)?;
+        tab.end_load_deferral();
         let url = tab.take_initial_url()?;
         // controls: the new web view has asked for nothing yet.
         tab.state_mut().forget_controls();
@@ -258,6 +269,7 @@ impl BrowserController {
 
         let was_active = self.active_tab_id == tab_id;
         self.tabs.remove(index);
+        self.visits.forget_tab(tab_id);
         self.command_queue
             .retain(|queued| queued.tab_id() != tab_id);
 
@@ -288,11 +300,30 @@ impl BrowserController {
             return false;
         };
 
-        if !tab.is_engine_ready() && command.is_discarded_before_engine_ready() {
+        let engine_ready = tab.is_engine_ready();
+        if !engine_ready && command.is_discarded_before_engine_ready() {
             return true;
+        }
+        if let Some(origin) = command.navigation_origin() {
+            // A reload goes to the page shown; back and forward go wherever they lead.
+            let target = (origin == NavigationOrigin::Reload).then(|| tab.state().url());
+            self.visits.set_origin(tab_id, origin, target);
         }
         // dialogs
         self.observe_command_for_page_requests(tab_id, &command);
+
+        // A tab that is not ready (a restored tab may wait a long time) holds one colour
+        // scheme, the latest, rather than every change.
+        if !engine_ready
+            && let BrowserCommand::SetColorScheme(scheme) = command
+            && let Some(held) = self.command_queue.iter_mut().find(|queued| {
+                queued.tab_id() == tab_id
+                    && matches!(queued.command(), BrowserCommand::SetColorScheme(_))
+            })
+        {
+            *held.command_mut() = BrowserCommand::SetColorScheme(scheme);
+            return true;
+        }
 
         if let Some(last_command) = self.command_queue.back_mut() {
             if last_command.tab_id() != tab_id {
@@ -384,6 +415,9 @@ impl BrowserController {
     /// Applies an engine event to its tab. `CloseRequested` changes nothing here: whether and
     /// how the tab closes is the embedder's decision.
     pub fn handle_event(&mut self, tab_id: TabId, event: BrowserEvent) -> bool {
+        if self.tabs.iter().any(|tab| tab.id() == tab_id) {
+            self.visits.observe(tab_id, &event);
+        }
         // dialogs
         self.observe_event_for_page_requests(tab_id, &event);
         // controls
@@ -400,6 +434,90 @@ impl BrowserController {
         }
         tab.state_mut().apply(event);
         true
+    }
+
+    /// Names how the navigation just started in the tab was reached, overriding what the
+    /// command that started it implied: call it right after `queue_navigation` or
+    /// `open_tab_with` (for example `Bookmark`, or `Restored` for a restored tab, whose page is
+    /// then not recorded). Returns false if the tab does not exist.
+    pub fn set_navigation_origin(&mut self, tab_id: TabId, origin: NavigationOrigin) -> bool {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id() == tab_id) else {
+            return false;
+        };
+        self.visits.rename_origin(tab_id, origin, tab.state().url());
+        true
+    }
+
+    /// Titles that only the engine's own error pages carry; a visit whose first title is one
+    /// of them is taken back.
+    pub fn set_error_page_titles(&mut self, titles: impl IntoIterator<Item = String>) {
+        self.visits
+            .set_error_page_titles(titles.into_iter().collect());
+    }
+
+    /// The history updates since the last call, in order. See the `visits` module for the
+    /// rules; the caller stamps them with the time and hands them to the history store.
+    pub fn take_visit_updates(&mut self) -> Vec<VisitUpdate> {
+        self.visits.take_updates()
+    }
+
+    /// Opens a tab from a saved session or the closed-tab list at `index` (clamped to the
+    /// strip), in the background. It shows `restored`'s address, title and zoom at once, but its
+    /// page is not created until the tab is first selected: see `is_load_deferred`. The address
+    /// is resolved like `queue_navigation`; if it does not resolve, no tab is opened.
+    pub fn open_restored_tab(
+        &mut self,
+        index: usize,
+        restored: &RestoredTab,
+    ) -> Result<TabId, AddressResolutionError> {
+        let url = restored
+            .url
+            .as_deref()
+            .map(|address| self.resolve_address(address).map(|url| url.to_string()))
+            .transpose()?;
+        let tab_id = TabId::new(self.next_tab_id);
+        self.next_tab_id += 1;
+
+        let mut tab = Tab::new(tab_id, BrowserState::default());
+        tab.defer_load();
+        if let Some(url) = url {
+            // history: the restored page is not a new visit.
+            self.visits
+                .set_origin(tab_id, NavigationOrigin::Restored, Some(&url));
+            tab.set_initial_url(url.clone());
+            tab.state_mut().apply(BrowserEvent::AddressChanged { url });
+        }
+        // After the address, which shows a placeholder title for a new document.
+        let state = tab.state_mut();
+        state.apply(BrowserEvent::PageTitleChanged {
+            title: Some(restored.title.clone()),
+        });
+        state.set_zoom_percent(
+            restored
+                .zoom_percent
+                .clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]),
+        );
+        self.tabs.insert(index.min(self.tabs.len()), tab);
+        Ok(tab_id)
+    }
+
+    /// Whether the engine must leave this tab without a page for now: it was restored and has
+    /// not been the active tab since. Such a tab is not engine-ready, so commands for it are
+    /// held (and pointer input dropped) exactly as for any tab whose page does not exist yet.
+    pub fn is_load_deferred(&self, tab_id: TabId) -> bool {
+        tab_id != self.active_tab_id
+            && self
+                .tabs
+                .iter()
+                .any(|tab| tab.id() == tab_id && tab.is_load_deferred())
+    }
+
+    /// Whether the tab was restored and its page has not been created yet, selected or not.
+    /// While the active tab is such a tab, the engine has work to do at its next pump.
+    pub fn is_restored_without_page(&self, tab_id: TabId) -> bool {
+        self.tabs
+            .iter()
+            .any(|tab| tab.id() == tab_id && tab.is_load_deferred())
     }
 
     /// Reserves a tab for a web view the engine is creating itself. The tab is inserted
@@ -520,6 +638,21 @@ impl BrowserController {
             None => resolve_address(input, &SearchUrlBuilder::new(|_| Err(NO_SEARCH.to_owned()))),
         }
     }
+
+    // history
+
+    /// The results page for searching `text` as it is, even if it looks like an address (the
+    /// suggestion list's search row), built by this controller's search builder. Refused, like
+    /// any search, until a builder is set.
+    pub fn search_url(&self, text: &str) -> Result<url::Url, AddressResolutionError> {
+        let query = NavigationTarget::SearchQuery(text.trim().to_owned());
+        match &self.search {
+            Some(search) => query.into_url(search),
+            None => query.into_url(&SearchUrlBuilder::new(|_| Err(NO_SEARCH.to_owned()))),
+        }
+    }
+
+    // settings
 
     /// Searches typed in the address bar are built by `search` from now on.
     pub fn set_search_url_builder(&mut self, search: SearchUrlBuilder) {

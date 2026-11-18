@@ -43,6 +43,7 @@ name = "network-outbound"
 path = "tests/network-outbound.rs"
 harness = false
 
+# Mercury: the shared-memory regression test (tests/shared-memory.rs).
 [[test]]
 name = "shared-memory"
 path = "tests/shared-memory.rs"
@@ -53,6 +54,7 @@ name = "system-info-read"
 path = "tests/system-info-read.rs"
 harness = false
 [dependencies.libc]
+# Mercury: 0.2.177 for the syscall numbers and constants the seccomp allowlist uses.
 version = "0.2.177"
 
 [dependencies.log]

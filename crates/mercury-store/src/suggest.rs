@@ -56,6 +56,10 @@ pub struct Suggestion {
     pub title: Option<String>,
     /// Whether the page is bookmarked.
     pub is_bookmark: bool,
+    /// Whether the user ever typed this page's URL (it has a typed visit). With
+    /// `is_bookmark`, what an address bar may complete inline: a host the user only reached by
+    /// a link or a redirect could be a look-alike.
+    pub typed: bool,
     /// The page's frecency as of the `now_ms` given to [`Store::suggest`]; higher ranks first.
     pub frecency: i64,
 }
@@ -104,7 +108,7 @@ const CANDIDATE_SQL: &str = "
            COALESCE((SELECT NULLIF(b.title, '') FROM bookmarks b
                      WHERE b.place_id = p.id ORDER BY b.id LIMIT 1), p.title),
            (SELECT count(*) FROM bookmarks b WHERE b.place_id = p.id),
-           p.last_visit_at, p.visit_count
+           p.last_visit_at, p.visit_count, p.typed_count
     FROM places p WHERE p.id = ?1 AND p.hidden = 0";
 
 /// Page ids in the order found, without repeats.
@@ -307,10 +311,11 @@ impl Store {
                         row.get::<_, i64>(2)?,
                         row.get(3)?,
                         row.get(4)?,
+                        row.get::<_, i64>(5)?,
                     ))
                 })
                 .optional()?;
-            let Some((url, title, bookmarks, last_visit_at, visit_count)) = row else {
+            let Some((url, title, bookmarks, last_visit_at, visit_count, typed_count)) = row else {
                 continue;
             };
             let frecency = frecency::calculate_frecency_from_counts(
@@ -326,6 +331,7 @@ impl Store {
                     url,
                     title,
                     is_bookmark: bookmarks > 0,
+                    typed: typed_count > 0,
                     frecency,
                 },
                 last_visit_at,

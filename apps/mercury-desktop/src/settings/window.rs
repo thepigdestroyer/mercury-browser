@@ -140,6 +140,7 @@ pub(crate) fn fill(window: &SettingsWindow, settings: &Settings, save_problem: O
     window.set_clear_history_on_exit(settings.privacy.clear_on_exit.history);
     window.set_clear_cookies_on_exit(settings.privacy.clear_on_exit.cookies);
     window.set_clear_cache_on_exit(settings.privacy.clear_on_exit.cache);
+    window.set_clear_browsing_data_available(true); // history lane
 
     window.set_ask_where_to_save(settings.downloads.ask_where_to_save);
 
@@ -410,10 +411,11 @@ fn connect(window: &SettingsWindow, handle: Weak<SettingsHandle>) {
     });
 }
 
-/// The history lane's seam: "Clear browsing data…" in the privacy section. The button stays
-/// disabled (`clear-browsing-data-available` is false) until this opens that dialog.
+/// The history lane's seam: "Clear browsing data…" in the privacy section opens the browser
+/// window's "Clear browsing data" dialog.
 fn clear_browsing_data() {
-    log::info!("clearing browsing data is not available yet");
+    let _slint = crate::callback_scope::InSlintCallback::enter();
+    crate::history_ui::show_clear_dialog();
 }
 
 fn open_editor(window: &SettingsWindow, id: &str, name: &str, keyword: &str, url: &str) {

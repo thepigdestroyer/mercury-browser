@@ -213,20 +213,25 @@ impl EndOfRun for Steps {
 
     fn begin_saves(&mut self) {
         // Slot (session): starts the final session write on the session worker.
-        // crate::session::begin_final_save();
+        crate::session::begin_final_save();
     }
 
     fn shut_down_profile_data(&mut self, deadline: Instant) {
-        // Slot (history): closes the history database, waiting for its queued work.
-        // crate::profile_data::shut_down(deadline);
-        // blocklists: stops the filter-list updater before the profile can be removed.
+        // import-ui lane: tells a read of another browser's files to stop, without waiting;
+        // what it leaves in the copy area is removed at the next start.
+        crate::import_ui::shut_down();
+        // blocklists: stops the filter-list updater (cancelling a download at once, waiting at
+        // most a second) before the profile can be removed.
         crate::filter_lists::shut_down(deadline);
+        // Slot (history): queues "clear history on exit" if the settings ask for it, then
+        // closes the history database, waiting for its queued work (that clear included).
+        self.settings.clear_history_on_exit_if_asked();
+        crate::profile_data::shut_down(deadline);
     }
 
     fn collect_saves(&mut self, deadline: Instant) {
         // Slot (session): waits for the final session write.
-        // crate::session::collect_final_save(deadline);
-        let _ = deadline;
+        crate::session::collect_final_save(deadline);
     }
 
     fn finish_settings(&mut self, deadline: Instant) {
@@ -248,6 +253,8 @@ impl EndOfRun for Steps {
     fn release_window(&mut self) {
         // menus: drops the About window and the menus' handle on the controller.
         crate::menus::release();
+        // bookmarks lane: drops the bookmarks manager window and the bar's state.
+        crate::bookmarks::release();
         drop(self.window.take());
     }
 

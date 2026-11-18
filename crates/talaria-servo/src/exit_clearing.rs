@@ -243,6 +243,38 @@ pub(crate) mod tests {
         );
     }
 
+    // history lane
+    #[test]
+    fn removing_site_data_never_touches_the_history_database() {
+        // The profile: `places.sqlite` and its companions beside Servo's directory, and (were
+        // a layout ever to put them there) inside it too.
+        let profile = tempfile::tempdir().expect("a directory");
+        let servo_directory = profile.path().join("servo");
+        std::fs::create_dir(&servo_directory).expect("a directory");
+        let history_files = [
+            "places.sqlite",
+            "places.sqlite-wal",
+            "places.sqlite-shm",
+            "places.sqlite.checked",
+            "places.sqlite.clear-pending",
+        ];
+        for directory in [profile.path(), servo_directory.as_path()] {
+            for file in history_files {
+                std::fs::write(directory.join(file), "history").expect("a file");
+            }
+        }
+        std::fs::write(servo_directory.join("cookie_jar.json"), "{}").expect("a file");
+
+        remove_site_data_files(&servo_directory);
+
+        let mut kept = history_files.map(str::to_owned).to_vec();
+        kept.sort();
+        assert_eq!(remaining(&servo_directory), kept);
+        for file in history_files {
+            assert!(profile.path().join(file).exists(), "{file}");
+        }
+    }
+
     #[test]
     fn removing_site_data_that_is_not_there_is_harmless() {
         let directory = tempfile::tempdir().expect("a directory");

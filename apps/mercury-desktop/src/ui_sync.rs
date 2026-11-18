@@ -124,8 +124,11 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     crate::page_requests::sync_page_request(window, controller); // dialogs
     // controls
     crate::controls::sync(window, controller);
+    // session: every change the window shows may need saving (before the menus read it)
+    crate::session::observe(window, controller);
     // menus lane: what the native menus show (Back/Forward, the tab list).
     crate::menus::sync(controller);
+    crate::bookmarks::sync(window, controller); // bookmarks lane
 }
 
 /// Only page-requested fullscreen is mirrored, so a window the user made fullscreen is left
