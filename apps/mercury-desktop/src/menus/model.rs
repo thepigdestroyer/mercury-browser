@@ -21,9 +21,6 @@ pub(crate) enum MenuCommand {
     // Seams other lanes fill in (`seams.rs`); disabled until they do.
     ReopenClosedTab,
     RestorePreviousSession,
-    BookmarkThisPage,
-    ToggleBookmarksBar,
-    ShowBookmarksManager,
     /// An entry of the bookmarks bar's first level, by its stable id.
     OpenBookmark(super::seams::BookmarkId),
     // No engine API in Servo 0.8.0: always disabled.
@@ -482,14 +479,23 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
         Menu {
             title: "Bookmarks",
             items: vec![
-                // Bookmarks lane (see `seams.rs`).
-                action("Bookmark This Page…", key('d', CMD), BookmarkThisPage),
+                // Bookmarks lane: its actions, through its shortcuts; the bar's entries through
+                // `seams.rs`.
+                action(
+                    "Bookmark This Page…",
+                    key('d', CMD),
+                    Shortcut(A::BookmarkPage),
+                ),
                 action(
                     "Show Bookmarks Bar",
                     key('b', SHIFT_CMD),
-                    ToggleBookmarksBar,
+                    Shortcut(A::ToggleBookmarksBar),
                 ),
-                action("Bookmarks Manager", None, ShowBookmarksManager),
+                action(
+                    "Bookmarks Manager",
+                    key('b', OPTION_CMD),
+                    Shortcut(A::ShowBookmarksManager),
+                ),
                 Separator,
                 BookmarksBarFolder,
             ],
@@ -534,9 +540,7 @@ pub(crate) const fn is_available(command: MenuCommand) -> bool {
         Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) => true,
         ReopenClosedTab => super::seams::REOPEN_CLOSED_TAB_AVAILABLE,
         RestorePreviousSession => super::seams::RESTORE_PREVIOUS_SESSION_AVAILABLE,
-        BookmarkThisPage | ToggleBookmarksBar | ShowBookmarksManager | OpenBookmark(_) => {
-            super::seams::BOOKMARKS_AVAILABLE
-        }
+        OpenBookmark(_) => super::seams::BOOKMARKS_AVAILABLE,
         Find | Stop => false,
     }
 }
@@ -832,8 +836,6 @@ mod tests {
                 ("Reopen Closed Tab", "⇧⌘T".to_owned()),
                 ("Find…", "⌘F".to_owned()),
                 ("Enter Full Screen", "⌃⌘F".to_owned()),
-                ("Bookmark This Page…", "⌘D".to_owned()),
-                ("Show Bookmarks Bar", "⇧⌘B".to_owned()),
                 ("Minimize", "⌘M".to_owned()),
             ]
         );
@@ -863,10 +865,6 @@ mod tests {
         for command in [
             MenuCommand::ReopenClosedTab,
             MenuCommand::RestorePreviousSession,
-            MenuCommand::BookmarkThisPage,
-            MenuCommand::ToggleBookmarksBar,
-            MenuCommand::ShowBookmarksManager,
-            MenuCommand::OpenBookmark(crate::menus::seams::BookmarkId::default()),
             MenuCommand::Find,
             MenuCommand::Stop,
         ] {
@@ -878,6 +876,15 @@ mod tests {
         assert!(is_enabled(
             MenuCommand::Shortcut(ShortcutAction::NewTab),
             &snapshot,
+            EditTarget::None
+        ));
+    }
+
+    #[test]
+    fn the_bookmarks_bar_entries_are_enabled() {
+        assert!(is_enabled(
+            MenuCommand::OpenBookmark(crate::menus::seams::BookmarkId(7)),
+            &MenuSnapshot::default(),
             EditTarget::None
         ));
     }

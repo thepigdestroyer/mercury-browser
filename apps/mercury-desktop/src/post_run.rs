@@ -248,6 +248,8 @@ impl EndOfRun for Steps {
     fn release_window(&mut self) {
         // menus: drops the About window and the menus' handle on the controller.
         crate::menus::release();
+        // bookmarks lane: drops the bookmarks manager window and the bar's state.
+        crate::bookmarks::release();
         drop(self.window.take());
     }
 

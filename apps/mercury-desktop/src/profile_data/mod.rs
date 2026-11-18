@@ -72,7 +72,7 @@
 //! inside an AppKit callback on macOS, where a panic cannot unwind: a panicking callback aborts
 //! the process. Callbacks must not panic (no `unwrap` on a reply).
 
-mod bookmarks;
+pub(crate) mod bookmarks;
 pub(crate) mod downloads;
 mod history;
 pub(crate) mod import;

@@ -19,6 +19,7 @@ use ui_sync::sync_ui;
 mod about;
 // activation (tabs lane)
 mod activation;
+mod bookmarks;
 mod callback_scope;
 mod callbacks;
 mod cli;
@@ -188,6 +189,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // controls
     controls::connect_controls(&window, Rc::clone(&controller));
     quit::quit_when_the_window_is_closed(&window);
+    bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
 
     let mut timers = Vec::new();
     let screenshot_result = options.screenshot.map(|screenshot| {

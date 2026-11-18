@@ -21,6 +21,7 @@ glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
+mercury-import = { path = "../../crates/mercury-import" }
 mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-store = { path = "../../crates/mercury-store" }
 mercury-ui = { path = "../../crates/mercury-ui" }
@@ -40,7 +41,8 @@ ash.workspace = true
 # `objc2-app-kit` and `objc2-foundation`: `NSScreen.visibleFrame`, the screen area outside the menu
 # bar and Dock (`window.screen.avail*`), and `deviceDescription` to find the monitor's screen.
 # `NSOpenPanel` and the features after it, with `block2` and `NSURL`: the file chooser of
-# `<input type=file>` (`src/controls/file_panel.rs`), shown as a sheet with a completion block.
+# `<input type=file>` (`src/controls/file_panel.rs`) and the bookmark file panels
+# (`src/bookmarks/panel.rs`), shown as sheets with a completion block.
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = "0.6.2"
 objc2 = "0.6.3"

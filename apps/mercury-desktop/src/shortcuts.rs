@@ -51,6 +51,13 @@ pub(crate) enum ShortcutAction {
     // history
     ShowHistory,
     ClearBrowsingData,
+    // bookmarks
+    /// Cmd+D (Ctrl+D): the star.
+    BookmarkPage,
+    /// Cmd+Shift+B (Ctrl+Shift+B).
+    ToggleBookmarksBar,
+    /// Cmd+Alt+B on macOS, as Safari and Chrome; Ctrl+Shift+O elsewhere, as Chrome.
+    ShowBookmarksManager,
 }
 
 impl ShortcutAction {
@@ -166,6 +173,11 @@ pub(crate) fn shortcut_action(
     };
     let character = character.as_deref();
 
+    // bookmarks lane
+    if let Some(action) = bookmark_shortcut(character, primary, shift, alt, platform) {
+        return Some(action);
+    }
+
     if primary && !alt {
         let common = match (character, shift) {
             (Some("t"), false) => Some(NewTab),
@@ -215,6 +227,26 @@ pub(crate) fn shortcut_action(
         (Key::Named(NamedKey::ArrowRight), _, true) => Some(Forward),
         (_, Some("d"), true) => Some(FocusAddressBar),
         (Key::Named(NamedKey::F5), _, false) => Some(Reload),
+        _ => None,
+    }
+}
+
+/// The bookmarks lane's shortcuts.
+fn bookmark_shortcut(
+    character: Option<&str>,
+    primary: bool,
+    shift: bool,
+    alt: bool,
+    platform: Platform,
+) -> Option<ShortcutAction> {
+    if !primary {
+        return None;
+    }
+    match (platform, character, shift, alt) {
+        (_, Some("d"), false, false) => Some(ShortcutAction::BookmarkPage),
+        (_, Some("b"), true, false) => Some(ShortcutAction::ToggleBookmarksBar),
+        (Platform::MacOs, Some("b"), false, true) => Some(ShortcutAction::ShowBookmarksManager),
+        (Platform::Other, Some("o"), true, false) => Some(ShortcutAction::ShowBookmarksManager),
         _ => None,
     }
 }
@@ -350,6 +382,10 @@ pub(crate) fn run_shortcut(
         // history lane
         ShortcutAction::ShowHistory => crate::history_ui::show_history(),
         ShortcutAction::ClearBrowsingData => crate::history_ui::show_clear_dialog(),
+        // bookmarks lane
+        ShortcutAction::BookmarkPage => crate::bookmarks::bookmark_this_page(),
+        ShortcutAction::ToggleBookmarksBar => crate::bookmarks::toggle_bookmarks_bar(),
+        ShortcutAction::ShowBookmarksManager => crate::bookmarks::show_bookmarks_manager(),
     }
 }
 
@@ -605,13 +641,17 @@ mod tests {
             (ShowSettings, false),
             (ShowHistory, false),
             (ClearBrowsingData, false),
+            (BookmarkPage, false),
+            (ToggleBookmarksBar, false),
+            (ShowBookmarksManager, false),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
                 NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
                 | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen | ShowSettings | ShowHistory | ClearBrowsingData => {}
+                | ExitFullscreen | ShowSettings | ShowHistory | ClearBrowsingData
+                | BookmarkPage | ToggleBookmarksBar | ShowBookmarksManager => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -740,6 +780,33 @@ mod tests {
         keys.clear();
 
         assert_eq!(keys.release(KEY_R), KeyDisposition::Forward);
+    }
+
+    #[test]
+    fn bookmark_shortcuts_on_macos() {
+        assert_eq!(mac(character("d"), CMD), Some(BookmarkPage));
+        assert_eq!(mac(character("B"), CMD | SHIFT), Some(ToggleBookmarksBar));
+        // winit reports Cmd+Option+B as "b" (Option is ignored while Cmd is held).
+        assert_eq!(mac(character("b"), CMD | ALT), Some(ShowBookmarksManager));
+        assert_eq!(mac(character("O"), CMD | SHIFT), None);
+        assert_eq!(mac(character("d"), CTRL), None);
+        assert_eq!(mac(character("b"), CMD), None);
+    }
+
+    #[test]
+    fn bookmark_shortcuts_elsewhere() {
+        assert_eq!(other(character("d"), CTRL), Some(BookmarkPage));
+        assert_eq!(
+            other(character("B"), CTRL | SHIFT),
+            Some(ToggleBookmarksBar)
+        );
+        assert_eq!(
+            other(character("O"), CTRL | SHIFT),
+            Some(ShowBookmarksManager)
+        );
+        assert_eq!(other(character("b"), CTRL | ALT), None);
+        // Alt+D still focuses the address bar.
+        assert_eq!(other(character("d"), ALT), Some(FocusAddressBar));
     }
 
     #[test]

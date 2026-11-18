@@ -5374,6 +5374,7 @@ dependencies = [
  "image",
  "libc",
  "log",
+ "mercury-import",
  "mercury-settings",
  "mercury-store",
  "mercury-ui",
