@@ -8,6 +8,7 @@ mod input;
 mod page_icon;
 mod page_request;
 mod tab;
+mod visits;
 mod web_view;
 mod zoom;
 
@@ -37,5 +38,6 @@ pub use page_request::{
     sanitize_page_text, strip_user_info,
 };
 pub use tab::{Tab, TabActivation, TabCommand, TabEvent, TabId};
+pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};

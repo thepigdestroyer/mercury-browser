@@ -600,7 +600,7 @@ export component SettingsWindow inherits Window {
                         }
 
                         CheckBox {
-                            text: "Browsing history";
+                            text: "Browsing and download history";
                             checked <=> root.clear-history-on-exit;
                             toggled => {
                                 root.toggled("clear-history-on-exit", self.checked);

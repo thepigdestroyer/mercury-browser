@@ -15,19 +15,23 @@ backtrace.workspace = true
 dirs.workspace = true
 dpi.workspace = true
 euclid.workspace = true
+getrandom.workspace = true
 gleam.workspace = true
 glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
 mercury-settings = { path = "../../crates/mercury-settings" }
+mercury-store = { path = "../../crates/mercury-store" }
 mercury-ui = { path = "../../crates/mercury-ui" }
+rusqlite.workspace = true
 servo.workspace = true
 slint.workspace = true
 surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash.workspace = true

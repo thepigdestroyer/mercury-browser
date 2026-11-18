@@ -217,9 +217,10 @@ impl EndOfRun for Steps {
     }
 
     fn shut_down_profile_data(&mut self, deadline: Instant) {
-        // Slot (history): closes the history database, waiting for its queued work.
-        // crate::profile_data::shut_down(deadline);
-        let _ = deadline;
+        // Slot (history): queues "clear history on exit" if the settings ask for it, then
+        // closes the history database, waiting for its queued work (that clear included).
+        self.settings.clear_history_on_exit_if_asked();
+        crate::profile_data::shut_down(deadline);
     }
 
     fn collect_saves(&mut self, deadline: Instant) {

@@ -48,6 +48,9 @@ pub(crate) enum ShortcutAction {
     ExitFullscreen,
     // settings-ui
     ShowSettings,
+    // history
+    ShowHistory,
+    ClearBrowsingData,
 }
 
 impl ShortcutAction {
@@ -195,6 +198,11 @@ pub(crate) fn shortcut_action(
             (Platform::MacOs, Key::Named(NamedKey::ArrowRight), _, false) => Some(Forward),
             (Platform::Other, Key::Named(NamedKey::PageDown), _, false) => Some(NextTab),
             (Platform::Other, Key::Named(NamedKey::PageUp), _, false) => Some(PreviousTab),
+            // history lane
+            (Platform::MacOs, _, Some("y"), false) => Some(ShowHistory),
+            (Platform::Other, _, Some("h"), false) => Some(ShowHistory),
+            (Platform::MacOs, Key::Named(NamedKey::Backspace), _, true) => Some(ClearBrowsingData),
+            (Platform::Other, Key::Named(NamedKey::Delete), _, true) => Some(ClearBrowsingData),
             _ => None,
         };
     }
@@ -339,6 +347,9 @@ pub(crate) fn run_shortcut(
             .queue_command(BrowserCommand::ExitFullscreen),
         // settings-ui
         ShortcutAction::ShowSettings => window.invoke_show_settings(),
+        // history lane
+        ShortcutAction::ShowHistory => crate::history_ui::show_history(),
+        ShortcutAction::ClearBrowsingData => crate::history_ui::show_clear_dialog(),
     }
 }
 
@@ -592,16 +603,38 @@ mod tests {
             (Quit, false),
             (ExitFullscreen, false),
             (ShowSettings, false),
+            (ShowHistory, false),
+            (ClearBrowsingData, false),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
             match action {
                 NewTab | CloseTab | NextTab | PreviousTab | SelectTab(_) | SelectLastTab | Back
                 | Forward | Reload | FocusAddressBar | ZoomIn | ZoomOut | ZoomReset | Quit
-                | ExitFullscreen | ShowSettings => {}
+                | ExitFullscreen | ShowSettings | ShowHistory | ClearBrowsingData => {}
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
+    }
+
+    // history lane
+    #[test]
+    fn history_and_clearing_browsing_data() {
+        assert_eq!(mac(character("y"), CMD), Some(ShowHistory));
+        assert_eq!(other(character("h"), CTRL), Some(ShowHistory));
+        assert_eq!(other(character("y"), CTRL), None);
+        assert_eq!(mac(character("h"), CMD), None);
+        // The Mac keyboard's Delete is Backspace.
+        assert_eq!(
+            mac(named(NamedKey::Backspace), CMD | SHIFT),
+            Some(ClearBrowsingData)
+        );
+        assert_eq!(
+            other(named(NamedKey::Delete), CTRL | SHIFT),
+            Some(ClearBrowsingData)
+        );
+        assert_eq!(mac(named(NamedKey::Backspace), CMD), None);
+        assert_eq!(other(named(NamedKey::Delete), CTRL), None);
     }
 
     const KEY_R: PhysicalKey = PhysicalKey::Code(KeyCode::KeyR);

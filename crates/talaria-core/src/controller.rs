@@ -2,10 +2,11 @@
 use std::collections::VecDeque;
 use std::time::Duration;
 
-use crate::address::{AddressResolutionError, SearchUrlBuilder, resolve_address};
+use crate::address::{AddressResolutionError, NavigationTarget, SearchUrlBuilder, resolve_address};
 use crate::browser::LoadState;
 use crate::browser::{BrowserCommand, BrowserEvent, BrowserState, placeholder_title};
 use crate::page_request::decision_to_remember;
+use crate::visits::{NavigationOrigin, VisitTracker, VisitUpdate};
 use crate::{
     ColorScheme, ControlAnswer, ControlId, ControlRequest, DEFAULT_ZOOM_PERCENT, Tab,
     TabActivation, TabCommand, TabId,
@@ -42,6 +43,7 @@ pub struct BrowserController {
     search: Option<SearchUrlBuilder>,
     // dialogs
     permission_decisions: Box<dyn PermissionDecisions>,
+    visits: VisitTracker,
 }
 
 impl BrowserController {
@@ -59,6 +61,7 @@ impl BrowserController {
             default_zoom_percent: DEFAULT_ZOOM_PERCENT,
             search: None,
             permission_decisions: Box::new(SessionPermissionDecisions::default()),
+            visits: VisitTracker::default(),
         }
     }
 
@@ -68,6 +71,8 @@ impl BrowserController {
     pub fn queue_navigation(&mut self, input: &str) -> Result<(), AddressResolutionError> {
         let url = self.resolve_address(input)?.to_string();
         let tab_id = self.active_tab_id;
+        self.visits
+            .set_origin(tab_id, NavigationOrigin::Typed, Some(&url));
         let tab = self
             .tab_mut(tab_id)
             .expect("the controller always owns an active tab");
@@ -258,6 +263,7 @@ impl BrowserController {
 
         let was_active = self.active_tab_id == tab_id;
         self.tabs.remove(index);
+        self.visits.forget_tab(tab_id);
         self.command_queue
             .retain(|queued| queued.tab_id() != tab_id);
 
@@ -290,6 +296,11 @@ impl BrowserController {
 
         if !tab.is_engine_ready() && command.is_discarded_before_engine_ready() {
             return true;
+        }
+        if let Some(origin) = command.navigation_origin() {
+            // A reload goes to the page shown; back and forward go wherever they lead.
+            let target = (origin == NavigationOrigin::Reload).then(|| tab.state().url());
+            self.visits.set_origin(tab_id, origin, target);
         }
         // dialogs
         self.observe_command_for_page_requests(tab_id, &command);
@@ -384,6 +395,9 @@ impl BrowserController {
     /// Applies an engine event to its tab. `CloseRequested` changes nothing here: whether and
     /// how the tab closes is the embedder's decision.
     pub fn handle_event(&mut self, tab_id: TabId, event: BrowserEvent) -> bool {
+        if self.tabs.iter().any(|tab| tab.id() == tab_id) {
+            self.visits.observe(tab_id, &event);
+        }
         // dialogs
         self.observe_event_for_page_requests(tab_id, &event);
         // controls
@@ -400,6 +414,31 @@ impl BrowserController {
         }
         tab.state_mut().apply(event);
         true
+    }
+
+    /// Names how the navigation just started in the tab was reached, overriding what the
+    /// command that started it implied: call it right after `queue_navigation` or
+    /// `open_tab_with` (for example `Bookmark`, or `Restored` for a restored tab, whose page is
+    /// then not recorded). Returns false if the tab does not exist.
+    pub fn set_navigation_origin(&mut self, tab_id: TabId, origin: NavigationOrigin) -> bool {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id() == tab_id) else {
+            return false;
+        };
+        self.visits.rename_origin(tab_id, origin, tab.state().url());
+        true
+    }
+
+    /// Titles that only the engine's own error pages carry; a visit whose first title is one
+    /// of them is taken back.
+    pub fn set_error_page_titles(&mut self, titles: impl IntoIterator<Item = String>) {
+        self.visits
+            .set_error_page_titles(titles.into_iter().collect());
+    }
+
+    /// The history updates since the last call, in order. See the `visits` module for the
+    /// rules; the caller stamps them with the time and hands them to the history store.
+    pub fn take_visit_updates(&mut self) -> Vec<VisitUpdate> {
+        self.visits.take_updates()
     }
 
     /// Reserves a tab for a web view the engine is creating itself. The tab is inserted
@@ -520,6 +559,21 @@ impl BrowserController {
             None => resolve_address(input, &SearchUrlBuilder::new(|_| Err(NO_SEARCH.to_owned()))),
         }
     }
+
+    // history
+
+    /// The results page for searching `text` as it is, even if it looks like an address (the
+    /// suggestion list's search row), built by this controller's search builder. Refused, like
+    /// any search, until a builder is set.
+    pub fn search_url(&self, text: &str) -> Result<url::Url, AddressResolutionError> {
+        let query = NavigationTarget::SearchQuery(text.trim().to_owned());
+        match &self.search {
+            Some(search) => query.into_url(search),
+            None => query.into_url(&SearchUrlBuilder::new(|_| Err(NO_SEARCH.to_owned()))),
+        }
+    }
+
+    // settings
 
     /// Searches typed in the address bar are built by `search` from now on.
     pub fn set_search_url_builder(&mut self, search: SearchUrlBuilder) {

@@ -13,10 +13,6 @@ use talaria_core::BrowserController;
 pub(crate) const REOPEN_CLOSED_TAB_AVAILABLE: bool = false;
 /// Session lane: History ▸ "Restore Previous Session".
 pub(crate) const RESTORE_PREVIOUS_SESSION_AVAILABLE: bool = false;
-/// History lane: History ▸ "Show All History" (Cmd+Y).
-pub(crate) const SHOW_HISTORY_AVAILABLE: bool = false;
-/// History lane: History ▸ "Clear Browsing Data…" (Shift+Cmd+Delete).
-pub(crate) const CLEAR_BROWSING_DATA_AVAILABLE: bool = false;
 
 /// Bookmarks lane: the Bookmarks menu ("Bookmark This Page…" Cmd+D, "Show Bookmarks Bar"
 /// Shift+Cmd+B, "Bookmarks Manager", and the bookmarks bar folder's first level).
@@ -27,12 +23,6 @@ pub(crate) fn reopen_closed_tab(_window: &MainWindow) {}
 
 /// Session lane: `restore-previous-session`.
 pub(crate) fn restore_previous_session(_window: &MainWindow) {}
-
-/// History lane: show the history window.
-pub(crate) fn show_history(_window: &MainWindow) {}
-
-/// History lane: show the "Clear browsing data" dialog.
-pub(crate) fn clear_browsing_data(_window: &MainWindow) {}
 
 /// Bookmarks lane: bookmark the active page.
 pub(crate) fn bookmark_this_page(_window: &MainWindow) {}

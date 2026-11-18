@@ -12,6 +12,8 @@ import { PopUpBlockedIndicator } from "tabs/pop-up-blocked.slint";
 // menus
 import { AddressBarEdit, BrowserMenu, BrowserMenuCommand, BrowserMenuEntry } from "menus/browser-menu.slint";
 export { AboutLink, AboutWindow } from "about/about-window.slint";
+// history lane
+import { ClearDataDialog, HistoryPanel, HistoryRow, SuggestionList, SuggestionRow } from "history/history.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -207,13 +209,57 @@ export component MainWindow inherits Window {
     in property <string> status-text: "";
     // The page is fullscreen: the tab strip and toolbar are hidden.
     in property <bool> chrome-hidden: false;
-    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused);
+    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused) || root.history-search-focused;
     out property <bool> web-view-hovered: web-view-input.has-hover;
     out property <float> web-view-pointer-x: web-view-input.mouse-x / 1px;
     out property <float> web-view-pointer-y: web-view-input.mouse-y / 1px;
     property <bool> new-tab-search-focused: false;
     // The window's colour scheme as Slint determined it, used when winit reports none.
     out property <ColorScheme> system-color-scheme: Palette.color-scheme;
+    // --- history lane ---
+    // Suggestions under the address field.
+    in property <[SuggestionRow]> suggestions;
+    in property <int> suggestion-selected: -1;
+    in property <bool> suggestions-open: false;
+    out property <bool> address-focused: address-input.has-focus;
+    callback address-edited(string);
+    callback suggestion-chosen(int);
+    // The field lost focus: the list closes, and a reply on its way is dropped.
+    callback address-blurred();
+    changed address-focused => {
+        if !self.address-focused {
+            root.address-blurred();
+        }
+    }
+    // Puts `text` in the address field and selects from `start` to `end` (UTF-8 offsets).
+    public function complete-address(text: string, start: int, end: int) {
+        root.address = text;
+        address-input.set-selection-offsets(start, end);
+    }
+    // The history window.
+    in property <bool> history-open: false;
+    in property <[HistoryRow]> history-rows;
+    in property <string> history-message;
+    in-out property <string> history-query;
+    // The window's search field has focus (it counts as a focused text input).
+    in-out property <bool> history-search-focused: false;
+    callback history-search(string);
+    callback history-open-entry(int, bool);
+    callback history-delete-entry(int);
+    callback history-delete-site(int);
+    callback history-more();
+    callback history-close();
+    // "Clear browsing data".
+    in property <bool> clear-dialog-open: false;
+    in-out property <int> clear-period: 0;
+    in-out property <bool> clear-history: true;
+    in-out property <bool> clear-cookies: false;
+    in-out property <bool> clear-cache: false;
+    in property <bool> clear-busy: false;
+    callback show-clear-dialog();
+    callback clear-confirm();
+    callback clear-cancel();
+    // --- end history lane ---
 
     callback navigate(string);
     callback go-back;
@@ -550,7 +596,7 @@ export component MainWindow inherits Window {
                     }
                 }
 
-                Rectangle {
+                address-box := Rectangle {
                     horizontal-stretch: 1;
                     height: 38px;
                     border-radius: 9px;
@@ -575,6 +621,9 @@ export component MainWindow inherits Window {
                             }
                             root.navigate(self.text);
                         }
+                        edited => {
+                            root.address-edited(self.text);
+                        }
                         // tabs: Escape drops the draft and returns focus to the page
                         key-pressed(event) => {
                             if event.text != Key.Escape {
@@ -584,7 +633,8 @@ export component MainWindow inherits Window {
                             if self.preedit-text != "" {
                                 return reject;
                             }
-                            // history lane: close the suggestion list here first, and accept.
+                            // history lane: an open suggestion list has taken Escape already
+                            // (`history_ui::handle_key`, before Slint sees the key).
                             root.reset-address(root.committed-address);
                             if root.web-view-visible {
                                 web-view-focus.focus();
@@ -1007,6 +1057,78 @@ export component MainWindow inherits Window {
         }
         row-hovered(index) => {
             root.controls-row-hovered(index);
+        }
+    }
+
+    // history lane
+    if root.history-open: HistoryPanel {
+        x: 0px;
+        y: web-view-area.absolute-position.y;
+        width: root.width;
+        height: web-view-area.height;
+        rows: root.history-rows;
+        message: root.history-message;
+        query <=> root.history-query;
+        init => {
+            self.focus-search();
+        }
+        search(text) => {
+            root.history-search(text);
+        }
+        search-focus-changed(focused) => {
+            root.history-search-focused = focused;
+        }
+        open(entry, new-tab) => {
+            root.history-open-entry(entry, new-tab);
+        }
+        delete-entry(entry) => {
+            root.history-delete-entry(entry);
+        }
+        delete-site(entry) => {
+            root.history-delete-site(entry);
+        }
+        more => {
+            root.history-more();
+        }
+        close => {
+            root.history-close();
+        }
+        clear-data => {
+            root.show-clear-dialog();
+        }
+    }
+
+    // history lane
+    if root.suggestions-open && address-input.has-focus && root.suggestions.length > 0: SuggestionList {
+        x: address-box.absolute-position.x;
+        y: address-box.absolute-position.y + address-box.height + 6px;
+        width: address-box.width;
+        rows: root.suggestions;
+        selected: root.suggestion-selected;
+        chosen(index) => {
+            root.suggestion-chosen(index);
+        }
+    }
+
+    // history lane
+    if root.clear-dialog-open: ClearDataDialog {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        period <=> root.clear-period;
+        history <=> root.clear-history;
+        cookies <=> root.clear-cookies;
+        cache <=> root.clear-cache;
+        busy: root.clear-busy;
+        init => {
+            self.focus();
+        }
+        confirm => {
+            root.clear-confirm();
+        }
+        cancel => {
+            root.clear-cancel();
         }
     }
 

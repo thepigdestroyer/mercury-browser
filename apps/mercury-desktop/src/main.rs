@@ -26,6 +26,7 @@ mod cli;
 mod controls;
 mod crash_handler;
 mod engine;
+mod history_ui;
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -45,6 +46,7 @@ mod page_tabs;
 mod platform_macos;
 mod post_run;
 mod profile;
+mod profile_data;
 mod quit;
 mod rendering;
 mod screen_metrics;
@@ -143,6 +145,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // settings-ui: search engine, zoom and colour scheme before any address is resolved.
     settings::prepare_controller(&settings, &mut controller.borrow_mut(), &options.urls);
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
+    profile_data::start(&profile, &mut controller.borrow_mut()); // history lane
     let web_view_focused = Rc::new(Cell::new(false));
 
     connect_servo_runtime(
@@ -163,6 +166,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
     );
+    history_ui::connect(&window, Rc::clone(&controller), options.is_automated()); // history lane
     // tabs: the "Pop-up blocked" indicator
     page_tabs::connect_pop_up_indicator(&window, &controller);
     // tabs: MERCURY_ALLOW_POP_UPS only counts in automated runs

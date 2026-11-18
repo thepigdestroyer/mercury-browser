@@ -412,6 +412,7 @@ impl EngineState {
         for web_view in self.web_views.values() {
             web_view.refresh_page_feedback();
         }
+        crate::profile_data::record_visits(&mut self.controller.borrow_mut()); // history lane
         let active_became_ready = !ready_before && {
             let controller = self.controller.borrow();
             is_engine_ready(&controller, controller.active_tab_id())
@@ -815,6 +816,21 @@ pub(crate) fn dispatch_pending_commands<W: TalariaWebView>(
     }
 
     Ok(controller.borrow().has_pending_commands())
+}
+
+/// Clears the engine's cookies, site data and cache as `kinds` says (history lane: "Clear
+/// browsing data"). Returns false if there is no engine, it is busy, or it did not answer.
+pub(crate) fn clear_site_data(kinds: talaria_servo::SiteDataKinds) -> bool {
+    let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {
+        return false;
+    };
+    let Ok(state) = engine.state.try_borrow() else {
+        return false;
+    };
+    state
+        .as_ref()
+        .and_then(|state| state.runtime.as_ref())
+        .is_some_and(|runtime| runtime.clear_site_data(kinds))
 }
 
 #[cfg(test)]

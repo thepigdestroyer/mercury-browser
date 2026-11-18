@@ -265,6 +265,11 @@ impl ServoRuntime {
         ))
     }
 
+    /// The engine, for the crate's helpers (history lane: `site_data`).
+    pub(crate) fn servo(&self) -> &servo::Servo {
+        &self.inner
+    }
+
     pub fn spin_event_loop(&self) {
         self.redraw_waker.acknowledge();
         self.inner.spin_event_loop();
@@ -589,14 +594,21 @@ impl servo::WebViewDelegate for BrowserDelegate {
         self.send_browser_event(BrowserEvent::AddressChanged {
             url: display_url(&url),
         });
+        // history
+        self.page_feedback.set_address(display_url(&url));
         // tabs: a same-document navigation keeps the document's title and icon
         if self.page_feedback.address_changed(web_view.load_status()) {
             self.read_document_title(&web_view);
         }
     }
 
-    fn notify_page_title_changed(&self, _web_view: servo::WebView, title: Option<String>) {
-        self.send_browser_event(BrowserEvent::PageTitleChanged { title });
+    fn notify_page_title_changed(&self, web_view: servo::WebView, title: Option<String>) {
+        self.send_browser_event(BrowserEvent::PageTitleChanged {
+            title: title.clone(),
+        });
+        // history
+        let url = web_view.url();
+        self.send_browser_event(crate::history_events::page_title_at(url.as_ref(), title));
     }
 
     fn notify_favicon_changed(&self, web_view: servo::WebView) {
@@ -648,6 +660,10 @@ impl servo::WebViewDelegate for BrowserDelegate {
 
     fn notify_history_changed(&self, _web_view: servo::WebView, entries: Vec<Url>, current: usize) {
         self.send_browser_event(history_changed_event(entries.len(), current));
+        // history
+        if let Some(event) = crate::history_events::page_committed(&entries, current) {
+            self.send_browser_event(event);
+        }
     }
 
     fn notify_cursor_changed(&self, _web_view: servo::WebView, cursor: Cursor) {
@@ -895,7 +911,7 @@ fn pointer_cursor_from_servo(cursor: Cursor) -> PointerCursor {
     }
 }
 
-fn display_url(url: &Url) -> String {
+pub(crate) fn display_url(url: &Url) -> String {
     if url.as_str() == NEW_TAB_URL {
         String::new()
     } else {

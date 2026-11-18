@@ -199,8 +199,6 @@ fn run_command(
         MenuCommand::System(_) => {}
         MenuCommand::ReopenClosedTab => seams::reopen_closed_tab(window),
         MenuCommand::RestorePreviousSession => seams::restore_previous_session(window),
-        MenuCommand::ShowHistory => seams::show_history(window),
-        MenuCommand::ClearBrowsingData => seams::clear_browsing_data(window),
         MenuCommand::BookmarkThisPage => seams::bookmark_this_page(window),
         MenuCommand::ToggleBookmarksBar => seams::toggle_bookmarks_bar(window),
         MenuCommand::ShowBookmarksManager => seams::show_bookmarks_manager(window),
