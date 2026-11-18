@@ -93,8 +93,10 @@ fn next() {
                 println!("mercury-browser: import: no profile was found");
             }
             let diagnostic = DIAGNOSTIC.with(|diagnostic| diagnostic.borrow_mut().take());
-            // Let the last page lay out and draw before it is captured.
-            slint::Timer::single_shot(Duration::from_millis(300), move || {
+            // Let the last page lay out and draw before it is captured (a named delay: the
+            // callback convention test reads the first `)` as the end of the call).
+            let settle = Duration::from_millis(300);
+            slint::Timer::single_shot(settle, move || {
                 let _slint = crate::callback_scope::InSlintCallback::enter();
                 if let Some(path) = diagnostic.as_ref().and_then(|d| d.snapshot.as_ref()) {
                     save_snapshot(&window, path);
