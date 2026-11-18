@@ -172,6 +172,9 @@ pub struct RestoredTab {
     /// Shown in the tab strip until the page reports its own title.
     pub title: String,
     pub zoom_percent: u16,
+    // tabs-plus
+    /// Opens pinned, inside the pinned group.
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

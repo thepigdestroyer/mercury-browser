@@ -497,7 +497,9 @@ impl BrowserController {
                 .zoom_percent
                 .clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]),
         );
-        self.tabs.insert(index.min(self.tabs.len()), tab);
+        // tabs-plus: a pinned tab opens inside the pinned group, any other after it
+        tab.set_pinned(restored.pinned);
+        self.insert_tab(index, tab);
         Ok(tab_id)
     }
 
@@ -533,8 +535,7 @@ impl BrowserController {
         let mut state = BrowserState::default();
         state.set_page_title(title);
         // tabs-plus: never among the pinned tabs
-        let index = (opener_index + 1).max(self.pinned_tab_count());
-        self.tabs.insert(index, Tab::opened_by_page(tab_id, state));
+        self.insert_tab(opener_index + 1, Tab::opened_by_page(tab_id, state));
         if activation == TabActivation::Foreground {
             self.active_tab_id = tab_id;
         }
@@ -621,7 +622,7 @@ impl BrowserController {
         self.next_tab_id += 1;
         let mut state = BrowserState::default();
         state.set_zoom_percent(self.default_zoom_percent);
-        self.tabs.push(Tab::new(tab_id, state));
+        self.insert_tab(self.tabs.len(), Tab::new(tab_id, state)); // tabs-plus
         if activation == TabActivation::Foreground {
             self.active_tab_id = tab_id;
         }
@@ -890,7 +891,24 @@ pub enum PinnedCloseOutcome {
 impl BrowserController {
     /// How many tabs are pinned; they are the first this many in `tabs()`.
     pub fn pinned_tab_count(&self) -> usize {
-        self.tabs.iter().take_while(|tab| tab.is_pinned()).count()
+        let count = self.tabs.iter().take_while(|tab| tab.is_pinned()).count();
+        debug_assert!(
+            self.tabs[count..].iter().all(|tab| !tab.is_pinned()),
+            "a pinned tab follows an unpinned one"
+        );
+        count
+    }
+
+    /// The one way a new tab enters the strip: `index` is clamped into the tab's group, so a
+    /// pinned tab lands among the pinned tabs and any other after them.
+    fn insert_tab(&mut self, index: usize, tab: Tab) {
+        let pinned_count = self.pinned_tab_count();
+        let index = if tab.is_pinned() {
+            index.min(pinned_count)
+        } else {
+            index.clamp(pinned_count, self.tabs.len())
+        };
+        self.tabs.insert(index, tab);
     }
 
     /// Pins a tab, moving it to the end of the pinned tabs, or unpins it, moving it to the
@@ -947,7 +965,8 @@ impl BrowserController {
     }
 
     /// Closes every unpinned tab except `keep`, and selects `keep`. Pinned tabs stay.
-    /// Returns how many tabs were closed (none if `keep` does not exist).
+    /// Returns how many tabs were closed (none if `keep` does not exist); when none close, the
+    /// selection stays as it was.
     pub fn close_other_tabs(&mut self, keep: TabId) -> usize {
         if !self.tabs.iter().any(|tab| tab.id() == keep) {
             return 0;
@@ -958,6 +977,9 @@ impl BrowserController {
             .filter(|tab| tab.id() != keep && !tab.is_pinned())
             .map(Tab::id)
             .collect::<Vec<_>>();
+        if closing.is_empty() {
+            return 0;
+        }
         self.tabs.retain(|tab| !closing.contains(&tab.id()));
         self.command_queue
             .retain(|queued| !closing.contains(&queued.tab_id()));

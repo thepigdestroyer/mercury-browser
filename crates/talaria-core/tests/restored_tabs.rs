@@ -10,6 +10,7 @@ fn restored(url: Option<&str>, title: &str, zoom_percent: u16) -> RestoredTab {
         url: url.map(str::to_owned),
         title: title.to_owned(),
         zoom_percent,
+        pinned: false,
     }
 }
 

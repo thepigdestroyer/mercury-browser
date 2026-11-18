@@ -771,6 +771,7 @@ fn a_tab_the_session_restores_records_nothing_for_its_restored_page() {
                 url: Some("https://a.test/".to_owned()),
                 title: "A".to_owned(),
                 zoom_percent: 100,
+                pinned: false,
             },
         )
         .unwrap();

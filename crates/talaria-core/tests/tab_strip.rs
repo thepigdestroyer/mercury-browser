@@ -384,3 +384,103 @@ fn matching_tabs_are_listed_in_strip_order() {
     assert_eq!(controller.matching_tabs(""), [third, first, second]);
     assert!(controller.matching_tabs("nothing here").is_empty());
 }
+
+// Restored, reopened and duplicated tabs (session lane) keep pinned tabs first.
+
+fn restored(url: &str, pinned: bool) -> talaria_core::RestoredTab {
+    talaria_core::RestoredTab {
+        url: Some(url.to_owned()),
+        title: url.to_owned(),
+        zoom_percent: 100,
+        pinned,
+    }
+}
+
+#[test]
+fn restored_pinned_tabs_open_pinned_in_strip_order() {
+    let mut controller = BrowserController::default();
+    let blank = controller.active_tab_id();
+    // A session is put back at the end of the strip, in order.
+    let a = controller
+        .open_restored_tab(1, &restored("https://a.test/", true))
+        .expect("the address resolves");
+    let b = controller
+        .open_restored_tab(2, &restored("https://b.test/", false))
+        .expect("the address resolves");
+    let c = controller
+        .open_restored_tab(3, &restored("https://c.test/", true))
+        .expect("the address resolves");
+
+    assert_eq!(order(&controller), [a, c, blank, b]);
+    assert_eq!(pinned(&controller), [a, c]);
+    assert_pinned_first(&controller);
+}
+
+#[test]
+fn a_reopened_pinned_tab_comes_back_pinned() {
+    let (mut controller, ids) = controller_with_tabs(3);
+    assert!(controller.set_tab_pinned(ids[0], true));
+
+    // It was at index 1 of the pinned group when it closed; the strip moved on since.
+    let reopened = controller
+        .open_restored_tab(5, &restored("https://pinned.test/", true))
+        .expect("the address resolves");
+
+    assert_eq!(order(&controller), [ids[0], reopened, ids[1], ids[2]]);
+    assert_pinned_first(&controller);
+}
+
+#[test]
+fn a_reopened_unpinned_tab_never_lands_among_the_pinned_tabs() {
+    let (mut controller, ids) = controller_with_tabs(3);
+    assert!(controller.set_tab_pinned(ids[0], true));
+    assert!(controller.set_tab_pinned(ids[1], true));
+
+    // It closed from index 0, before those tabs were pinned.
+    let reopened = controller
+        .open_restored_tab(0, &restored("https://closed.test/", false))
+        .expect("the address resolves");
+
+    assert_eq!(order(&controller), [ids[0], ids[1], reopened, ids[2]]);
+    assert_eq!(controller.pinned_tab_count(), 2);
+    assert_pinned_first(&controller);
+}
+
+#[test]
+fn a_duplicated_pinned_tab_goes_right_after_it_pinned() {
+    let (mut controller, ids) = controller_with_tabs(3);
+    assert!(controller.set_tab_pinned(ids[0], true));
+    assert!(controller.set_tab_pinned(ids[1], true));
+
+    // Duplicate Tab opens the copy at the original's index + 1.
+    let copy = controller
+        .open_restored_tab(1, &restored("https://first.test/", true))
+        .expect("the address resolves");
+
+    assert_eq!(order(&controller), [ids[0], copy, ids[1], ids[2]]);
+    assert_eq!(pinned(&controller), [ids[0], copy, ids[1]]);
+}
+
+#[test]
+fn new_blank_tabs_go_after_the_pinned_tabs_even_when_all_are_pinned() {
+    let (mut controller, ids) = controller_with_tabs(2);
+    assert!(controller.set_tab_pinned(ids[0], true));
+    assert!(controller.set_tab_pinned(ids[1], true));
+
+    let opened = controller.open_tab();
+
+    assert_eq!(order(&controller), [ids[0], ids[1], opened]);
+    assert_pinned_first(&controller);
+}
+
+#[test]
+fn closing_other_tabs_when_there_is_none_changes_no_selection() {
+    let (mut controller, ids) = controller_with_tabs(2);
+    assert!(controller.set_tab_pinned(ids[0], true));
+    assert!(controller.select_tab(ids[1]));
+
+    // Only the pinned tab is "other": nothing closes, and the selection stays.
+    assert_eq!(controller.close_other_tabs(ids[0]), 0);
+
+    assert_eq!(controller.active_tab_id(), ids[1]);
+}
