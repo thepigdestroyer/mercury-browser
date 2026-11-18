@@ -7,7 +7,7 @@ description: Open pages, search with DuckDuckGo, and understand the basic Mercur
 
 Mercury opens with a clean new tab. The address bar accepts both web addresses and ordinary search terms, so there is no separate search box to learn.
 
-![The Mercury new tab page](../screenshots/hermes-new-tab.png)
+![The Mercury new tab page](../screenshots/new-tab.png)
 
 ## Open a website
 

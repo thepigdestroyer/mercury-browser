@@ -22,7 +22,7 @@ hide:
     </div>
   </div>
   <div class="mercury-hero__visual">
-    <img src="screenshots/hermes-new-tab.png" alt="Mercury Browser new tab page" loading="eager">
+    <img src="screenshots/new-tab.png" alt="Mercury Browser new tab page" loading="eager">
   </div>
 </section>
 
