@@ -44,9 +44,10 @@ use mercury_passwords::LoginSummary;
 
 pub(crate) use fill::{fill_chosen, fill_menu};
 pub(crate) use section::{connect_settings_window, settings_window_closed};
+#[cfg(test)]
+pub(crate) use sign_in::REMEMBER_SIGN_IN_CHOICE;
 pub(crate) use sign_in::{
-    REMEMBER_SIGN_IN_CHOICE, read_saved_sign_in, save_sign_in_choice, saved_sign_in_username,
-    sign_in_sent,
+    read_saved_sign_in, save_sign_in_choice, saved_sign_in_username, sign_in_sent,
 };
 
 /// Everything the password manager keeps for the run, on the UI thread.
