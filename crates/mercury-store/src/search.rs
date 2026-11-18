@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 // Adapted from Zephium, https://github.com/zephium-browser/Zephium, commit
 // `9026a1fffad74d6e201ef97fe8c02c1b01403cd2`, `crates/zephium-store/src/hub/history.rs:617-640`
 // (`fts_query`), MPL-2.0.

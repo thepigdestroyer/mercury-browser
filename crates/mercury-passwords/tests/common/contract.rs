@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The contract every `SecretBackend` must meet. `tests/backend_contract.rs` runs each function
 //! against every backend. All passwords here are obviously fake.
 

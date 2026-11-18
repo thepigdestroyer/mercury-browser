@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The file chooser for `<input type=file>`: the system open panel, attached to the browser
 //! window as a sheet. Only the files the user chose are passed on.
 //!

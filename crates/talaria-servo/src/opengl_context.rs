@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use dpi::LogicalSize;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1,3 +1,5 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Keeps the actions in .github/workflows current. Every action there is pinned
 # to a full commit SHA with its version in a trailing comment; Dependabot
 # updates both together, in one weekly pull request.

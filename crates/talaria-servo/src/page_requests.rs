@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Keeps the engine's request objects for dialogs, leave prompts, sign-ins and permission
 //! prompts until the user answers. Servo blocks the asking page's script (or, for a sign-in, its
 //! load) until the object is answered or dropped; the browser thread is never blocked. Only an id

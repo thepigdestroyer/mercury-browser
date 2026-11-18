@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MPL-2.0
 use talaria_core::{
     BrowserEvent, BrowserState, LoadState, PageIcon, PointerCursor, display_origin,
     placeholder_title,

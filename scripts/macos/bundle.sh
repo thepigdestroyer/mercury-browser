@@ -1,4 +1,5 @@
 #!/usr/bin/env bash
+# SPDX-License-Identifier: MPL-2.0
 # Adapted from Zervo, https://github.com/Goddv/Zervo, commit 86cb7126,
 # scripts/bundle-macos.sh (deployment target :70-75, Info.plist :192-251,
 # signing :272-327, disk image :333-434), MPL-2.0; and from Servo,
