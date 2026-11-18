@@ -13,15 +13,8 @@
 //! - `summary`: what happened, in words; `marker`: notes of unfinished imports.
 //!
 //! The window is opened with [`show_import_window`], the one entry point for the File menu
-//! ("Import Bookmarks and Settings…") and the bookmarks manager. "Import bookmarks from a
-//! file…" calls [`seams::import_bookmarks_from_file`], which the bookmarks lane fills in.
-
-// Until the File menu (menus lane) calls `show_import_window`, only the `diagnostics` build
-// reaches the window.
-#![cfg_attr(
-    not(feature = "diagnostics"),
-    expect(dead_code, reason = "reached through the File menu (menus lane)")
-)]
+//! ("Import…") and the bookmarks manager. "Import bookmarks from a file…"
+//! calls [`seams::import_bookmarks_from_file`], which the bookmarks lane fills in.
 
 mod convert;
 mod copies;
@@ -130,7 +123,6 @@ fn new_read() -> ReadContext {
 
 /// Opens the import window, or brings it forward if it is open. Discovery starts now, on a
 /// background thread; nothing is looked for before.
-#[expect(dead_code, reason = "called by the File menu (menus lane)")]
 pub(crate) fn show_import_window(_main_window: &MainWindow) {
     open_window();
 }
@@ -164,7 +156,10 @@ fn open_window() {
     }
     spawn("import discovery", move || {
         let found = discover(&directories(&search), &context);
-        let _queued = slint::invoke_from_event_loop(move || discovered(generation, found));
+        let _queued = slint::invoke_from_event_loop(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
+            discovered(generation, found);
+        });
     });
 }
 
@@ -184,12 +179,14 @@ fn connect(window: &ImportWindow) {
     window.on_cancel_import(cancel);
     window.on_continue_import(continue_unfinished);
     window.on_import_from_file(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(window) = current_window() {
             seams::import_bookmarks_from_file(&window);
         }
     });
     window.on_close_window(close_later);
     window.window().on_close_requested(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         close_later();
         slint::CloseRequestResponse::KeepWindowShown
     });
@@ -329,7 +326,10 @@ fn begin(window: &ImportWindow, profile: FoundProfile, choice: Choice) {
     let context = new_read();
     spawn("import reader", move || {
         let prepared = read_profile(&profile, choice, &context, crate::profile_data::now_ms());
-        let _queued = slint::invoke_from_event_loop(move || read_done(generation, prepared));
+        let _queued = slint::invoke_from_event_loop(move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
+            read_done(generation, prepared);
+        });
     });
 }
 
@@ -443,7 +443,10 @@ fn close_later() {
         if let Err(error) = window.hide() {
             log::warn!("could not hide the import window: {error}");
         }
-        slint::Timer::single_shot(Duration::ZERO, move || drop(window));
+        slint::Timer::single_shot(Duration::ZERO, move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
+            drop(window);
+        });
     }
 }
 

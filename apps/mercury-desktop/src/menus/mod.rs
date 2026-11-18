@@ -200,6 +200,7 @@ fn run_command(
         }
         // Performed by AppKit itself; never dispatched.
         MenuCommand::System(_) => {}
+        MenuCommand::ImportBrowserData => crate::import_ui::show_import_window(window),
         MenuCommand::OpenBookmark(id) => seams::open_bookmark(window, id),
         MenuCommand::Find | MenuCommand::Stop => {}
     }

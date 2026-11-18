@@ -18,6 +18,8 @@ pub(crate) enum MenuCommand {
     OpenDocument(Document),
     /// Handled entirely by AppKit (standard selectors, macOS only).
     System(SystemAction),
+    /// import-ui: File ▸ "Import…", the import window.
+    ImportBrowserData,
     // Seams other lanes fill in (`seams.rs`); disabled until they do.
     /// An entry of the bookmarks bar's first level, by its stable id.
     OpenBookmark(super::seams::BookmarkId),
@@ -425,6 +427,9 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                     key('t', SHIFT_CMD),
                     Shortcut(A::ReopenClosedTab),
                 ),
+                Separator,
+                // import-ui: other browsers' bookmarks and history.
+                action("Import…", None, ImportBrowserData),
             ],
         },
         Menu {
@@ -544,7 +549,7 @@ pub(crate) fn tab_key(index: usize) -> Option<KeyEquivalent> {
 pub(crate) const fn is_available(command: MenuCommand) -> bool {
     use MenuCommand::*;
     match command {
-        Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) => true,
+        Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) | ImportBrowserData => true,
         OpenBookmark(_) => super::seams::BOOKMARKS_AVAILABLE,
         Find | Stop => false,
     }
@@ -896,6 +901,28 @@ mod tests {
         };
         assert!(is_enabled(reopen, &something, EditTarget::None));
         assert!(is_enabled(restore, &something, EditTarget::None));
+    }
+
+    #[test]
+    fn the_file_menu_opens_the_import_window() {
+        let file = menu_bar()
+            .into_iter()
+            .find(|menu| menu.title == "File")
+            .expect("a File menu");
+        let import = file.items.into_iter().find_map(|item| match item {
+            MenuItem::Action {
+                title: "Import…",
+                key,
+                command,
+            } => Some((key, command)),
+            _ => None,
+        });
+        assert_eq!(import, Some((None, MenuCommand::ImportBrowserData)));
+        assert!(is_enabled(
+            MenuCommand::ImportBrowserData,
+            &MenuSnapshot::default(),
+            EditTarget::None
+        ));
     }
 
     #[test]
