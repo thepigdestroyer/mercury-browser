@@ -353,9 +353,12 @@ fn an_empty_query_matches_every_tab() {
 fn matching_tabs_are_listed_in_strip_order() {
     let mut controller = BrowserController::default();
     let first = controller.active_tab_id();
-    for (id, url) in [(first, "https://docs.rs/slint")] {
-        assert!(controller.handle_event(id, BrowserEvent::AddressChanged { url: url.into() }));
-    }
+    assert!(controller.handle_event(
+        first,
+        BrowserEvent::AddressChanged {
+            url: "https://docs.rs/slint".into()
+        }
+    ));
     let second = controller
         .open_tab_with(None, TabActivation::Background)
         .expect("a blank tab opens");
