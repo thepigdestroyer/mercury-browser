@@ -673,18 +673,23 @@ impl BrowserController {
                 if let Some(answer) =
                     requests.receive(request.clone(), self.permission_decisions.as_ref())
                 {
+                    // media-capture: the other kind of a call a remembered Block refused.
+                    let refused = requests.take_refused_partners();
                     self.queue_page_request_answers(tab_id, &[id], answer);
+                    self.queue_page_request_answers(tab_id, &refused, PageRequestAnswer::Decline);
                 }
             }
             BrowserEvent::PageLoadStarted => {
                 let discarded = requests.start_new_document();
                 self.queue_page_request_answers(tab_id, &discarded, PageRequestAnswer::Discard);
             }
+            // media-capture: a crashed page has no devices any more. A `Failed` load state alone
+            // does not end access: the address bar reports addresses it cannot use that way,
+            // while the page stays and may still be capturing.
+            BrowserEvent::PageCrashed => requests.end_capture(),
             BrowserEvent::LoadStateChanged {
                 state: LoadState::Failed { .. },
             } => {
-                // media-capture: a crashed page has no devices any more.
-                requests.end_capture();
                 let discarded = requests.discard_all();
                 self.queue_page_request_answers(tab_id, &discarded, PageRequestAnswer::Discard);
             }
@@ -777,10 +782,20 @@ impl BrowserController {
             .map(|origin| origin.label().to_owned())
     }
 
-    /// Stop: the site's remembered camera and microphone decisions are forgotten, the tab's
-    /// access ends, and the page is reloaded; the engine releases the devices when the old
-    /// document is unloaded, and the reloaded page has to ask again. Returns false (and does
-    /// nothing) when the tab's page has no access.
+    /// Whether the tab's page kept itself from being reloaded after Stop (the user chose Stay
+    /// on its "Reload this page?" prompt): it still has its camera and microphone.
+    pub fn capture_stop_refused(&self, tab_id: TabId) -> bool {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == tab_id)
+            .is_some_and(|tab| tab.page_requests().capture_stop_refused())
+    }
+
+    /// Stop: the site's remembered camera and microphone decisions are forgotten and the page is
+    /// reloaded; the engine releases the devices when the old document is unloaded, and the
+    /// reloaded page has to ask again. The marks stay until the new document starts: the page
+    /// can keep itself from being reloaded (its leave prompt, answered Stay), and then still has
+    /// the devices. Returns false (and does nothing) when the tab's page has no access.
     pub fn stop_capture(&mut self, tab_id: TabId) -> bool {
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
@@ -792,7 +807,7 @@ impl BrowserController {
         let origin_key = requests
             .capture_origin()
             .and_then(|origin| origin.key().map(str::to_owned));
-        requests.end_capture();
+        requests.note_capture_stop();
         if let Some(origin_key) = origin_key {
             for permission in [PagePermission::Camera, PagePermission::Microphone] {
                 self.permission_decisions.forget(&origin_key, permission);

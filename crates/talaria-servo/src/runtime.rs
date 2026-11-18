@@ -850,7 +850,7 @@ fn crash_feedback(
     reason: String,
     cursor: Cursor,
     status_text: Option<String>,
-) -> [BrowserEvent; 3] {
+) -> [BrowserEvent; 4] {
     [
         BrowserEvent::LoadStateChanged {
             state: LoadState::Failed { message: reason },
@@ -859,6 +859,8 @@ fn crash_feedback(
             cursor: pointer_cursor_from_servo(cursor),
         },
         BrowserEvent::StatusTextChanged { text: status_text },
+        // media-capture: the page is gone, and with it any camera or microphone access.
+        BrowserEvent::PageCrashed,
     ]
 }
 
@@ -1420,6 +1422,8 @@ mod tests {
                 BrowserEvent::StatusTextChanged {
                     text: Some("https://a.test/".to_owned()),
                 },
+                // media-capture
+                BrowserEvent::PageCrashed,
             ]
         );
     }

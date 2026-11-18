@@ -869,11 +869,10 @@ fn only_storage_camera_and_microphone_are_asked_and_the_rest_denied_without_aski
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
-        // media-capture: camera and microphone are asked too.
-        if matches!(
-            feature,
-            PagePermission::PersistentStorage | PagePermission::Camera | PagePermission::Microphone
-        ) {
+        // media-capture: camera and microphone are asked too, on macOS (the only platform
+        // where pages can use them).
+        let capture = matches!(feature, PagePermission::Camera | PagePermission::Microphone);
+        if feature == PagePermission::PersistentStorage || (capture && cfg!(target_os = "macos")) {
             assert!(feature.is_promptable());
             assert_eq!(pending_id(&controller, tab_id), Some(id), "{feature:?}");
             assert!(drain(&mut controller).is_empty(), "{feature:?}");

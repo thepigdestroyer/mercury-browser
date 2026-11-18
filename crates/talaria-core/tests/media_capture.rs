@@ -1,13 +1,17 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Camera and microphone permission prompts, "Remember for this site" and the per-tab
-//! capture indicator (media-capture lane).
+//! capture indicator (media-capture lane). Camera and microphone are asked for only on macOS,
+//! where pages can use them; elsewhere they are denied without a prompt.
+#![cfg(target_os = "macos")]
 
 use std::time::Duration;
 
 use talaria_core::{
     BrowserCommand, BrowserController, BrowserEvent, CaptureAccess, LoadState, PagePermission,
     PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind, PageRequestReply,
-    PermissionDecision, PermissionDecisions, SessionPermissionDecisions, TabActivation, TabCommand,
-    TabId,
+    PermissionDecision, PermissionDecisions, PointerButton, PointerButtonAction,
+    SessionPermissionDecisions, TabActivation, TabCommand, TabId,
 };
 
 const PAGE: &str = "https://meet.example/room";
@@ -281,7 +285,27 @@ fn a_crash_ends_access() {
             },
         },
     );
+    controller.handle_event(tab_id, BrowserEvent::PageCrashed);
     assert_eq!(controller.capture_access(tab_id), CaptureAccess::default());
+}
+
+#[test]
+fn an_address_bar_error_keeps_access() {
+    let (mut controller, tab_id) = ready_controller();
+    ask(&mut controller, tab_id, 1, PAGE, PagePermission::Camera);
+    reply_front(&mut controller, tab_id, allow());
+
+    // What the address bar reports for an address it cannot use: no navigation happened, the
+    // page is still there and may still be capturing.
+    controller.handle_event(
+        tab_id,
+        BrowserEvent::LoadStateChanged {
+            state: LoadState::Failed {
+                message: "no search engine is set".to_owned(),
+            },
+        },
+    );
+    assert_eq!(controller.capture_access(tab_id), access(true, false));
 }
 
 #[test]
@@ -319,7 +343,7 @@ fn a_waiting_request_answered_by_a_remembered_grant_shows_access_in_its_tab() {
 }
 
 #[test]
-fn stop_forgets_the_sites_answers_ends_access_and_reloads() {
+fn stop_forgets_the_sites_answers_and_reloads_and_access_lasts_until_the_new_document() {
     let (mut controller, tab_id) = ready_controller();
     ask(&mut controller, tab_id, 1, PAGE, PagePermission::Camera);
     ask(&mut controller, tab_id, 2, PAGE, PagePermission::Microphone);
@@ -327,12 +351,16 @@ fn stop_forgets_the_sites_answers_ends_access_and_reloads() {
     drain(&mut controller);
 
     assert!(controller.stop_capture(tab_id));
-    assert_eq!(controller.capture_access(tab_id), CaptureAccess::default());
+    // The page still runs until the reload replaces it: the marks stay.
+    assert_eq!(controller.capture_access(tab_id), access(true, true));
+    assert!(!controller.capture_stop_refused(tab_id));
     let commands = drain(&mut controller)
         .into_iter()
         .map(|command| command.command().clone())
         .collect::<Vec<_>>();
     assert_eq!(commands, vec![BrowserCommand::Reload]);
+    controller.handle_event(tab_id, BrowserEvent::PageLoadStarted);
+    assert_eq!(controller.capture_access(tab_id), CaptureAccess::default());
 
     // Asked again, both kinds.
     ask(&mut controller, tab_id, 3, PAGE, PagePermission::Camera);
@@ -374,4 +402,69 @@ fn the_session_store_forgets_one_kind_for_one_origin() {
         decisions.decision("https://b.example", PagePermission::Camera),
         Some(PermissionDecision::Allow)
     );
+}
+
+#[test]
+fn a_reload_the_page_keeps_from_happening_after_stop_leaves_access_shown_and_says_so() {
+    let (mut controller, tab_id) = ready_controller();
+    ask(&mut controller, tab_id, 1, PAGE, PagePermission::Camera);
+    reply_front(&mut controller, tab_id, allow());
+    // The user clicked in the page, so its leave prompt is shown.
+    controller.queue_command(BrowserCommand::PointerButton {
+        action: PointerButtonAction::Down,
+        button: PointerButton::Left,
+        x: 0.0,
+        y: 0.0,
+    });
+    drain(&mut controller);
+
+    assert!(controller.stop_capture(tab_id));
+    assert!(controller.handle_event(
+        tab_id,
+        BrowserEvent::PageRequested(PageRequest {
+            id: PageRequestId::new(9),
+            url: PAGE.to_owned(),
+            kind: PageRequestKind::LeavePage,
+            received_at: Duration::ZERO,
+        }),
+    ));
+    let leave = controller
+        .pending_page_request(tab_id)
+        .expect("the leave prompt");
+    assert!(leave.is_reload_prompt());
+    // Stay.
+    reply_front(&mut controller, tab_id, block());
+
+    assert_eq!(controller.capture_access(tab_id), access(true, false));
+    assert!(controller.capture_stop_refused(tab_id));
+    // Stop again: another reload is asked for.
+    assert!(controller.stop_capture(tab_id));
+    assert!(!controller.capture_stop_refused(tab_id));
+    controller.handle_event(tab_id, BrowserEvent::PageLoadStarted);
+    assert!(!controller.capture_stop_refused(tab_id));
+    assert_eq!(controller.capture_access(tab_id), CaptureAccess::default());
+}
+
+#[test]
+fn a_remembered_refusal_of_one_kind_refuses_the_other_kind_of_the_same_call() {
+    let (mut controller, tab_id) = ready_controller();
+    let mut decisions = SessionPermissionDecisions::default();
+    decisions.remember(
+        "https://meet.example",
+        PagePermission::Camera,
+        PermissionDecision::Block,
+    );
+    controller.set_permission_decisions(Box::new(decisions));
+
+    // The engine asks for the microphone, then the camera, of one getUserMedia call.
+    ask(&mut controller, tab_id, 1, PAGE, PagePermission::Microphone);
+    ask(&mut controller, tab_id, 2, PAGE, PagePermission::Camera);
+    assert_eq!(
+        answers(&mut controller),
+        vec![
+            answer_command(2, PageRequestAnswer::Decline),
+            answer_command(1, PageRequestAnswer::Decline),
+        ]
+    );
+    assert_eq!(controller.pending_page_request(tab_id), None);
 }

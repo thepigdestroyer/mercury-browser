@@ -1,3 +1,5 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Camera and microphone access of a tab's page (media-capture lane).
 //!
 //! The engine never says when a page starts or stops capturing, so the browser shows what the
