@@ -11,6 +11,8 @@ adblock.workspace = true
 content-security-policy.workspace = true
 dpi.workspace = true
 euclid.workspace = true
+# openurl
+http.workspace = true
 log.workspace = true
 rustls.workspace = true
 # Checks the HTTP disk cache Servo opens (the same rusqlite Servo uses).

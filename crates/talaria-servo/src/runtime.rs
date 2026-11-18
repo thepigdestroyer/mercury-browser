@@ -353,6 +353,10 @@ struct BrowserServoDelegate {
 
 impl servo::ServoDelegate for BrowserServoDelegate {
     fn load_web_resource(&self, load: servo::WebResourceLoad) {
+        // openurl: a load without a web view (a worker's, say) never reads local files either.
+        let Some(load) = crate::openurl::refuse_local_file_load(None, None, load) else {
+            return;
+        };
         self.content_blocker.handle_web_resource_load(None, load);
     }
 }
@@ -621,6 +625,12 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn load_web_resource(&self, web_view: servo::WebView, load: servo::WebResourceLoad) {
+        // openurl: a web page's frames and resources never come from local files.
+        let Some(load) =
+            crate::openurl::refuse_local_file_load(Some(self.tab_id), web_view.url(), load)
+        else {
+            return;
+        };
         self.content_blocker
             .handle_web_resource_load(Some(&web_view), load);
     }
@@ -736,6 +746,16 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // controls
         self.drop_controls();
         for event in crash_feedback(reason, web_view.cursor(), web_view.status_text()) {
+            self.send_browser_event(event);
+        }
+    }
+
+    // openurl
+    /// Navigations a page asks for (links, forms, `location`, in the main frame or a frame;
+    /// not typed addresses, which never ask). Answered at once.
+    fn request_navigation(&self, web_view: servo::WebView, request: servo::NavigationRequest) {
+        if let Some(event) = crate::openurl::judge_navigation(self.tab_id, web_view.url(), request)
+        {
             self.send_browser_event(event);
         }
     }

@@ -10944,6 +10944,7 @@ dependencies = [
  "content-security-policy",
  "dpi",
  "euclid",
+ "http",
  "libc",
  "log",
  "objc2 0.6.5",

@@ -13,6 +13,8 @@ mod http_disk_cache;
 mod load_metrics;
 mod media_session;
 mod opengl_context;
+// openurl
+mod openurl;
 mod page_defaults;
 mod page_feedback;
 mod page_requests;

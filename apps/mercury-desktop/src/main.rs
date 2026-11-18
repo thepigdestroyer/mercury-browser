@@ -42,6 +42,8 @@ mod media_buffers;
 mod media_isolation;
 mod media_session;
 mod menus;
+// openurl
+mod openurl;
 mod page_requests; // dialogs
 mod panic_hook;
 // tabs opened and closed by pages
@@ -122,6 +124,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     ) {
         Ok(profile) => profile,
         Err(ProfileInUse { root }) => {
+            // openurl: the running browser opens this launch's addresses.
+            if openurl::hand_over_to_running_browser(&root, &options.urls) {
+                return Ok(ExitCode::SUCCESS);
+            }
             eprintln!(
                 "mercury-browser: the profile at {} is in use by another Mercury Browser; \
                  close it or choose another --profile-dir",
@@ -139,6 +145,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     select_hardware_accelerated_backend(options.is_automated())?;
     #[cfg(target_os = "macos")]
     macos_terminate::end_the_run_in_order_on_terminate_requests();
+    // openurl: links and files from other apps, from here on; queued until the window exists.
+    openurl::receive_from_other_apps(options.is_automated());
 
     let window = MainWindow::new()?;
     if let Some((width, height)) = options.window_size {
@@ -179,6 +187,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     )?;
     // settings-ui
     settings::connect(&settings, &window, &controller);
+    // openurl
+    openurl::attach(&window, Rc::clone(&controller), options.is_automated());
+    let handoff = openurl::listen_for_second_launches(&profile);
     sync_ui(&window, &controller.borrow());
     connect_ui_callbacks(
         &window,
@@ -251,6 +262,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         settings,
     });
     let run_result = shown.and_then(|()| slint::run_event_loop());
+    // openurl: no more second launches; the socket goes now (a quit signal ends the process
+    // without running destructors).
+    drop(handoff);
 
     // If the session ended (macOS log-out), the terminate handler has already ended the run
     // and AppKit exits; otherwise this ends it.

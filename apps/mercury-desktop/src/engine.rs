@@ -215,6 +215,8 @@ pub(crate) fn engine_busy() -> bool {
 }
 
 // media-session lane: media keys arrive outside a pump and need their command dispatched.
+// openurl
+/// Asks for a pump soon, even while the window is covered and skips its renders.
 pub(crate) fn request_pump() {
     let _queued = slint::invoke_from_event_loop(pump_after_wake);
 }
@@ -431,6 +433,8 @@ impl EngineState {
         if state_changed {
             sync_ui(window, &self.controller.borrow());
         }
+        // openurl: links pages asked other apps to open.
+        crate::openurl::handle_external_link_requests(&self.controller);
 
         let Some(rendering_context) = self.rendering_context.clone() else {
             return;

@@ -6,6 +6,8 @@ mod controls;
 mod cursor;
 mod input;
 mod media;
+// openurl
+mod navigation_policy;
 mod page_icon;
 mod page_request;
 mod tab;
@@ -47,3 +49,8 @@ pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
 pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};
+// openurl
+pub use navigation_policy::{
+    ExternalLinkRequest, NavigationVerdict, navigation_verdict, refuses_local_file_load,
+    remembered_origin,
+};

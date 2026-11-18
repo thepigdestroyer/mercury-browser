@@ -33,7 +33,8 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
-# media-session lane: the page's host in Now Playing (url is already a workspace dependency).
+# media-session lane: the page's host in Now Playing (url is already a workspace dependency);
+# openurl.
 url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]

@@ -17,6 +17,8 @@ use crate::{
 };
 
 const NO_SEARCH: &str = "no search engine is set";
+// openurl
+use crate::ExternalLinkRequest;
 
 /// What `close_tab` did.
 #[must_use]
@@ -44,6 +46,8 @@ pub struct BrowserController {
     // dialogs
     permission_decisions: Box<dyn PermissionDecisions>,
     visits: VisitTracker,
+    // openurl
+    external_link_requests: Vec<(TabId, ExternalLinkRequest)>,
 }
 
 impl BrowserController {
@@ -62,6 +66,7 @@ impl BrowserController {
             search: None,
             permission_decisions: Box::new(SessionPermissionDecisions::default()),
             visits: VisitTracker::default(),
+            external_link_requests: Vec::new(),
         }
     }
 
@@ -272,6 +277,9 @@ impl BrowserController {
         self.visits.forget_tab(tab_id);
         self.command_queue
             .retain(|queued| queued.tab_id() != tab_id);
+        // openurl
+        self.external_link_requests
+            .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
 
         if was_active {
             let replacement_index = index.saturating_sub(1).min(self.tabs.len() - 1);
@@ -428,6 +436,11 @@ impl BrowserController {
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
         };
+        // openurl: queued, not shown; nothing in the window changes.
+        if let BrowserEvent::ExternalLinkRequested(request) = event {
+            self.external_link_requests.push((tab_id, request));
+            return false;
+        }
 
         if event.shows_engine_ready() {
             tab.mark_engine_ready();
@@ -630,6 +643,12 @@ impl BrowserController {
         let muted = !tab.state().is_audio_muted();
         tab.state_mut().set_audio_muted(muted);
         self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted })
+    }
+
+    // openurl
+    /// The pages' requests to open links in other apps, oldest first, each returned once.
+    pub fn take_external_link_requests(&mut self) -> Vec<(TabId, ExternalLinkRequest)> {
+        std::mem::take(&mut self.external_link_requests)
     }
 
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {
