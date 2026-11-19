@@ -1666,15 +1666,6 @@ fn an_empty_folder_of_the_manager_says_so() {
     assert!(!find(&nodes, Role::Button, "Delete").enabled);
 }
 
-/// `BookmarkMenuList` (item 3's `bar.slint`) labels its outer rectangle "Bookmarks menu" and wraps a std
-/// `ListView`, whose own `list` node has no label. Remove this exemption when `bar.slint` labels it: the
-/// test then says that it matches nothing.
-const UNLABELLED_MENU_LIST: &[Exempt] = &[Exempt {
-    role: Role::List,
-    label: "",
-    reason: "the std ListView inside BookmarkMenuList (bar.slint, another item) has no accessible-label",
-}];
-
 #[test]
 fn the_bookmarks_preview_reads_the_bar_the_menu_and_the_popover() {
     a11y::init();
@@ -1712,7 +1703,7 @@ fn the_bookmarks_preview_reads_the_bar_the_menu_and_the_popover() {
     window.set_popover_folder_index(1);
     a11y::open_window(&window, 760.0, 520.0);
 
-    let nodes = freeze_except(&window, "windows-bookmarks-preview", UNLABELLED_MENU_LIST);
+    let nodes = freeze(&window, "windows-bookmarks-preview");
 
     // The three parts the preview shows are all there: the bar buttons (the titles the test gave),
     // the folder popup's rows and the star popover's fields.
