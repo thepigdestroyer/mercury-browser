@@ -86,7 +86,13 @@ fn parse_svg_document_in_memory(
     bytes: &[u8],
     usvg_options: Arc<usvg::Options>,
 ) -> Result<usvg::Tree, &'static str> {
-    usvg::Tree::from_data(bytes, &usvg_options)
+    // Mercury: refuse a document nested deeper than 500 elements before usvg walks it, one stack frame per
+    // level (servo#49835 does this with `usvg::Options::max_depth`, which needs usvg 0.50; decision D8).
+    // For an SVGZ file this also unpacks it, and usvg reads the unpacked bytes.
+    let bytes = crate::mercury_svg::guard(bytes).inspect_err(|error| {
+        warn!("Refusing an SVG image: {error}");
+    })?;
+    usvg::Tree::from_data(&bytes, &usvg_options)
         .inspect_err(|error| {
             warn!("Error when parsing SVG data: {error}");
         })

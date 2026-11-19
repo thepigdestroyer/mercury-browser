@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>SVG nesting guard</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 24px/1.4 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 24px; }
+  .line { margin-bottom: 10px; word-break: break-all; }
+  .tag { font-family: Menlo, monospace; font-weight: bold; margin-right: 8px; }
+  .PASS { color: #0a7a0a; }
+  .FAIL { color: #b00020; }
+  .INFO { color: #555555; }
+  img { width: 40px; height: 40px; vertical-align: middle; margin-left: 8px; border: 1px solid #999999; }
+</style>
+</head>
+<body>
+<!--
+  Mercury K0 item 4 (decision D8): servo-net refuses an SVG image nested deeper than 500 elements
+  (third_party/servo-net/mercury_svg.rs). Without the guard, a tiny file nested 100,000 deep exhausts the stack
+  of the image decoder thread and the whole browser crashes.
+
+  What a run shows: a green square for an image that loaded, "error" for the refused ones, and at the end
+  "still alive". A crash page (or no "still alive" line) is a failure. The 500-level case is the deepest
+  image Mercury accepts: if it crashed the process, the limit would be too high for the decoder thread's stack.
+  Screenshot: all cases finish in about a second; use --screenshot-delay 4000 (4 s) to be safe.
+-->
+<div id="results"></div>
+<script>
+  "use strict";
+  const results = document.getElementById("results");
+  let failures = 0;
+
+  function line(tag, text, image) {
+    const item = document.createElement("div");
+    item.className = "line";
+    const mark = document.createElement("span");
+    mark.className = "tag " + tag;
+    mark.textContent = tag;
+    item.appendChild(mark);
+    item.appendChild(document.createTextNode(text));
+    if (image) item.appendChild(image);
+    results.appendChild(item);
+    if (tag === "FAIL") failures++;
+  }
+
+  // An SVG whose longest chain of nested elements is `levels` long: <svg>, levels - 2 <g> and one <rect>.
+  function svgOfDepth(levels) {
+    const groups = levels - 2;
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">' +
+           "<g>".repeat(groups) +
+           '<rect width="40" height="40" fill="#0a7a0a"/>' +
+           "</g>".repeat(groups) +
+           "</svg>";
+  }
+
+  // Loads the SVG into an <img> from a Blob URL and reports which event came, and whether it was expected.
+  function load(levels, expected, note) {
+    return new Promise((resolve) => {
+      const label = levels.toLocaleString("en-US") + " levels";
+      const blob = new Blob([svgOfDepth(levels)], { type: "image/svg+xml" });
+      const url = URL.createObjectURL(blob);
+      const img = new Image();
+      img.alt = label;
+      let settled = false;
+      const done = (event) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        URL.revokeObjectURL(url);
+        const ok = event === expected;
+        line(ok ? "PASS" : "FAIL",
+             label + ": " + event + " event" + (ok ? "" : ", expected " + expected) + " (" + note + ")",
+             event === "load" ? img : null);
+        resolve();
+      };
+      img.onload = () => done("load");
+      img.onerror = () => done("error");
+      const timer = setTimeout(() => done("no event after 5 s"), 5000);
+      img.src = url;
+    });
+  }
+
+  (async () => {
+    // One after the other, so the page never holds more than one big document.
+    await load(10, "load", "an ordinary image still draws");
+    await load(501, "error", "one level over the limit is refused");
+    await load(100000, "error", "refused before the decoder recurses; a crash here is the bug");
+    await load(500, "load", "the deepest image Mercury accepts");
+    line("INFO", "guard: servo-net mercury_svg.rs, limit 500 elements");
+    // A timer after everything has settled: a browser that crashed while decoding never prints this.
+    setTimeout(() => {
+      line("INFO", "still alive");
+      line(failures === 0 ? "PASS" : "FAIL", failures === 0 ? "all checks passed" : failures + " check(s) failed");
+    }, 1000);
+  })();
+</script>
+</body>
+</html>
