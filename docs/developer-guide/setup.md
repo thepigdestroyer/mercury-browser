@@ -14,7 +14,7 @@ Both kinds of Mac build, lint, test and run the browser from source in the same 
 - A Mac with Apple silicon or an Intel processor, and macOS 13 or later.
 - The Xcode command-line tools (`xcode-select --install`). Full Xcode is not needed.
 - [rustup](https://rustup.rs/). The Rust version is pinned in `rust-toolchain.toml` and installs itself on the first build.
-- Python 3.11 or later, or `uv`, on `PATH` (on Apple silicon, Homebrew's `/opt/homebrew/bin` is enough; without Homebrew, as on an Intel Mac that has none, install `uv` with [its standalone installer](https://docs.astral.sh/uv/getting-started/installation/) and check that `uv --version` works in a new shell). Servo's own build scripts need it: they try `uv run python` first, then `python3`, then `python`. Mercury's own tools are Rust or POSIX shell, not Python (`scripts/serve-tests.py` is the one leftover helper; a Rust tool replaces it and it is deleted once the lanes in progress have merged).
+- Python 3.11 or later, or `uv`, on `PATH` (on Apple silicon, Homebrew's `/opt/homebrew/bin` is enough; without Homebrew, as on an Intel Mac that has none, install `uv` with [its standalone installer](https://docs.astral.sh/uv/getting-started/installation/) and check that `uv --version` works in a new shell). Servo's own build scripts need it: they try `uv run python` first, then `python3`, then `python`. Mercury's own tools are Rust or POSIX shell, not Python.
 - Free disk space: a cold build compiles all of Servo and needs 15–20 GB while it runs, plus about 5 GB for the unpacked GStreamer.
 
 ## Clone and prepare

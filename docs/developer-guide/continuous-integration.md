@@ -20,7 +20,7 @@ The expected times below are estimates from the size of the work and the runners
 | Fast checks (macOS) | `macos-26` | the same, on Apple Silicon (some of those crates have macOS-only code) | 3–6 minutes |
 | Linux quality checks | `ubuntu-22.04` | the whole workspace: `make fmt-check`, clippy with `-D warnings --all-features`, `cargo test` | 60–110 minutes (limit 120) |
 | macOS (Apple Silicon) | `macos-26` | GStreamer set-up; `cargo fmt --check`; the release build; `make app-macos`; the bundle checks, media libraries included (`--require-media`); a rendering smoke test; clippy with `-D warnings`; the workspace tests | 3–4 hours (limit 330 minutes) |
-| Scripts | `ubuntu-24.04` | `shellcheck -x` over every `*.sh` under `scripts/`; the licence headers; `python3 -m py_compile` over every `*.py`, which is only `scripts/serve-tests.py` (replaced by the Rust `scripts/serve-tests.sh` and kept until the lanes in progress have merged; the byte-compile step goes away together with that file) | 1 minute |
+| Scripts | `ubuntu-24.04` | `shellcheck -x` over every `*.sh` under `scripts/`; the licence headers | 1 minute |
 | Workflows | `ubuntu-24.04` | `actionlint` over `.github/workflows/`, which also runs shellcheck over every `run:` block | 1 minute |
 | Dependency policy | `ubuntu-24.04` | `cargo-deny check` against `deny.toml` | 2 minutes |
 
@@ -89,7 +89,7 @@ It runs for pushes to `master` that touch `docs/`, `mkdocs.yml` or `pages.yml`, 
 | --- | --- |
 | `make qa` | Linux quality checks (`fmt-check`, `lint`, `test`) |
 | `make qa-fast` | Fast checks: formatting, then clippy and tests for the crates `scripts/ci/light-crates.sh` lists |
-| `make lint-scripts` | Scripts, Workflows and Vendored crates jobs: shellcheck, `py_compile` (of `scripts/serve-tests.py` only; it goes away together with that script), actionlint, the licence headers and the vendored crates |
+| `make lint-scripts` | Scripts, Workflows and Vendored crates jobs: shellcheck, actionlint, the licence headers and the vendored crates |
 | `make deny` | Dependency policy job |
 | `make gstreamer-macos app-macos` then `scripts/ci/check-macos-bundle.sh --signature adhoc --require-media "dist/Mercury Browser.app"` | the bundle checks of the macOS job (with `eval "$(scripts/macos/gstreamer.sh env)"` in the shell first) |
 | `cargo run --release -p mercury-devtools --bin check-colors-screenshot -- <png>` | the smoke-test check (see below for the screenshot) |
@@ -119,8 +119,6 @@ Mercury's development and CI tools are written in Rust, in the engine-free crate
 | `light-crates` | `scripts/ci/light-crates.sh [--explain]` | Reads `cargo metadata` and prints the workspace members that depend on neither `servo` nor `slint`, as one line of `-p name` arguments; `--explain` prints a verdict for every member instead. Exits 1 when no member qualifies. |
 | `github-env` | `scripts/ci/github-env.sh [--print] <command>` | Runs the command, compares the environment before and after, and passes only the allow-listed changes to the later steps of the job through `$GITHUB_ENV` and `$GITHUB_PATH` (see the supply-chain rules above); `--print` writes them to standard output instead. Refuses anything else, with exit status 1. |
 | `package-manifest` | `scripts/macos/gstreamer-plugins.sh` and `scripts/macos/test-media.sh`, not by hand | The `jq` fallback: where `jq` is missing (macOS before 15), it reads the `servo` package's `manifest_path` from `cargo metadata`. `package-manifest servo` takes the output of `cargo metadata --format-version 1` on standard input and prints one path per line. |
-
-`scripts/serve-tests.py`, the Python server that `serve-tests` replaces, is kept only until the lanes in progress have merged, then deleted. Do not use or extend it.
 
 ## Dependency policy
 

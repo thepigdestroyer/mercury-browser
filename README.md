@@ -293,7 +293,7 @@ make qa
 
 If a page breaks, try it in Servo's own `servoshell` first. If it breaks there too, the fix belongs in Servo.
 
-Mercury's own tools are Rust or POSIX shell, not scripts in another language: the loopback server for the test pages, the smoke test's screenshot checker and the CI helpers live in `crates/mercury-devtools`. The one Python helper left, `scripts/serve-tests.py`, goes once the branches that still use it have merged. Servo's own build scripts still need Python, as above.
+Mercury's own tools are Rust or POSIX shell, not scripts in another language: the loopback server for the test pages, the smoke test's screenshot checker and the CI helpers live in `crates/mercury-devtools`. Servo's own build scripts still need Python, as above.
 
 Contributions are accepted under the terms in [CONTRIBUTING.md](CONTRIBUTING.md). They come in under the licence of the files they change, and you agree that I can also offer your contribution under a commercial licence.
 
