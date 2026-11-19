@@ -19,6 +19,8 @@ pub mod http_cache;
 pub mod http_loader;
 pub mod image_cache;
 pub mod local_directory_listing;
+// Mercury: keeps cookie and credential values out of the logs (EC13). A Mercury file.
+mod mercury_log;
 pub mod protocols;
 pub mod request_interceptor;
 pub mod resource_thread;
