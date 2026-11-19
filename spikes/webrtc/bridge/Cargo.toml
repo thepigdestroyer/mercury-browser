@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# GStreamer capture streams with frame sinks, and an appsrc remote source (sp-rtc lane, item 2).
+# Its own cargo workspace: nothing here is part of the default build. Run cargo from this
+# directory, after `eval "$(scripts/macos/gstreamer.sh env)"` from the repository root.
+[package]
+name = "mercury-rtc-bridge"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "PolyForm-Noncommercial-1.0.0"
+description = "GStreamer capture streams with frame sinks and an appsrc remote source, for the WebRTC spike"
+
+[workspace]
+
+[lib]
+name = "mercury_rtc_bridge"
+
+# The versions are the ones in the root Cargo.lock (gstreamer 0.25.4, gstreamer-app 0.25.2,
+# gstreamer-audio 0.25.4, gstreamer-video 0.25.4), pinned with `=`.
+[dependencies]
+mercury-frame-sink = { path = "../sink-api" }
+gstreamer = "=0.25.4"
+gstreamer-app = "=0.25.2"
+gstreamer-video = "=0.25.4"
+gstreamer-audio = "=0.25.4"
+thiserror = "=2.0.21"
