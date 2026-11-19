@@ -3,18 +3,29 @@
 
 //! When a snapshot is taken, and when a capture must be refused.
 //!
-//! GROUNDWORK STUB (lane tab-snapshots, item 3 owns this file): the constants and the data types
-//! are final; [`CaptureScheduler`] is to be written to the contracts in its comments.
-//!
 //! The picture source is the web view's one shared rendering context: it holds the last frame
 //! that was presented, whichever tab drew it, and is cleared and redrawn by the next tab's first
 //! paint and by a resize. A capture is therefore only right when the context still holds the
 //! tab's own last frame, which the scheduler checks from what the app tells it: the key and the
-//! surface size of the frame it last presented.
+//! surface size of the frame it last presented ([`CaptureScheduler::frame_presented`]). A capture
+//! for another tab, or at another size, is refused ([`Skip::WrongTab`], [`Skip::SizeChanged`]);
+//! this is the guard that keeps one tab's picture from landing on another tab.
+//!
+//! **Warning for whoever changes the rendering path.** The guard knows only the frames the app
+//! reports as presented. Any future code path that paints into the shared context without
+//! showing the result through `present` (and so without calling `frame_presented`) would leave
+//! the context holding a picture the scheduler has never heard of, while the guard still matches
+//! the last presented frame, and a capture would then attach that picture to the wrong tab. Such
+//! a path must either report the frame it painted, or call
+//! [`CaptureScheduler::rendering_changed`] so that nothing is captured until the next
+//! presented frame.
+//!
+//! Time is passed in by the caller as a [`Duration`] since an arbitrary start. It is never
+//! assumed to be monotonic here: every difference is taken with `saturating_sub`, so a time that
+//! goes backwards counts as "no time has passed" and never panics.
 
 use std::collections::HashMap;
 use std::hash::Hash;
-use std::marker::PhantomData;
 use std::time::Duration;
 
 /// A tab that stays active gets a new snapshot this often (SPEC section 6.1), once it has
@@ -112,6 +123,33 @@ impl<K: Copy> CaptureRequest<K> {
     }
 }
 
+/// What the scheduler remembers about one tab.
+#[derive(Debug, Clone, Copy)]
+struct TabState {
+    /// When the tab's first frame was presented: the start of its periodic clock until it has a
+    /// successful capture.
+    first_frame: Duration,
+    /// When the tab's last successful capture was reported.
+    last_capture: Option<Duration>,
+    /// Frames the tab presented since its last successful capture (or ever, if it has none).
+    frames_since_capture: u64,
+}
+
+/// The last frame the app presented: what the shared rendering context holds.
+#[derive(Debug, Clone, Copy)]
+struct Presented<K> {
+    key: K,
+    surface: (u32, u32),
+}
+
+/// The one capture that has been permitted and not yet reported.
+#[derive(Debug, Clone, Copy)]
+struct InFlight<K> {
+    key: K,
+    ticket: u64,
+    started: Duration,
+}
+
 /// The policy. One value per window; all time is passed in.
 ///
 /// Contract (the tests of item 3 pin each line):
@@ -141,9 +179,27 @@ impl<K: Copy> CaptureRequest<K> {
 /// - [`rendering_changed`](Self::rendering_changed) forgets what the context holds and clears the
 ///   disabled state, the backoff and any capture in flight (the context was torn down and made
 ///   again, perhaps on another GPU).
+///
+/// How the contract was read where it leaves room:
+///
+/// - The in-flight timeout is applied at the start of every decision (`frame_presented`,
+///   `tab_leaving`, `capture_now`) to a request strictly older than [`IN_FLIGHT_TIMEOUT`]. It is
+///   not applied by `capture_succeeded` and `capture_failed`: a result that arrives before any
+///   decision has noticed the timeout is still accepted (its picture was read while the guard
+///   held), and one that arrives after the request was dropped is refused by its ticket.
+/// - The failure count is cleared by `capture_succeeded` and `rendering_changed` only, so after
+///   `rendering_changed` it takes [`MAX_CONSECUTIVE_FAILURES`] new failures to disable again.
+/// - A refusal never changes the scheduler, except that an overdue request is dropped (and counted
+///   as a failure) by the decision that finds it.
 #[derive(Debug)]
 pub struct CaptureScheduler<K> {
-    tabs: HashMap<K, PhantomData<K>>,
+    tabs: HashMap<K, TabState>,
+    presented: Option<Presented<K>>,
+    in_flight: Option<InFlight<K>>,
+    /// Failures in a row since the last success (or `rendering_changed`).
+    failures: u32,
+    /// When the last failure was reported, for the backoff.
+    last_failure: Option<Duration>,
     next_ticket: u64,
 }
 
@@ -151,6 +207,10 @@ impl<K: Copy + Eq + Hash> CaptureScheduler<K> {
     pub fn new() -> Self {
         Self {
             tabs: HashMap::new(),
+            presented: None,
+            in_flight: None,
+            failures: 0,
+            last_failure: None,
             next_ticket: 1,
         }
     }
@@ -160,51 +220,190 @@ impl<K: Copy + Eq + Hash> CaptureScheduler<K> {
         self.tabs.len()
     }
 
+    /// The app showed a frame of tab `key` on a surface of `surface` pixels. Runs on every
+    /// presented frame (60 times a second): its common path, which ends in [`Skip::NotDue`],
+    /// neither allocates nor logs. Only the first frame of a tab enters it in the map.
     pub fn frame_presented(
         &mut self,
-        _key: K,
-        _surface: (u32, u32),
-        _now: Duration,
+        key: K,
+        surface: (u32, u32),
+        now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        let _ = self.next_ticket;
-        todo!("tab-snapshots item 3: frame_presented")
+        self.drop_overdue(now);
+        self.presented = Some(Presented { key, surface });
+        self.tabs
+            .entry(key)
+            .and_modify(|tab| tab.frames_since_capture = tab.frames_since_capture.saturating_add(1))
+            .or_insert(TabState {
+                first_frame: now,
+                last_capture: None,
+                frames_since_capture: 1,
+            });
+        self.decide(key, surface, now, CaptureReason::Periodic)
     }
 
+    /// The app is about to let another tab paint, so the context still holds `key`'s last frame
+    /// if `key` is the tab of the last presented frame, at `surface`.
     pub fn tab_leaving(
         &mut self,
-        _key: K,
-        _surface: (u32, u32),
-        _now: Duration,
+        key: K,
+        surface: (u32, u32),
+        now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        todo!("tab-snapshots item 3: tab_leaving")
+        self.drop_overdue(now);
+        self.decide(key, surface, now, CaptureReason::Leaving)
     }
 
+    /// A picture of the tab is wanted now, whatever its last snapshot's age.
     pub fn capture_now(
         &mut self,
-        _key: K,
-        _surface: (u32, u32),
-        _now: Duration,
+        key: K,
+        surface: (u32, u32),
+        now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        todo!("tab-snapshots item 3: capture_now")
+        self.drop_overdue(now);
+        self.decide(key, surface, now, CaptureReason::OnDemand)
     }
 
     /// The capture finished and its picture was made. Returns whether the request was still
     /// wanted (see the type's contract).
-    pub fn capture_succeeded(&mut self, _request: &CaptureRequest<K>, _now: Duration) -> bool {
-        todo!("tab-snapshots item 3: capture_succeeded")
+    pub fn capture_succeeded(&mut self, request: &CaptureRequest<K>, now: Duration) -> bool {
+        if !self.end_in_flight(request) {
+            return false;
+        }
+        // The tab is always there while its request is in flight (`forget` ends the request);
+        // if it were not, the picture would not be wanted.
+        let Some(tab) = self.tabs.get_mut(&request.key()) else {
+            return false;
+        };
+        tab.last_capture = Some(now);
+        tab.frames_since_capture = 0;
+        self.failures = 0;
+        true
     }
 
     /// The capture could not read or make a picture. Returns whether the request was still wanted.
-    pub fn capture_failed(&mut self, _request: &CaptureRequest<K>, _now: Duration) -> bool {
-        todo!("tab-snapshots item 3: capture_failed")
+    pub fn capture_failed(&mut self, request: &CaptureRequest<K>, now: Duration) -> bool {
+        if !self.end_in_flight(request) {
+            return false;
+        }
+        self.count_failure(now);
+        true
     }
 
-    pub fn forget(&mut self, _key: K) {
-        todo!("tab-snapshots item 3: forget")
+    /// The tab was closed: drop everything about it, so that a late result for it is not wanted.
+    pub fn forget(&mut self, key: K) {
+        self.tabs.remove(&key);
+        if self.presented.is_some_and(|presented| presented.key == key) {
+            self.presented = None;
+        }
+        if self.in_flight.is_some_and(|flight| flight.key == key) {
+            self.in_flight = None;
+        }
     }
 
+    /// The rendering context was torn down and made again: what it holds is unknown until the
+    /// next presented frame, and the failures that came from the old one no longer count.
     pub fn rendering_changed(&mut self) {
-        todo!("tab-snapshots item 3: rendering_changed")
+        self.presented = None;
+        self.in_flight = None;
+        self.failures = 0;
+        self.last_failure = None;
+    }
+
+    /// Whether a capture may start now, and if so, marks it in flight. The refusals are checked
+    /// in the order of the type's contract; none of them changes anything.
+    fn decide(
+        &mut self,
+        key: K,
+        surface: (u32, u32),
+        now: Duration,
+        reason: CaptureReason,
+    ) -> Result<CaptureRequest<K>, Skip> {
+        if self.failures >= MAX_CONSECUTIVE_FAILURES {
+            return Err(Skip::Disabled);
+        }
+        let Some(presented) = self.presented else {
+            return Err(Skip::NoFrame);
+        };
+        if presented.key != key {
+            return Err(Skip::WrongTab);
+        }
+        if presented.surface != surface {
+            return Err(Skip::SizeChanged);
+        }
+        // `presented` is cleared when its tab is forgotten, so the tab is here; if it were not,
+        // there would be no frame of it to capture.
+        let Some(tab) = self.tabs.get(&key) else {
+            return Err(Skip::NoFrame);
+        };
+        if tab.frames_since_capture == 0 {
+            return Err(Skip::NoNewFrame);
+        }
+        match reason {
+            CaptureReason::Leaving => {
+                let too_soon = tab
+                    .last_capture
+                    .is_some_and(|last| now.saturating_sub(last) < MIN_REPEAT_GAP);
+                if too_soon {
+                    return Err(Skip::TooSoon);
+                }
+            }
+            CaptureReason::Periodic => {
+                let since = tab.last_capture.unwrap_or(tab.first_frame);
+                if now.saturating_sub(since) < PERIODIC_INTERVAL {
+                    return Err(Skip::NotDue);
+                }
+            }
+            CaptureReason::OnDemand => {}
+        }
+        if self.in_flight.is_some() {
+            return Err(Skip::Busy);
+        }
+        let backing_off = self
+            .last_failure
+            .is_some_and(|failed| now.saturating_sub(failed) < FAILURE_BACKOFF);
+        if backing_off {
+            return Err(Skip::Backoff);
+        }
+
+        let ticket = self.next_ticket;
+        self.next_ticket = self.next_ticket.wrapping_add(1);
+        self.in_flight = Some(InFlight {
+            key,
+            ticket,
+            started: now,
+        });
+        Ok(CaptureRequest::new(key, reason, surface, ticket))
+    }
+
+    /// Gives up the request in flight if it is older than [`IN_FLIGHT_TIMEOUT`] and counts it as
+    /// a failure from `now`. Runs at the start of every decision.
+    fn drop_overdue(&mut self, now: Duration) {
+        let overdue = self
+            .in_flight
+            .is_some_and(|flight| now.saturating_sub(flight.started) > IN_FLIGHT_TIMEOUT);
+        if overdue {
+            self.in_flight = None;
+            self.count_failure(now);
+        }
+    }
+
+    /// Ends the request in flight if `request` is it. Returns whether it was: `false` for a
+    /// request of a forgotten tab, one that timed out, or one from before `rendering_changed`.
+    fn end_in_flight(&mut self, request: &CaptureRequest<K>) -> bool {
+        match self.in_flight {
+            Some(flight) if flight.ticket == request.ticket() && flight.key == request.key() => {
+                self.in_flight = None;
+                true
+            }
+            _ => false,
+        }
+    }
+
+    fn count_failure(&mut self, now: Duration) {
+        self.failures = self.failures.saturating_add(1);
+        self.last_failure = Some(now);
     }
 }
 
