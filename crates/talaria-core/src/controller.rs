@@ -277,12 +277,7 @@ impl BrowserController {
 
         let was_active = self.active_tab_id == tab_id;
         self.tabs.remove(index);
-        self.visits.forget_tab(tab_id);
-        self.command_queue
-            .retain(|queued| queued.tab_id() != tab_id);
-        // openurl
-        self.external_link_requests
-            .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
+        self.forget_closed_tab(tab_id);
 
         if was_active {
             let replacement_index = index.saturating_sub(1).min(self.tabs.len() - 1);
@@ -290,6 +285,18 @@ impl BrowserController {
         }
 
         CloseTabOutcome::Closed
+    }
+
+    /// Drops what the controller keeps for a tab that has just left the strip: its history
+    /// state (the last titles are written), the commands queued for it and its requests to open
+    /// links in other apps. Every way of closing a tab goes through here.
+    fn forget_closed_tab(&mut self, tab_id: TabId) {
+        self.visits.forget_tab(tab_id);
+        self.command_queue
+            .retain(|queued| queued.tab_id() != tab_id);
+        // openurl
+        self.external_link_requests
+            .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
     }
 
     pub fn close_tab_at(&mut self, index: usize) -> CloseTabOutcome {
@@ -1148,8 +1155,9 @@ impl BrowserController {
             return 0;
         }
         self.tabs.retain(|tab| !closing.contains(&tab.id()));
-        self.command_queue
-            .retain(|queued| !closing.contains(&queued.tab_id()));
+        for tab_id in closing.iter().copied() {
+            self.forget_closed_tab(tab_id);
+        }
         self.active_tab_id = keep;
         closing.len()
     }
