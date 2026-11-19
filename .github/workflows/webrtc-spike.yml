@@ -1,0 +1,452 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# The libwebrtc spike on Apple Silicon (spikes/webrtc/). This is the only place the arm64 code
+# of the spike runs: the development Mac is an Intel machine and can compile for arm64 but not
+# execute it. One job per spike crate, each in its own cargo workspace under spikes/webrtc/:
+#
+#   bridge     GStreamer capture streams with frame sinks (no libwebrtc)
+#   livekit    libwebrtc m150 (Shiguredo's prebuilt) through LiveKit's Rust bindings
+#   shiguredo  libwebrtc_c 0.157.0 through Shiguredo's own crate
+#
+# and one job (audit) that runs `scripts/macos/webrtc.sh inspect` on both archives. The spike is
+# not part of ci.yml or of any make target. Each job pins its archives through
+# scripts/macos/webrtc.sh (size and SHA-256, deleted on mismatch) and builds with the network
+# open only for crates.io; the crates' own build scripts refuse to download anything.
+#
+# Every build and test step continues on error, so a failing route still reports its other
+# results: the RESULT lines (`RESULT tNN pass|fail|skip detail`) of the tests go to the job
+# summary, and the logs, sizes and timings are uploaded as an artifact.
+#
+# The push trigger below is for the lane branch while the spike is being written; it is removed
+# in the lane's last commit and the workflow stays workflow_dispatch only.
+name: WebRTC spike
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - lane/sp-rtc
+    paths:
+      - "spikes/webrtc/**"
+      - "scripts/macos/webrtc.sh"
+      - ".github/workflows/webrtc-spike.yml"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: webrtc-spike-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  spike:
+    name: Spike (${{ matrix.crate }})
+    # macos-26 is GitHub's arm64 image (3 M1 cores, 7 GB of memory), the one ci.yml uses.
+    runs-on: macos-26
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - crate: bridge
+            webrtc_ids: ""
+          - crate: livekit
+            webrtc_ids: libwebrtc
+          - crate: shiguredo
+            webrtc_ids: libwebrtc-c
+    env:
+      CRATE_DIR: spikes/webrtc/${{ matrix.crate }}
+      WEBRTC_IDS: ${{ matrix.webrtc_ids }}
+      LOG_DIR: ${{ github.workspace }}/webrtc-spike-logs/${{ matrix.crate }}
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show the build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${LOG_DIR}"
+          {
+            echo "uname: $(uname -srm)"
+            echo "macOS: $(sw_vers -productVersion) ($(sw_vers -buildVersion))"
+            echo "cpu: $(sysctl -n machdep.cpu.brand_string) x $(sysctl -n hw.ncpu)"
+            echo "memory: $(( $(sysctl -n hw.memsize) / 1048576 )) MiB"
+            echo "xcode: $(xcode-select -p)"
+            echo "cc: $(cc --version | sed -n 1p)"
+            echo "sdk: $(xcrun --show-sdk-version)"
+          } | tee "${LOG_DIR}/environment.txt"
+          df -h /
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Reads rust-toolchain.toml: channel, profile and components.
+          rustup toolchain install
+          rustc -vV | tee -a "${LOG_DIR}/environment.txt"
+          cargo --version | tee -a "${LOG_DIR}/environment.txt"
+
+      # Only the downloaded .pkg files are cached; the key is the script that pins the version
+      # and the checksums, so changing either starts a new cache (as in ci.yml).
+      - name: Restore the GStreamer packages
+        id: gstreamer-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: gstreamer-macos-arm64-${{ hashFiles('scripts/macos/gstreamer.sh') }}
+
+      - name: Fetch and verify the GStreamer packages
+        run: scripts/macos/gstreamer.sh fetch
+
+      - name: Save the GStreamer packages
+        if: steps.gstreamer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: ${{ steps.gstreamer-cache.outputs.cache-primary-key }}
+
+      - name: Unpack and check GStreamer
+        run: make gstreamer-macos
+
+      - name: Export the GStreamer build environment
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          scripts/ci/github-env.sh scripts/macos/gstreamer.sh env
+
+      # The two libwebrtc archives are not cached together: a job fetches and caches only its own.
+      - name: Restore the libwebrtc archives
+        id: webrtc-cache
+        if: matrix.webrtc_ids != ''
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/mercury-browser/webrtc/**/*.tar.gz
+            ~/Library/Caches/mercury-browser/webrtc/**/*.sha256
+          key: webrtc-macos-arm64-${{ matrix.webrtc_ids }}-${{ hashFiles('scripts/macos/webrtc.sh') }}
+
+      - name: Fetch and verify the libwebrtc archives
+        if: matrix.webrtc_ids != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          read -r -a ids <<<"${WEBRTC_IDS}"
+          scripts/macos/webrtc.sh list "${ids[@]}" | tee "${LOG_DIR}/webrtc-pins.txt"
+          scripts/macos/webrtc.sh fetch "${ids[@]}" 2>&1 | tee "${LOG_DIR}/webrtc-fetch.log"
+
+      - name: Save the libwebrtc archives
+        if: matrix.webrtc_ids != '' && steps.webrtc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/mercury-browser/webrtc/**/*.tar.gz
+            ~/Library/Caches/mercury-browser/webrtc/**/*.sha256
+          key: ${{ steps.webrtc-cache.outputs.cache-primary-key }}
+
+      - name: Unpack and check the libwebrtc archives
+        if: matrix.webrtc_ids != ''
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          read -r -a ids <<<"${WEBRTC_IDS}"
+          scripts/macos/webrtc.sh unpack "${ids[@]}" 2>&1 | tee "${LOG_DIR}/webrtc-unpack.log"
+          scripts/macos/webrtc.sh check --deep "${ids[@]}" 2>&1 | tee "${LOG_DIR}/webrtc-check.log"
+          du -sh ~/Library/Caches/mercury-browser/webrtc/*/*/ | tee "${LOG_DIR}/webrtc-sizes.txt"
+
+      - name: Prepare the crate (patches applied to the registry copies)
+        id: prepare
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ ! -f "${CRATE_DIR}/prepare.sh" ]; then
+            echo "${CRATE_DIR} has no prepare.sh"
+            exit 0
+          fi
+          if [ -n "${WEBRTC_IDS}" ]; then
+            read -r -a ids <<<"${WEBRTC_IDS}"
+            env_lines="$(scripts/macos/webrtc.sh env "${ids[@]}")"
+            eval "${env_lines}"
+          fi
+          cd "${CRATE_DIR}"
+          ./prepare.sh 2>&1 | tee "${LOG_DIR}/prepare.log"
+
+      # A program that prints one line, built in the same job and the same profile: the size
+      # a spike binary adds is its stripped size minus this one's.
+      - name: Build the hello-world baseline
+        id: baseline
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          baseline=spikes/webrtc/.baseline-hello
+          mkdir -p "${baseline}/src"
+          printf '[package]\nname = "baseline-hello"\nversion = "0.0.0"\nedition = "2021"\n\n[workspace]\n' >"${baseline}/Cargo.toml"
+          printf 'fn main() {\n    println!("hello");\n}\n' >"${baseline}/src/main.rs"
+          cd "${baseline}"
+          cargo build --release 2>&1 | tail -n 3
+          cp target/release/baseline-hello "${LOG_DIR}/baseline-hello"
+          strip -x "${LOG_DIR}/baseline-hello"
+          wc -c <"${LOG_DIR}/baseline-hello" | tr -d ' ' | tee "${LOG_DIR}/baseline-hello.bytes"
+
+      - name: Build the crate and its tests (cold)
+        id: build
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "${WEBRTC_IDS}" ]; then
+            read -r -a ids <<<"${WEBRTC_IDS}"
+            env_lines="$(scripts/macos/webrtc.sh env "${ids[@]}")"
+            eval "${env_lines}"
+          fi
+          cd "${CRATE_DIR}"
+          status=0
+          started="$(date +%s)"
+          cargo test --release --no-run 2>&1 | tee "${LOG_DIR}/build.log" || status=$?
+          finished="$(date +%s)"
+          echo "$((finished - started))" >"${LOG_DIR}/build.seconds"
+          echo "cold build and link of the tests: $((finished - started)) s (exit status ${status})"
+          exit "${status}"
+
+      - name: Run the tests
+        id: test
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if [ -n "${WEBRTC_IDS}" ]; then
+            read -r -a ids <<<"${WEBRTC_IDS}"
+            env_lines="$(scripts/macos/webrtc.sh env "${ids[@]}")"
+            eval "${env_lines}"
+          fi
+          cd "${CRATE_DIR}"
+          status=0
+          started="$(date +%s)"
+          # DYLD_FALLBACK_LIBRARY_PATH is set on the cargo command line itself: macOS strips DYLD_*
+          # when a SIP-protected shell starts, and the test binaries need the GStreamer libraries.
+          DYLD_FALLBACK_LIBRARY_PATH="${MERCURY_GSTREAMER_PREFIX}/lib" \
+            GST_PLUGIN_SYSTEM_PATH_1_0="${MERCURY_GSTREAMER_PREFIX}/lib/gstreamer-1.0" \
+            cargo test --release -- --nocapture --test-threads=1 2>&1 | tee "${LOG_DIR}/test.log" || status=$?
+          finished="$(date +%s)"
+          echo "$((finished - started))" >"${LOG_DIR}/test.seconds"
+          exit "${status}"
+
+      - name: Measure the test binaries (size, libraries, deployment target)
+        id: size
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          baseline_bytes="$(cat "${LOG_DIR}/baseline-hello.bytes")"
+          deps="${CRATE_DIR}/target/release/deps"
+          : >"${LOG_DIR}/sizes.tsv"
+          find "${deps}" -maxdepth 1 -type f -perm -u+x ! -name '*.*' ! -name 'build_script_*' ! -name 'build-script-*' | sort |
+            while IFS= read -r binary; do
+              name="$(basename "${binary}")"
+              cp "${binary}" "${LOG_DIR}/${name}.stripped"
+              strip -x "${LOG_DIR}/${name}.stripped"
+              unstripped="$(wc -c <"${binary}" | tr -d ' ')"
+              stripped="$(wc -c <"${LOG_DIR}/${name}.stripped" | tr -d ' ')"
+              printf '%s\t%s\t%s\t%s\t%s\n' "${name}" "${unstripped}" "${stripped}" "${baseline_bytes}" "$((stripped - baseline_bytes))" >>"${LOG_DIR}/sizes.tsv"
+              {
+                echo "== ${name}"
+                otool -L "${binary}"
+                vtool -show-build "${binary}"
+              } >>"${LOG_DIR}/otool-vtool.txt"
+              rm -f "${LOG_DIR}/${name}.stripped"
+            done
+          cat "${LOG_DIR}/sizes.tsv"
+          cat "${LOG_DIR}/otool-vtool.txt"
+
+      - name: Report
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          {
+            echo "## Spike: ${{ matrix.crate }}"
+            echo
+            echo "| Step | Outcome |"
+            echo "| --- | --- |"
+            echo "| prepare.sh | ${{ steps.prepare.outcome }} |"
+            echo "| baseline hello-world | ${{ steps.baseline.outcome }} |"
+            echo "| cold build and link | ${{ steps.build.outcome }}, $(cat "${LOG_DIR}/build.seconds" 2>/dev/null || echo "-") s |"
+            echo "| tests | ${{ steps.test.outcome }}, $(cat "${LOG_DIR}/test.seconds" 2>/dev/null || echo "-") s |"
+            echo "| size measurement | ${{ steps.size.outcome }} |"
+            echo
+            if [ -f "${LOG_DIR}/test.log" ]; then
+              echo "### RESULT lines"
+              echo
+              echo "| Test | Result | Detail |"
+              echo "| --- | --- | --- |"
+              grep -h '^RESULT t' "${LOG_DIR}/test.log" | sort -u | awk '{ detail = $0; sub(/^RESULT [^ ]+ [^ ]+ ?/, "", detail); printf "| %s | %s | %s |\n", $2, $3, detail }' || true
+              echo
+              echo "Counts: $(grep -h '^RESULT t' "${LOG_DIR}/test.log" | sort -u | awk '{ n[$3]++ } END { for (k in n) printf "%s %d; ", k, n[k] }')"
+              echo
+              echo "Cargo test summaries:"
+              echo
+              echo '```'
+              grep -h '^test result' "${LOG_DIR}/test.log" || true
+              echo '```'
+            fi
+            if [ -s "${LOG_DIR}/sizes.tsv" ]; then
+              echo
+              echo "### Size of the test binaries (bytes)"
+              echo
+              echo "| Binary | Unstripped | Stripped | hello-world, stripped | Added |"
+              echo "| --- | --- | --- | --- | --- |"
+              awk -F'\t' '{ printf "| %s | %s | %s | %s | %s |\n", $1, $2, $3, $4, $5 }' "${LOG_DIR}/sizes.tsv"
+            fi
+            if [ -n "${WEBRTC_IDS}" ] && [ -f "${LOG_DIR}/webrtc-sizes.txt" ]; then
+              echo
+              echo "### libwebrtc archives in the cache"
+              echo
+              echo '```'
+              cat "${LOG_DIR}/webrtc-pins.txt" "${LOG_DIR}/webrtc-sizes.txt"
+              echo '```'
+            fi
+          } >>"${GITHUB_STEP_SUMMARY}"
+
+      - name: Upload the logs
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: webrtc-spike-${{ matrix.crate }}
+          path: webrtc-spike-logs/${{ matrix.crate }}
+          if-no-files-found: warn
+
+      - name: Fail the job when a step failed
+        if: always() && (steps.build.outcome == 'failure' || steps.test.outcome == 'failure' || steps.prepare.outcome == 'failure')
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          echo "A step failed; its log is in the uploaded artifact and its RESULT lines are in the summary." >&2
+          exit 1
+
+  # The static audit of both archives, run where the arm64 tools are (nm, otool, lipo and vtool
+  # read the same Mach-O files here as on the Intel Mac, so this repeats the audit rather than
+  # extending it). The Markdown goes to the job summary and the raw symbol lists to the artifact.
+  audit:
+    name: Archive audit
+    runs-on: macos-26
+    timeout-minutes: 45
+    env:
+      LOG_DIR: ${{ github.workspace }}/webrtc-spike-logs/audit
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Restore the GStreamer packages
+        id: gstreamer-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: gstreamer-macos-arm64-${{ hashFiles('scripts/macos/gstreamer.sh') }}
+
+      - name: Fetch and verify the GStreamer packages
+        run: scripts/macos/gstreamer.sh fetch
+
+      - name: Save the GStreamer packages
+        if: steps.gstreamer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: ${{ steps.gstreamer-cache.outputs.cache-primary-key }}
+
+      - name: Unpack and check GStreamer
+        run: make gstreamer-macos
+
+      - name: Restore the libwebrtc archives
+        id: webrtc-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/mercury-browser/webrtc/**/*.tar.gz
+            ~/Library/Caches/mercury-browser/webrtc/**/*.sha256
+          key: webrtc-macos-arm64-all-${{ hashFiles('scripts/macos/webrtc.sh') }}
+
+      - name: Fetch, unpack and check both archives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${LOG_DIR}"
+          scripts/macos/webrtc.sh list | tee "${LOG_DIR}/webrtc-pins.txt"
+          scripts/macos/webrtc.sh fetch 2>&1 | tee "${LOG_DIR}/webrtc-fetch.log"
+
+      - name: Save the libwebrtc archives
+        if: steps.webrtc-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/Library/Caches/mercury-browser/webrtc/**/*.tar.gz
+            ~/Library/Caches/mercury-browser/webrtc/**/*.sha256
+          key: ${{ steps.webrtc-cache.outputs.cache-primary-key }}
+
+      - name: Unpack and check both archives
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          scripts/macos/webrtc.sh unpack 2>&1 | tee "${LOG_DIR}/webrtc-unpack.log"
+          scripts/macos/webrtc.sh check --deep 2>&1 | tee "${LOG_DIR}/webrtc-check.log"
+
+      - name: Audit the archives (webrtc.sh inspect)
+        id: inspect
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          MERCURY_GSTREAMER_PREFIX="$(scripts/macos/gstreamer.sh prefix)"
+          export MERCURY_GSTREAMER_PREFIX
+          export MERCURY_WEBRTC_INSPECT_DIR="${LOG_DIR}/inspect"
+          scripts/macos/webrtc.sh inspect >"${LOG_DIR}/inspect.md" 2>"${LOG_DIR}/inspect.stderr"
+          cat "${LOG_DIR}/inspect.md" >>"${GITHUB_STEP_SUMMARY}"
+          # The raw symbol tables are tens of megabytes and regenerated by the same command.
+          rm -f "${LOG_DIR}"/inspect/*/symbols.tsv "${LOG_DIR}/inspect/gstreamer-exports.txt"
+
+      - name: Upload the audit
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: webrtc-spike-audit
+          path: webrtc-spike-logs/audit
+          if-no-files-found: warn
+
+      - name: Fail the job when the audit failed
+        if: always() && steps.inspect.outcome == 'failure'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cat "${LOG_DIR}/inspect.stderr" >&2 || true
+          exit 1
