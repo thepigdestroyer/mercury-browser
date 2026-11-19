@@ -84,6 +84,9 @@ component BarButton inherits Rectangle {
     // A click: whether it asks for a new background tab (Cmd-click on macOS, Ctrl-click
     // elsewhere, or a middle click).
     callback activated(bool);
+    // a11y-base: the button's place on the bar, read as "n of m".
+    in property <int> index;
+    in property <int> count;
 
     height: 26px;
     border-radius: 6px;
@@ -91,7 +94,11 @@ component BarButton inherits Rectangle {
         ? ChromePalette.button-pressed
         : touch.has-hover ? ChromePalette.button-hover : transparent;
     accessible-role: button;
-    accessible-label: root.item.title;
+    // The drawn text says "(untitled)" for a bookmark without a title; so does the label.
+    accessible-label: root.item.title == "" ? "(untitled)" : root.item.title;
+    accessible-description: root.item.is-folder ? "Folder" : "";
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
     accessible-action-default => {
         root.activated(false);
     }
@@ -147,20 +154,44 @@ export component BookmarkMenuList inherits Rectangle {
     drop-shadow-blur: 10px;
     drop-shadow-color: ChromePalette.shadow;
     accessible-role: list;
+    // a11y-base: the same popup shows a bookmarks folder and the bookmarks that did not fit.
+    accessible-label: "Bookmarks menu";
 
     ListView {
         x: 1px;
         y: 6px;
         width: parent.width - 2px;
         height: parent.height - 12px;
+        // a11y-base: the std ListView is a list of its own; the one above is the popup's.
+        accessible-role: none;
 
         for row[index] in root.rows: Rectangle {
             height: 28px;
             background: row-touch.has-hover && (row.kind == BookmarkRowKind.bookmark || row.kind == BookmarkRowKind.folder || row.kind == BookmarkRowKind.back)
                 ? ChromePalette.item-hover
                 : transparent;
-            accessible-role: button;
-            accessible-label: row.title;
+
+            // a11y-base: a screen reader meets a list item for a bookmark, a folder or the way
+            // back, plain text for "Empty", and nothing for a separator. These elements fill the
+            // row and draw nothing; the drawn texts below are hidden. (The row itself used to be a
+            // button for every kind, with an empty label for a separator and no default action.)
+            if row.kind == BookmarkRowKind.bookmark || row.kind == BookmarkRowKind.folder || row.kind == BookmarkRowKind.back: Rectangle {
+                accessible-role: list-item;
+                accessible-label: row.kind == BookmarkRowKind.back
+                    ? (row.title == "" ? "Back" : "Back to " + row.title)
+                    : row.title == "" ? "(untitled)" : row.title;
+                accessible-description: row.kind == BookmarkRowKind.folder ? "Folder" : row.kind == BookmarkRowKind.bookmark ? row.url : "";
+                accessible-item-index: index;
+                accessible-item-count: root.rows.length;
+                accessible-action-default => {
+                    root.row-activated(index, false);
+                }
+            }
+
+            if row.kind == BookmarkRowKind.empty: Rectangle {
+                accessible-role: text;
+                accessible-label: row.title == "" ? "(untitled)" : row.title;
+            }
 
             if row.kind == BookmarkRowKind.separator: Rectangle {
                 x: 10px;
@@ -191,6 +222,7 @@ export component BookmarkMenuList inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                     horizontal-stretch: 1;
+                    accessible-role: none;
                 }
 
                 if row.kind == BookmarkRowKind.folder: Text {
@@ -198,6 +230,7 @@ export component BookmarkMenuList inherits Rectangle {
                     color: ChromePalette.text-secondary;
                     font-size: 14px;
                     vertical-alignment: center;
+                    accessible-role: none;
                 }
             }
 
@@ -271,6 +304,8 @@ export component BookmarksBar inherits Rectangle {
         width: item.shown ? item.width : 0px;
         visible: item.shown;
         item: item;
+        index: index;
+        count: root.items.length;
         init => {
             root.measured(index, self.natural-width);
         }
@@ -294,6 +329,10 @@ export component BookmarksBar inherits Rectangle {
             : overflow-touch.has-hover ? ChromePalette.button-hover : transparent;
         accessible-role: button;
         accessible-label: "More bookmarks";
+        // a11y-base: it had no default action.
+        accessible-action-default => {
+            root.overflow-opened(self.x);
+        }
 
         Text {
             text: "»";

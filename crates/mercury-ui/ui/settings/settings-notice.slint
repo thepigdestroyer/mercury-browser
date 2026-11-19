@@ -8,7 +8,10 @@ export component SettingsNotice inherits Rectangle {
 
     height: 40px;
     background: ChromePalette.notice-background;
-    accessible-role: AccessibleRole.text;
+    // a11y-base: a group named by its message (it was a text with a button inside it, and the
+    // drawn message was read a second time). The Dismiss button keeps exactly the label
+    // "Dismiss": desktop tests find it by that label.
+    accessible-role: groupbox;
     accessible-label: root.text;
 
     HorizontalLayout {
@@ -23,6 +26,7 @@ export component SettingsNotice inherits Rectangle {
             font-size: 13px;
             vertical-alignment: center;
             overflow: elide;
+            accessible-role: none;
         }
 
         dismiss := Rectangle {
@@ -45,6 +49,7 @@ export component SettingsNotice inherits Rectangle {
                 font-size: 13px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                accessible-role: none;
             }
 
             dismiss-touch := TouchArea {

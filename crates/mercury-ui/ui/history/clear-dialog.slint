@@ -8,6 +8,9 @@ component Choice inherits Rectangle {
     in property <bool> checked;
     // A round mark for one-of choices, a square one for check boxes.
     in property <bool> round: false;
+    // a11y-base: for a round choice, its place among the time ranges, read as "n of m".
+    in property <int> index;
+    in property <int> count;
     callback toggled;
 
     height: 32px;
@@ -34,6 +37,7 @@ component Choice inherits Rectangle {
                 font-weight: 700;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                accessible-role: none;
             }
         }
 
@@ -42,6 +46,7 @@ component Choice inherits Rectangle {
             color: ChromePalette.text;
             font-size: 13px;
             vertical-alignment: center;
+            accessible-role: none;
         }
     }
 
@@ -50,10 +55,37 @@ component Choice inherits Rectangle {
             root.toggled();
         }
     }
+
+    // a11y-base: a role is a constant and cannot follow `round`, so each kind has an element of
+    // its own that fills the choice and draws nothing: a radio button for a time range, a check
+    // box for what to clear.
+    if root.round: Rectangle {
+        accessible-role: radio-button;
+        accessible-label: root.label;
+        accessible-checkable: true;
+        accessible-checked: root.checked;
+        accessible-item-index: root.index;
+        accessible-item-count: root.count;
+        accessible-action-default => {
+            root.toggled();
+        }
+    }
+
+    if !root.round: Rectangle {
+        accessible-role: checkbox;
+        accessible-label: root.label;
+        accessible-checkable: true;
+        accessible-checked: root.checked;
+        accessible-action-default => {
+            root.toggled();
+        }
+    }
 }
 
 component DialogButton inherits Rectangle {
     in property <string> label;
+    // a11y-base: what a screen reader says when it is not the drawn label.
+    in property <string> accessible-name;
     in property <bool> primary;
     in property <bool> enabled: true;
     callback clicked;
@@ -67,8 +99,17 @@ component DialogButton inherits Rectangle {
     background: root.primary
         ? (touch.pressed ? ChromePalette.danger.darker(15%) : ChromePalette.danger)
         : touch.has-hover && root.enabled ? ChromePalette.item-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.accessible-name != "" ? root.accessible-name : root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
 
     label-text := Text {
+        accessible-role: none;
         text: root.label;
         color: root.primary ? ChromePalette.primary-button-text : ChromePalette.text;
         font-size: 13px;
@@ -130,6 +171,9 @@ export component ClearDataDialog inherits FocusScope {
             drop-shadow-blur: 24px;
             drop-shadow-offset-y: 8px;
             drop-shadow-color: ChromePalette.shadow;
+            // a11y-base: Slint has no dialog role: the card is a group named by its heading.
+            accessible-role: groupbox;
+            accessible-label: "Clear browsing data";
 
             TouchArea { }
 
@@ -142,6 +186,7 @@ export component ClearDataDialog inherits FocusScope {
                     color: ChromePalette.text;
                     font-size: 17px;
                     font-weight: 650;
+                    accessible-role: none;
                 }
 
                 Text {
@@ -154,6 +199,8 @@ export component ClearDataDialog inherits FocusScope {
                 for label[index] in ["Last hour", "Today", "Last 7 days", "All time"]: Choice {
                     label: label;
                     round: true;
+                    index: index;
+                    count: 4;
                     checked: root.period == index;
                     toggled => {
                         root.period = index;
@@ -227,6 +274,7 @@ export component ClearDataDialog inherits FocusScope {
 
                     DialogButton {
                         label: root.busy ? "Clearing…" : "Clear data";
+                        accessible-name: root.busy ? "Clearing" : "Clear data";
                         primary: true;
                         enabled: root.anything && !root.busy;
                         clicked => {

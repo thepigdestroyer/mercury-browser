@@ -33,6 +33,7 @@ component EmphasisedText inherits HorizontalLayout {
         overflow: elide;
         horizontal-stretch: 0;
         max-width: self.preferred-width;
+        accessible-role: none;
     }
 
     if root.match != "": Text {
@@ -42,6 +43,7 @@ component EmphasisedText inherits HorizontalLayout {
         font-weight: 700;
         horizontal-stretch: 0;
         max-width: self.preferred-width;
+        accessible-role: none;
     }
 
     Text {
@@ -50,6 +52,7 @@ component EmphasisedText inherits HorizontalLayout {
         font-size: root.size;
         overflow: elide;
         horizontal-stretch: 1;
+        accessible-role: none;
     }
 }
 
@@ -68,6 +71,9 @@ export component SuggestionList inherits Rectangle {
     drop-shadow-blur: 18px;
     drop-shadow-offset-y: 6px;
     drop-shadow-color: ChromePalette.shadow;
+    // a11y-base: the list under the address field; it exists only while the field has focus.
+    accessible-role: list;
+    accessible-label: "Suggestions";
 
     VerticalLayout {
         padding: 6px;
@@ -82,6 +88,20 @@ export component SuggestionList inherits Rectangle {
             background: item.is-selected
                 ? ChromePalette.item-selected
                 : touch.has-hover ? ChromePalette.item-hover : transparent;
+            // a11y-base: the title is the label, and the kind and the address are the
+            // description ("Search suggestion", "Bookmark, <address>", "History, <address>").
+            accessible-role: list-item;
+            accessible-label: row.title-before + row.title-match + row.title-after;
+            accessible-description: row.is-search
+                ? "Search suggestion"
+                : (row.is-bookmark ? "Bookmark, " : "History, ") + row.url-before + row.url-match + row.url-after;
+            accessible-item-selectable: true;
+            accessible-item-selected: item.is-selected;
+            accessible-item-index: index;
+            accessible-item-count: root.rows.length;
+            accessible-action-default => {
+                root.chosen(index);
+            }
 
             HorizontalLayout {
                 padding-left: 12px;
@@ -97,6 +117,7 @@ export component SuggestionList inherits Rectangle {
                         font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        accessible-role: none;
                     }
 
                     // A magnifier for the search row, a clock for history.

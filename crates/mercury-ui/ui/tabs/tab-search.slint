@@ -25,12 +25,20 @@ component TabSearchRowView inherits Rectangle {
     callback chosen;
     callback hovered;
 
+    // a11y-base: what the row shows without words (the heavier title of the current tab, the
+    // "Pinned" mark) goes in the description, before the address.
+    pure function join(first: string, second: string) -> string {
+        first == "" ? second : second == "" ? first : first + ", " + second
+    }
+
     height: 44px;
     border-radius: 6px;
     background: root.highlighted ? ChromePalette.item-selected : transparent;
     accessible-role: list-item;
-    accessible-label: root.item.title;
-    accessible-description: root.item.url;
+    accessible-label: root.item.title == "" ? "Untitled tab" : root.item.title;
+    accessible-description: root.join(
+        root.join(root.item.pinned ? "Pinned tab" : "", root.item.active ? "Current tab" : ""),
+        root.item.url);
     accessible-item-selectable: true;
     accessible-item-selected: root.highlighted;
     accessible-item-index: root.index;
@@ -173,6 +181,7 @@ export component TabSearchPanel inherits Rectangle {
                     vertical-alignment: center;
                     single-line: true;
                     accessible-label: "Search tabs";
+                    accessible-placeholder-text: "Search tabs";
                     edited => {
                         root.highlighted = 0;
                         root.query-edited(self.text);
@@ -199,6 +208,8 @@ export component TabSearchPanel inherits Rectangle {
                 viewport-height: root.rows.length * 46px;
                 accessible-role: AccessibleRole.list;
                 accessible-label: "Open tabs";
+                // a11y-base: with no rows it is 0 px high: it is then not read at all.
+                visible: root.rows.length > 0;
 
                 function reveal(index: int) {
                     if index * 46px < -self.viewport-y {

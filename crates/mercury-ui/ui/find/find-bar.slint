@@ -10,6 +10,9 @@ component FindButton inherits Rectangle {
     in property <string> tooltip;
     in property <bool> enabled: true;
     in property <bool> checked: false;
+    // a11y-base: a button that stays pressed ("Match case"), told to assistive technology as a
+    // toggle with its state; the others only press.
+    in property <bool> toggles: false;
     in property <length> font-size: 15px;
     callback clicked;
 
@@ -24,9 +27,17 @@ component FindButton inherits Rectangle {
     opacity: root.enabled ? 1 : 0.35;
     accessible-role: button;
     accessible-label: root.tooltip;
+    accessible-checkable: root.toggles;
     accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
 
     Text {
+        accessible-role: none;
         text: root.label;
         // A checked button is filled with the selection colour, so its label takes the selection's
         // text colour (the hover label colour is an accent and vanishes on that fill).
@@ -85,6 +96,10 @@ export component FindBar inherits Rectangle {
 
     background: ChromePalette.toolbar-background;
     visible: root.shown;
+    // a11y-base: a search landmark; its field is "Find in page", its status ("3 of 7") is plain
+    // text, and the five controls are the field and four buttons.
+    accessible-role: search;
+    accessible-label: "Find bar";
 
     HorizontalLayout {
         padding-left: 14px;
@@ -110,6 +125,7 @@ export component FindBar inherits Rectangle {
                 color: ChromePalette.placeholder;
                 font-size: 13px;
                 vertical-alignment: center;
+                accessible-role: none;
             }
 
             field := TextInput {
@@ -122,6 +138,7 @@ export component FindBar inherits Rectangle {
                 vertical-alignment: center;
                 single-line: true;
                 accessible-label: "Find in page";
+                accessible-placeholder-text: "Find in page";
 
                 edited => {
                     root.edited(self.text);
@@ -147,6 +164,8 @@ export component FindBar inherits Rectangle {
         Text {
             min-width: 76px;
             text: root.status;
+            // a11y-base: nothing to read before a search; it keeps its room (invisible, not removed).
+            visible: root.status != "";
             color: ChromePalette.button-label;
             font-size: 12px;
             vertical-alignment: center;
@@ -178,6 +197,7 @@ export component FindBar inherits Rectangle {
             label: "Aa";
             font-size: 13px;
             tooltip: "Match case";
+            toggles: true;
             checked: root.match-case;
             clicked => {
                 root.toggle-match-case();
