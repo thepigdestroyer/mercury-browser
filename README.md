@@ -147,7 +147,7 @@ pie showData title Work packages, 19 November 2026
 | A completely redesigned, highly customisable interface | 🗓️ Planned | Replaces the look inherited from Hermes |
 | Accessibility of Mercury's own windows | 🗓️ Planned | |
 | Phishing protection, search suggestions, password breach checks, translation, update checks | 🗓️ Planned | Waiting for decisions on providers and keys |
-| macOS disk image built and published by CI, signed ad hoc | ✅ Done | No release has been tagged yet |
+| macOS disk image built and published by CI, signed ad hoc | ✅ Done | No release has been published yet |
 | With each release: SHA-256 checksums, a build-provenance attestation, the source of the bundled LGPL libraries and a signed update manifest | ✅ Done | The release workflow makes them once the owner has set up the update signing key. The browser does not check for updates yet |
 | macOS releases signed with a Developer ID and notarised | 🗓️ Planned | Needs an Apple Developer ID |
 
