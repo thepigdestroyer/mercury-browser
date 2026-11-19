@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>WebGL2 texture storage</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 20px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 20px; }
+  .line { margin-bottom: 6px; word-break: break-word; }
+  .tag { font-family: Menlo, monospace; font-weight: bold; margin-right: 8px; }
+  .PASS { color: #0a7a0a; }
+  .FAIL { color: #b00020; }
+  .SKIP, .INFO { color: #555555; }
+</style>
+</head>
+<body>
+<!--
+  Mercury K0 item 4 (WebGL backports): checks what servo#49436, #49632 and #49912 changed. One line per check, PASS,
+  FAIL or SKIP. A crash page, or no "done" line at the end, is a failure.
+
+  servo#49436: texStorage2D/3D storage is zeroed. The readbacks below must be all zero. They dirty the GPU's memory
+    first, but a driver that clears new storage itself passes with or without the fix, so a PASS here shows there is
+    no regression and no crash in the new zeroing code; it cannot prove the zeroing on such a driver.
+    A 2D array texture also keeps its layer count at every level (the webgltexture.rs part), which the "layer 5 can
+    be written at every level" check exercises. The zero readbacks use framebufferTextureLayer only for TEXTURE_3D:
+    Servo 0.8 rejects it for a TEXTURE_2D_ARRAY texture (fixed by servo#49902, which Mercury does not carry yet).
+  servo#49632: getParameter with a texture binding constant that the context does not have sets INVALID_ENUM and
+    returns null; Servo 0.8 panicked.
+  servo#49912: texStorage rejects S3TC formats until the extension is enabled, and depth formats for TEXTURE_3D.
+  Screenshot: the page runs in well under a second; --screenshot-delay 2000 is plenty.
+-->
+<div id="results"></div>
+<script>
+  "use strict";
+  const results = document.getElementById("results");
+  const counts = { PASS: 0, FAIL: 0, SKIP: 0 };
+
+  function line(tag, text) {
+    const item = document.createElement("div");
+    item.className = "line";
+    const mark = document.createElement("span");
+    mark.className = "tag " + tag;
+    mark.textContent = tag;
+    item.appendChild(mark);
+    item.appendChild(document.createTextNode(text));
+    results.appendChild(item);
+    if (tag in counts) counts[tag]++;
+  }
+
+  // A check returns true for PASS, a string starting with "SKIP:" to skip, or any other string as the FAIL reason.
+  function check(label, run) {
+    let outcome;
+    try {
+      outcome = run();
+    } catch (error) {
+      outcome = "threw " + error;
+    }
+    if (outcome === true) line("PASS", label);
+    else if (typeof outcome === "string" && outcome.startsWith("SKIP:")) line("SKIP", label + " (" + outcome.slice(5).trim() + ")");
+    else line("FAIL", label + ": " + outcome);
+  }
+
+  const ERRORS = { 0: "NO_ERROR", 0x0500: "INVALID_ENUM", 0x0501: "INVALID_VALUE", 0x0502: "INVALID_OPERATION",
+                   0x0505: "OUT_OF_MEMORY", 0x0506: "INVALID_FRAMEBUFFER_OPERATION", 0x9242: "CONTEXT_LOST_WEBGL" };
+  const errorName = (error) => ERRORS[error] || "0x" + error.toString(16);
+
+  // Reads the error flag until it is clear; returns the first error that was set.
+  function takeError(gl) {
+    const first = gl.getError();
+    for (let i = 0; i < 16 && gl.getError() !== gl.NO_ERROR; i++) { /* drain */ }
+    return first;
+  }
+
+  // The result of `gl.getError()` after `run`, starting from a clear error flag.
+  function errorAfter(gl, run) {
+    takeError(gl);
+    run();
+    return takeError(gl);
+  }
+
+  function newContext(version) {
+    const canvas = document.createElement("canvas");
+    canvas.width = 16;
+    canvas.height = 16;
+    return canvas.getContext(version);
+  }
+
+  // Number of non-zero bytes of the colour attachment, read as RGBA / UNSIGNED_BYTE.
+  function nonZeroBytes(gl, width, height) {
+    const pixels = new Uint8Array(width * height * 4);
+    pixels.fill(0xcd);
+    gl.readPixels(0, 0, width, height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+    let count = 0;
+    for (const byte of pixels) if (byte !== 0) count++;
+    return count;
+  }
+
+  // Checks the bound framebuffer is complete, then that its colour attachment reads back as all zero.
+  function readsZero(gl, width, height, what) {
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) return "SKIP: " + what + " framebuffer incomplete, status 0x" + status.toString(16);
+    const error = takeError(gl);
+    if (error !== gl.NO_ERROR) return what + " set " + errorName(error) + " while attaching";
+    const bad = nonZeroBytes(gl, width, height);
+    const after = takeError(gl);
+    if (after !== gl.NO_ERROR) return what + " readPixels set " + errorName(after);
+    return bad === 0 ? true : what + ": " + bad + " non-zero bytes of " + width * height * 4;
+  }
+
+  // Fills a texture with a pattern and deletes it, so the memory a later texStorage gets is not clean.
+  function dirtyTheMemory(gl, width, height) {
+    const data = new Uint8Array(width * height * 4).fill(0xab);
+    for (let round = 0; round < 3; round++) {
+      const scratch = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, scratch);
+      gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, width, height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data);
+      gl.deleteTexture(scratch);
+    }
+    takeError(gl);
+  }
+
+  const gl2 = newContext("webgl2");
+  if (!gl2) {
+    line("FAIL", "no WebGL2 context");
+  } else {
+    line("INFO", "VERSION: " + gl2.getParameter(gl2.VERSION));
+    const gl = gl2;
+    const framebuffer = gl.createFramebuffer();
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+
+    // ---- servo#49436: zeroed storage ------------------------------------------------------------------------
+
+    check("texStorage2D RGBA8 256x256, 4 levels: every level reads back as zero", () => {
+      dirtyTheMemory(gl, 256, 256);
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      gl.texStorage2D(gl.TEXTURE_2D, 4, gl.RGBA8, 256, 256);
+      const error = takeError(gl);
+      if (error !== gl.NO_ERROR) return "texStorage2D set " + errorName(error);
+      for (let level = 0, size = 256; level < 4; level++, size >>= 1) {
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, level);
+        const outcome = readsZero(gl, size, size, "level " + level + " (" + size + "x" + size + ")");
+        if (outcome !== true) return outcome;
+      }
+      return true;
+    });
+
+    check("texStorage2D on a cube map: all six faces read back as zero", () => {
+      dirtyTheMemory(gl, 64, 64);
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_CUBE_MAP, texture);
+      gl.texStorage2D(gl.TEXTURE_CUBE_MAP, 2, gl.RGBA8, 64, 64);
+      const error = takeError(gl);
+      if (error !== gl.NO_ERROR) return "texStorage2D set " + errorName(error);
+      for (let face = 0; face < 6; face++) {
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_CUBE_MAP_POSITIVE_X + face, texture, 0);
+        const outcome = readsZero(gl, 64, 64, "face " + face);
+        if (outcome !== true) return outcome;
+      }
+      return true;
+    });
+
+    check("texStorage3D TEXTURE_3D 32x32x8, 3 levels: layers read back as zero", () => {
+      dirtyTheMemory(gl, 32, 32);
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_3D, texture);
+      gl.texStorage3D(gl.TEXTURE_3D, 3, gl.RGBA8, 32, 32, 8);
+      const error = takeError(gl);
+      if (error !== gl.NO_ERROR) return "texStorage3D set " + errorName(error);
+      // Depth halves with the level for a 3D texture: 8, 4, 2.
+      for (const [level, layer, size] of [[0, 7, 32], [1, 3, 16], [2, 1, 8]]) {
+        gl.framebufferTextureLayer(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, texture, level, layer);
+        const outcome = readsZero(gl, size, size, "level " + level + " layer " + layer);
+        if (outcome !== true) return outcome;
+      }
+      return true;
+    });
+
+    check("texStorage3D TEXTURE_2D_ARRAY 32x32x6, 3 levels: layer 5 can be written at every level", () => {
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+      gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 3, gl.RGBA8, 32, 32, 6);
+      const error = takeError(gl);
+      if (error !== gl.NO_ERROR) return "texStorage3D set " + errorName(error);
+      // A 2D array keeps its layer count at every level. Before servo#49436 the count was halved with each level, so
+      // layer 5 of level 2 was out of range. (Not read back through a framebuffer: framebufferTextureLayer does not
+      // accept a TEXTURE_2D_ARRAY texture in Servo 0.8, which servo#49902 fixes and Mercury does not carry yet.)
+      for (const [level, size] of [[0, 32], [1, 16], [2, 8]]) {
+        const data = new Uint8Array(size * size * 4).fill(1);
+        const writeError = errorAfter(gl, () =>
+          gl.texSubImage3D(gl.TEXTURE_2D_ARRAY, level, 0, 0, 5, size, size, 1, gl.RGBA, gl.UNSIGNED_BYTE, data));
+        if (writeError !== gl.NO_ERROR) return "texSubImage3D level " + level + " layer 5 set " + errorName(writeError);
+      }
+      return true;
+    });
+
+    // ---- servo#49912: texStorage format checks --------------------------------------------------------------
+
+    const S3TC = [0x83f0, 0x83f1, 0x83f2, 0x83f3];
+    const DEPTH = ["DEPTH_COMPONENT16", "DEPTH_COMPONENT24", "DEPTH_COMPONENT32F", "DEPTH24_STENCIL8", "DEPTH32F_STENCIL8"];
+
+    check("texStorage2D rejects S3TC formats before the extension is enabled (INVALID_ENUM)", () => {
+      for (const format of S3TC) {
+        gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+        const error = errorAfter(gl, () => gl.texStorage2D(gl.TEXTURE_2D, 1, format, 4, 4));
+        if (error !== gl.INVALID_ENUM) return "0x" + format.toString(16) + " gave " + errorName(error);
+      }
+      return true;
+    });
+
+    check("texStorage3D rejects S3TC formats before the extension is enabled (INVALID_ENUM)", () => {
+      for (const format of S3TC) {
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, gl.createTexture());
+        const error = errorAfter(gl, () => gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, format, 4, 4, 1));
+        if (error !== gl.INVALID_ENUM) return "0x" + format.toString(16) + " gave " + errorName(error);
+      }
+      return true;
+    });
+
+    check("texStorage3D rejects depth formats for TEXTURE_3D (INVALID_OPERATION)", () => {
+      for (const format of DEPTH) {
+        gl.bindTexture(gl.TEXTURE_3D, gl.createTexture());
+        const error = errorAfter(gl, () => gl.texStorage3D(gl.TEXTURE_3D, 1, gl[format], 4, 4, 4));
+        if (error !== gl.INVALID_OPERATION) return format + " gave " + errorName(error);
+      }
+      return true;
+    });
+
+    check("texStorage3D accepts depth formats for TEXTURE_2D_ARRAY (NO_ERROR)", () => {
+      for (const format of DEPTH) {
+        gl.bindTexture(gl.TEXTURE_2D_ARRAY, gl.createTexture());
+        const error = errorAfter(gl, () => gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 1, gl[format], 4, 4, 4));
+        if (error !== gl.NO_ERROR) return format + " gave " + errorName(error);
+      }
+      return true;
+    });
+
+    check("texStorage2D accepts S3TC once WEBGL_compressed_texture_s3tc is enabled (NO_ERROR)", () => {
+      if (!gl.getExtension("WEBGL_compressed_texture_s3tc")) return "SKIP: extension not available";
+      for (const format of S3TC) {
+        gl.bindTexture(gl.TEXTURE_2D, gl.createTexture());
+        const error = errorAfter(gl, () => gl.texStorage2D(gl.TEXTURE_2D, 1, format, 4, 4));
+        if (error !== gl.NO_ERROR) return "0x" + format.toString(16) + " gave " + errorName(error);
+      }
+      return true;
+    });
+
+    // ---- servo#49632: texture binding queries ---------------------------------------------------------------
+
+    check("WebGL2: TEXTURE_BINDING_2D_ARRAY and _3D with nothing bound give null and NO_ERROR", () => {
+      takeError(gl);
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, null);
+      gl.bindTexture(gl.TEXTURE_3D, null);
+      const array = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
+      const volume = gl.getParameter(gl.TEXTURE_BINDING_3D);
+      const error = takeError(gl);
+      if (array !== null || volume !== null) return "got " + array + " and " + volume;
+      return error === gl.NO_ERROR ? true : "set " + errorName(error);
+    });
+
+    check("WebGL2: getParameter(TEXTURE_BINDING_2D_ARRAY) returns the bound texture", () => {
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
+      const bound = gl.getParameter(gl.TEXTURE_BINDING_2D_ARRAY);
+      const error = takeError(gl);
+      return bound === texture && error === gl.NO_ERROR ? true : "got " + bound + ", error " + errorName(error);
+    });
+  }
+
+  const gl1 = newContext("webgl");
+  if (!gl1) {
+    line("FAIL", "no WebGL1 context");
+  } else {
+    const gl = gl1;
+    const TEXTURE_BINDING_2D_ARRAY = 0x8c1d;
+    const TEXTURE_BINDING_3D = 0x806a;
+
+    check("WebGL1: getParameter(TEXTURE_BINDING_2D_ARRAY) gives null and INVALID_ENUM, not a panic", () => {
+      takeError(gl);
+      const value = gl.getParameter(TEXTURE_BINDING_2D_ARRAY);
+      const error = takeError(gl);
+      return value === null && error === gl.INVALID_ENUM ? true : "got " + value + ", error " + errorName(error);
+    });
+
+    check("WebGL1: getParameter(TEXTURE_BINDING_3D) gives null and INVALID_ENUM, not a panic", () => {
+      takeError(gl);
+      const value = gl.getParameter(TEXTURE_BINDING_3D);
+      const error = takeError(gl);
+      return value === null && error === gl.INVALID_ENUM ? true : "got " + value + ", error " + errorName(error);
+    });
+
+    check("WebGL1: TEXTURE_BINDING_2D and _CUBE_MAP with nothing bound give null and NO_ERROR", () => {
+      takeError(gl);
+      const flat = gl.getParameter(gl.TEXTURE_BINDING_2D);
+      const cube = gl.getParameter(gl.TEXTURE_BINDING_CUBE_MAP);
+      const error = takeError(gl);
+      if (flat !== null || cube !== null) return "got " + flat + " and " + cube;
+      return error === gl.NO_ERROR ? true : "set " + errorName(error);
+    });
+
+    check("WebGL1: getParameter(TEXTURE_BINDING_2D) returns the bound texture", () => {
+      const texture = gl.createTexture();
+      gl.bindTexture(gl.TEXTURE_2D, texture);
+      const bound = gl.getParameter(gl.TEXTURE_BINDING_2D);
+      const error = takeError(gl);
+      return bound === texture && error === gl.NO_ERROR ? true : "got " + bound + ", error " + errorName(error);
+    });
+  }
+
+  line("INFO", "done: " + counts.PASS + " passed, " + counts.FAIL + " failed, " + counts.SKIP + " skipped");
+</script>
+</body>
+</html>
