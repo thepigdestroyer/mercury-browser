@@ -101,8 +101,9 @@ pub struct RuntimeOptions {
     /// Where Servo keeps cookies, HSTS, HTTP authentication and site storage. `None` keeps
     /// nothing across runs.
     pub config_dir: Option<PathBuf>,
-    /// Turn on servoshell's experimental web-platform features, except the async clipboard and
-    /// WebGPU (see `EXCLUDED_EXPERIMENTAL_PREFS`).
+    /// Turn on servoshell's experimental web-platform features, except the async clipboard,
+    /// WebGPU and container queries (see `EXCLUDED_EXPERIMENTAL_PREFS`). The web-compatibility
+    /// preferences of `engine_prefs.rs` do not depend on it.
     pub experimental_web_features: bool,
     // settings
     /// Block ads and trackers from the start; changed later through `ServoRuntime::switches`.
@@ -588,8 +589,15 @@ const EXPERIMENTAL_PREFS: &[&str] = &[
 ];
 
 /// Entries of `EXPERIMENTAL_PREFS` that Mercury leaves off; the reasons are given where they
-/// are pinned in `mercury_preferences`.
-const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &["dom_async_clipboard_enabled", "dom_webgpu_enabled"];
+/// are pinned in `mercury_preferences`, except for container queries: Servo parses `@container`
+/// blocks and drops them (`@container` is Gecko-only in Stylo), and
+/// `CSS.supports('container-type', 'inline-size')` and `@supports` would report support that is
+/// not there, so pages would take the container query branch and get none of its layout.
+const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &[
+    "dom_async_clipboard_enabled",
+    "dom_webgpu_enabled",
+    "layout_css_container_queries_enabled",
+];
 
 /// Servo's user agent already names the Firefox release it matches, but carries a `Servo/x.y`
 /// token where Firefox has `Gecko/20100101`; some sites refuse to serve unrecognised browsers.
@@ -1420,15 +1428,44 @@ mod tests {
         assert_eq!(EXPERIMENTAL_PREFS.len(), 18);
         assert_eq!(
             EXCLUDED_EXPERIMENTAL_PREFS,
-            &["dom_async_clipboard_enabled", "dom_webgpu_enabled"]
+            &[
+                "dom_async_clipboard_enabled",
+                "dom_webgpu_enabled",
+                "layout_css_container_queries_enabled",
+            ]
         );
         let enabled = EXPERIMENTAL_PREFS
             .iter()
             .filter(|name| !EXCLUDED_EXPERIMENTAL_PREFS.contains(name))
             .collect::<Vec<_>>();
-        assert_eq!(enabled.len(), 16);
+        assert_eq!(enabled.len(), 15);
         for name in enabled {
             assert_eq!(preferences.get_value(name), PrefValue::Bool(true), "{name}");
+        }
+    }
+
+    // engine prefs
+    #[test]
+    fn container_queries_stay_off_so_that_pages_do_not_detect_them() {
+        // `@supports` and `CSS.supports` follow this preference, but Servo drops `@container`.
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert!(
+                !preferences.layout_css_container_queries_enabled,
+                "experimental features: {enabled}"
+            );
+        }
+    }
+
+    #[test]
+    fn web_compatibility_preferences_do_not_need_the_experimental_switch() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert!(preferences.dom_composition_event_enabled, "{enabled}");
+            assert!(preferences.dom_adoptedstylesheet_enabled, "{enabled}");
+            assert!(preferences.dom_visual_viewport_enabled, "{enabled}");
         }
     }
 
@@ -1529,6 +1566,7 @@ mod tests {
                 "dom_web_animations_enabled",
                 "dom_serviceworker_enabled",
                 "dom_webgpu_enabled",
+                "layout_css_container_queries_enabled",
                 "accessibility_enabled",
                 "expensive_accessibility_test_assertions_enabled",
                 // The media-capture pin stays: the new switch above replaces it later.

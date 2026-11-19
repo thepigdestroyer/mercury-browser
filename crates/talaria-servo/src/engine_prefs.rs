@@ -78,6 +78,18 @@ pub(crate) fn apply(preferences: &mut Preferences) {
     preferences.media_autoplay_block_origins.clear();
     preferences.media_webrtc_ip_policy.clear();
     preferences.stylo_prefs = stylo_prefs_list();
+    // Web compatibility (R14d ED1). Sites and frameworks feature-detect these, so each is on only
+    // because it works:
+    // - composition events: Servo already dispatches them; with the preference off,
+    //   `'CompositionEvent' in window` is false and React's input-method path falls back;
+    // - adopted style sheets: constructable style sheets in documents and shadow roots (Lit);
+    // - the visual viewport: read-only `window.visualViewport`. A trial: it stays only while
+    //   `tests/pages/compat-features.html` shows sane values and no run crashes.
+    // Container queries are off, in `runtime.rs` (`EXCLUDED_EXPERIMENTAL_PREFS`): Servo parses
+    // `@container` blocks and drops them, and `@supports` would report support that is not there.
+    preferences.dom_composition_event_enabled = true;
+    preferences.dom_adoptedstylesheet_enabled = true;
+    preferences.dom_visual_viewport_enabled = true;
 }
 
 #[cfg(test)]
@@ -130,6 +142,14 @@ mod tests {
         assert_eq!(preferences.media_autoplay_allow_origins, "");
         assert_eq!(preferences.media_autoplay_block_origins, "");
         assert_eq!(preferences.media_webrtc_ip_policy, "");
+    }
+
+    #[test]
+    fn the_web_compatibility_preferences_are_on() {
+        let preferences = applied();
+        assert!(preferences.dom_composition_event_enabled);
+        assert!(preferences.dom_adoptedstylesheet_enabled);
+        assert!(preferences.dom_visual_viewport_enabled);
     }
 
     #[test]
