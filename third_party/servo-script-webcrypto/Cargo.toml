@@ -187,7 +187,8 @@ version = "0.15"
 optional = true
 
 [dependencies.js]
-version = "=0.26.13"
+# Mercury: mozjs 0.27.0 (SpiderMonkey 153.7.0, mozjs_sys 153.7.0-0) for its security fixes, servo/servo#49907.
+version = "=0.27.0"
 features = [
     "intl",
     "libz-sys",
