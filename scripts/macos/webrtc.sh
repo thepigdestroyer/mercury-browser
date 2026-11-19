@@ -51,6 +51,8 @@
 # the assets, for the tests); the pins above are checked either way. MERCURY_WEBRTC_INSPECT_DIR
 # is where `inspect` also writes its raw symbol lists (default: a temporary directory).
 
+# The Markdown that `inspect` prints has backticks inside printf formats.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 PIN_IDS="libwebrtc libwebrtc-c"
@@ -80,6 +82,7 @@ MANIFEST_NAME=".mercury-webrtc-manifest"
 cache_root="${MERCURY_WEBRTC_CACHE:-${HOME}/Library/Caches/mercury-browser/webrtc}"
 
 # Scratch space for the listings `check` compares; removed when the script ends.
+inspect_dir=""
 work_dir="$(mktemp -d "${TMPDIR:-/tmp}/mercury-webrtc.XXXXXX")"
 trap 'rm -rf -- "$work_dir"' EXIT
 
@@ -456,8 +459,468 @@ cmd_env() {
     printf '%s' "$lines"
 }
 
+# ── inspect: the static audit of an unpacked archive, as Markdown ───────────────────────────────
+# Everything here reads files and runs nm, otool, lipo and vtool on them; nothing from an archive is
+# executed, so it works on an Intel Mac and on the arm64 runner alike.
+
+# md_row <cell> ...: one Markdown table row.
+md_row() {
+    local row="|" cell
+    for cell in "$@"; do
+        row="${row} ${cell} |"
+    done
+    printf '%s\n' "$row"
+}
+
+# md_header <cell> ...: a header row and its separator row.
+md_header() {
+    local separator="|" cell
+    md_row "$@"
+    for cell in "$@"; do
+        separator="${separator} --- |"
+    done
+    printf '%s\n' "$separator"
+}
+
+# human <bytes>: 12345678 -> 11.8 MiB.
+human() {
+    awk -v b="$1" 'BEGIN {
+        split("B KiB MiB GiB", unit, " "); i = 1
+        while (b >= 1024 && i < 4) { b /= 1024; i++ }
+        if (i == 1) printf "%d %s", b, unit[i]; else printf "%.1f %s", b, unit[i]
+    }'
+}
+
+# sym_count <symbols.tsv> <def|undef|local|all> <awk regex>: how many symbols of that kind match.
+# The table has the columns type, member and symbol (see build_symbol_table).
+sym_count() {
+    awk -F'\t' -v kind="$2" -v re="$3" '
+        {
+            ok = (kind == "all") || (kind == "undef" && $1 == "U") || (kind == "def" && $1 ~ /^[A-TV-Z]$/) ||
+                 (kind == "local" && $1 ~ /^[a-z]$/)
+            if (ok && $3 ~ re) n++
+        }
+        END { print n + 0 }' "$1"
+}
+
+# build_symbol_table <archive> <output>: "type<TAB>member<TAB>symbol" for every symbol of every member
+# (nm -A: global, local and undefined).
+build_symbol_table() {
+    (cd "$(dirname -- "$1")" && nm -A "$(basename -- "$1")") | awk '
+        { m = $1; sub(/^[^:]*:/, "", m); sub(/:$/, "", m)
+          if ($2 == "U") print "U\t" m "\t" $3; else print $3 "\t" m "\t" $4 }' >"$2"
+}
+
+# One row per check: <label> <awk regex>, ... The counts are of global definitions, undefined
+# references and local symbols, over all members; one pass over the table for all rows.
+inspect_rows() {
+    local table="$1" specs="${work_dir}/row-specs" label re
+    shift
+    : >"$specs"
+    while [ "$#" -ge 2 ]; do
+        printf '%s\t%s\n' "$1" "$2" >>"$specs"
+        shift 2
+    done
+    awk -F'\t' '
+        BEGIN { n = 0 }
+        NR == FNR { label[n] = $1; re[n] = $2; n++; next }
+        {
+            kind = ""
+            if ($1 == "U") kind = "undef"
+            else if ($1 ~ /^[A-TV-Z]$/) kind = "def"
+            else if ($1 ~ /^[a-z]$/) kind = "local"
+            if (kind == "") next
+            for (i = 0; i < n; i++) if ($3 ~ re[i]) count[i, kind]++
+        }
+        END { for (i = 0; i < n; i++) printf "%s\t%d\t%d\t%d\n", label[i], count[i, "def"], count[i, "undef"], count[i, "local"] }' \
+        "$specs" "$table" | while IFS=$'\t' read -r label defined referenced local_count; do
+        md_row "$label" "$defined" "$referenced" "$local_count"
+    done
+}
+
+# The component each archive member belongs to, by the symbols it defines and, failing that, by its
+# name. One line per member: "<component><TAB><member>".
+classify_members() {
+    awk -F'\t' '
+        $1 == "U" { next }
+        {
+            m = $2; s = $3; seen[m] = 1
+            if (s ~ /^_(vpx_|vp8_|vp9_|vpx|vp8cx|vp8dx)/) k = "libvpx"
+            else if (s ~ /^_dav1d_/) k = "dav1d"
+            else if (s ~ /^_(aom_|av1_|aomx_|od_|cdef_|av1)/) k = "libaom"
+            else if (s ~ /^_(opus_|silk_|celt_|ec_|WebRtcOpus|mapping|clt_|downmix|opus)/) k = "opus"
+            else if (s ~ /^_(srtp_|crypto_kernel|aes_icm|aes_gcm|stat_test|rdbx|null_cipher|datatypes)/) k = "libsrtp"
+            else if (s ~ /^_(chromium_|jsimd_|jpeg_)/) k = "libjpeg-turbo"
+            else if (s ~ /^_Cr_z_/) k = "zlib (Chromium, Cr_z_ prefixed)"
+            else if (s ~ /^__ZN4bssl|^_(SSL_|EVP_|X509_|BN_|CRYPTO_|OPENSSL_|ERR_|RSA_|EC_|ECDSA_|ECDH_|AES_|SHA|HMAC|CBS_|CBB_|BIO_|ASN1_|OBJ_|d2i_|i2d_|DH_|DSA_|RAND_|ED25519|X25519|CTR_|GCM|bssl|ssl_|x509|PEM_|CONF_|NCONF|BUF_|PKCS|sk_|MD5|RC4|chacha|fiat_|KYBER|MLKEM|MLDSA|SLHDSA|TRUST_TOKEN|SPAKE|XWING|poly1305|aes_|bn_|ecp_|ec_|rsa_|evp_|des_|DES_)/) k = "BoringSSL"
+            else if (s ~ /^__ZN6libyuv|^_(I4[0-9]|NV|ARGB|Scale|ConvertTo|ConvertFrom|Rotate|Mirror|Android|RAW|RGB|UYVY|YUY|H4|J4|I2|I0|I3|P2|Interpolate|Blend|Sobel|Compare|Hash|Sum|Convert)/) k = "libyuv"
+            else if (s ~ /^__ZN6dcsctp|^__ZN6webrtc|^__ZN3rtc|^__ZN8cricket|^__ZN7rnnoise|^_WebRtc|^_OBJC_(CLASS|METACLASS|IVAR)_[$]_RTC|^_RTC|^_rtc_|^_webrtc_|^_kRTC/) k = "webrtc"
+            else if (s ~ /^_(PaUtil|Pa_|pffft|ooura|rdft|cdft|makewt|G722)/) k = "webrtc third_party DSP"
+            else if (s ~ /google8protobuf/) k = "protobuf"
+            else if (s ~ /perfetto/) k = "perfetto"
+            else if (s ~ /^__ZN4absl|^_Absl/) k = "abseil"
+            else if (s ~ /^___cxa_|^__Znwm$|^__Znam$|^___dynamic_cast$|^___gxx_personality_v0$|^__ZSt9terminatev$|^__ZNSt4__Cr(6locale|8ios_base|4cout|4cerr|5ctype|7collate|8messages|9basic_ios|13basic_istream|13basic_ostream|12system_error|19__shared_weak_count)/) k = "libc++ and libc++abi"
+            else k = "none"
+            c[m, k]++
+        }
+        END {
+            # A member that defines webrtc symbols is a webrtc member even when it also defines
+            # protobuf, abseil or std:: template instantiations, so webrtc comes before those.
+            n = split("libvpx|dav1d|libaom|opus|libsrtp|libjpeg-turbo|zlib (Chromium, Cr_z_ prefixed)|BoringSSL|libyuv|webrtc|webrtc third_party DSP|protobuf|perfetto|abseil|libc++ and libc++abi", order, "|")
+            for (m in seen) {
+                cls = "none"
+                for (i = 1; i <= n; i++) if (c[m, order[i]] > 0) { cls = order[i]; break }
+                if (cls == "none") {
+                    # Members without a recognisable symbol: arch-guarded stubs of BoringSSL and libaom
+                    # assembly, protozero generated files, libyuv and opus leftovers; sorted by name.
+                    if (m ~ /[.]pbzero[.]o$|^trace_|^tracing/) cls = "perfetto"
+                    else if (m ~ /-(apple|linux|win|freebsd|openbsd|netbsd)[.]o$|^cpu_(aarch64|arm|intel|ppc)|^(siphash|engine|getentropy|err_data|mlkem|xwing|ssl_|tasn_|t_x509|v3_|f_string|buf|rc4|input)/) cls = "BoringSSL"
+                    else if (m ~ /^(row_|scale_|compare_|rotate_|convert_)/) cls = "libyuv"
+                    else if (m ~ /^(vp9_|vp8_)/) cls = "libvpx"
+                    else if (m ~ /^(cwrs|odintrin|cdef|mathops|pitch)/) cls = "opus or libaom (unclear)"
+                    else if (m ~ /^(trees|inflate|gz|crc32|deflate|adler)/) cls = "zlib (Chromium, Cr_z_ prefixed)"
+                    else if (m ~ /^j[a-z0-9]+[.]o$/) cls = "libjpeg-turbo"
+                    else cls = "unclassified (no global symbol)"
+                }
+                print cls "\t" m
+            }
+        }' "$1"
+}
+
+# notice_components <file> <heading marker>: one line per component of a NOTICE-style file (headings
+# such as "# name" with the marker "#", each followed by the licence text):
+# "<name><TAB><lines><TAB><licence words found>".
+notice_components() {
+    awk -v marker="$2" '
+        function flush() {
+            if (name == "") return
+            k = ""
+            if (txt ~ /Apache License/ && txt ~ /LLVM Exception/) k = k "Apache-2.0 WITH LLVM-exception; "
+            else if (txt ~ /Apache License/) k = k "Apache-2.0; "
+            if (txt ~ /Permission is hereby granted, free of charge/) k = k "MIT; "
+            if (txt ~ /Redistribution and use in source and binary forms/ && txt ~ /Neither the name/) k = k "BSD-3-Clause; "
+            else if (txt ~ /Redistribution and use in source and binary forms/) k = k "BSD-2-Clause; "
+            if (txt ~ /with or without fee/) k = k "ISC; "
+            if (txt ~ /Altered source versions/) k = k "zlib; "
+            if (txt ~ /Independent JPEG Group/) k = k "IJG; "
+            if (txt ~ /SSLeay|OpenSSL/) k = k "OpenSSL/SSLeay (advertising clause); "
+            if (txt ~ /public domain/ || txt ~ /Public Domain/) k = k "public-domain dedication; "
+            if (txt ~ /Mozilla Public License/) k = k "MPL (REVIEW); "
+            if (txt ~ /GNU (Lesser |Library )?General Public License|GPLv[23]|LGPL/) k = k "mentions GPL/LGPL (REVIEW: see the lines below); "
+            if (k == "") k = "custom permissive text (read it)"
+            printf "%s\t%d\t%s\n", name, lines, k
+        }
+        index($0, marker " ") == 1 { flush(); name = substr($0, length(marker) + 2); lines = 0; txt = "" }
+        { lines++; txt = txt "\n" $0 }
+        END { flush() }' "$1"
+}
+
+# inspect_licences <unpacked dir> <id>
+inspect_licences() {
+    local dir="$1" id="$2" file components marker
+    printf '\n### Licence and notice files\n\n'
+    printf 'Files in the archive whose name says licence, notice, patents or copying (outside include/):\n\n'
+    (cd "$dir" && find . -path ./include -prune -o -type f \( -iname 'LICENSE*' -o -iname 'NOTICE*' -o -iname 'PATENTS*' -o -iname 'COPYING*' -o -iname 'THIRD_PARTY*' \) -print | LC_ALL=C sort) |
+        while IFS= read -r file; do
+            printf -- '- `%s` (%s bytes)\n' "${file#./}" "$(size_of "${dir}/${file}")"
+        done
+    printf '\nPATENTS files anywhere (including include/): %s\n' \
+        "$(cd "$dir" && find . -iname 'PATENTS*' -type f | grep -c . || true)"
+    for file in NOTICE THIRD_PARTY_LICENSES.md; do
+        [ -f "${dir}/${file}" ] || continue
+        # NOTICE has "# component" headings; THIRD_PARTY_LICENSES.md has "# title" and "## component".
+        marker="#"
+        [ "$file" = "NOTICE" ] || marker="##"
+        components="$(notice_components "${dir}/${file}" "$marker")"
+        if [ -z "$components" ]; then
+            continue
+        fi
+        printf '\nComponents named in `%s`:\n\n' "$file"
+        md_header "Component" "Lines of text" "Licence found in the text"
+        while IFS=$'\t' read -r name lines licences; do
+            md_row "$name" "$lines" "$licences"
+        done <<<"$components"
+        if grep -q -i -E 'GNU|GPL' "${dir}/${file}"; then
+            printf '\nLines that mention GPL or LGPL in `%s` (these are the only ones; each is a mention, not a licence):\n\n' "$file"
+            grep -n -i -E 'GNU|GPL' "${dir}/${file}" | cut -c1-140 | sed 's/^/    /' || true
+        else
+            printf '\nNo line of `%s` mentions GPL, LGPL or GNU.\n' "$file"
+        fi
+    done
+    if [ "$id" = "libwebrtc-c" ]; then
+        printf '\n`LICENSE` is %s.\n' "$(head -n 3 "${dir}/LICENSE" | tr -s ' \n' ' ' | sed 's/^ //; s/ $//')"
+    fi
+}
+
+# inspect_one <id>
+inspect_one() {
+    local id="$1" dir archive lib tag table out first_members cls
+    tag="$(pin "$id" tag)"
+    dir="$(unpacked_path "$id")"
+    archive="$(archive_path "$id")"
+    case "$id" in
+        libwebrtc) lib="${dir}/lib/libwebrtc.a" ;;
+        libwebrtc-c) lib="${dir}/lib/libwebrtc_c.a" ;;
+    esac
+    out="${inspect_dir}/${id}"
+    mkdir -p "$out"
+    table="${out}/symbols.tsv"
+
+    printf '\n## %s %s\n\n' "$id" "$tag"
+    printf -- '- Asset: `%s` from `%s`\n' "$(pin "$id" asset)" "$(pin "$id" repo)"
+    printf -- '- Tarball: %s bytes (%s), sha256 `%s`, verified by `check`\n' "$(pin "$id" size)" "$(human "$(pin "$id" size)")" "$(pin "$id" sha256)"
+    printf -- '- Unpacked: %s KiB in %s files and %s symbolic links\n' \
+        "$(du -sk "$dir" | cut -f 1)" "$(grep -vc '^link ' "${dir}/${MANIFEST_NAME}" || true)" "$(grep -c '^link ' "${dir}/${MANIFEST_NAME}" || true)"
+    printf -- '- Static library: `%s`, %s bytes (%s)\n' "${lib#"${dir}"/}" "$(size_of "$lib")" "$(human "$(size_of "$lib")")"
+    printf -- '- Architecture: `%s`\n' "$(lipo -info "$lib" 2>&1)"
+    if [ -f "$(archive_path "$id").sha256" ] || [ -n "$(pin "$id" sidecar)" ]; then
+        printf -- '- Release checksum file `%s`: `%s`; the local sha256 is `%s`: %s\n' "$(pin "$id" sidecar)" \
+            "$(head -c 200 "$(id_dir "$id")/$(pin "$id" sidecar)" 2>/dev/null | tr -d '\n')" "$(sha256_of "$archive")" \
+            "$([ "$(head -c 64 "$(id_dir "$id")/$(pin "$id" sidecar)" 2>/dev/null)" = "$(sha256_of "$archive")" ] && echo equal || echo DIFFERENT)"
+    fi
+
+    printf '\n### Tree (top level of the unpacked archive)\n\n'
+    md_header "Entry" "Size" "Files"
+    (cd "$dir" && for entry in * ; do
+        [ -e "$entry" ] || continue
+        md_row "\`${entry}\`" "$(human $(($(du -sk "$entry" | cut -f 1) * 1024)))" "$(find "$entry" -type f | grep -c . || true)"
+    done)
+    if [ -d "${dir}/include" ]; then
+        printf '\n`include/` holds %s files; the largest groups:\n\n' "$(find "${dir}/include" -type f | grep -c . || true)"
+        md_header "Directory" "Files"
+        (cd "${dir}/include" && for entry in * third_party/*; do
+            if [ -d "$entry" ]; then printf '%s\t%s\n' "$(find "$entry" -type f | grep -c . || true)" "$entry"; fi
+        done | LC_ALL=C sort -rn | head -12 | while IFS=$'\t' read -r n entry; do md_row "\`include/${entry}\`" "$n"; done)
+    fi
+
+    inspect_licences "$dir" "$id"
+
+    say "inspect: reading the symbols of ${lib##*/} (${id})"
+    build_symbol_table "$lib" "$table"
+    printf '\n### Build target\n\n'
+    printf 'Members of the archive: %s (%s distinct names).\n\n' "$(ar t "$lib" | grep -vc '^__.SYMDEF' || true)" \
+        "$(ar t "$lib" | grep -v '^__.SYMDEF' | LC_ALL=C sort -u | grep -c . || true)"
+    md_header "minos and sdk of the members (otool -l)" "Members"
+    otool -l "$lib" | awk '
+        /^ +minos / { minos = $2 }
+        /^ +sdk /   { sdk = $2; count["minos " minos ", sdk " sdk]++ }
+        END { for (k in count) print count[k] "\t" k }' | LC_ALL=C sort -rn |
+        while IFS=$'\t' read -r n what; do md_row "$what" "$n"; done
+
+    printf '\n### Members by component\n\n'
+    printf 'By the symbols each member defines (and, for members without a recognisable symbol, by name): a guide, not a proof. Full list: `%s`.\n\n' "${out}/members.tsv"
+    classify_members "$table" | LC_ALL=C sort >"${out}/members.tsv"
+    md_header "Component" "Members" "First members"
+    cut -f 1 "${out}/members.tsv" | LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn | while read -r n cls_name; do
+        cls="${cls_name}"
+        first_members="$(awk -F'\t' -v c="$cls" '$1 == c { printf "%s ", $2; if (++k == 5) exit }' "${out}/members.tsv")"
+        md_row "$cls" "$n" "\`${first_members% }\`"
+    done
+
+    printf '\n### Absence checks (no software H.264, H.265, FFmpeg)\n\n'
+    printf 'Counts over every symbol of every member: global definitions, undefined references, local symbols.\n\n'
+    md_header "Pattern (awk regex on the symbol)" "Defined" "Referenced" "Local"
+    inspect_rows "$table" \
+        'Wels (OpenH264)' 'Wels' \
+        'openh264 or OpenH264' '[Oo]pen[Hh]264' \
+        'x264' 'x264' \
+        'x265' 'x265' \
+        'libde265 (de265)' 'de265' \
+        'ff_ (FFmpeg internals)' '^_ff_' \
+        'avcodec_' '^_avcodec_' \
+        'av_ (FFmpeg)' '^_av_' \
+        'ffmpeg in any case' '[Ff][Ff][Mm][Pp][Ee][Gg]' \
+        'iLBC (WebRtcIlbc)' 'WebRtcIlbc'
+
+    printf '\n### Presence checks\n\n'
+    md_header "Pattern (awk regex on the symbol)" "Defined" "Referenced" "Local"
+    inspect_rows "$table" \
+        'ObjC RTCDefaultVideoEncoderFactory' '^_OBJC_CLASS_[$]_RTCDefaultVideoEncoderFactory$' \
+        'ObjC RTCDefaultVideoDecoderFactory' '^_OBJC_CLASS_[$]_RTCDefaultVideoDecoderFactory$' \
+        'ObjC RTCVideoEncoderH264 (VideoToolbox)' '^_OBJC_CLASS_[$]_RTCVideoEncoderH264$' \
+        'ObjC RTCVideoDecoderH264 (VideoToolbox)' '^_OBJC_CLASS_[$]_RTCVideoDecoderH264$' \
+        'ObjC RTCVideoEncoderFactoryH264' '^_OBJC_CLASS_[$]_RTCVideoEncoderFactoryH264$' \
+        'ObjC RTCVideoEncoderH265 (VideoToolbox)' '^_OBJC_CLASS_[$]_RTCVideoEncoderH265$' \
+        'ObjC RTCVideoDecoderH265 (VideoToolbox)' '^_OBJC_CLASS_[$]_RTCVideoDecoderH265$' \
+        'VTCompressionSessionCreate (the OS encoder)' '^_VTCompressionSessionCreate$' \
+        'VTDecompressionSessionCreate (the OS decoder)' '^_VTDecompressionSessionCreate$' \
+        'webrtc::H264 and H265 RTP packetizers and parsers' 'RtpPacketizerH26[45]|H26[45]BitstreamParser' \
+        'libvpx VP8 encoder (vpx_codec_vp8_cx_algo)' '^_vpx_codec_vp8_cx_algo$' \
+        'libvpx VP8 decoder (vpx_codec_vp8_dx_algo)' '^_vpx_codec_vp8_dx_algo$' \
+        'libvpx VP9 encoder (vpx_codec_vp9_cx_algo)' '^_vpx_codec_vp9_cx_algo$' \
+        'libvpx VP9 decoder (vpx_codec_vp9_dx_algo)' '^_vpx_codec_vp9_dx_algo$' \
+        'libvpx, all vpx_codec_* functions' '^_vpx_codec_' \
+        'libaom AV1 encoder (aom_codec_av1_cx_algo)' '^_aom_codec_av1_cx_algo$' \
+        'libaom AV1 decoder (aom_codec_av1_dx_algo)' '^_aom_codec_av1_dx_algo$' \
+        'dav1d (dav1d_open)' '^_dav1d_open$' \
+        'dav1d, all dav1d_* functions' '^_dav1d_' \
+        'Opus (opus_encoder_create)' '^_opus_encoder_create$' \
+        'Opus (opus_decoder_create)' '^_opus_decoder_create$' \
+        'iSAC (WebRtcIsac_)' '^_WebRtcIsac_' \
+        'G.711 and G.722 (WebRtcG7xx)' '^_WebRtcG7' \
+        'BoringSSL, unprefixed SSL_new' '^_SSL_new$' \
+        'BoringSSL, unprefixed EVP_ functions' '^_EVP_' \
+        'BoringSSL, any boringssl or BORINGSSL prefixed name' '^_(boringssl|BORINGSSL|bssl)_' \
+        'dcsctp (namespace dcsctp)' '__ZN6dcsctp' \
+        'libsrtp (srtp_ functions)' '^_srtp_' \
+        'libyuv (namespace libyuv)' '__ZN6libyuv' \
+        'rnnoise weights (namespace rnnoise)' '__ZN7rnnoise' \
+        'AEC3 (EchoCanceller3)' 'EchoCanceller3' \
+        'AecDump' 'AecDump' \
+        'AudioProcessingBuilder' 'AudioProcessingBuilder' \
+        'AudioDeviceMac (the CoreAudio device layer)' 'AudioDeviceMac' \
+        'AudioDeviceModule (any)' 'AudioDeviceModule' \
+        'Desktop capture (DesktopCapturer)' 'DesktopCapturer' \
+        'Desktop capture (ScreenCapturer)' 'ScreenCapturer' \
+        'ScreenCaptureKit (SCStream)' '^_OBJC_CLASS_[$]_SCStream$' \
+        'RTCCameraVideoCapturer (AVFoundation camera)' '^_OBJC_CLASS_[$]_RTCCameraVideoCapturer$' \
+        'webrtc::test:: (test support code)' '__ZN6webrtc4test' \
+        'perfetto' 'perfetto' \
+        'protobuf (google::protobuf)' 'google8protobuf' \
+        'libjpeg-turbo (chromium_jpeg_)' '^_chromium_jpeg_' \
+        'zlib (Cr_z_ prefix)' '^_Cr_z_' \
+        'zlib unprefixed (inflate, deflate, crc32)' '^_(inflate|deflate|crc32|adler32)$'
+
+    printf '\n### C++ runtime inside the archive (libc++ in std::__Cr, libc++abi)\n\n'
+    md_header "Symbol (awk regex)" "Defined" "Referenced" "Local"
+    inspect_rows "$table" \
+        '___cxa_throw' '^___cxa_throw$' \
+        '___cxa_allocate_exception' '^___cxa_allocate_exception$' \
+        '___gxx_personality_v0' '^___gxx_personality_v0$' \
+        '___cxa_begin_catch' '^___cxa_begin_catch$' \
+        'operator new (_Znwm)' '^__Znwm$' \
+        'operator new[] (_Znam)' '^__Znam$' \
+        'operator delete (_ZdlPv)' '^__ZdlPv$' \
+        'std::terminate' '^__ZSt9terminatev$' \
+        '___dynamic_cast' '^___dynamic_cast$' \
+        'std::type_info vtable' '^__ZTVSt9type_info$' \
+        'std::__Cr:: symbols (any)' '^__ZNSt4__Cr' \
+        'std::__Cr::locale' '^__ZNSt4__Cr6locale' \
+        'std::__Cr::cout' '^__ZNSt4__Cr4cout' \
+        'std::__1:: (the system libc++ namespace)' '^__ZNSt3__1' \
+        '__Unwind_ (the unwinder)' '^___?Unwind_'
+    printf '\nMembers that define the C++ runtime (any of ___cxa_throw, operator new, ___gxx_personality_v0, ___dynamic_cast, std::terminate, std::__Cr::locale, std::__Cr::cout): `%s`\n' \
+        "$(awk -F'\t' '$1 ~ /^[A-TV-Z]$/ && $3 ~ /^(___cxa_throw|__Znwm|___gxx_personality_v0|___dynamic_cast|__ZSt9terminatev|__ZNSt4__Cr6localeC1Ev|__ZNSt4__Cr4cout.*)$/ { m[$2] = 1 } END { for (k in m) print k }' "$table" | LC_ALL=C sort | tr '\n' ' ' | sed 's/ $//')"
+
+    if [ -d "${dir}/include/third_party/libc++" ]; then
+        printf '\n### Headers and the C++ library configuration\n\n'
+        printf -- '- `__config_site` anywhere under include/: %s\n' \
+            "$(find "${dir}/include" -name '__config_site*' | grep -c . || true)"
+        printf -- '- libc++ headers under `third_party/libc++/src/include`: %s `.h` files and **%s** files without an extension. `<string>`: %s, `__config`: %s. libc++ keeps its public headers without an extension and the archive keeps only `.h`, `.hpp` and `.inc`, so C++ built against these headers needs libc++ from somewhere else.\n' \
+            "$(find "${dir}/include/third_party/libc++/src/include" -type f -name '*.h' 2>/dev/null | grep -c . || true)" \
+            "$(find "${dir}/include/third_party/libc++/src/include" -type f ! -name '*.*' 2>/dev/null | grep -c . || true)" \
+            "$([ -f "${dir}/include/third_party/libc++/src/include/string" ] && echo present || echo absent)" \
+            "$([ -f "${dir}/include/third_party/libc++/src/include/__config" ] && echo present || echo absent)"
+        printf -- '- libc++abi headers (`cxxabi.h`): %s; libunwind headers (`libunwind.h`): %s\n' \
+            "$([ -f "${dir}/include/third_party/libc++abi/src/include/cxxabi.h" ] && echo present || echo absent)" \
+            "$([ -f "${dir}/include/third_party/libunwind/src/include/libunwind.h" ] && echo present || echo absent)"
+        printf -- '- `include/` carries the headers of the whole source tree, including third-party trees that are not linked. Directories under `third_party/` named for H.264, H.265 or FFmpeg sources: %s\n' \
+            "$(for name in ffmpeg openh264 x264 libde265; do if [ -d "${dir}/include/third_party/${name}" ]; then printf '%s ' "$name"; fi; done)"
+        printf '  (headers only: the absence checks above show that none of their code is in the library).\n'
+    fi
+
+    if [ -d "${dir}/Frameworks" ]; then
+        printf '\n### Frameworks\n\n'
+        find "${dir}/Frameworks" -type f -perm -u+x ! -name '*.sh' | LC_ALL=C sort | while IFS= read -r file; do
+            case "$(file -b "$file")" in
+                *Mach-O*)
+                    printf -- '- `%s`: %s bytes, sha256 `%.12s`, %s; minos %s\n' "${file#"${dir}"/}" "$(size_of "$file")" "$(sha256_of "$file")" \
+                        "$(lipo -info "$file" 2>&1 | sed 's/^.*is architecture: //')" "$(vtool -show-build "$file" 2>/dev/null | awk '/minos/ { print $2; exit }')"
+                    printf '  - dynamic libraries it loads: %s\n' "$(otool -L "$file" | sed -n '2,$p' | awk '{print $1}' | sed 's#.*/##' | tr '\n' ' ')"
+                    printf '  - exported symbols: %s, of them Objective-C classes `RTC*`: %s\n' "$(nm -gU "$file" 2>/dev/null | grep -c . || true)" \
+                        "$(nm -gU "$file" 2>/dev/null | grep -c '_OBJC_CLASS_[$]_RTC' || true)"
+                    ;;
+            esac
+        done
+        printf -- '- Equal digests above mean the archive stores copies of one binary where a framework has symbolic links.\n'
+        printf -- '- `dSYMs` (debug information, not needed to link): %s\n' \
+            "$(human $(($(find "${dir}/Frameworks" -name '*.dSYM' -prune -exec du -sk {} + | awk '{ k += $1 } END { print k + 0 }') * 1024)))"
+        printf '  The framework is a separate, dynamically linked build; the spike links the static library and not this.\n'
+    fi
+
+    if [ "$id" = "libwebrtc-c" ]; then
+        printf '\n### The C API\n\n'
+        printf -- '- `bindings.rs`: %s bytes, %s `pub fn webrtc_` declarations, %s `pub struct` types, generator line: %s\n' \
+            "$(size_of "${dir}/bindings.rs")" "$(grep -c 'pub fn webrtc_' "${dir}/bindings.rs" || true)" "$(grep -c 'pub struct' "${dir}/bindings.rs" || true)" \
+            "$(head -n 1 "${dir}/bindings.rs" | tr -d '/*')"
+        printf -- '- exported wrapper functions in `%s` (`_webrtc_` prefix): %s\n' "${lib##*/}" "$(sym_count "$table" def '^_webrtc_')"
+        printf -- '- headers in `include/webrtc_c`: %s files\n' "$(find "${dir}/include" -type f | grep -c . || true)"
+        printf -- '- the archive is self-contained: it holds libwebrtc, Chromium'"'"'s libc++ and libc++abi, and the wrapper; the libwebrtc archive is not needed with it.\n'
+    fi
+
+    inspect_c_symbols "$id" "$table" "$out"
+}
+
+# inspect_c_symbols <id> <symbol table> <output directory>
+inspect_c_symbols() {
+    local id="$1" table="$2" out="$3" gst_lib family re
+    awk -F'\t' '$1 ~ /^[A-TV-Z]$/ && $3 !~ /^__Z/ && $3 !~ /^_OBJC_|^__OBJC|^_[$]s/ { print $3 }' "$table" | LC_ALL=C sort -u >"${out}/c-symbols.txt"
+    sed -E 's/^_//; s/^([A-Za-z0-9]+)_.*/\1/; s/^(.{1,16}).*/\1/' "${out}/c-symbols.txt" | LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn >"${out}/c-symbol-prefixes.txt"
+    printf '\n### C symbols (collision candidates for static linking)\n\n'
+    printf 'Global defined symbols that are neither C++ (`_Z`) nor Objective-C: **%s** distinct names; by prefix in `%s`, the names in `%s`. The largest families:\n\n' \
+        "$(grep -c . "${out}/c-symbols.txt" || true)" "${out}/c-symbol-prefixes.txt" "${out}/c-symbols.txt"
+    md_header "Prefix" "Symbols"
+    head -n 14 "${out}/c-symbol-prefixes.txt" | while read -r n prefix; do md_row "\`${prefix}\`" "$n"; done
+    printf '\nNames that other static libraries in the Mercury link also define (exact, case-sensitive):\n\n'
+    md_header "Library" "Pattern" "Defined here"
+    while IFS='|' read -r family re; do
+        md_row "$family" "\`${re//|/\\|}\`" "$(grep -c -E "$re" "${out}/c-symbols.txt" || true)"
+    done <<'EOF'
+zlib (libz-sys, system libz)|^_(inflate|deflate|crc32|adler32|compress|uncompress|zlibVersion|gz[a-z]+)$
+SQLite (libsqlite3-sys bundled)|^_sqlite3_
+aws-lc (aws-lc-sys, prefixed aws_lc_)|^_(aws_lc_|AWS_LC_)
+harfbuzz|^_hb_
+FreeType|^_FT_
+libpng|^_png_
+expat|^_XML_
+ICU|^_(u_|ucnv_|uprv_)
+OpenSSL or BoringSSL names (SSL_, EVP_, X509_)|^_(SSL|EVP|X509)_
+libjpeg unprefixed (jpeg_)|^_jpeg_
+EOF
+    printf '\nRenamed on purpose by Chromium: zlib as `Cr_z_*` (%s names), libjpeg-turbo as `chromium_*` (%s names).\n' \
+        "$(grep -c '^_Cr_z_' "${out}/c-symbols.txt" || true)" "$(grep -c '^_chromium_' "${out}/c-symbols.txt" || true)"
+
+    gst_lib=""
+    if [ -n "${MERCURY_GSTREAMER_PREFIX:-}" ] && [ -d "${MERCURY_GSTREAMER_PREFIX}/lib" ]; then
+        gst_lib="${MERCURY_GSTREAMER_PREFIX}/lib"
+    else
+        for family in "${HOME}"/Library/Caches/mercury-browser/gstreamer/*/GStreamer.framework/Versions/1.0/lib; do
+            [ -d "$family" ] && gst_lib="$family"
+        done
+    fi
+    if [ -n "$gst_lib" ]; then
+        local dylib exports="${inspect_dir}/gstreamer-exports.txt"
+        if [ ! -f "$exports" ]; then
+            for dylib in "$gst_lib"/*.dylib; do
+                nm -gU "$dylib" 2>/dev/null | awk 'NF == 3 && $2 ~ /^[A-Z]$/ { print $3 }'
+            done | LC_ALL=C sort -u >"$exports"
+        fi
+        printf '\nThe same names exported by the dynamic libraries of the GStreamer framework in use (%s dylibs, %s exported names): **%s** in common. Static symbols in the executable and the same names inside a dylib do not clash under macOS two-level namespaces, but the executable must not call the framework'"'"'s copy by accident; the largest overlapping families:\n\n' \
+            "$(find "$gst_lib" -maxdepth 1 -name '*.dylib' | grep -c . || true)" "$(grep -c . "$exports" || true)" \
+            "$(LC_ALL=C comm -12 "${out}/c-symbols.txt" "$exports" | grep -c . || true)"
+        md_header "Prefix" "Names in common"
+        LC_ALL=C comm -12 "${out}/c-symbols.txt" "$exports" | sed -E 's/^_//; s/^([A-Za-z0-9]+)_.*/\1/; s/^(.{1,16}).*/\1/' |
+            LC_ALL=C sort | uniq -c | LC_ALL=C sort -rn | head -n 10 | while read -r n prefix; do md_row "\`${prefix}\`" "$n"; done
+    else
+        printf '\n(GStreamer is not unpacked here, so the overlap with its dylibs was not computed.)\n'
+    fi
+    say "inspect: ${id}: raw lists are in ${out}"
+}
+
 cmd_inspect() {
-    die "inspect is not written yet"
+    local ids id
+    ids="$(ids_from "$@")"
+    inspect_dir="${MERCURY_WEBRTC_INSPECT_DIR:-${work_dir}/inspect}"
+    mkdir -p "$inspect_dir"
+    # A for loop, not `while read`: the tools run inside would read the loop's standard input.
+    for id in $ids; do
+        check_one "$id" "" >&2
+    done
+    printf '# libwebrtc prebuilts: static audit\n\n'
+    printf 'Host: %s, macOS %s.\n' "$(uname -sm)" "$(sw_vers -productVersion 2>/dev/null || echo unknown)"
+    for id in $ids; do
+        inspect_one "$id"
+    done
 }
 
 command="${1:-}"

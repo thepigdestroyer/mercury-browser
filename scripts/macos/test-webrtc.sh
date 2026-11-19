@@ -12,6 +12,8 @@
 # points at a closed port, so a download that went to a real host would fail the run.
 # Prints one line per check and exits non-zero if any fails. Writes only to a temporary
 # directory, which it removes.
+# Markdown backticks sit inside single-quoted strings below.
+# shellcheck disable=SC2016
 set -euo pipefail
 
 cd "$(dirname -- "${BASH_SOURCE[0]}")/../.."
@@ -362,6 +364,88 @@ check "env refuses a directory without the marker" "1|" "${result%%|*}|${result#
 rm -rf "$CACHE"
 result="$(run "$SCRIPT" env)"
 check "env refuses when nothing was fetched" "1|" "${result%%|*}|${result#*|}"
+
+# ── inspect, on small real static libraries built with the host's compiler ───────────────────
+if command -v cc >/dev/null 2>&1 && command -v ar >/dev/null 2>&1 && command -v nm >/dev/null 2>&1 && command -v otool >/dev/null 2>&1; then
+    ISRC="$TMP/isrc"
+    mkdir -p "$ISRC/webrtc/lib" "$ISRC/webrtc/include/api" "$ISRC/c/lib" "$ISRC/c/include" "$TMP/iserved" "$TMP/iobj"
+    cat >"$TMP/iobj/webrtc.c" <<'CEOF'
+int vpx_codec_vp8_cx_algo = 1;
+int Cr_z_inflate(void) { return 2; }
+int Cr_z_deflate(void) { return 3; }
+int SSL_new(void) { return 4; }
+int inflate_unprefixed_is_not_here = 5;
+CEOF
+    cat >"$TMP/iobj/c.c" <<'CEOF'
+int webrtc_PeerConnectionFactory_Create(void) { return 1; }
+CEOF
+    cc -c -o "$TMP/iobj/webrtc.o" "$TMP/iobj/webrtc.c"
+    cc -c -o "$TMP/iobj/c.o" "$TMP/iobj/c.c"
+    ar rcs "$ISRC/webrtc/lib/libwebrtc.a" "$TMP/iobj/webrtc.o"
+    ar rcs "$ISRC/c/lib/libwebrtc_c.a" "$TMP/iobj/c.o"
+    printf '#pragma once\n' >"$ISRC/webrtc/include/api/x.h"
+    printf 'WEBRTC_SRC_COMMIT=fake\n' >"$ISRC/webrtc/VERSIONS"
+    printf 'MACOS_DEPLOYMENT_TARGET=14\n' >"$ISRC/webrtc/DEPS"
+    cat >"$ISRC/webrtc/NOTICE" <<'NEOF'
+# webrtc
+```
+Redistribution and use in source and binary forms, with or without modification, are permitted.
+Neither the name of Google nor the names of its contributors may be used to endorse.
+```
+
+# g711
+```
+Despite my general liking of the GPL, I place this code in the public domain.
+```
+NEOF
+    printf '// bindings\npub fn webrtc_PeerConnectionFactory_Create();\n' >"$ISRC/c/bindings.rs"
+    printf '#pragma once\n' >"$ISRC/c/include/webrtc_c.h"
+    printf 'Apache License\nVersion 2.0, January 2004\n' >"$ISRC/c/LICENSE"
+    printf '# Third Party Licenses\n\n## WebRTC\n\nRedistribution and use in source and binary forms. Neither the name of Google.\n' >"$ISRC/c/THIRD_PARTY_LICENSES.md"
+    tar -czf "$TMP/iserved/webrtc.macos_arm64.tar.gz" -C "$ISRC" webrtc
+    tar -czf "$TMP/iserved/libwebrtc_c-macos_arm64.tar.gz" -C "$ISRC/c" .
+    ISHA="$(shasum -a 256 "$TMP/iserved/webrtc.macos_arm64.tar.gz" | cut -d ' ' -f 1)"
+    ISIZE="$(size_of "$TMP/iserved/webrtc.macos_arm64.tar.gz")"
+    ICSHA="$(shasum -a 256 "$TMP/iserved/libwebrtc_c-macos_arm64.tar.gz" | cut -d ' ' -f 1)"
+    ICSIZE="$(size_of "$TMP/iserved/libwebrtc_c-macos_arm64.tar.gz")"
+    printf '%s  libwebrtc_c-macos_arm64.tar.gz\n' "$ICSHA" >"$TMP/iserved/libwebrtc_c-macos_arm64.tar.gz.sha256"
+    sed -e "s/^\( *libwebrtc_size=\).*/\1\"${ISIZE}\"/" -e "s/^\( *libwebrtc_sha256=\).*/\1\"${ISHA}\"/" \
+        -e "s/^\( *libwebrtc_c_size=\).*/\1\"${ICSIZE}\"/" -e "s/^\( *libwebrtc_c_sha256=\).*/\1\"${ICSHA}\"/" \
+        "$REAL_SCRIPT" >"$TMP/webrtc-inspect.sh"
+    chmod +x "$TMP/webrtc-inspect.sh"
+    export MERCURY_WEBRTC_URL_BASE="file://$TMP/iserved" MERCURY_WEBRTC_CACHE="$TMP/icache" MERCURY_WEBRTC_INSPECT_DIR="$TMP/inspect"
+    "$TMP/webrtc-inspect.sh" fetch 2>/dev/null
+    "$TMP/webrtc-inspect.sh" unpack 2>/dev/null
+    result="$(HOME="$TMP/nohome" run "$TMP/webrtc-inspect.sh" inspect)"
+    report="${result#*|}"
+    has() {
+        if grep -F -- "$1" <<<"$report" >/dev/null; then printf 'yes'; else printf 'no'; fi
+    }
+    check "inspect succeeds on both archives" "0" "${result%%|*}"
+    check "inspect prints a Markdown report with a section per archive" "yes|yes|yes" \
+        "$(has '# libwebrtc prebuilts: static audit')|$(has '## libwebrtc m150.7871.3.5')|$(has '## libwebrtc-c 0.157.0')"
+    check "inspect finds the VP8 encoder the fake library defines" "yes" "$(has '| libvpx VP8 encoder (vpx_codec_vp8_cx_algo) | 1 | 0 | 0 |')"
+    check "inspect counts the prefixed zlib symbols, and no unprefixed ones" "yes|yes" \
+        "$(has '| zlib (Cr_z_ prefix) | 2 | 0 | 0 |')|$(has '| zlib unprefixed (inflate, deflate, crc32) | 0 | 0 | 0 |')"
+    check "inspect counts the unprefixed SSL_new" "yes" "$(has '| BoringSSL, unprefixed SSL_new | 1 | 0 | 0 |')"
+    check "inspect reports zero for every absence check (Wels, x264, ffmpeg)" "yes|yes|yes" \
+        "$(has '| Wels (OpenH264) | 0 | 0 | 0 |')|$(has '| x264 | 0 | 0 | 0 |')|$(has '| ffmpeg in any case | 0 | 0 | 0 |')"
+    check "inspect names the licences it finds in NOTICE" "yes|yes" \
+        "$(has '| BSD-3-Clause; ')|$(has 'public-domain dedication')"
+    check "inspect lists the lines that mention GPL" "yes" "$(has 'Despite my general liking of the GPL')"
+    check "inspect reads the .sha256 of libwebrtc-c and finds it equal" "yes" "$(has 'the local sha256 is `'"$ICSHA"'`: equal')"
+    check "inspect counts the exported wrapper functions" "yes" "$(has '(`_webrtc_` prefix): 1')"
+    check "inspect finds the Apache licence of libwebrtc-c" "yes" "$(has '`LICENSE` is Apache License Version 2.0')"
+    check "inspect writes its raw symbol lists to the directory it was given" "yes|yes" \
+        "$(exists "$TMP/inspect/libwebrtc/c-symbols.txt")|$(exists "$TMP/inspect/libwebrtc-c/members.tsv")"
+    check "inspect's C symbol list holds the fake symbols" "1" "$(grep -c -x '_Cr_z_inflate' "$TMP/inspect/libwebrtc/c-symbols.txt")"
+    printf 'x' >>"$TMP/icache/libwebrtc/m150.7871.3.5/unpacked/lib/libwebrtc.a"
+    result="$(run "$TMP/webrtc-inspect.sh" inspect libwebrtc)"
+    check "inspect refuses an archive that no longer verifies and prints no report" "1|" "${result%%|*}|${result#*|}"
+    unset MERCURY_WEBRTC_INSPECT_DIR
+else
+    printf 'SKIP inspect (needs cc, ar, nm and otool)\n'
+fi
 
 # ── Nothing reached the network ─────────────────────────────────────────────────────────────
 check "no curl call in the script goes anywhere but the pinned URL" "0" \
