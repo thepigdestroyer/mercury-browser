@@ -1,3 +1,1027 @@
 # Mercury's changes to servo-net 0.8.0, against the crate as published on crates.io
 # (SHA-256 e274e25650db0dacd2a290d13f51effd12735c17d5448403c2c77fea530e034d). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-net.
+diff --git a/connector.rs b/connector.rs
+--- a/connector.rs
++++ b/connector.rs
+@@ -42,6 +42,10 @@
+ /// ALPN identifier for HTTP/2 (RFC 7540 §3.1).
+ pub const ALPN_H2: &str = "h2";
+
++// Mercury: backport of servo/servo#49981 (merge commit 552c43da1). The HTTP/2 default of 16 KiB for the
++// header list is too small for YouTube, whose responses fail with "client error (SendRequest)".
++const HTTP2_MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
++
+ #[derive(Clone)]
+ pub struct ServoHttpConnector {
+     inner: HyperHttpConnector,
+@@ -668,6 +672,8 @@
+
+     Client::builder(TokioExecutor {})
+         .http1_title_case_headers(true)
++        // The default 16 KiB size is insufficient for certain sites like YouTube
++        .http2_max_header_list_size(HTTP2_MAX_HEADER_LIST_SIZE)
+         // This is necessary to allow hyper to perform various background tasks for HTTP/2.
+         .timer(TokioTimer::new())
+         // This is necessary for hyper to reap unused idle keep-alive connections.
+diff --git a/cookie.rs b/cookie.rs
+--- a/cookie.rs
++++ b/cookie.rs
+@@ -336,10 +336,11 @@
+     /// <http://tools.ietf.org/html/rfc6265#section-5.4> step 1
+     pub fn appropriate_for_url(&self, url: &ServoUrl, source: CookieSource) -> bool {
+         if log_enabled!(Level::Debug) {
++            // Mercury: name, domain and path only. Servo also prints the cookie's value, which for a
++            // session cookie is a credential (EC13).
+             debug!(
+-                " === SENT COOKIE : {} {} {:?} {:?}",
++                " === SENT COOKIE : {} {:?} {:?}",
+                 self.cookie.name(),
+-                self.cookie.value(),
+                 self.cookie.domain(),
+                 self.cookie.path()
+             );
+diff --git a/cookie_storage.rs b/cookie_storage.rs
+--- a/cookie_storage.rs
++++ b/cookie_storage.rs
+@@ -238,9 +238,16 @@
+         };
+
+         // Serialize the cookie-list into a cookie-string by processing each cookie in the cookie-list in order
+-        let result = cookie_list.fold(String::new(), reducer);
++        // Mercury: count the cookies while folding, so the log below can say how many were sent.
++        let mut sent_count = 0usize;
++        let result = cookie_list
++            .inspect(|_| sent_count += 1)
++            .fold(String::new(), reducer);
+
+-        info!(" === COOKIES SENT: {}", result);
++        // Mercury: log only the number of cookies, never the cookie string (it holds the values of session
++        // cookies). Servo logs the string at info level (EC13).
++        info!(" === COOKIES SENT: {} cookie(s)", sent_count);
++
+         match result.len() {
+             0 => None,
+             _ => Some(result),
+diff --git a/http_loader.rs b/http_loader.rs
+--- a/http_loader.rs
++++ b/http_loader.rs
+@@ -99,6 +99,8 @@
+     CacheKey, CachedResourcesOrGuard, HttpCache, ValidationStatus, construct_response,
+     invalidate_cached_resources, refresh,
+ };
++// Mercury: redacts cookie and credential header values in the debug logs (EC13).
++use crate::mercury_log::{header_for_log, headers_for_log};
+ use crate::resource_thread::{AuthCache, AuthCacheEntry};
+ use crate::websocket_loader::start_websocket;
+
+@@ -2184,8 +2186,9 @@
+     let request_id = request.id.0;
+     if log_enabled!(log::Level::Info) {
+         info!("{:?} request for {}", request.method, url);
+-        for header in request.headers.iter() {
+-            debug!(" - {:?}", header);
++        // Mercury: the values of Cookie and Authorization are not logged (EC13).
++        for (name, value) in request.headers.iter() {
++            debug!(" - {}", header_for_log(name, value));
+         }
+     }
+
+@@ -2280,8 +2283,9 @@
+
+     if log_enabled!(log::Level::Info) {
+         debug!("{:?} response for {}", response_stream.version(), url);
+-        for header in response_stream.headers().iter() {
+-            debug!(" - {:?}", header);
++        // Mercury: the values of Set-Cookie are not logged (EC13).
++        for (name, value) in response_stream.headers().iter() {
++            debug!(" - {}", header_for_log(name, value));
+         }
+     }
+
+@@ -2634,9 +2638,11 @@
+             return Response::network_error(NetworkError::CorsMethod);
+         }
+
++        // Mercury: the request's header map holds Cookie and Authorization values; log it redacted (EC13).
+         debug!(
+-            "CORS check: Allowed headers: {:?}, current headers: {:?}",
+-            header_names, request.headers
++            "CORS check: Allowed headers: {:?}, current headers: {}",
++            header_names,
++            headers_for_log(&request.headers)
+         );
+
+         // Step 7.6 If one of request’s header list’s names is a CORS non-wildcard request-header name
+diff --git a/image_cache.rs b/image_cache.rs
+--- a/image_cache.rs
++++ b/image_cache.rs
+@@ -86,7 +86,13 @@
+     bytes: &[u8],
+     usvg_options: Arc<usvg::Options>,
+ ) -> Result<usvg::Tree, &'static str> {
+-    usvg::Tree::from_data(bytes, &usvg_options)
++    // Mercury: refuse a document nested deeper than 500 elements before usvg walks it, one stack frame per
++    // level (servo#49835 does this with `usvg::Options::max_depth`, which needs usvg 0.50; decision D8).
++    // For an SVGZ file this also unpacks it, and usvg reads the unpacked bytes.
++    let bytes = crate::mercury_svg::guard(bytes).inspect_err(|error| {
++        warn!("Refusing an SVG image: {error}");
++    })?;
++    usvg::Tree::from_data(&bytes, &usvg_options)
+         .inspect_err(|error| {
+             warn!("Error when parsing SVG data: {error}");
+         })
+diff --git a/lib.rs b/lib.rs
+--- a/lib.rs
++++ b/lib.rs
+@@ -19,6 +19,10 @@
+ pub mod http_loader;
+ pub mod image_cache;
+ pub mod local_directory_listing;
++// Mercury: keeps cookie and credential values out of the logs (EC13), and refuses very deeply nested SVG
++// images (D8). Both are Mercury files.
++mod mercury_log;
++mod mercury_svg;
+ pub mod protocols;
+ pub mod request_interceptor;
+ pub mod resource_thread;
+diff --git a/mercury_log.rs b/mercury_log.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_log.rs
+@@ -0,0 +1,419 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++//! Mercury: keeps cookie values and credentials out of the logs (EC13).
++//!
++//! Servo's HTTP loader logs every request and response header at `debug` level, and the cookie jar logged
++//! the cookie string it sent at `info` level. Both carry session cookies and credentials. The functions
++//! here replace the value of `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` with
++//! [`REDACTED`] and leave every other header as it was, so a debug log still shows what was sent.
++//!
++//! This is a Mercury file, not an upstream one. Drop it (with its two call sites in `http_loader.rs`, the
++//! two log lines in `cookie.rs` and `cookie_storage.rs`, and the `mod mercury_log;` line in `lib.rs`) at the
++//! Servo release that no longer logs these values.
++
++use http::header::{HeaderMap, HeaderName, HeaderValue};
++
++/// What the value of a secret header is replaced with.
++pub(crate) const REDACTED: &str = "<redacted>";
++
++/// Headers whose value is a credential. Compared without regard to case.
++const SECRET_HEADERS: [&str; 4] = [
++    "cookie",
++    "set-cookie",
++    "authorization",
++    "proxy-authorization",
++];
++
++fn is_secret(name: &HeaderName) -> bool {
++    SECRET_HEADERS
++        .iter()
++        .any(|secret| name.as_str().eq_ignore_ascii_case(secret))
++}
++
++/// The value as the log shows it: quoted like `HeaderValue`'s own `Debug`, or [`REDACTED`] for a secret.
++fn value_for_log(name: &HeaderName, value: &HeaderValue) -> String {
++    if is_secret(name) {
++        format!("{REDACTED:?}")
++    } else {
++        format!("{value:?}")
++    }
++}
++
++/// One header as a log line shows it: `("name", "value")`, the same shape as `{:?}` of the pair that
++/// `HeaderMap::iter` yields, with the value of a secret header redacted.
++pub(crate) fn header_for_log(name: &HeaderName, value: &HeaderValue) -> String {
++    format!("({name:?}, {})", value_for_log(name, value))
++}
++
++/// A whole header map as a log line shows it: `{"name": "value", ...}`, the same shape as `{:?}` of a
++/// `HeaderMap`, with the values of secret headers redacted.
++pub(crate) fn headers_for_log(headers: &HeaderMap) -> String {
++    let entries: Vec<String> = headers
++        .iter()
++        .map(|(name, value)| format!("{name:?}: {}", value_for_log(name, value)))
++        .collect();
++    format!("{{{}}}", entries.join(", "))
++}
++
++#[cfg(test)]
++mod tests {
++    use http::header::{ACCEPT, AUTHORIZATION, COOKIE, PROXY_AUTHORIZATION, SET_COOKIE};
++
++    use super::*;
++
++    const SECRET: &str = "sessionid=s3cr3t-value-1234";
++
++    fn value(text: &str) -> HeaderValue {
++        HeaderValue::from_str(text).unwrap()
++    }
++
++    #[test]
++    fn the_value_of_each_secret_header_is_redacted() {
++        for name in [COOKIE, SET_COOKIE, AUTHORIZATION, PROXY_AUTHORIZATION] {
++            let line = header_for_log(&name, &value(SECRET));
++            assert!(!line.contains("s3cr3t"), "{name}: {line}");
++            assert!(line.contains(REDACTED), "{name}: {line}");
++            // The name stays, so the log still says which header was sent.
++            assert!(line.contains(name.as_str()), "{name}: {line}");
++        }
++    }
++
++    #[test]
++    fn the_names_are_matched_without_regard_to_case() {
++        for spelled in [
++            "Cookie",
++            "COOKIE",
++            "cOoKiE",
++            "Set-Cookie",
++            "AUTHORIZATION",
++            "Proxy-Authorization",
++        ] {
++            let name = HeaderName::from_bytes(spelled.as_bytes()).unwrap();
++            let line = header_for_log(&name, &value(SECRET));
++            assert!(!line.contains("s3cr3t"), "{spelled}: {line}");
++            assert!(line.contains(REDACTED), "{spelled}: {line}");
++        }
++    }
++
++    #[test]
++    fn other_headers_are_printed_as_before() {
++        let accept = value("text/html,application/xhtml+xml");
++        // The shape of the old `debug!(" - {:?}", header)`: a `(name, value)` pair.
++        assert_eq!(
++            header_for_log(&ACCEPT, &accept),
++            format!("{:?}", (&ACCEPT, &accept))
++        );
++        assert_eq!(
++            header_for_log(&ACCEPT, &accept),
++            r#"("accept", "text/html,application/xhtml+xml")"#
++        );
++    }
++
++    #[test]
++    fn an_empty_secret_value_is_redacted_too() {
++        // Not telling a log reader whether the credential was empty costs nothing.
++        let line = header_for_log(&AUTHORIZATION, &value(""));
++        assert_eq!(line, format!("(\"authorization\", {REDACTED:?})"));
++    }
++
++    #[test]
++    fn a_header_map_keeps_every_entry_and_hides_the_secrets() {
++        let mut headers = HeaderMap::new();
++        headers.insert(ACCEPT, value("*/*"));
++        headers.insert(COOKIE, value(SECRET));
++        headers.insert(AUTHORIZATION, value("Bearer t0ken-abcdef"));
++        headers.append(SET_COOKIE, value("a=first-secret; Path=/"));
++        headers.append(SET_COOKIE, value("b=second-secret; Secure"));
++
++        let line = headers_for_log(&headers);
++        for leaked in ["s3cr3t", "t0ken", "first-secret", "second-secret"] {
++            assert!(!line.contains(leaked), "{leaked} leaked: {line}");
++        }
++        assert!(line.starts_with('{') && line.ends_with('}'), "{line}");
++        assert!(line.contains(r#""accept": "*/*""#), "{line}");
++        // Two Set-Cookie headers are two entries, as in `HeaderMap::iter`.
++        assert_eq!(
++            line.matches(r#""set-cookie": "<redacted>""#).count(),
++            2,
++            "{line}"
++        );
++        assert!(line.contains(r#""cookie": "<redacted>""#), "{line}");
++        assert!(line.contains(r#""authorization": "<redacted>""#), "{line}");
++    }
++
++    #[test]
++    fn an_empty_header_map_prints_empty_braces() {
++        assert_eq!(headers_for_log(&HeaderMap::new()), "{}");
++    }
++
++    // ---- The guard: nobody may log a cookie value again --------------------------------------------
++
++    /// Every logging macro call in `source`, as the text between its parentheses.
++    fn log_macro_calls(source: &str) -> Vec<&str> {
++        const MACROS: [&str; 8] = [
++            "info", "debug", "trace", "warn", "error", "println", "eprintln", "dbg",
++        ];
++        let bytes = source.as_bytes();
++        let is_ident = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
++        let mut calls = Vec::new();
++        for name in MACROS {
++            let needle = format!("{name}!(");
++            let mut from = 0;
++            while let Some(found) = source[from..].find(&needle) {
++                let start = from + found;
++                from = start + needle.len();
++                if start > 0 && is_ident(bytes[start - 1]) {
++                    continue; // `some_info!(`, not the log macro
++                }
++                if let Some(end) = matching_paren(source, from) {
++                    calls.push(&source[from..end]);
++                }
++            }
++        }
++        calls
++    }
++
++    /// The index of the `)` that closes a `(` opened just before `from`, skipping string and char literals.
++    fn matching_paren(source: &str, from: usize) -> Option<usize> {
++        let bytes = source.as_bytes();
++        let mut depth = 1usize;
++        let mut i = from;
++        while i < bytes.len() {
++            match bytes[i] {
++                b'"' => i = end_of_string(bytes, i)?,
++                b'\'' => i += char_literal_len(bytes, i) - 1,
++                b'(' | b'[' | b'{' => depth += 1,
++                b')' | b']' | b'}' => {
++                    depth -= 1;
++                    if depth == 0 {
++                        return Some(i);
++                    }
++                },
++                _ => {},
++            }
++            i += 1;
++        }
++        None
++    }
++
++    /// The index of the closing quote of the string literal that opens at `open`.
++    fn end_of_string(bytes: &[u8], open: usize) -> Option<usize> {
++        let mut i = open + 1;
++        while i < bytes.len() {
++            match bytes[i] {
++                b'\\' => i += 1,
++                b'"' => return Some(i),
++                _ => {},
++            }
++            i += 1;
++        }
++        None
++    }
++
++    /// How many bytes a `'` at `at` takes: a char literal (`'x'`, `'\n'`), or 1 for a lifetime.
++    fn char_literal_len(bytes: &[u8], at: usize) -> usize {
++        match (bytes.get(at + 1), bytes.get(at + 2), bytes.get(at + 3)) {
++            (Some(b'\\'), _, Some(b'\'')) => 4,
++            (Some(_), Some(b'\''), _) => 3,
++            _ => 1,
++        }
++    }
++
++    /// The comma-separated arguments of a macro call, trimmed; commas inside brackets and literals do not split.
++    fn arguments(call: &str) -> Vec<&str> {
++        let bytes = call.as_bytes();
++        let mut parts = Vec::new();
++        let (mut depth, mut start, mut i) = (0usize, 0usize, 0usize);
++        while i < bytes.len() {
++            match bytes[i] {
++                b'"' => match end_of_string(bytes, i) {
++                    Some(end) => i = end,
++                    None => break,
++                },
++                b'\'' => i += char_literal_len(bytes, i) - 1,
++                b'(' | b'[' | b'{' => depth += 1,
++                b')' | b']' | b'}' => depth = depth.saturating_sub(1),
++                b',' if depth == 0 => {
++                    parts.push(call[start..i].trim());
++                    start = i + 1;
++                },
++                _ => {},
++            }
++            i += 1;
++        }
++        parts.push(call[start..].trim());
++        parts.retain(|part| !part.is_empty());
++        parts
++    }
++
++    /// Names captured inline by a format string, such as `{value}` or `{value:?}`.
++    fn inline_captures(literal: &str) -> Vec<String> {
++        let mut names = Vec::new();
++        let mut chars = literal.char_indices().peekable();
++        while let Some((i, c)) = chars.next() {
++            if c != '{' {
++                continue;
++            }
++            if chars.peek().map(|&(_, next)| next) == Some('{') {
++                chars.next(); // `{{` is a literal brace
++                continue;
++            }
++            let name: String = literal[i + 1..]
++                .chars()
++                .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
++                .collect();
++            if !name.is_empty() {
++                names.push(name);
++            }
++        }
++        names
++    }
++
++    /// Problems with the logging calls in a cookie file: every argument must be one of `allowed`, and no
++    /// format string may capture a variable by name (that would hide a value from this check).
++    fn cookie_log_problems(file: &str, source: &str, allowed: &[&str]) -> Vec<String> {
++        let mut problems = Vec::new();
++        for call in log_macro_calls(source) {
++            let args = arguments(call);
++            let Some((literal, rest)) = args.split_first() else {
++                continue;
++            };
++            for name in inline_captures(literal) {
++                problems.push(format!(
++                    "{file}: `{{{name}}}` in `{literal}` captures a variable"
++                ));
++            }
++            for arg in rest {
++                if !allowed.contains(arg) {
++                    problems.push(format!("{file}: logs `{arg}` in `{literal}`"));
++                }
++            }
++        }
++        problems
++    }
++
++    /// Problems with the logging calls in `http_loader.rs`: a header or a header map may only be logged
++    /// through `header_for_log` or `headers_for_log`.
++    fn header_log_problems(file: &str, source: &str) -> Vec<String> {
++        let mut problems = Vec::new();
++        for call in log_macro_calls(source) {
++            let args = arguments(call);
++            let Some((literal, rest)) = args.split_first() else {
++                continue;
++            };
++            for name in inline_captures(literal) {
++                if name == "header" || name == "headers" {
++                    problems.push(format!(
++                        "{file}: `{{{name}}}` in `{literal}` captures headers"
++                    ));
++                }
++            }
++            for arg in rest {
++                let mentions_headers = arg
++                    .split(|c: char| !(c.is_alphanumeric() || c == '_'))
++                    .any(|word| word == "header" || word == "headers");
++                let redacted =
++                    arg.starts_with("header_for_log(") || arg.starts_with("headers_for_log(");
++                if mentions_headers && !redacted {
++                    problems.push(format!(
++                        "{file}: logs `{arg}` in `{literal}` without redacting"
++                    ));
++                }
++            }
++        }
++        problems
++    }
++
++    /// The only things the cookie jar may log: a cookie's name, domain and path, and how many were sent.
++    const ALLOWED_COOKIE_LOG_ARGS: [&str; 4] = [
++        "self.cookie.name()",
++        "self.cookie.domain()",
++        "self.cookie.path()",
++        "sent_count",
++    ];
++
++    #[test]
++    fn the_cookie_files_do_not_log_a_cookie_value() {
++        for (file, source) in [
++            ("cookie_storage.rs", include_str!("cookie_storage.rs")),
++            ("cookie.rs", include_str!("cookie.rs")),
++        ] {
++            assert!(
++                !log_macro_calls(source).is_empty(),
++                "{file}: the guard found no logging call; it is looking at the wrong text"
++            );
++            let problems = cookie_log_problems(file, source, &ALLOWED_COOKIE_LOG_ARGS);
++            assert!(
++                problems.is_empty(),
++                "a cookie value or the cookie string would reach the log (EC13); if a new log line is \
++                 safe, add its arguments to ALLOWED_COOKIE_LOG_ARGS:\n{}",
++                problems.join("\n")
++            );
++        }
++    }
++
++    #[test]
++    fn the_http_loader_logs_headers_only_through_the_redacting_helpers() {
++        let source = include_str!("http_loader.rs");
++        let problems = header_log_problems("http_loader.rs", source);
++        assert!(
++            problems.is_empty(),
++            "a header value would reach the log unredacted (EC13):\n{}",
++            problems.join("\n")
++        );
++        // The guard is alive: the two header dumps and the CORS line really use the helpers.
++        assert!(
++            source.matches("header_for_log(").count() >= 2,
++            "the two header-dump loops no longer use header_for_log"
++        );
++        assert!(
++            source.contains("headers_for_log("),
++            "the CORS debug line no longer uses headers_for_log"
++        );
++    }
++
++    #[test]
++    fn the_guard_finds_the_lines_servo_used_to_have() {
++        // The upstream 0.8 lines, verbatim. If the guard did not flag these it would guard nothing.
++        let old_storage = r#"info!(" === COOKIES SENT: {}", result);"#;
++        let old_cookie = r#"debug!(
++            " === SENT COOKIE : {} {} {:?} {:?}",
++            self.cookie.name(),
++            self.cookie.value(),
++            self.cookie.domain(),
++            self.cookie.path()
++        );"#;
++        let captured = r#"info!("sent {result}");"#;
++        let problems = cookie_log_problems("old", old_storage, &ALLOWED_COOKIE_LOG_ARGS);
++        assert_eq!(problems.len(), 1, "{problems:?}");
++        let problems = cookie_log_problems("old", old_cookie, &ALLOWED_COOKIE_LOG_ARGS);
++        assert_eq!(problems.len(), 1, "{problems:?}");
++        assert!(problems[0].contains("self.cookie.value()"), "{problems:?}");
++        let problems = cookie_log_problems("old", captured, &ALLOWED_COOKIE_LOG_ARGS);
++        assert_eq!(problems.len(), 1, "{problems:?}");
++
++        let old_dump = r#"for header in request.headers.iter() { debug!(" - {:?}", header); }"#;
++        let old_cors =
++            r#"debug!("CORS check: {:?}, current headers: {:?}", header_names, request.headers);"#;
++        assert_eq!(header_log_problems("old", old_dump).len(), 1);
++        assert_eq!(header_log_problems("old", old_cors).len(), 1);
++        let redacted = r#"debug!(" - {}", header_for_log(name, value)); debug!("{}", headers_for_log(&request.headers));"#;
++        assert!(header_log_problems("new", redacted).is_empty());
++    }
++
++    #[test]
++    fn the_guard_reads_literals_and_nesting_correctly() {
++        let source = r#"
++            // not a call: some_info!(self.cookie.value())
++            debug!("a, b ( ) {}", f(x, y), 'c');
++            warn!("quote \" and paren ) in text, {}", self.cookie.name());
++        "#;
++        let calls = log_macro_calls(source);
++        assert_eq!(calls.len(), 2, "{calls:?}");
++        let args = arguments(calls.iter().find(|c| c.starts_with("\"a, b")).unwrap());
++        assert_eq!(args, [r#""a, b ( ) {}""#, "f(x, y)", "'c'"]);
++        assert_eq!(inline_captures("{{x}} {} {:?} {y} {z:?}"), ["y", "z"]);
++    }
++}
+diff --git a/mercury_svg.rs b/mercury_svg.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_svg.rs
+@@ -0,0 +1,451 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++//! Mercury: refuses SVG images that are nested too deeply (decision D8).
++//!
++//! `usvg` converts an SVG document with functions that call themselves once per level of nesting, so an
++//! image nested a hundred thousand elements deep (`<img src="...">` of a tiny file) can exhaust the stack
++//! of the image decoder thread and take the whole browser down. Servo fixed this in servo/servo#49835 by
++//! setting `usvg::Options::max_depth`, an option that exists from usvg 0.50. This tree has usvg 0.48.1,
++//! and moving resvg also touches `servo-malloc-size-of`, which Mercury does not carry. This file does the
++//! same job with one pass over the bytes, before `usvg` sees them.
++//!
++//! The scan never recurses, so its own cost does not depend on the nesting: it reads each byte once. It is
++//! a lexer, not an XML parser. A document that is not XML at all, or that is cut off in the middle of a
++//! construct, is reported as not too deep and left to `usvg`, which rejects it with its own error.
++//!
++//! Entities declared in a `<!DOCTYPE>` can expand to elements, which this scan does not follow. roxmltree
++//! (the XML parser inside usvg) limits entity expansion to 10 levels, so that adds at most 10 to the
++//! depth. Mercury's limit is 500, upstream's constant.
++//!
++//! This is a Mercury file. Drop it (with the call in `image_cache.rs` and the `mod mercury_svg;` line in
++//! `lib.rs`) at the Servo bump that takes resvg 0.50, and set `max_depth: 500` there as upstream does.
++
++use std::borrow::Cow;
++
++use resvg::usvg;
++
++/// The deepest nesting of elements Mercury accepts: the root is depth 1. Upstream's constant (servo#49835).
++pub(crate) const MAX_SVG_DEPTH: u32 = 500;
++
++/// The error `image_cache.rs` reports for a document that is too deeply nested.
++pub(crate) const TOO_DEEP: &str = "SVG is nested too deeply";
++
++/// The two magic bytes at the start of a gzip stream (an `.svgz` file).
++const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
++
++/// Unpacks `bytes` if it is gzip (SVGZ), then refuses it when it is nested deeper than [`MAX_SVG_DEPTH`].
++/// On success the bytes to give `usvg::Tree::from_data` are returned: the unpacked document for SVGZ (so
++/// usvg does not unpack it a second time), else `bytes` itself.
++pub(crate) fn guard(bytes: &[u8]) -> Result<Cow<'_, [u8]>, &'static str> {
++    let source = if bytes.starts_with(&GZIP_MAGIC) {
++        match usvg::decompress_svgz(bytes) {
++            // A gzip stream inside a gzip stream is not an SVG; usvg reports that from the original bytes.
++            Ok(unpacked) if !unpacked.starts_with(&GZIP_MAGIC) => Cow::Owned(unpacked),
++            // Malformed gzip: usvg reports it itself.
++            _ => Cow::Borrowed(bytes),
++        }
++    } else {
++        Cow::Borrowed(bytes)
++    };
++    if nesting_too_deep(&source) {
++        Err(TOO_DEEP)
++    } else {
++        Ok(source)
++    }
++}
++
++/// Whether the XML in `bytes` nests elements deeper than [`MAX_SVG_DEPTH`].
++///
++/// One pass, no recursion. Comments, CDATA sections, processing instructions and `<!DOCTYPE>` declarations
++/// (with their internal subset) are skipped, and `<` or `>` inside a quoted attribute value is text. An
++/// element that closes itself (`<a/>`) is one level deep at that point and does not raise the depth for
++/// what follows. The depth of a leaf counts: 499 open elements and a self-closing one inside them is 500.
++pub(crate) fn nesting_too_deep(bytes: &[u8]) -> bool {
++    let limit = MAX_SVG_DEPTH as usize;
++    let mut depth = 0usize;
++    let mut at = 0usize;
++    while let Some(offset) = find_byte(bytes, at, b'<') {
++        let lt = at + offset;
++        let Some(&next) = bytes.get(lt + 1) else {
++            return false;
++        };
++        at = match next {
++            // `<!--`, `<![CDATA[` and `<!DOCTYPE ... >`.
++            b'!' => match end_of_bang(bytes, lt) {
++                Some(end) => end,
++                None => return false,
++            },
++            // A processing instruction, such as `<?xml version="1.0"?>`.
++            b'?' => match find_seq(bytes, lt + 2, b"?>") {
++                Some(end) => end + 2,
++                None => return false,
++            },
++            // A close tag. Unbalanced ones are the parser's problem; the depth does not go below zero.
++            b'/' => match find_byte(bytes, lt + 2, b'>') {
++                Some(offset) => {
++                    depth = depth.saturating_sub(1);
++                    lt + 2 + offset + 1
++                },
++                None => return false,
++            },
++            // A start tag: the first character of an XML name.
++            c if is_name_start(c) => match end_of_start_tag(bytes, lt + 1) {
++                Some((gt, self_closing)) => {
++                    if depth + 1 > limit {
++                        return true;
++                    }
++                    if !self_closing {
++                        depth += 1;
++                    }
++                    gt + 1
++                },
++                None => return false,
++            },
++            // A `<` that starts nothing. XML forbids it in text; the parser rejects the document.
++            _ => lt + 1,
++        };
++    }
++    false
++}
++
++/// The first XML name character: a letter, `_`, `:` or the first byte of a non-ASCII character.
++fn is_name_start(byte: u8) -> bool {
++    byte.is_ascii_alphabetic() || byte == b'_' || byte == b':' || byte >= 0x80
++}
++
++/// The offset of the first `needle` in `bytes[from..]`, relative to `from`.
++fn find_byte(bytes: &[u8], from: usize, needle: u8) -> Option<usize> {
++    bytes.get(from..)?.iter().position(|&byte| byte == needle)
++}
++
++/// The index in `bytes` of the first `needle` at or after `from`.
++fn find_seq(bytes: &[u8], from: usize, needle: &[u8]) -> Option<usize> {
++    bytes
++        .get(from..)?
++        .windows(needle.len())
++        .position(|window| window == needle)
++        .map(|offset| from + offset)
++}
++
++/// The index just after the construct that starts with `<!` at `lt`: a comment, a CDATA section or a
++/// declaration such as `<!DOCTYPE svg [ ... ]>`. `None` when it is cut off.
++fn end_of_bang(bytes: &[u8], lt: usize) -> Option<usize> {
++    let rest = &bytes[lt..];
++    if rest.starts_with(b"<!--") {
++        return find_seq(bytes, lt + 4, b"-->").map(|end| end + 3);
++    }
++    if rest.starts_with(b"<![CDATA[") {
++        return find_seq(bytes, lt + 9, b"]]>").map(|end| end + 3);
++    }
++    // A declaration ends at the first `>` outside quotes and outside the `[ ... ]` internal subset, whose
++    // own declarations end in `>` too. Comments and processing instructions inside the subset may hold
++    // quotes and brackets, so they are skipped whole.
++    let mut in_subset = false;
++    let mut at = lt + 2;
++    while at < bytes.len() {
++        match bytes[at] {
++            quote @ (b'"' | b'\'') => at += 1 + find_byte(bytes, at + 1, quote)?,
++            b'<' if bytes[at..].starts_with(b"<!--") => at = find_seq(bytes, at + 4, b"-->")? + 2,
++            b'<' if bytes[at..].starts_with(b"<?") => at = find_seq(bytes, at + 2, b"?>")? + 1,
++            b'[' => in_subset = true,
++            b']' => in_subset = false,
++            b'>' if !in_subset => return Some(at + 1),
++            _ => {},
++        }
++        at += 1;
++    }
++    None
++}
++
++/// For the start tag whose name begins at `from`: the index of its closing `>` and whether it closes
++/// itself (`/>`). A `>` or `<` inside a quoted attribute value does not count. `None` when it is cut off.
++fn end_of_start_tag(bytes: &[u8], from: usize) -> Option<(usize, bool)> {
++    let mut quote: Option<u8> = None;
++    let mut previous = 0u8;
++    for (at, &byte) in bytes.get(from..)?.iter().enumerate() {
++        match quote {
++            Some(open) => {
++                if byte == open {
++                    quote = None;
++                }
++            },
++            None => match byte {
++                b'"' | b'\'' => quote = Some(byte),
++                b'>' => return Some((from + at, previous == b'/')),
++                _ => {},
++            },
++        }
++        previous = byte;
++    }
++    None
++}
++
++#[cfg(test)]
++mod tests {
++    use std::io::Write;
++
++    use flate2::Compression;
++    use flate2::write::GzEncoder;
++
++    use super::*;
++
++    /// `levels` nested `<g>` elements inside `<svg>`'s own level: `levels` elements deep in all.
++    fn nested(levels: usize) -> Vec<u8> {
++        let mut svg = String::from(
++            r#"<?xml version="1.0"?><svg xmlns="http://www.w3.org/2000/svg" width="10" height="10">"#,
++        );
++        for _ in 1..levels {
++            svg.push_str("<g>");
++        }
++        for _ in 1..levels {
++            svg.push_str("</g>");
++        }
++        svg.push_str("</svg>");
++        svg.into_bytes()
++    }
++
++    fn deep(text: &str) -> bool {
++        nesting_too_deep(text.as_bytes())
++    }
++
++    #[test]
++    fn the_limit_is_the_upstream_constant() {
++        assert_eq!(MAX_SVG_DEPTH, 500);
++    }
++
++    #[test]
++    fn the_boundary_is_500_levels() {
++        assert!(!nesting_too_deep(&nested(499)));
++        assert!(!nesting_too_deep(&nested(500)));
++        assert!(nesting_too_deep(&nested(501)));
++        assert!(nesting_too_deep(&nested(502)));
++    }
++
++    #[test]
++    fn a_hundred_thousand_levels_are_refused_without_recursing() {
++        // A recursive scan would overflow the 2 MiB stack of a test thread long before 100,000 levels.
++        assert!(nesting_too_deep(&nested(100_000)));
++        // Without a single close tag as well: the depth is reached on the way in.
++        let open_only = "<g>".repeat(100_000);
++        assert!(deep(&open_only));
++    }
++
++    #[test]
++    fn a_wide_document_is_not_a_deep_one() {
++        let flat = format!("<svg>{}</svg>", "<rect/>".repeat(100_000));
++        assert!(!deep(&flat));
++        let siblings = format!("<svg>{}</svg>", "<g></g>".repeat(100_000));
++        assert!(!deep(&siblings));
++    }
++
++    #[test]
++    fn a_self_closing_element_does_not_deepen_what_follows() {
++        // 499 open elements and then 100 self-closing ones in a row: 500 deep at most.
++        let doc = format!(
++            "{}{}{}",
++            "<g>".repeat(499),
++            "<rect/>".repeat(100),
++            "</g>".repeat(499)
++        );
++        assert!(!deep(&doc));
++        // The leaf itself is a level: 500 open elements and a self-closing one inside them is 501.
++        let doc = format!("{}<rect/>{}", "<g>".repeat(500), "</g>".repeat(500));
++        assert!(deep(&doc));
++        // `<g/>` repeated is never deeper than 1.
++        assert!(!deep(&"<g/>".repeat(100_000)));
++        // Space and attributes before the slash.
++        assert!(!deep(&format!(
++            "{}{}",
++            "<g a=\"1\" />".repeat(1000),
++            "<x/>"
++        )));
++    }
++
++    #[test]
++    fn close_tags_bring_the_depth_back() {
++        let doc = format!(
++            "{}{}{}",
++            "<g>".repeat(400),
++            "</g>".repeat(400),
++            "<g>".repeat(400)
++        );
++        assert!(!deep(&doc));
++        // More close tags than open ones do not wrap around to a large depth.
++        let doc = format!("{}{}", "</g>".repeat(1000), "<g>".repeat(400));
++        assert!(!deep(&doc));
++    }
++
++    #[test]
++    fn comments_hide_markup() {
++        let hidden = format!("<svg><!-- {} --></svg>", "<g>".repeat(10_000));
++        assert!(!deep(&hidden));
++        // `-->` ends the comment, and a `>` or `--` inside it does not.
++        let doc = format!("<svg><!-- a > b -- c -->{}</svg>", "<g>".repeat(600));
++        assert!(deep(&doc));
++        // `<!-->` does not open and close a comment at once.
++        let doc = format!("<svg><!--> {} --></svg>", "<g>".repeat(600));
++        assert!(!deep(&doc));
++    }
++
++    #[test]
++    fn cdata_hides_markup() {
++        let hidden = format!(
++            "<svg><style><![CDATA[ {} ]]></style></svg>",
++            "<g>".repeat(10_000)
++        );
++        assert!(!deep(&hidden));
++        // A `>` and a `]]` inside the section do not end it; `]]>` does.
++        let doc = format!("<svg><![CDATA[ a ]] > b ]]>{}</svg>", "<g>".repeat(600));
++        assert!(deep(&doc));
++    }
++
++    #[test]
++    fn processing_instructions_hide_markup() {
++        let hidden = format!(
++            r#"<?xml version="1.0"?><?x {} ?><svg/>"#,
++            "<g>".repeat(10_000)
++        );
++        assert!(!deep(&hidden));
++        let doc = format!("<?xml-stylesheet href='a'?>{}", "<g>".repeat(600));
++        assert!(deep(&doc));
++    }
++
++    #[test]
++    fn a_doctype_with_an_internal_subset_is_skipped() {
++        let doc = format!(
++            r#"<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN" "http://www.w3.org/Graphics/SVG/1.1/DTD/svg11.dtd" [
++                <!ENTITY a "<g>&b;</g>">
++                <!ENTITY b 'x > y ] z'>
++                <!-- <g><g> '"' ] > -->
++                <?pi <g> ?>
++            ]><svg>{}</svg>"#,
++            "<g>".repeat(600)
++        );
++        assert!(deep(&doc), "the document after the subset is 601 deep");
++        let doc = doc.replace(&"<g>".repeat(600), "<g>");
++        assert!(!deep(&doc), "the markup inside the subset is not elements");
++        // A DOCTYPE without a subset.
++        assert!(!deep(r#"<!DOCTYPE svg><svg><g/></svg>"#));
++    }
++
++    #[test]
++    fn quoted_attribute_values_may_hold_angle_brackets() {
++        let doc = format!(
++            r#"<svg a="<g><g><g>" b='>' c="/>" d='"<g>"'>{}</svg>"#,
++            "<g>".repeat(10)
++        );
++        assert!(!deep(&doc));
++        // A `/>` inside a quote does not make the tag self-closing: the element stays open.
++        let doc = format!(r#"{}"#, r#"<g title="a/>">"#.repeat(501));
++        assert!(deep(&doc));
++        // And a `>` inside a quote does not end the tag early, so what follows is not a start tag.
++        let doc = r#"<g title="></g><g><g><g>">"#.repeat(200);
++        assert!(!deep(&doc));
++        let doc = format!("{}{}", r#"<g a='" > <g>' >"#.repeat(499), "<rect/>");
++        assert!(!deep(&doc));
++    }
++
++    #[test]
++    fn text_between_the_elements_is_ignored() {
++        let doc = format!(
++            "{}a > b ]]> c{}",
++            "<g>\n  ".repeat(300),
++            "</g>\n".repeat(300)
++        );
++        assert!(!deep(&doc));
++    }
++
++    #[test]
++    fn what_is_not_xml_is_left_to_usvg() {
++        assert!(!deep(""));
++        assert!(!deep("plain text, no markup at all"));
++        assert!(!deep("<"));
++        assert!(!deep("< <3 <1 <. <- <= < g>"));
++        // Cut off in the middle of a construct: the document is not well formed, usvg says so.
++        assert!(!deep("<svg><!-- never ends <g><g><g>"));
++        assert!(!deep("<svg><![CDATA[ never ends"));
++        assert!(!deep("<?xml never ends"));
++        assert!(!deep("<!DOCTYPE svg [ <!ENTITY a \"never ends>"));
++        assert!(!deep("<svg a=\"never ends>"));
++        assert!(!deep("<svg></"));
++        // A binary file that happens to hold `<`.
++        assert!(!nesting_too_deep(&[
++            0x89, b'P', b'N', b'G', b'<', 0x00, 0xff, b'<', 0x1a, b'>'
++        ]));
++    }
++
++    #[test]
++    fn names_with_namespaces_and_non_ascii_letters_count() {
++        assert!(deep(&"<svg:g>".repeat(501)));
++        assert!(deep(&"<_g>".repeat(501)));
++        assert!(deep(&"<\u{e9}l>".repeat(501)));
++    }
++
++    fn gzip(bytes: &[u8]) -> Vec<u8> {
++        let mut encoder = GzEncoder::new(Vec::new(), Compression::default());
++        encoder.write_all(bytes).unwrap();
++        encoder.finish().unwrap()
++    }
++
++    #[test]
++    fn the_guard_passes_an_ordinary_document_unchanged() {
++        let svg = nested(10);
++        match guard(&svg) {
++            Ok(Cow::Borrowed(same)) => assert_eq!(same, svg.as_slice()),
++            other => panic!("{other:?}"),
++        }
++    }
++
++    #[test]
++    fn the_guard_refuses_a_deep_document() {
++        assert_eq!(guard(&nested(501)).unwrap_err(), "SVG is nested too deeply");
++        assert!(guard(&nested(500)).is_ok());
++    }
++
++    #[test]
++    fn an_svgz_file_is_unpacked_before_it_is_looked_at() {
++        // Compressed, 100,000 levels are a few hundred bytes of gzip: this is the way round the check.
++        let packed = gzip(&nested(100_000));
++        assert!(packed.len() < 4096, "{} bytes", packed.len());
++        assert_eq!(guard(&packed).unwrap_err(), TOO_DEEP);
++        // The gzip bytes themselves hold no `<` worth reading.
++        assert!(!nesting_too_deep(&packed));
++
++        // A shallow one is returned unpacked, so usvg does not unpack it again.
++        let svg = nested(20);
++        let packed = gzip(&svg);
++        match guard(&packed) {
++            Ok(Cow::Owned(unpacked)) => assert_eq!(unpacked, svg),
++            other => panic!("{other:?}"),
++        }
++    }
++
++    #[test]
++    fn a_broken_or_doubled_gzip_stream_is_left_to_usvg() {
++        let mut packed = gzip(&nested(20));
++        packed.truncate(packed.len() / 2);
++        // Not refused here: the original bytes go to usvg, which reports the gzip error.
++        assert!(matches!(guard(&packed), Ok(Cow::Borrowed(same)) if same == packed.as_slice()));
++        let doubled = gzip(&gzip(&nested(20)));
++        assert!(matches!(guard(&doubled), Ok(Cow::Borrowed(same)) if same == doubled.as_slice()));
++    }
++
++    #[test]
++    fn the_test_documents_are_real_svg_that_usvg_reads() {
++        // The guard's verdicts above are about documents usvg accepts. Parse on a thread with a large stack
++        // so this test does not itself depend on how much stack usvg takes per level.
++        let parsed = std::thread::Builder::new()
++            .stack_size(64 << 20)
++            .spawn(|| {
++                let options = usvg::Options::default();
++                usvg::Tree::from_data(&nested(MAX_SVG_DEPTH as usize), &options).is_ok()
++                    && usvg::Tree::from_data(&gzip(&nested(20)), &options).is_ok()
++            })
++            .unwrap()
++            .join()
++            .unwrap();
++        assert!(parsed);
++    }
++}

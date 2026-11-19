@@ -1,3 +1,88 @@
 # Mercury's changes to servo-layout 0.8.0, against the crate as published on crates.io
 # (SHA-256 02047fd51cca1b92cfd38bc4663c9f11f6ebf99cd2d5550bac507a0a2b77addc). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-layout.
+diff --git a/display_list/mod.rs b/display_list/mod.rs
+--- a/display_list/mod.rs
++++ b/display_list/mod.rs
+@@ -1575,7 +1575,8 @@
+             return;
+         }
+
+-        if !fragment.run_data.paints_caret {
++        // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++        if !fragment.run_data.paints_caret.load(Ordering::Relaxed) {
+             return;
+         }
+
+diff --git a/dom.rs b/dom.rs
+--- a/dom.rs
++++ b/dom.rs
+@@ -3,6 +3,8 @@
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+ use std::marker::PhantomData;
++// Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++use std::sync::atomic::Ordering;
+
+ use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
+ use layout_api::{
+@@ -396,7 +398,11 @@
+         self
+     }
+
+-    fn set_text_run_selection(&self, new_range: Option<RangeAny<Utf32CodeUnits>>) -> bool {
++    fn set_text_run_selection(
++        &self,
++        new_range: Option<RangeAny<Utf32CodeUnits>>,
++        new_paints_caret: bool,
++    ) -> bool {
+         let inner = self.0.borrow();
+         // When `::first-letter` is used, one DOM text node can generate multiple text runs
+         // so there isn’t a single place to set the new range
+@@ -409,6 +415,11 @@
+         }
+         if let Some(LayoutBox::Text(text_run)) = &*inner.self_box.borrow() {
+             *text_run.borrow().run_data.selection.borrow_mut() = new_range;
++            text_run
++                .borrow()
++                .run_data
++                .paints_caret
++                .store(new_paints_caret, Ordering::Relaxed);
+             true
+         } else {
+             false
+diff --git a/flow/inline/construct.rs b/flow/inline/construct.rs
+--- a/flow/inline/construct.rs
++++ b/flow/inline/construct.rs
+@@ -493,8 +493,9 @@
+                 character_range_in_ifc_text: new_character_range,
+                 original_offset: original_size_before,
+                 selection: AtomicRefCell::new(selection),
+-                paints_caret: info.node.text_node_paints_caret(),
+                 needs_caret_placeholder,
++                // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++                paints_caret: info.node.text_node_paints_caret().into(),
+                 offset_map: self.offset_map.clone(),
+             }
+             .into(),
+diff --git a/flow/inline/text_run.rs b/flow/inline/text_run.rs
+--- a/flow/inline/text_run.rs
++++ b/flow/inline/text_run.rs
+@@ -4,6 +4,7 @@
+
+ use std::mem;
+ use std::ops::Range;
++use std::sync::atomic::AtomicBool;
+ use std::sync::{Arc, OnceLock};
+
+ use app_units::Au;
+@@ -349,7 +350,8 @@
+     // TODO: make this more compact with a pair of `AtomicUsize`?
+     pub selection: AtomicRefCell<Option<RangeAny<Utf32CodeUnits>>>,
+     /// Whether a caret should be painted when the selection is an empty range (start == end)
+-    pub paints_caret: bool,
++    // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++    pub paints_caret: AtomicBool,
+     /// Whether a caret placeholder should be added for empty text runs or for empty
+     /// lines after a forced line break.
+     pub needs_caret_placeholder: bool,

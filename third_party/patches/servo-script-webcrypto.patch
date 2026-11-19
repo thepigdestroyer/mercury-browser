@@ -1,3 +1,16 @@
 # Mercury's changes to servo-script-webcrypto 0.8.0, against the crate as published on crates.io
 # (SHA-256 c57ab02cc56817713f0a8a18a125c90604f66d20479a2cd6e572874b2b5c4d7b). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-script-webcrypto.
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -187,7 +187,8 @@
+ optional = true
+
+ [dependencies.js]
+-version = "=0.26.13"
++# Mercury: mozjs 0.27.0 (SpiderMonkey 153.7.0, mozjs_sys 153.7.0-0) for its security fixes, servo/servo#49907.
++version = "=0.27.0"
+ features = [
+     "intl",
+     "libz-sys",

@@ -4,7 +4,17 @@
 diff --git a/Cargo.toml b/Cargo.toml
 --- a/Cargo.toml
 +++ b/Cargo.toml
-@@ -499,3 +499,9 @@
+@@ -209,7 +209,8 @@
+ version = "0.15"
+
+ [dependencies.js]
+-version = "=0.26.13"
++# Mercury: mozjs 0.27.0 (SpiderMonkey 153.7.0, mozjs_sys 153.7.0-0) for its security fixes, servo/servo#49907.
++version = "=0.27.0"
+ features = [
+     "intl",
+     "libz-sys",
+@@ -499,3 +500,9 @@
      "cfg(llvm_pgo)",
      "cfg(ohos_mock)",
  ]
@@ -75,6 +85,27 @@ diff --git a/dom/canvas/imagedata.rs b/dom/canvas/imagedata.rs
      pub(crate) fn get_snapshot(&self, no_gc: &NoGC) -> Snapshot {
          Snapshot::from_vec(
              self.get_size(),
+diff --git a/dom/characterdata/characterdata.rs b/dom/characterdata/characterdata.rs
+--- a/dom/characterdata/characterdata.rs
++++ b/dom/characterdata/characterdata.rs
+@@ -109,12 +109,16 @@
+     pub(crate) fn set_text_run_selection(
+         &self,
+         new_range: Option<RangeAny<Utf32CodeUnits>>,
++        // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++        new_paints_caret: bool,
+     ) -> bool {
+         self.upcast::<Node>()
+             .layout_data()
+             .borrow()
+             .as_ref()
+-            .is_some_and(|layout_data| layout_data.set_text_run_selection(new_range))
++            .is_some_and(|layout_data| {
++                layout_data.set_text_run_selection(new_range, new_paints_caret)
++            })
+     }
+
+     /// Returns the rendered text for this [`CharacterData`].
 diff --git a/dom/document/document.rs b/dom/document/document.rs
 --- a/dom/document/document.rs
 +++ b/dom/document/document.rs
@@ -148,6 +179,979 @@ diff --git a/dom/document/document_event_handler.rs b/dom/document/document_even
  use crate::dom::types::{
      CompositionEvent, Element, Event, EventTarget, GlobalScope, HTMLAnchorElement, HTMLAreaElement,
      HTMLElement, HTMLLabelElement, MouseEvent, Touch, TouchEvent, TouchList, WheelEvent, Window,
+@@ -1642,9 +1644,10 @@
+             TouchEventType::Cancel => "touchcancel",
+         };
+
+-        let touches = TouchList::new(cx, window, self.active_touch_points.borrow().r());
++        // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
++        let touches = TouchList::new(cx, window, self.active_touch_points.borrow().as_ref_slice());
+         let changed_touches = TouchList::new(cx, window, from_ref(&&*changed_touch));
+-        let target_touches = TouchList::new(cx, window, target_touches.r());
++        let target_touches = TouchList::new(cx, window, target_touches.as_ref_slice());
+
+         let touch_event = TouchEvent::new(
+             cx,
+diff --git a/dom/execcommand/basecommand.rs b/dom/execcommand/basecommand.rs
+--- a/dom/execcommand/basecommand.rs
++++ b/dom/execcommand/basecommand.rs
+@@ -37,6 +37,8 @@
+ use crate::dom::execcommand::commands::insertparagraph::execute_insert_paragraph_command;
+ use crate::dom::execcommand::commands::inserttext::execute_insert_text_command;
+ use crate::dom::execcommand::commands::italic::execute_italic_command;
++// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
++use crate::dom::execcommand::commands::outdent::execute_outdent_command;
+ use crate::dom::execcommand::commands::removeformat::execute_removeformat_command;
+ use crate::dom::execcommand::commands::strikethrough::execute_strikethrough_command;
+ use crate::dom::execcommand::commands::stylewithcss::execute_style_with_css_command;
+@@ -763,6 +765,7 @@
+             },
+             CommandName::InsertText => execute_insert_text_command(cx, document, selection, value),
+             CommandName::Italic => execute_italic_command(cx, document, selection),
++            CommandName::Outdent => execute_outdent_command(cx, document, selection),
+             CommandName::RemoveFormat => execute_removeformat_command(cx, document, selection),
+             CommandName::Strikethrough => execute_strikethrough_command(cx, document, selection),
+             CommandName::StyleWithCss => execute_style_with_css_command(document, value),
+diff --git a/dom/execcommand/commands/delete.rs b/dom/execcommand/commands/delete.rs
+--- a/dom/execcommand/commands/delete.rs
++++ b/dom/execcommand/commands/delete.rs
+@@ -17,6 +17,8 @@
+ use crate::dom::html::htmlbrelement::HTMLBRElement;
+ use crate::dom::html::htmlhrelement::HTMLHRElement;
+ use crate::dom::html::htmlimageelement::HTMLImageElement;
++// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
++use crate::dom::html::htmllielement::HTMLLIElement;
+ use crate::dom::html::htmltableelement::HTMLTableElement;
+ use crate::dom::selection::Selection;
+ use crate::dom::text::Text;
+@@ -159,9 +161,13 @@
+         offset == 0
+     {
+         // Step 7.1. Let items be a list of all lis that are ancestors of node.
+-        // TODO
++        let items = node
++            .ancestors()
++            .filter(|ancestor| ancestor.is::<HTMLLIElement>());
+         // Step 7.2. Normalize sublists of each item in items.
+-        // TODO
++        for item in items {
++            item.normalize_sublists(cx);
++        }
+         // Step 7.3. Record the values of the one-node list consisting of node, and let values be the result.
+         let values = record_the_values(vec![node.clone()]);
+         // Step 7.4. Split the parent of the one-node list consisting of node.
+diff --git a/dom/execcommand/commands/indent.rs b/dom/execcommand/commands/indent.rs
+--- a/dom/execcommand/commands/indent.rs
++++ b/dom/execcommand/commands/indent.rs
+@@ -8,12 +8,11 @@
+ use script_bindings::codegen::GenericBindings::NodeBinding::NodeMethods;
+ use script_bindings::inheritance::Castable;
+
+-use crate::dom::NodeTraits;
+ use crate::dom::bindings::root::DomRoot;
+ use crate::dom::document::Document;
+-use crate::dom::element::{AdjacentPosition, Element};
++use crate::dom::element::Element;
+ use crate::dom::execcommand::contenteditable::node::{
+-    NodeOrString, is_allowed_child, move_preserving_ranges, wrap_node_list,
++    NodeOrString, is_allowed_child, wrap_node_list,
+ };
+ use crate::dom::html::htmllielement::HTMLLIElement;
+ use crate::dom::html::htmlolistelement::HTMLOListElement;
+@@ -20,10 +19,10 @@
+ use crate::dom::html::htmlulistelement::HTMLUListElement;
+ use crate::dom::node::Node;
+ use crate::dom::selection::Selection;
+-use crate::dom::text::Text;
+
+ /// <https://w3c.github.io/editing/docs/execCommand/#indent>
+-pub(crate) fn indent(cx: &mut JSContext, document: &Document, node_list: Vec<DomRoot<Node>>) {
++// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
++pub(crate) fn indent(cx: &mut JSContext, context_object: &Document, node_list: Vec<DomRoot<Node>>) {
+     // Step 1. If node list is empty, do nothing and abort these steps.
+     if node_list.is_empty() {
+         return;
+@@ -85,78 +84,7 @@
+
+     // Step 5. Fix disallowed ancestors of new parent.
+     if let Some(new_parent) = new_parent {
+-        new_parent.fix_disallowed_ancestors(cx, document);
+-    }
+-}
+-
+-/// <https://w3c.github.io/editing/docs/execCommand/#normalize-sublists>
+-pub(crate) fn normalize_sublists(cx: &mut JSContext, item: DomRoot<Node>) {
+-    let item_element = item
+-        .downcast::<Element>()
+-        .expect("item should be an element");
+-
+-    // Step 1. If item is not an li or it is not editable or its parent is not editable, abort these steps.
+-    if !item.is::<HTMLLIElement>() ||
+-        !item.is_editable() ||
+-        !item
+-            .GetParentElement()
+-            .is_some_and(|parent| parent.upcast::<Node>().is_editable())
+-    {
+-        return;
+-    }
+-
+-    // Step 2. Let new item be null.
+-    let mut new_item: Option<DomRoot<Element>> = None;
+-
+-    // Step 3. While item has an ol or ul child:
+-    while item
+-        .child_elements()
+-        .any(|child| child.is::<HTMLOListElement>() || child.is::<HTMLUListElement>())
+-    {
+-        // Step 3.1. Let child be the last child of item.
+-        let child = item.GetLastChild().expect("Must have a last child here.");
+-
+-        // Step 3.2. If child is an ol or ul, or new item is null and child is a Text node whose data consists of zero of more space characters:
+-        if child.is::<HTMLOListElement>() ||
+-            child.is::<HTMLUListElement>() ||
+-            (new_item.is_none() &&
+-                child
+-                    .downcast::<Text>()
+-                    .is_some_and(|text| text.data().bytes().all(|byte| byte == b' ')))
+-        {
+-            // Step 3.2.1. Set new item to null.
+-            new_item = None;
+-
+-            // Step 3.2.2. Insert child into the parent of item immediately following item, preserving ranges.
+-            move_preserving_ranges(cx, &child, |cx| {
+-                item_element
+-                    .insert_adjacent(cx, AdjacentPosition::AfterEnd, &child)
+-                    .map(|elem| elem.expect("Should have inserted"))
+-            });
+-
+-            continue;
+-        }
+-        // Step 3.3. Otherwise:
+-        // Step 3.3.1. If new item is null,
+-        //             let new item be the result of calling createElement("li") on the ownerDocument of item,
+-        //             then insert new item into the parent of item immediately after item.
+-        if new_item.is_none() {
+-            new_item = Some(item.owner_document().create_element(cx, "li"));
+-            item_element
+-                .insert_adjacent(cx, AdjacentPosition::AfterEnd, &child)
+-                .expect("Insertion should always work here.");
+-        }
+-
+-        // Step 3.3.2. Insert child into new item as its first child, preserving ranges.
+-        move_preserving_ranges(cx, &child, |cx| {
+-            new_item
+-                .as_ref()
+-                .expect("Must have new item here")
+-                .downcast::<Element>()
+-                .expect("New item must be able to support children")
+-                .insert_adjacent(cx, AdjacentPosition::AfterBegin, &child)
+-                .map(|elem| elem.expect("Should have inserted"))
+-        });
++        new_parent.fix_disallowed_ancestors(cx, context_object);
+     }
+ }
+
+@@ -179,7 +107,7 @@
+
+     // Step 2. For each item in items, normalize sublists of item.
+     for item in items {
+-        normalize_sublists(cx, item);
++        item.normalize_sublists(cx);
+     }
+
+     // Normalizing sublists probably messes up the range
+@@ -234,7 +162,7 @@
+         if let Some(sibling) = sibling &&
+             sibling.is::<HTMLLIElement>()
+         {
+-            normalize_sublists(cx, sibling);
++            sibling.normalize_sublists(cx);
+         }
+     }
+
+diff --git a/dom/execcommand/commands/insertlinebreak.rs b/dom/execcommand/commands/insertlinebreak.rs
+--- a/dom/execcommand/commands/insertlinebreak.rs
++++ b/dom/execcommand/commands/insertlinebreak.rs
+@@ -7,12 +7,20 @@
+ use script_bindings::codegen::GenericBindings::RangeBinding::RangeMethods;
+ use script_bindings::codegen::GenericBindings::SelectionBinding::SelectionMethods;
+ use script_bindings::inheritance::Castable;
++use script_bindings::str::DOMString;
++// Mercury: hand-port of servo/servo#49884 (ba4852dce), 0.8 forms (white_space_collapse path,
++// Element::style() and is_collapsed_line_break take no cx). Drop at the bump that has it.
++use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
+
++use crate::dom::bindings::codegen::Bindings::DocumentBinding::DocumentMethods;
+ use crate::dom::bindings::root::DomRoot;
+ use crate::dom::document::Document;
+ use crate::dom::element::Element;
+-use crate::dom::execcommand::contenteditable::node::{NodeOrString, is_allowed_child};
++use crate::dom::execcommand::contenteditable::node::{
++    NodeOrString, is_allowed_child, move_preserving_ranges,
++};
+ use crate::dom::execcommand::contenteditable::selection::SelectionDeletionStripWrappers;
++use crate::dom::html::htmlpreelement::HTMLPreElement;
+ use crate::dom::selection::Selection;
+ use crate::dom::text::Text;
+
+@@ -48,7 +56,8 @@
+             NodeOrString::from_node(&active_range.start_container(), cx.no_gc()),
+         )
+     {
+-        return false;
++        // Mercury: hand-port of servo/servo#49917 (824dae490). Drop at the bump that has it.
++        return true;
+     }
+
+     // Step 4. If the active range's start node is not an Element, and "br" is not an allowed child
+@@ -65,7 +74,7 @@
+             ),
+         )
+     {
+-        return false;
++        return true;
+     }
+
+     // Step 5. If the active range's start node is a Text node and its start offset is zero, call
+@@ -111,11 +120,31 @@
+     }
+
+     // Step 7. Let br be the result of calling createElement("br") on the context object.
+-    let br = document.create_element(cx, "br");
++    //
++    // Browsers use a newline character for insertion when the CSS style for "white-space"
++    // preserves whitespace (that's the case for "pre", "pre-line" and "pre-wrap"). However,
++    // confusingly they don't do that when the node is exactly a `<pre>`.
++    let start_container = active_range.start_container();
++    let has_preformatted_styling = start_container
++        .downcast::<Element>()
++        // In case the start_container is a text node where we need to insert a "\n"
++        .or(start_container.GetParentElement().as_deref())
++        .filter(|element| !element.is::<HTMLPreElement>())
++        .and_then(|element| element.style())
++        .is_some_and(|style| {
++            let white_space_collapse = style.get_inherited_text().white_space_collapse;
++            white_space_collapse == WhiteSpaceCollapse::Preserve ||
++                white_space_collapse == WhiteSpaceCollapse::PreserveBreaks
++        });
+
++    let newline_node = if has_preformatted_styling {
++        DomRoot::upcast(document.CreateTextNode(cx, DOMString::from_static("\n")))
++    } else {
++        DomRoot::upcast(document.create_element(cx, "br"))
++    };
++
+     // Step 8. Call insertNode(br) on the active range.
+-    let br_node = DomRoot::upcast(br);
+-    if active_range.InsertNode(cx, &br_node).is_err() {
++    if active_range.InsertNode(cx, &newline_node).is_err() {
+         unreachable!("The node should always be insertable.");
+     }
+
+@@ -122,15 +151,35 @@
+     // Step 9. Call collapse() on the context object's selection, with br's parent as the first
+     //         argument and one plus br's index as the second argument.
+     if selection
+-        .Collapse(cx, br_node.GetParentNode().as_deref(), 1 + br_node.index())
++        .Collapse(
++            cx,
++            newline_node.GetParentNode().as_deref(),
++            1 + newline_node.index(),
++        )
+         .is_err()
+     {
+         unreachable!("Should always be able to collapse the selection.");
+     }
+
++    // Mercury: hand-port of servo/servo#49920 (d9656e7a2). Drop at the bump that has it.
++    active_range = selection
++        .active_range(cx)
++        .expect("Must always have an active range");
++
+     // Step 10. If br is a collapsed line break, call createElement("br") on the context object and
+     //          let extra br be the result, then call insertNode(extra br) on the active range.
+-    // TODO: Implement this.
++    if newline_node.is_collapsed_line_break(cx.no_gc()) {
++        // Same as above at step 7, we insert a newline character when appropriate
++        let extra_newline_node = if has_preformatted_styling {
++            DomRoot::upcast(document.CreateTextNode(cx, DOMString::from_static("\n")))
++        } else {
++            DomRoot::upcast(document.create_element(cx, "br"))
++        };
++
++        move_preserving_ranges(cx, &extra_newline_node, |cx| {
++            active_range.InsertNode(cx, &extra_newline_node)
++        });
++    }
+
+     // Step 11. Return true.
+     true
+diff --git a/dom/execcommand/commands/insertparagraph.rs b/dom/execcommand/commands/insertparagraph.rs
+--- a/dom/execcommand/commands/insertparagraph.rs
++++ b/dom/execcommand/commands/insertparagraph.rs
+@@ -16,6 +16,8 @@
+ use crate::dom::comment::Comment;
+ use crate::dom::document::Document;
+ use crate::dom::element::Element;
++// Mercury: backport of servo/servo#49818 (d1eff56d7). Drop at the bump that has it.
++use crate::dom::execcommand::commands::insertlinebreak::execute_insert_line_break_command;
+ use crate::dom::execcommand::contenteditable::node::{
+     NodeOrString, is_allowed_child, node_matches_local_name, split_the_parent, wrap_node_list,
+ };
+@@ -143,7 +145,9 @@
+                     cx.no_gc(),
+                 ),
+             ) {
+-                return true;
++                // Instead of true, browsers actually insert a line break instead:
++                // https://github.com/w3c/editing/issues/552
++                return execute_insert_line_break_command(cx, document, selection);
+             }
+             // Step 11.5.2. Set container to the result of calling createElement(tag) on the context object.
+             let container = document.create_element(cx, tag.str());
+diff --git a/dom/execcommand/commands/inserttext.rs b/dom/execcommand/commands/inserttext.rs
+--- a/dom/execcommand/commands/inserttext.rs
++++ b/dom/execcommand/commands/inserttext.rs
+@@ -141,7 +141,13 @@
+     // Step 14. Otherwise:
+     else {
+         // Step 14.1. If node has only one child, which is a collapsed line break, remove its child from it.
+-        // TODO: Implement this.
++        // Mercury: backport of servo/servo#49797 (8d0f0d77f). Drop at the bump that has it.
++        if node.children_count() == 1 &&
++            let Some(child) = node.children().next() &&
++            child.is_collapsed_line_break(cx.no_gc())
++        {
++            child.remove_self(cx);
++        }
+
+         // Step 14.2. Let text be the result of calling createTextNode(value) on the context object.
+         let text = document.CreateTextNode(cx, value.clone());
+diff --git a/dom/execcommand/commands/mod.rs b/dom/execcommand/commands/mod.rs
+--- a/dom/execcommand/commands/mod.rs
++++ b/dom/execcommand/commands/mod.rs
+@@ -19,6 +19,8 @@
+ pub(crate) mod insertparagraph;
+ pub(crate) mod inserttext;
+ pub(crate) mod italic;
++// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
++pub(crate) mod outdent;
+ pub(crate) mod removeformat;
+ pub(crate) mod strikethrough;
+ pub(crate) mod stylewithcss;
+diff --git a/dom/execcommand/commands/outdent.rs b/dom/execcommand/commands/outdent.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/execcommand/commands/outdent.rs
+@@ -0,0 +1,365 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
++// New file from upstream (MPL-2.0 header kept).
++
++use std::collections::HashSet;
++
++use html5ever::local_name;
++use js::context::JSContext;
++use script_bindings::codegen::GenericBindings::CSSStyleDeclarationBinding::CSSStyleDeclarationMethods;
++use script_bindings::codegen::GenericBindings::NodeBinding::NodeMethods;
++use script_bindings::inheritance::Castable;
++use script_bindings::str::DOMString;
++
++use crate::dom::bindings::codegen::Bindings::HTMLElementBinding::HTMLElementMethods;
++use crate::dom::bindings::root::{DomRoot, DomSlice};
++use crate::dom::document::Document;
++use crate::dom::element::Element;
++use crate::dom::execcommand::commands::indent::indent;
++use crate::dom::execcommand::contenteditable::node::{
++    record_the_values, restore_the_values, split_the_parent,
++};
++use crate::dom::html::htmlbrelement::HTMLBRElement;
++use crate::dom::html::htmlelement::HTMLElement;
++use crate::dom::html::htmllielement::HTMLLIElement;
++use crate::dom::html::htmlolistelement::HTMLOListElement;
++use crate::dom::html::htmlulistelement::HTMLUListElement;
++use crate::dom::iterators::ShadowIncluding;
++use crate::dom::node::Node;
++use crate::dom::selection::Selection;
++
++/// <https://w3c.github.io/editing/docs/execCommand/#outdent>
++pub(crate) fn outdent(cx: &mut JSContext, context_object: &Document, node: &Node) {
++    // Step 1. If node is not editable, abort these steps.
++    if !node.is_editable() {
++        return;
++    }
++
++    // Step 2. If node is a simple indentation element, remove node, preserving its descendants.
++    //         Then abort these steps.
++    if node
++        .downcast::<Element>()
++        .is_some_and(|element| element.is_simple_indentation_element())
++    {
++        node.remove_preserving_its_descendants(cx);
++        return;
++    }
++
++    // Step 3. If node is an indentation element:
++    if let Some(node_as_element) = node.downcast::<Element>() &&
++        node_as_element.is_indentation_element()
++    {
++        // Step 3.1. Unset the dir attribute of node, if any.
++        node_as_element.remove_attribute_by_name(cx, &local_name!("dir"));
++
++        // Step 3.2. Unset the margin, padding, and border CSS properties of node.
++        if let Some(node_as_html_element) = node_as_element.downcast::<HTMLElement>() {
++            let _ = node_as_html_element
++                .Style(cx)
++                .RemoveProperty(cx, DOMString::from_static("margin"));
++            let _ = node_as_html_element
++                .Style(cx)
++                .RemoveProperty(cx, DOMString::from_static("padding"));
++            let _ = node_as_html_element
++                .Style(cx)
++                .RemoveProperty(cx, DOMString::from_static("border"));
++        }
++
++        // Step 3.3. Set the tag name of node to "div".
++        node_as_element.set_the_tag_name(cx, "div");
++
++        // Step 3.4. Abort these steps.
++        return;
++    }
++
++    // Step 4. Let current ancestor be node's parent.
++    let mut current_ancestor = node.GetParentNode();
++
++    // Step 5. Let ancestor list be a list of nodes, initially empty.
++    let mut ancestor_list: Vec<DomRoot<Node>> = vec![];
++
++    // Step 6. While current ancestor is an editable Element that is neither a simple indentation
++    //         element nor an ol nor a ul, append current ancestor to ancestor list and then set
++    //         current ancestor to its parent.
++    while let Some(ancestor) = current_ancestor.clone() &&
++        ancestor.is_editable() &&
++        ancestor
++            .downcast::<Element>()
++            .is_some_and(|element| !element.is_simple_indentation_element()) &&
++        !ancestor.is::<HTMLOListElement>() &&
++        !ancestor.is::<HTMLUListElement>()
++    {
++        current_ancestor = ancestor.GetParentNode();
++        ancestor_list.push(ancestor);
++    }
++
++    // Step 7. If current ancestor is not an editable simple indentation element:
++    if !current_ancestor.as_ref().is_some_and(|ancestor| {
++        ancestor.is_editable() &&
++            ancestor
++                .downcast::<Element>()
++                .is_some_and(|element| element.is_simple_indentation_element())
++    }) {
++        // Step 7.1. Let current ancestor be node's parent.
++        current_ancestor = node.GetParentNode();
++
++        // Step 7.2. Let ancestor list be the empty list.
++        ancestor_list.clear();
++
++        // Step 7.3. While current ancestor is an editable Element that is neither an indentation
++        //           element nor an ol nor a ul, append current ancestor to ancestor list and then
++        //           set current ancestor to its parent.
++        while let Some(ancestor) = current_ancestor.clone() &&
++            ancestor.is_editable() &&
++            ancestor
++                .downcast::<Element>()
++                .is_some_and(|element| !element.is_indentation_element()) &&
++            !ancestor.is::<HTMLOListElement>() &&
++            !ancestor.is::<HTMLUListElement>()
++        {
++            current_ancestor = ancestor.GetParentNode();
++            ancestor_list.push(ancestor);
++        }
++    }
++
++    // Step 8. If node is an ol or ul and current ancestor is not an editable indentation element:
++    if let Some(node_as_element) = node.downcast::<Element>() &&
++        (node.is::<HTMLOListElement>() || node.is::<HTMLUListElement>()) &&
++        !current_ancestor.as_ref().is_some_and(|ancestor| {
++            ancestor.is_editable() &&
++                ancestor
++                    .downcast::<Element>()
++                    .is_some_and(|element| element.is_indentation_element())
++        })
++    {
++        // Step 8.1. Unset the reversed, start, and type attributes of node, if any are set.
++        node_as_element.remove_attribute_by_name(cx, &local_name!("reversed"));
++        node_as_element.remove_attribute_by_name(cx, &local_name!("start"));
++        node_as_element.remove_attribute_by_name(cx, &local_name!("type"));
++
++        // Step 8.2. Let children be the children of node.
++        let children = node.children();
++
++        // Step 8.3. If node has attributes, and its parent is not an ol or ul, set the tag name of node to "div".
++        if !node_as_element.attrs().borrow().is_empty() &&
++            !node.GetParentElement().is_some_and(|parent| {
++                parent.is::<HTMLOListElement>() || parent.is::<HTMLUListElement>()
++            })
++        {
++            node_as_element.set_the_tag_name(cx, "div");
++        }
++        // Step 8.4. Otherwise:
++        else {
++            // Step 8.4.1. Record the values of node's children, and let values be the result.
++            let values = record_the_values(node.children().collect());
++
++            // Step 8.4.2. Remove node, preserving its descendants.
++            node.remove_preserving_its_descendants(cx);
++
++            // Step 8.4.3. Restore the values from values.
++            restore_the_values(cx, values);
++        }
++
++        // Step 8.5. Fix disallowed ancestors of each member of children.
++        for child in children {
++            child.fix_disallowed_ancestors(cx, context_object);
++        }
++
++        // Step 8.6. Abort these steps.
++        return;
++    }
++
++    // Step 9. If current ancestor is not an editable indentation element, abort these steps.
++    if !current_ancestor.as_ref().is_some_and(|ancestor| {
++        ancestor.is_editable() &&
++            ancestor
++                .downcast::<Element>()
++                .is_some_and(|element| element.is_indentation_element())
++    }) {
++        return;
++    }
++
++    // Step 10. Append current ancestor to ancestor list.
++    ancestor_list.push(
++        current_ancestor
++            .clone()
++            .expect("Should have an ancestor here."),
++    );
++
++    // Step 11. Let original ancestor be current ancestor.
++    let original_ancestor = current_ancestor;
++
++    // Step 12. While ancestor list is not empty:
++    while !ancestor_list.is_empty() {
++        // Step 12.1. Let current ancestor be the last member of ancestor list.
++        // Step 12.2. Remove the last member from ancestor list.
++        let current_ancestor_ref = ancestor_list.pop();
++
++        // Step 12.3. Let target be the child of current ancestor that is equal to either node or
++        //            the last member of ancestor list.
++        let target = current_ancestor_ref
++            .expect("Must always have an ancestor here.")
++            .children()
++            .find(|child| **child == *node || Some(child) == ancestor_list.last())
++            .expect("Must be able to find a target here.");
++
++        // Step 12.4. If target is an inline node that is not a br, and its nextSibling is a br,
++        //            remove target's nextSibling from its parent.
++        if target.is_inline_node() &&
++            !target.is::<HTMLBRElement>() &&
++            let Some(next_br_sibling) = target.GetNextSibling() &&
++            next_br_sibling.is::<HTMLBRElement>()
++        {
++            next_br_sibling.remove_self(cx);
++        }
++
++        // Step 12.5. Let preceding siblings be the precedings siblings of target, and let
++        //            following siblings be the followings siblings of target.
++        let preceding_siblings = target.preceding_siblings().collect();
++        let following_siblings = target.following_siblings().collect();
++
++        // Step 12.6. Indent preceding siblings.
++        indent(cx, context_object, preceding_siblings);
++
++        // Step 12.7. Indent following siblings.
++        indent(cx, context_object, following_siblings);
++    }
++
++    // Step 13. Outdent original ancestor.
++    outdent(
++        cx,
++        context_object,
++        &original_ancestor.expect("Should have an ancestor here."),
++    );
++}
++
++/// <https://w3c.github.io/editing/docs/execCommand/#the-outdent-command>
++pub(crate) fn execute_outdent_command(
++    cx: &mut JSContext,
++    document: &Document,
++    selection: &Selection,
++) -> bool {
++    let mut active_range = selection
++        .active_range(cx)
++        .expect("Must always have an active range.");
++    // Step 1. Let items be a list of all lis that are inclusive ancestors of the active range's start and/or end node.
++    let items: HashSet<DomRoot<Node>> = active_range
++        .start_container()
++        .ancestors()
++        .chain(active_range.end_container().ancestors())
++        .filter(|ancestor| ancestor.is::<HTMLLIElement>())
++        .collect();
++
++    // Step 2. For each item in items, normalize sublists of item.
++    for item in items {
++        item.normalize_sublists(cx);
++    }
++
++    // Normalizing sublists probably messes up the range
++    active_range = selection
++        .active_range(cx)
++        .expect("Must always have an active range.");
++
++    // Step 3. Block-extend the active range, and let new range be the result.
++    let new_range = active_range.block_extend(cx, document);
++
++    // Step 4. Let node list be a list of nodes, initially empty.
++    rooted_vec!(let mut node_list);
++
++    // Step 5. For each node node contained in new range,
++    //         append node to node list if the last member of node list (if any)
++    //         is not an ancestor of node; node is editable;
++    //         and either node has no editable descendants, or is an ol or ul,
++    //         or is an li whose parent is an ol or ul.
++    for node in new_range.contained_nodes(cx.no_gc()) {
++        // This type is only used to tell the compiler how to handle the type of `node_list.last()`.
++        // It is not allowed to add a `& DomRoot<Node>` annotation, as test-tidy disallows that.
++        // However, if we omit the type, the compiler doesn't know what it is, since we also
++        // aren't allowed to add a type annotation to `node_list` itself, as that is handled
++        // by the `rooted_vec` macro. Lastly, we also can't make it `&Node`, since then the compiler
++        // thinks that the contents of the `RootedVec` is `Node`, whereas it is should be
++        // `RootedVec<DomRoot<Node>>`. The type alias here doesn't upset test-tidy,
++        // while also providing the necessary information to the compiler to work.
++        type DomRootNode = DomRoot<Node>;
++        if !node_list
++            .last()
++            .is_some_and(|last: &DomRootNode| last.is_ancestor_of(&node)) &&
++            node.is_editable() &&
++            (!node
++                .traverse_preorder(ShadowIncluding::No)
++                .any(|node| node.is_editable()) ||
++                node.is::<HTMLOListElement>() ||
++                node.is::<HTMLUListElement>() ||
++                (node.is::<HTMLLIElement>() &&
++                    node.GetParentElement().is_some_and(|parent| {
++                        parent.is::<HTMLOListElement>() || parent.is::<HTMLUListElement>()
++                    })))
++        {
++            node_list.push(node.as_rooted());
++        }
++    }
++
++    // Step 6. While node list is not empty:
++    let mut node_list_iter = node_list.iter().peekable();
++    while let Some(first_node) = node_list_iter.next() {
++        // Step 6.1. While the first member of node list is an ol or ul or is not the child of an
++        //           ol or ul, outdent it and remove it from node list.
++        // Note: This loop is combined with the outer one here so as to not require modifying the
++        //       node list.
++        if (first_node.is::<HTMLOListElement>() || first_node.is::<HTMLUListElement>()) ||
++            !first_node.GetParentElement().is_some_and(|parent| {
++                parent.is::<HTMLOListElement>() || parent.is::<HTMLUListElement>()
++            })
++        {
++            outdent(cx, document, first_node);
++            // We just walk the iterator instead of continuously removing things from node list.
++            continue;
++        }
++
++        // Step 6.2. If node list is empty, break from these substeps.
++        // The fact that we are here means that node list is not empty, as we still have a
++        // first_node.
++
++        // Step 6.3. Let sublist be a list of nodes, initially empty.
++        rooted_vec!(let mut sublist);
++
++        // Step 6.4. Remove the first member of node list and append it to sublist.
++        sublist.push(first_node.as_traced());
++
++        // Step 6.5. While the first member of node list is the nextSibling of the last member of
++        //           sublist, and the first member of node list is not an ol or ul, remove the
++        //           first member of node list and append it to sublist.
++        while let Some(node) = node_list_iter.next_if(|node| {
++            sublist
++                .last()
++                .expect("Must always have last element here.")
++                .GetNextSibling()
++                .is_some_and(|next_sibling| next_sibling == **node) &&
++                !node.is::<HTMLOListElement>() &&
++                !node.is::<HTMLUListElement>()
++        }) {
++            sublist.push(node.as_traced());
++        }
++
++        // Step 6.6. Record the values of sublist, and let values be the result.
++        let values = record_the_values(sublist.iter().map(|node| node.as_rooted()).collect());
++
++        // Step 6.7. Split the parent of sublist.
++        // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
++        split_the_parent(cx, sublist.as_ref_slice());
++
++        // Step 6.8. Fix disallowed ancestors of each member of sublist.
++        for node in sublist.iter() {
++            node.fix_disallowed_ancestors(cx, document);
++        }
++
++        // Step 6.9. Restore the values from values.
++        restore_the_values(cx, values);
++    }
++
++    // Step 7. Return true.
++    true
++}
+diff --git a/dom/execcommand/contenteditable/node.rs b/dom/execcommand/contenteditable/node.rs
+--- a/dom/execcommand/contenteditable/node.rs
++++ b/dom/execcommand/contenteditable/node.rs
+@@ -24,7 +24,8 @@
+ use crate::dom::bindings::root::{DomRoot, DomSlice, UnrootedDom};
+ use crate::dom::bindings::str::DOMString;
+ use crate::dom::characterdata::CharacterData;
+-use crate::dom::element::Element;
++// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
++use crate::dom::element::{AdjacentPosition, Element};
+ use crate::dom::execcommand::basecommand::{CommandName, CssPropertyName};
+ use crate::dom::execcommand::commands::forecolor::serialize_to_simple_color;
+ use crate::dom::html::htmlanchorelement::HTMLAnchorElement;
+@@ -32,6 +33,8 @@
+ use crate::dom::html::htmlelement::HTMLElement;
+ use crate::dom::html::htmlimageelement::HTMLImageElement;
+ use crate::dom::html::htmllielement::HTMLLIElement;
++use crate::dom::html::htmlolistelement::HTMLOListElement;
++use crate::dom::html::htmlulistelement::HTMLUListElement;
+ use crate::dom::iterators::ShadowIncluding;
+ use crate::dom::node::{Node, NodeTraits};
+ use crate::dom::text::Text;
+@@ -150,9 +153,10 @@
+ }
+
+ /// <https://w3c.github.io/editing/docs/execCommand/#preserving-ranges>
+-pub(crate) fn move_preserving_ranges<Move>(cx: &mut JSContext, node: &Node, mut move_: Move)
++// Mercury: hand-port of servo/servo#49920 (d9656e7a2). Drop at the bump that has it.
++pub(crate) fn move_preserving_ranges<Move, Return>(cx: &mut JSContext, node: &Node, mut move_: Move)
+ where
+-    Move: FnMut(&mut JSContext) -> Fallible<DomRoot<Node>>,
++    Move: FnMut(&mut JSContext) -> Fallible<Return>,
+ {
+     // Step 1. Let node be the moved node, old parent and old index be the old parent
+     // (which may be null) and index, and new parent and new index be the new parent and index.
+@@ -1741,14 +1745,84 @@
+         restore_the_values(cx, values);
+     }
+
++    /// <https://w3c.github.io/editing/docs/execCommand/#normalize-sublists>
++    pub(crate) fn normalize_sublists(&self, cx: &mut JSContext) {
++        let item_element = self
++            .downcast::<Element>()
++            .expect("item should be an element.");
++
++        // Step 1. If item is not an li or it is not editable or its parent is not editable, abort these steps.
++        if !self.is::<HTMLLIElement>() ||
++            !self.is_editable() ||
++            !self
++                .GetParentElement()
++                .is_some_and(|parent| parent.upcast::<Node>().is_editable())
++        {
++            return;
++        }
++
++        // Step 2. Let new item be null.
++        let mut new_item: Option<DomRoot<Element>> = None;
++
++        // Step 3. While item has an ol or ul child:
++        while self
++            .child_elements()
++            .any(|child| child.is::<HTMLOListElement>() || child.is::<HTMLUListElement>())
++        {
++            // Step 3.1. Let child be the last child of item.
++            let child = self.GetLastChild().expect("Must have a last child here.");
++
++            // Step 3.2. If child is an ol or ul, or new item is null and child is a Text node whose data consists of zero of more space characters:
++            if child.is::<HTMLOListElement>() ||
++                child.is::<HTMLUListElement>() ||
++                (new_item.is_none() &&
++                    child
++                        .downcast::<Text>()
++                        .is_some_and(|text| text.data().bytes().all(|byte| byte == b' ')))
++            {
++                // Step 3.2.1. Set new item to null.
++                new_item = None;
++
++                // Step 3.2.2. Insert child into the parent of item immediately following item, preserving ranges.
++                move_preserving_ranges(cx, &child, |cx| {
++                    item_element
++                        .insert_adjacent(cx, AdjacentPosition::AfterEnd, &child)
++                        .map(|elem| elem.expect("Should have inserted"))
++                });
++
++                continue;
++            }
++            // Step 3.3. Otherwise:
++            // Step 3.3.1. If new item is null,
++            //             let new item be the result of calling createElement("li") on the ownerDocument of item,
++            //             then insert new item into the parent of item immediately after item.
++            if new_item.is_none() {
++                new_item = Some(self.owner_document().create_element(cx, "li"));
++                item_element
++                    .insert_adjacent(cx, AdjacentPosition::AfterEnd, &child)
++                    .expect("Insertion should always work here.");
++            }
++
++            // Step 3.3.2. Insert child into new item as its first child, preserving ranges.
++            move_preserving_ranges(cx, &child, |cx| {
++                new_item
++                    .as_ref()
++                    .expect("Must have new item here")
++                    .downcast::<Element>()
++                    .expect("New item must be able to support children")
++                    .insert_adjacent(cx, AdjacentPosition::AfterBegin, &child)
++                    .map(|elem| elem.expect("Should have inserted"))
++            });
++        }
++    }
++
+     /// <https://w3c.github.io/editing/docs/execCommand/#collapsed-block-prop>
+     pub(crate) fn is_collapsed_block_prop(&self, no_gc: &NoGC) -> bool {
+         // > A collapsed block prop is either a collapsed line break that is not an extraneous line break,
+-
+-        // TODO: Check for collapsed line break
+-        if self
+-            .downcast::<HTMLBRElement>()
+-            .is_some_and(|br| !br.is_extraneous_line_break())
++        // Mercury: backport of servo/servo#49797 (8d0f0d77f). Drop at the bump that has it.
++        if self.is_collapsed_line_break(no_gc) &&
++            self.downcast::<HTMLBRElement>()
++                .is_some_and(|br| !br.is_extraneous_line_break())
+         {
+             return true;
+         }
+@@ -2234,7 +2308,8 @@
+             self.remove_self(cx);
+         } else {
+             rooted_vec!(let children <- self.children().map(|child| DomRoot::as_traced(&child)));
+-            split_the_parent(cx, children.r());
++            // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
++            split_the_parent(cx, children.as_ref_slice());
+         }
+     }
+
+@@ -2350,4 +2425,69 @@
+             _ => command.resolved_value_for_node(element),
+         }
+     }
++
++    /// <https://w3c.github.io/editing/docs/execCommand/#collapsed-line-break>
++    pub(crate) fn is_collapsed_line_break(&self, no_gc: &NoGC) -> bool {
++        // > A collapsed line break is a br that begins a line box which has nothing else in it,
++        // > and therefore has zero height.
++        //
++        // This also takes into account a newly created text node with the only value "\n", since
++        // that's what browsers insert when the white-space CSS property indicates it has pre-formatted
++        // content.
++        // Mercury: hand-port of servo/servo#49884 (ba4852dce). Drop at the bump that has it.
++        if !self.is::<HTMLBRElement>() &&
++            !self
++                .downcast::<Text>()
++                .is_some_and(|text| text.data().as_str() == "\n")
++        {
++            return false;
++        }
++
++        // Inspired by the reverse-engineered implementation from Ladybird, we look at DOM nodes to
++        // figure out what "nothing else in it" means. However, we don't follow the logic from Ladybird
++        // completely, as the end-condition for block nodes is different.
++        //
++        // If the next node contains some text, then it is not collapsed. This would be the case where
++        // there is a `<br>some text`.
++        //
++        // In any other case, we either have inline or block nodes. For inline nodes, it means that these
++        // nodes would be rendered on the same line. In that case, we also aren't collapsed. For example
++        // when there is a `<br><span></span>`
++        //
++        // Only in the case that a `<br>` is followed by nothing (whitespace or no nodes) leading immediately
++        // to a block node, it is considered collapsed.
++        // Mercury: hand-port of servo/servo#49920 (d9656e7a2). Drop at the bump that has it.
++        let editing_host = self.editing_host_of().expect("Must always be editable");
++        let root = self
++            .block_node_of()
++            // It could be that all ancestors up to and including the editing host are all inline. In that case
++            // we should only consider up to the editing host, as it acts as the bounding box for considering
++            // whether something is collapsed.
++            .filter(|block_node| editing_host.is_ancestor_of(block_node))
++            .unwrap_or(editing_host);
++
++        for following in self.following_nodes_unrooted(no_gc, &root, ShadowIncluding::No) {
++            if let Some(text) = UnrootedDom::downcast::<Text>(following.clone()) {
++                if text.is_whitespace_node() {
++                    continue;
++                }
++                return false;
++            }
++
++            // This is checking if we have nodes like comments, which we should not consider for this algorithm
++            let Some(element) = UnrootedDom::downcast::<Element>(following.clone()) else {
++                continue;
++            };
++
++            if following.is_block_node() {
++                return true;
++            }
++
++            if element.is_void() {
++                return false;
++            }
++        }
++
++        true
++    }
+ }
+diff --git a/dom/execcommand/contenteditable/selection.rs b/dom/execcommand/contenteditable/selection.rs
+--- a/dom/execcommand/contenteditable/selection.rs
++++ b/dom/execcommand/contenteditable/selection.rs
+@@ -607,7 +607,8 @@
+                     .and_then(|child| child.GetParentNode())
+                     .is_some_and(|parent_of_child| parent_of_child != start_block)
+                 {
+-                    split_the_parent(cx, children.r());
++                    // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
++                    split_the_parent(cx, children.as_ref_slice());
+                     continue;
+                 }
+                 break;
+diff --git a/dom/execcommand/execcommands.rs b/dom/execcommand/execcommands.rs
+--- a/dom/execcommand/execcommands.rs
++++ b/dom/execcommand/execcommands.rs
+@@ -169,6 +169,8 @@
+             "insertparagraph" => CommandName::InsertParagraph,
+             "inserttext" => CommandName::InsertText,
+             "italic" => CommandName::Italic,
++            // Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
++            "outdent" => CommandName::Outdent,
+             "removeformat" => CommandName::RemoveFormat,
+             "strikethrough" => CommandName::Strikethrough,
+             "stylewithcss" => CommandName::StyleWithCss,
+diff --git a/dom/gamepad/gamepad.rs b/dom/gamepad/gamepad.rs
+--- a/dom/gamepad/gamepad.rs
++++ b/dom/gamepad/gamepad.rs
+@@ -133,7 +133,8 @@
+                 true,
+                 0.,
+                 mapping_type,
+-                buttons.r(),
++                // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
++                buttons.as_ref_slice(),
+                 None,
+                 GamepadHand::_empty,
+                 axis_bounds,
 diff --git a/dom/html/embedded_content/htmlcanvaselement.rs b/dom/html/embedded_content/htmlcanvaselement.rs
 --- a/dom/html/embedded_content/htmlcanvaselement.rs
 +++ b/dom/html/embedded_content/htmlcanvaselement.rs
@@ -181,6 +1185,52 @@ diff --git a/dom/html/embedded_content/htmlvideoelement.rs b/dom/html/embedded_c
  use script_bindings::error::Fallible;
  use servo_media::player::video::VideoFrame;
  use servo_url::ServoUrl;
+diff --git a/dom/html/form_controls/input_type/text_input_widget.rs b/dom/html/form_controls/input_type/text_input_widget.rs
+--- a/dom/html/form_controls/input_type/text_input_widget.rs
++++ b/dom/html/form_controls/input_type/text_input_widget.rs
+@@ -64,10 +64,11 @@
+
+         let mut updated = false;
+         if let Some(character_data) = shadow_tree.value_character_data() {
+-            updated |= character_data.set_text_run_selection(new_range);
++            // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++            updated |= character_data.set_text_run_selection(new_range, true);
+         }
+         if let Some(character_data) = shadow_tree.placeholder_character_data_if_exists() {
+-            updated |= character_data.set_text_run_selection(new_range);
++            updated |= character_data.set_text_run_selection(new_range, true);
+         }
+         updated
+     }
+diff --git a/dom/html/htmlelement.rs b/dom/html/htmlelement.rs
+--- a/dom/html/htmlelement.rs
++++ b/dom/html/htmlelement.rs
+@@ -18,6 +18,8 @@
+ use style::attr::AttrValue;
+ use stylo_dom::ElementState;
+
++// Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++use crate::dom::NodeFlags;
+ use crate::dom::activation::Activatable;
+ use crate::dom::bindings::codegen::Bindings::CharacterDataBinding::CharacterData_Binding::CharacterDataMethods;
+ use crate::dom::bindings::codegen::Bindings::EventHandlerBinding::{
+@@ -1367,6 +1369,16 @@
+             (&local_name!("form"), mutation) if self.is_form_associated_custom_element() => {
+                 self.form_attribute_mutated(cx, mutation);
+             },
++            // Adding or removing a "contenteditable" attribute might make a 0-size selection
++            // render its caret or not.
++            (&local_name!("contenteditable"), ..) => {
++                if let Some(selection) = self.owner_document().selection() &&
++                    self.upcast::<Node>()
++                        .get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION)
++                {
++                    selection.set_visible_selection_dirty();
++                }
++            },
+             // Adding or removing a "disabled" attribute may disable or enable a disableable
+             // form control.
+             (&local_name!("disabled"), _) => {
 diff --git a/dom/media/mediadevices.rs b/dom/media/mediadevices.rs
 --- a/dom/media/mediadevices.rs
 +++ b/dom/media/mediadevices.rs
@@ -874,6 +1924,67 @@ diff --git a/dom/navigator/navigator.rs b/dom/navigator/navigator.rs
      #[cfg(feature = "gamepad")]
      pub(crate) fn get_gamepad(&self, index: usize) -> Option<DomRoot<Gamepad>> {
          self.gamepads.borrow().get(index).and_then(|g| g.get())
+diff --git a/dom/node/layout_dom.rs b/dom/node/layout_dom.rs
+--- a/dom/node/layout_dom.rs
++++ b/dom/node/layout_dom.rs
+@@ -281,9 +281,15 @@
+     }
+
+     pub(crate) fn text_node_paints_caret(&self) -> bool {
+-        // TODO: Add support for `contenteditable`.
++        // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
+         self.parent_node_ref()
+-            .is_some_and(|parent| parent.is_text_container_of_single_line_input())
++            .is_some_and(|parent| parent.is_text_container_of_single_line_input()) ||
++            (self
++                .unsafe_get()
++                .get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION) &&
++                self.owner_doc_for_layout()
++                    .visible_selection_for_layout()
++                    .is_some_and(|selection| selection.paints_caret_for_layout()))
+     }
+
+     pub(crate) fn text_node_needs_caret_placeholder(&self) -> bool {
+diff --git a/dom/node/node.rs b/dom/node/node.rs
+--- a/dom/node/node.rs
++++ b/dom/node/node.rs
+@@ -2748,7 +2748,8 @@
+                 node.children_unrooted(cx.no_gc())
+                     .map(|node| Dom::from_ref(&**node)),
+             );
+-            new_nodes.r()
++            // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
++            new_nodes.as_ref_slice()
+         } else {
+             from_ref(&node)
+         };
+@@ -3010,7 +3011,7 @@
+         let added_nodes = if let Some(node) = node.as_ref() {
+             if let NodeTypeId::DocumentFragment(_) = node.type_id() {
+                 added_nodes.extend(node.children().map(|child| Dom::from_ref(&*child)));
+-                added_nodes.r()
++                added_nodes.as_ref_slice()
+             } else {
+                 from_ref(node)
+             }
+@@ -3035,7 +3036,7 @@
+         if !removed_nodes.is_empty() || !added_nodes.is_empty() {
+             let mutation = LazyCell::new(|| Mutation::ChildList {
+                 added: Some(added_nodes),
+-                removed: Some(removed_nodes.r()),
++                removed: Some(removed_nodes.as_ref_slice()),
+                 prev: None,
+                 next: None,
+             });
+@@ -4111,7 +4112,7 @@
+             node.type_id() == NodeTypeId::DocumentFragment(DocumentFragmentTypeId::ShadowRoot)
+         {
+             nodes.extend(node.children().map(|node| Dom::from_ref(&*node)));
+-            nodes.r()
++            nodes.as_ref_slice()
+         } else {
+             from_ref(&node)
+         };
 diff --git a/dom/permission/permissions.rs b/dom/permission/permissions.rs
 --- a/dom/permission/permissions.rs
 +++ b/dom/permission/permissions.rs
@@ -894,6 +2005,325 @@ diff --git a/dom/permission/permissions.rs b/dom/permission/permissions.rs
      // Step 4. If there exists a policy-controlled feature for feature and settings'
      // relevant global object has an associated Document run the following step:
      //   1. Let document be settings' relevant global object's associated Document.
+diff --git a/dom/range/range.rs b/dom/range/range.rs
+--- a/dom/range/range.rs
++++ b/dom/range/range.rs
+@@ -1628,9 +1628,11 @@
+             // offset to offset.
+             let start_container = range.start_container();
+             let start_offset = range.start_offset();
++            // Mercury: backport of servo/servo#49541 (e35a02ebd): `offset + count` saturates, so
++            // a huge `count` no longer overflows u32 and panics. Drop at the bump that has it.
+             if &*start_container == node &&
+                 start_offset > offset &&
+-                start_offset <= offset + removed_code_units
++                start_offset <= offset.saturating_add(removed_code_units)
+             {
+                 range.set_start_without_reporting(node, offset);
+             }
+@@ -1641,7 +1643,7 @@
+             let end_offset = range.end_offset();
+             if &*end_container == node &&
+                 end_offset > offset &&
+-                end_offset <= offset + removed_code_units
++                end_offset <= offset.saturating_add(removed_code_units)
+             {
+                 range.set_end_without_reporting(node, offset);
+             }
+@@ -1648,7 +1650,8 @@
+             // Step 10: For each live range whose start node is node and start offset is
+             // greater than offset + count: increase its start offset by data’s length and
+             // decrease it by count.
+-            if &*start_container == node && start_offset > offset + removed_code_units {
++            if &*start_container == node && start_offset > offset.saturating_add(removed_code_units)
++            {
+                 range.set_start_without_reporting(
+                     node,
+                     start_offset + added_code_units() - removed_code_units,
+@@ -1657,7 +1660,7 @@
+             // Step 11: For each live range whose end node is node and end offset is
+             // greater than offset + count: increase its end offset by data’s length and
+             // decrease it by count.
+-            if &*end_container == node && end_offset > offset + removed_code_units {
++            if &*end_container == node && end_offset > offset.saturating_add(removed_code_units) {
+                 range.set_end_without_reporting(
+                     node,
+                     end_offset + added_code_units() - removed_code_units,
+diff --git a/dom/selection.rs b/dom/selection.rs
+--- a/dom/selection.rs
++++ b/dom/selection.rs
+@@ -41,7 +41,8 @@
+ use crate::dom::selection_range::{RootedSelectionBoundary, SelectionBoundary, SelectionRange};
+ use crate::dom::staticrange::StaticRange;
+ use crate::dom::traversal::FlatTreeForSelectionNoGcTraversal;
+-use crate::dom::types::ShadowRoot;
++// Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
++use crate::dom::types::{HTMLInputElement, HTMLTextAreaElement, ShadowRoot};
+ use crate::dom::{CharacterData, FlatTreeParent, NodeDamage, NodeFlags, StartOrEnd};
+
+ /// Used value of [`user-select`](https://drafts.csswg.org/css-ui-4/#propdef-user-select):
+@@ -77,6 +78,9 @@
+     /// * Boundaries are in flat tree order.
+     #[custom_trace]
+     visible_range: AtomicRefCell<Option<SelectionRange>>,
++    /// Whether or not a blinking caret needs to be rendered for this selection when it
++    /// is 0-length.
++    paints_caret: Cell<bool>,
+     /// The [`Direction`] of this [`Selection`] which determines which endpoint of
+     /// [`Self::range`] is the anchor and which is the focus.
+     direction: Cell<Direction>,
+@@ -95,6 +99,7 @@
+             range: Default::default(),
+             live_range: MutNullableDom::new(None),
+             visible_range: Default::default(),
++            paints_caret: Cell::new(false),
+             direction: Cell::new(Direction::Directionless),
+             has_scheduled_selectionchange_event: Cell::new(false),
+             visible_selection_dirty: Cell::new(false),
+@@ -338,6 +343,13 @@
+             return;
+         }
+
++        self.paints_caret.set(
++            self.range
++                .borrow()
++                .as_ref()
++                .is_some_and(|range| self.should_paint_caret(range, no_gc)),
++        );
++
+         let previously_flagged_nodes = self
+             .iter_nodes_with_overlaps_document_selection_flag(no_gc)
+             .collect();
+@@ -347,10 +359,34 @@
+             previously_flagged_nodes,
+             flat_tree_selection.as_ref(),
+             &self.document,
++            self.paints_caret.get(),
+         );
+         self.set_visible_range(no_gc, flat_tree_selection);
+     }
+
++    fn should_paint_caret(&self, range: &SelectionRange, no_gc: &NoGC) -> bool {
++        if let Some(shadow_root) = range.end.container.containing_shadow_root() {
++            let host = shadow_root.host_unrooted(no_gc);
++            if host.is::<HTMLInputElement>() || host.is::<HTMLTextAreaElement>() {
++                // This is the case where, if `selection_for_text_node` returns a selection
++                // it is a `TextInput` selection
++                return true;
++            }
++        }
++        // This is the case where, if `selection_for_text_node` returns a selection,
++        // it is a document selection.
++        servo_config::pref!(dom_exec_command_enabled) &&
++            range.collapsed() &&
++            self.document
++                .focus_handler()
++                .focused_area()
++                .element()
++                .is_some_and(|focused_element| {
++                    Some(focused_element.upcast::<Node>()) ==
++                        range.end.container.editing_host_of().as_deref()
++                })
++    }
++
+     /// <https://w3c.github.io/selection-api/#dfn-schedule-a-selectionchange-event>
+     pub(crate) fn queue_selectionchange_task(&self) {
+         // Step 1. If target's has scheduled selectionchange event is true, abort these steps.
+@@ -1457,6 +1493,10 @@
+     pub(crate) fn range_for_layout(&self) -> Option<AtomicRef<'dom, SelectionRange>> {
+         AtomicRef::filter_map(self.unsafe_get().visible_range.borrow(), Option::as_ref)
+     }
++
++    pub(crate) fn paints_caret_for_layout(&self) -> bool {
++        self.unsafe_get().paints_caret.get()
++    }
+ }
+
+ enum FlatTreeNodePosition {
+@@ -1761,6 +1801,8 @@
+     used_user_select_cache: FxHashMap<UnrootedDom<'no_gc, Node>, UsedUserSelect>,
+     /// Whether or not this update requires a display list update.
+     needs_new_display_list: bool,
++    /// Whether or not the caret needs to be painted for the visible selection.
++    paints_caret: bool,
+ }
+
+ impl<'no_gc> VisibleSelectionFlagUpdate<'no_gc> {
+@@ -1769,6 +1811,7 @@
+         previously_flagged_nodes: FxHashSet<UnrootedDom<'no_gc, Node>>,
+         flat_tree_selection: Option<&FlatTreeSelection<'_>>,
+         document: &Document,
++        paints_caret: bool,
+     ) {
+         let mut update = Self {
+             no_gc,
+@@ -1775,6 +1818,7 @@
+             previously_flagged_nodes,
+             used_user_select_cache: Default::default(),
+             needs_new_display_list: false,
++            paints_caret,
+         };
+
+         if let Some(flat_tree_selection) = flat_tree_selection {
+@@ -1824,7 +1868,7 @@
+         character_data: &CharacterData,
+         range: Option<RangeAny<Utf32CodeUnits>>,
+     ) {
+-        if character_data.set_text_run_selection(range) {
++        if character_data.set_text_run_selection(range, self.paints_caret) {
+             self.needs_new_display_list = true;
+         } else {
+             // Note: This isn't just necessary when the `CharacterData` doesn't have a
+diff --git a/dom/serviceworker/notification.rs b/dom/serviceworker/notification.rs
+--- a/dom/serviceworker/notification.rs
++++ b/dom/serviceworker/notification.rs
+@@ -881,6 +881,19 @@
+             }
+         }
+
++        // Mercury: a notification with no image, icon, badge or action icon to fetch (or only
++        // ones whose URL does not parse) has nothing that would call `show()` later, so it was
++        // never shown. Show it now. No `pending_request_ids` entry exists in this case: an id is
++        // inserted only together with its `pending_requests` entry above. `show()` only sends the
++        // embedder message and queues the `show` event as a task, so it is safe to run it here,
++        // inside the constructor. The idea is that of patch 0002 of Zervo (github.com/Goddv/Zervo,
++        // `patches/servo/0002-script-show-notification-without-resources.patch`); this code is
++        // written from its description, not copied.
++        if pending_requests.is_empty() {
++            self.show();
++            return;
++        }
++
+         for (request, resource_type) in pending_requests {
+             self.fetch_and_show_when_ready(request, resource_type);
+         }
+diff --git a/dom/webgl/validations/tex_image_2d.rs b/dom/webgl/validations/tex_image_2d.rs
+--- a/dom/webgl/validations/tex_image_2d.rs
++++ b/dom/webgl/validations/tex_image_2d.rs
+@@ -783,11 +783,32 @@
+             context.webgl_error(InvalidEnum);
+             return Err(TexImageValidationError::InvalidTextureFormat);
+         }
++        // Mercury: backport of servo/servo#49912 (merge commit 43753d9b4). texStorage rejects a compressed
++        // format whose extension is not enabled (INVALID_ENUM) and a depth format for TEXTURE_3D
++        // (INVALID_OPERATION).
++        if internal_format.is_compressed() &&
++            context
++                .extension_manager()
++                .get_tex_compression_format(internal_format.as_gl_constant())
++                .is_none()
++        {
++            context.webgl_error(InvalidEnum);
++            return Err(TexImageValidationError::InvalidCompressionFormat);
++        }
+         // Compressed formats have no 3D layout, only 2D arrays of compressed images.
+         if target == TexImageTarget::Texture3D && internal_format.is_compressed() {
+             context.webgl_error(InvalidOperation);
+             return Err(TexImageValidationError::InvalidTextureFormat);
+         }
++        if target == TexImageTarget::Texture3D &&
++            matches!(
++                internal_format.to_unsized(),
++                TexFormat::DepthComponent | TexFormat::DepthStencil
++            )
++        {
++            context.webgl_error(InvalidOperation);
++            return Err(TexImageValidationError::InvalidTextureFormat);
++        }
+
+         if self.levels < 1 {
+             context.webgl_error(InvalidValue);
+diff --git a/dom/webgl/webglrenderingcontext.rs b/dom/webgl/webglrenderingcontext.rs
+--- a/dom/webgl/webglrenderingcontext.rs
++++ b/dom/webgl/webglrenderingcontext.rs
+@@ -2329,45 +2329,34 @@
+                 self.bound_renderbuffer.get().to_jsval(cx, retval);
+                 return;
+             },
+-            constants::TEXTURE_BINDING_2D => {
+-                let texture = self
+-                    .textures
+-                    .active_texture_slot(constants::TEXTURE_2D, self.webgl_version())
+-                    .unwrap()
+-                    .get();
+-                texture.to_jsval(cx, retval);
+-                return;
+-            },
+-            WebGL2RenderingContextConstants::TEXTURE_BINDING_2D_ARRAY => {
+-                let texture = self
+-                    .textures
+-                    .active_texture_slot(
+-                        WebGL2RenderingContextConstants::TEXTURE_2D_ARRAY,
+-                        self.webgl_version(),
+-                    )
+-                    .unwrap()
+-                    .get();
+-                texture.to_jsval(cx, retval);
+-                return;
+-            },
+-            WebGL2RenderingContextConstants::TEXTURE_BINDING_3D => {
+-                let texture = self
+-                    .textures
+-                    .active_texture_slot(
+-                        WebGL2RenderingContextConstants::TEXTURE_3D,
+-                        self.webgl_version(),
+-                    )
+-                    .unwrap()
+-                    .get();
+-                texture.to_jsval(cx, retval);
+-                return;
+-            },
++            // Mercury: backport of servo/servo#49632 (merge commit e690242e4). An invalid binding constant for
++            // the context's WebGL version sets INVALID_ENUM and returns null instead of panicking on `unwrap`.
++            constants::TEXTURE_BINDING_2D |
++            WebGL2RenderingContextConstants::TEXTURE_BINDING_2D_ARRAY |
++            WebGL2RenderingContextConstants::TEXTURE_BINDING_3D |
+             constants::TEXTURE_BINDING_CUBE_MAP => {
+-                let texture = self
++                let target = match parameter {
++                    constants::TEXTURE_BINDING_2D => constants::TEXTURE_2D,
++                    WebGL2RenderingContextConstants::TEXTURE_BINDING_2D_ARRAY => {
++                        WebGL2RenderingContextConstants::TEXTURE_2D_ARRAY
++                    },
++                    WebGL2RenderingContextConstants::TEXTURE_BINDING_3D => {
++                        WebGL2RenderingContextConstants::TEXTURE_3D
++                    },
++                    constants::TEXTURE_BINDING_CUBE_MAP => constants::TEXTURE_CUBE_MAP,
++                    _ => unreachable!(),
++                };
++                let slot = match self
+                     .textures
+-                    .active_texture_slot(constants::TEXTURE_CUBE_MAP, self.webgl_version())
+-                    .unwrap()
+-                    .get();
++                    .active_texture_slot(target, self.webgl_version())
++                {
++                    Ok(slot) => slot,
++                    Err(err) => {
++                        self.webgl_error(err);
++                        return retval.set(NullValue());
++                    },
++                };
++                let texture = slot.get();
+                 texture.to_jsval(cx, retval);
+                 return;
+             },
+diff --git a/dom/webgl/webgltexture.rs b/dom/webgl/webgltexture.rs
+--- a/dom/webgl/webgltexture.rs
++++ b/dom/webgl/webgltexture.rs
+@@ -623,7 +623,11 @@
+
+             width = cmp::max(1, width / 2);
+             height = cmp::max(1, height / 2);
+-            depth = cmp::max(1, depth / 2);
++            // Mercury: backport of servo/servo#49436 (merge commit c2c5117bf). Only a 3D texture halves its
++            // depth with each level; a 2D array keeps its layer count.
++            if target == TexImageTarget::Texture3D {
++                depth = cmp::max(1, depth / 2);
++            }
+         }
+
+         self.immutable_levels.set(Some(levels));
 diff --git a/dom/window/window.rs b/dom/window/window.rs
 --- a/dom/window/window.rs
 +++ b/dom/window/window.rs

@@ -1,3 +1,393 @@
 # Mercury's changes to servo-constellation 0.8.0, against the crate as published on crates.io
 # (SHA-256 327d28714f0dcbb946844c83995ca01926d103c2bcbf6c6797f3f09c7893b4ea). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-constellation.
+diff --git a/constellation.rs b/constellation.rs
+--- a/constellation.rs
++++ b/constellation.rs
+@@ -84,6 +84,12 @@
+ //!
+ //! See <https://github.com/servo/servo/issues/14704>
+
++// Mercury: the routing of Mercury's lane messages (K0 engine base, R14 section 3.4). It is declared
++// here, not in lib.rs, so that it is a child of this module and its lane files can use
++// `Constellation`'s private state without edits to this file.
++#[path = "mercury/mod.rs"]
++mod mercury;
++
+ use std::borrow::ToOwned;
+ use std::cell::{Cell, OnceCell, RefCell};
+ use std::collections::hash_map::Entry;
+@@ -1480,6 +1486,10 @@
+             EmbedderToConstellationMessage::SetNetworkOnlineState(online) => {
+                 self.handle_set_network_online_state(online);
+             },
++            // Mercury: every lane message goes through one arm (mercury/mod.rs).
++            EmbedderToConstellationMessage::Mercury(message) => {
++                self.handle_mercury_embedder_message(message);
++            },
+         }
+     }
+
+@@ -2075,6 +2085,10 @@
+                     }
+                 },
+             },
++            // Mercury: every lane message goes through one arm (mercury/mod.rs).
++            ScriptToConstellationMessage::Mercury(message) => {
++                self.handle_mercury_script_message(webview_id, source_pipeline_id, message);
++            },
+         }
+     }
+
+diff --git a/embedder.rs b/embedder.rs
+--- a/embedder.rs
++++ b/embedder.rs
+@@ -4,7 +4,7 @@
+
+ use embedder_traits::{
+     InputEventOutcome, JSValue, JavaScriptEvaluationError, JavaScriptEvaluationId,
+-    MediaSessionEvent, NewWebViewDetails, TraversalId,
++    MediaSessionEvent, MercuryEmbedderMsg, NewWebViewDetails, TraversalId,
+ };
+ use servo_base::generic_channel::GenericSender;
+ use servo_base::id::{PipelineId, WebViewId};
+@@ -42,4 +42,9 @@
+     HistoryChanged(WebViewId, Vec<ServoUrl>, usize),
+     /// A pipeline exited, whether cleanly or because its content process died.
+     PipelineExited(PipelineId),
++    // Mercury: one variant for every Mercury lane message, so a lane adds its own messages in
++    // `embedder_traits::mercury` and never in this enum (K0 engine base, R14 section 3.4).
++    /// A message for Mercury's embedding layer, grouped by lane. The first field is the web view
++    /// it concerns, if any.
++    Mercury(Option<WebViewId>, MercuryEmbedderMsg),
+ }
+diff --git a/mercury/a11y.rs b/mercury/a11y.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/a11y.rs
+@@ -0,0 +1,33 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file belongs to the a11y lane. Implement handlers here only.
++
++use layout_api::ScriptThreadFactory;
++use servo_base::id::{PipelineId, WebViewId};
++use servo_constellation_traits::{A11yEmbedderMsg, A11yScriptMsg, ServiceWorkerManagerFactory};
++
++use crate::constellation::Constellation;
++
++impl<STF, SWF> Constellation<STF, SWF>
++where
++    STF: ScriptThreadFactory,
++    SWF: ServiceWorkerManagerFactory,
++{
++    /// Handle a message of the `a11y` lane from the embedding layer. The enum is still empty.
++    pub(super) fn handle_a11y_embedder_message(&mut self, message: A11yEmbedderMsg) {
++        match message {}
++    }
++
++    /// Handle a message of the `a11y` lane from the script thread of `source_pipeline_id` in
++    /// `webview_id`. The enum is still empty.
++    pub(super) fn handle_a11y_script_message(
++        &mut self,
++        _webview_id: WebViewId,
++        _source_pipeline_id: PipelineId,
++        message: A11yScriptMsg,
++    ) {
++        match message {}
++    }
++}
+diff --git a/mercury/core.rs b/mercury/core.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/core.rs
+@@ -0,0 +1,41 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file belongs to the core lane (the scaffold itself). Implement handlers here only.
++
++use layout_api::ScriptThreadFactory;
++use log::trace;
++use servo_base::id::{PipelineId, WebViewId};
++use servo_constellation_traits::{CoreEmbedderMsg, CoreScriptMsg, ServiceWorkerManagerFactory};
++
++use crate::constellation::Constellation;
++
++impl<STF, SWF> Constellation<STF, SWF>
++where
++    STF: ScriptThreadFactory,
++    SWF: ServiceWorkerManagerFactory,
++{
++    /// Handle a message of the `core` lane from the embedding layer.
++    pub(super) fn handle_core_embedder_message(&mut self, message: CoreEmbedderMsg) {
++        match message {
++            CoreEmbedderMsg::Probe(value) => {
++                trace!("Mercury core probe {value} from the embedder");
++            },
++        }
++    }
++
++    /// Handle a message of the `core` lane from the script thread of `source_pipeline_id`.
++    pub(super) fn handle_core_script_message(
++        &mut self,
++        _webview_id: WebViewId,
++        source_pipeline_id: PipelineId,
++        message: CoreScriptMsg,
++    ) {
++        match message {
++            CoreScriptMsg::Probe(value) => {
++                trace!("Mercury core probe {value} from {source_pipeline_id}");
++            },
++        }
++    }
++}
+diff --git a/mercury/media.rs b/mercury/media.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/media.rs
+@@ -0,0 +1,33 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file belongs to the media lane. Implement handlers here only.
++
++use layout_api::ScriptThreadFactory;
++use servo_base::id::{PipelineId, WebViewId};
++use servo_constellation_traits::{MediaEmbedderMsg, MediaScriptMsg, ServiceWorkerManagerFactory};
++
++use crate::constellation::Constellation;
++
++impl<STF, SWF> Constellation<STF, SWF>
++where
++    STF: ScriptThreadFactory,
++    SWF: ServiceWorkerManagerFactory,
++{
++    /// Handle a message of the `media` lane from the embedding layer. The enum is still empty.
++    pub(super) fn handle_media_embedder_message(&mut self, message: MediaEmbedderMsg) {
++        match message {}
++    }
++
++    /// Handle a message of the `media` lane from the script thread of `source_pipeline_id` in
++    /// `webview_id`. The enum is still empty.
++    pub(super) fn handle_media_script_message(
++        &mut self,
++        _webview_id: WebViewId,
++        _source_pipeline_id: PipelineId,
++        message: MediaScriptMsg,
++    ) {
++        match message {}
++    }
++}
+diff --git a/mercury/mod.rs b/mercury/mod.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/mod.rs
+@@ -0,0 +1,106 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this whole directory is Mercury's own (K0 engine base, R14 section 3.4). The
++// constellation hands every `Mercury` message to the router below, which hands it to one function
++// per lane, so a lane implements its handlers in its own file here and never edits
++// `constellation.rs`. Nothing in upstream Servo refers to it except the two match arms and the
++// `mod` line in `constellation.rs`.
++
++//! Routing of Mercury's lane messages inside the `Constellation`.
++//!
++//! This module is declared inside `constellation.rs` (with `#[path]`), so it is a child of that
++//! module and its lane files can read and change the private state of [`Constellation`]. The
++//! handlers are `impl` blocks of `Constellation` in the lane files:
++//!
++//! | file | script messages | embedder messages |
++//! |---|---|---|
++//! | `core.rs` | `handle_core_script_message` | `handle_core_embedder_message` |
++//! | `a11y.rs` | `handle_a11y_script_message` | `handle_a11y_embedder_message` |
++//! | `media.rs` | `handle_media_script_message` | `handle_media_embedder_message` |
++//! | `page.rs` | `handle_page_script_message` | `handle_page_embedder_message` |
++//! | `text.rs` | `handle_text_script_message` | `handle_text_embedder_message` |
++//!
++//! The network lane has no constellation messages.
++//!
++//! Handlers must not log a message's payload: what a page sent must not reach a log.
++
++mod a11y;
++mod core;
++mod media;
++mod page;
++mod text;
++
++use layout_api::ScriptThreadFactory;
++use servo_base::id::{PipelineId, WebViewId};
++use servo_constellation_traits::{
++    MercuryEmbedderToConstellation, MercuryScriptToConstellation, ServiceWorkerManagerFactory,
++};
++
++use crate::constellation::Constellation;
++
++impl<STF, SWF> Constellation<STF, SWF>
++where
++    STF: ScriptThreadFactory,
++    SWF: ServiceWorkerManagerFactory,
++{
++    /// Handle a [`MercuryEmbedderToConstellation`] message by passing it to its lane.
++    pub(super) fn handle_mercury_embedder_message(
++        &mut self,
++        message: MercuryEmbedderToConstellation,
++    ) {
++        match message {
++            MercuryEmbedderToConstellation::Core(message) => {
++                self.handle_core_embedder_message(message);
++            },
++            // One arm per lane, each separated from the next by a comment line.
++            MercuryEmbedderToConstellation::A11y(message) => {
++                self.handle_a11y_embedder_message(message);
++            },
++            // The media lane.
++            MercuryEmbedderToConstellation::Media(message) => {
++                self.handle_media_embedder_message(message);
++            },
++            // The page lane.
++            MercuryEmbedderToConstellation::Page(message) => {
++                self.handle_page_embedder_message(message);
++            },
++            // The text lane.
++            MercuryEmbedderToConstellation::Text(message) => {
++                self.handle_text_embedder_message(message);
++            },
++        }
++    }
++
++    /// Handle a [`MercuryScriptToConstellation`] message that the script thread of
++    /// `source_pipeline_id` (in `webview_id`) sent, by passing it to its lane.
++    pub(super) fn handle_mercury_script_message(
++        &mut self,
++        webview_id: WebViewId,
++        source_pipeline_id: PipelineId,
++        message: MercuryScriptToConstellation,
++    ) {
++        match message {
++            MercuryScriptToConstellation::Core(message) => {
++                self.handle_core_script_message(webview_id, source_pipeline_id, message);
++            },
++            // One arm per lane, each separated from the next by a comment line.
++            MercuryScriptToConstellation::A11y(message) => {
++                self.handle_a11y_script_message(webview_id, source_pipeline_id, message);
++            },
++            // The media lane.
++            MercuryScriptToConstellation::Media(message) => {
++                self.handle_media_script_message(webview_id, source_pipeline_id, message);
++            },
++            // The page lane.
++            MercuryScriptToConstellation::Page(message) => {
++                self.handle_page_script_message(webview_id, source_pipeline_id, message);
++            },
++            // The text lane.
++            MercuryScriptToConstellation::Text(message) => {
++                self.handle_text_script_message(webview_id, source_pipeline_id, message);
++            },
++        }
++    }
++}
+diff --git a/mercury/page.rs b/mercury/page.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/page.rs
+@@ -0,0 +1,33 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file belongs to the page lane. Implement handlers here only.
++
++use layout_api::ScriptThreadFactory;
++use servo_base::id::{PipelineId, WebViewId};
++use servo_constellation_traits::{PageEmbedderMsg, PageScriptMsg, ServiceWorkerManagerFactory};
++
++use crate::constellation::Constellation;
++
++impl<STF, SWF> Constellation<STF, SWF>
++where
++    STF: ScriptThreadFactory,
++    SWF: ServiceWorkerManagerFactory,
++{
++    /// Handle a message of the `page` lane from the embedding layer. The enum is still empty.
++    pub(super) fn handle_page_embedder_message(&mut self, message: PageEmbedderMsg) {
++        match message {}
++    }
++
++    /// Handle a message of the `page` lane from the script thread of `source_pipeline_id` in
++    /// `webview_id`. The enum is still empty.
++    pub(super) fn handle_page_script_message(
++        &mut self,
++        _webview_id: WebViewId,
++        _source_pipeline_id: PipelineId,
++        message: PageScriptMsg,
++    ) {
++        match message {}
++    }
++}
+diff --git a/mercury/text.rs b/mercury/text.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/text.rs
+@@ -0,0 +1,33 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file belongs to the text lane. Implement handlers here only.
++
++use layout_api::ScriptThreadFactory;
++use servo_base::id::{PipelineId, WebViewId};
++use servo_constellation_traits::{ServiceWorkerManagerFactory, TextEmbedderMsg, TextScriptMsg};
++
++use crate::constellation::Constellation;
++
++impl<STF, SWF> Constellation<STF, SWF>
++where
++    STF: ScriptThreadFactory,
++    SWF: ServiceWorkerManagerFactory,
++{
++    /// Handle a message of the `text` lane from the embedding layer. The enum is still empty.
++    pub(super) fn handle_text_embedder_message(&mut self, message: TextEmbedderMsg) {
++        match message {}
++    }
++
++    /// Handle a message of the `text` lane from the script thread of `source_pipeline_id` in
++    /// `webview_id`. The enum is still empty.
++    pub(super) fn handle_text_script_message(
++        &mut self,
++        _webview_id: WebViewId,
++        _source_pipeline_id: PipelineId,
++        message: TextScriptMsg,
++    ) {
++        match message {}
++    }
++}
+diff --git a/tracing.rs b/tracing.rs
+--- a/tracing.rs
++++ b/tracing.rs
+@@ -84,6 +84,8 @@
+                 Self::ForwardAccessibilityAction(..) => target!("ForwardAccessibilityAction"),
+                 Self::ClearSessionHistory(..) => target!("ClearHistory"),
+                 Self::SetNetworkOnlineState(..) => target!("SetNetworkOnlineState"),
++                // Mercury: every lane message shares one target.
++                Self::Mercury(..) => target!("Mercury"),
+             }
+         }
+     }
+@@ -205,6 +207,8 @@
+                 Self::TriggerGarbageCollection => target!("TriggerGarbageCollection"),
+                 Self::AcquireWakeLock(..) => target!("AcquireWakeLock"),
+                 Self::ReleaseWakeLock(..) => target!("ReleaseWakeLock"),
++                // Mercury: every lane message shares one target.
++                Self::Mercury(..) => target!("Mercury"),
+             }
+         }
+     }
