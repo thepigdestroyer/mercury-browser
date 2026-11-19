@@ -732,6 +732,14 @@ inspect_one() {
         'ffmpeg in any case' '[Ff][Ff][Mm][Pp][Ee][Gg]' \
         'iLBC (WebRtcIlbc)' 'WebRtcIlbc'
 
+    printf '\n### Strings in the library (strings -a, case-insensitive)\n\n'
+    local strings_hits token
+    strings_hits="$(strings -a "$lib" | LC_ALL=C grep -i -o -E 'GNU General Public|GNU Lesser|LGPL|GPLv[23]|FFmpeg|libavcodec|OpenH264|x264|libde265|Cisco Systems' | tr '[:upper:]' '[:lower:]' | LC_ALL=C sort | uniq -c || true)"
+    md_header "String" "Occurrences"
+    for token in 'gnu general public' 'gnu lesser' 'lgpl' 'gplv2' 'gplv3' 'ffmpeg' 'libavcodec' 'openh264' 'x264' 'libde265' 'cisco systems'; do
+        md_row "\`${token}\`" "$(awk -v t="$token" 'index($0, " " t) { print $1; found = 1 } END { if (!found) print 0 }' <<<"$strings_hits")"
+    done
+
     printf '\n### Presence checks\n\n'
     md_header "Pattern (awk regex on the symbol)" "Defined" "Referenced" "Local"
     inspect_rows "$table" \

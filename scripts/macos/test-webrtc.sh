@@ -433,6 +433,8 @@ NEOF
     check "inspect names the licences it finds in NOTICE" "yes|yes" \
         "$(has '| BSD-3-Clause; ')|$(has 'public-domain dedication')"
     check "inspect lists the lines that mention GPL" "yes" "$(has 'Despite my general liking of the GPL')"
+    check "inspect searches the library's strings for GPL and FFmpeg and finds none" "yes|yes" \
+        "$(has '| `gnu general public` | 0 |')|$(has '| `ffmpeg` | 0 |')"
     check "inspect reads the .sha256 of libwebrtc-c and finds it equal" "yes" "$(has 'the local sha256 is `'"$ICSHA"'`: equal')"
     check "inspect counts the exported wrapper functions" "yes" "$(has '(`_webrtc_` prefix): 1')"
     check "inspect finds the Apache licence of libwebrtc-c" "yes" "$(has '`LICENSE` is Apache License Version 2.0')"
