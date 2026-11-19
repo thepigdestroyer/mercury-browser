@@ -43,6 +43,8 @@ pub struct Tab {
     page_requests: PageRequests,
     // site security
     site_security: TabSiteSecurity,
+    // tabs-plus
+    pinned: bool,
 }
 
 impl Tab {
@@ -56,6 +58,7 @@ impl Tab {
             opened_by_page: false,
             page_requests: PageRequests::default(),
             site_security: TabSiteSecurity::default(),
+            pinned: false,
         }
     }
 
@@ -151,6 +154,16 @@ impl Tab {
         &mut self.site_security
     }
 
+    // tabs-plus
+    /// True for a pinned tab. Pinned tabs always come first in the strip.
+    pub const fn is_pinned(&self) -> bool {
+        self.pinned
+    }
+
+    pub(crate) fn set_pinned(&mut self, pinned: bool) {
+        self.pinned = pinned;
+    }
+
     /// Whether the tab was restored and its page has not been created yet.
     pub(crate) const fn is_load_deferred(&self) -> bool {
         self.load_deferred
@@ -174,6 +187,9 @@ pub struct RestoredTab {
     /// Shown in the tab strip until the page reports its own title.
     pub title: String,
     pub zoom_percent: u16,
+    // tabs-plus
+    /// Opens pinned, inside the pinned group.
+    pub pinned: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]

@@ -19,6 +19,11 @@ import { PopUpBlockedIndicator } from "tabs/pop-up-blocked.slint";
 // menus
 import { AddressBarEdit, BrowserMenu, BrowserMenuCommand, BrowserMenuEntry } from "menus/browser-menu.slint";
 export { AboutLink, AboutWindow } from "about/about-window.slint";
+// tabs-plus
+import { BrowserTab, TabMenuCommand, TabPreview, TabStrip } from "tabs/tab-strip.slint";
+export { BrowserTab, TabMenuCommand, TabMenuEntry } from "tabs/tab-strip.slint";
+import { TabSearchPopup, TabSearchRow } from "tabs/tab-search.slint";
+export { TabSearchRow } from "tabs/tab-search.slint";
 // history lane
 import { ClearDataDialog, HistoryPanel, HistoryRow, SuggestionList, SuggestionRow } from "history/history.slint";
 // bookmarks
@@ -28,7 +33,6 @@ export { BookmarkRowKind, BookmarksManager, BookmarksPreview } from "bookmarks/b
 export { ImportPage, ImportProfileRow, ImportSummaryLine, ImportWindow } from "import/import-window.slint";
 // session
 import { SessionBar } from "session/session-bar.slint";
-import { TabAudioButton, TabAudioState } from "media/tab-audio.slint";
 import { FindBar } from "find/find-bar.slint";
 // site-security
 import { HttpsOnlyInterstitial, SecurityIndicatorButton, SiteInfo, SiteInfoPopover, SiteSecurityIcon } from "site-security/site-security.slint";
@@ -73,16 +77,6 @@ export enum WebViewCursor {
     nwse-resize,
 }
 
-export struct BrowserTab {
-    title: string,
-    icon: image,
-    has-icon: bool,
-    active: bool,
-    loading: bool,
-    // media-session lane
-    audio: TabAudioState,
-}
-
 component ChromeButton inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
@@ -109,132 +103,6 @@ component ChromeButton inherits Rectangle {
         enabled: root.enabled;
         clicked => {
             root.clicked();
-        }
-    }
-}
-
-component TabIcon inherits Rectangle {
-    in property <image> source;
-
-    width: 18px;
-    background: transparent;
-
-    Image {
-        y: (parent.height - self.height) / 2;
-        width: 18px;
-        height: 18px;
-        source: root.source;
-        image-fit: contain;
-    }
-}
-
-component BrowserTabButton inherits Rectangle {
-    in property <BrowserTab> tab;
-    in property <bool> closable;
-    // media-capture: what the tab's page may capture.
-    in property <CaptureView> capture;
-    callback selected;
-    callback closed;
-    // media-session lane
-    callback audio-clicked;
-
-    min-width: 112px;
-    max-width: 248px;
-    horizontal-stretch: 1;
-    border-radius: 8px;
-    background: root.tab.active
-        ? ChromePalette.tab-active
-        : tab-touch.has-hover ? ChromePalette.tab-hover : transparent;
-
-    if root.tab.active: Rectangle {
-        x: 14px;
-        y: parent.height - 2px;
-        width: parent.width - 28px;
-        height: 2px;
-        background: ChromePalette.accent;
-    }
-
-    tab-touch := TouchArea {
-        clicked => {
-            root.selected();
-        }
-    }
-
-    HorizontalLayout {
-        padding-left: 12px;
-        padding-right: 8px;
-        spacing: 8px;
-
-        if root.tab.has-icon: TabIcon {
-            source: root.tab.icon;
-        }
-
-        if !root.tab.has-icon: TabIcon {
-            source: @image-url("../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
-        }
-
-        Text {
-            horizontal-stretch: 1;
-            text: root.tab.title;
-            color: root.tab.active ? ChromePalette.text : ChromePalette.tab-title-inactive;
-            font-size: 13px;
-            font-weight: root.tab.active ? 550 : 450;
-            overflow: elide;
-            vertical-alignment: center;
-        }
-
-        // media-capture
-        if root.capture.camera || root.capture.microphone: VerticalLayout {
-            alignment: center;
-
-            CaptureTabMark {
-                camera: root.capture.camera;
-                microphone: root.capture.microphone;
-            }
-        }
-
-        if root.tab.loading: Rectangle {
-            width: 6px;
-            height: 6px;
-            border-radius: 3px;
-            background: ChromePalette.accent;
-        }
-
-        // media-session lane
-        if root.tab.audio != TabAudioState.silent: VerticalLayout {
-            alignment: center;
-
-            TabAudioButton {
-                state: root.tab.audio;
-                active-tab: root.tab.active;
-                tab-title: root.tab.title;
-                clicked => {
-                    root.audio-clicked();
-                }
-            }
-        }
-
-        if root.closable: Rectangle {
-            width: 22px;
-            height: 22px;
-            border-radius: 6px;
-            background: close-touch.pressed
-                ? ChromePalette.tab-close-pressed
-                : close-touch.has-hover ? ChromePalette.tab-close-hover : transparent;
-
-            Text {
-                text: "×";
-                color: close-touch.has-hover ? ChromePalette.text : ChromePalette.tab-close-label;
-                font-size: 15px;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-
-            close-touch := TouchArea {
-                clicked => {
-                    root.closed();
-                }
-            }
         }
     }
 }
@@ -324,6 +192,8 @@ export component MainWindow inherits Window {
     callback restore-previous-session();
     // --- end session ---
     // --- media-session ---
+    // Mute or unmute a tab. The argument is the tab's id (`BrowserTab.id`), not its index in the
+    // strip, so it still means that tab if the strip changed since the click.
     callback toggle-tab-muted(int);
     // --- end media-session ---
 
@@ -582,13 +452,8 @@ export component MainWindow inherits Window {
     }
 
     public function reveal-active-tab() {
-        tab-strip.viewport-x = Math.min(
-            0px,
-            Math.max(
-                tab-strip.width - tab-strip.viewport-width,
-                -root.active-tab-index * 190px,
-            ),
-        );
+        // tabs-plus: the strip scrolls just enough to show the active tab
+        tab-strip.reveal(root.active-tab-index);
     }
 
     // --- tabs ---
@@ -598,6 +463,7 @@ export component MainWindow inherits Window {
 
     public function reset-address(text: string) {
         root.address = text;
+        root.synced-address = text; // tabs-plus: not a draft
     }
 
     // The origin whose pop-up was blocked in the active tab; empty hides the indicator.
@@ -703,6 +569,41 @@ export component MainWindow inherits Window {
     }
     // --- end site-security ---
 
+    // --- tabs-plus ---
+    // What the application last wrote into the address field (or the text the user accepted
+    // with Return): the field holds a draft of the user's while its text differs from this.
+    out property <string> synced-address;
+    // A navigation that did not come from the field's Return (a suggestion, the history window,
+    // Home, a bookmark, Back, Forward, Reload): whatever the field holds is no longer a draft.
+    public function accept-address-draft() {
+        root.synced-address = root.address;
+    }
+    // The field's text could not be opened (it is no address and no search was possible): it
+    // stays, as a draft, for the user to fix.
+    public function keep-address-draft() {
+        root.synced-address = root.committed-address;
+    }
+    // How many of `tabs` are pinned; they come first.
+    in property <int> pinned-tab-count: 0;
+    // Tab search: the rows matching the query, set by the application.
+    in property <[TabSearchRow]> tab-search-rows;
+    in-out property <string> tab-search-query;
+    // The tab with this id goes to this index in the strip, pinned or not (a drag ended).
+    callback move-tab(int, int, bool);
+    // A command from a tab's menu, for the tab with this id.
+    callback tab-menu-activated(int, TabMenuCommand);
+    // The tab search query changed (also called with "" when it opens).
+    callback tab-search-edited(string);
+    // A tab was chosen in tab search: its id.
+    callback tab-search-chosen(int);
+
+    public function show-tab-search() {
+        root.tab-search-query = "";
+        root.tab-search-edited("");
+        tab-search.show();
+    }
+    // --- end tabs-plus ---
+
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
     preferred-width: 1180px;
@@ -728,35 +629,30 @@ export component MainWindow inherits Window {
                 padding-bottom: 3px;
                 spacing: 8px;
 
-                tab-strip := Flickable {
+                // tabs-plus: pinned tabs, dragging, the tab menu and the "all tabs" button
+                tab-strip := TabStrip {
                     horizontal-stretch: 1;
-                    viewport-width: Math.max(self.width, root.tabs.length * 190px);
-                    viewport-height: self.height;
-
-                    HorizontalLayout {
-                        width: tab-strip.viewport-width;
-                        spacing: 6px;
-
-                        for tab[index] in root.tabs: BrowserTabButton {
-                            width: 184px;
-                            tab: tab;
-                            closable: true;
-                            // media-capture
-                            capture: root.capture-tabs[index];
-
-                            selected => {
-                                root.select-tab(index);
-                            }
-
-                            closed => {
-                                root.close-tab(index);
-                            }
-
-                            // media-session lane
-                            audio-clicked => {
-                                root.toggle-tab-muted(index);
-                            }
-                        }
+                    tabs: root.tabs;
+                    // media-capture: what each tab's page may capture, in the order of `tabs`.
+                    capture-tabs: root.capture-tabs;
+                    pinned-count: root.pinned-tab-count;
+                    select-tab(index) => {
+                        root.select-tab(index);
+                    }
+                    close-tab(index) => {
+                        root.close-tab(index);
+                    }
+                    audio-clicked(id) => {
+                        root.toggle-tab-muted(id);
+                    }
+                    move-tab(id, index, pinned) => {
+                        root.move-tab(id, index, pinned);
+                    }
+                    tab-menu-activated(id, command) => {
+                        root.tab-menu-activated(id, command);
+                    }
+                    show-all-tabs => {
+                        root.show-tab-search();
                     }
                 }
 
@@ -866,6 +762,7 @@ export component MainWindow inherits Window {
                             if self.has-focus {
                                 self.clear-focus();
                             }
+                            root.synced-address = self.text; // tabs-plus: the draft is accepted
                             root.navigate(self.text);
                         }
                         edited => {
@@ -1500,6 +1397,28 @@ export component MainWindow inherits Window {
         }
         row-hovered(index) => {
             root.controls-row-hovered(index);
+        }
+    }
+
+    // tabs-plus: the hover preview of a tab, below the strip
+    if !root.chrome-hidden && tab-strip.preview-index >= 0 && tab-strip.preview-index < root.tabs.length: TabPreview {
+        x: clamp(tab-strip.absolute-position.x + tab-strip.preview-x, 8px, Math.max(8px, root.width - self.width - 8px));
+        y: tab-strip.absolute-position.y + tab-strip.height + 4px;
+        title: root.tabs[tab-strip.preview-index].title;
+        url: root.tabs[tab-strip.preview-index].url;
+    }
+
+    // tabs-plus: tab search
+    tab-search := TabSearchPopup {
+        x: (root.width - self.width) / 2;
+        y: 52px;
+        rows: root.tab-search-rows;
+        query <=> root.tab-search-query;
+        query-edited(text) => {
+            root.tab-search-edited(text);
+        }
+        chosen(id) => {
+            root.tab-search-chosen(id);
         }
     }
 

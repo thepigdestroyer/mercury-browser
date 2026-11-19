@@ -117,6 +117,13 @@ pub(crate) fn sync(controller: &BrowserController) {
             .position(|tab| tab.id() == active_tab_id)
             .unwrap_or(0),
         bookmarks_bar: seams::bookmarks_bar_items(controller),
+        // tabs-plus
+        active_tab_pinned: controller
+            .tabs()
+            .any(|tab| tab.id() == active_tab_id && tab.is_pinned()),
+        can_close_other_tabs: controller
+            .tabs()
+            .any(|tab| tab.id() != active_tab_id && !tab.is_pinned()),
         // session
         can_reopen_closed_tab: crate::session::can_reopen_closed_tab(),
         can_restore_previous_session: crate::session::can_restore_previous_session(),
@@ -203,6 +210,10 @@ fn run_command(
         MenuCommand::ImportBrowserData => crate::import_ui::show_import_window(window),
         MenuCommand::OpenBookmark(id) => seams::open_bookmark(window, id),
         MenuCommand::Stop => {}
+        // tabs-plus
+        MenuCommand::TabStrip(command) => {
+            crate::tab_strip::run_strip_command(window, controller, command);
+        }
     }
 }
 
@@ -264,6 +275,11 @@ const fn browser_menu_item(command: BrowserMenuCommand) -> BrowserMenuItem {
         BrowserMenuCommand::About => BrowserMenuItem::About,
         BrowserMenuCommand::Help => BrowserMenuItem::Help,
         BrowserMenuCommand::Quit => BrowserMenuItem::Quit,
+        // tabs-plus
+        BrowserMenuCommand::SearchTabs => BrowserMenuItem::SearchTabs,
+        BrowserMenuCommand::DuplicateTab => BrowserMenuItem::DuplicateTab,
+        BrowserMenuCommand::TogglePinTab => BrowserMenuItem::TogglePinTab,
+        BrowserMenuCommand::CloseOtherTabs => BrowserMenuItem::CloseOtherTabs,
     }
 }
 
@@ -278,6 +294,11 @@ const fn browser_menu_command(item: BrowserMenuItem) -> BrowserMenuCommand {
         BrowserMenuItem::About => BrowserMenuCommand::About,
         BrowserMenuItem::Help => BrowserMenuCommand::Help,
         BrowserMenuItem::Quit => BrowserMenuCommand::Quit,
+        // tabs-plus
+        BrowserMenuItem::SearchTabs => BrowserMenuCommand::SearchTabs,
+        BrowserMenuItem::DuplicateTab => BrowserMenuCommand::DuplicateTab,
+        BrowserMenuItem::TogglePinTab => BrowserMenuCommand::TogglePinTab,
+        BrowserMenuItem::CloseOtherTabs => BrowserMenuCommand::CloseOtherTabs,
     }
 }
 
@@ -327,6 +348,10 @@ mod tests {
             BrowserMenuItem::About,
             BrowserMenuItem::Help,
             BrowserMenuItem::Quit,
+            BrowserMenuItem::SearchTabs,
+            BrowserMenuItem::DuplicateTab,
+            BrowserMenuItem::TogglePinTab,
+            BrowserMenuItem::CloseOtherTabs,
         ] {
             assert_eq!(browser_menu_item(browser_menu_command(item)), item);
         }

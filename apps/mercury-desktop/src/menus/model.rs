@@ -25,6 +25,9 @@ pub(crate) enum MenuCommand {
     OpenBookmark(super::seams::BookmarkId),
     // No engine API in Servo 0.8.0: always disabled.
     Stop,
+    // tabs-plus
+    /// Pinning and "close other tabs" for the active tab (`tab_strip.rs`).
+    TabStrip(crate::tab_strip::TabStripCommand),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,6 +383,7 @@ const fn key(key: char, modifiers: Modifiers) -> Option<KeyEquivalent> {
 
 /// The macOS menu bar, top to bottom. The first menu is the application menu.
 pub(crate) fn menu_bar() -> Vec<Menu> {
+    use crate::tab_strip::TabStripCommand;
     use MenuCommand::*;
     use MenuItem::{BookmarksBarFolder, Separator, Services, TabList};
     use ShortcutAction as A;
@@ -413,6 +417,8 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
             title: "File",
             items: vec![
                 action("New Tab", key('t', CMD), Shortcut(A::NewTab)),
+                // tabs-plus: the session lane's duplicate
+                action("Duplicate Tab", None, Shortcut(A::DuplicateTab)),
                 action(
                     "Open Location…",
                     key('l', CMD),
@@ -420,6 +426,12 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 ),
                 Separator,
                 action("Close Tab", key('w', CMD), Shortcut(A::CloseTab)),
+                // tabs-plus
+                action(
+                    "Close Other Tabs",
+                    key('w', OPTION_CMD),
+                    TabStrip(TabStripCommand::CloseOtherTabs),
+                ),
                 // Session lane.
                 action(
                     "Reopen Closed Tab",
@@ -529,6 +541,12 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                     key('[', SHIFT_CMD),
                     Shortcut(A::PreviousTab),
                 ),
+                // tabs-plus
+                action("Search Tabs…", key('a', SHIFT_CMD), Shortcut(A::SearchTabs)),
+                action("Move Tab Left", None, Shortcut(A::MoveTabLeft)),
+                action("Move Tab Right", None, Shortcut(A::MoveTabRight)),
+                action("Pin Tab", None, TabStrip(TabStripCommand::PinTab)),
+                action("Unpin Tab", None, TabStrip(TabStripCommand::UnpinTab)),
                 Separator,
                 TabList,
             ],
@@ -557,6 +575,8 @@ pub(crate) const fn is_available(command: MenuCommand) -> bool {
         Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) | ImportBrowserData => true,
         OpenBookmark(_) => super::seams::BOOKMARKS_AVAILABLE,
         Stop => false,
+        // tabs-plus
+        TabStrip(_) => true,
     }
 }
 
@@ -597,6 +617,10 @@ pub(crate) struct MenuSnapshot {
     /// The bookmarks bar's first level, in order: each entry's stable id and title (bookmarks
     /// lane).
     pub(crate) bookmarks_bar: Vec<(super::seams::BookmarkId, String)>,
+    // tabs-plus
+    pub(crate) active_tab_pinned: bool,
+    /// Another unpinned tab exists, which "Close Other Tabs" would close.
+    pub(crate) can_close_other_tabs: bool,
     // session
     /// A closed tab can be reopened.
     pub(crate) can_reopen_closed_tab: bool,
@@ -614,6 +638,12 @@ pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: Ed
         Shortcut(ShortcutAction::Forward) => snapshot.can_go_forward,
         Shortcut(ShortcutAction::NextTab | ShortcutAction::PreviousTab) => {
             snapshot.tab_titles.len() > 1
+        }
+        // tabs-plus
+        TabStrip(crate::tab_strip::TabStripCommand::PinTab) => !snapshot.active_tab_pinned,
+        TabStrip(crate::tab_strip::TabStripCommand::UnpinTab) => snapshot.active_tab_pinned,
+        TabStrip(crate::tab_strip::TabStripCommand::CloseOtherTabs) => {
+            snapshot.can_close_other_tabs
         }
         // session
         Shortcut(ShortcutAction::ReopenClosedTab) => snapshot.can_reopen_closed_tab,
@@ -644,6 +674,11 @@ pub(crate) enum BrowserMenuItem {
     About,
     Help,
     Quit,
+    // tabs-plus
+    SearchTabs,
+    DuplicateTab,
+    TogglePinTab,
+    CloseOtherTabs,
 }
 
 impl BrowserMenuItem {
@@ -658,6 +693,15 @@ impl BrowserMenuItem {
             Self::About => MenuCommand::About,
             Self::Help => MenuCommand::OpenDocument(Document::Help),
             Self::Quit => MenuCommand::Shortcut(ShortcutAction::Quit),
+            // tabs-plus
+            Self::SearchTabs => MenuCommand::Shortcut(ShortcutAction::SearchTabs),
+            Self::DuplicateTab => MenuCommand::Shortcut(ShortcutAction::DuplicateTab),
+            Self::TogglePinTab => {
+                MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::TogglePinTab)
+            }
+            Self::CloseOtherTabs => {
+                MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::CloseOtherTabs)
+            }
         }
     }
 }
@@ -681,7 +725,15 @@ pub(crate) fn browser_menu(platform: Platform) -> (Vec<BrowserMenuRow>, Vec<Brow
         separator_before,
     };
     (
-        vec![row("New Tab", BrowserMenuItem::NewTab, false)],
+        vec![
+            row("New Tab", BrowserMenuItem::NewTab, false),
+            // tabs-plus: the active tab's commands, so they have a keyboard path everywhere
+            row("Search Tabs…", BrowserMenuItem::SearchTabs, false),
+            row("Duplicate Tab", BrowserMenuItem::DuplicateTab, false),
+            // Retitled "Unpin Tab" while the active tab is pinned (`tab_strip::sync`).
+            row("Pin Tab", BrowserMenuItem::TogglePinTab, false),
+            row("Close Other Tabs", BrowserMenuItem::CloseOtherTabs, false),
+        ],
         vec![
             row("Find…", BrowserMenuItem::Find, false),
             row("Settings…", BrowserMenuItem::Settings, true),
@@ -856,6 +908,7 @@ mod tests {
             vec![
                 ("Hide Mercury Browser", "⌘H".to_owned()),
                 ("Hide Others", "⌥⌘H".to_owned()),
+                ("Close Other Tabs", "⌥⌘W".to_owned()),
                 ("Enter Full Screen", "⌃⌘F".to_owned()),
                 ("Minimize", "⌘M".to_owned()),
             ]
@@ -1063,9 +1116,18 @@ mod tests {
         let bar = actions();
         let (top, bottom) = browser_menu(Platform::MacOs);
         for row in top.iter().chain(&bottom) {
+            // tabs-plus: one browser-menu row toggles; the menu bar has "Pin Tab" and "Unpin Tab".
+            let commands = match row.item.command() {
+                MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::TogglePinTab) => vec![
+                    MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::PinTab),
+                    MenuCommand::TabStrip(crate::tab_strip::TabStripCommand::UnpinTab),
+                ],
+                command => vec![command],
+            };
             assert!(
-                bar.iter()
-                    .any(|(_, _, command)| *command == row.item.command()),
+                commands
+                    .iter()
+                    .all(|wanted| bar.iter().any(|(_, _, command)| command == wanted)),
                 "{:?}",
                 row.item
             );
@@ -1098,6 +1160,10 @@ mod tests {
             labels(Platform::MacOs),
             vec![
                 ("New Tab", "⌘T".to_owned()),
+                ("Search Tabs…", "⇧⌘A".to_owned()),
+                ("Duplicate Tab", String::new()),
+                ("Pin Tab", String::new()),
+                ("Close Other Tabs", "⌥⌘W".to_owned()),
                 ("Find…", "⌘F".to_owned()),
                 ("Settings…", "⌘,".to_owned()),
                 ("About Mercury Browser", String::new()),
@@ -1109,6 +1175,10 @@ mod tests {
             labels(Platform::Other),
             vec![
                 ("New Tab", "Ctrl+T".to_owned()),
+                ("Search Tabs…", "Ctrl+Shift+A".to_owned()),
+                ("Duplicate Tab", String::new()),
+                ("Pin Tab", String::new()),
+                ("Close Other Tabs", String::new()),
                 ("Find…", "Ctrl+F".to_owned()),
                 ("Settings…", "Ctrl+,".to_owned()),
                 ("About Mercury Browser", String::new()),
@@ -1281,5 +1351,24 @@ mod tests {
         assert_eq!(KeyEquivalent::new('f', CONTROL_CMD).mac_label(), "⌃⌘F");
         assert_eq!(KeyEquivalent::new('t', SHIFT_CMD).mac_label(), "⇧⌘T");
         assert_eq!(KeyEquivalent::new(DELETE_KEY, SHIFT_CMD).mac_label(), "⇧⌘⌫");
+    }
+
+    // tabs-plus
+    #[test]
+    fn pin_unpin_and_close_others_follow_the_active_tab() {
+        use crate::tab_strip::TabStripCommand::{CloseOtherTabs, PinTab, UnpinTab};
+        let enabled = |snapshot: &MenuSnapshot, command| {
+            is_enabled(MenuCommand::TabStrip(command), snapshot, EditTarget::None)
+        };
+        let mut snapshot = MenuSnapshot::default();
+        assert!(enabled(&snapshot, PinTab));
+        assert!(!enabled(&snapshot, UnpinTab));
+        assert!(!enabled(&snapshot, CloseOtherTabs));
+
+        snapshot.active_tab_pinned = true;
+        snapshot.can_close_other_tabs = true;
+        assert!(!enabled(&snapshot, PinTab));
+        assert!(enabled(&snapshot, UnpinTab));
+        assert!(enabled(&snapshot, CloseOtherTabs));
     }
 }

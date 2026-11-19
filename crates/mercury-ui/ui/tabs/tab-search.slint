@@ -1,0 +1,261 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// Tab search (Shift+Cmd+A, and the strip's "all tabs" button): type to filter the open tabs by
+// title and address; the arrow keys move, Return switches, Escape closes. The filtering is done
+// by the application (`talaria_core::tab_matches_query`), which sets `rows`.
+// Colours come only from `ChromePalette`.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export struct TabSearchRow {
+    // The tab's id in the controller.
+    id: int,
+    title: string,
+    url: string,
+    icon: image,
+    has-icon: bool,
+    pinned: bool,
+    active: bool,
+}
+
+component TabSearchRowView inherits Rectangle {
+    in property <TabSearchRow> item;
+    in property <bool> highlighted;
+    in property <int> index;
+    in property <int> count;
+    callback chosen;
+    callback hovered;
+
+    height: 44px;
+    border-radius: 6px;
+    background: root.highlighted ? ChromePalette.item-selected : transparent;
+    accessible-role: list-item;
+    accessible-label: root.item.title;
+    accessible-description: root.item.url;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.highlighted;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.chosen();
+    }
+
+    HorizontalLayout {
+        padding-left: 10px;
+        padding-right: 10px;
+        spacing: 10px;
+
+        Image {
+            width: 18px;
+            height: 18px;
+            y: (parent.height - self.height) / 2;
+            source: root.item.has-icon ? root.item.icon : @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
+            image-fit: contain;
+            accessible-role: none;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+
+            Text {
+                text: root.item.title;
+                color: root.highlighted ? ChromePalette.item-selected-text : ChromePalette.text;
+                font-size: 13px;
+                font-weight: root.item.active ? 600 : 400;
+                overflow: elide;
+                accessible-role: none;
+            }
+
+            if root.item.url != "": Text {
+                text: root.item.url;
+                color: root.highlighted ? ChromePalette.item-selected-text : ChromePalette.text-secondary;
+                font-size: 11px;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+
+        if root.item.pinned: Text {
+            text: "Pinned";
+            color: root.highlighted ? ChromePalette.item-selected-text : ChromePalette.shortcut-text;
+            font-size: 11px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.chosen();
+        }
+        changed has-hover => {
+            if self.has-hover {
+                root.hovered();
+            }
+        }
+    }
+}
+
+// The panel itself, also rendered on its own by the rendering test.
+export component TabSearchPanel inherits Rectangle {
+    in property <[TabSearchRow]> rows;
+    in-out property <string> query;
+    in-out property <int> highlighted: 0;
+    callback query-edited(string);
+    callback chosen(int);
+    callback closed;
+
+    public function focus-field() {
+        field.focus();
+        field.select-all();
+    }
+
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+    background: ChromePalette.popup-background;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: ChromePalette.shadow;
+    drop-shadow-offset-y: 4px;
+    accessible-role: search;
+    accessible-label: "Search tabs";
+
+    keys := FocusScope {
+        // The field has focus; the arrows and Escape are taken before it sees them.
+        capture-key-pressed(event) => {
+            if event.text == Key.DownArrow {
+                root.highlighted = root.rows.length == 0 ? 0 : Math.mod(root.highlighted + 1, root.rows.length);
+                list.reveal(root.highlighted);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.highlighted = root.rows.length == 0 ? 0 : Math.mod(root.highlighted - 1 + root.rows.length, root.rows.length);
+                list.reveal(root.highlighted);
+                return accept;
+            }
+            if event.text == Key.Escape {
+                root.closed();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding: 8px;
+            spacing: 6px;
+
+            Rectangle {
+                height: 34px;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: field.has-focus ? ChromePalette.accent : ChromePalette.field-border;
+                background: ChromePalette.field-background;
+
+                if field.text == "": Text {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    height: parent.height;
+                    text: "Search tabs";
+                    color: ChromePalette.placeholder;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+
+                field := TextInput {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    height: parent.height;
+                    text <=> root.query;
+                    color: ChromePalette.text;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    single-line: true;
+                    accessible-label: "Search tabs";
+                    edited => {
+                        root.highlighted = 0;
+                        root.query-edited(self.text);
+                    }
+                    accepted => {
+                        if root.highlighted >= 0 && root.highlighted < root.rows.length {
+                            root.chosen(root.rows[root.highlighted].id);
+                        }
+                    }
+                }
+            }
+
+            if root.rows.length == 0: Text {
+                height: 40px;
+                text: "No open tab matches";
+                color: ChromePalette.text-secondary;
+                font-size: 13px;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            list := Flickable {
+                height: Math.min(root.rows.length, 8) * 46px;
+                viewport-height: root.rows.length * 46px;
+                accessible-role: AccessibleRole.list;
+                accessible-label: "Open tabs";
+
+                function reveal(index: int) {
+                    if index * 46px < -self.viewport-y {
+                        self.viewport-y = -index * 46px;
+                    }
+                    if (index + 1) * 46px > self.height - self.viewport-y {
+                        self.viewport-y = self.height - (index + 1) * 46px;
+                    }
+                }
+
+                for row[index] in root.rows: TabSearchRowView {
+                    y: index * 46px;
+                    width: parent.width;
+                    item: row;
+                    index: index;
+                    count: root.rows.length;
+                    highlighted: index == root.highlighted;
+                    chosen => {
+                        root.chosen(row.id);
+                    }
+                    hovered => {
+                        root.highlighted = index;
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component TabSearchPopup inherits PopupWindow {
+    in property <[TabSearchRow]> rows;
+    in-out property <string> query;
+    callback query-edited(string);
+    callback chosen(int);
+
+    close-policy: close-on-click-outside;
+    width: 420px;
+    // Grows with the rows (up to eight, then the list scrolls).
+    height: 8px + 34px + 6px + (root.rows.length == 0 ? 40px : Math.min(root.rows.length, 8) * 46px) + 8px;
+
+    panel := TabSearchPanel {
+        width: root.width;
+        height: root.height;
+        rows: root.rows;
+        query <=> root.query;
+        init => {
+            self.focus-field();
+        }
+        query-edited(text) => {
+            root.query-edited(text);
+        }
+        chosen(id) => {
+            root.close();
+            root.chosen(id);
+        }
+        closed => {
+            root.close();
+        }
+    }
+}

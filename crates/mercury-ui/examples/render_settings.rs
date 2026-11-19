@@ -158,8 +158,7 @@ fn sample_main_window(theme: ChromeTheme) -> Result<MainWindow, Box<dyn Error>> 
         has_icon: false,
         active,
         loading: false,
-        // media-session lane
-        audio: mercury_ui::TabAudioState::Silent,
+        ..Default::default()
     };
     window.set_tabs(ModelRc::new(VecModel::from(vec![
         tab("New Tab", true),

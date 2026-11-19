@@ -1,0 +1,850 @@
+// SPDX-License-Identifier: MPL-2.0
+// The tab strip: pinned tabs (compact, first), the other tabs (shrinking down to a minimum width,
+// then scrolling), dragging to reorder (into and out of the pinned group), the tab menu, the
+// "all tabs" button when the tabs no longer fit, and what the hover preview needs.
+// Colours come only from `ChromePalette`.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { TabAudioButton, TabAudioState } from "../media/tab-audio.slint"; // media-session lane
+import { CaptureTabMark, CaptureView } from "../capture/capture-indicator.slint"; // media-capture
+
+export struct BrowserTab {
+    title: string,
+    icon: image,
+    has-icon: bool,
+    active: bool,
+    loading: bool,
+    // tabs-plus
+    // The tab's id in the controller (`TabId`), for commands that must not act on a tab that
+    // moved or closed in the meantime.
+    id: int,
+    pinned: bool,
+    // The page's address, for the hover preview; empty for a new tab.
+    url: string,
+    // media-session lane: whether the tab plays sound or is muted (the speaker button).
+    audio: TabAudioState,
+}
+
+export enum TabMenuCommand {
+    pin,
+    unpin,
+    close,
+    close-others,
+    duplicate,
+}
+
+// The tab strip's measurements, shared with the window.
+export global TabStripMetrics {
+    out property <length> pinned-width: 40px;
+    out property <length> min-tab-width: 112px;
+    out property <length> max-tab-width: 184px;
+    out property <length> spacing: 6px;
+    out property <length> list-button-width: 34px;
+    // How far the pointer moves with the button down before a press becomes a drag.
+    out property <length> drag-threshold: 6px;
+}
+
+component TabIcon inherits Rectangle {
+    in property <image> source;
+
+    width: 18px;
+    background: transparent;
+    accessible-role: none;
+
+    Image {
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        source: root.source;
+        image-fit: contain;
+        accessible-role: none;
+    }
+}
+
+component TabButton inherits Rectangle {
+    in property <BrowserTab> tab;
+    in property <int> index;
+    in property <int> count;
+    // media-capture: what the tab's page may capture.
+    in property <CaptureView> capture;
+    // Being dragged: its slot shows an empty outline (the ghost copy follows the pointer).
+    in property <bool> dragged;
+    // The copy that follows the pointer: drawn only, never takes input.
+    in property <bool> ghost;
+    out property <bool> hovered: touch.has-hover;
+    callback selected;
+    callback closed;
+    // The speaker (or the badge on a pinned tab) was clicked: mute or unmute the tab. It is a
+    // button of its own inside the tab's touch area: a press on it does not select the tab, start
+    // a drag or touch the strip's pointer state.
+    callback audio-clicked;
+    // A right-click or Control-click: open the tab's menu at this x within the tab.
+    callback menu-requested(length);
+    // The pointer x within the tab where the drag started, then where it is now.
+    callback drag-started(length);
+    callback drag-moved(length);
+    callback drag-ended(length);
+    callback drag-cancelled;
+    // A left button release that ended no drag of this tab.
+    callback released;
+
+    property <bool> left-pressed;
+    property <bool> drag-active;
+    property <length> press-x;
+
+    // Narrow tabs with sound. A tab narrower than 160 px has little room for the title once the
+    // speaker (22 px) and the close button (22 px) are both in it, so its layout changes:
+    //  - the speaker takes the page icon's place at the left, so it is visible at any width and
+    //    never moves when the pointer arrives;
+    //  - the close button keeps its own place at the right edge, which is reserved so the title
+    //    does not change either; it shows on the active tab and under the pointer (the speaker
+    //    stays clickable and the tab hovered while the pointer is on either button);
+    //  - the title keeps at least 40 px (112 px tabs) between the two.
+    // From 160 px the speaker sits before the close button, which is always shown, and the title
+    // has at least 54 px. A pinned tab has its own badge instead.
+    property <bool> compact-audio: !root.tab.pinned && root.tab.audio != TabAudioState.silent && root.width < 160px;
+    // Narrow inactive tabs show their close button only under the pointer, leaving room for the
+    // title; with sound they show it that way up to 160 px (see above).
+    property <bool> show-close: root.tab.active || touch.has-hover || (!root.compact-audio && root.width >= 150px);
+
+    border-radius: 8px;
+    background: root.dragged ? transparent : root.tab.active || root.ghost
+        ? ChromePalette.tab-active
+        : touch.has-hover ? ChromePalette.tab-hover : transparent;
+    border-width: root.dragged ? 1px : 0px;
+    border-color: ChromePalette.separator;
+    drop-shadow-blur: root.ghost ? 8px : 0px;
+    drop-shadow-color: ChromePalette.shadow;
+
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.tab.title;
+    accessible-description: root.tab.pinned ? "Pinned tab" : "";
+    accessible-item-selectable: true;
+    accessible-item-selected: root.tab.active;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.selected();
+    }
+
+    if root.tab.active && !root.dragged: Rectangle {
+        x: root.tab.pinned ? 8px : 14px;
+        y: parent.height - 2px;
+        width: parent.width - (root.tab.pinned ? 16px : 28px);
+        height: 2px;
+        background: ChromePalette.accent;
+    }
+
+    touch := TouchArea {
+        enabled: !root.ghost;
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.down {
+                if event.button == PointerEventButton.right || (event.button == PointerEventButton.left && event.modifiers.control) {
+                    root.menu-requested(self.mouse-x);
+                } else if event.button == PointerEventButton.left {
+                    root.left-pressed = true;
+                    root.press-x = self.mouse-x;
+                    // Selected on press, like other browsers: a dragged tab is the active one.
+                    root.selected();
+                }
+            } else if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
+                if root.drag-active {
+                    root.drag-ended(self.mouse-x);
+                } else {
+                    root.released();
+                }
+                root.drag-active = false;
+                root.left-pressed = false;
+            } else if event.kind == PointerEventKind.cancel {
+                if root.drag-active {
+                    root.drag-cancelled();
+                }
+                root.drag-active = false;
+                root.left-pressed = false;
+            }
+        }
+        moved => {
+            if root.left-pressed && !root.drag-active && abs(self.mouse-x - root.press-x) > TabStripMetrics.drag-threshold {
+                root.drag-active = true;
+                root.drag-started(root.press-x);
+            }
+            if root.drag-active {
+                root.drag-moved(self.mouse-x);
+            }
+        }
+
+        // tabs-plus: the content is inside the touch area, so the pointer on × still hovers the tab.
+        if root.tab.pinned && !root.dragged: Rectangle {
+            TabIcon {
+                x: (parent.width - self.width) / 2;
+                height: parent.height;
+                source: root.tab.has-icon ? root.tab.icon : @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
+            }
+
+            if root.tab.loading: Rectangle {
+                x: parent.width - 10px;
+                y: 7px;
+                width: 6px;
+                height: 6px;
+                border-radius: 3px;
+                background: ChromePalette.accent;
+            }
+
+            // media-capture: the red mark at the bottom left, beside the sound badge.
+            if root.capture.camera || root.capture.microphone: CaptureTabMark {
+                x: 2px;
+                y: parent.height - self.height - 3px;
+                camera: root.capture.camera;
+                microphone: root.capture.microphone;
+            }
+
+            // The sound badge: 16 px at the bottom right (x 22 to 38, y 19 to 35 of the 40 x 38 px
+            // tab), clear of the loading dot above it (y 7 to 13) and of the active tab's line
+            // below it (y 36). It has the tab's own colour behind it so it reads over the icon.
+            if root.tab.audio != TabAudioState.silent: TabAudioButton {
+                x: parent.width - self.width - 2px;
+                y: parent.height - self.height - 3px;
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                icon-size: 12px;
+                resting-background: root.tab.active || root.ghost ? ChromePalette.tab-active : touch.has-hover ? ChromePalette.tab-hover : ChromePalette.window-background;
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                tab-title: root.tab.title;
+                interactive: !root.ghost;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
+        }
+
+        if !root.tab.pinned && !root.dragged: HorizontalLayout {
+            padding-left: root.compact-audio ? 8px : 12px;
+            padding-right: 8px;
+            spacing: root.compact-audio ? 6px : 8px;
+
+            // A narrow tab with sound: the speaker where the page icon would be (see
+            // `compact-audio`).
+            if root.compact-audio: TabAudioButton {
+                y: (parent.height - self.height) / 2;
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                tab-title: root.tab.title;
+                interactive: !root.ghost;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
+
+            if !root.compact-audio && root.tab.has-icon: TabIcon {
+                source: root.tab.icon;
+            }
+
+            if !root.compact-audio && !root.tab.has-icon: TabIcon {
+                source: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
+            }
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.tab.title;
+                color: root.tab.active ? ChromePalette.text : ChromePalette.tab-title-inactive;
+                font-size: 13px;
+                font-weight: root.tab.active ? 550 : 450;
+                overflow: elide;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+
+            // media-capture: this tab's page may use the camera or the microphone.
+            if root.capture.camera || root.capture.microphone: CaptureTabMark {
+                y: (parent.height - self.height) / 2;
+                camera: root.capture.camera;
+                microphone: root.capture.microphone;
+            }
+
+            if root.tab.loading: Rectangle {
+                width: 6px;
+                height: 6px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 3px;
+                background: ChromePalette.accent;
+            }
+
+            // The speaker of a tab with room for it: between the title (and loading dot) and the
+            // close button. Inside the tab's touch area like the close button, so the pointer on
+            // it keeps the tab hovered.
+            if !root.compact-audio && root.tab.audio != TabAudioState.silent: TabAudioButton {
+                y: (parent.height - self.height) / 2;
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                tab-title: root.tab.title;
+                interactive: !root.ghost;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
+
+            // The close button's place on a narrow tab with sound, kept while the button is
+            // hidden so nothing moves when it shows.
+            if root.compact-audio && !root.show-close: Rectangle {
+                width: 22px;
+                accessible-role: none;
+            }
+
+            if root.show-close: Rectangle {
+                width: 22px;
+                height: 22px;
+                y: (parent.height - self.height) / 2;
+                border-radius: 6px;
+                background: close-touch.pressed
+                    ? ChromePalette.tab-close-pressed
+                    : close-touch.has-hover ? ChromePalette.tab-close-hover : transparent;
+                accessible-role: button;
+                accessible-label: "Close tab";
+                accessible-description: root.tab.title;
+                accessible-action-default => {
+                    root.closed();
+                }
+
+                Text {
+                    text: "×";
+                    color: close-touch.has-hover ? ChromePalette.text : ChromePalette.tab-close-label;
+                    font-size: 15px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+
+                close-touch := TouchArea {
+                    clicked => {
+                        root.closed();
+                    }
+                }
+            }
+        }
+    }
+}
+
+export struct TabMenuEntry {
+    title: string,
+    enabled: bool,
+    command: TabMenuCommand,
+    separator-before: bool,
+}
+
+component TabMenuRow inherits Rectangle {
+    in property <TabMenuEntry> entry;
+    in property <bool> highlighted;
+    callback activated(TabMenuCommand);
+
+    height: 30px;
+    border-radius: 6px;
+    background: !root.entry.enabled ? transparent : root.highlighted ? ChromePalette.item-selected : touch.has-hover ? ChromePalette.item-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.entry.title;
+    accessible-enabled: root.entry.enabled;
+    accessible-action-default => {
+        if root.entry.enabled {
+            root.activated(root.entry.command);
+        }
+    }
+
+    Text {
+        x: 10px;
+        width: parent.width - 20px;
+        height: parent.height;
+        text: root.entry.title;
+        color: !root.entry.enabled ? ChromePalette.disabled-text : root.highlighted ? ChromePalette.item-selected-text : ChromePalette.text;
+        font-size: 13px;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    touch := TouchArea {
+        enabled: root.entry.enabled;
+        clicked => {
+            root.activated(root.entry.command);
+        }
+    }
+}
+
+// The menu of one tab (right-click or Control-click). Arrow keys move, Return chooses, Escape
+// closes.
+export component TabMenu inherits PopupWindow {
+    in property <[TabMenuEntry]> entries;
+    callback activated(TabMenuCommand);
+
+    property <int> highlighted: -1;
+
+    pure function next-enabled(from: int, step: int) -> int {
+        if root.entries.length == 0 {
+            return -1;
+        }
+        // The menu has at most one disabled row, so two steps always find an enabled one.
+        if root.entries[Math.mod(from + step + root.entries.length, root.entries.length)].enabled {
+            return Math.mod(from + step + root.entries.length, root.entries.length);
+        }
+        Math.mod(from + 2 * step + 2 * root.entries.length, root.entries.length)
+    }
+
+    close-policy: close-on-click-outside;
+    width: 200px;
+
+    FocusScope {
+        init => {
+            self.focus();
+        }
+        key-pressed(event) => {
+            if event.text == Key.DownArrow {
+                root.highlighted = root.next-enabled(root.highlighted < 0 ? -1 : root.highlighted, 1);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                root.highlighted = root.next-enabled(root.highlighted < 0 ? root.entries.length : root.highlighted, -1);
+                return accept;
+            }
+            if (event.text == Key.Return || event.text == " ") && root.highlighted >= 0 {
+                if root.entries[root.highlighted].enabled {
+                    root.close();
+                    root.activated(root.entries[root.highlighted].command);
+                }
+                return accept;
+            }
+            reject
+        }
+
+        Rectangle {
+            border-radius: 10px;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+            background: ChromePalette.popup-background;
+            drop-shadow-blur: 18px;
+            drop-shadow-color: ChromePalette.shadow;
+            drop-shadow-offset-y: 4px;
+            accessible-role: list;
+            accessible-label: "Tab menu";
+
+            VerticalLayout {
+                padding: 6px;
+
+                for entry[index] in root.entries: VerticalLayout {
+                    if entry.separator-before: Rectangle {
+                        height: 9px;
+                        accessible-role: none;
+
+                        Rectangle {
+                            x: 8px;
+                            y: 4px;
+                            width: parent.width - 16px;
+                            height: 1px;
+                            background: ChromePalette.separator;
+                        }
+                    }
+                    TabMenuRow {
+                        entry: entry;
+                        highlighted: root.highlighted == index;
+                        activated(command) => {
+                            root.close();
+                            root.activated(command);
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A small button with an accessible name, for the strip.
+// A button showing a downward chevron (drawn, so it does not depend on a font's glyphs).
+component ChevronButton inherits Rectangle {
+    in property <string> accessible-name;
+    callback clicked;
+
+    border-radius: 7px;
+    background: touch.pressed ? ChromePalette.button-pressed : touch.has-hover ? ChromePalette.button-hover : transparent;
+    accessible-role: button;
+    accessible-label: root.accessible-name;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    Path {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 10px;
+        height: 6px;
+        viewbox-width: 10;
+        viewbox-height: 6;
+        commands: "M 1 1 L 5 5 L 9 1";
+        stroke: touch.has-hover ? ChromePalette.button-label-hover : ChromePalette.button-label;
+        stroke-width: 1.6px;
+        accessible-role: none;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component TabStrip inherits Rectangle {
+    in property <[BrowserTab]> tabs;
+    in property <int> pinned-count: 0;
+    // media-capture: what each tab's page may capture, in the order of `tabs`.
+    in property <[CaptureView]> capture-tabs;
+    // The tab whose preview is shown (-1: none), and where it is, from the strip's left edge.
+    out property <int> preview-index: -1;
+    out property <length> preview-x: root.slot-x(root.preview-index) + root.shown-scroll;
+    // The tabs no longer fit at their smallest width: the "all tabs" button is shown.
+    out property <bool> overflowing: root.min-content-width > root.width;
+    // How long the pointer rests on a tab before its preview shows (a property for tests).
+    in property <duration> preview-delay: 600ms;
+
+    callback select-tab(int);
+    callback close-tab(int);
+    // The speaker (or muted speaker) of the tab with this id was clicked: mute or unmute it. The
+    // id, not the index, so the command still means this tab if the strip changes meanwhile.
+    callback audio-clicked(int);
+    // The tab with this id goes to this index in the strip, pinned or not.
+    callback move-tab(int, int, bool);
+    callback tab-menu-activated(int, TabMenuCommand);
+    callback show-all-tabs;
+
+    // Layout. Slots are where the tabs sit; a dragged tab follows the pointer instead.
+    property <length> pinned-stride: TabStripMetrics.pinned-width + TabStripMetrics.spacing;
+    property <length> pinned-region: root.pinned-count * root.pinned-stride;
+    property <int> unpinned-count: root.tabs.length - root.pinned-count;
+    property <length> min-content-width: root.pinned-region + root.unpinned-count * (TabStripMetrics.min-tab-width + TabStripMetrics.spacing) - TabStripMetrics.spacing;
+    property <length> clip-width: root.overflowing ? root.width - TabStripMetrics.list-button-width - TabStripMetrics.spacing : root.width;
+    property <length> tab-width: root.unpinned-count == 0
+        ? TabStripMetrics.max-tab-width
+        : clamp((root.clip-width - root.pinned-region + TabStripMetrics.spacing) / root.unpinned-count - TabStripMetrics.spacing, TabStripMetrics.min-tab-width, TabStripMetrics.max-tab-width);
+    property <length> stride: root.tab-width + TabStripMetrics.spacing;
+    property <length> content-width: root.pinned-region + root.unpinned-count * root.stride - TabStripMetrics.spacing;
+    property <length> scroll-x: 0px;
+    property <length> min-scroll: Math.min(0px, root.clip-width - root.content-width);
+    property <length> shown-scroll: clamp(root.scroll-x, root.min-scroll, 0px);
+
+    // Dragging. The dragged tab is known by its id; `drag-index` follows it when rows are
+    // inserted or removed around it. If the tab goes away (closed, or its row replaced), the
+    // ghost and the mark disappear at once, and the release moves nothing.
+    property <int> drag-index: -1;
+    property <int> drag-tab-id: -1;
+    property <bool> drag-valid: root.drag-index >= 0 && root.drag-index < root.tabs.length && root.tabs[root.drag-index].id == root.drag-tab-id;
+    // The left button is down on a tab (a press that may become a drag).
+    property <bool> pointer-down;
+    property <length> drag-x;
+    property <length> grab-offset;
+
+    // Hovering. After a press or a right-click on a tab, its preview waits until the pointer
+    // leaves it.
+    property <int> hover-index: -1;
+    property <int> preview-suppressed: -1;
+
+    // The tab menu.
+    property <int> menu-tab-id: -1;
+    property <int> menu-index: -1;
+    property <length> menu-x;
+    // Captured when the menu opens, so its rows describe that tab even if the strip changes.
+    property <bool> menu-pinned;
+    property <bool> menu-can-close-others;
+
+    pure function slot-x(index: int) -> length {
+        if index < root.pinned-count {
+            return index * root.pinned-stride;
+        }
+        root.pinned-region + (index - root.pinned-count) * root.stride
+    }
+
+    pure function slot-width(index: int) -> length {
+        index < root.pinned-count ? TabStripMetrics.pinned-width : root.tab-width
+    }
+
+    // Where a tab dragged from `from` and dropped with the pointer at `x` (content coordinates)
+    // lands: over the pinned tabs it is pinned, elsewhere it is not.
+    pure function drops-pinned(x: length) -> bool {
+        root.pinned-count > 0 && x < root.pinned-region
+    }
+
+    pure function drop-index(from: int, x: length) -> int {
+        if root.drops-pinned(x) {
+            return clamp(floor(x / root.pinned-stride), 0, from < root.pinned-count ? root.pinned-count - 1 : root.pinned-count);
+        }
+        clamp(root.pinned-count + floor((x - root.pinned-region) / root.stride), from < root.pinned-count ? root.pinned-count - 1 : root.pinned-count, root.tabs.length - 1)
+    }
+
+    // Where the insertion mark goes for a drop at `index`.
+    pure function mark-x(from: int, index: int) -> length {
+        index <= from
+            ? root.slot-x(index) - TabStripMetrics.spacing / 2
+            : root.slot-x(index) + root.slot-width(index) + TabStripMetrics.spacing / 2
+    }
+
+    // Scrolls just enough to show the tab at `index`.
+    public function reveal(index: int) {
+        // Never scroll the strip under a pressed or dragging pointer.
+        if index < 0 || index >= root.tabs.length || root.pointer-down || root.drag-index >= 0 {
+            return;
+        }
+        let left = root.slot-x(index);
+        let right = left + root.slot-width(index);
+        let shown-left = left < -root.shown-scroll ? -left : root.shown-scroll;
+        let shown-both = right > root.clip-width - shown-left ? root.clip-width - right : shown-left;
+        root.scroll-x = clamp(shown-both, root.min-scroll, 0px);
+    }
+
+    public function show-menu-for(index: int, x: length) {
+        root.menu-index = index;
+        root.menu-tab-id = root.tabs[index].id;
+        root.menu-pinned = root.tabs[index].pinned;
+        root.menu-can-close-others = root.unpinned-count - (root.tabs[index].pinned ? 0 : 1) > 0;
+        root.preview-suppressed = index;
+        root.menu-x = root.slot-x(index) + root.shown-scroll + x;
+        tab-menu.show();
+    }
+
+    accessible-role: tab-list;
+    accessible-label: "Tabs";
+
+    function cancel-drag() {
+        root.drag-index = -1;
+        root.drag-tab-id = -1;
+        root.pointer-down = false;
+    }
+
+    preview-timer := Timer {
+        interval: root.preview-delay;
+        running: root.hover-index >= 0 && root.preview-index != root.hover-index && root.drag-index < 0 && root.hover-index != root.preview-suppressed;
+        triggered => {
+            root.preview-index = root.hover-index;
+        }
+    }
+
+    // A short grace between two tabs, so the preview moves instead of starting over.
+    hide-timer := Timer {
+        interval: 150ms;
+        running: root.hover-index < 0 && root.preview-index >= 0;
+        triggered => {
+            root.preview-index = -1;
+        }
+    }
+
+    strip-area := Rectangle {
+        x: 0px;
+        width: root.clip-width;
+        clip: true;
+
+        scroll-touch := TouchArea {
+            scroll-event(event) => {
+                if root.min-scroll >= 0px {
+                    return reject;
+                }
+                root.scroll-x = clamp(root.shown-scroll + event.delta-x + event.delta-y, root.min-scroll, 0px);
+                accept
+            }
+
+            Rectangle {
+                x: root.shown-scroll;
+                width: Math.max(root.content-width, 0px);
+
+                for tab[index] in root.tabs: tab-button := TabButton {
+                    x: root.slot-x(index);
+                    width: root.slot-width(index);
+                    tab: tab;
+                    index: index;
+                    count: root.tabs.length;
+                    capture: root.capture-tabs[index]; // media-capture
+                    dragged: index == root.drag-index;
+
+                    changed index => {
+                        if root.drag-tab-id >= 0 && tab.id == root.drag-tab-id {
+                            root.drag-index = self.index;
+                        }
+                    }
+                    changed hovered => {
+                        if !self.hovered && root.preview-suppressed == index {
+                            root.preview-suppressed = -1;
+                        }
+                        if self.hovered {
+                            root.hover-index = index;
+                            if root.preview-index >= 0 {
+                                root.preview-index = index;
+                            }
+                        } else if root.hover-index == index {
+                            root.hover-index = -1;
+                        }
+                    }
+                    selected => {
+                        root.preview-index = -1;
+                        // A drag whose tab went away before the release was seen.
+                        if root.drag-index >= 0 {
+                            root.cancel-drag();
+                        }
+                        root.preview-suppressed = index;
+                        root.pointer-down = true;
+                        root.select-tab(index);
+                    }
+                    released => {
+                        root.pointer-down = false;
+                        // A release with a drag still recorded: its tab went away mid-drag.
+                        if root.drag-index >= 0 {
+                            root.cancel-drag();
+                        }
+                    }
+                    closed => {
+                        root.preview-index = -1;
+                        root.close-tab(index);
+                    }
+                    audio-clicked => {
+                        // Not selected, dragged or pressed: only the preview gets out of the way
+                        // until the pointer leaves the tab.
+                        root.preview-index = -1;
+                        root.preview-suppressed = index;
+                        root.audio-clicked(tab.id);
+                    }
+                    menu-requested(x) => {
+                        root.preview-index = -1;
+                        root.pointer-down = false;
+                        root.show-menu-for(index, x);
+                    }
+                    drag-started(x) => {
+                        root.preview-index = -1;
+                        root.drag-tab-id = tab.id;
+                        root.drag-index = index;
+                        root.grab-offset = x;
+                        root.drag-x = root.slot-x(index) + x;
+                    }
+                    drag-moved(x) => {
+                        if root.drag-index >= 0 && tab.id == root.drag-tab-id {
+                            root.drag-x = tab-button.x + x;
+                        }
+                    }
+                    drag-ended(x) => {
+                        root.pointer-down = false;
+                        // Only the tab that was picked up is moved, and only while it is still here.
+                        if root.drag-index < 0 || tab.id != root.drag-tab-id {
+                            root.cancel-drag();
+                            return;
+                        }
+                        let from = root.drag-index;
+                        let id = root.drag-tab-id;
+                        let pointer = tab-button.x + x;
+                        root.cancel-drag();
+                        root.move-tab(id, root.drop-index(from, pointer), root.drops-pinned(pointer));
+                    }
+                    drag-cancelled => {
+                        root.cancel-drag();
+                    }
+                }
+
+                // The dragged tab, following the pointer above the others.
+                if root.drag-valid: TabButton {
+                    x: clamp(root.drag-x - root.grab-offset, 0px, Math.max(0px, root.content-width - self.width));
+                    width: root.slot-width(root.drag-index);
+                    height: parent.height;
+                    tab: root.tabs[root.drag-index];
+                    capture: root.capture-tabs[root.drag-index]; // media-capture
+                    ghost: true;
+                    accessible-role: none;
+                }
+
+                if root.drag-valid: Rectangle {
+                    x: root.mark-x(root.drag-index, root.drop-index(root.drag-index, root.drag-x)) - 1px;
+                    y: 6px;
+                    width: 2px;
+                    height: parent.height - 12px;
+                    border-radius: 1px;
+                    background: ChromePalette.accent;
+                }
+            }
+        }
+    }
+
+    if root.overflowing: ChevronButton {
+        x: root.width - self.width;
+        y: (parent.height - self.height) / 2;
+        width: TabStripMetrics.list-button-width;
+        height: 34px;
+        accessible-name: "Show all tabs";
+        clicked => {
+            root.show-all-tabs();
+        }
+    }
+
+    tab-menu := TabMenu {
+        x: Math.min(root.menu-x, root.width - self.width);
+        y: root.height;
+        entries: [
+            {
+                title: root.menu-pinned ? "Unpin tab" : "Pin tab",
+                enabled: true,
+                command: root.menu-pinned ? TabMenuCommand.unpin : TabMenuCommand.pin,
+                separator-before: false,
+            },
+            {
+                title: "Duplicate tab",
+                enabled: true,
+                command: TabMenuCommand.duplicate,
+                separator-before: false,
+            },
+            {
+                title: "Close tab",
+                enabled: true,
+                command: TabMenuCommand.close,
+                separator-before: true,
+            },
+            {
+                title: "Close other tabs",
+                enabled: root.menu-can-close-others,
+                command: TabMenuCommand.close-others,
+                separator-before: false,
+            },
+        ];
+        activated(command) => {
+            root.tab-menu-activated(root.menu-tab-id, command);
+        }
+    }
+}
+
+// What the pointer is resting on: the tab's title and address, drawn by the window below the
+// strip. Browser chrome, not page content: it uses the popup colours and never takes input.
+export component TabPreview inherits Rectangle {
+    in property <string> title;
+    in property <string> url;
+
+    width: 300px;
+    height: layout.preferred-height;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+    background: ChromePalette.popup-background;
+    drop-shadow-blur: 12px;
+    drop-shadow-color: ChromePalette.shadow;
+    drop-shadow-offset-y: 3px;
+    accessible-role: none;
+
+    layout := VerticalLayout {
+        padding: 10px;
+        spacing: 4px;
+
+        Text {
+            text: root.title;
+            color: ChromePalette.text;
+            font-size: 13px;
+            font-weight: 600;
+            wrap: word-wrap;
+            overflow: elide;
+            max-height: 36px;
+        }
+
+        if root.url != "": Text {
+            text: root.url;
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            overflow: elide;
+            wrap: no-wrap;
+        }
+    }
+}

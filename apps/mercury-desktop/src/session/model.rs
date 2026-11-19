@@ -34,8 +34,7 @@ pub(crate) fn tab_snapshot(tab: &Tab) -> TabSnapshot {
         },
         title: state.page_title().to_owned(),
         zoom_percent: state.zoom_percent(),
-        // Tabs cannot be pinned yet.
-        pinned: false,
+        pinned: tab.is_pinned(),
     }
 }
 
@@ -54,11 +53,15 @@ pub(crate) fn only_new_tab_pages(snapshot: &SessionSnapshot) -> bool {
 }
 
 /// The tab to open for a saved one: a new-tab page opens blank.
+///
+/// Muting a tab is a choice for this run only, so it is not saved: `TabSnapshot` has no audio
+/// field, nor has `RestoredTab`. A restored or reopened tab, a pinned one too, opens unmuted.
 pub(crate) fn restored_tab(tab: &TabSnapshot) -> RestoredTab {
     RestoredTab {
         url: (!is_new_tab_page(&tab.url)).then(|| tab.url.clone()),
         title: tab.title.clone(),
         zoom_percent: tab.zoom_percent,
+        pinned: tab.pinned,
     }
 }
 
@@ -258,6 +261,9 @@ pub(crate) fn reopen_index(closed: &ClosedTab, tab_count: usize) -> usize {
 }
 
 /// "Duplicate tab": a copy of the active tab, to open just after it.
+///
+/// The copy opens unmuted, even when the active tab is muted (and pinned or not): it is a new
+/// page, and the mute choice belongs to the tab the user muted, for this run (see `restored_tab`).
 pub(crate) fn duplicate_of_active(controller: &BrowserController) -> (usize, RestoredTab) {
     let active_tab_id = controller.active_tab_id();
     let (index, tab) = controller
@@ -272,6 +278,8 @@ pub(crate) fn duplicate_of_active(controller: &BrowserController) -> (usize, Res
             url: (!state.url().is_empty()).then(|| state.url().to_owned()),
             title: state.page_title().to_owned(),
             zoom_percent: state.zoom_percent(),
+            // tabs-plus: a copy of a pinned tab opens pinned, right after it
+            pinned: tab.is_pinned(),
         },
     )
 }
@@ -418,7 +426,8 @@ pub(crate) fn recovery_label(snapshot: &SessionSnapshot) -> String {
 
 #[cfg(test)]
 mod tests {
-    use talaria_core::{BrowserEvent, CloseTabOutcome, TabActivation};
+    use mercury_ui::TabAudioState;
+    use talaria_core::{BrowserEvent, CloseTabOutcome, TabActivation, TabAudio};
 
     use super::*;
     use crate::shortcuts::Platform;
@@ -496,6 +505,7 @@ mod tests {
                 },
                 TabSnapshot {
                     zoom_percent: 110,
+                    pinned: false,
                     ..saved_tab("https://a.test/", "A")
                 },
                 saved_tab("https://b.test/", "B"),
@@ -872,9 +882,195 @@ mod tests {
                     url: Some("https://b.test/".to_owned()),
                     title: "B".to_owned(),
                     zoom_percent: 110,
+                    pinned: false,
                 }
             )
         );
+    }
+
+    // tabs-plus
+    #[test]
+    fn pinned_tabs_are_saved_restored_and_duplicated_pinned() {
+        let mut controller = BrowserController::default();
+        let a = page(&mut controller, "https://a.test/", "A");
+        page(&mut controller, "https://b.test/", "B");
+        assert!(controller.set_tab_pinned(a, true));
+        controller.select_tab(a);
+        let saved = controller
+            .tabs()
+            .map(tab_snapshot)
+            .map(|tab| tab.pinned)
+            .collect::<Vec<_>>();
+        assert_eq!(saved, [true, false, false]);
+
+        let tab = TabSnapshot {
+            pinned: true,
+            ..saved_tab("https://a.test/", "A")
+        };
+        assert!(restored_tab(&tab).pinned);
+
+        // The copy of a pinned tab opens right after it, pinned.
+        let (index, copy) = duplicate_of_active(&controller);
+        assert_eq!(index, 1);
+        assert!(copy.pinned);
+    }
+
+    // media-session lane x tabs-plus: muting is a choice for this run, not part of the session.
+
+    fn tab_of(controller: &BrowserController, tab_id: TabId) -> &Tab {
+        controller
+            .tabs()
+            .find(|tab| tab.id() == tab_id)
+            .expect("the tab is open")
+    }
+
+    fn is_silent(controller: &BrowserController, tab_id: TabId) -> bool {
+        let state = tab_of(controller, tab_id).state();
+        !state.is_audio_muted() && state.audio_indicator() == TabAudio::Silent
+    }
+
+    #[test]
+    fn a_muted_tab_is_saved_exactly_as_the_same_tab_unmuted() {
+        let mut controller = BrowserController::default();
+        let mut tracker = SessionTracker::default();
+        let a = page(&mut controller, "https://a.test/", "A");
+        tracker.observe_tabs(&controller, NOW);
+
+        for pinned in [false, true] {
+            if pinned {
+                assert!(controller.set_tab_pinned(a, true));
+            }
+            let unmuted = tab_snapshot(tab_of(&controller, a));
+            assert!(controller.toggle_audio_muted(a));
+            let muted = tab_snapshot(tab_of(&controller, a));
+            assert!(controller.toggle_audio_muted(a));
+
+            // Every field is named, so a field for the mute cannot be added without a decision
+            // here: there is none today.
+            assert_eq!(
+                muted,
+                TabSnapshot {
+                    url: "https://a.test/".to_owned(),
+                    title: "A".to_owned(),
+                    zoom_percent: 100,
+                    pinned,
+                }
+            );
+            assert_eq!(muted, unmuted);
+        }
+
+        // Muting changes nothing that is saved: the session does not look changed, so it does
+        // not cause a write either.
+        tracker.observe_tabs(&controller, NOW);
+        let geometry = WindowGeometry::default();
+        let unmuted_window = window_snapshot(&controller, &geometry);
+        assert!(controller.toggle_audio_muted(a));
+        assert!(!tracker.observe_tabs(&controller, NOW), "muted");
+        assert_eq!(
+            window_snapshot(&controller, &geometry).tabs,
+            unmuted_window.tabs
+        );
+        assert!(controller.toggle_audio_muted(a));
+        assert!(!tracker.observe_tabs(&controller, NOW), "unmuted");
+    }
+
+    #[test]
+    fn restoring_reopening_and_duplicating_open_unmuted_tabs_a_pinned_muted_one_too() {
+        let mut controller = BrowserController::default();
+        let mut tracker = SessionTracker::default();
+        let a = page(&mut controller, "https://a.test/", "A");
+        assert!(controller.set_tab_pinned(a, true));
+        assert!(controller.select_tab(a));
+        assert!(controller.toggle_audio_muted(a));
+        tracker.observe_tabs(&controller, NOW);
+        let saved = tracker.snapshot(&controller, NOW);
+        assert!(saved.windows[0].tabs[0].pinned);
+
+        // Duplicate Tab: the copy of the pinned muted tab opens right after it, pinned, unmuted.
+        let (index, duplicate) = duplicate_of_active(&controller);
+        let copy = controller
+            .open_restored_tab(index, &duplicate)
+            .expect("the address resolves");
+        assert!(tab_of(&controller, copy).is_pinned());
+        assert!(is_silent(&controller, copy), "the copy is unmuted");
+        assert!(
+            tab_of(&controller, a).state().is_audio_muted(),
+            "the tab it was copied from stays muted"
+        );
+
+        // Reopen Closed Tab: the muted pinned tab is closed and comes back pinned, unmuted.
+        assert_eq!(controller.close_tab(a), CloseTabOutcome::Closed);
+        tracker.observe_tabs(&controller, NOW);
+        let closed = tracker.pop_closed().expect("the closed tab is remembered");
+        assert!(closed.tab.pinned);
+        let index = reopen_index(&closed, controller.tabs().len());
+        let reopened = controller
+            .open_restored_tab(index, &restored_tab(&closed.tab))
+            .expect("the address resolves");
+        assert!(tab_of(&controller, reopened).is_pinned());
+        assert!(
+            is_silent(&controller, reopened),
+            "the reopened tab is unmuted"
+        );
+
+        // Restoring a session: every tab the plan opens, in a run of its own, is unmuted.
+        let mut next_run = BrowserController::default();
+        let plan = plan_restore(&saved, &next_run, true);
+        assert!(plan.tabs.iter().any(|tab| tab.pinned));
+        for tab in &plan.tabs {
+            let index = next_run.tabs().len();
+            next_run
+                .open_restored_tab(index, tab)
+                .expect("the address resolves");
+        }
+        assert!(next_run.tabs().any(|tab| tab.is_pinned()));
+        assert!(
+            next_run
+                .tabs()
+                .all(|tab| tab.state().audio_indicator() != TabAudio::Muted),
+            "a restored tab is unmuted"
+        );
+        assert!(
+            crate::tab_strip::strip_rows(&next_run)
+                .iter()
+                .all(|row| row.audio != TabAudioState::Muted)
+        );
+    }
+
+    #[test]
+    fn a_muted_tab_stays_muted_when_pinned_unpinned_or_moved() {
+        let mut controller = BrowserController::default();
+        let a = page(&mut controller, "https://a.test/", "A");
+        let b = page(&mut controller, "https://b.test/", "B");
+        page(&mut controller, "https://c.test/", "C");
+        assert!(controller.toggle_audio_muted(b));
+        // The rows the strip shows: the muted tab says so, wherever it is, and no other does.
+        let check = |controller: &BrowserController, step: &str| {
+            let rows = crate::tab_strip::strip_rows(controller);
+            assert_eq!(rows.len(), 4, "{step}");
+            for row in rows {
+                let want = if row.id == crate::tab_strip::id_for_ui(b) {
+                    TabAudioState::Muted
+                } else {
+                    TabAudioState::Silent
+                };
+                assert_eq!(row.audio, want, "{step}: tab {}", row.id);
+            }
+        };
+        check(&controller, "muted");
+
+        assert!(controller.set_tab_pinned(b, true));
+        check(&controller, "pinned");
+        assert!(controller.set_tab_pinned(a, true));
+        check(&controller, "another tab pinned after it");
+        assert!(controller.move_tab_by(b, 1));
+        check(&controller, "moved within the pinned tabs");
+        assert!(controller.move_tab(b, 3, false));
+        check(&controller, "dragged out of the pinned tabs");
+        assert!(controller.move_tab(b, 0, true));
+        check(&controller, "dragged back in");
+        assert!(controller.set_tab_pinned(b, false));
+        check(&controller, "unpinned");
     }
 
     // --- the restore plan ---
@@ -997,6 +1193,7 @@ mod tests {
                 url: Some("https://a.test/".to_owned()),
                 title: "A".to_owned(),
                 zoom_percent: 150,
+                pinned: false,
             }
         );
         for url in ["about:blank", "about:newtab", "about:home"] {

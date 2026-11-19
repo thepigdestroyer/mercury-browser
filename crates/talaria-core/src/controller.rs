@@ -295,12 +295,7 @@ impl BrowserController {
 
         let was_active = self.active_tab_id == tab_id;
         self.tabs.remove(index);
-        self.visits.forget_tab(tab_id);
-        self.command_queue
-            .retain(|queued| queued.tab_id() != tab_id);
-        // openurl
-        self.external_link_requests
-            .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
+        self.forget_closed_tab(tab_id);
 
         if was_active {
             let replacement_index = index.saturating_sub(1).min(self.tabs.len() - 1);
@@ -308,6 +303,18 @@ impl BrowserController {
         }
 
         CloseTabOutcome::Closed
+    }
+
+    /// Drops what the controller keeps for a tab that has just left the strip: its history
+    /// state (the last titles are written), the commands queued for it and its requests to open
+    /// links in other apps. Every way of closing a tab goes through here.
+    fn forget_closed_tab(&mut self, tab_id: TabId) {
+        self.visits.forget_tab(tab_id);
+        self.command_queue
+            .retain(|queued| queued.tab_id() != tab_id);
+        // openurl
+        self.external_link_requests
+            .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
     }
 
     pub fn close_tab_at(&mut self, index: usize) -> CloseTabOutcome {
@@ -576,7 +583,9 @@ impl BrowserController {
                 .zoom_percent
                 .clamp(ZOOM_STEPS[0], ZOOM_STEPS[ZOOM_STEPS.len() - 1]),
         );
-        self.tabs.insert(index.min(self.tabs.len()), tab);
+        // tabs-plus: a pinned tab opens inside the pinned group, any other after it
+        tab.set_pinned(restored.pinned);
+        self.insert_tab(index, tab);
         Ok(tab_id)
     }
 
@@ -617,8 +626,8 @@ impl BrowserController {
         self.next_tab_id += 1;
         let mut state = BrowserState::default();
         state.set_page_title(title);
-        self.tabs
-            .insert(opener_index + 1, Tab::opened_by_page(tab_id, state));
+        // tabs-plus: never among the pinned tabs
+        self.insert_tab(opener_index + 1, Tab::opened_by_page(tab_id, state));
         if activation == TabActivation::Foreground {
             self.active_tab_id = tab_id;
         }
@@ -784,7 +793,7 @@ impl BrowserController {
         self.next_tab_id += 1;
         let mut state = BrowserState::default();
         state.set_zoom_percent(self.default_zoom_percent);
-        self.tabs.push(Tab::new(tab_id, state));
+        self.insert_tab(self.tabs.len(), Tab::new(tab_id, state)); // tabs-plus
         if activation == TabActivation::Foreground {
             self.active_tab_id = tab_id;
         }
@@ -1360,4 +1369,164 @@ impl BrowserController {
         self.queue_command_for(tab_id, BrowserCommand::Reload);
         true
     }
+}
+
+// tabs-plus
+/// What the close-tab shortcut did to a pinned tab, which it never closes.
+#[must_use]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinnedCloseOutcome {
+    /// The tab is not pinned (or does not exist): close it as usual.
+    NotPinned,
+    /// The first unpinned tab is selected instead.
+    SelectedUnpinned,
+    /// Every tab is pinned, so a new tab was opened and selected.
+    OpenedTab,
+}
+
+// tabs-plus
+/// Pinned tabs come first in the strip, always; every method here keeps that true.
+impl BrowserController {
+    /// How many tabs are pinned; they are the first this many in `tabs()`.
+    pub fn pinned_tab_count(&self) -> usize {
+        let count = self.tabs.iter().take_while(|tab| tab.is_pinned()).count();
+        debug_assert!(
+            self.tabs[count..].iter().all(|tab| !tab.is_pinned()),
+            "a pinned tab follows an unpinned one"
+        );
+        count
+    }
+
+    /// The one way a new tab enters the strip: `index` is clamped into the tab's group, so a
+    /// pinned tab lands among the pinned tabs and any other after them.
+    fn insert_tab(&mut self, index: usize, tab: Tab) {
+        let pinned_count = self.pinned_tab_count();
+        let index = if tab.is_pinned() {
+            index.min(pinned_count)
+        } else {
+            index.clamp(pinned_count, self.tabs.len())
+        };
+        self.tabs.insert(index, tab);
+    }
+
+    /// Pins a tab, moving it to the end of the pinned tabs, or unpins it, moving it to the
+    /// start of the unpinned tabs. Returns false if nothing changed.
+    pub fn set_tab_pinned(&mut self, tab_id: TabId, pinned: bool) -> bool {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id() == tab_id) else {
+            return false;
+        };
+        if tab.is_pinned() == pinned {
+            return false;
+        }
+        let index = if pinned { self.pinned_tab_count() } else { 0 };
+        self.move_tab(tab_id, index, pinned)
+    }
+
+    /// Moves a tab so that it ends up at `index` in the strip, pinned or not. The index is
+    /// clamped into the tab's group: a pinned tab lands among the pinned tabs, an unpinned one
+    /// after them. Dragging a tab into or out of the pinned group pins or unpins it.
+    /// The selection does not change. Returns false if nothing changed.
+    pub fn move_tab(&mut self, tab_id: TabId, index: usize, pinned: bool) -> bool {
+        let Some(from) = self.tabs.iter().position(|tab| tab.id() == tab_id) else {
+            return false;
+        };
+        let mut tab = self.tabs.remove(from);
+        let was_pinned = tab.is_pinned();
+        tab.set_pinned(pinned);
+        let pinned_count = self.pinned_tab_count();
+        let index = if pinned {
+            index.min(pinned_count)
+        } else {
+            index.clamp(pinned_count, self.tabs.len())
+        };
+        self.tabs.insert(index, tab);
+        index != from || was_pinned != pinned
+    }
+
+    /// Moves a tab one place left (`-1`) or right (`1`) within its group, for the keyboard.
+    /// Returns false at the edge of the group.
+    pub fn move_tab_by(&mut self, tab_id: TabId, delta: isize) -> bool {
+        let Some(from) = self.tabs.iter().position(|tab| tab.id() == tab_id) else {
+            return false;
+        };
+        let pinned = self.tabs[from].is_pinned();
+        let pinned_count = self.pinned_tab_count();
+        let group = if pinned {
+            0..pinned_count
+        } else {
+            pinned_count..self.tabs.len()
+        };
+        match from.checked_add_signed(delta) {
+            Some(to) if group.contains(&to) => self.move_tab(tab_id, to, pinned),
+            _ => false,
+        }
+    }
+
+    /// Closes every unpinned tab except `keep`, and selects `keep`. Pinned tabs stay.
+    /// Returns how many tabs were closed (none if `keep` does not exist); when none close, the
+    /// selection stays as it was.
+    pub fn close_other_tabs(&mut self, keep: TabId) -> usize {
+        if !self.tabs.iter().any(|tab| tab.id() == keep) {
+            return 0;
+        }
+        let closing = self
+            .tabs
+            .iter()
+            .filter(|tab| tab.id() != keep && !tab.is_pinned())
+            .map(Tab::id)
+            .collect::<Vec<_>>();
+        if closing.is_empty() {
+            return 0;
+        }
+        self.tabs.retain(|tab| !closing.contains(&tab.id()));
+        for tab_id in closing.iter().copied() {
+            self.forget_closed_tab(tab_id);
+        }
+        self.active_tab_id = keep;
+        closing.len()
+    }
+
+    /// The close-tab shortcut never closes a pinned tab: it selects the first unpinned tab
+    /// instead, or opens a new tab when every tab is pinned. Closing a pinned tab takes its
+    /// own command (the tab's menu).
+    pub fn step_off_pinned_tab(&mut self, tab_id: TabId) -> PinnedCloseOutcome {
+        if !self
+            .tabs
+            .iter()
+            .any(|tab| tab.id() == tab_id && tab.is_pinned())
+        {
+            return PinnedCloseOutcome::NotPinned;
+        }
+        match self.tabs.iter().find(|tab| !tab.is_pinned()).map(Tab::id) {
+            Some(unpinned) => {
+                self.active_tab_id = unpinned;
+                PinnedCloseOutcome::SelectedUnpinned
+            }
+            None => {
+                self.open_tab();
+                PinnedCloseOutcome::OpenedTab
+            }
+        }
+    }
+
+    /// The tabs whose title or address contains every word of `query`, in strip order; see
+    /// `tab_matches_query`.
+    pub fn matching_tabs(&self, query: &str) -> Vec<TabId> {
+        self.tabs
+            .iter()
+            .filter(|tab| tab_matches_query(tab.state().page_title(), tab.state().url(), query))
+            .map(Tab::id)
+            .collect()
+    }
+}
+
+/// Whether every whitespace-separated word of `query` occurs in the title or the address,
+/// ignoring case. An empty query matches everything.
+pub fn tab_matches_query(title: &str, url: &str, query: &str) -> bool {
+    let title = title.to_lowercase();
+    let url = url.to_lowercase();
+    query.split_whitespace().all(|word| {
+        let word = word.to_lowercase();
+        title.contains(&word) || url.contains(&word)
+    })
 }

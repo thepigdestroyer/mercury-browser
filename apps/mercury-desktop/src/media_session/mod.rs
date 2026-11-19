@@ -203,17 +203,19 @@ pub(crate) fn install(
     });
 
     let weak_window = window.as_weak();
-    window.on_toggle_tab_muted(move |index| {
+    // tabs-plus: the strip's audio button names its tab by id, as every other strip callback
+    // does (`tab_strip::connect`), never by position: with pinned tabs and tabs that move, a
+    // row's index is not the tab's id. A stale id (the tab closed while the click was on its
+    // way) or one outside the id range finds no tab, and nothing happens.
+    window.on_toggle_tab_muted(move |id| {
         let _slint = crate::callback_scope::InSlintCallback::enter();
+        let Some(tab_id) = crate::tab_strip::id_from_ui(id) else {
+            return;
+        };
         let Some(window) = weak_window.upgrade() else {
             return;
         };
-        let tab_id = usize::try_from(index)
-            .ok()
-            .and_then(|index| controller.borrow().tabs().nth(index).map(|tab| tab.id()));
-        if let Some(tab_id) = tab_id {
-            toggle_mute(&window, &controller, tab_id);
-        }
+        toggle_mute(&window, &controller, tab_id);
     });
 }
 
@@ -369,8 +371,10 @@ mod tests {
     use std::cell::RefCell;
     use std::rc::Rc;
 
+    use slint::Model;
     use talaria_core::{
-        BrowserEvent, MediaPlaybackState, MediaProbe, MediaSessionAction, TabCommand, TabId,
+        BrowserEvent, CloseTabOutcome, MediaPlaybackState, MediaProbe, MediaSessionAction,
+        TabActivation, TabCommand, TabId,
     };
 
     use super::*;
@@ -669,5 +673,238 @@ mod tests {
             ]
         );
         assert_eq!(diagnostic_commands("navigate@1, reload, reload@x, @5,"), []);
+    }
+
+    // tabs-plus: the strip's audio button, through the window (Slint's testing backend: no
+    // display, no engine; `install` with `interactive` false takes no system services).
+
+    /// (tab id, audio, pinned) of each row the window's strip shows.
+    type StripAudio = Vec<(i32, TabAudioState, bool)>;
+
+    /// A window with this lane installed over a controller of `count` tabs (the first active),
+    /// each with an address so that its page counts as created (commands for a tab whose page
+    /// does not exist yet are held back), with the strip synced and the queue drained.
+    fn window_with_tabs(count: usize) -> (MainWindow, Rc<RefCell<BrowserController>>, Vec<TabId>) {
+        crate::settings::tests::init_slint();
+        let window = MainWindow::new().expect("the main window can be created");
+        let controller = Rc::new(RefCell::new(BrowserController::default()));
+        let mut ids = vec![controller.borrow().active_tab_id()];
+        for _ in 1..count {
+            let tab_id = controller
+                .borrow_mut()
+                .open_tab_with(None, TabActivation::Background)
+                .expect("a blank tab opens");
+            ids.push(tab_id);
+        }
+        for (number, tab_id) in ids.iter().enumerate() {
+            ready(
+                &mut controller.borrow_mut(),
+                *tab_id,
+                &format!("tab{number}"),
+            );
+        }
+        install(&window, Rc::clone(&controller), false);
+        crate::tab_strip::sync(&window, &controller.borrow());
+        let _queued = drain(&mut controller.borrow_mut());
+        (window, controller, ids)
+    }
+
+    fn strip_audio(window: &MainWindow) -> StripAudio {
+        window
+            .get_tabs()
+            .iter()
+            .map(|row| (row.id, row.audio, row.pinned))
+            .collect()
+    }
+
+    fn is_muted(controller: &RefCell<BrowserController>, tab_id: TabId) -> bool {
+        controller
+            .borrow()
+            .tabs()
+            .find(|tab| tab.id() == tab_id)
+            .is_some_and(|tab| tab.state().is_audio_muted())
+    }
+
+    /// The mute commands queued since the last call: (tab, muted).
+    fn mute_commands(controller: &RefCell<BrowserController>) -> Vec<(TabId, bool)> {
+        drain(&mut controller.borrow_mut())
+            .iter()
+            .filter_map(|command| match command.command() {
+                BrowserCommand::SetAudioMuted { muted } => Some((command.tab_id(), *muted)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The tab plays, and a probe heard it.
+    fn plays_sound(controller: &RefCell<BrowserController>, tab_id: TabId) {
+        let mut controller = controller.borrow_mut();
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::MediaPlaybackChanged {
+                state: MediaPlaybackState::Playing,
+            },
+        );
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::MediaProbed {
+                probe: MediaProbe {
+                    playing: 1,
+                    audible: 1,
+                    unseen: false,
+                    fullscreen_video: false,
+                },
+            },
+        );
+    }
+
+    #[test]
+    fn the_audio_button_mutes_its_tab_by_id_and_a_second_click_unmutes() {
+        use TabAudioState::{Muted, Silent};
+
+        let (window, controller, ids) = window_with_tabs(3);
+        let id = |n: usize| crate::tab_strip::id_for_ui(ids[n]);
+
+        window.invoke_toggle_tab_muted(id(1));
+
+        assert!(is_muted(&controller, ids[1]));
+        assert!(!is_muted(&controller, ids[0]) && !is_muted(&controller, ids[2]));
+        assert_eq!(mute_commands(&controller), [(ids[1], true)]);
+        // The handler syncs the window: the row shows it at once.
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(0), Silent, false),
+                (id(1), Muted, false),
+                (id(2), Silent, false)
+            ]
+        );
+
+        window.invoke_toggle_tab_muted(id(1));
+
+        assert!(!is_muted(&controller, ids[1]));
+        assert_eq!(mute_commands(&controller), [(ids[1], false)]);
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(0), Silent, false),
+                (id(1), Silent, false),
+                (id(2), Silent, false)
+            ]
+        );
+    }
+
+    /// A pinned tab sits at the front, so its id is not its row's index: the button must find
+    /// the tab by id, or it mutes whichever tab sits at the index the id happens to be.
+    #[test]
+    fn a_pinned_tab_is_muted_by_its_id_and_not_the_tab_at_that_index() {
+        use TabAudioState::{Muted, Silent};
+
+        let (window, controller, ids) = window_with_tabs(3);
+        let id = |n: usize| crate::tab_strip::id_for_ui(ids[n]);
+        assert!(controller.borrow_mut().set_tab_pinned(ids[2], true));
+        crate::tab_strip::sync(&window, &controller.borrow());
+        // The strip is now [third, first, second]: ids and indexes differ for every tab.
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(2), Silent, true),
+                (id(0), Silent, false),
+                (id(1), Silent, false)
+            ]
+        );
+
+        window.invoke_toggle_tab_muted(id(2));
+
+        assert!(is_muted(&controller, ids[2]));
+        assert!(!is_muted(&controller, ids[0]) && !is_muted(&controller, ids[1]));
+        assert_eq!(mute_commands(&controller), [(ids[2], true)]);
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(2), Muted, true),
+                (id(0), Silent, false),
+                (id(1), Silent, false)
+            ]
+        );
+    }
+
+    #[test]
+    fn a_closed_tabs_id_or_one_that_never_was_mutes_nothing() {
+        let (window, controller, ids) = window_with_tabs(3);
+        // The first tab closes: the strip is [second, third], and the closed tab's id is the
+        // index of a tab that is still there.
+        assert_eq!(
+            controller.borrow_mut().close_tab(ids[0]),
+            CloseTabOutcome::Closed
+        );
+        crate::tab_strip::sync(&window, &controller.borrow());
+        let _queued = drain(&mut controller.borrow_mut());
+        let before = strip_audio(&window);
+        assert_eq!(before.len(), 2);
+
+        let closed = crate::tab_strip::id_for_ui(ids[0]);
+        for id in [closed, -1, 0, 1000, i32::MAX, i32::MIN] {
+            window.invoke_toggle_tab_muted(id);
+        }
+
+        assert!(
+            controller
+                .borrow()
+                .tabs()
+                .all(|tab| !tab.state().is_audio_muted())
+        );
+        assert!(mute_commands(&controller).is_empty());
+        assert_eq!(strip_audio(&window), before);
+    }
+
+    #[test]
+    fn the_rows_show_muted_playing_and_silent_tabs_and_keep_their_id_and_pinned() {
+        use TabAudioState::{Muted, Playing, Silent};
+
+        let (window, controller, ids) = window_with_tabs(3);
+        let id = |n: usize| crate::tab_strip::id_for_ui(ids[n]);
+        plays_sound(&controller, ids[0]);
+        assert!(controller.borrow_mut().set_tab_pinned(ids[2], true));
+        crate::tab_strip::sync(&window, &controller.borrow());
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(2), Silent, true),
+                (id(0), Playing, false),
+                (id(1), Silent, false)
+            ]
+        );
+
+        // Muting a silent pinned tab shows it: the button stays to unmute it.
+        window.invoke_toggle_tab_muted(id(2));
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(2), Muted, true),
+                (id(0), Playing, false),
+                (id(1), Silent, false)
+            ]
+        );
+
+        // A tab that plays and is muted shows Muted; unmuted it plays again.
+        window.invoke_toggle_tab_muted(id(0));
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(2), Muted, true),
+                (id(0), Muted, false),
+                (id(1), Silent, false)
+            ]
+        );
+        window.invoke_toggle_tab_muted(id(0));
+        assert_eq!(
+            strip_audio(&window),
+            [
+                (id(2), Muted, true),
+                (id(0), Playing, false),
+                (id(1), Silent, false)
+            ]
+        );
     }
 }

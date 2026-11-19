@@ -76,6 +76,7 @@ mod signals;
 mod site_security;
 #[cfg(target_os = "macos")]
 mod system_proxy;
+mod tab_strip; // tabs-plus
 mod tab_switch_frame;
 mod ui_sync;
 
@@ -271,6 +272,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         options.answer_permission_prompts,
     );
+    tab_strip::connect(&window, Rc::clone(&controller)); // tabs-plus
     quit::quit_when_the_window_is_closed(&window);
     bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
     // media-session lane: system Now Playing and power assertions only in interactive launches.

@@ -31,6 +31,8 @@ pub use browser::{
 // media-capture
 pub use capture::CaptureAccess;
 pub use controller::{BrowserController, CloseTabOutcome};
+// tabs-plus
+pub use controller::{PinnedCloseOutcome, tab_matches_query};
 pub use controls::{
     ContextMenuAction, ContextMenuEntry, ControlAnswer, ControlId, ControlRect, ControlRequest,
     Rgb, SelectEntry, SelectOption,

@@ -33,6 +33,13 @@ pub(crate) fn connect_ui_callbacks(
             return;
         };
 
+        // tabs-plus: a navigation from anywhere ends the address draft; text that could not be
+        // opened stays for the user to fix.
+        if result.is_ok() {
+            window.invoke_accept_address_draft();
+        } else {
+            window.invoke_keep_address_draft();
+        }
         if let Err(error) = result {
             let tab_id = navigate_controller.borrow().active_tab_id();
             navigate_controller.borrow_mut().handle_event(
@@ -56,6 +63,7 @@ pub(crate) fn connect_ui_callbacks(
             .borrow_mut()
             .queue_command(BrowserCommand::GoBack);
         if let Some(window) = back_window.upgrade() {
+            window.invoke_accept_address_draft(); // tabs-plus
             window.window().request_redraw();
         }
     });
@@ -68,6 +76,7 @@ pub(crate) fn connect_ui_callbacks(
             .borrow_mut()
             .queue_command(BrowserCommand::GoForward);
         if let Some(window) = forward_window.upgrade() {
+            window.invoke_accept_address_draft(); // tabs-plus
             window.window().request_redraw();
         }
     });
@@ -80,6 +89,7 @@ pub(crate) fn connect_ui_callbacks(
             .borrow_mut()
             .queue_command(BrowserCommand::Reload);
         if let Some(window) = reload_window.upgrade() {
+            window.invoke_accept_address_draft(); // tabs-plus
             window.window().request_redraw();
         }
     });
@@ -233,5 +243,55 @@ mod tests {
         }
 
         assert_eq!(consumed, vec![true, false]);
+    }
+
+    // tabs-plus
+    /// A suggestion, the history window, Home and bookmarks navigate without the field's
+    /// Return; Back, Forward and Reload too. After any of them the field follows the page again.
+    #[test]
+    fn navigating_any_other_way_ends_the_address_draft() {
+        use std::cell::{Cell, RefCell};
+        use std::rc::Rc;
+
+        use mercury_ui::MainWindow;
+        use talaria_core::{BrowserController, BrowserEvent};
+
+        crate::settings::tests::init_slint();
+        let window = MainWindow::new().expect("the main window can be created");
+        let controller = Rc::new(RefCell::new(BrowserController::default()));
+        super::connect_ui_callbacks(&window, Rc::clone(&controller), Rc::new(Cell::new(false)));
+        let tab = controller.borrow().active_tab_id();
+        let commit = |url: &str| {
+            controller.borrow_mut().handle_event(
+                tab,
+                BrowserEvent::AddressChanged {
+                    url: url.to_owned(),
+                },
+            );
+            crate::ui_sync::sync_ui(&window, &controller.borrow());
+        };
+        commit("https://a.test/");
+
+        // The user leaves text in the field, which then loses focus.
+        window.set_address("exa".into());
+        window.invoke_navigate("https://example.test/".into());
+        commit("https://example.test/");
+        assert_eq!(window.get_address(), "https://example.test/");
+
+        window.set_address("half typed".into());
+        window.invoke_go_back();
+        commit("https://a.test/");
+        assert_eq!(window.get_address(), "https://a.test/");
+
+        window.set_address("half typed".into());
+        window.invoke_reload();
+        commit("https://a.test/#reloaded");
+        assert_eq!(window.get_address(), "https://a.test/#reloaded");
+
+        // Return on text that is no address (no search engine here): the text stays to fix.
+        window.set_address("not an address".into());
+        window.invoke_navigate("not an address".into());
+        crate::ui_sync::sync_ui(&window, &controller.borrow());
+        assert_eq!(window.get_address(), "not an address");
     }
 }

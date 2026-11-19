@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 use std::cell::Cell;
 
-use mercury_ui::{BrowserTab, MainWindow, WebViewCursor, WebViewPointerButton};
-use slint::{ComponentHandle, Image, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel};
+use mercury_ui::{MainWindow, WebViewCursor, WebViewPointerButton};
+use slint::{ComponentHandle, Image, Rgba8Pixel, SharedPixelBuffer};
 use talaria_core::{BrowserController, LoadState, PageIcon, PointerButton, PointerCursor, TabId};
 
 thread_local! {
@@ -60,9 +60,18 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     let tab_changed = SYNCED_TAB.with(|synced| synced.tab_changed(controller.active_tab_id()));
     let shown_address = crate::site_security::display_address(state.url()); // site-security
     window.set_committed_address(shown_address.as_str().into());
-    if let Some(address) =
-        address_bar_update(&shown_address, window.get_address_has_focus(), tab_changed)
-    {
+    // tabs-plus: a draft the user typed survives syncs until Return, Escape or a tab switch
+    let (text, synced) = (window.get_address(), window.get_synced_address());
+    let draft = AddressField {
+        text: &text,
+        synced: &synced,
+    };
+    if let Some(address) = address_bar_update(
+        &shown_address,
+        window.get_address_has_focus(),
+        tab_changed,
+        &draft,
+    ) {
         window.invoke_reset_address(address.into());
     }
     // tabs: a tab opened by a page never shows the new-tab page
@@ -83,35 +92,8 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
             .into(),
     );
 
-    let active_tab_id = controller.active_tab_id();
-    let mut active_tab_index = 0;
-    let tabs = controller
-        .tabs()
-        .enumerate()
-        .map(|(index, tab)| {
-            let state = tab.state();
-            if tab.id() == active_tab_id {
-                active_tab_index = index;
-            }
-            let (icon, has_icon) = match state.page_icon() {
-                Some(icon) => (slint_image_from_page_icon(icon), true),
-                None => (Image::default(), false),
-            };
-
-            BrowserTab {
-                title: state.page_title().into(),
-                icon,
-                has_icon,
-                active: tab.id() == active_tab_id,
-                loading: matches!(state.load_state(), LoadState::Loading),
-                // media-session lane
-                audio: crate::media_session::tab_audio_state(state.audio_indicator()),
-            }
-        })
-        .collect::<Vec<_>>();
-    window.set_tabs(ModelRc::new(VecModel::from(tabs)));
-    window.set_active_tab_index(i32::try_from(active_tab_index).unwrap_or(i32::MAX));
-    window.invoke_reveal_active_tab();
+    // tabs-plus: the strip's rows are updated in place (pinned tabs, ids, addresses)
+    crate::tab_strip::sync(window, controller);
 
     // settings-ui: the new-tab hint names the chosen search engine.
     let new_tab_hint = crate::settings::new_tab_hint(&window.get_search_engine_name());
@@ -165,13 +147,31 @@ fn active_page_area(controller: &BrowserController) -> PageArea {
     )
 }
 
-/// What the address field should show. `None` means leave the user's text alone.
+/// The address field's text, and what the application last wrote into it (`synced-address`).
+pub(crate) struct AddressField<'a> {
+    pub(crate) text: &'a str,
+    pub(crate) synced: &'a str,
+}
+
+impl AddressField<'_> {
+    /// The user typed something that is neither what was last synced nor the committed address.
+    fn is_draft(&self, committed: &str) -> bool {
+        self.text != self.synced && self.text != committed
+    }
+}
+
+/// What the address field should show. `None` means leave the user's text alone: while the
+/// field has focus, or while it holds a draft (until Return, Escape or a tab switch).
 pub(crate) fn address_bar_update(
     committed: &str,
     field_has_focus: bool,
     tab_changed: bool,
+    field: &AddressField<'_>,
 ) -> Option<String> {
-    (tab_changed || !field_has_focus).then(|| committed.to_owned())
+    if tab_changed {
+        return Some(committed.to_owned());
+    }
+    (!field_has_focus && !field.is_draft(committed)).then(|| committed.to_owned())
 }
 
 fn single_line(text: &str) -> String {
@@ -285,26 +285,79 @@ mod tests {
         assert_eq!(web_view_cursor(PointerCursor::None), WebViewCursor::None);
     }
 
+    /// A field holding what was last synced: no draft.
+    const IDLE: AddressField<'static> = AddressField {
+        text: "https://old.test/",
+        synced: "https://old.test/",
+    };
+
+    // tabs-plus
+    #[test]
+    fn a_draft_survives_syncs_after_the_field_loses_focus() {
+        let draft = AddressField {
+            text: "rust slint",
+            synced: "https://a.test/",
+        };
+        // The page commits a new address while the user's text waits (focus elsewhere).
+        assert_eq!(
+            address_bar_update("https://a.test/next", false, false, &draft),
+            None
+        );
+        // A tab switch replaces it.
+        assert_eq!(
+            address_bar_update("https://b.test/", false, true, &draft),
+            Some("https://b.test/".to_owned())
+        );
+    }
+
+    #[test]
+    fn after_return_or_escape_the_field_follows_the_page_again() {
+        // Return: the accepted text is what was last synced.
+        let accepted = AddressField {
+            text: "rust slint",
+            synced: "rust slint",
+        };
+        assert_eq!(
+            address_bar_update("https://search.test/?q=rust+slint", false, false, &accepted),
+            Some("https://search.test/?q=rust+slint".to_owned())
+        );
+        // Escape: the field shows the committed address.
+        let restored = AddressField {
+            text: "https://a.test/",
+            synced: "https://old.test/",
+        };
+        assert_eq!(
+            address_bar_update("https://a.test/", false, false, &restored),
+            Some("https://a.test/".to_owned())
+        );
+    }
+
     #[test]
     fn address_is_written_when_the_field_is_idle() {
         assert_eq!(
-            address_bar_update("https://a.test/", false, false),
+            address_bar_update("https://a.test/", false, false, &IDLE),
             Some("https://a.test/".to_owned())
         );
     }
 
     #[test]
     fn address_is_left_alone_while_the_user_is_typing() {
-        assert_eq!(address_bar_update("https://a.test/", true, false), None);
+        assert_eq!(
+            address_bar_update("https://a.test/", true, false, &IDLE),
+            None
+        );
     }
 
     #[test]
     fn tab_change_overrides_typing() {
         assert_eq!(
-            address_bar_update("https://b.test/", true, true),
+            address_bar_update("https://b.test/", true, true, &IDLE),
             Some("https://b.test/".to_owned())
         );
-        assert_eq!(address_bar_update("", false, true), Some(String::new()));
+        assert_eq!(
+            address_bar_update("", false, true, &IDLE),
+            Some(String::new())
+        );
     }
 
     #[test]
@@ -319,7 +372,7 @@ mod tests {
 
         assert!(!tab_changed);
         assert_eq!(
-            address_bar_update("https://pop.test/", true, tab_changed),
+            address_bar_update("https://pop.test/", true, tab_changed, &IDLE),
             None
         );
         // A switch the user makes afterwards replaces the draft as usual.
