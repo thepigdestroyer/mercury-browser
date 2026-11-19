@@ -82,6 +82,8 @@ The macOS menu bar cannot be opened without input. To read it back, use the diag
 
 Each Mercury-specific upstream regression needs a focused test close to the patch. The `gaol` shared-memory test protects the `memfd` and `ftruncate` behavior that originally killed isolated Servo children with `SIGXFSZ`.
 
+The vendored Servo crates are not workspace members, so `make test` and `cargo test --workspace` do not run their own unit tests. `make vendored-tests` runs the ones that need neither GStreamer nor a window (`servo-config`, `stylo_static_prefs`, `servo-embedder-traits`, `servo-constellation-traits`: the preferences, the Stylo preference bridge and the message types) in the light build pool, and the `Fast checks` jobs of CI run it. The ones that build the engine are run by hand with `RUST_TEST_THREADS=2` on a Servo upgrade (see [Re-vendor on a Servo upgrade](vendored-patches.md#re-vendor-on-a-servo-upgrade)): `cargo test --release -p servo-net --lib mercury` (the log redaction and the SVG nesting guard), `-p servo-script --lib`, `-p servo-webgl --lib` and `-p servo --lib mercury` (message delivery). The behaviour of the backports is checked with the pages in `tests/pages/` in a real run: `compat-features.html`, `compat-editing.html`, `webgl2-textures.html`, `svg-deep-nesting.html` and `notification-no-icon.html`, each printing `PASS`, `FAIL` or `SKIP` lines.
+
 ## Manual browser checks
 
 Automated runs on the shared development Mac never synthesise keyboard or mouse input and never take focus. They use `--screenshot`, which captures the window once the page has loaded and exits, or `--background`:

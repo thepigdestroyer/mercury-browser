@@ -83,6 +83,34 @@ On macOS and Linux, `talaria-servo` turns on Servo's `media-gstreamer` feature, 
 
 At the top of `main`, `media_isolation.rs` points GStreamer's registry and plugin paths at the application's own files, and `media_buffers.rs` gives GStreamer a private, locked directory for its download buffers that is removed at quit. [Development setup](setup.md#macos-media-set-up-gstreamer) has the details. WebRTC and `getUserMedia` are off.
 
+## Engine preferences
+
+Servo's preferences (`third_party/servo-config/prefs.rs`) reproduce Servo 0.8 by default. The values Mercury ships are chosen in one place, `crates/talaria-servo/src/engine_prefs.rs`, and applied for every launch by `mercury_preferences` in `runtime.rs`: nothing in it depends on the experimental-features switch, so `--disable-experimental-web-features` keeps them. `EXPERIMENTAL_PREFS` in `runtime.rs` (copied from servoshell) is the separate list that switch controls; `EXCLUDED_EXPERIMENTAL_PREFS` holds the entries of that list that Mercury never enables (clipboard, WebGPU, container queries).
+
+- **One batch of new preferences.** The preferences the first two waves of engine work need (media source, encrypted media, picture-in-picture, WebCodecs, display capture, autoplay policy, the WebRTC address policy, Global Privacy Control, the SameSite default, Web Locks, ...) were added to Servo's struct in one block, headed `// Mercury (K0)`, so that no lane edits that hot file again. A new preference has no reader in Servo until the lane that owns it adds one in its own file. Every name must exist: `Preferences::set_value` panics on an unknown name, and the tests in `engine_prefs.rs` check each one.
+- **Product values set now:** `privacy_gpc_enabled` on, `media_autoplay_policy` `"block-audible"`, `:nth-child(of)` on, composition events, adopted style sheets and `window.visualViewport` on (web compatibility: sites and frameworks feature-detect them). Everything else is **pinned off** in `PINNED_OFF` by a test: the media feature switches, `dom_cookiestore_enabled` (it would read and write the cookie jar past the third-party rule and Global Privacy Control), service workers and Web Animations (stubs in 0.8), the accessibility tree and container queries (`@supports` would report what the engine drops).
+- **A lane turns a feature on in `engine_prefs.rs` only:** set the preference in `apply` and delete its line from `PINNED_OFF` (the test that pins the list then stops asserting it). No Servo crate changes.
+- **Stylo preferences by name.** Servo forwards only seven Stylo preferences, each by hand. `Preferences::stylo_prefs` is a comma-separated `name=true|false` list that `servo::prefs::set` applies to Stylo through `stylo_static_prefs::set_bool` (`servo-config/mercury_stylo.rs`, `stylo_static_prefs/mercury_bridge.rs`). Mercury's list is `STYLO_PREFS` in `engine_prefs.rs`: add a line there to turn a Stylo feature on. A name Stylo does not know is ignored by the engine, so a test asserts there is none (`servo::prefs::apply_stylo_prefs` returns the unknown names). A name that is removed later keeps its last value in a running process; the list sets, it does not reset. Only `layout.css.nth-child-of.enabled` is on; a lane turns on each other Stylo preference when it implements the layout the feature needs.
+
+Check a change with `tests/pages/compat-features.html`, which prints a `PASS` or `FAIL` line for each of these web-compatibility switches.
+
+## Messages from the engine to a lane
+
+Every lane that needs something from the engine (accessibility, media, the network, page features, text input) would otherwise add a variant to Servo's shared message enums and edit `servo.rs`, which rebuilds Servo and conflicts with every other lane. The patched Servo crates carry one variant per channel instead, and one file per lane behind it:
+
+| Channel | Variant | Lane files |
+| --- | --- | --- |
+| engine to embedder | `EmbedderMsg::Mercury(Option<WebViewId>, MercuryEmbedderMsg)` | `third_party/servo-embedder-traits/mercury/{core,a11y,media,net,page,text}.rs` |
+| constellation to embedder | `ConstellationToEmbedderMsg::Mercury(..)` (same payload) | the same files |
+| script to constellation | `ScriptToConstellationMessage::Mercury(MercuryScriptToConstellation)` | `third_party/servo-constellation-traits/mercury/{core,a11y,media,page,text}.rs` (`<Lane>ScriptMsg`) |
+| embedder to constellation | `EmbedderToConstellationMessage::Mercury(MercuryEmbedderToConstellation)` | the same files (`<Lane>EmbedderMsg`) |
+
+In the embedder, `WebViewDelegate::notify_mercury_message` (for a message whose web view still exists) and `ServoDelegate::notify_mercury_message` (otherwise) are defaulted no-ops; `runtime.rs` forwards both to `mercury_messages::handle`, which has one arm per lane. In the constellation, `servo-constellation/mercury/mod.rs` routes each message to one function per lane file. `Servo::send_mercury_message` sends an embedder-to-constellation message.
+
+**To add a message, a lane edits only its own files:** the variants in its lane file in `servo-embedder-traits` or `servo-constellation-traits` (the enums start empty, `Serialize` and `Deserialize` because `EmbedderMsg` and `ScriptToConstellationMessage` cross processes); its handler in `servo-constellation/mercury/<lane>.rs` (an `impl Constellation` function that can use the constellation's private state) and, for the embedder, its arm in `crates/talaria-servo/src/mercury_messages.rs` (replace the call in the lane's arm; the arms are separated by comment lines so two lanes never touch adjacent lines). The `Debug` output of every type in these directories is the variant path only: **a page's data must never reach a log through a derive**, so a lane keeps that rule for its own types. `size_of::<EmbedderMsg>()` is 248 bytes with the scaffold, as in 0.8.0, and a test allows one pointer of growth.
+
+`CoreMsg::Probe(u64)` and its constellation twins exist only so that the types can be built in tests; the engine never sends them.
+
 ## Process isolation
 
 Servo runs each page in a separate content process (`multiprocess: true`). The executable recognises Servo's content-process arguments in `main`, before it starts the interface, graphics, media or any other thread, and hands over to Servo's content-process entry point (`talaria-servo/src/content_process.rs`). A content process starts one thread of its own first: a watchdog that ends it within a second of the browser process's death. Content processes ignore `SIGINT`, `SIGHUP` and `SIGTERM` sent to the whole process group, so they stay alive while the browser shuts Servo down in order.
