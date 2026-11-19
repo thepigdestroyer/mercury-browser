@@ -18,6 +18,12 @@
 //!   runs Slint or waits on its event loop: both also run inside AppKit's terminate callback.
 //! - New-tab pages are saved as `about:newtab` (10). A `NewerVersion` refusal stops saving for
 //!   the rest of the run and tells the user once (11).
+//! - Tab groups travel with the tabs: a saved tab names its group, the window saves the groups
+//!   (name, colour, key, in ring order) and the group id counter, and a restore makes the groups
+//!   again once their tabs are open (`model::restore_planned_groups`). "Reopen closed tab" puts a
+//!   tab back in its group, making the group again if it is gone, and brings back the tabs that
+//!   were closed together with their group in one go. The group dock's and the corner dial's saved
+//!   state is carried through a save unchanged.
 
 mod model;
 mod saver;
@@ -43,8 +49,9 @@ use crate::settings::SettingsHandle;
 use crate::shortcuts::Platform;
 use crate::ui_sync::sync_ui;
 use model::{
-    RestorePlan, SavedOrigin, SessionTracker, WindowGeometry, duplicate_of_active, observed_bounds,
-    place_window, plan_restore, recovery_label, reopen_index, restored_tab, saved_origin,
+    RestorePlan, SavedLayout, SavedOrigin, SessionTracker, WindowGeometry, duplicate_of_active,
+    observed_bounds, place_window, plan_restore, recovery_label, reopen_closed_run,
+    restore_planned_groups, saved_origin,
 };
 use saving::{Resolve, SaveState, Written};
 
@@ -118,6 +125,11 @@ pub(crate) fn start(
         } else {
             previous = Some(last.snapshot.clone());
         }
+    }
+    if let Some(saved) = geometry_from {
+        // The group dock and the corner dial are carried through unchanged (nothing sets them
+        // yet): a save writes back what was loaded, whether or not the window is placed here.
+        tracker.set_layout(SavedLayout::of(saved));
     }
     if let Some(saved) = geometry_from
         && !window_size_given
@@ -228,21 +240,19 @@ fn peek_session(f: impl FnOnce(&Session) -> bool) -> bool {
     })
 }
 
-/// "Reopen closed tab": the most recently closed tab, back at its old place, selected.
+/// "Reopen closed tab": the most recently closed tab, back at its old place, selected. A tab that
+/// was in a group goes back into it (made again if it is gone); the tabs closed together with
+/// their group come back together.
 pub(crate) fn reopen_closed_tab(window: &MainWindow, controller: &RefCell<BrowserController>) {
     let reopened = with_session(|session| {
         // A tab closed since the last look is the one to bring back.
         session.observe_tabs(&controller.borrow(), now_ms());
-        let closed = session.tracker.pop_closed()?;
-        session.saving.mark_dirty();
-        let mut controller = controller.borrow_mut();
-        let index = reopen_index(&closed, controller.tabs().len());
-        match controller.open_restored_tab(index, &restored_tab(&closed.tab)) {
-            Ok(tab_id) => {
-                controller.select_tab(tab_id);
-            }
-            Err(error) => log::warn!("could not reopen a closed tab: {error}"),
+        let run = session.tracker.pop_closed_run();
+        if run.is_empty() {
+            return None;
         }
+        session.saving.mark_dirty();
+        reopen_closed_run(&mut controller.borrow_mut(), &run, SystemTime::now());
         Some(())
     });
     if reopened.flatten().is_some() {
@@ -383,6 +393,14 @@ fn apply_plan(
     if !opened.iter().any(Option::is_some) {
         return;
     }
+    // The groups are made once their tabs are open, before the blank start tab goes.
+    restore_planned_groups(
+        &mut controller,
+        &opened,
+        &plan.groups,
+        plan.next_group_id,
+        SystemTime::now(),
+    );
     if let Some(select) = plan.select {
         // The planned tab, or the nearest that opened.
         let tab_id = opened[select..]
