@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+list | Page context menu | |
+list-item | Back | | selected, item 0 of 8
+list-item | Forward | | disabled, unselected, item 1 of 8
+list-item | Reload | | unselected, item 2 of 8
+list-item | Copy | | unselected, item 4 of 8
+list-item | Select all | | unselected, item 5 of 8
+list-item | Save page as… | | unselected, item 7 of 8

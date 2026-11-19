@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+groupbox | Colour picker from paint.example | |
+button | #000000 | | item 0 of 16
+button | #555555 | | item 1 of 16
+button | #aaaaaa | | item 2 of 16
+button | #ffffff | | item 3 of 16
+button | #e53935 | | item 4 of 16
+button | #fb8c00 | | item 5 of 16
+button | #fdd835 | | item 6 of 16
+button | #43a047 | | item 7 of 16
+button | #00897b | | item 8 of 16
+button | #00acc1 | | item 9 of 16
+button | #1e88e5 | | item 10 of 16
+button | #3949ab | | item 11 of 16
+button | #8e24aa | | item 12 of 16
+button | #d81b60 | | item 13 of 16
+button | #6d4c41 | | item 14 of 16
+button | #546e7a | | item 15 of 16
+slider | Hue | Degrees round the colour wheel, from red at 0 | value "180"
+slider | Lightness | Percent, from black at 0 to white at 100 | value "50"
+text | Colour value #1e88e5 | |
+button | Cancel | |
+button | Done | |
