@@ -22,6 +22,7 @@ STRICT="$RESOURCES/entitlements.plist"
 ADHOC="$RESOURCES/entitlements-adhoc.plist"
 JIT="com.apple.security.cs.allow-jit=<true/> com.apple.security.cs.allow-unsigned-executable-memory=<true/>"
 NO_VALIDATION="com.apple.security.cs.disable-library-validation=<true/>"
+DEVICES="com.apple.security.device.audio-input=<true/> com.apple.security.device.camera=<true/>"
 LOCATION="com.apple.security.personal-information.location=<true/>"
 LOCATION_WORDING="Websites you allow can ask for your location."
 failures=0
@@ -80,9 +81,9 @@ check "--identity without a value is refused" "bundle: error: --identity needs a
     "$(code=0; output="$(scripts/macos/bundle.sh --identity 2>&1)" || code=$?; printf '%s (exit %s)' "$output" "$code")"
 
 # ── What the entitlement files grant ──────────────────────────────────────
-check "strict entitlements grant only the JIT keys and location" "$JIT $LOCATION " \
+check "strict entitlements grant only the JIT, capture-device and location keys" "$JIT $DEVICES $LOCATION " \
     "$(plist_grants "$STRICT" | tr '\n' ' ')"
-check "ad-hoc entitlements add only library validation" "$JIT $NO_VALIDATION $LOCATION " \
+check "ad-hoc entitlements add only library validation" "$JIT $NO_VALIDATION $DEVICES $LOCATION " \
     "$(plist_grants "$ADHOC" | tr '\n' ' ')"
 
 # ── Location usage strings ────────────────────────────────────────────────
@@ -100,8 +101,8 @@ readback() {
     for key in "$@"; do printf '<key>%s</key><true/>' "$key"; done
     printf '</dict></plist>\n'
 }
-ADHOC_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation com.apple.security.personal-information.location)"
-STRICT_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.personal-information.location)"
+ADHOC_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.cs.disable-library-validation com.apple.security.device.camera com.apple.security.device.audio-input com.apple.security.personal-information.location)"
+STRICT_READBACK="$(readback com.apple.security.cs.allow-jit com.apple.security.cs.allow-unsigned-executable-memory com.apple.security.device.camera com.apple.security.device.audio-input com.apple.security.personal-information.location)"
 check "read-back ad-hoc entitlements match the ad-hoc file" ok \
     "$(status entitlements_match "$ADHOC" <<<"$ADHOC_READBACK")"
 check "read-back strict entitlements match the strict file" ok \

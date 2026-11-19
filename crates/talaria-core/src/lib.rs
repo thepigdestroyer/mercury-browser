@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 mod address;
 mod browser;
+// media-capture
+mod capture;
 mod controller;
 mod controls;
 mod cursor;
@@ -23,6 +25,8 @@ pub use browser::{
     BrowserCommand, BrowserEvent, BrowserState, DownloadOffer, DownloadSignal, LoadState,
     PointerButton, PointerButtonAction, display_origin, placeholder_title,
 };
+// media-capture
+pub use capture::CaptureAccess;
 pub use controller::{BrowserController, CloseTabOutcome};
 pub use controls::{
     ContextMenuAction, ContextMenuEntry, ControlAnswer, ControlId, ControlRect, ControlRequest,

@@ -14,12 +14,15 @@
   between at signs below: VERSION, the workspace version from Cargo.toml, and
   MINIMUM_SYSTEM_VERSION, MACOSX_DEPLOYMENT_TARGET from .cargo/config.toml.
 
+  Camera and microphone: websites can ask for them (navigator.mediaDevices,
+  on macOS), so the two usage descriptions below are required; macOS ends a
+  process that opens either device without one.
   Location: macOS shows NSLocationUsageDescription (and, on newer releases,
   NSLocationWhenInUseUsageDescription) in its prompt the first time a page the
-  user allowed in Mercury asks for its position. There are deliberately no
-  camera, microphone or Bluetooth usage descriptions: those web features are
-  off. Add the matching string here in the same change that turns one on, or
-  macOS will end the process when a page first uses it.
+  user allowed in Mercury asks for its position. There is deliberately no
+  Bluetooth usage description: that web feature is off. Add the matching
+  string here in the same change that turns one on, or macOS will end the
+  process when a page first uses it.
 -->
 <plist version="1.0">
 <dict>
@@ -55,6 +58,10 @@
 	<string>NSApplication</string>
 	<key>NSSupportsAutomaticGraphicsSwitching</key>
 	<true/>
+	<key>NSCameraUsageDescription</key>
+	<string>Websites you allow can use your camera.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Websites you allow can use your microphone.</string>
 	<key>NSLocationUsageDescription</key>
 	<string>Websites you allow can ask for your location.</string>
 	<key>NSLocationWhenInUseUsageDescription</key>

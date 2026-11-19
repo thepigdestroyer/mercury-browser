@@ -100,10 +100,14 @@ servo-embedder-traits = { path = "third_party/servo-embedder-traits" }
 servo-layout = { path = "third_party/servo-layout" }
 servo-layout-api = { path = "third_party/servo-layout-api" }
 servo-media = { path = "third_party/servo-media" }
+servo-media-gstreamer = { path = "third_party/servo-media-gstreamer" }
 servo-media-player = { path = "third_party/servo-media-player" }
+servo-media-streams = { path = "third_party/servo-media-streams" }
 servo-media-webrtc = { path = "third_party/servo-media-webrtc" }
 servo-net = { path = "third_party/servo-net" }
 servo-net-traits = { path = "third_party/servo-net-traits" }
+servo-script = { path = "third_party/servo-script" }
+servo-script-bindings = { path = "third_party/servo-script-bindings" }
 servo-storage = { path = "third_party/servo-storage" }
 servo-storage-traits = { path = "third_party/servo-storage-traits" }
 servo-webgl = { path = "third_party/servo-webgl" }

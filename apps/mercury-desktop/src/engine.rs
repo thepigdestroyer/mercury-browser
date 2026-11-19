@@ -223,6 +223,12 @@ pub(crate) fn engine_busy() -> bool {
     })
 }
 
+/// media-capture: has the engine take the controller's queued commands soon, even while the
+/// window is covered and renders nothing (a redraw request alone would then not pump it).
+pub(crate) fn request_engine_pump() {
+    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
 fn pump_after_wake() {
     let _slint = crate::callback_scope::InSlintCallback::enter();
     let Some(engine) = ENGINE.with(|current| current.borrow().upgrade()) else {

@@ -108,12 +108,30 @@ path = "components/media/servo-media"
 license = "MPL-2.0"
 
 [[crate]]
+name = "servo-media-gstreamer"
+version = "0.8.0"
+checksum = "7bb5bc60a53436a224a57f23059a494bf84296119f1c6e8f5bbba8a2af3fa96f"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/media/backends/gstreamer"
+license = "MPL-2.0"
+
+[[crate]]
 name = "servo-media-player"
 version = "0.8.0"
 checksum = "fd072c0c9456f27cd17e9b3a752bf3a6e570468e806bc7d085d1a521e76f9083"
 repository = "https://github.com/servo/servo"
 commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
 path = "components/media/player"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-media-streams"
+version = "0.8.0"
+checksum = "6a36e094d79e768473b699e84513547521476529f5b2253dad9edf3a337dd116"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/media/streams"
 license = "MPL-2.0"
 
 [[crate]]
@@ -142,6 +160,24 @@ repository = "https://github.com/servo/servo"
 commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
 path = "components/shared/net"
 license = "MPL-2.0"
+
+[[crate]]
+name = "servo-script"
+version = "0.8.0"
+checksum = "b6c3e52be4165b3f98b992f384156b049d30b769004a96cf52903ea27cd32f9b"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/script"
+license = "MPL-2.0"
+
+[[crate]]
+name = "servo-script-bindings"
+version = "0.8.0"
+checksum = "75f9bbcb6eb03e96610c1cbd9e71a26869874178e4f109a9a1c3f810bce88f81"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/script_bindings"
+license = "MPL-2.0 AND BSD-3-Clause"
 
 [[crate]]
 name = "servo-storage"

@@ -8,6 +8,8 @@ export { ChromePalette, ChromeTheme } from "theme/chrome-palette.slint";
 import { SettingsNotice } from "settings/settings-notice.slint";
 export { SearchEngineRow, SettingsWindow } from "settings/settings-window.slint";
 import { PageRequestSheet, PageRequestStyle, PageRequestView, PermissionPrompt } from "dialogs/page-requests.slint";
+// media-capture
+import { CaptureBubble, CaptureButton, CaptureTabMark, CaptureView } from "capture/capture-indicator.slint";
 // controls
 import { ColorPicker, ContextMenuPopup, ContextMenuRow, PopupBackdrop, SelectPopup, SelectPopupRow } from "controls/controls.slint";
 import { PopUpBlockedIndicator } from "tabs/pop-up-blocked.slint";
@@ -123,6 +125,8 @@ component TabIcon inherits Rectangle {
 component BrowserTabButton inherits Rectangle {
     in property <BrowserTab> tab;
     in property <bool> closable;
+    // media-capture: what the tab's page may capture.
+    in property <CaptureView> capture;
     callback selected;
     callback closed;
     // media-session lane
@@ -171,6 +175,16 @@ component BrowserTabButton inherits Rectangle {
             font-weight: root.tab.active ? 550 : 450;
             overflow: elide;
             vertical-alignment: center;
+        }
+
+        // media-capture
+        if root.capture.camera || root.capture.microphone: VerticalLayout {
+            alignment: center;
+
+            CaptureTabMark {
+                camera: root.capture.camera;
+                microphone: root.capture.microphone;
+            }
         }
 
         if root.tab.loading: Rectangle {
@@ -586,6 +600,18 @@ export component MainWindow inherits Window {
     callback page-request-answered(int, bool, string, string, bool);
     // --- end dialogs ---
 
+    // --- media-capture ---
+    // What the active tab's page may capture (heading empty when nothing), and the same for
+    // every tab, in the order of `tabs`.
+    in property <CaptureView> capture;
+    in property <[CaptureView]> capture-tabs;
+    // The bubble under the capture button; the browser closes it when the page loses access.
+    in-out property <bool> capture-bubble-open: false;
+    property <length> capture-anchor-x: 0px;
+    // Stop: take the access away and reload the page.
+    callback capture-stop();
+    // --- end media-capture ---
+
     // --- menus ---
     // The browser menu's items above and below its zoom row (built in apps/mercury-desktop/src/menus).
     in property <[BrowserMenuEntry]> browser-menu-top-entries;
@@ -681,6 +707,8 @@ export component MainWindow inherits Window {
                             width: 184px;
                             tab: tab;
                             closable: true;
+                            // media-capture
+                            capture: root.capture-tabs[index];
 
                             selected => {
                                 root.select-tab(index);
@@ -834,6 +862,19 @@ export component MainWindow inherits Window {
                     }
                     dismiss => {
                         root.dismiss-pop-up-blocked();
+                    }
+                }
+
+                // media-capture: the active tab's page may use the camera or microphone.
+                if root.capture.heading != "": VerticalLayout {
+                    alignment: center;
+
+                    CaptureButton {
+                        capture: root.capture;
+                        clicked => {
+                            root.capture-anchor-x = self.absolute-position.x + self.width / 2 - web-view-area.absolute-position.x;
+                            root.capture-bubble-open = !root.capture-bubble-open;
+                        }
                     }
                 }
 
@@ -1240,12 +1281,25 @@ export component MainWindow inherits Window {
                 }
             }
 
+            // media-capture
+            if root.capture-bubble-open && root.capture.heading != "": CaptureBubble {
+                capture: root.capture;
+                anchor-x: root.capture-anchor-x;
+                stop => {
+                    root.capture-bubble-open = false;
+                    root.capture-stop();
+                }
+                closed => {
+                    root.capture-bubble-open = false;
+                }
+            }
+
             // dialogs
             if root.page-request.style == PageRequestStyle.permission: PermissionPrompt {
                 request: root.page-request;
                 anchor-x: address-input.absolute-position.x - 14px - web-view-area.absolute-position.x;
-                answered(id, accepted) => {
-                    root.page-request-answered(id, accepted, "", "", false);
+                answered(id, accepted, checked) => {
+                    root.page-request-answered(id, accepted, "", "", checked);
                 }
             }
 

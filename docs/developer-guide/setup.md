@@ -142,6 +142,7 @@ Notes:
   incomplete `lib`), `dyld: Library not loaded: @rpath/libgst…` before anything else (no `lib`
   at all), or `canPlayType('video/mp4; codecs="avc1.42E01E"')` answering `''` in a page.
 - `make test-media-macos` runs `scripts/macos/test-media.sh`, the tests for these scripts.
+- `make test-capture-macos` checks camera and microphone capture with fake devices only, from a copy of the release build without the real capture plugins; see [Camera and microphone](media-capture.md).
 - `tests/pages/media.html` checks playback without making a sound; serve it with
   `scripts/serve-tests.py` (a loopback server that honours `Range`); see `tests/media/README.md`.
 

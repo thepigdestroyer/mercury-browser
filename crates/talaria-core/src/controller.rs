@@ -5,8 +5,10 @@ use std::time::Duration;
 use crate::address::{AddressResolutionError, NavigationTarget, SearchUrlBuilder, resolve_address};
 use crate::browser::LoadState;
 use crate::browser::{BrowserCommand, BrowserEvent, BrowserState, placeholder_title};
-use crate::page_request::decision_to_remember;
+use crate::page_request::{Answered, decision_to_remember};
 use crate::visits::{NavigationOrigin, VisitTracker, VisitUpdate};
+// media-capture
+use crate::{CaptureAccess, PagePermission};
 use crate::{
     ColorScheme, ControlAnswer, ControlId, ControlRequest, DEFAULT_ZOOM_PERCENT, RestoredTab, Tab,
     TabActivation, TabCommand, TabId, ZOOM_STEPS,
@@ -882,27 +884,42 @@ impl BrowserController {
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
         };
-        let Some((answered, discarded)) = tab.page_requests_mut().answer(id, &reply, now) else {
+        let Some(Answered {
+            answered,
+            discarded,
+            paired,
+        }) = tab.page_requests_mut().answer(id, &reply, now)
+        else {
             return false;
         };
-        let remembered = decision_to_remember(&answered, &reply);
+        let remembered = std::iter::once(&answered)
+            .chain(paired.as_ref())
+            .filter_map(|pending| decision_to_remember(pending, &reply))
+            .collect::<Vec<_>>();
         self.queue_page_request_answers(tab_id, &discarded, PageRequestAnswer::Discard);
+        let answer = reply.into_answer();
         self.queue_command_for(
             tab_id,
             BrowserCommand::AnswerPageRequest {
                 id,
-                answer: reply.into_answer(),
+                answer: answer.clone(),
             },
         );
+        // media-capture: a camera and a microphone request shown together get one answer.
+        if let Some(paired) = &paired {
+            self.queue_page_request_answers(tab_id, &[paired.id()], answer);
+        }
 
-        if let Some((origin, permission, decision)) = remembered {
+        for (origin, permission, decision) in remembered {
             self.permission_decisions
                 .remember(&origin, permission, decision);
             let decided = self
                 .tabs
                 .iter_mut()
                 .map(|tab| {
-                    let ids = tab.page_requests_mut().take_decided(&origin, permission);
+                    let ids = tab
+                        .page_requests_mut()
+                        .take_decided(&origin, permission, decision);
                     (tab.id(), ids)
                 })
                 .collect::<Vec<_>>();
@@ -934,13 +951,20 @@ impl BrowserController {
                 if let Some(answer) =
                     requests.receive(request.clone(), self.permission_decisions.as_ref())
                 {
+                    // media-capture: the other kind of a call a remembered Block refused.
+                    let refused = requests.take_refused_partners();
                     self.queue_page_request_answers(tab_id, &[id], answer);
+                    self.queue_page_request_answers(tab_id, &refused, PageRequestAnswer::Decline);
                 }
             }
             BrowserEvent::PageLoadStarted => {
                 let discarded = requests.start_new_document();
                 self.queue_page_request_answers(tab_id, &discarded, PageRequestAnswer::Discard);
             }
+            // media-capture: a crashed page has no devices any more. A `Failed` load state alone
+            // does not end access: the address bar reports addresses it cannot use that way,
+            // while the page stays and may still be capturing.
+            BrowserEvent::PageCrashed => requests.end_capture(),
             BrowserEvent::LoadStateChanged {
                 state: LoadState::Failed { .. },
             } => {
@@ -1035,5 +1059,62 @@ fn show_loading(tab: &mut Tab, url: String) {
 impl Default for BrowserController {
     fn default() -> Self {
         Self::new(BrowserState::default())
+    }
+}
+
+// media-capture
+impl BrowserController {
+    /// Which capture devices the tab's current page has been allowed to use (for the indicator).
+    pub fn capture_access(&self, tab_id: TabId) -> CaptureAccess {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == tab_id)
+            .map(|tab| tab.page_requests().capture_access())
+            .unwrap_or_default()
+    }
+
+    /// The site (as shown to the user) that was allowed to capture in the tab, if any.
+    pub fn capture_origin(&self, tab_id: TabId) -> Option<String> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == tab_id)?
+            .page_requests()
+            .capture_origin()
+            .map(|origin| origin.label().to_owned())
+    }
+
+    /// Whether the tab's page kept itself from being reloaded after Stop (the user chose Stay
+    /// on its "Reload this page?" prompt): it still has its camera and microphone.
+    pub fn capture_stop_refused(&self, tab_id: TabId) -> bool {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == tab_id)
+            .is_some_and(|tab| tab.page_requests().capture_stop_refused())
+    }
+
+    /// Stop: the site's remembered camera and microphone decisions are forgotten and the page is
+    /// reloaded; the engine releases the devices when the old document is unloaded, and the
+    /// reloaded page has to ask again. The marks stay until the new document starts: the page
+    /// can keep itself from being reloaded (its leave prompt, answered Stay), and then still has
+    /// the devices. Returns false (and does nothing) when the tab's page has no access.
+    pub fn stop_capture(&mut self, tab_id: TabId) -> bool {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return false;
+        };
+        let requests = tab.page_requests_mut();
+        if requests.capture_access().is_empty() {
+            return false;
+        }
+        let origin_key = requests
+            .capture_origin()
+            .and_then(|origin| origin.key().map(str::to_owned));
+        requests.note_capture_stop();
+        if let Some(origin_key) = origin_key {
+            for permission in [PagePermission::Camera, PagePermission::Microphone] {
+                self.permission_decisions.forget(&origin_key, permission);
+            }
+        }
+        self.queue_command_for(tab_id, BrowserCommand::Reload);
+        true
     }
 }

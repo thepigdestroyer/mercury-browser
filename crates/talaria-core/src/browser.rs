@@ -301,6 +301,11 @@ pub enum BrowserEvent {
     PageRequested(PageRequest),
     /// A new document started loading in the tab (not a same-document navigation).
     PageLoadStarted,
+    // media-capture
+    /// The page's content process crashed (sent after the crash's `LoadStateChanged`). Unlike a
+    /// `Failed` load state alone, which also reports an address the browser could not use, it
+    /// means the page is gone.
+    PageCrashed,
     // history
     /// The tab's session history changed (a new document, a fragment change, `pushState` or
     /// `replaceState`, a reload, back or forward, or a subframe navigating): `url` is the
@@ -625,6 +630,8 @@ impl BrowserState {
             BrowserEvent::ExternalLinkRequested(_) => {}
             // dialogs: kept by the tab's page requests, not here.
             BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
+            // media-capture: kept by the tab's page requests.
+            BrowserEvent::PageCrashed => {}
             // history: read by the controller's visit tracker, not shown.
             BrowserEvent::PageCommitted { .. } | BrowserEvent::PageTitleAt { .. } => {}
             // media session

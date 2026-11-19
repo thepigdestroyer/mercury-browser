@@ -124,6 +124,7 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     };
     window.set_content_message(content_message.into());
     crate::page_requests::sync_page_request(window, controller); // dialogs
+    crate::media_capture::sync_capture(window, controller); // media-capture
     // controls
     crate::controls::sync(window, controller);
     // session: every change the window shows may need saving (before the menus read it)

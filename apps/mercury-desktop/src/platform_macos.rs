@@ -71,4 +71,16 @@ mod tests {
         assert!(embedded().contains("<string>mercury-browser</string>"));
         assert!(embedded().contains("<string>io.github.thepigdestroyer.mercury-browser</string>"));
     }
+
+    // media-capture: macOS ends a process that opens the camera or microphone when its
+    // application's Info.plist has no usage description for it.
+    #[test]
+    fn embedded_info_plist_describes_camera_and_microphone_use() {
+        assert!(embedded().contains(
+            "<key>NSCameraUsageDescription</key>\n\t<string>Websites you allow can use your camera.</string>"
+        ));
+        assert!(embedded().contains(
+            "<key>NSMicrophoneUsageDescription</key>\n\t<string>Websites you allow can use your microphone.</string>"
+        ));
+    }
 }

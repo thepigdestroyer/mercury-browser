@@ -1,0 +1,533 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+use std::cell::Cell;
+use std::sync::{Arc, Mutex};
+
+use dom_struct::dom_struct;
+use embedder_traits::AllowOrDeny;
+use js::context::JSContext;
+use js::realm::CurrentRealm;
+use script_bindings::cell::DomRefCell;
+use script_bindings::reflector::reflect_dom_object;
+use servo_base::generic_channel::GenericCallback;
+use servo_media::ServoMedia;
+use servo_media::streams::MediaStreamType;
+use servo_media::streams::capture::{Constrain, ConstrainRange, MediaTrackConstraintSet};
+use servo_media::streams::device_monitor::MediaDeviceKind as ServoMediaDeviceKind;
+use servo_media::streams::registry::{MediaStreamId, get_stream};
+
+use crate::conversions::Convert;
+use crate::dom::bindings::codegen::Bindings::MediaDeviceInfoBinding::MediaDeviceKind;
+use crate::dom::bindings::codegen::Bindings::MediaDevicesBinding::{
+    MediaDevicesMethods, MediaStreamConstraints,
+};
+use crate::dom::bindings::codegen::Bindings::PermissionStatusBinding::{
+    PermissionName, PermissionState,
+};
+use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
+use crate::dom::bindings::codegen::UnionTypes::{
+    BooleanOrMediaTrackConstraints, ClampedUnsignedLongOrConstrainULongRange as ConstrainULong,
+    DoubleOrConstrainDoubleRange as ConstrainDouble,
+};
+use crate::dom::bindings::error::Error;
+use crate::dom::bindings::refcounted::{Trusted, TrustedPromise};
+use crate::dom::bindings::reflector::DomGlobal;
+use crate::dom::bindings::root::{Dom, DomRoot};
+use crate::dom::eventtarget::EventTarget;
+use crate::dom::globalscope::GlobalScope;
+use crate::dom::media::mediadeviceinfo::MediaDeviceInfo;
+use crate::dom::media::mediastream::MediaStream;
+use crate::dom::media::mediastreamtrack::MediaStreamTrack;
+use crate::dom::permissions::{
+    AsyncPermissionRequest, descriptor_permission_state, record_permission_request_result,
+    request_permission_to_use_async,
+};
+use crate::dom::promise::{Promise, RootedPromise};
+
+#[dom_struct]
+pub(crate) struct MediaDevices {
+    eventtarget: EventTarget,
+    /// Mercury: the live tracks that `getUserMedia()` made from a device, and their clones.
+    /// A device is released when its last track stops or when the document goes away.
+    capture_tracks: DomRefCell<Vec<Dom<MediaStreamTrack>>>,
+    /// Mercury: counts `stop_all_capture` calls. A `getUserMedia` call started before the last
+    /// one (the document was unloaded or torn down since) never opens a device, even if a
+    /// permission answer for it arrives late.
+    capture_generation: Cell<u64>,
+}
+
+/// Mercury: one call to `getUserMedia()` waiting for the user's answers. It is shared by the
+/// permission callbacks, which run on the IPC thread and queue a task each.
+struct CaptureRequest {
+    promise: Option<TrustedPromise>,
+    audio: Option<MediaTrackConstraintSet>,
+    video: Option<MediaTrackConstraintSet>,
+    /// `None` while the answer is outstanding; `Some(true)` when not asked for.
+    audio_granted: Option<bool>,
+    video_granted: Option<bool>,
+    /// `MediaDevices::capture_generation` when the call was made.
+    generation: u64,
+}
+
+impl MediaDevices {
+    pub(crate) fn new_inherited() -> MediaDevices {
+        MediaDevices {
+            eventtarget: EventTarget::new_inherited(),
+            capture_tracks: Default::default(),
+            capture_generation: Cell::new(0),
+        }
+    }
+
+    pub(crate) fn new(cx: &mut JSContext, global: &GlobalScope) -> DomRoot<MediaDevices> {
+        reflect_dom_object(cx, Box::new(MediaDevices::new_inherited()), global)
+    }
+
+    /// Mercury: a callback for the embedder's answer to one permission prompt.
+    fn permission_callback(
+        &self,
+        request: Arc<Mutex<CaptureRequest>>,
+        name: PermissionName,
+    ) -> GenericCallback<AllowOrDeny> {
+        let this = Trusted::new(self);
+        let task_source = self
+            .global()
+            .task_manager()
+            .media_element_task_source()
+            .to_sendable();
+        GenericCallback::new(move |response: Result<AllowOrDeny, _>| {
+            let this = this.clone();
+            let request = request.clone();
+            task_source.queue(task!(getusermedia_permission_response: move |cx| {
+                let this = this.root();
+                let stale = request.lock().unwrap().generation != this.capture_generation.get() ||
+                    !this.global().as_window().Document().is_fully_active();
+                let global = this.global();
+                match settle_answer(stale, response.ok(), |answer| {
+                    record_permission_request_result(name, &global, answer)
+                }) {
+                    AnswerOutcome::Stale => this.abort_stale_request(cx, &request),
+                    AnswerOutcome::Settled(state) => this.permission_settled(cx, &request, name, state),
+                }
+            }));
+        })
+        .expect("Could not create callback in script.")
+    }
+
+    /// Mercury: records one answer; rejects on the first refusal, and opens the devices only
+    /// once every requested kind is granted.
+    fn permission_settled(
+        &self,
+        cx: &mut JSContext,
+        request: &Mutex<CaptureRequest>,
+        name: PermissionName,
+        state: PermissionState,
+    ) {
+        let mut request = request.lock().unwrap();
+        let granted = state == PermissionState::Granted;
+        if name == PermissionName::Microphone {
+            request.audio_granted = Some(granted);
+        } else {
+            request.video_granted = Some(granted);
+        }
+        if !granted {
+            if let Some(promise) = request.promise.take() {
+                promise
+                    .root(cx)
+                    .reject_error(cx, Error::NotAllowed(Some("Permission denied".to_string())));
+            }
+            return;
+        }
+        if request.audio_granted != Some(true) || request.video_granted != Some(true) {
+            return;
+        }
+        let Some(promise) = request.promise.take() else {
+            return;
+        };
+        let (audio, video) = (request.audio.take(), request.video.take());
+        let generation = request.generation;
+        drop(request);
+        let promise = promise.root(cx);
+        // The answer may arrive after the document stopped being fully active, or after its
+        // capture was stopped (it was unloaded, perhaps kept for the history): open nothing then.
+        if generation != self.capture_generation.get() ||
+            !self.global().as_window().Document().is_fully_active()
+        {
+            promise.reject_error(cx, Error::Abort(None));
+            return;
+        }
+        self.start_capture(cx, &promise, audio, video);
+    }
+
+    /// Mercury: a stale call opens nothing and rejects with `AbortError`; its other answer, if
+    /// any, finds the promise gone and does nothing.
+    fn abort_stale_request(&self, cx: &mut JSContext, request: &Mutex<CaptureRequest>) {
+        let promise = request.lock().unwrap().promise.take();
+        if let Some(promise) = promise {
+            promise.root(cx).reject_error(cx, Error::Abort(None));
+        }
+    }
+
+    /// Mercury: opens the devices (only after permission) and settles the promise.
+    fn start_capture(
+        &self,
+        cx: &mut JSContext,
+        promise: &RootedPromise,
+        audio: Option<MediaTrackConstraintSet>,
+        video: Option<MediaTrackConstraintSet>,
+    ) {
+        let global = self.global();
+        let media = ServoMedia::get();
+        let mut sources = vec![];
+        if let Some(constraints) = audio {
+            match media.create_audioinput_stream(constraints) {
+                Some(id) => sources.push((id, MediaStreamType::Audio)),
+                None => return self.fail_capture(cx, promise, &sources, "No microphone found"),
+            }
+        }
+        if let Some(constraints) = video {
+            match media.create_videoinput_stream(constraints) {
+                Some(id) => sources.push((id, MediaStreamType::Video)),
+                None => return self.fail_capture(cx, promise, &sources, "No camera found"),
+            }
+        }
+        let stream = MediaStream::new(cx, &global);
+        for (id, ty) in sources {
+            let track = MediaStreamTrack::new_capture(cx, &global, id, ty);
+            self.register_capture_track(&track);
+            stream.add_track(&track);
+        }
+        promise.resolve_native(cx, &stream);
+    }
+
+    /// Mercury: a device was missing after the grant: stops the sources already opened for the
+    /// call and rejects it with `NotFoundError`.
+    fn fail_capture(
+        &self,
+        cx: &mut JSContext,
+        promise: &RootedPromise,
+        opened: &[(MediaStreamId, MediaStreamType)],
+        message: &str,
+    ) {
+        for (id, _) in opened {
+            stop_source(*id);
+        }
+        promise.reject_error(cx, Error::NotFound(Some(message.to_string())));
+    }
+
+    /// Mercury: called for every track made from a device, including clones.
+    pub(crate) fn register_capture_track(&self, track: &MediaStreamTrack) {
+        self.capture_tracks.borrow_mut().push(Dom::from_ref(track));
+    }
+
+    /// Mercury: releases the device behind `id` once no live track uses it.
+    pub(crate) fn release_source_if_unused(&self, id: MediaStreamId) {
+        if self
+            .capture_tracks
+            .borrow()
+            .iter()
+            .any(|track| track.id() == id && !track.is_ended())
+        {
+            return;
+        }
+        self.capture_tracks
+            .borrow_mut()
+            .retain(|track| track.id() != id);
+        stop_source(id);
+    }
+
+    /// Mercury: ends every capture track and releases every device of this document, and
+    /// forgets the camera and microphone answers, so that a page restored from the history
+    /// asks again. Run when the document is unloaded and when its window is torn down.
+    pub(crate) fn stop_all_capture(&self) {
+        self.capture_generation
+            .set(self.capture_generation.get().wrapping_add(1));
+        let tracks: Vec<_> = self
+            .capture_tracks
+            .borrow_mut()
+            .drain(..)
+            .map(|track| DomRoot::from_ref(&*track))
+            .collect();
+        let mut stopped = vec![];
+        for track in tracks {
+            track.end();
+            if !stopped.contains(&track.id()) {
+                stopped.push(track.id());
+                stop_source(track.id());
+            }
+        }
+        let global = self.global();
+        let mut answers = global.permission_state_invocation_results().borrow_mut();
+        answers.remove(&PermissionName::Camera);
+        answers.remove(&PermissionName::Microphone);
+    }
+}
+
+/// Mercury: stops a device source for good (see `MediaStream::stop` in servo-media-streams).
+fn stop_source(id: MediaStreamId) {
+    if let Some(stream) = get_stream(&id) {
+        stream.lock().unwrap().stop();
+    }
+}
+
+impl MediaDevicesMethods<crate::DomTypeHolder> for MediaDevices {
+    /// <https://w3c.github.io/mediacapture-main/#dom-mediadevices-getusermedia>
+    ///
+    /// Mercury: asks the embedder for "microphone" and "camera" (both at once, so that it can
+    /// show them together) and opens no device before every requested kind is granted.
+    fn GetUserMedia(
+        &self,
+        cx: &mut CurrentRealm,
+        constraints: &MediaStreamConstraints,
+    ) -> RootedPromise {
+        let p = Promise::new_in_realm(cx);
+        let global = self.global();
+        let audio = convert_constraints(&constraints.audio);
+        let video = convert_constraints(&constraints.video);
+
+        // Step 3. If both audio and video are false, reject with a TypeError.
+        if audio.is_none() && video.is_none() {
+            p.reject_error(
+                cx,
+                Error::Type(c"getUserMedia() needs audio or video".to_owned()),
+            );
+            return p;
+        }
+        // The document must be fully active.
+        if !global.as_window().Document().is_fully_active() {
+            p.reject_error(cx, Error::InvalidState(None));
+            return p;
+        }
+        // Secure contexts only. Cross-origin frames are refused by the permission state
+        // (`Document::allowed_to_use_feature`).
+        if !global.is_secure_context() {
+            p.reject_error(cx, Error::NotAllowed(Some("Permission denied".to_string())));
+            return p;
+        }
+
+        let wants_audio = audio.is_some();
+        let wants_video = video.is_some();
+        let request = Arc::new(Mutex::new(CaptureRequest {
+            promise: Some(TrustedPromise::from(&p)),
+            audio,
+            video,
+            audio_granted: (!wants_audio).then_some(true),
+            video_granted: (!wants_video).then_some(true),
+            generation: self.capture_generation.get(),
+        }));
+        for (wanted, name) in [
+            (wants_audio, PermissionName::Microphone),
+            (wants_video, PermissionName::Camera),
+        ] {
+            if !wanted || request.lock().unwrap().promise.is_none() {
+                continue;
+            }
+            let callback = self.permission_callback(request.clone(), name);
+            if let AsyncPermissionRequest::Settled(state) =
+                request_permission_to_use_async(name, &global, callback)
+            {
+                self.permission_settled(cx, &request, name, state);
+            }
+        }
+        p
+    }
+
+    /// <https://w3c.github.io/mediacapture-main/#dom-mediadevices-enumeratedevices>
+    ///
+    /// Mercury: labels and ids only for the kinds the document may use ("device information
+    /// can be exposed"); without camera or microphone permission nothing is probed at all,
+    /// and one entry without id or label stands for each kind.
+    fn EnumerateDevices(&self, cx: &mut JSContext) -> RootedPromise {
+        // Step 1.
+        let mut realm = CurrentRealm::assert(cx);
+        let p = Promise::new_in_realm(&mut realm);
+
+        // Step 2.
+        // XXX These steps should be run in parallel.
+        // XXX Steps 2.1 - 2.4
+
+        let global = self.global();
+        let camera = descriptor_permission_state(PermissionName::Camera, Some(&global)) ==
+            PermissionState::Granted;
+        let microphone = descriptor_permission_state(PermissionName::Microphone, Some(&global)) ==
+            PermissionState::Granted;
+
+        // Step 2.5
+        let devices = if camera || microphone {
+            let media = ServoMedia::get();
+            let device_monitor = media.get_device_monitor();
+            Some(device_monitor.enumerate_devices().unwrap_or_default())
+        } else {
+            None
+        };
+        let present = |kind: fn(&ServoMediaDeviceKind) -> bool| {
+            devices
+                .as_ref()
+                .is_none_or(|devices| devices.iter().any(|device| kind(&device.kind)))
+        };
+        let mut result_list = vec![];
+        for device in devices.iter().flatten() {
+            let exposed = match device.kind {
+                ServoMediaDeviceKind::VideoInput => camera,
+                ServoMediaDeviceKind::AudioInput | ServoMediaDeviceKind::AudioOutput => microphone,
+            };
+            if exposed {
+                // XXX The media backend has no way to group devices yet.
+                result_list.push(MediaDeviceInfo::new(
+                    cx,
+                    &global,
+                    &device.device_id,
+                    device.kind.convert(),
+                    &device.label,
+                    "",
+                ));
+            }
+        }
+        if !microphone && present(|kind| matches!(kind, ServoMediaDeviceKind::AudioInput)) {
+            result_list.push(MediaDeviceInfo::new(
+                cx,
+                &global,
+                "",
+                MediaDeviceKind::Audioinput,
+                "",
+                "",
+            ));
+        }
+        if !camera && present(|kind| matches!(kind, ServoMediaDeviceKind::VideoInput)) {
+            result_list.push(MediaDeviceInfo::new(
+                cx,
+                &global,
+                "",
+                MediaDeviceKind::Videoinput,
+                "",
+                "",
+            ));
+        }
+
+        p.resolve_native(cx, &result_list);
+
+        // Step 3.
+        p
+    }
+}
+
+fn convert_constraints(js: &BooleanOrMediaTrackConstraints) -> Option<MediaTrackConstraintSet> {
+    match js {
+        BooleanOrMediaTrackConstraints::Boolean(false) => None,
+        BooleanOrMediaTrackConstraints::Boolean(true) => Some(Default::default()),
+        BooleanOrMediaTrackConstraints::MediaTrackConstraints(c) => Some(MediaTrackConstraintSet {
+            height: c.parent.height.as_ref().and_then(convert_culong),
+            width: c.parent.width.as_ref().and_then(convert_culong),
+            aspect: c.parent.aspectRatio.as_ref().and_then(convert_cdouble),
+            frame_rate: c.parent.frameRate.as_ref().and_then(convert_cdouble),
+            sample_rate: c.parent.sampleRate.as_ref().and_then(convert_culong),
+        }),
+    }
+}
+
+// Mercury: a bare number is an ideal value, not a requirement
+// (https://w3c.github.io/mediacapture-main/#dfn-constrainable-property). The backend cannot
+// express ideal values, so it is ignored instead of excluding every device without that mode.
+fn convert_culong(js: &ConstrainULong) -> Option<Constrain<u32>> {
+    match js {
+        ConstrainULong::ClampedUnsignedLong(_) => None,
+        ConstrainULong::ConstrainULongRange(range) => {
+            if range.parent.min.is_some() || range.parent.max.is_some() {
+                Some(Constrain::Range(ConstrainRange {
+                    min: range.parent.min,
+                    max: range.parent.max,
+                    ideal: range.ideal,
+                }))
+            } else {
+                range.exact.map(Constrain::Value)
+            }
+        },
+    }
+}
+
+fn convert_cdouble(js: &ConstrainDouble) -> Option<Constrain<f64>> {
+    match js {
+        ConstrainDouble::Double(_) => None,
+        ConstrainDouble::ConstrainDoubleRange(range) => {
+            if range.parent.min.is_some() || range.parent.max.is_some() {
+                Some(Constrain::Range(ConstrainRange {
+                    min: range.parent.min.map(|x| *x),
+                    max: range.parent.max.map(|x| *x),
+                    ideal: range.ideal.map(|x| *x),
+                }))
+            } else {
+                range.exact.map(|exact| Constrain::Value(*exact))
+            }
+        },
+    }
+}
+
+/// Mercury: what one permission answer to a `getUserMedia` call amounts to.
+#[derive(Debug, PartialEq)]
+enum AnswerOutcome {
+    /// The call was made before the document's capture was last stopped, or the document is no
+    /// longer fully active.
+    Stale,
+    Settled(PermissionState),
+}
+
+/// Mercury: `record` stores an answer in the global's permission results. A stale answer is
+/// not stored: `stop_all_capture` cleared those results, and a late Allow written back would let
+/// the document, if it is restored from the history, capture without asking.
+fn settle_answer(
+    stale: bool,
+    response: Option<AllowOrDeny>,
+    record: impl FnOnce(AllowOrDeny) -> PermissionState,
+) -> AnswerOutcome {
+    if stale {
+        return AnswerOutcome::Stale;
+    }
+    AnswerOutcome::Settled(match response {
+        Some(answer) => record(answer),
+        None => PermissionState::Denied,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::Cell;
+
+    use embedder_traits::AllowOrDeny;
+
+    use super::{AnswerOutcome, PermissionState, settle_answer};
+
+    // Mercury: a late Allow must not be stored after `stop_all_capture` cleared the results: a
+    // document restored from the history would capture again without asking, and without marks.
+    #[test]
+    fn a_stale_answer_is_not_recorded() {
+        let recorded = Cell::new(false);
+        let record = |_| {
+            recorded.set(true);
+            PermissionState::Granted
+        };
+        assert_eq!(
+            settle_answer(true, Some(AllowOrDeny::Allow), record),
+            AnswerOutcome::Stale
+        );
+        assert!(!recorded.get());
+    }
+
+    #[test]
+    fn a_current_answer_is_recorded() {
+        let recorded = Cell::new(false);
+        let record = |_| {
+            recorded.set(true);
+            PermissionState::Granted
+        };
+        assert_eq!(
+            settle_answer(false, Some(AllowOrDeny::Allow), record),
+            AnswerOutcome::Settled(PermissionState::Granted)
+        );
+        assert!(recorded.get());
+        assert_eq!(
+            settle_answer(false, None, |_| unreachable!("nothing to record")),
+            AnswerOutcome::Settled(PermissionState::Denied)
+        );
+    }
+}

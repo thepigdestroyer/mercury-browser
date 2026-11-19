@@ -40,6 +40,8 @@ mod macos_app_delegate;
 mod macos_terminate;
 #[cfg(target_os = "macos")]
 mod media_buffers;
+// media-capture
+mod media_capture;
 #[cfg(target_os = "macos")]
 mod media_isolation;
 mod media_session;
@@ -116,6 +118,28 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             return Ok(ExitCode::from(u8::try_from(code).unwrap_or(1)));
         }
     };
+
+    // media-capture: `--fake-media-devices`; refused unless no plugin beside this executable can
+    // open a real camera or microphone. Sets the content processes' environment, so before
+    // any thread starts.
+    #[cfg(target_os = "macos")]
+    if let Err(message) = media_capture::select_fake_media_devices(options.fake_media_devices) {
+        eprintln!("mercury-browser: {message}");
+        return Ok(ExitCode::from(2));
+    }
+    #[cfg(not(target_os = "macos"))]
+    if options.fake_media_devices {
+        eprintln!("mercury-browser: --fake-media-devices is available on macOS only");
+        return Ok(ExitCode::from(2));
+    }
+    // media-capture: only an interactive run asks macOS whether Mercury may use the devices.
+    media_capture::set_system_access_source(if options.fake_system_denies_capture {
+        media_capture::SystemAccessSource::SimulateDenied
+    } else if options.is_automated() {
+        media_capture::SystemAccessSource::AssumeAllowed
+    } else {
+        media_capture::SystemAccessSource::Query
+    });
 
     use_automatic_gpu_selection();
     // Dropped last, after the engine has saved its data: a temporary profile is deleted then.
@@ -227,6 +251,12 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     }
     // controls
     controls::connect_controls(&window, Rc::clone(&controller));
+    // media-capture
+    media_capture::connect_capture_callbacks(
+        &window,
+        Rc::clone(&controller),
+        options.answer_permission_prompts,
+    );
     quit::quit_when_the_window_is_closed(&window);
     bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
     // media-session lane: system Now Playing and power assertions only in interactive launches.

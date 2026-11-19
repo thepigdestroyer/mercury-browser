@@ -76,8 +76,8 @@ slint::slint! {
             if root.request.style == PageRequestStyle.permission: PermissionPrompt {
                 request: root.request;
                 anchor-x: 146px;
-                answered(id, accepted) => {
-                    root.answered(id, accepted, "", "", false);
+                answered(id, accepted, checked) => {
+                    root.answered(id, accepted, "", "", checked);
                 }
             }
         }

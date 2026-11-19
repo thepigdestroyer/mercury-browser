@@ -1,6 +1,6 @@
 ---
 title: Vendored Patches
-description: Maintain and eventually remove Mercury's focused gaol, Surfman and servo-canvas compatibility patches.
+description: Maintain and eventually remove Mercury's focused gaol, Surfman and servo-canvas compatibility patches and its Servo engine patches, and re-vendor them on a Servo upgrade.
 ---
 
 # Vendored patches
@@ -89,8 +89,12 @@ The removal commit should say which upstream release absorbed the patch.
 | `third_party/gaol` | 0.2.1 | In the Linux sandbox profile: system calls that current Rust, glibc, SpiderMonkey and Servo need, and no zero file-size limit, which killed content processes sizing their shared-memory IPC regions |
 | `third_party/surfman` | 0.14.0 | Avoid process-global `DRI_PRIME=1` selection and its race with media initialization |
 | `third_party/servo-canvas` | 0.8.0 | Make Servo's GPU 2D-canvas backend (`vello` feature) build against wgpu 30, fall back to the CPU backend when it cannot start, survive failed renders and read-backs, share one GPU device, and fix GPU drawing defects (lost drawing, clips, oversized canvases, shapes with shadows) |
+| `third_party/servo-script` | 0.8.0 | Home of Mercury's engine patches. Camera and microphone: ask before opening a device, expose device names only with permission, `MediaStreamTrack.stop()`, release devices when a document goes away, camera and microphone `'self'` in frames and refused to workers |
+| `third_party/servo-script-bindings` | 0.8.0 | WebIDL for the above (`stop()`, `readyState`, `[SecureContext]` `mediaDevices`); WebRTC moved behind `dom_webrtc_transceiver_enabled` so capture can be on without it |
+| `third_party/servo-media-streams` | 0.8.0 | `MediaStream::stop()`, so a device can be released |
+| `third_party/servo-media-gstreamer` | 0.8.0 | Its GStreamer implementation, and a caps-field fix for fractional constraints |
 
-The gaol and Surfman patches date from before the fork and Mercury continues to carry them ([Origins and credits](origins.md)). Mercury added the servo-canvas patch. Both older patches concern Linux. The `gaol` patch adjusts the Linux sandbox profile (its seccomp allow-list and file-size limit), which takes effect only when Servo's `sandbox` option is on; Mercury keeps it off on every platform (see [Process isolation](servo-integration.md#process-isolation)). The Surfman patch changes how Mesa's GPU is chosen.
+The gaol and Surfman patches date from before the fork and Mercury continues to carry them ([Origins and credits](origins.md)). Mercury added the servo-canvas patch and the Servo engine patches (`servo-script` and the three crates vendored with it, see [The Servo engine patches](#the-servo-engine-patches-servo-script-and-friends)). The `gaol` and Surfman patches concern Linux. The `gaol` patch adjusts the Linux sandbox profile (its seccomp allow-list and file-size limit), which takes effect only when Servo's `sandbox` option is on; Mercury keeps it off on every platform (see [Process isolation](servo-integration.md#process-isolation)). The Surfman patch changes how Mesa's GPU is chosen.
 
 ## Validate the gaol patch
 
@@ -103,7 +107,7 @@ cargo test \
 
 The separate target directory avoids leaving an untracked build tree inside the vendored crate.
 
-Media uses Servo's upstream GStreamer backend without a local patch. It still needs a manual playback check because unit tests cannot prove that the host's plugins, decoder selection, audio sink, frame transfer, and isolated content process work together.
+Media playback uses Servo's upstream GStreamer player without a local patch (the changes to `servo-media-gstreamer` concern camera and microphone capture only). It still needs a manual playback check because unit tests cannot prove that the host's plugins, decoder selection, audio sink, frame transfer, and isolated content process work together.
 
 ## The servo-canvas patch
 
@@ -147,3 +151,20 @@ Run it in both modes and compare line by line: `i` samples must be identical, `e
 
 `tests/pages/canvas-many.html` creates 50 canvases (`?n=200` for more), reads a pixel back from each and prints the timings; use it to compare the two backends' cost of creating canvases.
 
+## The Servo engine patches (`servo-script` and friends)
+
+`third_party/servo-script`, `servo-script-bindings`, `servo-media-streams` and `servo-media-gstreamer` were vendored together for camera and microphone capture. Like every crate in `third_party/vendor.toml` they are the published `.crate` plus `third_party/patches/<crate>.patch`, checked by `make servo-patches-check`. `servo-script` is also where later engine patches go. Each crate's `MERCURY.md` lists its changes; `third_party/servo-script/MERCURY.md` describes the capture patch as a whole and the rustc warnings the vendored crate shows with Mercury's feature set and how each is silenced at its own site.
+
+Rules on top of [Changing a vendored crate](#changing-a-vendored-crate):
+
+- **List every change** in that crate's `MERCURY.md` with the upstream file and line it changes. Mark each hunk with a `// Mercury:` comment where a comment fits (also in WebIDL); `make servo-patches-check` requires one in every changed file.
+- **No formatting churn.** The vendored files follow Servo's rustfmt settings, which differ from Mercury's; `cargo fmt --all` does not touch `third_party/`. Format new code with `rustfmt --edition 2024 --config match_block_trailing_comma=true,binop_separator=Back,imports_granularity=Module,group_imports=StdExternalCrate,style_edition=2024 <file>` (these leave the upstream files unchanged).
+- **Zero warnings.** Cargo does not cap lints for path dependencies, so warnings from the vendored crates appear in `cargo build`. Silence one only at its own site and record it in `MERCURY.md`; never with a crate-wide `[lints]` entry, which would hide warnings in Mercury's own changes.
+
+### Re-vendor on a Servo upgrade
+
+Run [`upgrade --servo`](#upgrading), which merges Mercury's changes into the new published crates, and follow its steps. Then, for these four crates:
+
+1. Redo the warning table in `third_party/servo-script/MERCURY.md` from a clean build's output: new upstream warnings are silenced at their site, and silencing that is no longer needed is removed.
+2. Update the versions, checksums, commits and line numbers in each `MERCURY.md`. Drop a change whose "drop when" condition the new release meets.
+3. Run the capture tests (`make test-capture-macos`) and the full gate.

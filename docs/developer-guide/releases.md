@@ -89,10 +89,10 @@ The identity decides which of two entitlement files in `apps/mercury-desktop/res
 
 | Identity | File | Grants |
 |---|---|---|
-| `-` (ad hoc, the default) | `entitlements-adhoc.plist` | `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, `com.apple.security.cs.disable-library-validation` |
-| anything else (Developer ID, Apple Development) | `entitlements.plist` | `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory` |
+| `-` (ad hoc, the default) | `entitlements-adhoc.plist` | `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, `com.apple.security.cs.disable-library-validation`, `com.apple.security.device.camera`, `com.apple.security.device.audio-input` |
+| anything else (Developer ID, Apple Development) | `entitlements.plist` | `com.apple.security.cs.allow-jit`, `com.apple.security.cs.allow-unsigned-executable-memory`, `com.apple.security.device.camera`, `com.apple.security.device.audio-input` |
 
-The two JIT entitlements are needed by SpiderMonkey to run JavaScript under the hardened runtime; without them no page loads.
+The two JIT entitlements are needed by SpiderMonkey to run JavaScript under the hardened runtime; without them no page loads. The two device entitlements let websites the user allows use the camera and microphone (the hardened runtime refuses both without them); `Info.plist.in` carries the matching `NSCameraUsageDescription` and `NSMicrophoneUsageDescription`, without which macOS ends a process that opens either device.
 
 `disable-library-validation` exists only because of ad-hoc signing. The hardened runtime normally lets a process load only libraries signed by Apple or by its own team, and an ad-hoc signature has no team identifier, so an ad-hoc build could never load the libraries it bundles in `Contents/MacOS/lib`: it would stop at launch with "mapping process and mapped file (non-platform) have different Team IDs". The ad-hoc file turns that check off.
 

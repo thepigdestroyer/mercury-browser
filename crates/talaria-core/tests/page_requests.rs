@@ -731,6 +731,9 @@ impl PermissionDecisions for AlwaysBlock {
     }
 
     fn remember(&mut self, _origin: &str, _permission: PagePermission, _: PermissionDecision) {}
+
+    // media-capture
+    fn forget(&mut self, _origin: &str, _permission: PagePermission) {}
 }
 
 #[test]
@@ -861,14 +864,17 @@ const EVERY_PERMISSION: [PagePermission; 13] = [
 ];
 
 #[test]
-fn persistent_storage_and_geolocation_are_asked_and_every_other_permission_is_denied_without_asking()
- {
+fn storage_camera_microphone_and_geolocation_are_asked_and_the_rest_denied_without_asking() {
     for (index, feature) in EVERY_PERMISSION.into_iter().enumerate() {
         let (mut controller, tab_id) = ready_controller();
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
+        // media-capture: camera and microphone are asked too, on macOS (the only platform
+        // where pages can use them).
+        let capture = matches!(feature, PagePermission::Camera | PagePermission::Microphone);
         if feature == PagePermission::PersistentStorage
+            || (capture && cfg!(target_os = "macos"))
             || (feature == PagePermission::Geolocation && GEOLOCATION_OFFERED)
         {
             assert!(feature.is_promptable());

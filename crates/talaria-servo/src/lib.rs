@@ -8,6 +8,9 @@ mod embedder_controls;
 mod error;
 mod error_pages;
 mod exit_clearing;
+// media-capture
+#[cfg(target_os = "macos")]
+mod fake_media_devices;
 mod find_in_page;
 mod frame_ready;
 mod geolocation;
@@ -36,6 +39,11 @@ pub use content_process::{
 pub use error::ServoWebViewError;
 pub use error_pages::error_page_titles;
 pub use exit_clearing::{EngineSwitches, ExitClearing};
+// media-capture
+#[cfg(target_os = "macos")]
+pub use fake_media_devices::{
+    FAKE_MEDIA_DEVICES_VARIABLE, executable_lib_dir, fake_media_devices_problem,
+};
 pub use geolocation::{
     FakeLocation, FixedPosition, GeolocationDiagnostic, GeolocationSetup, LocationError,
 };
