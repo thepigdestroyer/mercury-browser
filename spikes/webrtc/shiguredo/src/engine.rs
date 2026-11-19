@@ -92,9 +92,11 @@ impl Engine {
         };
         adm.init()?;
         let recording_devices = adm.recording_devices();
-        if recording_devices != 0 {
+        // 0 for the virtual module; the `Dummy` layer's AudioDeviceDummy answers -1 ("not supported"),
+        // as the first CI run showed. Both mean that no device exists, so only a positive count fails.
+        if recording_devices > 0 {
             return Err(error(format!(
-                "the audio device module reports {recording_devices} recording devices, expected 0"
+                "the audio device module reports {recording_devices} recording devices, expected none"
             )));
         }
 
