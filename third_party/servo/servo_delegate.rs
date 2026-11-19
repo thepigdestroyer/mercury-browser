@@ -1,7 +1,7 @@
 /* This Source Code Form is subject to the terms of the Mozilla Public
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
-use embedder_traits::{ConsoleLogLevel, Notification};
+use embedder_traits::{ConsoleLogLevel, MercuryEmbedderMsg, Notification};
 use servo_base::generic_channel;
 
 use crate::webview_delegate::{AllowOrDenyRequest, WebResourceLoad};
@@ -44,6 +44,12 @@ pub trait ServoDelegate {
     ///
     /// <https://developer.mozilla.org/en-US/docs/Web/API/Console_API>
     fn show_console_message(&self, _level: ConsoleLogLevel, _message: String) {}
+
+    // Mercury: one hook for every Mercury lane message that names no web view (K0 engine base).
+    /// A message from the engine to Mercury that is not tied to a web view, or whose web view has
+    /// gone. Messages that name a live web view go to
+    /// [`WebViewDelegate::notify_mercury_message`](crate::WebViewDelegate::notify_mercury_message).
+    fn notify_mercury_message(&self, _message: MercuryEmbedderMsg) {}
 }
 
 pub(crate) struct DefaultServoDelegate;

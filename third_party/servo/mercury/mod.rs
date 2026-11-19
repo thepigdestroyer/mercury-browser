@@ -1,0 +1,111 @@
+/* This Source Code Form is subject to the terms of the Mozilla Public
+ * License, v. 2.0. If a copy of the MPL was not distributed with this
+ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+// Mercury: this file is Mercury's own (K0 engine base, R14 section 3.4). It delivers the one
+// `Mercury` message variant of each channel to the delegates and sends Mercury's messages to the
+// constellation, so that a lane adds its messages in its own files and never edits `servo.rs`.
+// Nothing in upstream Servo refers to it except the two match arms in `servo.rs`.
+
+//! Delivery of Mercury's lane messages to the embedder, and the way back to the constellation.
+//!
+//! * [`EmbedderMsg::Mercury`](crate::EmbedderMsg::Mercury) and
+//!   `ConstellationToEmbedderMsg::Mercury` both end in [`deliver`], which calls
+//!   [`WebViewDelegate::notify_mercury_message`](crate::WebViewDelegate::notify_mercury_message)
+//!   when the message names a web view that still exists and
+//!   [`ServoDelegate::notify_mercury_message`](crate::ServoDelegate::notify_mercury_message)
+//!   otherwise.
+//! * [`Servo::send_mercury_message`] sends a [`MercuryEmbedderToConstellation`] message to the
+//!   constellation.
+//!
+//! The message types of the constellation's lane files (for example `CoreEmbedderMsg`) are
+//! re-exported from the crate root next to the embedder's (`CoreMsg`, `MercuryEmbedderMsg`), so an
+//! embedder reaches all of them as `servo::*`.
+
+use std::rc::Rc;
+
+use embedder_traits::MercuryEmbedderMsg;
+use log::debug;
+use servo_base::id::WebViewId;
+use servo_constellation_traits::EmbedderToConstellationMessage;
+// Mercury: the lane files of `servo_constellation_traits::mercury` reach `servo::*` through this
+// glob, so a lane that adds a payload type there never edits `lib.rs` here.
+pub use servo_constellation_traits::mercury::*;
+
+use crate::Servo;
+use crate::servo_delegate::ServoDelegate;
+use crate::webview::WebView;
+
+/// Deliver a Mercury lane message: to the delegate of `webview` when the web view still exists,
+/// and to the delegate of the whole `Servo` instance when the message names no web view or the web
+/// view is gone. `webview_id` is only used for the log line about a vanished web view.
+///
+/// The message is never printed in full: its `Debug` output is only the variant path.
+pub(crate) fn deliver(
+    webview_id: Option<WebViewId>,
+    webview: Option<WebView>,
+    servo_delegate: &Rc<dyn ServoDelegate>,
+    message: MercuryEmbedderMsg,
+) {
+    match webview {
+        Some(webview) => webview.delegate().notify_mercury_message(webview, message),
+        None => {
+            if let Some(webview_id) = webview_id {
+                debug!("Mercury message {message:?} for gone web view {webview_id:?}");
+            }
+            servo_delegate.notify_mercury_message(message);
+        },
+    }
+}
+
+impl Servo {
+    /// Send a message of one of Mercury's lanes to the constellation. It is handled by the
+    /// lane's function in the `mercury/` directory of `servo-constellation`.
+    pub fn send_mercury_message(&self, message: MercuryEmbedderToConstellation) {
+        self.constellation_proxy()
+            .send(EmbedderToConstellationMessage::Mercury(message));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use embedder_traits::CoreMsg;
+    use servo_base::id::{BrowsingContextId, PipelineNamespace, PipelineNamespaceId};
+
+    use super::*;
+
+    #[derive(Default)]
+    struct RecordingDelegate {
+        seen: RefCell<Vec<String>>,
+    }
+
+    impl ServoDelegate for RecordingDelegate {
+        fn notify_mercury_message(&self, message: MercuryEmbedderMsg) {
+            self.seen.borrow_mut().push(format!("{message:?}"));
+        }
+    }
+
+    fn probe() -> MercuryEmbedderMsg {
+        MercuryEmbedderMsg::Core(CoreMsg::Probe(0xDEAD_BEEF))
+    }
+
+    #[test]
+    fn a_message_without_a_web_view_goes_to_the_servo_delegate() {
+        let recording = Rc::new(RecordingDelegate::default());
+        let delegate: Rc<dyn ServoDelegate> = recording.clone();
+        deliver(None, None, &delegate, probe());
+        assert_eq!(*recording.seen.borrow(), ["Core::Probe"]);
+    }
+
+    #[test]
+    fn a_message_for_a_gone_web_view_goes_to_the_servo_delegate() {
+        PipelineNamespace::install(PipelineNamespaceId(1));
+        let webview_id = WebViewId::mock_for_testing(BrowsingContextId::new());
+        let recording = Rc::new(RecordingDelegate::default());
+        let delegate: Rc<dyn ServoDelegate> = recording.clone();
+        deliver(Some(webview_id), None, &delegate, probe());
+        assert_eq!(*recording.seen.borrow(), ["Core::Probe"]);
+    }
+}

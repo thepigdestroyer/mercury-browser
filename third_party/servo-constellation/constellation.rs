@@ -84,6 +84,12 @@
 //!
 //! See <https://github.com/servo/servo/issues/14704>
 
+// Mercury: the routing of Mercury's lane messages (K0 engine base, R14 section 3.4). It is declared
+// here, not in lib.rs, so that it is a child of this module and its lane files can use
+// `Constellation`'s private state without edits to this file.
+#[path = "mercury/mod.rs"]
+mod mercury;
+
 use std::borrow::ToOwned;
 use std::cell::{Cell, OnceCell, RefCell};
 use std::collections::hash_map::Entry;
@@ -1480,6 +1486,10 @@ where
             EmbedderToConstellationMessage::SetNetworkOnlineState(online) => {
                 self.handle_set_network_online_state(online);
             },
+            // Mercury: every lane message goes through one arm (mercury/mod.rs).
+            EmbedderToConstellationMessage::Mercury(message) => {
+                self.handle_mercury_embedder_message(message);
+            },
         }
     }
 
@@ -2074,6 +2084,10 @@ where
                         warn!("Failed to release screen wake lock: {e}");
                     }
                 },
+            },
+            // Mercury: every lane message goes through one arm (mercury/mod.rs).
+            ScriptToConstellationMessage::Mercury(message) => {
+                self.handle_mercury_script_message(webview_id, source_pipeline_id, message);
             },
         }
     }

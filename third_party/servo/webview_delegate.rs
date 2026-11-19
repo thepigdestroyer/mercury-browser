@@ -10,9 +10,10 @@ use embedder_traits::{
     ConfirmResponse, ConsoleLogLevel, ContextMenuAction, ContextMenuElementInformation,
     ContextMenuItem, Cursor, EmbedderControlId, EmbedderControlResponse, FilePickerRequest,
     FilterPattern, InputEventId, InputEventResult, InputMethodType, LoadStatus, MediaSessionEvent,
-    NewWebViewDetails, Notification, PermissionFeature, PromptResponse, RgbColor, ScreenGeometry,
-    SelectElementOptionOrOptgroup, SelectElementRequest, SimpleDialogRequest, TraversalId,
-    WebResourceRequest, WebResourceResponse, WebResourceResponseMsg,
+    MercuryEmbedderMsg, NewWebViewDetails, Notification, PermissionFeature, PromptResponse,
+    RgbColor, ScreenGeometry, SelectElementOptionOrOptgroup, SelectElementRequest,
+    SimpleDialogRequest, TraversalId, WebResourceRequest, WebResourceResponse,
+    WebResourceResponseMsg,
 };
 use paint_api::rendering_context::RenderingContext;
 use servo_base::generic_channel::{GenericCallback, GenericSender, SendError};
@@ -1072,6 +1073,13 @@ pub trait WebViewDelegate {
     /// A console message was logged by content in this [`WebView`].
     /// <https://developer.mozilla.org/en-US/docs/Web/API/Console_API>
     fn show_console_message(&self, _webview: WebView, _level: ConsoleLogLevel, _message: String) {}
+
+    // Mercury: one hook for every Mercury lane message (K0 engine base); see `mercury/mod.rs`.
+    /// A message from the engine to Mercury about this [`WebView`], grouped by lane. The
+    /// message types are in `embedder_traits::mercury`; a lane adds variants only in its own
+    /// file there. A message that names a web view that has gone goes to
+    /// [`ServoDelegate::notify_mercury_message`](crate::ServoDelegate::notify_mercury_message).
+    fn notify_mercury_message(&self, _webview: WebView, _message: MercuryEmbedderMsg) {}
 
     /// There is a new accessibility tree update from this [`WebView`].
     ///

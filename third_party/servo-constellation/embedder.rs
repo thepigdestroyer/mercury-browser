@@ -4,7 +4,7 @@
 
 use embedder_traits::{
     InputEventOutcome, JSValue, JavaScriptEvaluationError, JavaScriptEvaluationId,
-    MediaSessionEvent, NewWebViewDetails, TraversalId,
+    MediaSessionEvent, MercuryEmbedderMsg, NewWebViewDetails, TraversalId,
 };
 use servo_base::generic_channel::GenericSender;
 use servo_base::id::{PipelineId, WebViewId};
@@ -42,4 +42,9 @@ pub enum ConstellationToEmbedderMsg {
     HistoryChanged(WebViewId, Vec<ServoUrl>, usize),
     /// A pipeline exited, whether cleanly or because its content process died.
     PipelineExited(PipelineId),
+    // Mercury: one variant for every Mercury lane message, so a lane adds its own messages in
+    // `embedder_traits::mercury` and never in this enum (K0 engine base, R14 section 3.4).
+    /// A message for Mercury's embedding layer, grouped by lane. The first field is the web view
+    /// it concerns, if any.
+    Mercury(Option<WebViewId>, MercuryEmbedderMsg),
 }
