@@ -16,7 +16,7 @@
 <script>
   // Runs after the load event, so the page has finished loading when the request appears.
   window.addEventListener("load", () => setTimeout(() => {
-    // Open through scripts/serve-tests.py (/pages/http-auth.html): its /private answers 401 with
+    // Open through scripts/serve-tests.sh (/pages/http-auth.html): its /private answers 401 with
     // WWW-Authenticate: Basic and accepts alice / secret. Servo 0.8
     // asks the browser for credentials only for navigations (servo-net http_loader.rs), so the
     // page loads it in a frame, added after the load event so the page itself counts as loaded.

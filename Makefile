@@ -100,7 +100,7 @@ help:
 		'qa' 'Run formatting, linting, and tests.' \
 		'qa-fast' 'Check formatting, lint and test the crates that need no engine.' \
 		'ci-tools' 'Download the pinned shellcheck, actionlint and cargo-deny.' \
-		'lint-scripts' 'Lint scripts/ (shellcheck, py_compile), the workflows (actionlint), licence headers and vendored crates.' \
+		'lint-scripts' 'Lint scripts/ (shellcheck; py_compile of the leftover scripts/serve-tests.py), the workflows (actionlint), licence headers and vendored crates.' \
 		'servo-patches-check' 'Check that each crate in third_party/ is the published crate plus its exported patch.' \
 		'deny' 'Check dependencies against the policy in deny.toml.' \
 		'build' 'Build the complete workspace in debug mode.' \
@@ -239,6 +239,11 @@ qa-fast:
 ci-tools:
 	scripts/ci/install-tools.sh --dir "$(CI_TOOLS_DIR)"
 
+# The py_compile line below checks the one Python file of ours that is left,
+# scripts/serve-tests.py. Rust replaced it (scripts/serve-tests.sh, in
+# crates/mercury-devtools); it is kept only until the lanes in progress have
+# merged. Delete that line together with scripts/serve-tests.py. PYTHON stays:
+# the documentation toolchain (`make docs-install`) uses it too.
 lint-scripts:
 	@$(CI_TOOLS_PATH); export PATH; \
 	missing=; \

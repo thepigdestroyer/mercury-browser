@@ -1,7 +1,7 @@
 # Page-request test pages
 
 Pages that ask the browser something as soon as they have loaded, so that `--screenshot` shows the
-browser's answer UI without any input. Serve `tests/` with `scripts/serve-tests.py` (loopback; its
+browser's answer UI without any input. Serve `tests/` with `scripts/serve-tests.sh` (loopback; its
 `/private` route asks for HTTP Basic authentication and accepts only `alice` / `secret`). Loopback
 is a secure context, which permission requests need.
 
@@ -14,11 +14,11 @@ is a secure context, which permission requests need.
 | `permission-camera.html` | `navigator.permissions.request({name: "camera"})`: denied without a prompt |
 | `clipboard.html` | `navigator.clipboard` is missing while Mercury does not offer the clipboard API (`ASYNC_CLIPBOARD_OFFERED`): the page says so. If the API is ever offered, the page calls `writeText()` then `readText()` on load, without a gesture: both refused (Servo resolves the write anyway), the read resolves with `""`; run with `MERCURY_TEST_CLIPBOARD_TEXT=seed` to give the run's in-memory clipboard a text the page must not see. By hand, in a normal run: a text box whose `paste` handler shows the text the user's paste gave the page (and, with the API offered, buttons for a script's copy and read) |
 | `http-auth.html` | a frame loading `/private`: the sign-in sheet (Servo asks only for navigations, not for `fetch()`) |
-| `navigate-then-head-alert.html?port=N` | navigates (by script) to `head-alert.html` on port `N`, another origin, whose `<head>` alerts; run with `RUST_LOG=talaria_servo=debug` to see whether the new address or the new document's dialog reaches the browser first. Needs a second `serve-tests.py --port N`. The run ends with exit 3, because the head alert keeps the page from loading. |
+| `navigate-then-head-alert.html?port=N` | navigates (by script) to `head-alert.html` on port `N`, another origin, whose `<head>` alerts; run with `RUST_LOG=talaria_servo=debug` to see whether the new address or the new document's dialog reaches the browser first. Needs a second `scripts/serve-tests.sh --port N`. The run ends with exit 3, because the head alert keeps the page from loading. |
 
 ```sh
-python3 scripts/serve-tests.py >serve.port &
-sleep 1; port="$(head -n 1 serve.port)"
+scripts/serve-tests.sh >serve.port &   # builds the Rust server the first time
+until [ -s serve.port ]; do sleep 0.2; done; port="$(head -n 1 serve.port)"
 ./target/release/mercury-browser --background --window-size 1100x700 --screenshot alert.png \
   --screenshot-delay 2000 "http://127.0.0.1:$port/pages/dialog-alert.html"
 kill %1; rm serve.port

@@ -5763,6 +5763,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-devtools"
+version = "0.2.0"
+dependencies = [
+ "getrandom 0.4.3",
+ "httpdate",
+ "image",
+ "libc",
+ "percent-encoding",
+ "serde_json",
+ "tempfile",
+]
+
+[[package]]
 name = "mercury-downloads"
 version = "0.2.0"
 dependencies = [

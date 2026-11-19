@@ -87,6 +87,7 @@ flowchart TB
 | `crates/mercury-downloads` | The download engine: fetching files, resuming after an interruption, stopping cleanly at quit |
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |
 | `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset (`scripts/macos/make-icns.sh`) |
+| `crates/mercury-devtools` | Development and CI tools: the loopback server for `tests/`, the smoke test's screenshot checker and the CI scripts' helpers |
 | `third_party/` | Patched copies of a few dependencies, each with a `MERCURY.md` explaining the change |
 
 ## Where things stand

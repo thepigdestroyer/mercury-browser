@@ -3,6 +3,7 @@
 resolver = "3"
 members = [
     "apps/mercury-desktop",
+    "crates/mercury-devtools",
     "crates/mercury-downloads",
     "crates/mercury-filter-lists",
     "crates/mercury-iconset",
@@ -41,6 +42,7 @@ gleam = "0.15"
 glow = "0.17"
 # openurl: the status and headers of refused loads (already in the lock through Servo).
 http = "1.5"
+httpdate = "1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2.191"
 log = "0.4"

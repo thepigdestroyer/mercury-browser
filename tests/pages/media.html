@@ -135,7 +135,7 @@
     };
     if (opaqueOrigin) {
       line("note: loaded from file://, where media and XHR are cross-origin; the canvas and "
-        + "decodeAudioData checks are skipped (serve the page with scripts/serve-tests.py)", null);
+        + "decodeAudioData checks are skipped (serve the page with scripts/serve-tests.sh)", null);
     }
     for (const type of Object.keys(types)) {
       early[type] = document.createElement("video").canPlayType(type);

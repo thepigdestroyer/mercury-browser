@@ -144,7 +144,7 @@ Notes:
 - `make test-media-macos` runs `scripts/macos/test-media.sh`, the tests for these scripts.
 - `make test-capture-macos` checks camera and microphone capture with fake devices only, from a copy of the release build without the real capture plugins; see [Camera and microphone](media-capture.md).
 - `tests/pages/media.html` checks playback without making a sound; serve it with
-  `scripts/serve-tests.py` (a loopback server that honours `Range`); see `tests/media/README.md`.
+  `scripts/serve-tests.sh` (a loopback server that honours `Range`); see `tests/media/README.md`.
 
 ## Build the documentation
 

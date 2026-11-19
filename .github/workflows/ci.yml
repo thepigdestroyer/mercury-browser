@@ -386,7 +386,10 @@ jobs:
             --screenshot dist/smoke/colors.png \
             --window-size 900x700 \
             "file://${GITHUB_WORKSPACE}/tests/pages/colors.html"
-          scripts/ci/check-colors-screenshot.py dist/smoke/colors.png
+          # The checker is Rust (crates/mercury-devtools, which has no Servo
+          # dependency), so building it adds little to this job.
+          cargo run --locked --release --package mercury-devtools \
+            --bin check-colors-screenshot -- dist/smoke/colors.png
 
       - name: Upload the screenshot
         # Whether the smoke test passed or failed, if it ran.
@@ -468,8 +471,9 @@ jobs:
         run: scripts/ci/check-license-headers.sh
 
       - name: Byte-compile the Python scripts
-        # A syntax error in the screenshot checker would otherwise surface
-        # only in the macOS job, hours in.
+        # The only Python of ours is scripts/serve-tests.py, replaced by
+        # scripts/serve-tests.sh (Rust) and kept only until the lanes in
+        # progress have merged. This step goes away together with that file.
         shell: bash
         env:
           PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache

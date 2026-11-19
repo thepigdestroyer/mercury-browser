@@ -1,0 +1,44 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-devtools"
+description = "Mercury Browser's development and CI tools: the test page server, the screenshot checker and the CI helpers"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "serve-tests"
+path = "src/bin/serve-tests.rs"
+
+[[bin]]
+name = "check-colors-screenshot"
+path = "src/bin/check-colors-screenshot.rs"
+
+[[bin]]
+name = "package-manifest"
+path = "src/bin/package-manifest.rs"
+
+[[bin]]
+name = "light-crates"
+path = "src/bin/light-crates.rs"
+
+[[bin]]
+name = "github-env"
+path = "src/bin/github-env.rs"
+
+[dependencies]
+getrandom.workspace = true
+httpdate.workspace = true
+image.workspace = true
+percent-encoding.workspace = true
+serde_json.workspace = true
+
+# serve-tests handles signals and watches its parent process, which needs libc on Unix only.
+[target.'cfg(unix)'.dependencies]
+libc.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

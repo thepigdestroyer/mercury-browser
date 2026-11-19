@@ -62,17 +62,31 @@ check "the default list names files like libgstcoreelements.dylib" "yes" \
     "$(if grep -x 'libgstcoreelements.dylib' <<<"$default_list" >/dev/null; then echo yes; else echo no; fi)"
 check "ogg is excluded by default" "0|libgstogg.dylib" "$(run bash "$PLUGINS" --excluded)"
 
+# Without jq (macOS before 15) the script reads cargo metadata with the workspace's own
+# reader: a PATH of the system's tools minus jq, and cargo.
+cargo_dir="$(dirname -- "$(command -v cargo)")"
+if [ -e "$cargo_dir/jq" ]; then
+    skip "without jq, the default list is the same (jq is beside cargo in $cargo_dir)"
+else
+    mkdir -p "$TMP/no-jq"
+    for tool in /usr/bin/* /bin/*; do
+        name="${tool##*/}"
+        [ "$name" = jq ] || [ -e "$TMP/no-jq/$name" ] || ln -s "$tool" "$TMP/no-jq/$name"
+    done
+    check "without jq, the default list is the same" "0|$default_list" \
+        "$(PATH="$TMP/no-jq:$cargo_dir" run bash "$PLUGINS")"
+fi
+
 # The remaining cases read a copy of Servo's lists, so they do not run cargo.
-# The resolved servo crate, read with jq or, where jq is missing (macOS before 15), python3.
+# The resolved servo crate, read with jq or, where jq is missing (macOS before 15), the
+# workspace's own reader (crates/mercury-devtools, package-manifest).
 metadata="$(cargo metadata --format-version 1 --locked --offline --filter-platform aarch64-apple-darwin 2>/dev/null)" ||
     { printf 'FAIL cargo metadata failed; run this from a checkout whose dependencies are fetched (make fetch)\n'; exit 1; }
 if command -v jq >/dev/null 2>&1; then
     manifest="$(jq -r '.packages[] | select(.name == "servo") | .manifest_path' <<<"$metadata")"
-elif command -v python3 >/dev/null 2>&1; then
-    manifest="$(python3 -c 'import json,sys; print("".join(p["manifest_path"] for p in json.load(sys.stdin)["packages"] if p["name"]=="servo"))' <<<"$metadata")"
 else
-    printf 'FAIL this test needs jq or python3 to read cargo metadata\n'
-    exit 1
+    manifest="$(cargo run --locked --release --quiet -p mercury-devtools --bin package-manifest -- servo \
+        <<<"$metadata")" || { printf 'FAIL package-manifest could not read cargo metadata\n'; exit 1; }
 fi
 manifest_dir="$(dirname -- "$manifest")"
 mkdir -p "$TMP/lists"
@@ -308,16 +322,19 @@ start_server() {
     # Emptied before the server starts: the shell only truncates the file in the child, so
     # an old port could otherwise be read before then.
     : >"$TMP/serve.port"
-    python3 scripts/serve-tests.py >"$TMP/serve.port" &
+    # Built first, so that the wait below is for the server and not for the compiler.
+    cargo build --locked --release --quiet -p mercury-devtools --bin serve-tests ||
+        { printf 'FAIL the test server (crates/mercury-devtools) does not build\n'; exit 1; }
+    scripts/serve-tests.sh >"$TMP/serve.port" &
     SERVER_PID=$!
     local tries=0
-    while [ ! -s "$TMP/serve.port" ] && [ "$tries" -lt 50 ]; do
+    while [ ! -s "$TMP/serve.port" ] && [ "$tries" -lt 100 ]; do
         sleep 0.1
         tries=$((tries + 1))
     done
     PORT="$(head -n 1 "$TMP/serve.port")"
     case "$PORT" in
-        '' | *[!0-9]*) printf 'FAIL scripts/serve-tests.py printed no port\n'; exit 1 ;;
+        '' | *[!0-9]*) printf 'FAIL scripts/serve-tests.sh printed no port\n'; exit 1 ;;
     esac
 }
 
