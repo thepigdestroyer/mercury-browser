@@ -9,6 +9,13 @@
 //!   `.cargo/config.toml`) or whatever an exported variable overrides it with.
 
 fn main() {
+    // libwebrtc_c.a is a static library whose Objective-C code includes categories
+    // (RTCVideoCodecInfo+Private and others). The linker drops an object file that holds only a
+    // category unless it is told to keep categories (route L's first CI run aborted with
+    // "-[RTCVideoCodecInfo initWithNativeSdpVideoFormat:]: unrecognized selector"). The Apple
+    // default codec factories of t09 take this path here too, and so will the final Mercury binary.
+    println!("cargo:rustc-link-arg-tests=-ObjC");
+    println!("cargo:rustc-link-arg-examples=-ObjC");
     println!("cargo:rerun-if-env-changed=MERCURY_GSTREAMER_PREFIX");
     println!("cargo:rerun-if-env-changed=MACOSX_DEPLOYMENT_TARGET");
     if let Ok(prefix) = std::env::var("MERCURY_GSTREAMER_PREFIX") {
