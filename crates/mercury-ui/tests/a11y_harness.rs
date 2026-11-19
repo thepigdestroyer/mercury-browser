@@ -399,7 +399,7 @@ fn a_golden_file_is_blessed_compared_and_diffed() {
     // No file yet: the failure says how to create it and what it would hold.
     assert_panics_with(
         || check_snapshot(dir, "round-trip", text, false),
-        "Create it with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y",
+        "Create it with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'",
     );
     assert_panics_with(
         || check_snapshot(dir, "round-trip", text, false),

@@ -21,8 +21,7 @@ use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementRoot};
 use slint::{ComponentHandle, LogicalSize};
 
 /// The command that rewrites the golden files, named in the header of each one and in failures.
-pub const BLESS_COMMAND: &str =
-    "MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y";
+pub const BLESS_COMMAND: &str = "MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'";
 
 /// How far two lengths may differ and still count as equal (the layout works in `f32`).
 pub const TOLERANCE: f32 = 0.01;
