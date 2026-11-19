@@ -38,3 +38,9 @@ Without the `webrtc.sh env` line the build stops: `.cargo/config.toml` points `L
 - `examples/probe_route.rs`, `examples/probe_baseline.rs`: the size measurement.
 
 The findings are in `research/R18-webrtc-spike.md` (notes outside the repository).
+
+## Status (19 Nov 2026)
+
+Compiled and linked for `aarch64-apple-darwin` from an Intel Mac (library, tests, two size probes; clippy with `-D warnings` and `cargo fmt` clean; a cold
+offline build from an empty `target/` took 8 minutes on a loaded 12-thread Mac). Nothing has been run: t01 to t13 await the arm64 CI job. Route L passes the gates
+that can be judged without running it; see `research/R18-parts/3-livekit.md` for the gate table and for what to look at in the CI output (t03, t05, t06, t10, t11).
