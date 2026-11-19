@@ -12,7 +12,7 @@
 //! - [`schedule`]: [`CaptureScheduler`] decides when a picture is taken (when a tab stops being
 //!   the active one, every 30 seconds while it is, and on demand) and refuses a capture that could
 //!   attach one tab's picture to another;
-//! - [`registry`]: [`TabSnapshots`] puts the three together and is what the desktop app holds.
+//! - [`registry`]: [`SnapshotRegistry`] puts the three together and is what the desktop app holds.
 //!
 //! Time is always passed in as a [`std::time::Duration`] since an arbitrary start (the app uses
 //! the time since it began). Nothing here reads a clock, touches the disk or names a tab type: the
@@ -28,7 +28,7 @@ pub mod store;
 
 pub use downscale::{Limits, MAX_HEIGHT, MAX_WIDTH, downscale, fit_within};
 pub use frame::{FrameError, MAX_DIMENSION, RgbaFrame};
-pub use registry::{FinishOutcome, Stats, TabSnapshots};
+pub use registry::{FinishOutcome, SnapshotRegistry, Stats};
 pub use schedule::{
     CaptureReason, CaptureRequest, CaptureScheduler, FAILURE_BACKOFF, IN_FLIGHT_TIMEOUT,
     MAX_CONSECUTIVE_FAILURES, MIN_REPEAT_GAP, PERIODIC_INTERVAL, Skip,

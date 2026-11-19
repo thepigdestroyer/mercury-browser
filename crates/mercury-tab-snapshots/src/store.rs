@@ -14,7 +14,7 @@ use crate::frame::RgbaFrame;
 
 /// The default memory cap: 128 MB (owner decision, 18 Nov 2026), read as 128,000,000 bytes so
 /// that the cap can never be above the number he gave. A full-size snapshot (480 by 300, RGBA8)
-/// costs 576,000 bytes plus [`ENTRY_OVERHEAD_BYTES`], so the default holds about 221 of them.
+/// costs 576,000 bytes plus [`ENTRY_OVERHEAD_BYTES`], so the default holds 222 of them.
 pub const DEFAULT_CAP_BYTES: usize = 128_000_000;
 
 /// What an entry costs besides its pixels (the key, the bookkeeping and the allocation's own

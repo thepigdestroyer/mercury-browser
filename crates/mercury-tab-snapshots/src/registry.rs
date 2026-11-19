@@ -3,8 +3,8 @@
 
 //! The snapshots of a window's tabs: the store and the scheduler together.
 //!
-//! GROUNDWORK STUB (lane tab-snapshots, item 3 owns this file, after `schedule.rs`): the data
-//! types are final; [`TabSnapshots`] is to be written to the contracts in its comments.
+//! GROUNDWORK STUB (lane tab-snapshots, item 4 owns this file, after items 2 and 3 have landed): the data
+//! types are final; [`SnapshotRegistry`] is to be written to the contracts in its comments.
 
 use std::hash::Hash;
 use std::time::Duration;
@@ -13,7 +13,7 @@ use crate::downscale::Limits;
 use crate::schedule::{CaptureRequest, CaptureScheduler, Skip};
 use crate::store::{DEFAULT_CAP_BYTES, Snapshot, SnapshotStore};
 
-/// What [`TabSnapshots::finish`] did with a capture's result.
+/// What [`SnapshotRegistry::finish`] did with a capture's result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FinishOutcome {
     /// The snapshot is stored; `evicted` older ones made room.
@@ -54,14 +54,14 @@ pub struct Stats {
 /// [`peek`](Self::peek) are the store's. The caller shrinks the frame itself (on a worker thread)
 /// with [`limits`](Self::limits).
 #[derive(Debug)]
-pub struct TabSnapshots<K> {
+pub struct SnapshotRegistry<K> {
     limits: Limits,
     store: SnapshotStore<K>,
     scheduler: CaptureScheduler<K>,
     stats: Stats,
 }
 
-impl<K: Copy + Eq + Hash> TabSnapshots<K> {
+impl<K: Copy + Eq + Hash> SnapshotRegistry<K> {
     pub fn new(cap_bytes: usize, limits: Limits) -> Self {
         Self {
             limits,
@@ -83,7 +83,7 @@ impl<K: Copy + Eq + Hash> TabSnapshots<K> {
         _now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
         let _ = &self.scheduler;
-        todo!("tab-snapshots item 3: TabSnapshots::frame_presented")
+        todo!("tab-snapshots item 4: SnapshotRegistry::frame_presented")
     }
 
     pub fn tab_leaving(
@@ -92,7 +92,7 @@ impl<K: Copy + Eq + Hash> TabSnapshots<K> {
         _surface: (u32, u32),
         _now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        todo!("tab-snapshots item 3: TabSnapshots::tab_leaving")
+        todo!("tab-snapshots item 4: SnapshotRegistry::tab_leaving")
     }
 
     pub fn capture_now(
@@ -101,7 +101,7 @@ impl<K: Copy + Eq + Hash> TabSnapshots<K> {
         _surface: (u32, u32),
         _now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        todo!("tab-snapshots item 3: TabSnapshots::capture_now")
+        todo!("tab-snapshots item 4: SnapshotRegistry::capture_now")
     }
 
     pub fn finish(
@@ -110,34 +110,34 @@ impl<K: Copy + Eq + Hash> TabSnapshots<K> {
         _snapshot: Option<Snapshot>,
         _now: Duration,
     ) -> FinishOutcome {
-        todo!("tab-snapshots item 3: TabSnapshots::finish")
+        todo!("tab-snapshots item 4: SnapshotRegistry::finish")
     }
 
     /// A tab closed: its snapshot goes, its state goes, a capture in flight for it is discarded.
     pub fn forget(&mut self, _key: K) {
-        todo!("tab-snapshots item 3: TabSnapshots::forget")
+        todo!("tab-snapshots item 4: SnapshotRegistry::forget")
     }
 
     /// The rendering context was torn down and made again: see the scheduler. Stored snapshots
     /// stay (they are copies in memory, not tied to the context).
     pub fn rendering_changed(&mut self) {
-        todo!("tab-snapshots item 3: TabSnapshots::rendering_changed")
+        todo!("tab-snapshots item 4: SnapshotRegistry::rendering_changed")
     }
 
     /// The tab's snapshot, which becomes the most recently used.
     pub fn get(&mut self, _key: K) -> Option<&Snapshot> {
-        todo!("tab-snapshots item 3: TabSnapshots::get")
+        todo!("tab-snapshots item 4: SnapshotRegistry::get")
     }
 
     /// The tab's snapshot without changing the order.
     pub fn peek(&self, _key: K) -> Option<&Snapshot> {
-        todo!("tab-snapshots item 3: TabSnapshots::peek")
+        todo!("tab-snapshots item 4: SnapshotRegistry::peek")
     }
 
     /// Changes the memory cap (evicting at once if it is lower); returns how many were evicted.
     pub fn set_cap_bytes(&mut self, _cap_bytes: usize) -> usize {
         let _ = &self.store;
-        todo!("tab-snapshots item 3: TabSnapshots::set_cap_bytes")
+        todo!("tab-snapshots item 4: SnapshotRegistry::set_cap_bytes")
     }
 
     pub fn stats(&self) -> Stats {
@@ -145,7 +145,7 @@ impl<K: Copy + Eq + Hash> TabSnapshots<K> {
     }
 }
 
-impl<K: Copy + Eq + Hash> Default for TabSnapshots<K> {
+impl<K: Copy + Eq + Hash> Default for SnapshotRegistry<K> {
     fn default() -> Self {
         Self::new(DEFAULT_CAP_BYTES, Limits::DEFAULT)
     }
