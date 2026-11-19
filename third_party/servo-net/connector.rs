@@ -42,6 +42,10 @@ pub const BUF_SIZE: usize = 32768;
 /// ALPN identifier for HTTP/2 (RFC 7540 §3.1).
 pub const ALPN_H2: &str = "h2";
 
+// Mercury: backport of servo/servo#49981 (merge commit 552c43da1). The HTTP/2 default of 16 KiB for the
+// header list is too small for YouTube, whose responses fail with "client error (SendRequest)".
+const HTTP2_MAX_HEADER_LIST_SIZE: u32 = 64 * 1024;
+
 #[derive(Clone)]
 pub struct ServoHttpConnector {
     inner: HyperHttpConnector,
@@ -668,6 +672,8 @@ pub fn create_http_client(tls_config: TlsConfig) -> ServoClient {
 
     Client::builder(TokioExecutor {})
         .http1_title_case_headers(true)
+        // The default 16 KiB size is insufficient for certain sites like YouTube
+        .http2_max_header_list_size(HTTP2_MAX_HEADER_LIST_SIZE)
         // This is necessary to allow hyper to perform various background tasks for HTTP/2.
         .timer(TokioTimer::new())
         // This is necessary for hyper to reap unused idle keep-alive connections.
