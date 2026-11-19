@@ -912,6 +912,7 @@ fn t06() -> Res {
         let mut layers_seen: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
         let found = wait_until(Duration::from_secs(25), || {
             let Ok(entries) = stats_of(&pair.a) else {
+                thread::sleep(Duration::from_millis(500));
                 return false;
             };
             layers_seen.clear();
@@ -932,7 +933,12 @@ fn t06() -> Res {
                     );
                 }
             }
-            layers_seen.len() >= 3
+            let complete = layers_seen.len() >= 3;
+            if !complete {
+                // getStats is not free: look twice a second, not every 5 ms.
+                thread::sleep(Duration::from_millis(500));
+            }
+            complete
         });
         let summary = layers_seen
             .iter()
@@ -1044,21 +1050,25 @@ fn t07() -> Res {
     // 2. The sender is removed and the call renegotiated: the remote side loses the track.
     pair.a.pc().remove_track(&sender).ctx("remove_track")?;
     negotiate(&pair.a, &pair.b).ctx("renegotiation")?;
-    let remote_signal = pair
-        .b
-        .wait_for(Duration::from_secs(10), |state| {
-            let ended = state
-                .tracks
-                .iter()
-                .any(|t| t.track.state() == MediaStreamTrackState::Ended);
-            (state.removed_tracks > 0 || ended).then(|| {
-                format!(
-                    "on_remove_track={} track_ended={ended}",
-                    state.removed_tracks
-                )
-            })
-        })
-        .ctx("renegotiation without the sender did not end or remove the remote track in 10 s")?;
+    // The track states are read with the peer's lock released: asking libwebrtc for a track state
+    // is a blocking call to the signaling thread, which may be waiting for that lock in a callback.
+    let mut remote_signal = String::new();
+    let signalled = wait_until(Duration::from_secs(10), || {
+        let removed = pair.b.with_state(|s| s.removed_tracks);
+        let ended = pair
+            .b
+            .remote_tracks()
+            .iter()
+            .any(|(_, track)| track.state() == MediaStreamTrackState::Ended);
+        remote_signal = format!("on_remove_track={removed} track_ended={ended}");
+        removed > 0 || ended
+    });
+    if !signalled {
+        return Err(
+            "renegotiation without the sender did not end or remove the remote track in 10 s"
+                .into(),
+        );
+    }
 
     // 3. close() on one side ends the other side's data channel.
     drop(link);
@@ -1074,13 +1084,13 @@ fn t07() -> Res {
         ));
     }
     pair.b.close();
-    let track_after = pair.b.with_state(|s| {
-        s.tracks
-            .iter()
-            .map(|t| format!("{:?}", t.track.state()))
-            .collect::<Vec<_>>()
-            .join(",")
-    });
+    let track_after = pair
+        .b
+        .remote_tracks()
+        .iter()
+        .map(|(_, track)| format!("{:?}", track.state()))
+        .collect::<Vec<_>>()
+        .join(",");
     pass(format!(
         "stop() gave ended()=1 and disabled the track; remove_track + renegotiation: {remote_signal}; a.close() closed b's data channel (b connection {b_connection}); remote tracks after b.close(): {track_after}; \
          the wrapper cannot mark a local track Ended (no set_state), so MED-2 ends a sender with remove_track and a renegotiation; sink {}",

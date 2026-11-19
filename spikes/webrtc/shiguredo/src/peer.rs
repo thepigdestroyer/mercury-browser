@@ -491,6 +491,19 @@ impl Peer {
         Some(Channel::attach(channel))
     }
 
+    /// Every remote track announced so far, as `(kind, track)`. The handles are copied under the
+    /// lock; ask them for their state afterwards (a call into libwebrtc must never run with the
+    /// state lock held: the signaling thread may be waiting for it in a callback).
+    pub fn remote_tracks(&self) -> Vec<(String, MediaStreamTrack)> {
+        self.with_state(|state| {
+            state
+                .tracks
+                .iter()
+                .map(|t| (t.kind.clone(), t.track.clone()))
+                .collect()
+        })
+    }
+
     /// The first remote track of `kind` that has been announced.
     pub fn remote_track(&self, kind: &str, timeout: Duration) -> Option<MediaStreamTrack> {
         self.wait_for(timeout, |state| {
