@@ -1791,3 +1791,29 @@ fn a_combo_box_of_the_settings_window_opens_through_the_expand_action() {
 
     assert_eq!(theme.accessible_expanded(), Some(true));
 }
+
+#[test]
+fn the_settings_notice_about_a_file_that_cannot_be_saved_is_read_before_the_section() {
+    let window = settings_window(0);
+    window.set_save_problem(
+        "Your settings could not be read, so Mercury Browser is using its defaults.".into(),
+    );
+
+    let nodes = a11y::reading_order(&window);
+    a11y::assert_labelled(&nodes, "the settings window with its notice");
+    a11y::assert_bounds(&nodes, a11y::window_size(&window));
+
+    let position = |role: Role, label: &str| {
+        nodes
+            .iter()
+            .position(|n| n.role == role && n.label == label)
+            .unwrap_or_else(|| panic!("no {role:?} {label:?}"))
+    };
+    let notice = position(
+        Role::Text,
+        "Your settings could not be read, so Mercury Browser is using its defaults.",
+    );
+    // After the sections, in front of the heading of the section it is shown over.
+    assert!(position(Role::TabList, "Settings sections") < notice);
+    assert!(notice < position(Role::Text, "General"));
+}
