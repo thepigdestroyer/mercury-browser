@@ -6,6 +6,8 @@ mod document_starts;
 mod download_offers;
 mod downloads;
 mod embedder_controls;
+// engine prefs: the preferences Mercury sets for the engine, in one file.
+mod engine_prefs;
 mod error;
 mod error_pages;
 mod exit_clearing;

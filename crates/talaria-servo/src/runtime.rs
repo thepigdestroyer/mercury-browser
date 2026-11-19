@@ -496,6 +496,9 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
     // Servo accept the paths it names without any file panel (`htmlinputelement.rs`); it exists
     // for Servo's own tests.
     preferences.dom_testing_html_input_element_select_files_enabled = false;
+    // engine prefs: the product values and pins of the web-platform preferences, set for every
+    // launch (not behind the experimental-features switch); see `engine_prefs.rs`.
+    crate::engine_prefs::apply(&mut preferences);
     preferences.user_agent = firefox_compatible_user_agent(&preferences.user_agent);
     apply_system_proxy(&mut preferences, runtime_options.system_proxy.as_ref());
     // Servo's size limit (`network_http_disk_cache_size`, 100 MB) is kept.
@@ -1497,6 +1500,72 @@ mod tests {
             assert!(
                 !preferences_with_experimental_web_features(enabled).dom_webrtc_transceiver_enabled
             );
+        }
+    }
+
+    // engine prefs
+    #[test]
+    fn the_first_two_waves_preferences_exist_and_stay_off() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+            for name in [
+                "dom_media_source_enabled",
+                "dom_media_capabilities_enabled",
+                "dom_eme_enabled",
+                "dom_picture_in_picture_enabled",
+                "dom_video_frame_callback_enabled",
+                "dom_webcodecs_enabled",
+                "dom_display_capture_enabled",
+                "dom_audio_output_enabled",
+                "dom_audioworklet_enabled",
+                "dom_media_recorder_enabled",
+                "dom_webrtc_peerconnection_enabled",
+                "media_eme_clearkey_enabled",
+                "network_cookie_samesite_lax_default",
+                "dom_web_locks_enabled",
+                // Pinned although Servo's default is already off: `cookieStore` would bypass the
+                // third-party cookie rule and Global Privacy Control.
+                "dom_cookiestore_enabled",
+                "dom_web_animations_enabled",
+                "dom_serviceworker_enabled",
+                "dom_webgpu_enabled",
+                "accessibility_enabled",
+                "expensive_accessibility_test_assertions_enabled",
+                // The media-capture pin stays: the new switch above replaces it later.
+                "dom_webrtc_transceiver_enabled",
+            ] {
+                assert!(
+                    Preferences::exists(name),
+                    "{name} is not a Servo preference"
+                );
+                assert_eq!(
+                    preferences.get_value(name),
+                    PrefValue::Bool(false),
+                    "{name} (experimental features: {enabled})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mercury_sets_global_privacy_control_and_blocks_audible_autoplay() {
+        // Not behind the experimental switch: both values are the product's.
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert!(preferences.privacy_gpc_enabled, "{enabled}");
+            assert_eq!(preferences.media_autoplay_policy, "block-audible");
+            for name in [
+                "media_autoplay_allow_origins",
+                "media_autoplay_block_origins",
+                "media_webrtc_ip_policy",
+            ] {
+                assert_eq!(
+                    preferences.get_value(name),
+                    PrefValue::Str(String::new()),
+                    "{name}"
+                );
+            }
         }
     }
 
