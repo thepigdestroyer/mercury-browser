@@ -8,11 +8,15 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use mercury_ui::{
-    AboutWindow, BrowserMenuCommand, BrowserMenuEntry, ChromePalette, ChromeTheme, MainWindow,
+    AboutLink, AboutWindow, BrowserMenuCommand, BrowserMenuEntry, ChromePalette, ChromeTheme,
+    MainWindow,
 };
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
-use slint::platform::{Key, Platform, WindowAdapter, WindowEvent};
-use slint::{ComponentHandle, LogicalSize, ModelRc, PhysicalSize, SharedPixelBuffer, VecModel};
+use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
+use slint::{
+    ComponentHandle, LogicalPosition, LogicalSize, ModelRc, PhysicalSize, SharedPixelBuffer,
+    VecModel,
+};
 
 struct SoftwarePlatform;
 
@@ -190,6 +194,63 @@ fn render_browser_menu_in_window(theme: ChromeTheme, name: &str) {
     window.hide().expect("the main window can be hidden");
 }
 
+fn click(window: &slint::Window, x: f32, y: f32) {
+    let position = LogicalPosition::new(x, y);
+    window.dispatch_event(WindowEvent::PointerMoved { position });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+}
+
+/// Where the About window's links are: the rows they fill and, left to right, the first and last
+/// column of each link.
+#[derive(Debug)]
+struct LinkRow {
+    top: u32,
+    bottom: u32,
+    runs: Vec<(u32, u32)>,
+}
+
+/// Finds the links by their colour. They are the first text in the accent colour below the icon
+/// (which has orange of its own), and the Slint badge below the separator has none; the end of
+/// the search is where the separator is. Antialiased edges are left out by asking for a colour
+/// close to the accent. Ink less than `LINK_GAP` apart is one link (the gap in a link is a
+/// space, between links it is the layout's 18px).
+fn link_row(pixels: &SharedPixelBuffer<slint::Rgba8Pixel>, accent: [u8; 3]) -> LinkRow {
+    const BELOW_THE_ICON: u32 = 110;
+    const ABOVE_THE_SEPARATOR: u32 = 285;
+    const LINK_GAP: u32 = 12;
+    let is_accent = |[r, g, b]: [u8; 3]| {
+        r.abs_diff(accent[0]) <= 48 && g.abs_diff(accent[1]) <= 48 && b.abs_diff(accent[2]) <= 48
+    };
+    let mut rows = (BELOW_THE_ICON..ABOVE_THE_SEPARATOR)
+        .filter(|&y| (0..pixels.width()).any(|x| is_accent(pixel(pixels, x, y))));
+    let top = rows
+        .next()
+        .expect("the links have rows of the accent colour");
+    let mut bottom = top;
+    for y in rows {
+        if y > bottom + 1 {
+            break;
+        }
+        bottom = y;
+    }
+    let mut runs: Vec<(u32, u32)> = Vec::new();
+    for x in (0..pixels.width()).filter(|&x| (top..=bottom).any(|y| is_accent(pixel(pixels, x, y))))
+    {
+        match runs.last_mut() {
+            Some(run) if x - run.1 <= LINK_GAP => run.1 = x,
+            _ => runs.push((x, x)),
+        }
+    }
+    LinkRow { top, bottom, runs }
+}
+
 fn render_about(theme: ChromeTheme, name: &str) -> ([u8; 3], [u8; 3]) {
     let about = AboutWindow::new().expect("the About window can be created");
     about.global::<ChromePalette>().set_theme(theme);
@@ -206,6 +267,11 @@ fn render_about(theme: ChromeTheme, name: &str) -> ([u8; 3], [u8; 3]) {
             .into(),
     );
     about.set_credit_line("Began as a fork of Hermes Browser by Kayk Caputo.".into());
+    let clicked = Rc::new(RefCell::new(Vec::new()));
+    about.on_open_link({
+        let clicked = Rc::clone(&clicked);
+        move |link| clicked.borrow_mut().push(link)
+    });
     // A software window has no size until it is given one; this is the size the window declares.
     about.window().set_size(LogicalSize::new(380.0, 420.0));
     about.show().expect("the About window can be shown");
@@ -215,6 +281,34 @@ fn render_about(theme: ChromeTheme, name: &str) -> ([u8; 3], [u8; 3]) {
         .expect("the About window renders");
     save(&pixels, &format!("about-{name}.png"));
     assert_eq!(about.window().size(), PhysicalSize::new(380, 420));
+
+    // Licence, Third-party notices and Source code: three links in the accent colour on one
+    // line, inside the window's padding, and each one opens its own page.
+    let accent = rgb(about.global::<ChromePalette>().get_accent());
+    let links = link_row(&pixels, accent);
+    assert_eq!(links.runs.len(), 3, "{name}: {links:?}");
+    assert!(links.bottom - links.top < 20, "{name}: one line: {links:?}");
+    let (first, last) = (links.runs[0], links.runs[2]);
+    assert!(first.0 >= 24, "{name}: inside the padding: {links:?}");
+    assert!(last.1 < 380 - 24, "{name}: inside the padding: {links:?}");
+    assert!(
+        first.0.abs_diff(379 - last.1) <= 6,
+        "{name}: the links are centred: {links:?}"
+    );
+    let middle = links.top + (links.bottom - links.top) / 2;
+    for run in &links.runs {
+        let x = (run.0 + run.1) as f32 / 2.0;
+        click(about.window(), x, middle as f32);
+    }
+    assert_eq!(
+        *clicked.borrow(),
+        [
+            AboutLink::Licence,
+            AboutLink::ThirdPartyNotices,
+            AboutLink::SourceCode
+        ],
+        "{name}"
+    );
     about.hide().expect("the About window can be hidden");
     (
         pixel(&pixels, 4, 4),

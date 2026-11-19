@@ -6,6 +6,7 @@ import { ChromePalette, ChromeTheme } from "../theme/chrome-palette.slint";
 export enum AboutLink {
     licence,
     third-party-notices,
+    source-code,
 }
 
 component LinkText inherits Text {
@@ -171,6 +172,14 @@ export component AboutWindow inherits Window {
                     text: "Third-party notices";
                     clicked => {
                         root.open-link(AboutLink.third-party-notices);
+                    }
+                }
+
+                // MPL-2.0 §3.2: the binary says where the source is.
+                LinkText {
+                    text: "Source code";
+                    clicked => {
+                        root.open-link(AboutLink.source-code);
                     }
                 }
             }

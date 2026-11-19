@@ -3,6 +3,8 @@
 //! What the menus contain and who owns each key: the macOS menu bar and the browser menu are
 //! both built from this table, and the tests check it against `shortcuts.rs`.
 
+use std::borrow::Cow;
+
 use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::shortcuts::{Platform, ShortcutAction, shortcut_action};
@@ -56,18 +58,22 @@ pub(crate) enum Document {
     Help,
     Licence,
     ThirdPartyNotices,
+    /// The repository, where the source of the MPL-2.0 parts is (MPL-2.0 §3.2).
+    SourceCode,
 }
 
 impl Document {
-    pub(crate) const fn url(self) -> &'static str {
+    /// The address the page opens at. Only the third-party notices depend on the installation:
+    /// they open the page packaged with the program as a `file://` address, and the notices file
+    /// on GitHub when there is none (see `about::third_party_notices_url`).
+    pub(crate) fn url(self) -> Cow<'static, str> {
         match self {
-            Self::Help => "https://thepigdestroyer.github.io/mercury-browser/",
-            Self::Licence => {
-                "https://github.com/thepigdestroyer/mercury-browser/blob/master/LICENSE"
-            }
-            Self::ThirdPartyNotices => {
-                "https://github.com/thepigdestroyer/mercury-browser/blob/master/THIRD-PARTY-NOTICES.md"
-            }
+            Self::Help => Cow::Borrowed("https://thepigdestroyer.github.io/mercury-browser/"),
+            Self::Licence => Cow::Borrowed(
+                "https://github.com/thepigdestroyer/mercury-browser/blob/master/LICENSE",
+            ),
+            Self::ThirdPartyNotices => crate::about::third_party_notices_url(),
+            Self::SourceCode => Cow::Borrowed("https://github.com/thepigdestroyer/mercury-browser"),
         }
     }
 }
@@ -1351,6 +1357,66 @@ mod tests {
         assert_eq!(KeyEquivalent::new('f', CONTROL_CMD).mac_label(), "⌃⌘F");
         assert_eq!(KeyEquivalent::new('t', SHIFT_CMD).mac_label(), "⇧⌘T");
         assert_eq!(KeyEquivalent::new(DELETE_KEY, SHIFT_CMD).mac_label(), "⇧⌘⌫");
+    }
+
+    const DOCUMENTS: [Document; 4] = [
+        Document::Help,
+        Document::Licence,
+        Document::ThirdPartyNotices,
+        Document::SourceCode,
+    ];
+
+    #[test]
+    fn documents_open_the_pages_they_name() {
+        assert_eq!(
+            Document::Help.url(),
+            "https://thepigdestroyer.github.io/mercury-browser/"
+        );
+        assert_eq!(
+            Document::Licence.url(),
+            "https://github.com/thepigdestroyer/mercury-browser/blob/master/LICENSE"
+        );
+        assert_eq!(
+            Document::SourceCode.url(),
+            "https://github.com/thepigdestroyer/mercury-browser"
+        );
+    }
+
+    #[test]
+    fn the_third_party_notices_are_the_bundled_page_or_the_page_on_github() {
+        // The test program is in `target/<profile>/deps`, with no page beside it, so GitHub is
+        // what it gets; a packaged program gets the `file://` address of its own page.
+        let url = Document::ThirdPartyNotices.url();
+        let bundled = url.starts_with("file:///") && url.ends_with("/credits/credits.html");
+        assert!(
+            bundled || url == crate::about::THIRD_PARTY_NOTICES_ONLINE_URL,
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn every_document_is_an_address_the_browser_resolves_in_a_new_tab() {
+        for document in DOCUMENTS {
+            let url = document.url();
+            let parsed = url::Url::parse(&url).expect("the address parses");
+            match document {
+                // `file:` is for the page of the installed program; the rest are web pages.
+                Document::ThirdPartyNotices => {
+                    assert!(matches!(parsed.scheme(), "https" | "file"), "{url}");
+                }
+                _ => assert_eq!(parsed.scheme(), "https", "{document:?}"),
+            }
+            // `open_tab_with` resolves it like a typed address, and keeps it as it is.
+            let target = talaria_core::classify_address(&url).expect("the address resolves");
+            assert_eq!(target, talaria_core::NavigationTarget::Url(parsed));
+        }
+    }
+
+    #[test]
+    fn a_document_is_a_command_that_is_always_available() {
+        for document in DOCUMENTS {
+            assert!(is_available(MenuCommand::OpenDocument(document)));
+        }
     }
 
     // tabs-plus
