@@ -333,6 +333,8 @@ impl BrowserController {
         // openurl
         self.external_link_requests
             .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
+        // groups-core: a group the closed tab was the last of is deleted, its key freed
+        self.settle_groups();
     }
 
     pub fn close_tab_at(&mut self, index: usize) -> CloseTabOutcome {
@@ -647,8 +649,12 @@ impl BrowserController {
         self.next_tab_id += 1;
         let mut state = BrowserState::default();
         state.set_page_title(title);
+        let mut tab = Tab::opened_by_page(tab_id, state);
+        // groups-core: the new tab joins its opener's group (a pinned opener has none)
+        let opener = &self.tabs[opener_index];
+        tab.set_group(opener.group().filter(|_| !opener.is_pinned()));
         // tabs-plus: never among the pinned tabs
-        self.insert_tab(opener_index + 1, Tab::opened_by_page(tab_id, state));
+        self.insert_tab(opener_index + 1, tab);
         if activation == TabActivation::Foreground {
             self.activate(tab_id); // groups-core
         }
@@ -1420,12 +1426,14 @@ impl BrowserController {
 
     /// The one way a new tab enters the strip: `index` is clamped into the tab's group, so a
     /// pinned tab lands among the pinned tabs and any other after them.
-    fn insert_tab(&mut self, index: usize, tab: Tab) {
+    fn insert_tab(&mut self, index: usize, mut tab: Tab) {
         let pinned_count = self.pinned_tab_count();
         let index = if tab.is_pinned() {
             index.min(pinned_count)
         } else {
-            index.clamp(pinned_count, self.tabs.len())
+            let index = index.clamp(pinned_count, self.tabs.len());
+            // groups-core: a grouped tab stays in its run, a loose one is snapped out of any (R1)
+            self.place_among_groups(index, &mut tab)
         };
         self.tabs.insert(index, tab);
     }
@@ -1451,14 +1459,24 @@ impl BrowserController {
         let Some(from) = self.tabs.iter().position(|tab| tab.id() == tab_id) else {
             return false;
         };
+        // groups-core: an unpinned tab in a group stays in its run
+        let run = if pinned { None } else { self.run_around(from) };
         let mut tab = self.tabs.remove(from);
         let was_pinned = tab.is_pinned();
         tab.set_pinned(pinned);
+        if pinned {
+            // groups-core: a pinned tab is in no group; one left without tabs is deleted
+            tab.set_group(None);
+            self.drop_empty_groups();
+        }
         let pinned_count = self.pinned_tab_count();
         let index = if pinned {
             index.min(pinned_count)
+        } else if let Some((start, end)) = run {
+            index.clamp(start, end) // groups-core: inside the run it came from
         } else {
-            index.clamp(pinned_count, self.tabs.len())
+            // groups-core: a loose tab is snapped out of any run (R1)
+            self.snap_out_of_run(index.clamp(pinned_count, self.tabs.len()))
         };
         self.tabs.insert(index, tab);
         index != from || was_pinned != pinned
@@ -1477,8 +1495,16 @@ impl BrowserController {
         } else {
             pinned_count..self.tabs.len()
         };
+        // groups-core: a grouped tab moves within its run only
+        let group = self
+            .run_around(from)
+            .map_or(group, |(start, end)| start..end + 1);
         match from.checked_add_signed(delta) {
-            Some(to) if group.contains(&to) => self.move_tab(tab_id, to, pinned),
+            // groups-core: a loose tab steps over a whole run, never into it
+            Some(to) if group.contains(&to) => {
+                let to = self.past_adjacent_run(from, to);
+                self.move_tab(tab_id, to, pinned)
+            }
             _ => false,
         }
     }
