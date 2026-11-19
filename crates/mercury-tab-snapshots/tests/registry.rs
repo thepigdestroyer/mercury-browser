@@ -372,9 +372,15 @@ fn captures_stop_after_three_failures_in_a_row_until_the_context_is_made_again()
     );
 
     registry.rendering_changed();
-    // The tab's first frame is long past without a picture, so its periodic capture is due.
+    // Captures are on again, but the first frame of the new context starts the tab's periodic
+    // clock afresh (it may be a partial first paint), so the capture comes 30 s later.
+    assert_eq!(
+        registry.frame_presented(A, SIZE, secs(101)),
+        Err(Skip::NotDue),
+        "captures are on again, not due yet"
+    );
     let request = registry
-        .frame_presented(A, SIZE, secs(101))
+        .frame_presented(A, SIZE, secs(131))
         .expect("captures are on again");
     assert_eq!(request.reason(), CaptureReason::Periodic);
 }

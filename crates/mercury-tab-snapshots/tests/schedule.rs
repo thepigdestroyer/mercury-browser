@@ -308,14 +308,18 @@ fn three_failures_in_a_row_disable_captures_until_rendering_changed() {
         scheduler.tab_leaving(A, SIZE, secs(10_001)),
         Err(Skip::NoFrame)
     );
-    let request = ok(scheduler.frame_presented(A, SIZE, secs(10_002)));
+    // The first frame of the new context starts the tab's periodic clock afresh (it may be a
+    // partial first paint), so its periodic capture is 30 s later.
+    quiet_frame(&mut scheduler, A, secs(10_002));
+    quiet_frame(&mut scheduler, A, secs(10_031));
+    let request = ok(scheduler.frame_presented(A, SIZE, secs(10_032)));
     assert_eq!(request.reason(), CaptureReason::Periodic);
-    assert!(scheduler.capture_failed(&request, secs(10_003)));
+    assert!(scheduler.capture_failed(&request, secs(10_033)));
     assert_eq!(
-        scheduler.capture_now(A, SIZE, secs(10_004)),
+        scheduler.capture_now(A, SIZE, secs(10_034)),
         Err(Skip::Backoff)
     );
-    ok(scheduler.capture_now(A, SIZE, secs(10_008)));
+    ok(scheduler.capture_now(A, SIZE, secs(10_038)));
 }
 
 #[test]
@@ -578,6 +582,66 @@ fn rapid_switching_captures_a_tab_at_most_once_a_second() {
 }
 
 #[test]
+fn a_tab_that_comes_back_is_not_captured_on_its_first_frame_back() {
+    // Integrator finding on item 3: the periodic clock ran from the tab's last capture alone, so
+    // a tab that returned after more than 30 s was captured on its first presented frame, which
+    // can be a partial first paint that would replace the good picture taken when it left.
+    let mut scheduler = Sched::new();
+    quiet_frame(&mut scheduler, A, ms(0));
+    let leaving = ok(scheduler.tab_leaving(A, SIZE, ms(2_000)));
+    assert!(scheduler.capture_succeeded(&leaving, ms(2_000)));
+    quiet_frame(&mut scheduler, B, ms(2_010));
+
+    // A returns 98 s after its last capture and presents its first frame, then more.
+    quiet_frame(&mut scheduler, A, ms(100_000));
+    quiet_frame(&mut scheduler, A, ms(100_016));
+    quiet_frame(&mut scheduler, A, ms(129_999));
+    // The clock runs from the first frame back, not from the old capture.
+    let request = ok(scheduler.frame_presented(A, SIZE, ms(130_000)));
+    assert_eq!(request.reason(), CaptureReason::Periodic);
+    assert_eq!(request.key(), A);
+}
+
+#[test]
+fn a_tab_that_never_got_a_picture_restarts_its_clock_when_it_comes_back() {
+    let mut scheduler = Sched::new();
+    quiet_frame(&mut scheduler, A, ms(0));
+    // The leaving capture of A failed, so A has no picture; B is shown, and A comes back at 50 s.
+    fail_leaving(&mut scheduler, A, ms(1_000));
+    quiet_frame(&mut scheduler, B, ms(1_010));
+    quiet_frame(&mut scheduler, A, ms(50_000));
+    quiet_frame(&mut scheduler, A, ms(79_999));
+    let request = ok(scheduler.frame_presented(A, SIZE, ms(80_000)));
+    assert_eq!(request.reason(), CaptureReason::Periodic);
+}
+
+#[test]
+fn a_tab_that_stays_active_keeps_its_clock_when_the_frames_go_on() {
+    // The restart is for a tab that becomes the presented one, not for every frame.
+    let mut scheduler = Sched::new();
+    quiet_frame(&mut scheduler, A, ms(0));
+    quiet_frame(&mut scheduler, B, ms(10));
+    quiet_frame(&mut scheduler, A, ms(20));
+    let mut at = ms(20);
+    while at < ms(30_019) {
+        at += ms(250);
+        quiet_frame(&mut scheduler, A, at.min(ms(30_019)));
+    }
+    let request = ok(scheduler.frame_presented(A, SIZE, ms(30_020)));
+    assert_eq!(request.reason(), CaptureReason::Periodic);
+}
+
+#[test]
+fn rendering_changed_restarts_the_clock_of_the_next_frame() {
+    let mut scheduler = Sched::new();
+    quiet_frame(&mut scheduler, A, ms(0));
+    scheduler.rendering_changed();
+    quiet_frame(&mut scheduler, A, ms(40_000));
+    quiet_frame(&mut scheduler, A, ms(69_999));
+    let request = ok(scheduler.frame_presented(A, SIZE, ms(70_000)));
+    assert_eq!(request.reason(), CaptureReason::Periodic);
+}
+#[test]
 fn known_tabs_follows_the_frames_and_forget() {
     let mut scheduler = Sched::new();
     assert_eq!(scheduler.known_tabs(), 0);
@@ -795,16 +859,18 @@ fn the_per_frame_path_does_not_allocate() {
         assert_eq!(result, Err(Skip::NotDue));
     }
     // A refused periodic capture (Busy) and a disabled scheduler are per-frame paths as well.
-    let request = ok(scheduler.frame_presented(A, SIZE, secs(40)));
+    // A becomes the presented tab again at 35 s, so its periodic capture is due at 65 s.
+    quiet_frame(&mut scheduler, A, secs(35));
+    let request = ok(scheduler.frame_presented(A, SIZE, secs(65)));
     for frame in 0..1_000u64 {
-        let result = scheduler.frame_presented(A, SIZE, secs(40) + ms(frame));
+        let result = scheduler.frame_presented(A, SIZE, secs(65) + ms(frame));
         assert_eq!(result, Err(Skip::Busy));
     }
-    assert!(scheduler.capture_failed(&request, secs(41)));
-    fail_leaving(&mut scheduler, A, secs(46));
-    fail_leaving(&mut scheduler, A, secs(52));
+    assert!(scheduler.capture_failed(&request, secs(66)));
+    fail_leaving(&mut scheduler, A, secs(71));
+    fail_leaving(&mut scheduler, A, secs(77));
     for frame in 0..1_000u64 {
-        let result = scheduler.frame_presented(A, SIZE, secs(60) + ms(frame));
+        let result = scheduler.frame_presented(A, SIZE, secs(85) + ms(frame));
         assert_eq!(result, Err(Skip::Disabled));
     }
     assert_eq!(allocations_on_this_thread() - before, 0);

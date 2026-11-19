@@ -126,9 +126,11 @@ impl<K: Copy> CaptureRequest<K> {
 /// What the scheduler remembers about one tab.
 #[derive(Debug, Clone, Copy)]
 struct TabState {
-    /// When the tab's first frame was presented: the start of its periodic clock until it has a
-    /// successful capture.
-    first_frame: Duration,
+    /// When the tab last became the one whose frames are presented (its first frame, or its first
+    /// frame after another tab's or after `rendering_changed`). Its periodic clock never starts
+    /// before this, so a tab that comes back is not captured on its first frame back (which can
+    /// be a partial first paint) but 30 s after it.
+    active_since: Duration,
     /// When the tab's last successful capture was reported.
     last_capture: Option<Duration>,
     /// Frames the tab presented since its last successful capture (or ever, if it has none).
@@ -158,7 +160,10 @@ struct InFlight<K> {
 ///   large, is now what the context holds, counts it for the tab, and then decides a
 ///   [`CaptureReason::Periodic`] capture: `Ok` when [`PERIODIC_INTERVAL`] has passed since the
 ///   tab's last successful capture (or since its first presented frame if it has none) and no
-///   other refusal applies.
+///   other refusal applies. The clock never starts before the frame with which the tab last
+///   became the presented one: a tab that comes back is captured 30 s after its first frame back,
+///   not on it (that frame can be a partial first paint, and the picture taken when the tab left
+///   is the better one).
 /// - [`tab_leaving`](Self::tab_leaving) is called before the app lets another tab paint: `Ok`
 ///   ([`CaptureReason::Leaving`]) only if the last presented frame is `key`'s at the same
 ///   `surface` size and the tab presented a frame since its last capture and it is not
@@ -230,12 +235,18 @@ impl<K: Copy + Eq + Hash> CaptureScheduler<K> {
         now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
         self.drop_overdue(now);
+        let became_active = self.presented.is_none_or(|presented| presented.key != key);
         self.presented = Some(Presented { key, surface });
         self.tabs
             .entry(key)
-            .and_modify(|tab| tab.frames_since_capture = tab.frames_since_capture.saturating_add(1))
+            .and_modify(|tab| {
+                tab.frames_since_capture = tab.frames_since_capture.saturating_add(1);
+                if became_active {
+                    tab.active_since = now;
+                }
+            })
             .or_insert(TabState {
-                first_frame: now,
+                active_since: now,
                 last_capture: None,
                 frames_since_capture: 1,
             });
@@ -350,7 +361,9 @@ impl<K: Copy + Eq + Hash> CaptureScheduler<K> {
                 }
             }
             CaptureReason::Periodic => {
-                let since = tab.last_capture.unwrap_or(tab.first_frame);
+                let since = tab
+                    .last_capture
+                    .map_or(tab.active_since, |last| last.max(tab.active_since));
                 if now.saturating_sub(since) < PERIODIC_INTERVAL {
                     return Err(Skip::NotDue);
                 }
