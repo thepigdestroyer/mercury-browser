@@ -293,6 +293,10 @@ package-linux: build-release
 	mkdir -p "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)"
 	cp "target/release/mercury-browser" "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/mercury-browser"
 	"$(STRIP)" --strip-unneeded "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/mercury-browser"
+# blocklists: the filter lists are data files beside the program, never compiled into it.
+	@if LC_ALL=C grep -q -a -F -e "advanced-ads-" -e "scorecardresearch" -e "Brave Firstparty specific filters" "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/mercury-browser"; then \
+		echo "error: mercury-browser contains filter-list text" >&2; exit 1; \
+	fi
 	cp README.md "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/README.md"
 	cp LICENSE "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/LICENSE"
 	cp THIRD-PARTY-NOTICES.md "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/THIRD-PARTY-NOTICES.md"

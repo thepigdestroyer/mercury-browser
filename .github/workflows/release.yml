@@ -259,6 +259,16 @@ jobs:
           strip --strip-unneeded \
             "${output_directory}/mercury-browser"
 
+          # The filter lists are data files beside the program, never compiled into it.
+          if LC_ALL=C grep -q -a -F \
+            -e "advanced-ads-" \
+            -e "scorecardresearch" \
+            -e "Brave Firstparty specific filters" \
+            "${output_directory}/mercury-browser"; then
+            echo "error: mercury-browser contains filter-list text" >&2
+            exit 1
+          fi
+
           cp README.md \
             "${output_directory}/README.md"
 

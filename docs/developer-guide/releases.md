@@ -13,7 +13,23 @@ Mercury publishes a Linux preview archive from an Ubuntu 22.04 GitHub-hosted run
 make package-linux
 ```
 
-The target creates an optimized executable, strips it, copies the README and license, then writes a compressed archive and SHA-256 checksum under `dist/`.
+The target builds the optimized workspace, copies the executable and strips it, copies the README, the license, the third-party notices and the licence texts, installs the filter lists, then writes a compressed archive and SHA-256 checksum under `dist/`. The release workflow's archive has the same contents. Inside the archive's single top-level folder (`<package>/`):
+
+```text
+<package>/
+  mercury-browser          the stripped executable
+  README.md
+  LICENSE
+  THIRD-PARTY-NOTICES.md
+  LICENSES/                the licence texts the notices refer to
+  filter-lists/            the ad and tracker filter lists (data, read at start-up)
+    manifest.json          each list's name, source URL, licence, version or date and SHA-256
+    *.txt                  the five lists the manifest names
+    NOTICE.md              each list's name, credit, licence and source
+    LICENSES/              the licence texts of those lists (CC-BY-SA-3.0 and MPL-2.0)
+```
+
+`filter-lists/` is written by `mercury-filter-lists install <destination>` (the binary of `crates/mercury-filter-lists`, run from the repository root). It checks every list against its SHA-256 in `crates/talaria-servo/resources/adblock/manifest.json` and writes nothing if one does not match or a licence text is missing from `LICENSES/`. The lists are data files beside the program and are never compiled into it: after stripping, the target and the release workflow fail if the executable contains a fragment of a list (`advanced-ads-`, `scorecardresearch` or `Brave Firstparty specific filters`). The macOS bundle check (`scripts/ci/check-macos-bundle.sh`) looks for the same fragments.
 
 The current package name follows this shape:
 
