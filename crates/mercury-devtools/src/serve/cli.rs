@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 
-//! The command line of `serve-tests` (`[-h] [--port PORT]`), read and answered as the Python
-//! script's `argparse` parser did.
+//! The command line of `serve-tests` (`[-h] [--port PORT] [--log LOG]`), read and answered as
+//! the Python script's `argparse` parser did.
 
 use super::python::python_int;
 
@@ -10,16 +10,17 @@ use super::python::python_int;
 pub const DESCRIPTION: &str =
     "Serve the repository's tests/ directory on the loopback interface, for the media checks.";
 const PROGRAM: &str = "serve-tests";
-const USAGE: &str = "usage: serve-tests [-h] [--port PORT]";
+const USAGE: &str = "usage: serve-tests [-h] [--port PORT] [--log LOG]";
 
 /// What the command line asks for.
 #[derive(Debug, PartialEq, Eq)]
 pub enum Command {
     /// Print the help text on standard output and exit 0.
     Help,
-    /// Serve on this port (0: any free port). Not checked against 0..=65535 here: like the
-    /// Python script, an out-of-range port fails when binding, with exit status 1.
-    Serve { port: i64 },
+    /// Serve on this port (0: any free port), and append a JSON line per request to the file
+    /// `log` if given. The port is not checked against 0..=65535 here: like the Python script,
+    /// an out-of-range port fails when binding, with exit status 1.
+    Serve { port: i64, log: Option<String> },
 }
 
 /// A command-line error: the message for standard error and the exit status.
@@ -32,7 +33,7 @@ pub struct UsageError {
 /// The `--help` text.
 pub fn help_text() -> String {
     format!(
-        "{USAGE}\n\n{DESCRIPTION}\n\noptional arguments:\n  -h, --help   show this help message and exit\n  --port PORT  port to bind (default: any free port)\n"
+        "{USAGE}\n\n{DESCRIPTION}\n\noptional arguments:\n  -h, --help   show this help message and exit\n  --port PORT  port to bind (default: any free port)\n  --log LOG    append one JSON line per request to this file\n"
     )
 }
 
@@ -49,7 +50,7 @@ fn long_option(argument: &str) -> Option<&'static str> {
     if argument.len() < 3 || !argument.starts_with("--") {
         return None;
     }
-    ["--help", "--port"]
+    ["--help", "--port", "--log"]
         .into_iter()
         .find(|option| option.starts_with(argument))
 }
@@ -61,9 +62,10 @@ fn looks_like_negative_number(argument: &str) -> bool {
 }
 
 /// Reads the command line (without the program name) as the Python script's `argparse`
-/// parser did: `[-h] [--port PORT]`, with `--port=N` and unambiguous prefixes.
+/// parser did: `[-h] [--port PORT] [--log LOG]`, with `--port=N` and unambiguous prefixes.
 pub fn parse_arguments(arguments: &[String]) -> Result<Command, UsageError> {
     let mut port = 0;
+    let mut log = None;
     let mut unrecognised = Vec::new();
     let mut only_positional = false;
     let mut index = 0;
@@ -101,7 +103,7 @@ pub fn parse_arguments(arguments: &[String]) -> Result<Command, UsageError> {
                 }
                 return Ok(Command::Help);
             }
-            Some(_) => {
+            Some(option) => {
                 let value = match inline_value {
                     Some(value) => value,
                     None => match arguments.get(index) {
@@ -113,12 +115,20 @@ pub fn parse_arguments(arguments: &[String]) -> Result<Command, UsageError> {
                             index += 1;
                             next.as_str()
                         }
-                        _ => return Err(usage_error("argument --port: expected one argument")),
+                        _ => {
+                            return Err(usage_error(&format!(
+                                "argument {option}: expected one argument"
+                            )));
+                        }
                     },
                 };
-                port = python_int(value).ok_or_else(|| {
-                    usage_error(&format!("argument --port: invalid int value: '{value}'"))
-                })?;
+                if option == "--log" {
+                    log = Some(value.to_owned());
+                } else {
+                    port = python_int(value).ok_or_else(|| {
+                        usage_error(&format!("argument --port: invalid int value: '{value}'"))
+                    })?;
+                }
             }
             None => unrecognised.push(argument.to_owned()),
         }
@@ -129,7 +139,7 @@ pub fn parse_arguments(arguments: &[String]) -> Result<Command, UsageError> {
             unrecognised.join(" ")
         )));
     }
-    Ok(Command::Serve { port })
+    Ok(Command::Serve { port, log })
 }
 
 #[cfg(test)]
@@ -142,7 +152,7 @@ mod tests {
 
     #[test]
     fn command_line_like_argparse() {
-        let serve = |port| Ok(Command::Serve { port });
+        let serve = |port| Ok(Command::Serve { port, log: None });
         assert_eq!(parse_arguments(&[]), serve(0));
         assert_eq!(
             parse_arguments(&arguments(&["--port", "8765"])),
@@ -154,6 +164,20 @@ mod tests {
             serve(2)
         );
         assert_eq!(parse_arguments(&arguments(&["--port", "-1"])), serve(-1));
+        let logged = |port, file: &str| {
+            Ok(Command::Serve {
+                port,
+                log: Some(file.to_owned()),
+            })
+        };
+        assert_eq!(
+            parse_arguments(&arguments(&["--log", "requests.jsonl"])),
+            logged(0, "requests.jsonl")
+        );
+        assert_eq!(
+            parse_arguments(&arguments(&["--port=1", "--lo=a b", "--log", "c"])),
+            logged(1, "c")
+        );
         assert_eq!(parse_arguments(&arguments(&["-h"])), Ok(Command::Help));
         assert_eq!(
             parse_arguments(&arguments(&["x", "--help"])),
@@ -161,6 +185,11 @@ mod tests {
         );
         for (list, detail) in [
             (&["--port"][..], "argument --port: expected one argument"),
+            (&["--log"][..], "argument --log: expected one argument"),
+            (
+                &["--log", "--port", "1"][..],
+                "argument --log: expected one argument",
+            ),
             (
                 &["--port", "--help"][..],
                 "argument --port: expected one argument",
@@ -189,7 +218,8 @@ mod tests {
     #[test]
     fn help_names_the_option() {
         let help = help_text();
-        assert!(help.starts_with("usage: serve-tests [-h] [--port PORT]\n"));
+        assert!(help.starts_with("usage: serve-tests [-h] [--port PORT] [--log LOG]\n"));
         assert!(help.contains("--port PORT  port to bind (default: any free port)"));
+        assert!(help.contains("--log LOG    append one JSON line per request to this file"));
     }
 }

@@ -4,13 +4,15 @@
 //! Serve the repository's `tests/` directory on the loopback interface, for the media and
 //! dialog checks.
 //!
-//!     scripts/serve-tests.sh [--port N]
+//!     scripts/serve-tests.sh [--port N] [--log FILE]
 //!
 //! Binds 127.0.0.1 on an ephemeral port (or `--port`), prints the port on the first line of
 //! standard output, and serves `tests/` (so `tests/pages/media.html` is `/pages/media.html`).
 //! Single byte ranges are answered with 206 Partial Content, `/private` asks for HTTP Basic
-//! authentication (`alice` / `secret`); see `mercury_devtools::serve`. Exits with status 0 on
-//! SIGINT, SIGTERM or SIGHUP, and when the process that started it goes away.
+//! authentication (`alice` / `secret`), `/download/<name>` answers generated files for the
+//! downloads checks and `--log FILE` appends one JSON line per request to a file; see
+//! `mercury_devtools::serve`. Exits with status 0 on SIGINT, SIGTERM or SIGHUP, and when the
+//! process that started it goes away.
 //!
 //! Signals and the parent-process check are Unix APIs, so on other systems this prints a
 //! message and exits with status 1 (the workspace still builds there).
@@ -49,12 +51,12 @@ mod unix {
 
     pub fn main() -> ExitCode {
         let arguments: Vec<String> = std::env::args().skip(1).collect();
-        let port = match serve::parse_arguments(&arguments) {
+        let (port, log) = match serve::parse_arguments(&arguments) {
             Ok(Command::Help) => {
                 print!("{}", serve::help_text());
                 return ExitCode::SUCCESS;
             }
-            Ok(Command::Serve { port }) => port,
+            Ok(Command::Serve { port, log }) => (port, log),
             Err(error) => {
                 eprint!("{}", error.message);
                 return ExitCode::from(error.status as u8);
@@ -65,7 +67,7 @@ mod unix {
             return ExitCode::FAILURE;
         };
         let root = serve::default_root();
-        let server = match Server::bind(&root, port) {
+        let mut server = match Server::bind(&root, port) {
             Ok(server) => server,
             Err(error) => {
                 eprintln!(
@@ -75,6 +77,17 @@ mod unix {
                 return ExitCode::FAILURE;
             }
         };
+
+        if let Some(log) = log {
+            // Relative to where the server was started, as the Python script resolved it.
+            match std::path::absolute(&log) {
+                Ok(path) => server = server.with_request_log(path),
+                Err(error) => {
+                    eprintln!("serve-tests: cannot use the request log {log}: {error}");
+                    return ExitCode::FAILURE;
+                }
+            }
+        }
 
         for signal in [libc::SIGINT, libc::SIGTERM, libc::SIGHUP] {
             // SAFETY: the handler only calls _exit.

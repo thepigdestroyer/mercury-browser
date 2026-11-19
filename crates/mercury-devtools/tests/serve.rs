@@ -87,6 +87,15 @@ const PAGE: &str = "<!doctype html><title>page</title><p>Hello</p>\n";
 /// A root like `tests/`: pages, media, a directory with an index file and one without, and a
 /// secret beside the root that must stay out of reach.
 fn fixture() -> (tempfile::TempDir, u16) {
+    let dir = tree();
+    let port = Server::bind(&dir.path().join("tests"), 0)
+        .expect("bind")
+        .spawn();
+    (dir, port)
+}
+
+/// The files of [`fixture`], not yet served.
+fn tree() -> tempfile::TempDir {
     let dir = tempfile::tempdir().expect("temporary directory");
     let root = dir.path().join("tests");
     fs::create_dir_all(root.join("pages")).unwrap();
@@ -103,8 +112,7 @@ fn fixture() -> (tempfile::TempDir, u16) {
     fs::write(root.join("media/tone.wav"), b"RIFF0123WAVE").unwrap();
     fs::write(root.join("media/empty.mp4"), b"").unwrap();
     fs::write(dir.path().join("secret.txt"), "secret").unwrap();
-    let port = Server::bind(&root, 0).expect("bind").spawn();
-    (dir, port)
+    dir
 }
 
 fn clip() -> Vec<u8> {
@@ -335,10 +343,15 @@ fn private_asks_for_basic_authentication() {
         get(port, "GET", "/private#x", &[]).status_line,
         "HTTP/1.0 404 File not found"
     );
-    // Other methods are not implemented there either.
+    // A POST is refused (405: only the downloads routes take one), other methods are not
+    // implemented there either.
     assert_eq!(
         get(port, "POST", "/private", &[]).status_line,
-        "HTTP/1.0 501 Unsupported method ('POST')"
+        "HTTP/1.0 405 Method Not Allowed"
+    );
+    assert_eq!(
+        get(port, "PUT", "/private", &[]).status_line,
+        "HTTP/1.0 501 Unsupported method ('PUT')"
     );
 }
 
@@ -585,4 +598,433 @@ fn serves_the_repository_tests_directory() {
     let range = get(port, "GET", "/media/tone.wav", &["Range: bytes=0-3"]);
     assert_eq!(range.body, tone[..4]);
     assert_eq!(range.body, b"RIFF");
+}
+
+// The downloads routes and the request log, which the Python server gained in train 20
+// (`/download/<name>`, `POST /form-result`, `--log FILE`).
+
+/// A request with a body (`POST`, or any method), the length of which is announced.
+fn send(port: u16, method: &str, path: &str, headers: &[&str], body: &[u8]) -> Response {
+    let mut request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: 127.0.0.1:{port}\r\nContent-Length: {}\r\n",
+        body.len()
+    )
+    .into_bytes();
+    for header in headers {
+        request.extend_from_slice(header.as_bytes());
+        request.extend_from_slice(b"\r\n");
+    }
+    request.extend_from_slice(b"\r\n");
+    request.extend_from_slice(body);
+    parse(exchange(port, &request))
+}
+
+fn generated(range: std::ops::Range<usize>) -> Vec<u8> {
+    range.map(|i| (i % 251) as u8).collect()
+}
+
+const LAST_MODIFIED: &str = "Tue, 14 Nov 2023 22:13:20 GMT";
+
+#[test]
+fn downloads_answer_generated_bytes() {
+    let (_dir, port) = fixture();
+    let response = get(port, "GET", "/download/a.bin", &[]);
+    assert_eq!(response.status_line, "HTTP/1.0 200 OK");
+    assert_common_headers(&response);
+    assert_eq!(
+        response.header("Content-Type"),
+        Some("application/octet-stream")
+    );
+    assert_eq!(response.header("Content-Length"), Some("1000"));
+    assert_eq!(
+        response.header("ETag"),
+        Some("\"1000-application%2Foctet-stream\"")
+    );
+    assert_eq!(response.header("Last-Modified"), Some(LAST_MODIFIED));
+    assert_eq!(response.header("Content-Disposition"), None);
+    assert_eq!(response.header("Set-Cookie"), None);
+    assert_eq!(response.body, generated(0..1000));
+
+    let sized = get(port, "GET", "/download/b.zip?size=300000", &[]);
+    assert_eq!(sized.header("Content-Length"), Some("300000"));
+    assert_eq!(sized.body, generated(0..300_000));
+    let empty = get(port, "GET", "/download/empty?size=0", &[]);
+    assert_eq!(empty.status_line, "HTTP/1.0 200 OK");
+    assert_eq!(empty.header("Content-Length"), Some("0"));
+    assert!(empty.body.is_empty());
+    // Only GET and POST are download routes: a HEAD finds no such file.
+    assert_eq!(
+        get(port, "HEAD", "/download/a.bin", &[]).status_line,
+        "HTTP/1.0 404 File not found"
+    );
+}
+
+#[test]
+fn download_parameters_set_the_headers() {
+    let (_dir, port) = fixture();
+    let response = get(
+        port,
+        "GET",
+        "/download/r.csv?type=text/csv&size=10&disposition=attachment&filename=r%20x.csv&setcookie=sid%3D1%3B+Path%3D/",
+        &[],
+    );
+    assert_eq!(response.header("Content-Type"), Some("text/csv"));
+    assert_eq!(response.header("ETag"), Some("\"10-text%2Fcsv\""));
+    assert_eq!(
+        response.header("Content-Disposition"),
+        Some("attachment; filename=\"r x.csv\"")
+    );
+    assert_eq!(response.header("Set-Cookie"), Some("sid=1; Path=/"));
+    let inline = get(port, "GET", "/download/i?disposition=inline&size=1", &[]);
+    assert_eq!(inline.header("Content-Disposition"), Some("inline"));
+    // The last value of a name wins; a blank value is as good as none.
+    let repeated = get(port, "GET", "/download/i?size=5&size=7&type=", &[]);
+    assert_eq!(repeated.header("Content-Length"), Some("7"));
+    assert_eq!(
+        repeated.header("Content-Type"),
+        Some("application/octet-stream")
+    );
+}
+
+#[test]
+fn downloads_answer_ranges_and_validators() {
+    let (_dir, port) = fixture();
+    let path = "/download/r.bin?size=300";
+    let part = get(port, "GET", path, &["Range: bytes=100-199"]);
+    assert_eq!(part.status_line, "HTTP/1.0 206 Partial Content");
+    assert_eq!(part.header("Content-Range"), Some("bytes 100-199/300"));
+    assert_eq!(part.header("Content-Length"), Some("100"));
+    assert_eq!(part.body, generated(100..200));
+    let open = get(port, "GET", path, &["Range: bytes=290-"]);
+    assert_eq!(open.header("Content-Range"), Some("bytes 290-299/300"));
+    assert_eq!(open.body, generated(290..300));
+    let clamped = get(port, "GET", path, &["Range: bytes=250-9999"]);
+    assert_eq!(clamped.header("Content-Range"), Some("bytes 250-299/300"));
+    assert_eq!(clamped.body, generated(250..300));
+
+    // A resume whose validator still matches continues; one whose validator is stale gets the
+    // whole file again.
+    let etag = "If-Range: \"300-application%2Foctet-stream\"";
+    for matching in [etag, &format!("If-Range: {LAST_MODIFIED}")[..]] {
+        let resumed = get(port, "GET", path, &["Range: bytes=10-", matching]);
+        assert_eq!(
+            resumed.status_line, "HTTP/1.0 206 Partial Content",
+            "{matching}"
+        );
+        assert_eq!(resumed.body, generated(10..300));
+    }
+    let changed = get(
+        port,
+        "GET",
+        path,
+        &["Range: bytes=10-", "If-Range: \"other\""],
+    );
+    assert_eq!(changed.status_line, "HTTP/1.0 200 OK");
+    assert_eq!(changed.header("Content-Range"), None);
+    assert_eq!(changed.body, generated(0..300));
+
+    // A suffix range or any other form is ignored; an unsatisfiable one is refused.
+    for ignored in [
+        "Range: bytes=-5",
+        "Range: bytes=0-1,5-6",
+        "Range: items=1-2",
+    ] {
+        let whole = get(port, "GET", path, &[ignored]);
+        assert_eq!(whole.status_line, "HTTP/1.0 200 OK", "{ignored}");
+        assert_eq!(whole.body.len(), 300);
+    }
+    for refused in [
+        "Range: bytes=300-",
+        "Range: bytes=9999999999999999999999-",
+        "Range: bytes=9-3",
+    ] {
+        let response = get(port, "GET", path, &[refused]);
+        assert_eq!(
+            response.status_line, "HTTP/1.0 416 Requested Range Not Satisfiable",
+            "{refused}"
+        );
+        assert_eq!(response.header("Content-Range"), Some("bytes */300"));
+        assert_eq!(response.header("Content-Length"), Some("0"));
+        assert!(response.body.is_empty());
+    }
+    let nothing = get(port, "GET", "/download/e?size=0", &["Range: bytes=0-"]);
+    assert_eq!(
+        nothing.status_line,
+        "HTTP/1.0 416 Requested Range Not Satisfiable"
+    );
+    assert_eq!(nothing.header("Content-Range"), Some("bytes */0"));
+}
+
+#[test]
+fn downloads_can_be_a_picture_or_text() {
+    let (_dir, port) = fixture();
+    let picture = get(
+        port,
+        "GET",
+        "/download/p.png?body=png&type=image/png&size=7",
+        &[],
+    );
+    assert_eq!(picture.header("Content-Type"), Some("image/png"));
+    assert_eq!(&picture.body[..8], b"\x89PNG\r\n\x1a\n");
+    assert_eq!(
+        picture.header("Content-Length"),
+        Some(picture.body.len().to_string().as_str())
+    );
+    assert_eq!(
+        picture.header("ETag"),
+        Some(format!("\"{}-image%2Fpng\"", picture.body.len()).as_str())
+    );
+    // The same bytes every time, so that a resumed picture matches its first part.
+    let again = get(
+        port,
+        "GET",
+        "/download/p.png?body=png",
+        &["Range: bytes=8-"],
+    );
+    assert_eq!(again.body, picture.body[8..]);
+
+    let text = get(
+        port,
+        "GET",
+        "/download/t.txt?body=text&size=20&type=text/plain",
+        &[],
+    );
+    assert_eq!(text.body, b"line 0\nline 1\nline 2");
+    let rest = get(
+        port,
+        "GET",
+        "/download/t.txt?body=text&size=20",
+        &["Range: bytes=14-"],
+    );
+    assert_eq!(rest.body, b"line 2");
+}
+
+#[test]
+fn downloads_can_be_throttled() {
+    let (_dir, port) = fixture();
+    // 100 000 bytes a second, in pieces of a tenth of a second: 20 000 bytes take 0.2 s.
+    let started = std::time::Instant::now();
+    let slow = get(
+        port,
+        "GET",
+        "/download/slow.bin?size=20000&rate=100000",
+        &[],
+    );
+    assert!(
+        started.elapsed() >= Duration::from_millis(180),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(slow.body, generated(0..20_000));
+}
+
+#[test]
+fn bad_download_parameters_are_refused() {
+    let (_dir, port) = fixture();
+    for path in [
+        "/download/a?size=many",
+        "/download/a?size=-1",
+        "/download/a?rate=fast",
+        "/download/a?rate=-5",
+        "/download/a?body=text&size=999999999999",
+        "/download/a?setcookie=a%0d%0aX-Injected:%20yes",
+        "/download/a?disposition=attachment&filename=a%0aX-Injected:%20yes",
+        "/download/a?type=text/plain%0d%0aX-Injected:%20yes",
+    ] {
+        let response = get(port, "GET", path, &[]);
+        assert!(
+            response.status_line.starts_with("HTTP/1.0 400 "),
+            "{path}: {}",
+            response.status_line
+        );
+        assert_eq!(response.header("X-Injected"), None, "{path}");
+    }
+}
+
+#[test]
+fn posts_are_read_and_routed() {
+    let (_dir, port) = fixture();
+    let download = send(
+        port,
+        "POST",
+        "/download/report.csv?type=text/csv&size=6&disposition=attachment&filename=report.csv",
+        &["Content-Type: application/x-www-form-urlencoded"],
+        b"name=value&other=thing",
+    );
+    assert_eq!(download.status_line, "HTTP/1.0 200 OK");
+    assert_eq!(download.header("Content-Type"), Some("text/csv"));
+    assert_eq!(download.body, generated(0..6));
+
+    let form = send(port, "POST", "/form-result", &[], b"a=b");
+    assert_eq!(form.status_line, "HTTP/1.0 200 OK");
+    assert_common_headers(&form);
+    assert_eq!(form.header("Content-Type"), Some("text/html"));
+    assert_eq!(
+        form.header("Content-Length"),
+        Some(form.body.len().to_string().as_str())
+    );
+    let page = form.text();
+    assert!(page.contains("<title>Form result</title>"), "{page}");
+    assert!(page.contains("/download/after-post.zip?type=application/zip"));
+    assert!(page.contains("setTimeout(() => document.getElementById('f').click(), 500)"));
+
+    // Any other POST is refused, whether or not it has a body; other methods stay unsupported.
+    for path in ["/pages/page.html", "/private", "/form-result/more", "/"] {
+        let response = send(port, "POST", path, &[], b"x=1");
+        assert_eq!(
+            response.status_line, "HTTP/1.0 405 Method Not Allowed",
+            "{path}"
+        );
+        assert_eq!(response.header("Connection"), Some("close"));
+    }
+    assert_eq!(
+        get(port, "POST", "/pages/page.html", &[]).status_line,
+        "HTTP/1.0 405 Method Not Allowed"
+    );
+    assert_eq!(
+        get(port, "PUT", "/download/a.bin", &[]).status_line,
+        "HTTP/1.0 501 Unsupported method ('PUT')"
+    );
+    // A Content-Length that is not a number ends the connection without an answer.
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(b"POST /form-result HTTP/1.0\r\nContent-Length: many\r\n\r\n")
+        .unwrap();
+    stream.shutdown(Shutdown::Write).unwrap();
+    let mut raw = Vec::new();
+    stream.read_to_end(&mut raw).unwrap();
+    assert!(raw.is_empty(), "{raw:?}");
+}
+
+/// The lines of the request log, as JSON, waiting up to ten seconds for `count` of them.
+fn log_lines(path: &Path, count: usize) -> Vec<serde_json::Value> {
+    let deadline = std::time::Instant::now() + Duration::from_secs(10);
+    loop {
+        let lines: Vec<serde_json::Value> = fs::read_to_string(path)
+            .unwrap_or_default()
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON line"))
+            .collect();
+        if lines.len() >= count || std::time::Instant::now() > deadline {
+            return lines;
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+}
+
+#[test]
+fn the_request_log_has_a_line_per_request() {
+    let dir = tree();
+    let log = dir.path().join("requests.jsonl");
+    let port = Server::bind(&dir.path().join("tests"), 0)
+        .expect("bind")
+        .with_request_log(&log)
+        .spawn();
+
+    get(
+        port,
+        "GET",
+        "/pages/page.html",
+        &["Cookie: sid=1", "Referer: http://x/", "User-Agent: probe/1"],
+    );
+    get(port, "GET", "/media/clip.webm", &["Range: bytes=0-9"]);
+    get(port, "GET", "/pages/missing.html", &[]);
+    get(
+        port,
+        "GET",
+        "/download/a.bin?size=2500",
+        &["Range: bytes=500-"],
+    );
+    get(
+        port,
+        "GET",
+        "/download/a.bin?size=10",
+        &["Range: bytes=10-"],
+    );
+    send(port, "POST", "/form-result", &[], b"x");
+    send(port, "POST", "/pages/page.html", &[], b"");
+    // Not logged: /private, a HEAD and a request that fails to parse.
+    get(port, "GET", "/private", &[]);
+    get(port, "HEAD", "/pages/page.html", &[]);
+    exchange(port, b"NONSENSE\r\n\r\n");
+    get(port, "GET", "/download/last", &[]);
+
+    let lines = log_lines(&log, 8);
+    assert_eq!(lines.len(), 8, "{lines:#?}");
+    let summary: Vec<(String, String, Option<u64>, Option<bool>)> = lines
+        .iter()
+        .map(|line| {
+            (
+                line["method"].as_str().unwrap().to_owned(),
+                line["path"].as_str().unwrap().to_owned(),
+                line["sent"].as_u64(),
+                line["complete"].as_bool(),
+            )
+        })
+        .collect();
+    let expected = [
+        ("GET", "/pages/page.html", None, None),
+        ("GET", "/media/clip.webm", None, None),
+        ("GET", "/pages/missing.html", None, None),
+        ("GET", "/download/a.bin?size=2500", Some(2000), Some(true)),
+        ("GET", "/download/a.bin?size=10", Some(0), Some(true)),
+        ("POST", "/form-result", Some(page_length()), Some(true)),
+        ("POST", "/pages/page.html", None, None),
+        ("GET", "/download/last", Some(1000), Some(true)),
+    ];
+    for (line, (method, path, sent, complete)) in summary.iter().zip(expected) {
+        assert_eq!(line, &(method.to_owned(), path.to_owned(), sent, complete));
+    }
+    let first = &lines[0];
+    assert_eq!(first["cookie"], "sid=1");
+    assert_eq!(first["referer"], "http://x/");
+    assert_eq!(first["user_agent"], "probe/1");
+    assert!(first["range"].is_null());
+    assert_eq!(lines[1]["range"], "bytes=0-9");
+    assert!(lines[1]["cookie"].is_null());
+    assert_eq!(lines[3]["range"], "bytes=500-");
+}
+
+/// The length of the page `POST /form-result` answers.
+fn page_length() -> u64 {
+    send(fixture().1, "POST", "/form-result", &[], b"")
+        .body
+        .len() as u64
+}
+
+#[test]
+fn a_download_the_client_abandons_is_logged_as_incomplete() {
+    let dir = tree();
+    let log = dir.path().join("requests.jsonl");
+    let port = Server::bind(&dir.path().join("tests"), 0)
+        .expect("bind")
+        .with_request_log(&log)
+        .spawn();
+    let mut stream = TcpStream::connect(("127.0.0.1", port)).expect("connect");
+    stream
+        .write_all(b"GET /download/huge.bin?size=4000000000 HTTP/1.0\r\n\r\n")
+        .unwrap();
+    let mut first = [0u8; 4096];
+    stream
+        .read_exact(&mut first)
+        .expect("the start of the download");
+    drop(stream);
+    let lines = log_lines(&log, 1);
+    assert_eq!(lines.len(), 1, "the abandoned download is logged");
+    assert_eq!(lines[0]["complete"], false);
+    let sent = lines[0]["sent"].as_u64().expect("the bytes sent");
+    assert!((4096..4_000_000_000).contains(&sent), "{sent}");
+}
+
+#[test]
+fn a_request_log_in_a_missing_folder_does_not_stop_the_server() {
+    let dir = tree();
+    let log = dir.path().join("no/such/folder/requests.jsonl");
+    let port = Server::bind(&dir.path().join("tests"), 0)
+        .expect("bind")
+        .with_request_log(&log)
+        .spawn();
+    let page = get(port, "GET", "/pages/page.html", &[]);
+    assert_eq!(page.status_line, "HTTP/1.0 200 OK");
+    assert!(!log.exists());
 }

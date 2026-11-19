@@ -5,7 +5,7 @@
 # Serve the repository's tests/ directory on the loopback interface, for the media and dialog
 # checks.
 #
-#   scripts/serve-tests.sh [-h] [--port N]
+#   scripts/serve-tests.sh [-h] [--port N] [--log FILE]
 #
 # Builds (quietly, if needed) and runs the Rust server `serve-tests` from
 # crates/mercury-devtools, in place of this shell: it binds 127.0.0.1 on an ephemeral port (or

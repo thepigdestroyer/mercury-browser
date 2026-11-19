@@ -11,7 +11,7 @@
 <body>
 <!--
   openurl lane: links to schemes the engine cannot load (mailto:, tel:, app schemes). Serve
-  tests/ with scripts/serve-tests.py and open http://127.0.0.1:<port>/pages/openurl-external.html
+  tests/ with scripts/serve-tests.sh and open http://127.0.0.1:<port>/pages/openurl-external.html
   A timer sets location = "mailto:…" 500 ms after load, with no user gesture: the browser must
   refuse it (and log "no user gesture"). 300 ms later a second one follows; an automated run
   started with MERCURY_DIAGNOSTIC_GESTURE_AFTER_REFUSAL=1 grants the tab one gesture after the

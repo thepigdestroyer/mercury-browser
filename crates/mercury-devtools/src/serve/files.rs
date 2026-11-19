@@ -44,7 +44,7 @@ pub(super) fn parse_range(header: &str) -> Option<(&str, &str)> {
 }
 
 /// Digits as a number, saturating where Python's integers would simply be large.
-fn saturating_number(digits: &str) -> u64 {
+pub(super) fn saturating_number(digits: &str) -> u64 {
     digits.parse().unwrap_or(u64::MAX)
 }
 
@@ -200,7 +200,7 @@ pub(super) fn send_whole(
 
 /// The path, query and fragment of a request path, as `urllib.parse.urlsplit` separates them
 /// (the fragment first, then the query).
-fn split_url(target: &str) -> (&str, &str, &str) {
+pub(super) fn split_url(target: &str) -> (&str, &str, &str) {
     let (rest, fragment) = target.split_once('#').unwrap_or((target, ""));
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
     (path, query, fragment)

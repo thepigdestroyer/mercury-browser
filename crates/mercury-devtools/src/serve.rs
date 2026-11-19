@@ -14,13 +14,17 @@
 //!   Content, or 416 when unsatisfiable; any other `Range` is ignored and the whole file sent;
 //! - `/private`, which asks for HTTP Basic authentication (realm `Mercury test realm`) and
 //!   accepts only `alice` / `secret`;
-//! - `Accept-Ranges: bytes` and `Cache-Control: no-store` on every response.
+//! - `Accept-Ranges: bytes` and `Cache-Control: no-store` on every response;
+//! - the downloads routes (`/download/<name>`, `POST /form-result`) and the request log
+//!   (`--log FILE`), which the Python script gained after this crate was written (see
+//!   `downloads`).
 //!
 //! The work is split by job: `cli` reads the command line, `http` reads requests and
-//! writes responses, `files` answers the file routes and `python` holds the Python-style
-//! text helpers the others share. This module accepts connections and routes each request.
+//! writes responses, `files` answers the file routes, `downloads` the generated downloads and
+//! the request log, and `python` holds the Python-style text helpers the others share. This module accepts connections and routes each request.
 
 mod cli;
+mod downloads;
 mod files;
 mod http;
 mod python;
@@ -29,18 +33,22 @@ pub use cli::{Command, DESCRIPTION, UsageError, help_text, parse_arguments};
 pub use files::{guess_type, translate_path};
 
 use std::fs;
-use std::io::{self, BufReader};
+use std::io::{self, BufRead, BufReader, Read};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
+use downloads::{
+    DOWNLOAD_PREFIX, FORM_RESULT_PATH, RequestLog, record, send_download, send_form_result,
+    url_path,
+};
 use files::{parse_range, send_range, send_whole};
 use http::{
     HeaderError, MAX_LINE, Request, Responder, parse_version_number, read_headers, read_line,
     reason,
 };
-use python::{is_python_space, latin1, python_repr, python_strip};
+use python::{is_python_space, latin1, python_int, python_repr, python_strip};
 
 /// The route that asks for HTTP Basic authentication.
 pub const PRIVATE_PATH: &str = "/private";
@@ -58,6 +66,7 @@ pub fn default_root() -> PathBuf {
 pub struct Server {
     listener: TcpListener,
     root: Arc<PathBuf>,
+    log: Option<Arc<RequestLog>>,
 }
 
 impl Server {
@@ -68,7 +77,15 @@ impl Server {
         Ok(Server {
             listener,
             root: Arc::new(root),
+            log: None,
         })
+    }
+
+    /// Appends one JSON line per request to `path` (`--log`); see the `downloads` module for
+    /// the line. A relative path is relative to the working directory of the server.
+    pub fn with_request_log(mut self, path: impl Into<PathBuf>) -> Server {
+        self.log = Some(Arc::new(RequestLog::new(path.into())));
+        self
     }
 
     /// The port the server listens on.
@@ -85,9 +102,10 @@ impl Server {
             match stream {
                 Ok(stream) => {
                     let root = Arc::clone(&self.root);
+                    let log = self.log.clone();
                     let spawned = std::thread::Builder::new()
                         .name("serve-tests connection".into())
-                        .spawn(move || handle_connection(stream, &root));
+                        .spawn(move || handle_connection(stream, &root, log.as_deref()));
                     if spawned.is_err() {
                         std::thread::sleep(Duration::from_millis(10));
                     }
@@ -107,15 +125,15 @@ impl Server {
     }
 }
 
-fn handle_connection(stream: TcpStream, root: &Path) {
+fn handle_connection(stream: TcpStream, root: &Path, log: Option<&RequestLog>) {
     // A client that goes away mid-response only ends its own connection. Python printed a
     // traceback to standard error then; nothing here does.
-    let _ = handle_request(&stream, root);
+    let _ = handle_request(&stream, root, log);
     let _ = stream.shutdown(Shutdown::Write);
 }
 
 /// Reads one request from the connection and answers it.
-fn handle_request(stream: &TcpStream, root: &Path) -> io::Result<()> {
+fn handle_request(stream: &TcpStream, root: &Path, log: Option<&RequestLog>) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut responder = Responder {
         stream,
@@ -191,7 +209,8 @@ fn handle_request(stream: &TcpStream, root: &Path) -> io::Result<()> {
         headers,
     };
     match request.command.as_str() {
-        "GET" | "HEAD" => respond(&mut responder, &request, root),
+        "GET" | "HEAD" => respond(&mut responder, &request, root, log),
+        "POST" => post(&mut responder, &mut reader, &request, log),
         other => {
             let message = format!("Unsupported method ({})", python_repr(other));
             responder.send_error(501, Some(&message), None)
@@ -199,20 +218,66 @@ fn handle_request(stream: &TcpStream, root: &Path) -> io::Result<()> {
     }
 }
 
-/// Routes a `GET` or `HEAD`: `/private`, a byte range of a file, or the whole file.
-fn respond(responder: &mut Responder<'_>, request: &Request, root: &Path) -> io::Result<()> {
+/// Routes a `GET` or `HEAD`: `/private`, the generated downloads (`GET` only), a byte range
+/// of a file, or the whole file. A `GET` of a file route is written to the request log.
+fn respond(
+    responder: &mut Responder<'_>,
+    request: &Request,
+    root: &Path,
+    log: Option<&RequestLog>,
+) -> io::Result<()> {
     if request.path.split('?').next() == Some(PRIVATE_PATH) {
         return send_private(responder, request);
     }
+    if request.command == "GET" && url_path(&request.path).starts_with(DOWNLOAD_PREFIX) {
+        return send_download(responder, request, log);
+    }
     let path = translate_path(root, &request.path);
-    if let Some(header) = request.header("Range")
+    let result = if let Some(header) = request.header("Range")
         && !path.is_dir()
         && path.is_file()
         && let Some((first, last)) = parse_range(python_strip(header))
     {
-        return send_range(responder, &path, first, last);
+        send_range(responder, &path, first, last)
+    } else {
+        send_whole(responder, request, &path)
+    };
+    if result.is_ok() && request.command == "GET" {
+        record(log, request, None, None);
     }
-    send_whole(responder, request, &path)
+    result
+}
+
+/// Routes a `POST`: the body is read and dropped, then `/download/...` and `/form-result`
+/// answer; anything else is 405.
+fn post(
+    responder: &mut Responder<'_>,
+    reader: &mut impl BufRead,
+    request: &Request,
+    log: Option<&RequestLog>,
+) -> io::Result<()> {
+    let length = match request.header("Content-Length") {
+        None => 0,
+        Some("") => 0,
+        Some(value) => match python_int(value) {
+            Some(length) => length,
+            // Python's `int()` failed on it and the connection ended without an answer.
+            None => return Ok(()),
+        },
+    };
+    if let Ok(length) = u64::try_from(length) {
+        io::copy(&mut reader.by_ref().take(length), &mut io::sink())?;
+    }
+    let path = url_path(&request.path);
+    if path.starts_with(DOWNLOAD_PREFIX) {
+        return send_download(responder, request, log);
+    }
+    if path == FORM_RESULT_PATH {
+        return send_form_result(responder, request, log);
+    }
+    let result = responder.send_error(405, None, None);
+    record(log, request, None, None);
+    result
 }
 
 /// The `/private` route: 200 with the accepted credentials, otherwise 401 and a challenge.

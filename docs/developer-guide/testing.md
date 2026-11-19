@@ -95,7 +95,7 @@ Before merging a rendering or media change, check at least:
 
 1. The new tab page paints.
 2. A simple HTTPS page loads, paints and updates its title.
-3. The relevant pages in `tests/pages/` (for example `colors.html`, `canvas-readback.html`, `media.html`) show the expected result. Serve the media pages with `python3 scripts/serve-tests.py`, which supports `Range` requests, rather than from `file://`.
+3. The relevant pages in `tests/pages/` (for example `colors.html`, `canvas-readback.html`, `media.html`) show the expected result. Serve the media pages with `scripts/serve-tests.sh`, which supports `Range` requests, rather than from `file://`.
 4. Quitting leaves no `mercury-browser` process behind and no repeated broken-pipe errors in the log.
 
 What only a person can try (clicking, typing, logging out, real devices) is in the [hands-on checklist](hands-on-checklist.md).

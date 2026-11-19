@@ -136,6 +136,7 @@ pub(super) fn reason(code: u16) -> &'static str {
         400 => "Bad Request",
         401 => "Unauthorized",
         404 => "Not Found",
+        405 => "Method Not Allowed",
         414 => "Request-URI Too Long",
         416 => "Requested Range Not Satisfiable",
         431 => "Request Header Fields Too Large",

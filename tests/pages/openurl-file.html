@@ -12,7 +12,7 @@
 <body>
 <!--
   openurl lane: an http(s) page must not reach a file: URL. Serve tests/ with
-  scripts/serve-tests.py and open
+  scripts/serve-tests.sh and open
     http://127.0.0.1:<port>/pages/openurl-file.html?target=file:///<abs>/tests/pages/openurl-file-target.html
   A timer sets location to the target 500 ms after the load event (not with top=0; Servo
   aborts the document before it asks whether it may navigate, so a refused navigation while the

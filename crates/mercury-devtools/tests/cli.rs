@@ -126,9 +126,14 @@ mod serve_tests {
         assert_eq!(help.status.code(), Some(0));
         assert!(
             String::from_utf8_lossy(&help.stdout)
-                .starts_with("usage: serve-tests [-h] [--port PORT]\n")
+                .starts_with("usage: serve-tests [-h] [--port PORT] [--log LOG]\n")
         );
-        for arguments in [&["--port"][..], &["--port", "eighty"], &["extra"]] {
+        for arguments in [
+            &["--port"][..],
+            &["--port", "eighty"],
+            &["--log"],
+            &["extra"],
+        ] {
             let output = Command::new(SERVE_TESTS)
                 .args(arguments)
                 .output()
@@ -143,6 +148,44 @@ mod serve_tests {
             .expect("run");
         assert_eq!(out_of_range.status.code(), Some(1));
         assert!(out_of_range.stdout.is_empty());
+    }
+
+    #[test]
+    fn appends_a_json_line_per_request_to_the_log_file() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let log = dir.path().join("requests.jsonl");
+        let (mut child, port) = start(&["--log", log.to_str().expect("a UTF-8 path")]);
+        let page = fetch(
+            port,
+            "GET /pages/http-auth.html HTTP/1.0\r\nCookie: a=b\r\nUser-Agent: probe\r\n\r\n",
+        );
+        assert!(page.starts_with("HTTP/1.0 200 OK\r\n"), "{page}");
+        let download = fetch(port, "GET /download/x.bin?size=5 HTTP/1.0\r\n\r\n");
+        assert!(
+            download.ends_with("\r\n\r\n\0\x01\x02\x03\x04"),
+            "{download:?}"
+        );
+        signal(&child, libc::SIGTERM);
+        assert_eq!(
+            wait_with_timeout(&mut child, Duration::from_secs(5)).and_then(|s| s.code()),
+            Some(0)
+        );
+        let text = std::fs::read_to_string(&log).expect("the log file");
+        let lines: Vec<serde_json::Value> = text
+            .lines()
+            .map(|line| serde_json::from_str(line).expect("a JSON line"))
+            .collect();
+        assert_eq!(lines.len(), 2, "{text}");
+        assert_eq!(lines[0]["method"], "GET");
+        assert_eq!(lines[0]["path"], "/pages/http-auth.html");
+        assert_eq!(lines[0]["cookie"], "a=b");
+        assert_eq!(lines[0]["user_agent"], "probe");
+        assert!(lines[0]["sent"].is_null() && lines[0]["complete"].is_null());
+        assert_eq!(lines[1]["path"], "/download/x.bin?size=5");
+        assert_eq!(
+            (lines[1]["sent"].as_u64(), lines[1]["complete"].as_bool()),
+            (Some(5), Some(true))
+        );
     }
 
     #[test]
