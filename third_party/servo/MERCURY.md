@@ -23,7 +23,7 @@ Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message 
   `deliver` (the web view's delegate when the web view exists, else the `ServoDelegate`, with one `debug!` naming the
   variant path when the web view is gone), `Servo::send_mercury_message(MercuryEmbedderToConstellation)` (sends
   `EmbedderToConstellationMessage::Mercury`; an inherent `impl Servo` there, so `servo.rs` has no hook line for it) and a
-  re-export of the constellation-side lane types. `lib.rs`: `mod mercury;` and `pub use crate::mercury::*;` (the embedder
+  re-export of the constellation-side lane types. `lib.rs`: `#[path = "mercury/mod.rs"] mod mercury_delivery;` (not named `mercury`: `pub use embedder_traits::*` re-exports that crate's `mercury` module, which a private module of the same name hides) and `pub use crate::mercury_delivery::*;` (the embedder
   side, `MercuryEmbedderMsg` and `CoreMsg`, already arrives through `pub use embedder_traits::*`).
 - **Why:** one path from the engine to Mercury's delegates and back for every lane; `ServoInner` is private to `servo.rs`,
   so `deliver` takes what it needs as arguments.

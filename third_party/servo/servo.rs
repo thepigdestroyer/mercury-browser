@@ -105,7 +105,7 @@ use crate::gamepad_delegate::{GamepadHapticEffectRequest, GamepadHapticEffectReq
 use crate::geolocation_delegate::{PositionRequest, PositionWatch};
 use crate::javascript_evaluator::JavaScriptEvaluator;
 // Mercury: delivery of Mercury's lane messages (K0 engine base).
-use crate::mercury;
+use crate::mercury_delivery as mercury;
 use crate::network_manager::NetworkManager;
 use crate::proxies::ConstellationProxy;
 use crate::responders::ServoErrorChannel;
