@@ -508,42 +508,65 @@ mod tests {
     }
 
     /// A scripted list of 100,000 options with the selection near the end. Prints the time per
-    /// key; the bound only catches a return to work proportional to the list per row.
+    /// key; the bound only catches a return to work proportional to the list per row. A
+    /// loaded machine can stretch any one pass, so the bound is held by the best of five
+    /// passes (after one warm-up pass): work proportional to the list per row makes every
+    /// pass slow, a busy moment makes only some of them slow.
     #[test]
     fn a_list_of_100000_options_stays_fast() {
+        /// One pass: a fresh model, then 100 rounds of the six keys and one type-ahead
+        /// character each (700 keys). Returns the build time and the time per key.
+        fn pass(entries: &[SelectEntry]) -> (Duration, Duration) {
+            let built_at = Instant::now();
+            let mut model = SelectModel::new(entries, &[99_990], true);
+            let build_time = built_at.elapsed();
+            let keys = [
+                SelectKey::Down,
+                SelectKey::Up,
+                SelectKey::Space,
+                SelectKey::Home,
+                SelectKey::End,
+                SelectKey::Down,
+            ];
+
+            let started_at = Instant::now();
+            let mut now = started_at;
+            for round in 0..100 {
+                for key in keys {
+                    model.key(key, now);
+                    let row = model.highlighted().expect("an option is highlighted");
+                    let _ = (model.row_top(row), model.is_selected(row));
+                }
+                now += Duration::from_secs(2);
+                model.key(
+                    SelectKey::Character(if round % 2 == 0 { 'o' } else { 'x' }),
+                    now,
+                );
+            }
+            (build_time, started_at.elapsed() / 700)
+        }
+
         let entries = (0..100_000)
             .map(|id| SelectEntry::Option(option(id, &format!("Option {id}"), id % 7 == 3)))
             .collect::<Vec<_>>();
-        let built_at = Instant::now();
-        let mut model = SelectModel::new(&entries, &[99_990], true);
-        let build_time = built_at.elapsed();
-        let keys = [
-            SelectKey::Down,
-            SelectKey::Up,
-            SelectKey::Space,
-            SelectKey::Home,
-            SelectKey::End,
-            SelectKey::Down,
-        ];
+        let _warm_up = pass(&entries);
+        let passes = (0..5).map(|_| pass(&entries)).collect::<Vec<_>>();
+        let build_time = passes.iter().map(|(build, _)| *build).min().unwrap();
+        let times = passes
+            .iter()
+            .map(|(_, per_key)| *per_key)
+            .collect::<Vec<_>>();
+        let mut sorted = times.clone();
+        sorted.sort();
+        let (best, median) = (sorted[0], sorted[2]);
 
-        let started_at = Instant::now();
-        let mut now = started_at;
-        for round in 0..100 {
-            for key in keys {
-                model.key(key, now);
-                let row = model.highlighted().expect("an option is highlighted");
-                let _ = (model.row_top(row), model.is_selected(row));
-            }
-            now += Duration::from_secs(2);
-            model.key(
-                SelectKey::Character(if round % 2 == 0 { 'o' } else { 'x' }),
-                now,
-            );
-        }
-        let per_key = started_at.elapsed() / 700;
-
-        println!("100,000 options: built in {build_time:?}, {per_key:?} per key");
-        assert!(per_key < Duration::from_millis(20), "{per_key:?} per key");
+        println!(
+            "100,000 options: built in {build_time:?}, best {best:?} and median {median:?} per key"
+        );
+        assert!(
+            best < Duration::from_millis(20),
+            "best {best:?} per key over five passes: {times:?}"
+        );
     }
 
     #[test]
