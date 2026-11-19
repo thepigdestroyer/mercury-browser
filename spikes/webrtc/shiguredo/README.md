@@ -10,7 +10,7 @@ from the same server. Mercury does not allow that, so the crate is used through 
 - `prepare.sh` copies the crate from the cargo registry (SHA-256 of the `.crate` checked) to `vendor/shiguredo_webrtc` (git-ignored),
   deletes its Python files and applies `patches/shiguredo_webrtc-0.157.0.patch`. `Cargo.toml` points `[patch.crates-io]` at
   `vendor/`, so a forgotten `prepare.sh` stops cargo.
-- The patch (8 lines in `build.rs`, one new file of 76 lines) makes the build script take `lib/libwebrtc_c.a` and `bindings.rs`
+- The patch (8 added lines in `build.rs`, one new file of 76 lines) makes the build script take `lib/libwebrtc_c.a` and `bindings.rs`
   from `MERCURY_WEBRTC_C_DIR` and refuse to run without it: no download, no CMake, no libclang, no source build.
 - `scripts/macos/webrtc.sh env libwebrtc-c` exports that variable, only after it has re-hashed the pinned archive.
 
@@ -44,7 +44,7 @@ merged with the root's string, so the value is a plain string). Run cargo from t
 ## Licences
 
 - `shiguredo_webrtc` is Apache-2.0; it is neither committed nor vendored here (`vendor/` is git-ignored).
-- `patches/shiguredo_webrtc-0.157.0.patch` modifies an Apache-2.0 file (`build.rs`: 8 added lines, 12 lines of context), so the
+- `patches/shiguredo_webrtc-0.157.0.patch` modifies an Apache-2.0 file (`build.rs`: 8 added lines and the 3 lines of context diff prints around each hunk), so the
   patch file stays under Apache-2.0 for those hunks. The new file it adds, `mercury_prebuilt.rs`, is Mercury's own and carries
   its own PolyForm header inside the patch.
 - Everything else in this directory is PolyForm-Noncommercial-1.0.0 (SPDX header in each file); `Cargo.lock`, `README.md` and the
