@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::appearance::{DEFAULT_LAYOUT, DEFAULT_PALETTE, TabGroupSettings};
 use crate::bounded::{self, Unread};
 use crate::search::{DEFAULT_ENGINE_ID, SearchEngine};
 
@@ -133,6 +134,15 @@ pub struct AppearanceSettings {
     pub show_bookmarks_bar: bool,
     /// Whether the toolbar has a home button.
     pub show_home_button: bool,
+    /// The layout id: one of [`LAYOUT_IDS`](crate::LAYOUT_IDS). A validated string, not an enum,
+    /// so a layout from a later version loads here as the default with a repair.
+    pub layout: String,
+    /// The id of the palette used in the light scheme (see `mercury-appearance`).
+    pub palette_light: String,
+    /// The id of the palette used in the dark scheme.
+    pub palette_dark: String,
+    /// The tab-group controls.
+    pub tab_groups: TabGroupSettings,
 }
 
 impl Default for AppearanceSettings {
@@ -142,6 +152,10 @@ impl Default for AppearanceSettings {
             default_zoom_percent: 100,
             show_bookmarks_bar: true,
             show_home_button: false,
+            layout: DEFAULT_LAYOUT.to_owned(),
+            palette_light: DEFAULT_PALETTE.to_owned(),
+            palette_dark: DEFAULT_PALETTE.to_owned(),
+            tab_groups: TabGroupSettings::default(),
         }
     }
 }
