@@ -450,6 +450,11 @@ impl servo::ServoDelegate for BrowserServoDelegate {
         };
         self.content_blocker.handle_web_resource_load(None, load);
     }
+
+    // engine messages: Mercury's lane messages that name no web view, or whose web view has gone.
+    fn notify_mercury_message(&self, message: servo::MercuryEmbedderMsg) {
+        crate::mercury_messages::handle(None, message);
+    }
 }
 
 fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
@@ -1113,6 +1118,21 @@ impl servo::WebViewDelegate for BrowserDelegate {
             );
         }
         self.send_browser_event(event);
+    }
+
+    // engine messages: Mercury's lane messages for this tab, routed by `mercury_messages.rs`.
+    fn notify_mercury_message(
+        &self,
+        _web_view: servo::WebView,
+        message: servo::MercuryEmbedderMsg,
+    ) {
+        crate::mercury_messages::handle(Some(self.tab_id), message);
+    }
+
+    // notifications: the notification UI is a later lane's; until then the title is logged, at
+    // debug level, and nothing of the page's other text (body, tag, icons) is.
+    fn show_notification(&self, _web_view: servo::WebView, notification: servo::Notification) {
+        log::debug!("page notification: {}", notification.title);
     }
 }
 

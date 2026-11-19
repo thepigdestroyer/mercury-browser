@@ -21,6 +21,8 @@ mod history_events;
 mod http_disk_cache;
 mod load_metrics;
 mod media_session;
+// engine messages: routes the engine's Mercury message variants to the lanes that own them.
+mod mercury_messages;
 mod opengl_context;
 // openurl
 mod openurl;
