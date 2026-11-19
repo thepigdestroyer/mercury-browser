@@ -51,14 +51,22 @@ Every other permission a page can ask for is refused without a prompt, because M
 
 ## Site security
 
-The icon before the address says how the page was loaded. A padlock means an HTTPS page whose certificate was accepted; **Not secure** means the page came over plain HTTP; a warning mark means you chose to continue past a certificate error. A new tab and Mercury's own pages show no padlock. Click the icon for **site information**: the permissions the site has been given (each with **Reset**), the cookies and site data it holds (with **Clear**), and any exception you made for the site.
+The icon before the address says how the page was loaded:
+
+- **A padlock:** an HTTPS page whose certificate Mercury could verify.
+- **A warning mark:** the connection is not safe. The heading of **site information** says which case it is. **Not secure** is plain HTTP to any site that is not on this computer, including a device on your network at a private address such as `192.168.1.2` or a name such as `printer.local` (`data:` pages are marked the same way). **Not secure: the certificate is not valid** is the certificate-error page itself, which shows the mark before you have chosen anything. **Not secure: you allowed an invalid certificate** is an HTTPS page you opened by continuing past that error.
+- **A circled "i":** neither a padlock nor a warning. It marks **Page on this computer** (plain HTTP to `localhost` or another loopback address such as `127.0.0.1`), **File on this computer**, and **Mercury Browser page** (one of Mercury's own error pages).
+- **Nothing:** a new tab.
+
+Click the icon for **site information**: the permissions the site has been given (each with **Reset**), the cookies and site data it holds (with **Clear**), and any exception you made for the site.
 
 ### HTTPS-only mode
 
-With **Settings → Privacy and security → Load pages over HTTPS only** on, Mercury opens the HTTPS address of every page you open or follow a link to over HTTP. If the site has no HTTPS version, Mercury shows **The secure version of this site is not available** with **Go back** and **Continue to the site (not secure)**; nothing is loaded over HTTP until you choose to. Some things are outside it:
+With **Settings → Privacy and security → Load pages over HTTPS only** on, Mercury opens the HTTPS address instead of the HTTP address of a page you open or follow a link to, except for your own computer and the local network (the first item below). If the site has no HTTPS version, Mercury shows **The secure version of this site is not available** with **Go back** and **Continue to the site (not secure)**; nothing else is loaded over HTTP until you choose to. Some things are outside it:
 
+- Your own computer and the local network. Their addresses load over HTTP as usual, because devices at home seldom have a certificate a browser accepts, and the mode does not protect them: `localhost` and other loopback addresses, private and link-local addresses such as `192.168.1.1`, and names of one word (`router`) or ending in `.local`, `.localhost`, `.internal`, `.lan` or `.home.arpa` (`printer.local`). The address bar still marks such a page **Not secure**, or **Page on this computer** for `localhost` and loopback addresses.
 - Only the page itself is upgraded. Images, scripts and frames a page loads over HTTP are loaded as the page asks.
-- A page that sends you back to its HTTP address after every upgrade (with a script or a meta refresh) is upgraded a few times and then stopped.
+- A page whose HTTPS address keeps redirecting to an HTTP address, so that no load ever finishes, is upgraded up to five times and then stopped, and Mercury shows the same **The secure version of this site is not available** page. A page that finishes loading and then sends you back to its HTTP address with a script or a meta refresh is upgraded again each time, for as long as it keeps doing that; you can leave it at any time.
 - If you choose **Continue** after Mercury blocked a form that was being sent, the page is opened again with a plain request: the form's data is not sent a second time.
 - A page that a link opened in a new tab may lose its connection to the page that opened it when it is upgraded.
 
