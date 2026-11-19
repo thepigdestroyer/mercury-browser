@@ -84,6 +84,8 @@ path = [
   "tests/pages/head-alert.html",
   "tests/pages/http-auth.html",
   "tests/pages/js.html",
+  "tests/pages/login-form.html",
+  "tests/pages/login-iframe.html",
   "tests/pages/media-session.html",
   "tests/pages/media.html",
   "tests/pages/navigate-then-head-alert.html",

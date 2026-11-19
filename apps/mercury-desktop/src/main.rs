@@ -52,6 +52,8 @@ mod page_requests; // dialogs
 mod panic_hook;
 // tabs opened and closed by pages
 mod page_tabs;
+// passwords-ui
+mod passwords;
 #[cfg(target_os = "macos")]
 mod platform_macos;
 mod post_run;
@@ -174,6 +176,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     let settings =
         settings::SettingsHandle::start(profile.paths.as_ref().map(|p| p.root.as_path()));
     let options = settings::launch_options(options, &settings);
+    // passwords-ui: the login keychain only for a normal run of the default profile.
+    passwords::start(options.is_automated(), options.profile_dir.is_none());
     select_hardware_accelerated_backend(options.is_automated())?;
     #[cfg(target_os = "macos")]
     macos_terminate::end_the_run_in_order_on_terminate_requests();
@@ -229,6 +233,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     history_ui::connect(&window, Rc::clone(&controller), options.is_automated()); // history lane
+    passwords::connect_main_window(&window); // passwords-ui: a sign-in that could not be saved
     // tabs: the "Pop-up blocked" indicator
     page_tabs::connect_pop_up_indicator(&window, &controller);
     // tabs: MERCURY_ALLOW_POP_UPS only counts in automated runs

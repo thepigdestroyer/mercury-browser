@@ -456,6 +456,32 @@ impl TalariaWebView for ServoWebView {
         self.evaluate_for_find(find_in_page::end_script(&request), |_result| None);
         Ok(())
     }
+
+    // passwords: Servo evaluates scripts in the top-level document only, which is the only
+    // document the script fills; it checks the origin and the focused field itself.
+    fn fill_login(&mut self, fill: talaria_core::LoginFill) -> Result<(), Self::Error> {
+        let tab_id = self.tab_id.value();
+        let origin = fill.origin().to_owned();
+        self.inner
+            .evaluate_javascript(fill.script(), move |result| match result {
+                Ok(servo::JSValue::String(outcome)) => {
+                    log::info!("tab {tab_id}: login fill on {origin}: {outcome}");
+                }
+                Ok(_) => log::warn!("tab {tab_id}: login fill on {origin}: no status"),
+                // Never the error's details: a page's exception message can quote the values.
+                Err(error) => log::warn!(
+                    "tab {tab_id}: login fill on {origin} failed: {}",
+                    match error {
+                        servo::JavaScriptEvaluationError::DocumentNotFound => "no document",
+                        servo::JavaScriptEvaluationError::CompilationFailure => "compilation",
+                        servo::JavaScriptEvaluationError::EvaluationFailure(_) => "exception",
+                        servo::JavaScriptEvaluationError::WebViewNotReady => "not ready",
+                        _ => "engine error",
+                    }
+                ),
+            });
+        Ok(())
+    }
 }
 
 /// The same editing Servo performs for Cmd/Ctrl+X, C and V in the page.

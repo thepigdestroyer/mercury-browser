@@ -4,6 +4,8 @@ use crate::{ClipboardCommand, ColorScheme, ControlAnswer, ControlId, ImeInput, K
 use crate::{EndFindRequest, FindRequest, PageRequestAnswer, PageRequestId};
 // media session
 use crate::MediaSessionAction;
+// passwords
+use crate::LoginFill;
 
 pub trait WebView {
     type Error;
@@ -53,6 +55,8 @@ pub trait WebView {
     /// Searches the page; the answer arrives as `BrowserEvent::FindResult`.
     fn find(&mut self, request: FindRequest) -> Result<(), Self::Error>;
     fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error>;
+    // passwords
+    fn fill_login(&mut self, fill: LoginFill) -> Result<(), Self::Error>;
 }
 
 pub fn dispatch_command<W>(web_view: &mut W, command: BrowserCommand) -> Result<(), W::Error>
@@ -101,5 +105,7 @@ where
         BrowserCommand::BeginFind { request_id } => web_view.begin_find(request_id),
         BrowserCommand::Find(request) => web_view.find(request),
         BrowserCommand::EndFind(request) => web_view.end_find(request),
+        // passwords
+        BrowserCommand::FillLogin(fill) => web_view.fill_login(fill),
     }
 }

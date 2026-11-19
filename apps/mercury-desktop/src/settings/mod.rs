@@ -644,6 +644,23 @@ impl SettingsHandle {
     }
 }
 
+// passwords-ui
+/// Whether the settings let the browser offer to save a password for `origin` (serialised, as
+/// in the "Never save passwords for" list).
+pub(crate) fn password_saving_allowed(origin: &str) -> bool {
+    HANDLE
+        .with(|current| current.borrow().upgrade())
+        .is_none_or(|handle| {
+            let settings = handle.settings.borrow();
+            settings.passwords.offer_to_save
+                && !settings
+                    .passwords
+                    .never_save_origins
+                    .iter()
+                    .any(|never| never == origin)
+        })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use mercury_settings::Theme;

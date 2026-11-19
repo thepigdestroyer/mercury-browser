@@ -14,7 +14,7 @@
 //! - Permission requests, see `talaria_core::PagePermission` and the lane report for which
 //!   features can reach the browser with Mercury's preferences.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -83,17 +83,54 @@ impl InputProtector {
 thread_local! {
     /// The window's protector; the window lives on this thread.
     static PROTECTOR: RefCell<InputProtector> = RefCell::default();
+    /// passwords-ui: the sign-in request whose saved password could not be read on Sign in.
+    static UNREADABLE: Cell<Option<PageRequestId>> = const { Cell::new(None) };
 }
 
-/// The password manager's seam: credentials saved for a site's sign-in, used to fill the sheet
-/// in. `origin` is the serialised origin (`https://example.com`); `realm` is the sign-in realm,
-/// which Servo 0.8 does not report, so it is always `None` for now. Nothing is saved yet.
-pub(crate) fn saved_http_credentials(
-    _origin: &str,
-    _realm: Option<&str>,
-) -> Option<HttpCredentials> {
-    None
+/// The view of a page request. For a sign-in, the password manager's seam: the user name saved for a site's sign-in, used to fill the sheet
+/// in, and the save choice. A page can raise the sheet without a gesture, so no password is read
+/// here: it is read when the user signs in with the field empty (see the answer callback). A
+/// proxy's challenge names the destination's URL, so nothing is filled or offered for a proxy.
+pub(crate) fn sign_in_view(pending: &PendingPageRequest) -> PageRequestView {
+    let PageRequestKind::Authentication { for_proxy } = pending.kind() else {
+        return page_request_view(pending, None);
+    };
+    let origin = pending.origin().key();
+    // passwords-ui
+    let username =
+        origin.and_then(|origin| crate::passwords::saved_sign_in_username(origin, *for_proxy));
+    let saved = username
+        .as_ref()
+        .map(|username| HttpCredentials::new(username.clone(), String::new()));
+    let view = page_request_view(pending, saved.as_ref());
+    let choice = crate::passwords::save_sign_in_choice(origin, *for_proxy);
+    let unreadable = UNREADABLE.with(|unreadable| unreadable.get() == Some(pending.id()));
+    PageRequestView {
+        warning: if unreadable && view.warning.is_empty() {
+            SAVED_PASSWORD_UNREADABLE.into()
+        } else if unreadable {
+            format!("{}\n{SAVED_PASSWORD_UNREADABLE}", view.warning).into()
+        } else {
+            view.warning.clone()
+        },
+        detail: if saved.is_some() {
+            SAVED_PASSWORD_DETAIL.into()
+        } else {
+            view.detail.clone()
+        },
+        choice_label: choice.unwrap_or_default().into(),
+        ..view
+    }
 }
+
+/// Under a sign-in sheet that starts with a saved user name.
+const SAVED_PASSWORD_DETAIL: &str =
+    "Leave the password empty to sign in with the saved password for this user name.";
+
+/// On a sign-in sheet whose saved password could not be read when the user signed in (the
+/// keychain was locked, access was denied, or the login is gone).
+pub(crate) const SAVED_PASSWORD_UNREADABLE: &str =
+    "The saved password could not be read; type it to sign in.";
 
 /// Shows the active tab's oldest unanswered request, or nothing.
 pub(crate) fn sync_page_request(window: &MainWindow, controller: &BrowserController) {
@@ -107,16 +144,7 @@ pub(crate) fn sync_page_request(window: &MainWindow, controller: &BrowserControl
         );
     });
     let view = pending
-        .map(|pending| {
-            let saved = match pending.kind() {
-                PageRequestKind::Authentication { .. } => pending
-                    .origin()
-                    .key()
-                    .and_then(|origin| saved_http_credentials(origin, None)),
-                _ => None,
-            };
-            page_request_view(&pending, saved.as_ref())
-        })
+        .map(|pending| sign_in_view(&pending))
         .unwrap_or_default();
     if window.get_page_request() != view {
         window.set_page_request(view);
@@ -153,6 +181,21 @@ pub(crate) fn connect_page_request_callbacks(
         }
         // openurl: a confirmation to open a link in another app is acted on here.
         crate::openurl::page_request_answered(&pending, accepted, checked);
+        // passwords-ui: Sign in with the saved user name and an empty password uses the saved
+        // password, read now (the user's gesture) on the store worker; the request is answered
+        // when it arrives, if it is still waiting. If the saved logins could not be listed (a
+        // locked keychain at launch), they are listed again first.
+        if accepted
+            && password.is_empty()
+            && let PageRequestKind::Authentication { for_proxy: false } = pending.kind()
+            && let Some(origin) = pending.origin().key()
+            && (crate::passwords::saved_sign_ins_unknown()
+                || crate::passwords::saved_sign_in_username(origin, false).as_deref()
+                    == Some(text.as_str()))
+        {
+            sign_in_with_saved_password(&controller, &weak_window, tab_id, id, origin, &text);
+            return;
+        }
         // media-capture: camera and microphone prompts have their own replies.
         let capture = crate::media_capture::capture_reply(
             &pending,
@@ -169,14 +212,110 @@ pub(crate) fn connect_page_request_callbacks(
             }
             None => reply_for(pending.kind(), accepted, &text, &password, checked),
         };
-        controller
-            .borrow_mut()
-            .answer_page_request(tab_id, id, reply, now);
-        if let Some(window) = weak_window.upgrade() {
-            sync_ui(&window, &controller.borrow());
-            window.window().request_redraw();
+        // passwords-ui: the save choice ticked (only shown where saving is offered); saved once
+        // the sign-in has worked.
+        if accepted
+            && checked
+            && !password.is_empty()
+            && let PageRequestKind::Authentication { for_proxy } = pending.kind()
+            && let Some(origin) = pending.origin().key()
+            && crate::passwords::save_sign_in_choice(Some(origin), *for_proxy).is_some()
+        {
+            crate::passwords::sign_in_sent(tab_id, origin, &text, &password);
         }
+        answer_and_show(&controller, &weak_window, tab_id, id, reply);
     });
+}
+
+/// passwords-ui: the user pressed Sign in on the sheet of request `id` with `username` and an
+/// empty password. Once the saved logins are known, signs in with the saved password for that
+/// user name (read on the store worker: macOS may ask). If none is saved, signs in with the
+/// empty password typed. If the saved password cannot be read, the sheet stays and says so.
+pub(crate) fn sign_in_with_saved_password(
+    controller: &Rc<RefCell<BrowserController>>,
+    window: &slint::Weak<MainWindow>,
+    tab_id: talaria_core::TabId,
+    id: PageRequestId,
+    origin: &str,
+    username: &str,
+) {
+    let controller = Rc::clone(controller);
+    let window = window.clone();
+    let origin = origin.to_owned();
+    let username = username.to_owned();
+    crate::passwords::with_saved_sign_ins_listed(move || {
+        if !still_waiting(&controller, tab_id, id) {
+            return;
+        }
+        if crate::passwords::saved_sign_ins_unknown() {
+            show_unreadable(&controller, &window, id);
+            return;
+        }
+        if crate::passwords::saved_sign_in_username(&origin, false).as_deref()
+            != Some(username.as_str())
+        {
+            let reply = PageRequestReply::new(PageRequestAnswer::Credentials(
+                HttpCredentials::new(username, String::new()),
+            ));
+            answer_and_show(&controller, &window, tab_id, id, reply);
+            return;
+        }
+        let reading = username.clone();
+        crate::passwords::read_saved_sign_in(&origin, &reading, move |password| {
+            if !still_waiting(&controller, tab_id, id) {
+                return;
+            }
+            let Some(password) = password else {
+                show_unreadable(&controller, &window, id);
+                return;
+            };
+            let reply = PageRequestReply::new(PageRequestAnswer::Credentials(
+                HttpCredentials::new(username, password),
+            ));
+            answer_and_show(&controller, &window, tab_id, id, reply);
+        });
+    });
+}
+
+/// passwords-ui: whether request `id` is still the one waiting in its tab.
+fn still_waiting(
+    controller: &RefCell<BrowserController>,
+    tab_id: talaria_core::TabId,
+    id: PageRequestId,
+) -> bool {
+    controller
+        .borrow()
+        .pending_page_request(tab_id)
+        .is_some_and(|pending| pending.id() == id)
+}
+
+/// passwords-ui: the sheet of request `id` says that the saved password could not be read.
+fn show_unreadable(
+    controller: &RefCell<BrowserController>,
+    window: &slint::Weak<MainWindow>,
+    id: PageRequestId,
+) {
+    UNREADABLE.with(|unreadable| unreadable.set(Some(id)));
+    if let Some(window) = window.upgrade() {
+        sync_ui(&window, &controller.borrow());
+        window.window().request_redraw();
+    }
+}
+
+fn answer_and_show(
+    controller: &RefCell<BrowserController>,
+    window: &slint::Weak<MainWindow>,
+    tab_id: talaria_core::TabId,
+    id: PageRequestId,
+    reply: PageRequestReply,
+) {
+    controller
+        .borrow_mut()
+        .answer_page_request(tab_id, id, reply, page_request_clock());
+    if let Some(window) = window.upgrade() {
+        sync_ui(&window, &controller.borrow());
+        window.window().request_redraw();
+    }
 }
 
 /// Whether the active tab shows a sheet over its page (anything but a permission prompt): its
@@ -219,6 +358,8 @@ pub(crate) fn reply_for(
         PageRequestKind::Permission(_) => reply,
         // openurl: the checkbox is "Always allow", kept by the openurl module.
         PageRequestKind::OpenExternally { .. } => reply,
+        // passwords-ui: a sign-in's choice is "save the password", not a block.
+        PageRequestKind::Authentication { .. } => reply,
         _ if checked => reply.blocking_further_dialogs(),
         _ => reply,
     }
@@ -509,8 +650,33 @@ mod tests {
     }
 
     #[test]
-    fn nothing_is_saved_for_sign_ins_yet() {
-        assert_eq!(saved_http_credentials("https://example.com", None), None);
+    fn nothing_is_filled_into_a_sign_in_without_a_saved_login() {
+        crate::passwords::tests::install_fakes();
+        let view = sign_in_view(&pending(
+            "https://example.com/",
+            PageRequestKind::Authentication { for_proxy: false },
+        ));
+
+        assert_eq!(view.value, "");
+        assert_eq!(view.secret, "");
+    }
+
+    // passwords-ui
+    #[test]
+    fn a_sign_ins_choice_saves_rather_than_blocks() {
+        assert_eq!(
+            reply_for(
+                &PageRequestKind::Authentication { for_proxy: false },
+                true,
+                "alice",
+                "pw",
+                true
+            ),
+            PageRequestReply::new(PageRequestAnswer::Credentials(HttpCredentials::new(
+                "alice".to_owned(),
+                "pw".to_owned()
+            )))
+        );
     }
 
     #[test]
@@ -816,5 +982,174 @@ mod tests {
         assert!(!protector.accepts_request(camera, Some(PagePermission::Microphone), at(1_800)));
         assert!(protector.accepts_request(camera, Some(PagePermission::Microphone), at(2_200)));
         assert!(!protector.accepts_request(camera, None, at(2_200)));
+    }
+}
+
+// passwords-ui (review): written before the fix.
+#[cfg(test)]
+mod password_tests {
+    use std::time::Duration;
+
+    use mercury_passwords::{LoginKey, Origin, Password};
+    use talaria_core::{BrowserEvent, PageRequest, PageRequestId};
+
+    use super::*;
+    use crate::passwords::tests::{install_fakes, save_login};
+
+    fn sign_in(for_proxy: bool) -> PendingPageRequest {
+        let mut controller = BrowserController::default();
+        let tab_id = controller.active_tab_id();
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::PageRequested(PageRequest {
+                id: PageRequestId::new(3),
+                url: "https://example.com/private".to_owned(),
+                kind: PageRequestKind::Authentication { for_proxy },
+                received_at: Duration::ZERO,
+            }),
+        );
+        controller.pending_page_request(tab_id).expect("pending")
+    }
+
+    fn saved() {
+        let (passwords, _, _) = install_fakes();
+        save_login(
+            &passwords,
+            LoginKey::http_auth(
+                Origin::parse("https://example.com").expect("valid"),
+                "",
+                "alice",
+            ),
+            Password::new("fake-pw".to_owned()),
+        );
+    }
+
+    #[test]
+    fn a_proxy_sign_in_gets_empty_fields_even_with_a_saved_login_for_the_url() {
+        saved();
+
+        let view = sign_in_view(&sign_in(true));
+
+        assert_eq!(view.value, "");
+        assert_eq!(view.secret, "");
+        assert_eq!(
+            view.choice_label, "",
+            "nothing is offered to save for a proxy"
+        );
+    }
+
+    #[test]
+    fn a_site_sign_in_starts_with_the_saved_user_name_only() {
+        saved();
+
+        let view = sign_in_view(&sign_in(false));
+
+        assert_eq!(view.value, "alice");
+        assert_eq!(
+            view.secret, "",
+            "the password is read only when the user signs in"
+        );
+        assert!(view.detail.contains("saved password"));
+    }
+
+    #[test]
+    fn a_memory_only_run_offers_to_remember_until_quit() {
+        saved();
+
+        let view = sign_in_view(&sign_in(false));
+
+        assert_eq!(view.choice_label, crate::passwords::REMEMBER_SIGN_IN_CHOICE);
+    }
+}
+
+// passwords-ui (review round 2): written before the fix.
+#[cfg(test)]
+mod saved_password_tests {
+    use std::time::Duration;
+
+    use mercury_password_manager::Interaction;
+    use mercury_passwords::{LoginKey, Origin, Password};
+    use talaria_core::{BrowserEvent, PageRequest, PageRequestId, TabId};
+
+    use super::*;
+    use crate::passwords::tests::{install_deferred, install_fakes, save_login};
+
+    const ORIGIN: &str = "https://example.com";
+
+    fn alice() -> LoginKey {
+        LoginKey::http_auth(Origin::parse(ORIGIN).expect("valid"), "", "alice")
+    }
+
+    fn controller() -> (Rc<RefCell<BrowserController>>, TabId) {
+        let mut controller = BrowserController::default();
+        let tab_id = controller.active_tab_id();
+        controller.handle_event(
+            tab_id,
+            BrowserEvent::PageRequested(PageRequest {
+                id: PageRequestId::new(3),
+                url: format!("{ORIGIN}/private"),
+                kind: PageRequestKind::Authentication { for_proxy: false },
+                received_at: Duration::ZERO,
+            }),
+        );
+        (Rc::new(RefCell::new(controller)), tab_id)
+    }
+
+    #[test]
+    fn the_sheet_says_when_the_saved_password_could_not_be_read() {
+        let (passwords, _, _) = install_fakes();
+        save_login(&passwords, alice(), Password::new("fake".to_owned()));
+        // Removed by another program since it was listed.
+        passwords
+            .worker
+            .run(Interaction::Allowed, |store| store.remove(&alice()), |_| {});
+        let (controller, tab_id) = controller();
+
+        sign_in_with_saved_password(
+            &controller,
+            &slint::Weak::default(),
+            tab_id,
+            PageRequestId::new(3),
+            ORIGIN,
+            "alice",
+        );
+
+        let pending = controller
+            .borrow()
+            .pending_page_request(tab_id)
+            .expect("still waiting");
+        assert!(
+            sign_in_view(&pending)
+                .warning
+                .contains(SAVED_PASSWORD_UNREADABLE)
+        );
+    }
+
+    #[test]
+    fn a_list_that_could_not_be_read_is_read_again_on_sign_in() {
+        let (passwords, _, _) = install_deferred();
+        save_login(&passwords, alice(), Password::new("fake".to_owned()));
+        passwords.logins.borrow_mut().clear();
+        passwords.list_unavailable.set(true);
+        let (controller, tab_id) = controller();
+
+        sign_in_with_saved_password(
+            &controller,
+            &slint::Weak::default(),
+            tab_id,
+            PageRequestId::new(3),
+            ORIGIN,
+            "alice",
+        );
+        assert_eq!(
+            passwords.worker.last_interaction(),
+            Some(Interaction::Allowed)
+        );
+        passwords.worker.run_queued();
+
+        assert!(
+            controller.borrow().pending_page_request(tab_id).is_none(),
+            "answered with the saved password"
+        );
     }
 }

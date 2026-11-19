@@ -11,6 +11,8 @@ mod input;
 mod media;
 // openurl
 mod navigation_policy;
+// passwords
+mod login_fill;
 mod page_icon;
 mod page_request;
 mod site_security;
@@ -47,6 +49,8 @@ pub use media::{
     MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
     TabAudio,
 };
+// passwords
+pub use login_fill::LoginFill;
 pub use page_icon::PageIcon;
 pub use page_request::{
     GEOLOCATION_FRAME_GATE, GEOLOCATION_OFFERED, HttpCredentials, MAX_COMBINING_MARKS,

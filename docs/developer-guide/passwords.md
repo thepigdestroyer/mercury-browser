@@ -8,7 +8,8 @@ description: How the mercury-passwords crate stores website logins in the macOS 
 `crates/mercury-passwords` is the storage and logic behind Mercury's password manager. It keeps
 website logins in the operating system's credential store, generates passwords, and reads and
 writes the login CSV files other browsers export. It has no UI and does not detect, offer to
-save or fill forms; those parts build on it. The app does not use the crate yet: its password window is in progress, and filling logins into pages needs hooks in Servo that are on the list of planned patches.
+save or fill forms; those parts build on it (see [the password manager in the
+browser](#the-password-manager-in-the-browser)).
 
 ## The model
 
@@ -187,6 +188,165 @@ Keychain tests must never read or change the developer's own keychains, nor show
 
 Use the `security` tool read-only and only with an explicit path to a temporary keychain (for
 example `security dump-keychain <path>`), never with `-d`, which prints secrets.
+
+## The password manager in the browser
+
+`crates/mercury-password-manager` (no Servo, no Slint) holds the logic between the store and the
+interface; `apps/mercury-desktop/src/passwords/` connects it to the windows, the engine and macOS.
+
+| Part | Where | What it does |
+| --- | --- | --- |
+| Backend choice | `passwords::start` | The login keychain only in a normal interactive run of the default profile. `--screenshot`, `--background`, `--profile-dir` and tests keep logins in memory (`AnyBackend::memory`), authenticate with `RefusingAuthenticator` and copy to an in-memory pasteboard: they never touch the login keychain, show a system prompt or change the real clipboard. |
+| Settings section | `passwords/section.rs`, `ui/passwords/passwords-section.slint` | List (`login_rows`, untrusted text made safe by `display_text`), search (`filter_rows`), open, copy the user name, show or copy the password, edit (`update_login`: a new user name saves the new key before removing the old), delete (asks first), the generator, CSV import (`import_csv`: never overwrites or reads a saved password) and export (`export_csv` + `write_private_file`: a new `0600` file renamed over the chosen path). The Slint side talks only through the `PasswordManagerUi` global. |
+| Store worker | `StoreWorker`, `passwords/mod.rs` | No Keychain call runs on the interface thread: one thread owns the store, jobs after a gesture may make macOS ask (`Interaction::Allowed`), everything else runs with Keychain user interaction off (`Interaction::Never`), a job that panics is reported and the worker goes on, and the list of saved logins (no passwords) is kept in memory. See below. |
+| Authentication | `Authenticator`, `AuthGate`, `passwords/local_auth.rs` | Showing, copying and exporting a password first asks `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (Touch ID or the login password). One success lasts `AUTH_GRACE_PERIOD` (60 s of wall-clock time, so sleep counts) or until the settings window closes. |
+| Copying | `Pasteboard`, `CopiedSecret`, `passwords/system_pasteboard.rs` | A password is copied with a request to keep it on this Mac (`NSPasteboardContentsCurrentHostOnly`, which AppKit does not let a program read back), as one item that carries the string and the `org.nspasteboard.ConcealedType` and `TransientType` markers, written with a single `writeObjects:` after `prepareForNewContentsWithOptions:`, and removed after `CLIPBOARD_CLEAR_DELAY` (60 s) or at quit (`post_run`) if the pasteboard has not changed since. |
+| Manual fill | `passwords/fill.rs`, `controls/context_menu.rs`, `talaria_core::LoginFill` | See below. |
+| HTTP sign-in | `passwords/sign_in.rs`, `SignInSaves`, `page_requests.rs` | See below. |
+
+### The store worker
+
+No Keychain call runs on the interface thread. One thread (`password-store`) owns the store. A
+job's result comes back through `slint::invoke_from_event_loop`, and each reply checks again that
+what it was for (the opened login, the focused field, the waiting sign-in) is still there. The
+section shows "Waiting for your keychain…" meanwhile. The memory store runs jobs inline, so tests
+stay synchronous; `StoreWorker::deferred` tests what happens while a job waits.
+
+- **Interaction.** Jobs after a gesture in Mercury's own interface run with
+  `Interaction::Allowed` (macOS may ask): opening the Passwords section, reading, copying, editing
+  or deleting a login, picking a login in the fill menu, Sign in with a saved password, and saving
+  a sign-in the user ticked the save choice for. Start-up and the reload after a saved sign-in run
+  with `Interaction::Never`: Keychain user interaction is switched off for the job
+  (`KeychainBackend::without_user_interaction`), so a call that would show a dialog fails with
+  `Locked`. The list of saved logins (no passwords) is kept in memory, so search, the fill menu and
+  the sign-in sheet never call the Keychain.
+- **Only this thread calls the Keychain.** `without_user_interaction` is process-wide
+  (`SecKeychainSetUserInteractionAllowed`), so a Keychain call on another thread while a quiet job
+  runs would lose its dialog. Every Keychain access in the process therefore goes through
+  `StoreWorker`. `StoreWorker::spawn` binds the backend to the worker thread
+  (`AnyBackend::bind_to_current_thread`), and each Keychain call of `AnyBackend` asserts
+  `on_owner_thread()` with `debug_assert!`. **That assertion exists in debug builds only.**
+  `debug_assert!` is compiled out of release builds, and the repository's tests run with
+  `--release`, so there it never fires; the rule is kept by construction (only `StoreWorker` holds
+  the store), not by a check in release. The memory store is not checked. The test of it,
+  `a_keychain_call_off_the_owner_thread_is_refused` (macOS, debug assertions only), calls a backend
+  for the default keychain from a thread that does not own it: the assertion fires before any
+  Keychain call, so it needs no temporary keychain and shows no dialog. It runs only in a
+  debug-profile test run (`cargo test -p mercury-password-manager --lib`).
+- **A failed job.** Every job runs under `catch_unwind` (on the worker thread, inline and
+  deferred alike), and a drop guard switches the quiet flag off again whatever happens. A job that
+  panics delivers a marker instead of its result: its reply never runs, the handler set with
+  `StoreWorker::set_on_failure` gets `WorkerFailure::JobFailed`, and the worker takes the next job.
+  If the worker thread is gone (its channel is closed), `run` drops the waiting reply, so nothing
+  leaks, and reports `WorkerFailure::Stopped`; no job runs again in that run. `Passwords::store_failed`
+  turns these into "Something went wrong with the saved logins." and "Saved logins are
+  unavailable until Mercury Browser restarts." in the Passwords section of the settings window
+  (`STORE_FAILED`, `STORE_STOPPED` in `section.rs`). With that window closed a failure is only
+  logged, and a sign-in sheet or fill that waited for the job stays as it was.
+- **A list that could not be read.** If the list of saved logins failed to load (a locked
+  keychain at launch, where the start-up job may not ask), it is read again with
+  `Interaction::Allowed` the next time the user makes a gesture that needs it: opening the
+  Passwords section, a right-click over a password field, or Sign in with an empty password on a
+  sign-in sheet. The menu opened by that right-click offers nothing; the next one offers what the
+  read found. See "HTTP sign-in" below for the sheet.
+
+### Manual fill
+
+Servo 0.8 has no autofill hooks (research R6), so filling is user-started and top-frame only:
+
+1. A right-click focuses the clicked field before Servo opens its context menu. When the menu
+   arrives, `talaria-servo` looks for a pending input-method control of type `Password` in the
+   **same pipeline** as the menu and, if there is one, sends
+   `BrowserEvent::PasswordFieldMenu { menu, field }` after the menu's `ControlShown`.
+2. The context menu then starts with "Fill login…" if form logins are saved for the exact origin
+   of the tab's **top-level** URL (`fill_candidates`). Choosing it turns the menu into the list of
+   those logins.
+3. Picking one (a click or Return in Mercury's own menu: the user gesture) dismisses the engine's
+   menu and, if the same field still has focus and the page still has that origin, queues
+   `BrowserCommand::FillLogin`. `ServoWebView::fill_login` evaluates `talaria-core`'s
+   `login_fill.js` with the values as escaped string literals. `evaluate_javascript` only runs in
+   the top-level document; the script fills only if `location.origin` is the login's origin and
+   `document.activeElement` is one of that document's own password inputs (focus in any frame
+   makes the frame element the active element). It sets the value, finds the user-name partner
+   (the last editable text-like input before it in its form) and fires `input` and `change`. The
+   status word is logged; the values never are.
+
+Never filled: on page load, without the menu, into a frame, on a page whose origin cannot hold
+logins (plain HTTP other than loopback). The page can read a filled value, like any value the
+user types. Save-on-submit and frame-aware fill wait for the engine patch (R7 B2).
+
+**Diagnostics.** A build with the `passwords-diagnostics` feature reads
+`MERCURY_PASSWORDS_DIAG_FILL="<origin> <user> <password>"` in automated runs: it seeds that login
+in the run's memory store and fills the focused field each time a page finishes loading, as if the
+user had picked it. `tests/pages/login-form.html` and `login-iframe.html` (see
+`tests/pages/README-dialogs.md`) check the fill and the refusal in a frame with `--screenshot`.
+
+### HTTP sign-in
+
+A page can raise the sign-in sheet without a gesture, so the sheet starts with the **user name**
+only of the most recently changed HTTP login saved for the exact origin that asked (realm `""`:
+Servo 0.8 does not report it), from the in-memory list. The saved password is read when the user
+presses Sign in with that user name and the password field empty; the request is answered when the
+keychain replies, if it is still waiting.
+
+**Never for a proxy:** a proxy's challenge carries the destination's URL, so filling it would hand
+the destination's login to the proxy. Proxy sheets start empty and offer nothing to save.
+
+Unless the settings turn saving off or list the origin under "Never save passwords for", the sheet
+offers "Save the user name and password in Mercury Browser" (in memory-only runs: "Remember the user
+name and password until Mercury Browser quits"). With it ticked and a password typed, the login is
+saved once the sign-in has worked: the tab starts a new document and finishes loading it without
+asking the same origin again (`SignInSaves`; with wrong credentials Servo asks again first).
+
+**Saving.** The user asked for that save (ticked the choice and pressed Sign in), so it runs with
+`Interaction::Allowed`: macOS may unlock the keychain or ask about an item another build saved. If
+it still fails, `Couldn't save the login for <site>.` appears under the toolbar
+(`PasswordSaveNotice` in `main-window.slint`, shown while the toolbar is) with **Retry**, which
+saves the same login again with `Interaction::Allowed`, and **Dismiss**, which forgets it unsaved.
+Only the last failed save is kept (`Passwords::failed_save`). A save that worked reloads the list
+with `Interaction::Never`.
+
+**Reading.** Sign in with the saved user name and the password field empty reads the saved
+password on the worker with `Interaction::Allowed` (`read_saved_sign_in`). If it cannot be read (a
+locked or refusing keychain, or the login is gone), the sheet stays and says "The saved password
+could not be read; type it to sign in." (`SAVED_PASSWORD_UNREADABLE` in `page_requests.rs`). If the
+list of saved logins failed to load at launch, Sign in with an empty password lists it again first
+(with `Interaction::Allowed`, `with_saved_sign_ins_listed`) and, if it still cannot be listed,
+shows the same message instead of signing in with an empty password for a login it cannot see.
+
+**Empty password.** An empty password field with a matching saved user name always means "use the
+saved password": the sheet does not send what was typed. A user name with a saved login therefore
+cannot be signed in with nothing typed as the password, and a saved login whose password is
+genuinely empty cannot be re-entered empty from the sheet; typing any password sends that one
+instead. `PasswordStore::save` refuses empty passwords, so such a login can only have been put in
+the keychain by another program.
+
+**Follow-up:** Keychain items are not per profile (one service name), which is why `--profile-dir`
+profiles keep logins in memory. Per-profile items (a profile id in the account prefix or the
+service name, in `mercury-passwords`) would let them persist.
+
+### Not yet verified
+
+The tests use fake backends, a fake authenticator, an in-memory pasteboard and, for
+`mercury-password-manager`, a temporary keychain with user interaction switched off, so none of
+these has run for real:
+
+- **Keychain dialogs.** The unlock and "allow access" dialogs that `Interaction::Allowed` permits
+  (on Sign in, on the save after a sign-in, on Retry, on opening the section) have not been seen
+  on a Mac.
+- **Touch ID** and the login-password fallback behind `LAContext.evaluatePolicy`.
+- **The real pasteboard.** `passwords/system_pasteboard.rs` has tests that write to a private
+  `NSPasteboard` (`pasteboardWithUniqueName`, never the general one) and read it back: one item
+  with the string, `ConcealedType` and `TransientType`; a plain copy without the markers; each
+  copy replacing the last. Not verified: that `CurrentHostOnly` is still in force after the
+  `writeObjects:` (AppKit has no call to read it back, and no second device was paired to see
+  Universal Clipboard refuse the item), the general pasteboard itself, and that a clipboard
+  manager honours the two markers. The user guide therefore says Mercury *asks* macOS to keep
+  a copied password on this Mac, not that it is guaranteed.
+- **A real HTTP save.** A sign-in against a real server whose login is then saved to the real
+  login keychain, and the "Couldn't save" notice and Retry on a real failure.
+- **Linux.** `cargo check -p mercury-desktop --all-targets` for Linux has not been run (it cannot
+  be compiled on the development Mac); the macOS-only code is behind `cfg(target_os = "macos")`.
 
 ## Other platforms
 

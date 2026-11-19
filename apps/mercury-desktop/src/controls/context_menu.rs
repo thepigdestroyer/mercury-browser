@@ -20,6 +20,11 @@ pub(crate) enum MenuCommand {
     Engine(ContextMenuAction),
     /// Opened by the browser in a background tab; the engine's menu is dismissed.
     OpenInNewTab(String),
+    // passwords-ui
+    /// "Fill login…": the menu becomes the list of saved logins for the page.
+    ShowLogins,
+    /// Fills saved login number `n` of that list; the engine's menu is dismissed.
+    FillLogin(usize),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +52,54 @@ pub(crate) enum MenuKey {
 pub(crate) enum MenuOutcome {
     Stay,
     Close(Option<MenuCommand>),
+    // passwords-ui
+    /// The rows were replaced (by the list of saved logins); show them again.
+    Replaced,
+}
+
+// passwords-ui
+/// Puts "Fill login…" first, above Servo's items, and keeps the chooser it opens: a heading
+/// naming the site, then one row per saved login.
+pub(crate) fn with_login_chooser(
+    model: MenuModel,
+    heading: &str,
+    usernames: &[String],
+) -> MenuModel {
+    let mut rows = vec![
+        MenuRow::Item {
+            label: "Fill login…".to_owned(),
+            enabled: true,
+            command: MenuCommand::ShowLogins,
+        },
+        MenuRow::Separator,
+    ];
+    rows.extend(model.rows);
+    if rows.last() == Some(&MenuRow::Separator) {
+        rows.pop();
+    }
+    let mut chooser = vec![
+        MenuRow::Item {
+            label: heading.to_owned(),
+            enabled: false,
+            command: MenuCommand::ShowLogins,
+        },
+        MenuRow::Separator,
+    ];
+    chooser.extend(
+        usernames
+            .iter()
+            .enumerate()
+            .map(|(index, username)| MenuRow::Item {
+                label: username.clone(),
+                enabled: true,
+                command: MenuCommand::FillLogin(index),
+            }),
+    );
+    MenuModel {
+        rows,
+        highlighted: None,
+        chooser: Some(chooser),
+    }
 }
 
 /// `page_url` is the address of the page the menu belongs to.
@@ -167,6 +220,8 @@ fn browser_item(
 pub(crate) struct MenuModel {
     rows: Vec<MenuRow>,
     highlighted: Option<usize>,
+    // passwords-ui: the rows "Fill login…" shows.
+    chooser: Option<Vec<MenuRow>>,
 }
 
 impl MenuModel {
@@ -174,6 +229,7 @@ impl MenuModel {
         Self {
             rows,
             highlighted: None,
+            chooser: None,
         }
     }
 
@@ -225,6 +281,19 @@ impl MenuModel {
 
     pub(crate) fn click(&mut self, row: usize) -> MenuOutcome {
         match self.rows.get(row) {
+            // passwords-ui
+            Some(MenuRow::Item {
+                enabled: true,
+                command: MenuCommand::ShowLogins,
+                ..
+            }) => match self.chooser.take() {
+                Some(chooser) => {
+                    self.rows = chooser;
+                    self.highlighted = (0..self.rows.len()).find(|&row| self.is_enabled(row));
+                    MenuOutcome::Replaced
+                }
+                None => MenuOutcome::Stay,
+            },
             Some(MenuRow::Item {
                 enabled: true,
                 command,
@@ -580,6 +649,59 @@ mod tests {
         assert_eq!(model.highlighted(), Some(4));
         model.hover(6);
         assert_eq!(model.highlighted(), None);
+    }
+
+    // passwords-ui
+    fn password_field_menu() -> MenuModel {
+        let entries = vec![
+            item("Cut", ContextMenuAction::Cut, false),
+            item("Paste", ContextMenuAction::Paste, true),
+        ];
+        with_login_chooser(
+            MenuModel::new(build_menu(&entries, None, None, PAGE)),
+            "Fill a login for a.test",
+            &["alice".to_owned(), "bob".to_owned()],
+        )
+    }
+
+    #[test]
+    fn fill_login_comes_first_and_opens_the_list_of_logins() {
+        let mut model = password_field_menu();
+        assert_eq!(
+            labels(model.rows()),
+            vec!["Fill login…", "—", "Cut", "Paste"]
+        );
+
+        assert_eq!(model.click(0), MenuOutcome::Replaced);
+
+        assert_eq!(
+            labels(model.rows()),
+            vec!["Fill a login for a.test", "—", "alice", "bob"]
+        );
+        assert_eq!(model.highlighted(), Some(2), "the first login");
+        assert_eq!(
+            model.click(0),
+            MenuOutcome::Stay,
+            "the heading does nothing"
+        );
+        assert_eq!(
+            model.click(3),
+            MenuOutcome::Close(Some(MenuCommand::FillLogin(1)))
+        );
+    }
+
+    #[test]
+    fn the_keyboard_reaches_the_logins_too() {
+        let mut model = password_field_menu();
+
+        model.key(MenuKey::Down);
+        assert_eq!(model.key(MenuKey::Return), MenuOutcome::Replaced);
+        model.key(MenuKey::Down);
+
+        assert_eq!(
+            model.key(MenuKey::Return),
+            MenuOutcome::Close(Some(MenuCommand::FillLogin(1)))
+        );
     }
 
     #[test]

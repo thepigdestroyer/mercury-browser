@@ -6,6 +6,7 @@ members = [
     "crates/mercury-downloads",
     "crates/mercury-iconset",
     "crates/mercury-import",
+    "crates/mercury-password-manager",
     "crates/mercury-passwords",
     "crates/mercury-servo-patches",
     "crates/mercury-settings",

@@ -1,0 +1,32 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Login form test page</title>
+<style>
+  html, body { margin: 0; background: #ffffff; }
+  body { padding: 24px; font: 22px/1.5 sans-serif; color: #000000; }
+  h1 { margin: 0 0 12px; font-size: 32px; }
+  label { display: block; margin: 8px 0; }
+  input { font: inherit; width: 360px; }
+</style>
+</head>
+<body>
+  <h1>Login form test page</h1>
+  <form action="/nowhere" method="post">
+    <label>Email <input id="user" type="email" name="email"></label>
+    <label>Password <input id="pass" type="password" name="password" autofocus></label>
+  </form>
+  <p id="result">Nothing filled yet.</p>
+<script>
+  // Says what the browser filled, without showing the password itself.
+  document.getElementById("pass").addEventListener("input", () => {
+    const user = document.getElementById("user").value;
+    const length = document.getElementById("pass").value.length;
+    document.getElementById("result").textContent =
+      "Filled: user name \"" + user + "\", password of " + length + " characters.";
+  });
+  window.addEventListener("load", () => document.getElementById("pass").focus());
+</script>
+</body>
+</html>

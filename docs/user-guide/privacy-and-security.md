@@ -70,6 +70,17 @@ Mercury itself sends nothing to any server: no crash reports, no usage statistic
 
 The settings for search suggestions and HTTPS-only browsing are greyed out because those features aren't there yet. Phishing protection, password breach checks, translation and update checks are planned; each will say which service it uses and can be turned off.
 
+## Saved passwords
+
+Mercury keeps saved logins in your login keychain. Open **Settings > Passwords** to search them, open one, copy its user name or password, edit or delete it, generate a new password, or import and export a CSV file (Chrome, Edge, Brave, Firefox and Safari exports are read; Chrome's format is written).
+
+- **Showing, copying or exporting a password** asks for Touch ID or your Mac's login password first. Once you have confirmed, Mercury does not ask again for a minute while the Settings window stays open. Mercury asks macOS to keep a copied password on this Mac rather than send it to your other devices through Universal Clipboard, and to mark it as secret for clipboard managers that respect that. It is removed from the clipboard after a minute or when Mercury quits, unless you have copied something else since.
+- **Filling a login into a page:** right-click (or Control-click) the page's password field and choose **Fill login…**, then the login. Mercury fills the password and the user-name field before it, only on the page's own site, and never into a frame embedded from another site. Nothing is filled on its own when a page loads.
+- **Sites that ask through Mercury's sign-in sheet** (HTTP authentication): the sheet starts with your saved user name for that site; leave the password empty and press **Sign in** to use the saved password; if it cannot be read, the sheet stays open and asks you to type it. An empty password field always uses the saved password for that user name, so a saved login whose password is genuinely empty cannot be re-entered empty from the sheet; type any password to override. **Save the user name and password in Mercury Browser** saves what you type once the sign-in has worked; if it cannot be saved, Mercury says so under the toolbar and offers **Retry**. Nothing is filled in or saved for a proxy server's sign-in. **Offer to save passwords** and **Never save passwords for** in Settings control this.
+- Saving what you type into a page's own sign-in form is not available yet: it needs a later version of the web engine.
+- An exported file holds every password in clear text and is readable only by you. Delete it once you no longer need it, and do not open it in a spreadsheet.
+- Runs with `--profile-dir`, `--screenshot` or `--background` keep logins only until Mercury quits and never use the keychain.
+
 ## Proxy servers
 
 On macOS, Mercury uses the proxies set in **System Settings > Network > (your network) > Details > Proxies**, read when Mercury starts; a change takes effect at the next start. The `http_proxy`, `https_proxy` and `no_proxy` environment variables, if set, are used instead (on Linux they are the only source).

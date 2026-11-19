@@ -7,6 +7,8 @@ use talaria_core::{
 // media session
 use talaria_core::MediaSessionAction;
 use talaria_core::{PageRequestAnswer, PageRequestId};
+// passwords
+use talaria_core::LoginFill;
 
 #[derive(Debug, PartialEq)]
 enum FakeCall {
@@ -55,6 +57,8 @@ enum FakeCall {
     BeginFind(u64),
     Find(FindRequest),
     EndFind(EndFindRequest),
+    // passwords
+    FillLogin(LoginFill),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -208,6 +212,11 @@ impl WebView for FakeWebView {
 
     fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error> {
         self.record(FakeCall::EndFind(request))
+    }
+
+    // passwords
+    fn fill_login(&mut self, fill: LoginFill) -> Result<(), Self::Error> {
+        self.record(FakeCall::FillLogin(fill))
     }
 }
 
@@ -584,4 +593,20 @@ fn find_commands_reach_the_web_view() {
             FakeCall::EndFind(end),
         ]
     );
+}
+
+// passwords
+#[test]
+fn a_login_fill_reaches_the_web_view_unchanged() {
+    let mut web_view = FakeWebView::default();
+    let fill = LoginFill::new(
+        "https://example.com".to_owned(),
+        "alice".to_owned(),
+        "fake-pw".to_owned(),
+    );
+
+    let result = dispatch_command(&mut web_view, BrowserCommand::FillLogin(fill.clone()));
+
+    assert_eq!(result, Ok(()));
+    assert_eq!(web_view.calls, vec![FakeCall::FillLogin(fill)]);
 }

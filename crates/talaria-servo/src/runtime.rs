@@ -995,7 +995,12 @@ impl servo::WebViewDelegate for BrowserDelegate {
             }
             control => {
                 if let Some(event) = self.controls.show(control) {
+                    // passwords: a context menu over the focused password field
+                    let password_field_menu = self.controls.password_field_menu(&event);
                     self.send_browser_event(event);
+                    if let Some(event) = password_field_menu {
+                        self.send_browser_event(event);
+                    }
                 }
             }
         }

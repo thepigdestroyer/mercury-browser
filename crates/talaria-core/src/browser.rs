@@ -12,6 +12,8 @@ use crate::{
     MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
     TabAudio,
 };
+// passwords
+use crate::LoginFill;
 
 const DEFAULT_PAGE_TITLE: &str = "New Tab";
 const INITIAL_ADDRESS: &str = "";
@@ -180,6 +182,10 @@ pub enum BrowserCommand {
     /// Search the page and select a match (answered by `FindResult`).
     Find(FindRequest),
     EndFind(EndFindRequest),
+    // passwords
+    /// Fills a login the user chose into the focused password field of the top-level document,
+    /// if that document has the login's origin.
+    FillLogin(LoginFill),
 }
 
 impl BrowserCommand {
@@ -361,6 +367,14 @@ pub enum BrowserEvent {
     HttpsOnlyBlocked {
         url: String,
     },
+    // passwords
+    /// The context menu `menu` was opened in the same frame as the focused password field
+    /// `field` (an input-method control of a password input). Sent right after the menu's
+    /// `ControlShown`.
+    PasswordFieldMenu {
+        menu: ControlId,
+        field: ControlId,
+    },
 }
 
 /// A page the engine could not show, offered to the browser as a download.
@@ -418,6 +432,8 @@ pub struct BrowserState {
     audio_muted: bool,
     // find
     find: FindState,
+    // passwords: the context menu and the password field it was opened over.
+    password_field_menu: Option<(ControlId, ControlId)>,
 }
 
 impl Default for BrowserState {
@@ -440,6 +456,7 @@ impl Default for BrowserState {
             audio_muted: false,
             // find
             find: FindState::default(),
+            password_field_menu: None,
         }
     }
 }
@@ -668,6 +685,26 @@ impl BrowserState {
             BrowserEvent::ErrorPageShown { .. }
             | BrowserEvent::HttpsUpgraded { .. }
             | BrowserEvent::HttpsOnlyBlocked { .. } => {}
+            // passwords
+            BrowserEvent::PasswordFieldMenu { menu, field } => {
+                self.password_field_menu = Some((menu, field));
+            }
         }
+    }
+
+    // passwords
+    /// The control id of the focused editable element, while the input method is active.
+    pub fn input_method_id(&self) -> Option<ControlId> {
+        self.input_method.map(|(id, _)| id)
+    }
+
+    /// The focused password field, when the pending control is a context menu opened over it
+    /// (in its frame) and the field still has focus.
+    pub fn password_field_menu(&self) -> Option<ControlId> {
+        let (menu, field) = self.password_field_menu?;
+        let menu_pending = self.pending_control.as_ref().is_some_and(|(id, request)| {
+            *id == menu && matches!(request, ControlRequest::ContextMenu { .. })
+        });
+        (menu_pending && self.input_method_id() == Some(field)).then_some(field)
     }
 }

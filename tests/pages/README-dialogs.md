@@ -22,3 +22,18 @@ sleep 1; port="$(head -n 1 serve.port)"
   --screenshot-delay 2000 "http://127.0.0.1:$port/pages/dialog-alert.html"
 kill %1; rm serve.port
 ```
+
+## Password fill pages (passwords-ui)
+
+`login-form.html` focuses its password field on load and reports what was filled (the user name and
+the password's length, never the password). `login-iframe.html` shows the same form in a frame on
+`localhost`, another origin. With a build that has the `passwords-diagnostics` feature,
+`MERCURY_PASSWORDS_DIAG_FILL="http://127.0.0.1:$port alice@example.com fake-pw"` fills the focused field
+each time a page finishes loading, as if the user had chosen the login from "Fill login…"
+(docs/developer-guide/passwords.md):
+
+```sh
+MERCURY_PASSWORDS_DIAG_FILL="http://127.0.0.1:$port alice@example.com fake-pw" RUST_LOG=info \
+  ./target/release/mercury-browser --background --window-size 1100x700 --screenshot fill.png \
+  --screenshot-delay 3000 "http://127.0.0.1:$port/pages/login-form.html"
+```

@@ -23,8 +23,9 @@ slint.workspace = true
 # (the browser menu and the About window), the history lane's `examples/render_history.rs`
 # and `tests/suggestion_click.rs` (which also need system fonts), `tests/session_bar.rs`
 # (the session bar), `tests/render_tab_audio.rs` (the tab's sound indicator),
-# `tests/find_bar_render.rs` (the find bar) and `tests/downloads_render.rs` (the downloads
-# components). Dev-only, so the application's Slint features are unchanged.
+# `tests/find_bar_render.rs` (the find bar), `tests/downloads_render.rs` (the downloads
+# components) and `examples/render_passwords.rs` (the Passwords section and the fill menu).
+# Dev-only, so the application's Slint features are unchanged.
 [dev-dependencies]
 image.workspace = true
 slint = { workspace = true, features = ["renderer-software", "software-renderer-systemfonts"] }

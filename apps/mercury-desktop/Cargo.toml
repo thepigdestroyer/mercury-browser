@@ -23,6 +23,9 @@ libc.workspace = true
 log.workspace = true
 mercury-downloads = { path = "../../crates/mercury-downloads" }
 mercury-import = { path = "../../crates/mercury-import" }
+# passwords-ui
+mercury-password-manager = { path = "../../crates/mercury-password-manager" }
+mercury-passwords = { path = "../../crates/mercury-passwords" }
 mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-store = { path = "../../crates/mercury-store" }
 mercury-ui = { path = "../../crates/mercury-ui" }
@@ -39,6 +42,7 @@ mercury-site-security = { path = "../../crates/mercury-site-security" }
 # media-session lane: the page's host in Now Playing (url is already a workspace dependency);
 # openurl.
 url.workspace = true
+zeroize.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
 ash.workspace = true
@@ -67,6 +71,9 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "NSMenuItem",
     "NSOpenPanel",
     "NSPanel",
+    # passwords-ui: copying a user name or password.
+    "NSPasteboard",
+    "NSPasteboardItem",
     "NSSavePanel",
     "NSView",
     "NSWindow",
@@ -130,6 +137,9 @@ menu-diagnostics = []
 # find lane: diagnostic command-line options (`--find`, `--find-steps`), never in released builds;
 # `make lint` and `make test` turn them on with `--all-features`.
 diagnostics = []
+# passwords-ui: `MERCURY_PASSWORDS_DIAG_FILL`, a fill without the context menu in automated runs,
+# to check the fill script (docs/developer-guide/passwords.md). Never in a released build.
+passwords-diagnostics = []
 
 [build-dependencies]
 gl_generator = "0.14"
