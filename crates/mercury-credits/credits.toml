@@ -309,6 +309,10 @@ note = "the Wayland protocol definitions (protocols/)"
 [accept_unclassified]
 crates = [
     # FTL.TXT (the FreeType Licence), LICENSE.TXT (FreeType's licence overview) and libpng's
-    # PNG Reference Library License 2.0.
+    # PNG Reference Library License 2.0. Linux only.
     "freetype-sys",
+    # Its LICENSE is a ten-line note that rustls is under Apache-2.0, MIT or ISC and that the
+    # texts are LICENSE-APACHE, LICENSE-MIT and LICENSE-ISC, which the tool credits itself.
+    # Linux only (macOS uses the platform verifier).
+    "rustls-native-certs",
 ]

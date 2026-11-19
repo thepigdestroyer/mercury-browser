@@ -85,7 +85,7 @@ The file is `crates/mercury-credits/credits.toml`. Its comments say what each en
 | `[[ignore]]` `crate`, `reason` | A crate in the set that is not credited, such as a build tool whose output holds none of its code. The reason is printed as a warning on every run. None is used today. |
 | `[accept_unclassified]` `crates` | A crate whose licence files have wording the tool does not know, read and accepted by a person. Every entry needs a comment saying what was read. |
 
-An entry for a crate that is not in the application for the target being checked draws a warning ("names crates that are not in the app for ..."). The entries for the Linux-only crates (FreeType, the Wayland protocols, Fontconfig) therefore warn when checking the macOS target, and the one for `objc-sys` when checking the Linux target. The warning is expected; the comments in `credits.toml` mark which entries are for which target.
+An entry for a crate that is not in the application for the target being checked draws a warning ("names crates that are not in the app for ..."). The entries for the Linux-only crates (FreeType, the Wayland protocols, Fontconfig, rustls-native-certs) therefore warn when checking the macOS target, and the one for `objc-sys` when checking the Linux target. The warning is expected; the comments in `credits.toml` mark which entries are for which target.
 
 ### When `check` fails
 
