@@ -3,15 +3,18 @@
 
 //! The snapshots of a window's tabs: the store and the scheduler together.
 //!
-//! GROUNDWORK STUB (lane tab-snapshots, item 4 owns this file, after items 2 and 3 have landed): the data
-//! types are final; [`SnapshotRegistry`] is to be written to the contracts in its comments.
+//! The scheduler decides when a picture may be taken and the store keeps the pictures under a
+//! memory cap; the registry is the one value the app holds, and it keeps the two in step. The step
+//! that matters is [`SnapshotRegistry::finish`]: a picture is stored only if the scheduler still
+//! wants the request it answers, so the picture of a tab that was closed while it was being
+//! shrunk on another thread is thrown away and never enters the store.
 
 use std::hash::Hash;
 use std::time::Duration;
 
 use crate::downscale::Limits;
 use crate::schedule::{CaptureRequest, CaptureScheduler, Skip};
-use crate::store::{DEFAULT_CAP_BYTES, Snapshot, SnapshotStore};
+use crate::store::{DEFAULT_CAP_BYTES, InsertOutcome, Snapshot, SnapshotStore};
 
 /// What [`SnapshotRegistry::finish`] did with a capture's result.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -27,19 +30,24 @@ pub enum FinishOutcome {
     Failed,
 }
 
-/// Counters for logs and tests.
+/// Counters for logs and tests. Every call of [`SnapshotRegistry::finish`] adds one to exactly
+/// one of `stored`, `too_large`, `failed` and `discarded`.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct Stats {
+    /// Snapshots in the store now.
     pub entries: usize,
+    /// What they cost together (pixels and overhead), never above `cap_bytes`.
     pub used_bytes: usize,
     pub cap_bytes: usize,
     /// Snapshots stored since the start.
     pub stored: u64,
+    /// Snapshots that were made but cost more than the whole cap, so were not stored.
+    pub too_large: u64,
     /// Captures that failed.
     pub failed: u64,
     /// Results thrown away because their request was no longer wanted.
     pub discarded: u64,
-    /// Snapshots evicted to stay under the cap.
+    /// Snapshots evicted to stay under the cap, whether by a new snapshot or by a lower cap.
     pub evicted: u64,
 }
 
@@ -58,7 +66,9 @@ pub struct SnapshotRegistry<K> {
     limits: Limits,
     store: SnapshotStore<K>,
     scheduler: CaptureScheduler<K>,
-    stats: Stats,
+    /// The counters; the live fields (`entries`, `used_bytes`, `cap_bytes`) are filled in by
+    /// [`stats`](Self::stats) from the store.
+    counters: Stats,
 }
 
 impl<K: Copy + Eq + Hash> SnapshotRegistry<K> {
@@ -67,7 +77,7 @@ impl<K: Copy + Eq + Hash> SnapshotRegistry<K> {
             limits,
             store: SnapshotStore::new(cap_bytes),
             scheduler: CaptureScheduler::new(),
-            stats: Stats::default(),
+            counters: Stats::default(),
         }
     }
 
@@ -76,72 +86,109 @@ impl<K: Copy + Eq + Hash> SnapshotRegistry<K> {
         self.limits
     }
 
+    /// The app showed a frame of `key` on a surface of `surface` pixels; see
+    /// [`CaptureScheduler::frame_presented`]. Runs on every presented frame.
     pub fn frame_presented(
         &mut self,
-        _key: K,
-        _surface: (u32, u32),
-        _now: Duration,
+        key: K,
+        surface: (u32, u32),
+        now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        let _ = &self.scheduler;
-        todo!("tab-snapshots item 4: SnapshotRegistry::frame_presented")
+        self.scheduler.frame_presented(key, surface, now)
     }
 
+    /// The app is about to let another tab paint; see [`CaptureScheduler::tab_leaving`].
     pub fn tab_leaving(
         &mut self,
-        _key: K,
-        _surface: (u32, u32),
-        _now: Duration,
+        key: K,
+        surface: (u32, u32),
+        now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        todo!("tab-snapshots item 4: SnapshotRegistry::tab_leaving")
+        self.scheduler.tab_leaving(key, surface, now)
     }
 
+    /// A picture is wanted now; see [`CaptureScheduler::capture_now`].
     pub fn capture_now(
         &mut self,
-        _key: K,
-        _surface: (u32, u32),
-        _now: Duration,
+        key: K,
+        surface: (u32, u32),
+        now: Duration,
     ) -> Result<CaptureRequest<K>, Skip> {
-        todo!("tab-snapshots item 4: SnapshotRegistry::capture_now")
+        self.scheduler.capture_now(key, surface, now)
     }
 
+    /// Ends `request` with its result: `Some(snapshot)` if the picture was made, `None` if the
+    /// capture failed. A snapshot reaches the store only if the scheduler still wants the request
+    /// (the tab was not forgotten, the request did not time out, the rendering context was not
+    /// made again); otherwise it is dropped and the outcome is [`FinishOutcome::Discarded`].
     pub fn finish(
         &mut self,
-        _request: CaptureRequest<K>,
-        _snapshot: Option<Snapshot>,
-        _now: Duration,
+        request: CaptureRequest<K>,
+        snapshot: Option<Snapshot>,
+        now: Duration,
     ) -> FinishOutcome {
-        todo!("tab-snapshots item 4: SnapshotRegistry::finish")
+        let Some(snapshot) = snapshot else {
+            if self.scheduler.capture_failed(&request, now) {
+                self.counters.failed += 1;
+                return FinishOutcome::Failed;
+            }
+            self.counters.discarded += 1;
+            return FinishOutcome::Discarded;
+        };
+        // Ask first: a picture the scheduler no longer wants must not touch the store.
+        if !self.scheduler.capture_succeeded(&request, now) {
+            self.counters.discarded += 1;
+            return FinishOutcome::Discarded;
+        }
+        match self.store.insert(request.key(), snapshot) {
+            InsertOutcome::Stored { evicted } => {
+                self.counters.stored += 1;
+                self.counters.evicted += evicted as u64;
+                FinishOutcome::Stored { evicted }
+            }
+            InsertOutcome::TooLarge => {
+                self.counters.too_large += 1;
+                FinishOutcome::TooLarge
+            }
+        }
     }
 
     /// A tab closed: its snapshot goes, its state goes, a capture in flight for it is discarded.
-    pub fn forget(&mut self, _key: K) {
-        todo!("tab-snapshots item 4: SnapshotRegistry::forget")
+    pub fn forget(&mut self, key: K) {
+        self.store.remove(key);
+        self.scheduler.forget(key);
     }
 
     /// The rendering context was torn down and made again: see the scheduler. Stored snapshots
     /// stay (they are copies in memory, not tied to the context).
     pub fn rendering_changed(&mut self) {
-        todo!("tab-snapshots item 4: SnapshotRegistry::rendering_changed")
+        self.scheduler.rendering_changed();
     }
 
     /// The tab's snapshot, which becomes the most recently used.
-    pub fn get(&mut self, _key: K) -> Option<&Snapshot> {
-        todo!("tab-snapshots item 4: SnapshotRegistry::get")
+    pub fn get(&mut self, key: K) -> Option<&Snapshot> {
+        self.store.get(key)
     }
 
     /// The tab's snapshot without changing the order.
-    pub fn peek(&self, _key: K) -> Option<&Snapshot> {
-        todo!("tab-snapshots item 4: SnapshotRegistry::peek")
+    pub fn peek(&self, key: K) -> Option<&Snapshot> {
+        self.store.peek(key)
     }
 
     /// Changes the memory cap (evicting at once if it is lower); returns how many were evicted.
-    pub fn set_cap_bytes(&mut self, _cap_bytes: usize) -> usize {
-        let _ = &self.store;
-        todo!("tab-snapshots item 4: SnapshotRegistry::set_cap_bytes")
+    pub fn set_cap_bytes(&mut self, cap_bytes: usize) -> usize {
+        let evicted = self.store.set_cap_bytes(cap_bytes);
+        self.counters.evicted += evicted as u64;
+        evicted
     }
 
     pub fn stats(&self) -> Stats {
-        self.stats
+        Stats {
+            entries: self.store.len(),
+            used_bytes: self.store.used_bytes(),
+            cap_bytes: self.store.cap_bytes(),
+            ..self.counters
+        }
     }
 }
 
