@@ -21,6 +21,7 @@
 
 use std::path::{Component, Path, PathBuf};
 
+use core_foundation::base::{CFTypeRef, TCFType};
 use core_foundation::data::CFData;
 use security_framework::base::Error as SecError;
 use security_framework::item::{
@@ -78,6 +79,13 @@ impl KeychainBackend {
     /// An existing file is opened and unlocked with `password`; a wrong password gives
     /// [`PasswordError::AccessDenied`]. A new file is created unlocked.
     ///
+    /// `SecKeychainUnlock` checks the password only when the keychain is locked: on an unlocked
+    /// keychain (a new one starts unlocked and macOS keeps it so until its idle timer, sleep or a
+    /// lock request) it succeeds with any password. So an existing keychain is locked first, and
+    /// only then unlocked with `password`; if it cannot be locked, `file` fails rather than trust
+    /// a password it did not check. Anything else using the same keychain file, in this process or
+    /// another, finds it locked for that moment, and a refused password leaves it locked.
+    ///
     /// Apple's implementation adds a newly created keychain to the user's search list (and makes
     /// it the default keychain if the user has none) when its path contains `/login.keychain`.
     /// To make that impossible, and to keep this away from real keychains, `file` refuses with
@@ -94,6 +102,7 @@ impl KeychainBackend {
         }
         let keychain = if path.exists() {
             let mut keychain = SecKeychain::open(path).map_err(map_error)?;
+            lock(&keychain).map_err(map_error)?;
             keychain
                 .unlock(Some(password))
                 .map_err(|error| match error.code() {
@@ -200,6 +209,26 @@ impl SecretBackend for KeychainBackend {
             });
         }
         Ok(summaries)
+    }
+}
+
+#[link(name = "Security", kind = "framework")]
+unsafe extern "C" {
+    /// `OSStatus SecKeychainLock(SecKeychainRef keychain)` from `Security/SecKeychain.h`. Neither
+    /// `security-framework` nor `security-framework-sys` declares it. The reference is passed as
+    /// the opaque pointer it is.
+    fn SecKeychainLock(keychain: CFTypeRef) -> i32;
+}
+
+/// Locks `keychain`. Locking a keychain that is already locked succeeds.
+fn lock(keychain: &SecKeychain) -> Result<(), SecError> {
+    // SAFETY: `keychain` owns a live `SecKeychainRef` for the whole call, and `SecKeychainLock`
+    // only reads that reference: it does not keep it, free it or write through it.
+    let status = unsafe { SecKeychainLock(keychain.as_CFTypeRef()) };
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(SecError::from_code(status))
     }
 }
 

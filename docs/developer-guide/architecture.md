@@ -1,76 +1,82 @@
 ---
 title: Architecture
-description: Follow state, commands, input, and rendered frames through the Mercury Browser layers.
+description: Follow state, commands, input, page requests and rendered frames through the Mercury Browser crates.
 ---
 
 # Architecture
 
-Mercury separates product state from engine integration. That boundary lets most browser behavior run in fast Rust tests without initializing Servo, Slint, WGPU, or a desktop event loop.
+Mercury keeps browser logic apart from the engine and from the interface. That boundary lets most behaviour run in fast Rust tests without starting Servo, Slint, WGPU or an event loop.
 
 ## Layers
 
 ```text
-Mercury Desktop
-  Slint window, winit events, WGPU composition, runtime integration
+apps/mercury-desktop
+  the window, macOS menu bar, shortcuts, file panels, settings glue,
+  rendering bridge, start-up and the orderly quit
           │
-          │ UI callbacks and presentation state
+          │ Slint callbacks and presentation properties
           ▼
-Mercury UI
-  Slint components and UI-facing models
+crates/mercury-ui
+  Slint components: tab strip, address bar, new tab page, settings window,
+  dialogs, pickers, browser menu, About window
           │
-          │ browser commands and events
+          │ browser commands and events (from mercury-desktop)
           ▼
-Talaria Core
-  tabs, navigation policy, state transitions, WebView contract
+crates/talaria-core
+  tabs, navigation, address resolution, page requests, zoom, the WebView trait
           │
           │ engine-neutral WebView calls
           ▼
-Talaria Servo
-  Servo runtime, WebViews, delegates, rendering, media, blocking
+crates/talaria-servo
+  Servo runtime, web views, delegates, content blocking, page requests,
+  media, HTTP cache, proxies, clearing data at exit
           │
           ▼
-Servo, WebRender, Surfman, and GStreamer
+Servo 0.8 (with the patches in third_party/), WebRender, Surfman, GStreamer
 ```
+
+`crates/mercury-settings` sits beside the core: the desktop loads `settings.json` from the profile at start-up, applies the settings to the controller and to `talaria-servo`, and saves changes from the settings window. The data crates (`mercury-store`, `mercury-passwords`, `mercury-downloads`, `mercury-import`) are not connected to the app yet.
 
 ## Talaria Core
 
-`talaria-core` owns the browser concepts that should survive an engine or UI replacement:
+`talaria-core` holds the browser concepts that should survive a change of engine or interface:
 
-- `BrowserController` owns tabs, the active tab, and the command queue.
-- `BrowserState` applies engine events such as URL, title, icon, history, and load-state changes.
-- `BrowserCommand` describes navigation and input without Servo types.
-- `WebView` is the trait implemented by an engine adapter.
-- Address resolution distinguishes supported URLs from DuckDuckGo search queries.
+- `BrowserController` owns the tabs, the active tab and the command queue.
+- `BrowserState` applies engine events such as URL, title, icon, history, load-state and zoom changes.
+- `BrowserCommand` and `TabCommand` describe navigation and input without Servo types.
+- `WebView` is the trait an engine adapter implements.
+- Address resolution tells addresses from searches. Search URLs come only from a `SearchUrlBuilder` the application supplies from its search-engine settings; the core never builds one itself.
+- Page requests (dialogs, sign-in, permissions, "leave this page?") are modelled and answered here, including which permissions may be asked about at all.
 
-The controller coalesces adjacent pointer movement, scrolling, and focus commands for the same tab. This keeps high-frequency desktop input from growing an unbounded queue between frames.
+The controller merges adjacent pointer movement, scrolling and focus commands for the same tab, so fast input doesn't grow an unbounded queue between frames. The crate depends on `url` only, does no I/O and never reads the clock.
 
 ## Desktop composition
 
-`mercury-desktop` creates the Slint window, selects the graphics backend, creates a `ServoRuntime`, and owns one `ServoWebView` per browser tab.
+`mercury-desktop` creates the Slint window, the WGPU device, a `ServoRuntime` and one `ServoWebView` per tab.
 
-During each event-loop turn it:
+During each turn of the event loop it:
 
-1. Reads pending Servo events and applies them to the matching tab.
-2. Ensures every model tab has a WebView and removes closed WebViews.
-3. Shows and resumes the active WebView while hiding and throttling the previous one.
-4. Updates viewport size and scale factor.
-5. Dispatches a bounded number of queued browser commands.
-6. Paints only when Servo has announced a new frame.
-7. Synchronizes the native UI from the active `BrowserState`.
+1. reads pending Servo events and applies them to the matching tab;
+2. makes sure every tab has a web view and removes closed ones;
+3. shows and resumes the active web view, and hides and throttles the previous one;
+4. updates the viewport size and scale factor;
+5. dispatches a bounded number of queued browser commands;
+6. paints only when Servo has announced a new frame;
+7. brings the Slint interface and the menu bar up to date from the active tab's state.
 
-The bounded command drain prevents a burst of input from monopolizing a frame.
+The bounded command drain keeps a burst of input from taking over a frame.
 
 ## Command flow
 
 ```text
-Slint callback or winit input
+Slint callback, winit key or pointer event, or a menu item
   → BrowserController queue
   → TabCommand with a stable TabId
   → ServoWebView adapter
   → Servo WebView API
 ```
 
-Commands carry a `TabId`, so switching tabs does not accidentally redirect already queued work to the newly active page.
+Commands carry a `TabId`, so switching tabs never redirects work already queued for another page. Key presses go through `shortcuts.rs` first; the macOS menu bar and the browser menu are built from one table in `menus/model.rs`, and its tests check that every key has exactly one owner.
 
 ## Event flow
 
@@ -79,13 +85,15 @@ Servo WebViewDelegate
   → TabEvent over the runtime channel
   → BrowserController::handle_event
   → BrowserState::apply
-  → Slint presentation model
+  → Slint properties and the menu bar
 ```
 
-The same stable `TabId` routes asynchronous title, favicon, load, and history updates back to the WebView that produced them.
+The same `TabId` routes title, icon, load, history and page-request events back to the tab that caused them.
 
-## Rendering ownership
+## Rendering
 
-Slint owns the native window and event loop. Servo renders into a separate offscreen Surfman context; on Linux, Mercury imports each completed frame through Vulkan external memory and gives the resulting WGPU texture to Slint. The two renderers never share OpenGL state or the window framebuffer. A consumable frame-ready signal also prevents repainting a page when Servo has not produced a new frame.
+Slint owns the window and the event loop. Servo renders into a separate offscreen Surfman OpenGL context. On macOS, each finished frame's IOSurface becomes a Metal texture on Slint's own WGPU device, with one small render pass and no copy through the CPU; on Linux, the frame is copied into Vulkan external memory and imported into Slint's WGPU device. The two renderers never share OpenGL state or the window's framebuffer. A frame-ready signal that is consumed on use keeps Mercury from repainting when Servo has produced nothing new. [Servo integration](servo-integration.md#frame-delivery) has the details.
 
-On Linux, Mesa and the desktop session choose the default graphics adapter. Mercury removes inherited `DRI_PRIME` overrides before graphics or media threads start, and the vendored Surfman patch avoids applying a process-global GPU preference during context creation.
+## Profiles
+
+A normal launch locks and uses `~/Library/Application Support/Mercury Browser/Default` (`~/.local/share/mercury-browser/Default` on Linux): `settings.json` at its top, Servo's cookies and site data in its `servo` folder. The HTTP cache lives in the platform's cache folder. `--screenshot` and `--background` runs use a temporary profile that is removed at exit, unless `--profile-dir` names one; a directory is accepted as a profile only if it is new, empty or carries the marker file `.mercury-browser-profile`. A second Mercury on the same profile exits with status 4.

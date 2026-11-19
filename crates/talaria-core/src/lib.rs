@@ -4,7 +4,11 @@ mod browser;
 mod controller;
 mod controls;
 mod cursor;
+mod find;
 mod input;
+mod media;
+// openurl
+mod navigation_policy;
 mod page_icon;
 mod page_request;
 mod tab;
@@ -16,8 +20,8 @@ pub use address::{
     AddressResolutionError, NavigationTarget, SearchUrlBuilder, classify_address, resolve_address,
 };
 pub use browser::{
-    BrowserCommand, BrowserEvent, BrowserState, LoadState, PointerButton, PointerButtonAction,
-    display_origin, placeholder_title,
+    BrowserCommand, BrowserEvent, BrowserState, DownloadOffer, DownloadSignal, LoadState,
+    PointerButton, PointerButtonAction, display_origin, placeholder_title,
 };
 pub use controller::{BrowserController, CloseTabOutcome};
 // tabs-plus
@@ -27,9 +31,18 @@ pub use controls::{
     Rgb, SelectEntry, SelectOption,
 };
 pub use cursor::{ColorScheme, PointerCursor};
+pub use find::{
+    CONTINUATION_ROUNDS, EndFindRequest, FindMatches, FindOutcome, FindRequest, FindSelection,
+    FindState, FindStatus, FindStep,
+};
 pub use input::{
     ClipboardCommand, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
     KeyboardModifiers,
+};
+// media session
+pub use media::{
+    MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
+    TabAudio,
 };
 pub use page_icon::PageIcon;
 pub use page_request::{
@@ -43,3 +56,8 @@ pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
 pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};
+// openurl
+pub use navigation_policy::{
+    ExternalLinkRequest, NavigationVerdict, navigation_verdict, refuses_local_file_load,
+    remembered_origin,
+};

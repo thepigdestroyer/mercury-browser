@@ -3,11 +3,11 @@ site_name: Mercury Browser
 site_description: User and developer documentation for the Mercury Browser technical preview.
 site_author: Mrinal Joshi
 site_url: https://thepigdestroyer.github.io/mercury-browser/
-copyright: Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors · MPL-2.0 · Began as a fork of Hermes Browser by Kayk Caputo
+copyright: Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors · Source-available, free for non-commercial use · Began as a fork of Hermes Browser by Kayk Caputo
 
 repo_name: thepigdestroyer/mercury-browser
 repo_url: https://github.com/thepigdestroyer/mercury-browser
-edit_uri: edit/master/docs/
+edit_uri: edit/mercury/docs/
 
 docs_dir: docs
 site_dir: target/mkdocs
@@ -19,7 +19,7 @@ theme:
   name: material
   language: en
   logo: assets/mercury-browser.svg
-  favicon: assets/mercury-browser.svg
+  favicon: assets/favicon.svg
   icon:
     repo: fontawesome/brands/github
   palette:
@@ -64,6 +64,7 @@ nav:
       - Start browsing: user-guide/getting-started.md
       - Tabs and shortcuts: user-guide/browsing.md
       - Media playback: user-guide/media.md
+      - Downloads: user-guide/downloads.md
       - Privacy and security: user-guide/privacy-and-security.md
       - Troubleshooting: user-guide/troubleshooting.md
   - Developer Guide:
@@ -78,6 +79,7 @@ nav:
       - Vendored patches: developer-guide/vendored-patches.md
       - Releases: developer-guide/releases.md
       - Contributing: developer-guide/contributing.md
+      - Origins and credits: developer-guide/origins.md
 
 markdown_extensions:
   - admonition

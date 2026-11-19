@@ -35,9 +35,9 @@ The settle period works around a race in Servo 0.8. A page's WebGL contexts are 
 
 Servo calls `notify_new_frame_ready` on the WebView delegate. Mercury records the first-frame milestone and marks the tab's frame-ready signal. Servo's runtime waker schedules the native redraw, and the desktop then calls `paint()` once for that frame without issuing a duplicate wake.
 
-Servo owns a dedicated offscreen Surfman context. On Linux, Mercury copies the completed framebuffer into Vulkan external memory and imports it into the WGPU device already owned by Slint. Slint then composes that texture as a normal image. Servo never draws into Slint's window framebuffer and cannot leak OpenGL state into the UI renderer. This separation is essential during window moves and resizes, when both renderers are active in quick succession.
+Servo owns a dedicated offscreen Surfman context. Mercury turns each completed frame into a texture on the WGPU device Slint already owns (through Metal on macOS, through Vulkan external memory on Linux), and Slint composes that texture as a normal image. Servo never draws into Slint's window framebuffer and cannot leak OpenGL state into the interface's renderer. This separation matters during window moves and resizes, when both renderers are active in quick succession.
 
-The Linux bridge requires Slint's Vulkan WGPU backend. The transfer stays on the GPU and explicitly waits for the OpenGL copy to finish before Slint samples the texture, preventing partially updated frames.
+The Linux bridge requires Slint's Vulkan WGPU backend. Its transfer stays on the GPU and waits for the OpenGL copy to finish before Slint samples the texture, so no partly updated frame is shown.
 
 ### Frame bridges
 
@@ -73,25 +73,27 @@ Keep platform-specific event decoding in the desktop crate and engine-specific m
 
 ## Content blocking
 
-The build script compiles the bundled Brave filter snapshot into a serialized `adblock` engine. For each subresource request, the WebView delegate maps Servo's content destination to an ad-block resource type and checks the request before it loads.
+`talaria-servo`'s build script compiles the filter lists in `crates/talaria-servo/resources/adblock/` (EasyList, EasyPrivacy, uBlock Origin's filters and three Brave lists, pinned snapshots described in that folder's `README.md`) into a serialised `adblock` engine, so start-up neither parses text lists nor contacts a server. For each subresource request, the web view delegate maps Servo's request destination to an ad-block resource type and checks the request before it loads.
 
-Matched subresources are intercepted and cancelled. Main-frame navigations remain allowed until Mercury has an interstitial that can explain a blocked page.
+Matched subresources are cancelled. Main-frame navigations are always allowed, until Mercury has a page that can explain why a document was blocked. The **Block ads and trackers** setting flips a shared switch (`set_content_blocking`) that the delegate reads for every request, so a change applies to the next request without a restart.
 
-## Linux media
+## Media
 
-The Linux target enables Servo's upstream `media-gstreamer` feature. Mercury uses the `servo-media-gstreamer` 0.7.0 release unchanged; this is important because its GL frame-transfer path remains compatible with Servo's isolated content processes.
+On macOS and Linux, `talaria-servo` turns on Servo's `media-gstreamer` feature, which uses `servo-media-gstreamer` 0.8.0 unchanged. On macOS the GStreamer libraries come from the official framework packages: `scripts/macos/gstreamer.sh` unpacks them for the build, and `scripts/macos/collect-gstreamer.sh` copies what the executable needs into `target/<profile>/lib` or the app bundle's `Contents/MacOS/lib`. On Linux, GStreamer is a system dependency. Other platforms keep Servo's no-op media backend.
 
-GStreamer remains a native system dependency. Cargo selects the Rust backend, but the machine must still provide the runtime plugins and codecs.
+At the top of `main`, `media_isolation.rs` points GStreamer's registry and plugin paths at the application's own files, and `media_buffers.rs` gives GStreamer a private, locked directory for its download buffers that is removed at quit. [Development setup](setup.md#macos-media-set-up-gstreamer) has the details. WebRTC and `getUserMedia` are off.
 
 ## Process isolation
 
-The executable recognizes Servo's `--content-process <token>` bootstrap before it initializes UI, graphics, media, or worker threads. The vendored `gaol` crate also supports the system calls and shared-memory sizing needed by current Linux runtimes.
+Servo runs each page in a separate content process (`multiprocess: true`). The executable recognises Servo's content-process arguments in `main`, before it starts the interface, graphics, media or any other thread, and hands over to Servo's content-process entry point (`talaria-servo/src/content_process.rs`). A content process starts one thread of its own first: a watchdog that ends it within a second of the browser process's death. Content processes ignore `SIGINT`, `SIGHUP` and `SIGTERM` sent to the whole process group, so they stay alive while the browser shuts Servo down in order.
 
-Despite that preparation, normal options explicitly set:
+The operating-system sandbox is a separate option, and Mercury sets it off on every platform:
 
 ```rust
 multiprocess: true,
 sandbox: false,
 ```
 
-Servo 0.7.0 content processes complete navigation and deliver visible frames, input, audio, and video in Mercury. The operating-system sandbox is a separate option: keep it disabled until Linux `gaol` can enforce its profile without destabilizing child processes. A sandbox acceptance test must cover navigation, visible pixels, audio and video, input, and clean shutdown together.
+So a content process runs with the user's full permissions. Turning the sandbox on is open work. Any change that does must be tested for navigation, visible pixels, audio and video, input and a clean quit together, since each of them crosses the process boundary.
+
+The vendored `gaol` crate (Servo's sandboxing library) carries a patch to its Linux sandbox profile, which matters only once the sandbox is on; see [Vendored patches](vendored-patches.md).

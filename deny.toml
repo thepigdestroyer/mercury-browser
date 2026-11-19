@@ -170,8 +170,10 @@ allow = ["LicenseRef-Slint-Royalty-free-2.0"]
 # page-control popups), `examples/render_bookmarks.rs` (the bookmarks components),
 # `examples/render_import.rs` (the import window),
 # `tests/page_request_render.rs` (the dialog components), `tests/render_menus.rs` (the browser
-# menu and the About window), and the history lane's `examples/render_history.rs` and
-# `tests/suggestion_click.rs`, use to render without a display.
+# menu and the About window), the history lane's `examples/render_history.rs` and
+# `tests/suggestion_click.rs`, `tests/render_tab_audio.rs` (the tab's sound indicator),
+# `tests/find_bar_render.rs` (the find bar) and `tests/downloads_render.rs` (the downloads
+# components), use to render without a display.
 [[licenses.exceptions]]
 crate = "i-slint-renderer-software"
 allow = ["LicenseRef-Slint-Royalty-free-2.0"]

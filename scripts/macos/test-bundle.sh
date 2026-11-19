@@ -3,10 +3,12 @@
 # SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Checks the parts of scripts/macos/bundle.sh that can be tested without a
 # build or a signing identity: the identity checks, which entitlement file each
-# identity gets and what the files grant, and the helpers in lib.sh that parse
-# otool and codesign output.
+# identity gets and what the files grant, the notice files every bundle
+# carries, and the helpers in lib.sh that parse otool and codesign output.
 #
 #   scripts/macos/test-bundle.sh      (or: make test-bundle-macos)
+#   MERCURY_TEST_BUNDLE="dist/Mercury Browser.app" scripts/macos/test-bundle.sh
+#                                     also checks the notice files in a built bundle
 #
 # Prints one line per check and exits non-zero if any fails. Writes nothing.
 set -euo pipefail
@@ -195,6 +197,37 @@ check "deployment target from .cargo/config.toml is a version" yes \
     "$([[ "$(config_deployment_target <.cargo/config.toml)" =~ ^[0-9]+(\.[0-9]+)*$ ]] && echo yes || echo no)"
 check "workspace version" 1.2.3 \
     "$(workspace_version <<<$'[package]\nversion = "9.9.9"\n[workspace.package]\nversion = "1.2.3"\nedition = "2024"')"
+
+# ── Notice files in Contents/Resources ────────────────────────────────────
+check "the bundle carries LICENSE, NOTICE and THIRD-PARTY-NOTICES.md" \
+    "LICENSE NOTICE THIRD-PARTY-NOTICES.md " "$(bundled_notice_files | tr '\n' ' ')"
+check "every notice file exists in the repository" "" "$(missing_notice_files "$PWD")"
+check "NOTICE names Mercury's copyright holder" yes \
+    "$(grep -q '^Copyright © 2026 Mrinal Joshi and the Mercury Browser contributors\.$' NOTICE && echo yes || echo no)"
+check "NOTICE carries the PolyForm Required Notice line" yes \
+    "$(grep -q '^Required Notice: ' NOTICE && echo yes || echo no)"
+check "both licence texts are in LICENSES/" yes \
+    "$([ -f LICENSES/PolyForm-Noncommercial-1.0.0.md ] && [ -f LICENSES/MPL-2.0.txt ] && echo yes || echo no)"
+# The pattern matches bundle.sh's literal text, so nothing in it is meant to expand.
+# shellcheck disable=SC2016
+check "bundle.sh copies LICENSES/ into Contents/Resources" yes \
+    "$(grep -q '^ditto LICENSES "\$RES_DIR/LICENSES"$' scripts/macos/bundle.sh && echo yes || echo no)"
+check "a directory without them is reported" "LICENSE NOTICE THIRD-PARTY-NOTICES.md " \
+    "$(missing_notice_files "$PWD/scripts" | tr '\n' ' ')"
+check "bundle.sh copies the notice files from that list" yes \
+    "$(grep -q 'done < <(bundled_notice_files)' scripts/macos/bundle.sh && echo yes || echo no)"
+# With a built bundle as MERCURY_TEST_BUNDLE, its Contents/Resources is checked too.
+if [ -n "${MERCURY_TEST_BUNDLE:-}" ]; then
+    check "the notice files are in $MERCURY_TEST_BUNDLE" "" \
+        "$(missing_notice_files "$MERCURY_TEST_BUNDLE/Contents/Resources")"
+    check "the bundled NOTICE is the repository's" yes \
+        "$(cmp -s NOTICE "$MERCURY_TEST_BUNDLE/Contents/Resources/NOTICE" && echo yes || echo no)"
+    check "the bundled LICENSE is the repository's" yes \
+        "$(cmp -s LICENSE "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSE" && echo yes || echo no)"
+    check "the licence texts are in the bundle's LICENSES/" yes \
+        "$(cmp -s LICENSES/PolyForm-Noncommercial-1.0.0.md "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSES/PolyForm-Noncommercial-1.0.0.md" &&
+            cmp -s LICENSES/MPL-2.0.txt "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSES/MPL-2.0.txt" && echo yes || echo no)"
+fi
 
 # ── No bundle without its media libraries ─────────────────────────────────
 # Each run stops before writing anything; the --out directory must not appear.

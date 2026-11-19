@@ -140,6 +140,8 @@ pub(crate) fn connect_servo_runtime(
         runtime.set_new_tab_allocator(new_tab_allocator);
         // activation (tabs lane): a new document does not inherit the last one's activation
         runtime.set_document_started_listener(crate::page_tabs::document_started_listener());
+        // downloads-ui lane: decides, as each top-level request starts, whether the user started it
+        runtime.set_document_request_listener(crate::downloads::document_request_listener());
     }
     ENGINE.with(|current| *current.borrow_mut() = Rc::downgrade(&engine));
     schedule_graphics_bootstrap(Rc::downgrade(&engine), GRAPHICS_BOOTSTRAP_DELAY);
@@ -176,6 +178,8 @@ pub(crate) fn with_runtime(work: impl FnOnce(&ServoRuntime)) -> bool {
 /// If Servo has not finished shutting down within `ENGINE_SHUTDOWN_TIMEOUT`, the process exits
 /// with `exit_code_if_stuck` rather than hang.
 pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
+    // find: how long the engine takes to shut down (`RUST_LOG=mercury_browser::engine=debug`).
+    let started = std::time::Instant::now();
     // Queued re-pumps and Servo's waker reach the engine only through this; from now on they
     // find nothing.
     let Some(engine) = ENGINE.with(|current| current.replace(Weak::new()).upgrade()) else {
@@ -195,10 +199,15 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
         }
     }
     state.shut_down(window.as_ref(), exit_code_if_stuck);
+    // `shut_down` returns right after the watchdog is disarmed.
+    log::debug!("engine shut down in {} ms", started.elapsed().as_millis());
 }
 
 // session: lets a newly selected restored tab get its web view without waiting for a redraw
-/// Asks for a pump from the event loop, as Servo's waker does.
+// media-session lane, openurl, find: commands queued outside a render (media keys, links from
+// other apps, find's debounce timer, the `--find` diagnostic) need their command dispatched.
+/// Asks for a pump from the event loop, as Servo's waker does: soon, even while the window is
+/// covered and skips its renders.
 pub(crate) fn request_pump() {
     let _queued = slint::invoke_from_event_loop(pump_after_wake);
 }
@@ -419,6 +428,7 @@ impl EngineState {
             web_view.refresh_page_feedback();
         }
         crate::profile_data::record_visits(&mut self.controller.borrow_mut()); // history lane
+        crate::downloads::take_download_offers(&self.controller); // downloads-ui lane
         let active_became_ready = !ready_before && {
             let controller = self.controller.borrow();
             is_engine_ready(&controller, controller.active_tab_id())
@@ -426,6 +436,8 @@ impl EngineState {
         if state_changed {
             sync_ui(window, &self.controller.borrow());
         }
+        // openurl: links pages asked other apps to open.
+        crate::openurl::handle_external_link_requests(&self.controller);
 
         let Some(rendering_context) = self.rendering_context.clone() else {
             return;
@@ -565,6 +577,12 @@ impl EngineState {
             self.current_viewport_size = Some(viewport_size);
         }
 
+        // media-session lane: `runtime` is the `&ServoRuntime` taken from `self.runtime` at the
+        // top of this function (the field is an `Option` since `take_parts`).
+        crate::media_session::after_pump(
+            &mut self.controller.borrow_mut(),
+            runtime.engine_media_session_tab(),
+        );
         match dispatch_pending_commands(&self.controller, &mut self.web_views) {
             Ok(has_pending_commands) => {
                 if has_pending_commands {
@@ -940,6 +958,30 @@ mod tests {
             &mut self,
             _command: talaria_core::ClipboardCommand,
         ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        // media session
+        fn set_audio_muted(&mut self, _muted: bool) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn media_session_action(
+            &mut self,
+            _action: talaria_core::MediaSessionAction,
+            _through_engine: bool,
+        ) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn probe_media(&mut self) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        // find
+        fn begin_find(&mut self, _request_id: u64) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn find(&mut self, _request: talaria_core::FindRequest) -> Result<(), Self::Error> {
+            Ok(())
+        }
+        fn end_find(&mut self, _request: talaria_core::EndFindRequest) -> Result<(), Self::Error> {
             Ok(())
         }
     }

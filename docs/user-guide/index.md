@@ -1,45 +1,65 @@
 ---
 title: User Guide
-description: Install Mercury, browse the web, play media, and understand the current preview limitations.
+description: Install Mercury Browser, browse with it, play media, and understand what the preview does and does not do yet.
 ---
 
 # User Guide
 
-Mercury is deliberately small: it gives you tabs, an address bar, native input, content blocking, and Servo's view of the web without pretending to be a finished everyday browser.
-
-This guide helps you get useful results from the technical preview and recognize the difference between a site problem, a missing media component, and a known engine limitation.
+Mercury Browser is a desktop web browser for macOS on Apple Silicon. Servo renders the pages; Mercury provides the window, tabs, address bar, menus, settings and dialogs around them. It is a preview: many everyday features work, some are still being merged, and a few depend on things Servo does not do yet.
 
 ## Start here
 
-1. [Install Mercury](installation.md) and its native Linux dependencies.
-2. [Start browsing](getting-started.md) with a URL or DuckDuckGo search.
-3. Keep the [privacy and security model](privacy-and-security.md) in mind.
-4. If a page is blank or incomplete, work through [Troubleshooting](troubleshooting.md).
+1. [Install Mercury](installation.md).
+2. [Start browsing](getting-started.md): the address bar, search engines, tabs and settings.
+3. Learn the [shortcuts and menus](browsing.md).
+4. Read what Mercury [blocks, stores and asks](privacy-and-security.md).
+5. If a page or a video doesn't work, see [Media playback](media.md) and [Troubleshooting](troubleshooting.md).
 
-## Current platform support
+## Platforms
 
-| Platform | Status | Notes |
-| --- | --- | --- |
-| Linux x86-64 | Primary development platform | X11 and Wayland are supported; multimedia uses system GStreamer plugins. |
-| Windows x86-64 | Source-build foundation | No Windows release artifact is currently published; native GStreamer is not packaged yet. |
-| macOS | Not currently packaged | No supported release workflow is available. |
+| Platform | Status |
+| --- | --- |
+| macOS 13 or later on Apple Silicon (M1 or later) | The platform Mercury is built for. Media libraries are bundled with the app. |
+| Linux x86-64 | Builds from source and is tested in CI. It gets less attention than macOS, and some parts are macOS only, such as the menu bar and the native file panel. |
+| Windows | Not built at the moment. |
+| Intel Macs | Not supported. |
 
-!!! note
-    Source builds follow Servo's own platform requirements. A successful build does not imply that every web platform feature is implemented.
+## What is ready and what isn't
 
-## The short version
+On the `mercury` branch today:
 
-Mercury is a good fit for:
+- tabs, pages that open tabs, pop-up blocking (pop-ups need a click in the page), and pages closing their own tab;
+- the address bar with seven built-in search engines and keywords such as `@wikipedia`;
+- a settings window for search, appearance (Light, Dark, System), the home page and clearing data when Mercury quits;
+- page dialogs, permission prompts and HTTP sign-in;
+- drop-down lists, a colour picker, the macOS file panel and a right-click menu;
+- the macOS menu bar and the About window;
+- an orderly quit from the window, ⌘Q, the Dock, log-out or a terminal signal;
+- audio and video through GStreamer 1.28, bundled with the app;
+- ad and tracker blocking at the network level;
+- your system's proxy settings and an HTTP disk cache.
 
-- Exploring Servo on real websites
-- Testing browser-shell ideas in a native Rust application
-- Following the project's progress
-- Reproducing and reporting focused compatibility issues
+Being merged now, so **not** in the app yet: session restore and reopening closed tabs, the history window and address-bar suggestions, bookmarks, importing from other browsers, the downloads list, find in page, opening links from other apps, the tab audio indicator and Now Playing, camera and microphone, location, and filter lists updated in the background. The password storage and the download engine exist as libraries, but their windows are not there yet.
 
-It is not yet a good fit for:
+Planned: a complete redesign of the interface, accessibility of Mercury's own windows, phishing protection, search suggestions, translation, update checks, and releases signed with an Apple Developer ID.
 
-- Passwords, payments, private accounts, or sensitive browsing
-- A primary browser profile
-- Sites that depend on extensions or DRM
-- Adaptive streaming players that require Media Source Extensions
+## What Servo can't do yet
 
+These come from the engine, so Mercury can't offer them either:
+
+- Media Source Extensions, which most large video sites use to stream. Their videos may not play; a plain MP4 or WebM file plays.
+- DRM, passkeys, extensions, printing, spell-checking and picture-in-picture.
+- Some pages look or behave differently from other browsers. Site compatibility is whatever Servo implements.
+
+## Is Mercury for you?
+
+Good uses today:
+
+- trying Servo on real websites in a native Mac app;
+- following the project, testing builds and reporting problems;
+- working on the browser itself.
+
+Not yet:
+
+- passwords, payments, banking or anything sensitive: content processes are not sandboxed by the operating system;
+- your only browser: some sites need features Servo doesn't have.

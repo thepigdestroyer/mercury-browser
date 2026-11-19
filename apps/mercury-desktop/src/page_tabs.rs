@@ -291,6 +291,10 @@ fn allocate_page_tab(
         return None;
     };
     let tab_id = controller.adopt_tab(opener, activation)?;
+    if decision == PopUpDecision::Foreground {
+        // downloads-ui lane: the gesture opened this tab, so its first page is the user's.
+        crate::downloads::note_tab_opened_by_gesture(tab_id);
+    }
     if activation == TabActivation::Foreground {
         keep_address_draft_for(tab_id);
     }

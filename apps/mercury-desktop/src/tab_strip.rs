@@ -42,6 +42,8 @@ pub(crate) fn strip_rows(controller: &BrowserController) -> Vec<BrowserTab> {
                 id: id_for_ui(tab.id()),
                 pinned: tab.is_pinned(),
                 url: state.url().into(),
+                // media-session lane
+                audio: crate::media_session::tab_audio_state(state.audio_indicator()),
             }
         })
         .collect()

@@ -220,6 +220,9 @@ impl EndOfRun for Steps {
         // import-ui lane: tells a read of another browser's files to stop, without waiting;
         // what it leaves in the copy area is removed at the next start.
         crate::import_ui::shut_down();
+        // downloads-ui lane: interrupts the running downloads (keeping what can be resumed) and
+        // queues how each ended, before the history database closes.
+        crate::downloads::shut_down(deadline);
         // Slot (history): queues "clear history on exit" if the settings ask for it, then
         // closes the history database, waiting for its queued work (that clear included).
         self.settings.clear_history_on_exit_if_asked();
@@ -244,6 +247,8 @@ impl EndOfRun for Steps {
     }
 
     fn shut_down_engine(&mut self, exit_code: u8) {
+        // media-session lane: clear Now Playing and release the display before the engine goes.
+        crate::media_session::shut_down();
         crate::engine::shut_down_engine(exit_code);
     }
 

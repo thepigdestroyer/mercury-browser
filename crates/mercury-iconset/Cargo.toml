@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mercury-iconset"
+description = "Renders the Mercury Browser app icon SVG into a macOS iconset (used by scripts/macos/make-icns.sh)."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+resvg.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

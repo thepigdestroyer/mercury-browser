@@ -21,6 +21,12 @@ pub type NewTabAllocator = Rc<dyn Fn(TabId) -> Option<TabId>>;
 /// Called synchronously inside Servo's event loop when a tab starts loading a new document.
 pub type DocumentStartedListener = Rc<dyn Fn(TabId)>;
 
+/// downloads: called synchronously inside Servo's event loop as a tab's top-level request
+/// starts, with the tab, the URL and whether it is a redirect hop; answers whether the user
+/// started it. Shared by every tab's delegate, those of tabs pages open included.
+pub type DocumentRequestListener = Rc<dyn Fn(TabId, &url::Url, bool) -> bool>;
+pub(crate) type SharedDocumentRequestListener = Rc<RefCell<Option<DocumentRequestListener>>>;
+
 /// A web view a page opened, with the channel its events arrive on.
 pub type AdoptedWebView = (TabId, ServoWebView, Receiver<TabEvent>);
 
@@ -35,6 +41,11 @@ pub(crate) struct PageTabs {
     pub(crate) allocator: RefCell<Option<NewTabAllocator>>,
     /// Shared with every tab's `DocumentStarts`.
     pub(crate) document_started_listener: SharedDocumentStartedListener,
+    // media session
+    /// The tab whose page last sent a media-session event: Servo's one active session.
+    pub(crate) engine_media_session: crate::media_session::EngineMediaSession,
+    /// downloads: shared with every tab's delegate.
+    pub(crate) document_request_listener: SharedDocumentRequestListener,
     pub(crate) control_ids: ControlIds,
     pub(crate) content_blocker: Rc<ContentBlocker>,
     pub(crate) screen_metrics: Rc<Cell<Option<ScreenMetrics>>>,

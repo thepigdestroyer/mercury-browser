@@ -40,8 +40,11 @@ component TextButton inherits Rectangle {
         width: parent.width - 20px;
         text: root.label;
         overflow: elide;
+        // A pressed plain button is filled with `item-selected`, where the accent and danger
+        // colours do not read: its label takes `item-selected-text` then.
         color: root.primary
             ? ChromePalette.primary-button-text
+            : touch.pressed ? ChromePalette.item-selected-text
             : root.danger ? ChromePalette.danger : ChromePalette.accent;
         font-size: 12px;
         font-weight: 550;

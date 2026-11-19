@@ -201,6 +201,32 @@ fn a_wrong_keychain_password_is_refused_without_naming_it() {
     assert!(!format!("{error} {error:?}").contains("fake-wrong-password"));
 }
 
+/// macOS checks an unlock password only when the keychain is locked, so refusing a wrong one needs
+/// `file` to lock the keychain first. This holds the keychain unlocked through a second handle and
+/// tries a wrong password twice (the first refusal leaves the keychain locked, the second meets it
+/// locked); the right password must still open it, with its items intact.
+#[test]
+fn a_wrong_password_is_refused_every_time_and_the_right_one_still_opens_the_keychain() {
+    let (guard, backend) = temp_keychain();
+    let key = form("https://example.com", "alice");
+    backend.put(&key, &fake("fake-kept")).expect("save");
+    drop(backend);
+    let _unlocked_elsewhere = guard.handle();
+
+    for _ in 0..2 {
+        match KeychainBackend::file(&guard.path(), "fake-wrong-password") {
+            Err(error) => assert_eq!(error, PasswordError::AccessDenied),
+            Ok(_) => panic!("a wrong password must not open the keychain"),
+        }
+    }
+
+    let reopened = KeychainBackend::file(&guard.path(), TEST_KEYCHAIN_PASSWORD).expect("reopen");
+    assert_eq!(
+        reopened.get(&key).expect("read").expect("present").expose(),
+        "fake-kept"
+    );
+}
+
 #[test]
 fn operations_touch_only_the_targeted_keychain() {
     let (first_guard, first) = temp_keychain();

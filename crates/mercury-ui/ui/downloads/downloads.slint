@@ -1,0 +1,710 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The downloads list: the toolbar button with its progress ring, the popover of recent
+// downloads, the panel with every download, and the question before quitting with downloads
+// running.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// Every colour of these components, in one place: each is a `ChromePalette` role, so the
+// components follow the appearance setting and the brand accent like the rest of the chrome.
+export global DownloadsPalette {
+    out property <bool> dark: ChromePalette.dark;
+    out property <color> surface: ChromePalette.popup-background;
+    out property <color> surface-raised: ChromePalette.item-hover;
+    out property <color> border: ChromePalette.popup-border;
+    out property <color> text: ChromePalette.text;
+    out property <color> muted: ChromePalette.text-secondary;
+    out property <color> accent: ChromePalette.accent;
+    out property <color> accent-text: ChromePalette.primary-button-text;
+    out property <color> danger: ChromePalette.danger;
+    out property <color> track: ChromePalette.separator;
+    out property <color> hover: ChromePalette.button-hover;
+    out property <color> scrim: ChromePalette.scrim;
+    out property <color> button-idle: ChromePalette.button-label;
+    out property <color> focus-ring: ChromePalette.focus-ring;
+    out property <color> shadow: dark ? #00000060 : #00000030;
+    out property <color> shadow-strong: ChromePalette.shadow;
+}
+
+export struct DownloadRow {
+    guid: string,
+    name: string,
+    status: string,
+    // 0 to 1; below 0 no bar; above 1 a bar of unknown length.
+    progress: float,
+    failed: bool,
+    can-open: bool,
+    can-show: bool,
+    can-cancel: bool,
+    can-resume: bool,
+    can-retry: bool,
+    can-remove: bool,
+}
+
+export enum DownloadAction {
+    open,
+    show,
+    cancel,
+    resume,
+    retry,
+    remove,
+}
+
+component TextButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    callback clicked;
+
+    out property <bool> focused: focus.has-focus;
+
+    public function take-focus() {
+        focus.focus();
+    }
+
+    height: 26px;
+    width: label-text.preferred-width + 16px;
+    border-radius: 6px;
+    border-width: focus.has-focus ? 2px : 0px;
+    border-color: DownloadsPalette.focus-ring;
+    background: root.primary
+        ? (touch.pressed ? DownloadsPalette.accent.darker(20%) : DownloadsPalette.accent)
+        : (touch.has-hover ? DownloadsPalette.hover : transparent);
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    label-text := Text {
+        text: root.label;
+        color: root.primary ? DownloadsPalette.accent-text : DownloadsPalette.accent;
+        font-size: 12px;
+        font-weight: 550;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    // Reached with Tab; Return or Space presses the button.
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// A ring that fills clockwise from the top.
+component ProgressRing inherits Rectangle {
+    in property <float> progress;
+    in property <color> ring-color;
+    in property <color> track-color;
+    property <float> shown: root.progress > 1 ? 0.25 : Math.max(0.02, Math.min(0.999, root.progress));
+    property <float> end-x: 12 + 9 * Math.sin(root.shown * 360deg);
+    property <float> end-y: 12 - 9 * Math.cos(root.shown * 360deg);
+
+    width: 24px;
+    height: 24px;
+
+    Path {
+        width: 24px;
+        height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: root.track-color;
+        stroke-width: 2.5px;
+        commands: "M 12 3 A 9 9 0 1 1 11.99 3";
+    }
+
+    Path {
+        width: 24px;
+        height: 24px;
+        viewbox-width: 24;
+        viewbox-height: 24;
+        stroke: root.ring-color;
+        stroke-width: 2.5px;
+        commands: "M 12 3 A 9 9 0 " + (root.shown > 0.5 ? "1" : "0") + " 1 " + root.end-x + " " + root.end-y;
+    }
+}
+
+// The toolbar button. Shown once something was downloaded in this run.
+export component DownloadsButton inherits Rectangle {
+    in property <bool> active;
+    in property <float> progress;
+    in property <bool> open;
+    // Something started or finished since the list was last opened.
+    in property <bool> attention;
+    // Where the popover hangs from: the button's lower right corner, in window coordinates.
+    out property <length> anchor-right: self.absolute-position.x + self.width;
+    out property <length> anchor-bottom: self.absolute-position.y + self.height;
+    callback anchor-changed(length, length);
+    callback clicked;
+
+    init => {
+        root.anchor-changed(root.anchor-right, root.anchor-bottom);
+    }
+    changed anchor-right => {
+        root.anchor-changed(root.anchor-right, root.anchor-bottom);
+    }
+    changed anchor-bottom => {
+        root.anchor-changed(root.anchor-right, root.anchor-bottom);
+    }
+
+    accessible-role: button;
+    accessible-label: root.active ? "Downloads, in progress" : "Downloads";
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    width: 36px;
+    height: 34px;
+    border-radius: 7px;
+    background: touch.pressed || root.open
+        ? DownloadsPalette.hover
+        : touch.has-hover ? DownloadsPalette.hover.transparentize(40%) : transparent;
+
+    if root.active: ProgressRing {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        progress: root.progress;
+        ring-color: DownloadsPalette.accent;
+        track-color: DownloadsPalette.track;
+    }
+
+    Text {
+        text: "↓";
+        color: touch.has-hover || root.active ? DownloadsPalette.accent : DownloadsPalette.button-idle;
+        font-size: root.active ? 13px : 17px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    if root.attention && !root.open: Rectangle {
+        x: parent.width - 11px;
+        y: 4px;
+        width: 7px;
+        height: 7px;
+        border-radius: 3.5px;
+        background: DownloadsPalette.accent;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+component DownloadItem inherits Rectangle {
+    in property <DownloadRow> entry;
+    in property <string> show-label;
+    callback action(string, DownloadAction);
+
+    height: 64px;
+    background: hover-area.has-hover ? DownloadsPalette.surface-raised : transparent;
+    border-radius: 8px;
+    accessible-role: list-item;
+    accessible-label: root.entry.name + ", " + root.entry.status;
+
+    hover-area := TouchArea { }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 8px;
+        spacing: 10px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+
+            Text {
+                text: root.entry.name;
+                color: DownloadsPalette.text;
+                font-size: 13px;
+                font-weight: 600;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.entry.status;
+                color: root.entry.failed ? DownloadsPalette.danger : DownloadsPalette.muted;
+                font-size: 11px;
+                overflow: elide;
+            }
+
+            if root.entry.progress >= 0: Rectangle {
+                height: 3px;
+                border-radius: 1.5px;
+                background: DownloadsPalette.track;
+
+                Rectangle {
+                    x: 0px;
+                    width: root.entry.progress > 1 ? parent.width * 30% : parent.width * Math.min(1, root.entry.progress);
+                    height: parent.height;
+                    border-radius: 1.5px;
+                    background: DownloadsPalette.accent;
+                }
+            }
+        }
+
+        HorizontalLayout {
+            alignment: end;
+            spacing: 2px;
+            padding-top: 19px;
+            padding-bottom: 19px;
+
+            if root.entry.can-open: TextButton {
+                label: "Open";
+                clicked => {
+                    root.action(root.entry.guid, DownloadAction.open);
+                }
+            }
+            if root.entry.can-resume: TextButton {
+                label: "Resume";
+                clicked => {
+                    root.action(root.entry.guid, DownloadAction.resume);
+                }
+            }
+            if root.entry.can-retry: TextButton {
+                label: "Retry";
+                clicked => {
+                    root.action(root.entry.guid, DownloadAction.retry);
+                }
+            }
+            if root.entry.can-show: TextButton {
+                label: root.show-label;
+                clicked => {
+                    root.action(root.entry.guid, DownloadAction.show);
+                }
+            }
+            if root.entry.can-cancel: TextButton {
+                label: "Cancel";
+                clicked => {
+                    root.action(root.entry.guid, DownloadAction.cancel);
+                }
+            }
+            if root.entry.can-remove: TextButton {
+                label: "Remove";
+                clicked => {
+                    root.action(root.entry.guid, DownloadAction.remove);
+                }
+            }
+        }
+    }
+}
+
+// The recent downloads, under the toolbar button.
+export component DownloadsPopover inherits Rectangle {
+    in property <[DownloadRow]> rows;
+    in property <string> show-label;
+    callback action(string, DownloadAction);
+    callback clear-list;
+    callback show-all;
+
+    width: 460px;
+    height: header.height + Math.max(1, root.rows.length) * 64px + footer.height + 16px;
+    border-radius: 10px;
+    border-width: 1px;
+    border-color: DownloadsPalette.border;
+    background: DownloadsPalette.surface;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: DownloadsPalette.shadow;
+    drop-shadow-offset-y: 4px;
+
+    accessible-role: list;
+    accessible-label: "Downloads";
+
+    // Clicks on the popover never reach what is under it.
+    TouchArea { }
+
+    // Opening the popover moves the keyboard into it; Tab then reaches its buttons. Return
+    // does nothing here, so opening it can never press a button by accident.
+    popover-focus := FocusScope {
+        focus-on-click: false;
+    }
+
+    init => {
+        popover-focus.focus();
+    }
+
+    VerticalLayout {
+        padding: 8px;
+        spacing: 0px;
+
+        header := HorizontalLayout {
+            height: 36px;
+            padding-left: 12px;
+            padding-right: 4px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: "Downloads";
+                color: DownloadsPalette.text;
+                font-size: 14px;
+                font-weight: 650;
+                vertical-alignment: center;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                TextButton {
+                    label: "Clear list";
+                    clicked => {
+                        root.clear-list();
+                    }
+                }
+            }
+        }
+
+        if root.rows.length == 0: Text {
+            height: 64px;
+            text: "No downloads";
+            color: DownloadsPalette.muted;
+            font-size: 12px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        for row in root.rows: DownloadItem {
+            entry: row;
+            show-label: root.show-label;
+            action(guid, action) => {
+                root.action(guid, action);
+            }
+        }
+
+        footer := HorizontalLayout {
+            height: 36px;
+            alignment: center;
+
+            VerticalLayout {
+                alignment: center;
+                TextButton {
+                    label: "Show all downloads";
+                    clicked => {
+                        root.show-all();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// Every download, newest first, over the page area.
+export component DownloadsPanel inherits Rectangle {
+    in property <[DownloadRow]> rows;
+    in property <string> show-label;
+    in property <bool> can-show-more;
+    callback action(string, DownloadAction);
+    callback clear-list;
+    callback show-more;
+    callback close;
+
+    background: DownloadsPalette.surface;
+
+    accessible-role: list;
+    accessible-label: "Downloads";
+
+    // Clicks on the panel never reach the page under it.
+    TouchArea { }
+
+    // Opening the list moves the keyboard into it; Tab then reaches its buttons.
+    panel-focus := FocusScope {
+        focus-on-click: false;
+    }
+
+    init => {
+        panel-focus.focus();
+    }
+
+    VerticalLayout {
+        padding-left: 32px;
+        padding-right: 32px;
+        padding-top: 20px;
+        padding-bottom: 20px;
+        spacing: 12px;
+
+        HorizontalLayout {
+            height: 36px;
+            spacing: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: "Downloads";
+                color: DownloadsPalette.text;
+                font-size: 20px;
+                font-weight: 650;
+                vertical-alignment: center;
+            }
+
+            VerticalLayout {
+                alignment: center;
+                TextButton {
+                    label: "Clear list";
+                    clicked => {
+                        root.clear-list();
+                    }
+                }
+            }
+
+            VerticalLayout {
+                alignment: center;
+                TextButton {
+                    label: "Close";
+                    primary: true;
+                    clicked => {
+                        root.close();
+                    }
+                }
+            }
+        }
+
+        Rectangle {
+            height: 1px;
+            background: DownloadsPalette.border;
+        }
+
+        if root.rows.length == 0: Text {
+            vertical-stretch: 1;
+            text: "No downloads";
+            color: DownloadsPalette.muted;
+            font-size: 13px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+
+        if root.rows.length > 0: Flickable {
+            vertical-stretch: 1;
+            viewport-height: list.preferred-height;
+
+            list := VerticalLayout {
+                spacing: 2px;
+                alignment: start;
+
+                for row in root.rows: DownloadItem {
+                    entry: row;
+                    show-label: root.show-label;
+                    action(guid, action) => {
+                        root.action(guid, action);
+                    }
+                }
+
+                if root.can-show-more: HorizontalLayout {
+                    height: 44px;
+                    alignment: center;
+
+                    VerticalLayout {
+                        alignment: center;
+                        TextButton {
+                            label: "Show more";
+                            clicked => {
+                                root.show-more();
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// "Cancel N downloads and quit?", over the whole window.
+export component QuitDownloadsPrompt inherits Rectangle {
+    in property <string> title;
+    in property <string> body;
+    in property <string> confirm-label;
+    in property <string> keep-label;
+    callback confirm;
+    callback keep;
+
+    background: DownloadsPalette.scrim;
+    accessible-role: groupbox;
+    accessible-label: root.title;
+
+    // A click outside the card is not an answer.
+    TouchArea { }
+
+    // The default answer has the focus from the start, so Return keeps downloading.
+    init => {
+        keep-button.take-focus();
+    }
+
+    // Keys the focused button does not use come here: Escape keeps downloading, and Tab or
+    // Shift+Tab moves between the two buttons without leaving the question.
+    FocusScope {
+        focus-on-click: false;
+        focus-on-tab-navigation: false;
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.keep();
+                return accept;
+            }
+            if event.text == Key.Tab || event.text == Key.Backtab {
+                if keep-button.focused {
+                    confirm-button.take-focus();
+                } else {
+                    keep-button.take-focus();
+                }
+                return accept;
+            }
+            return reject;
+        }
+
+        card := Rectangle {
+            width: Math.min(420px, parent.width - 48px);
+            height: card-layout.preferred-height;
+            x: (parent.width - self.width) / 2;
+            y: Math.max(24px, (parent.height - self.height) / 2 - 40px);
+            border-radius: 12px;
+            border-width: 1px;
+            border-color: DownloadsPalette.border;
+            background: DownloadsPalette.surface;
+            drop-shadow-blur: 24px;
+            drop-shadow-color: DownloadsPalette.shadow-strong;
+
+            card-layout := VerticalLayout {
+                padding: 22px;
+                spacing: 12px;
+
+                Text {
+                    text: root.title;
+                    color: DownloadsPalette.text;
+                    font-size: 16px;
+                    font-weight: 650;
+                    wrap: word-wrap;
+                }
+
+                Text {
+                    text: root.body;
+                    color: DownloadsPalette.muted;
+                    font-size: 13px;
+                    wrap: word-wrap;
+                }
+
+                HorizontalLayout {
+                    alignment: end;
+                    spacing: 8px;
+                    padding-top: 6px;
+
+                    confirm-button := TextButton {
+                        label: root.confirm-label;
+                        clicked => {
+                            root.confirm();
+                        }
+                    }
+
+                    keep-button := TextButton {
+                        label: root.keep-label;
+                        primary: true;
+                        clicked => {
+                            root.keep();
+                        }
+                    }
+                }
+            }
+        }
+    }
+}
+
+// A page started a download without the user: asks before anything is fetched. Shown at the
+// top of the page area, in the browser's own colours, naming the site.
+export component DownloadOfferBar inherits Rectangle {
+    in property <string> text;
+    // Where the file comes from, when another host than the page.
+    in property <string> detail;
+    callback download;
+    callback block;
+    callback dismiss;
+
+    height: 48px;
+    background: DownloadsPalette.surface;
+    accessible-role: groupbox;
+    accessible-label: root.text + ". " + root.detail;
+
+    // Clicks on the bar never reach the page under it.
+    TouchArea { }
+
+    Rectangle {
+        y: parent.height - 1px;
+        height: 1px;
+        background: DownloadsPalette.border;
+    }
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 10px;
+        spacing: 8px;
+
+        Text {
+            text: "↓";
+            color: DownloadsPalette.accent;
+            font-size: 16px;
+            font-weight: 650;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+
+            Text {
+                text: root.text;
+                color: DownloadsPalette.text;
+                font-size: 13px;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.detail;
+                color: DownloadsPalette.muted;
+                font-size: 11px;
+                overflow: elide;
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            TextButton {
+                label: "Download";
+                primary: true;
+                clicked => {
+                    root.download();
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            TextButton {
+                label: "Block";
+                clicked => {
+                    root.block();
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: center;
+            TextButton {
+                label: "Not now";
+                clicked => {
+                    root.dismiss();
+                }
+            }
+        }
+    }
+}

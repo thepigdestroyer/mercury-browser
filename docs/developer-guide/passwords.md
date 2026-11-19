@@ -8,7 +8,7 @@ description: How the mercury-passwords crate stores website logins in the macOS 
 `crates/mercury-passwords` is the storage and logic behind Mercury's password manager. It keeps
 website logins in the operating system's credential store, generates passwords, and reads and
 writes the login CSV files other browsers export. It has no UI and does not detect, offer to
-save or fill forms; those parts build on it.
+save or fill forms; those parts build on it. The app does not use the crate yet: its password window is in progress, and filling logins into pages needs hooks in Servo that are on the list of planned patches.
 
 ## The model
 
@@ -51,7 +51,7 @@ search list, and makes it the default keychain if there is none, when its path c
 | Attribute | Value |
 | --- | --- |
 | service (`svce`) | `io.github.thepigdestroyer.mercury-browser.logins` (`KEYCHAIN_SERVICE`) |
-| account (`acct`) | a versioned encoding of origin, kind, realm and user name — see below |
+| account (`acct`) | a versioned encoding of origin, kind, realm and user name (see below) |
 | label (`labl`) | the site and user name, for example `example.com (alice)`; HTTP logins add ` – realm` |
 | description (`desc`) | `Mercury Browser web login` or `Mercury Browser HTTP login` |
 | data | the password, UTF-8 |
@@ -72,7 +72,7 @@ escaped  = any text, with each UTF-8 byte of "|", "%" and of control characters 
 
 Only canonical strings decode: a string is accepted if encoding its decoded key gives the same
 string back. Items under the service whose account does not decode (another version, someone
-else's item) are skipped with a `debug` log line, never reported as errors and never deleted —
+else's item) are skipped with a `debug` log line, never reported as errors and never deleted:
 `remove_all` only deletes what `list` returned.
 
 A Keychain item as `security dump-keychain` shows it (from a temporary keychain; the secret is
@@ -190,5 +190,5 @@ example `security dump-keychain <path>`), never with `-d`, which prints secrets.
 
 ## Other platforms
 
-On platforms other than macOS the crate builds with `MemoryBackend` only; a Secret Service
-backend for Linux is planned. Every macOS-specific line is behind `cfg(target_os = "macos")`.
+On platforms other than macOS the crate builds with `MemoryBackend` only, which keeps nothing
+after the process ends. Every macOS-specific line is behind `cfg(target_os = "macos")`.

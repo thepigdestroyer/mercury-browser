@@ -4,6 +4,7 @@ resolver = "3"
 members = [
     "apps/mercury-desktop",
     "crates/mercury-downloads",
+    "crates/mercury-iconset",
     "crates/mercury-import",
     "crates/mercury-passwords",
     "crates/mercury-servo-patches",
@@ -21,6 +22,8 @@ edition = "2024"
 license = "MPL-2.0 AND PolyForm-Noncommercial-1.0.0"
 
 [workspace.dependencies]
+# find: tests only (talaria-servo's dev-dependency), for the find-in-page script.
+boa_engine = { version = "0.20", default-features = false }
 adblock = "=0.13.5"
 ash = "0.38"
 backtrace = "0.3.77"
@@ -33,6 +36,8 @@ futures-util = "0.3.34"
 getrandom = "0.4"
 gleam = "0.15"
 glow = "0.17"
+# openurl: the status and headers of refused loads (already in the lock through Servo).
+http = "1.5"
 image = { version = "0.25", default-features = false, features = ["png"] }
 libc = "0.2.191"
 log = "0.4"
@@ -41,6 +46,7 @@ objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false }
 percent-encoding = "2.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "stream"] }
+resvg = { version = "0.48", default-features = false }
 rusqlite = { version = "0.38", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
 security-framework = "3.7"
@@ -84,7 +90,24 @@ zeroize = "1.9"
 # clippy lints members. `make servo-patches-check` fails if either happens.
 [patch.crates-io]
 gaol = { path = "third_party/gaol" }
+i-slint-backend-winit = { path = "third_party/i-slint-backend-winit" }
+servo = { path = "third_party/servo" }
 servo-canvas = { path = "third_party/servo-canvas" }
+servo-config = { path = "third_party/servo-config" }
+servo-constellation = { path = "third_party/servo-constellation" }
+servo-constellation-traits = { path = "third_party/servo-constellation-traits" }
+servo-embedder-traits = { path = "third_party/servo-embedder-traits" }
+servo-layout = { path = "third_party/servo-layout" }
+servo-layout-api = { path = "third_party/servo-layout-api" }
+servo-media = { path = "third_party/servo-media" }
+servo-media-player = { path = "third_party/servo-media-player" }
+servo-media-webrtc = { path = "third_party/servo-media-webrtc" }
+servo-net = { path = "third_party/servo-net" }
+servo-net-traits = { path = "third_party/servo-net-traits" }
+servo-storage = { path = "third_party/servo-storage" }
+servo-storage-traits = { path = "third_party/servo-storage-traits" }
+servo-webgl = { path = "third_party/servo-webgl" }
+stylo_static_prefs = { path = "third_party/stylo_static_prefs" }
 surfman = { path = "third_party/surfman" }
 
 # Keep the controller easy to debug while optimizing the browser-engine, frame-transfer, and media

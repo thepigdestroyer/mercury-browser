@@ -134,3 +134,9 @@ code and keep their own licences.
 - Brave Firstparty specific filters — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-firstparty.txt`) — local file `brave-firstparty.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
 - Brave Specific — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-specific.txt`) — local file `brave-specific.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
 - Brave unbreak list (its only line is `! Brave desktop filters`) — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-unbreak.txt`) — local file `brave-unbreak.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
+
+## Build tools
+
+Libraries linked only into Mercury's own build tools, never into the browser or its app bundle.
+
+- resvg 0.48 — https://github.com/linebender/resvg — Apache-2.0 OR MIT (used under MIT; Copyright 2017 the Resvg Authors; the text is in `LICENSES/MIT-resvg.txt`) — the SVG renderer of `crates/mercury-iconset`, which `scripts/macos/make-icns.sh` runs to render the app icon's iconset. Mercury's source contains none of its code.

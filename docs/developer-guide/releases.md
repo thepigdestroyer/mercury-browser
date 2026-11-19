@@ -148,13 +148,25 @@ Notarisation has not been run for Mercury yet; current macOS builds are ad hoc.
 
 ### Application icon
 
-`AppIcon.icns` and the PNGs in `apps/mercury-desktop/resources/macos/AppIcon.iconset/` are generated from `apps/mercury-desktop/resources/mercury-browser.svg` and committed, so packaging does not need to render them. After changing the logo, regenerate both with:
+`AppIcon.icns` and the PNGs in `apps/mercury-desktop/resources/macos/AppIcon.iconset/` are generated from two SVG masters in the same folder and committed, so packaging does not need to render them:
+
+- `AppIcon.svg`, the full icon drawn on Apple's macOS icon grid (an 824 px rounded plate on a 1024 px canvas), for 64 px and up;
+- `AppIcon-small.svg`, a simplified version (no halo, a larger Sun and a heavier M) for 16 and 32 px, where the full icon's detail is lost.
+
+After changing either, regenerate the iconset and `.icns` with:
 
 ```bash
 scripts/macos/make-icns.sh
 ```
 
-It compiles `scripts/macos/render-icon.swift`, which draws the logo onto a rounded square following Apple's macOS icon grid at each of the ten iconset sizes, then runs `iconutil`.
+It runs the workspace tool `mercury-iconset` (`crates/mercury-iconset`, built on the resvg SVG renderer) to render the ten iconset sizes, checks each size with `sips`, then runs `iconutil`.
+
+The other brand files live in `docs/assets/`:
+
+- `mercury-browser.svg` (the mark, also used in the app);
+- `favicon.svg`;
+- `readme-banner.svg`;
+- `brand/`, which holds the one-colour mark, the light and dark lockups, and the GitHub social preview (`social-preview.svg` and the `social-preview.png` rendered from it).
 
 ## Continuous integration
 

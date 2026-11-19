@@ -29,12 +29,17 @@ use crate::geolocation::{
 };
 use crate::http_disk_cache::{CacheCheck, http_disk_cache_database, repair_http_disk_cache};
 use crate::load_metrics::{LoadMilestone, PageLoadMetrics};
+// media session
+use crate::media_session::{EngineMediaSession, browser_event_from_servo, describe_for_log};
 use crate::page_defaults::page_defaults_user_content;
 use crate::page_feedback::{DOCUMENT_TITLE_SCRIPT, PageFeedback, reads_title_at};
 use crate::page_requests::{
     ClosesOnDrop, PendingEngineRequests, ServoPageRequest, page_permission, simple_dialog_kind,
 };
-use crate::page_tabs::{AdoptedWebView, DocumentStartedListener, NewTabAllocator, PageTabs};
+use crate::page_tabs::{
+    AdoptedWebView, DocumentRequestListener, DocumentStartedListener, NewTabAllocator, PageTabs,
+    SharedDocumentRequestListener,
+};
 use crate::proxy::SystemProxySettings;
 use crate::screen::ScreenMetrics;
 use crate::session_data::{
@@ -131,6 +136,8 @@ pub struct ServoRuntime {
     /// The user-origin style sheet every web view shares. Servo's `UserContentManager` holds a
     /// handle to Servo of its own, so this field must stay before `after_engine_cleanup`.
     user_content: Rc<servo::UserContentManager>,
+    /// The `User-Agent` pages are loaded with; downloads send the same. (downloads)
+    user_agent: String,
     /// Tabs opened by pages; it holds a handle to Servo too, so it stays before
     /// `after_engine_cleanup`.
     page_tabs: Rc<PageTabs>,
@@ -169,9 +176,11 @@ impl ServoRuntime {
         let options = mercury_options(runtime_options.config_dir.clone());
         let multiprocess_enabled = options.multiprocess;
         let sandbox_enabled = options.sandbox;
+        let preferences = mercury_preferences(&runtime_options);
+        let user_agent = preferences.user_agent.clone(); // downloads
         let inner = ServoBuilder::default()
             .opts(options)
-            .preferences(mercury_preferences(&runtime_options))
+            .preferences(preferences)
             .event_loop_waker(Box::new(event_loop_waker))
             .build();
         inner.setup_logging();
@@ -211,6 +220,9 @@ impl ServoRuntime {
             adopted: RefCell::default(),
             allocator: RefCell::default(),
             document_started_listener: Rc::default(),
+            // media session
+            engine_media_session: EngineMediaSession::default(),
+            document_request_listener: Rc::default(), // downloads
             control_ids: ControlIds::default(),
             content_blocker,
             screen_metrics: Rc::clone(&screen_metrics),
@@ -224,6 +236,7 @@ impl ServoRuntime {
             redraw_waker,
             screen_metrics,
             user_content,
+            user_agent,
             page_tabs,
             after_engine_cleanup,
             switches,
@@ -299,10 +312,37 @@ impl ServoRuntime {
             .replace(Some(listener));
     }
 
+    // media session
+    /// The tab whose page Servo sends media-session actions to (one for all web views).
+    pub fn engine_media_session_tab(&self) -> Option<TabId> {
+        self.page_tabs.engine_media_session.get()
+    }
+
     /// Web views created by pages since the last call, in creation order, each with the channel
     /// its tab's events arrive on.
     pub fn take_adopted_web_views(&self) -> Vec<AdoptedWebView> {
         self.page_tabs.adopted.take()
+    }
+
+    // downloads
+    /// Called synchronously, inside `spin_event_loop`, as each top-level request of a tab starts
+    /// (`redirect` for the next hop of a navigation); answers whether the user started it.
+    pub fn set_document_request_listener(&self, listener: DocumentRequestListener) {
+        self.page_tabs
+            .document_request_listener
+            .replace(Some(listener));
+    }
+
+    /// The `User-Agent` the engine sends.
+    pub fn user_agent(&self) -> &str {
+        &self.user_agent
+    }
+
+    /// The cookies the engine would send with an HTTP request to `url`, as name and value
+    /// pairs (`HttpOnly` ones included), given to `answer` once the network thread replies
+    /// (during a later `spin_event_loop`). Does not block.
+    pub fn cookies_for_url(&self, url: &Url, answer: impl FnOnce(Vec<(String, String)>) + 'static) {
+        crate::downloads::cookies_for_url(&self.inner, url, answer);
     }
 }
 
@@ -343,6 +383,10 @@ struct BrowserServoDelegate {
 
 impl servo::ServoDelegate for BrowserServoDelegate {
     fn load_web_resource(&self, load: servo::WebResourceLoad) {
+        // openurl: a load without a web view (a worker's, say) never reads local files either.
+        let Some(load) = crate::openurl::refuse_local_file_load(None, None, load) else {
+            return;
+        };
         self.content_blocker.handle_web_resource_load(None, load);
     }
 }
@@ -511,6 +555,12 @@ struct BrowserDelegate {
     document_start: Rc<DocumentStarts>,
     /// The tab's geolocation, also Servo's delegate for it; `None` while it is off.
     geolocation: Option<Rc<dyn PageGeolocation>>,
+    // media session
+    engine_media_session: EngineMediaSession,
+    /// downloads: the method, URL and referrer of the last top-level request.
+    last_document_request: RefCell<Option<(String, Url, Option<Url>)>>,
+    /// downloads: shared by every tab's delegate.
+    document_request_listener: SharedDocumentRequestListener,
 }
 
 /// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
@@ -540,6 +590,8 @@ fn new_tab_delegate(
         ),
         page_feedback,
         geolocation,
+        // media session
+        browser_event_sender: browser_event_sender.clone(),
     };
     let delegate = Rc::new(BrowserDelegate {
         tab_id,
@@ -554,11 +606,83 @@ fn new_tab_delegate(
         page_requests: parts.page_requests.shared(),
         document_start: Rc::clone(&parts.document_start),
         geolocation: page_geolocation,
+        // media session
+        engine_media_session: Rc::clone(&shared.engine_media_session),
+        last_document_request: RefCell::new(None), // downloads
+        document_request_listener: Rc::clone(&shared.document_request_listener), // downloads
     });
     (delegate, parts)
 }
 
 impl BrowserDelegate {
+    // downloads
+    fn note_document_request(
+        &self,
+        web_view: &servo::WebView,
+        request: &servo::WebResourceRequest,
+    ) {
+        if request.is_for_main_frame {
+            let url = request.url.clone().into_url();
+            *self.last_document_request.borrow_mut() = Some((
+                request.method.to_string(),
+                url.clone(),
+                request
+                    .referrer_url
+                    .clone()
+                    .map(|referrer| referrer.into_url()),
+            ));
+            // Decided now, inside the engine's event loop as the request starts, so neither the
+            // server's latency nor a new document starting in the same spin (which ends the
+            // click's activation) can make the user's click look like the page's own doing.
+            let listener = self.document_request_listener.borrow().clone();
+            let user_started =
+                listener.is_some_and(|listener| listener(self.tab_id, &url, request.is_redirect));
+            self.send_browser_event(BrowserEvent::DocumentRequestStarted {
+                url: url.to_string(),
+                redirect: request.is_redirect,
+                from: web_view.url().map(|from| from.to_string()),
+                user_started,
+            });
+        }
+    }
+
+    // downloads
+    /// A complete top-level page without a title may be Servo's "Unknown content type" page;
+    /// if the page confirms it, the tab is told it was offered a download.
+    fn check_for_download_offer(&self, web_view: &servo::WebView) {
+        if web_view.page_title().is_some_and(|title| !title.is_empty()) {
+            return;
+        }
+        let sender = self.browser_event_sender.clone();
+        let tab_id = self.tab_id;
+        let last_request = self.last_document_request.borrow().clone();
+        web_view.evaluate_javascript(crate::download_offers::RECOGNISE_SCRIPT, move |answer| {
+            let Ok(servo::JSValue::String(answer)) = answer else {
+                return;
+            };
+            let Some((mime_type, url)) = crate::download_offers::parse_answer(&answer) else {
+                return;
+            };
+            let method_and_url = last_request
+                .as_ref()
+                .map(|(method, requested, _)| (method.clone(), requested.clone()));
+            let posted = crate::download_offers::was_posted(method_and_url.as_ref(), &url);
+            let referrer = last_request
+                .filter(|(_, requested, _)| *requested == url)
+                .and_then(|(_, _, referrer)| referrer)
+                .map(String::from);
+            let _sent = sender.send(TabEvent::new(
+                tab_id,
+                BrowserEvent::DownloadOffered {
+                    url: url.to_string(),
+                    mime_type,
+                    posted,
+                    referrer,
+                },
+            ));
+        });
+    }
+
     fn send_browser_event(&self, event: BrowserEvent) {
         let _send_result = self
             .browser_event_sender
@@ -605,6 +729,13 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn load_web_resource(&self, web_view: servo::WebView, load: servo::WebResourceLoad) {
+        // openurl: a web page's frames and resources never come from local files.
+        let Some(load) =
+            crate::openurl::refuse_local_file_load(Some(self.tab_id), web_view.url(), load)
+        else {
+            return;
+        };
+        self.note_document_request(&web_view, &load.request); // downloads
         self.content_blocker
             .handle_web_resource_load(Some(&web_view), load);
     }
@@ -654,6 +785,9 @@ impl servo::WebViewDelegate for BrowserDelegate {
     fn notify_load_status_changed(&self, web_view: servo::WebView, status: LoadStatus) {
         // geolocation: a reported start ends the old document's requests and parks its watches
         on_load_status(self.geolocation.as_deref(), status);
+        if status == LoadStatus::Complete {
+            self.check_for_download_offer(&web_view); // downloads
+        }
         // dialogs: a new document; the previous one's requests and page state no longer apply.
         // tabs: the same signal resets the title and icon and forgets the tab's activation,
         // synchronously, before any script of the new document runs.
@@ -720,6 +854,16 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // controls
         self.drop_controls();
         for event in crash_feedback(reason, web_view.cursor(), web_view.status_text()) {
+            self.send_browser_event(event);
+        }
+    }
+
+    // openurl
+    /// Navigations a page asks for (links, forms, `location`, in the main frame or a frame;
+    /// not typed addresses, which never ask). Answered at once.
+    fn request_navigation(&self, web_view: servo::WebView, request: servo::NavigationRequest) {
+        if let Some(event) = crate::openurl::judge_navigation(self.tab_id, web_view.url(), request)
+        {
             self.send_browser_event(event);
         }
     }
@@ -842,6 +986,28 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // Servo does not say which frame asked; the request is shown for the tab's page.
         let kind = PageRequestKind::Permission(page_permission(request.feature()));
         self.forward_page_request(web_view.url(), kind, ServoPageRequest::Permission(request));
+    }
+
+    // media session
+    fn notify_media_session_event(
+        &self,
+        _web_view: servo::WebView,
+        event: servo::MediaSessionEvent,
+    ) {
+        // The constellation forwards an event only after making its sender the active session.
+        self.engine_media_session.set(Some(self.tab_id));
+        let event = browser_event_from_servo(event);
+        // Metadata and positions are the page's; playback changes are the browser's own.
+        if matches!(event, BrowserEvent::MediaPlaybackChanged { .. }) {
+            info!("tab {}: media session: {event:?}", self.tab_id.value());
+        } else {
+            log::debug!(
+                "tab {}: media session: {}",
+                self.tab_id.value(),
+                describe_for_log(&event)
+            );
+        }
+        self.send_browser_event(event);
     }
 }
 

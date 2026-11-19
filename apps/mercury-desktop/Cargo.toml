@@ -21,6 +21,7 @@ glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
+mercury-downloads = { path = "../../crates/mercury-downloads" }
 mercury-import = { path = "../../crates/mercury-import" }
 mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-store = { path = "../../crates/mercury-store" }
@@ -33,6 +34,8 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+# media-session lane: the page's host in Now Playing (url is already a workspace dependency);
+# openurl.
 url.workspace = true
 
 [target.'cfg(target_os = "linux")'.dependencies]
@@ -45,6 +48,7 @@ ash.workspace = true
 # `<input type=file>` (`src/controls/file_panel.rs`) and the bookmark file panels
 # (`src/bookmarks/panel.rs`), shown as sheets with a completion block.
 [target.'cfg(target_os = "macos")'.dependencies]
+# media-session lane: `block2` also gives the `MPRemoteCommand` handlers their blocks.
 block2 = "0.6.2"
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
@@ -107,6 +111,9 @@ signal-hook-registry.workspace = true
 i-slint-backend-testing.workspace = true
 mercury-ui = { path = "../../crates/mercury-ui", features = ["test-support"] }
 tempfile.workspace = true
+# downloads-ui lane: a headless window for the quit question's keyboard test. Dev-only, so the
+# application's Slint features are unchanged.
+slint = { workspace = true, features = ["renderer-software"] }
 
 [features]
 # `--exit-by logout`: the browser sends itself the quit Apple event of a log-out. For tests
@@ -118,6 +125,8 @@ quit-diagnostics = []
 menu-diagnostics = []
 # import-ui lane: `--import-from` and `--import-snapshot` (docs in `cli.rs`). Never in a
 # released build; `make lint`, `make check` and `make test` turn it on (`--all-features`).
+# find lane: diagnostic command-line options (`--find`, `--find-steps`), never in released builds;
+# `make lint` and `make test` turn them on with `--all-features`.
 diagnostics = []
 
 [build-dependencies]

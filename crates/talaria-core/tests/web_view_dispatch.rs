@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: MPL-2.0
 use talaria_core::{
     BrowserCommand, ClipboardCommand, ColorScheme, CompositionState, ControlAnswer, ControlId,
-    ImeInput, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, PointerButton,
-    PointerButtonAction, WebView, dispatch_command,
+    EndFindRequest, FindRequest, FindStep, ImeInput, KeyLocation, KeyState, KeyboardInput,
+    KeyboardModifiers, PointerButton, PointerButtonAction, WebView, dispatch_command,
 };
+// media session
+use talaria_core::MediaSessionAction;
 use talaria_core::{PageRequestAnswer, PageRequestId};
 
 #[derive(Debug, PartialEq)]
@@ -45,6 +47,14 @@ enum FakeCall {
     AnswerPageRequest(PageRequestId, PageRequestAnswer),
     // menus
     Clipboard(ClipboardCommand),
+    // media session
+    SetAudioMuted(bool),
+    MediaSessionAction(MediaSessionAction, bool),
+    ProbeMedia,
+    // find
+    BeginFind(u64),
+    Find(FindRequest),
+    EndFind(EndFindRequest),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -168,6 +178,36 @@ impl WebView for FakeWebView {
     // menus
     fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error> {
         self.record(FakeCall::Clipboard(command))
+    }
+
+    // media session
+    fn set_audio_muted(&mut self, muted: bool) -> Result<(), Self::Error> {
+        self.record(FakeCall::SetAudioMuted(muted))
+    }
+
+    fn media_session_action(
+        &mut self,
+        action: MediaSessionAction,
+        through_engine: bool,
+    ) -> Result<(), Self::Error> {
+        self.record(FakeCall::MediaSessionAction(action, through_engine))
+    }
+
+    fn probe_media(&mut self) -> Result<(), Self::Error> {
+        self.record(FakeCall::ProbeMedia)
+    }
+
+    // find
+    fn begin_find(&mut self, request_id: u64) -> Result<(), Self::Error> {
+        self.record(FakeCall::BeginFind(request_id))
+    }
+
+    fn find(&mut self, request: FindRequest) -> Result<(), Self::Error> {
+        self.record(FakeCall::Find(request))
+    }
+
+    fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error> {
+        self.record(FakeCall::EndFind(request))
     }
 }
 
@@ -475,4 +515,73 @@ fn clipboard_commands_reach_the_page_editing() {
         assert_eq!(result, Ok(()));
         assert_eq!(web_view.calls, vec![FakeCall::Clipboard(command)]);
     }
+}
+
+#[test]
+fn media_session_commands_reach_the_web_view() {
+    let mut web_view = FakeWebView::default();
+
+    for command in [
+        BrowserCommand::SetAudioMuted { muted: true },
+        BrowserCommand::SetAudioMuted { muted: false },
+        BrowserCommand::MediaSessionAction {
+            action: MediaSessionAction::Pause,
+            through_engine: false,
+        },
+        BrowserCommand::MediaSessionAction {
+            action: MediaSessionAction::NextTrack,
+            through_engine: true,
+        },
+        BrowserCommand::ProbeMedia,
+    ] {
+        assert_eq!(dispatch_command(&mut web_view, command), Ok(()));
+    }
+
+    assert_eq!(
+        web_view.calls,
+        vec![
+            FakeCall::SetAudioMuted(true),
+            FakeCall::SetAudioMuted(false),
+            FakeCall::MediaSessionAction(MediaSessionAction::Pause, false),
+            FakeCall::MediaSessionAction(MediaSessionAction::NextTrack, true),
+            FakeCall::ProbeMedia,
+        ]
+    );
+}
+
+#[test]
+fn find_commands_reach_the_web_view() {
+    let mut web_view = FakeWebView::default();
+    let request = FindRequest {
+        id: 2,
+        query: "needle".to_owned(),
+        match_case: true,
+        step: FindStep::Previous,
+        repeat: 2,
+        thorough: true,
+        current: Some(3),
+    };
+    let end = EndFindRequest {
+        query: "needle".to_owned(),
+        match_case: true,
+        restore_selection: None,
+        caret_left: true,
+    };
+
+    for command in [
+        BrowserCommand::BeginFind { request_id: 1 },
+        BrowserCommand::Find(request.clone()),
+        BrowserCommand::EndFind(end.clone()),
+    ] {
+        assert_eq!(dispatch_command(&mut web_view, command), Ok(()));
+    }
+
+    assert_eq!(
+        web_view.calls,
+        vec![
+            FakeCall::BeginFind(1),
+            FakeCall::Find(request),
+            FakeCall::EndFind(end),
+        ]
+    );
 }

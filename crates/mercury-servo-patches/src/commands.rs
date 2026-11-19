@@ -21,6 +21,9 @@ pub const MARKER: &str = "Mercury:";
 pub const PATCHES_DIR: &str = "third_party/patches";
 const THIRD_PARTY: &str = "third_party";
 const CONFLICT_MARKERS: [&str; 3] = ["<<<<<<<", "|||||||", ">>>>>>>"];
+/// Lines a patch to a changed file must not remove: the licences of vendored
+/// crates (MPL-2.0, MIT, Apache-2.0, Slint's) require notices to stay intact.
+const LICENCE_NOTICES: [&str; 3] = ["SPDX-License-Identifier", "Copyright", "©"];
 
 /// A repository checkout and how to reach the outside world from it.
 pub struct Repo {
@@ -478,6 +481,8 @@ impl Repo {
             repository: source.repository,
             commit: source.commit,
             path: source.path,
+            license: source.license.clone(),
+            license_note: None,
             unmarked: Vec::new(),
         };
         manifest.upsert(entry.clone());
@@ -614,6 +619,14 @@ impl Repo {
                 entry.version
             ));
         }
+        let declared = source_of(&pristine, name)?.license;
+        if declared != entry.license {
+            problems.push(format!(
+                "{MANIFEST_PATH}: {name} records the licence {}, but the crate declares {}",
+                entry.license.as_deref().unwrap_or("none"),
+                declared.as_deref().unwrap_or("none")
+            ));
+        }
         let patch_path = self.patch_file(name);
         let Ok(patch_bytes) = fs::read(&patch_path) else {
             problems.push(format!(
@@ -684,6 +697,21 @@ impl Repo {
                     "{name}/{}: changed without a `{MARKER}` comment in the changed lines",
                     change.path
                 ));
+            }
+            let kept: BTreeSet<&str> = added.iter().map(|line| line.trim()).collect();
+            for removed in change.removed_lines()? {
+                let removed = String::from_utf8_lossy(&removed);
+                let removed = removed.trim();
+                if LICENCE_NOTICES
+                    .iter()
+                    .any(|notice| removed.contains(notice))
+                    && !kept.contains(removed)
+                {
+                    problems.push(format!(
+                        "{name}/{}: removes or alters the licence notice {removed:?}; vendored licences require notices to stay intact",
+                        change.path
+                    ));
+                }
             }
         }
         Ok(problems)
@@ -866,6 +894,7 @@ impl Repo {
                 repository: source.repository.or(entry.repository.clone()),
                 commit: source.commit,
                 path: source.path,
+                license: source.license.clone(),
                 ..entry.clone()
             });
 
@@ -873,6 +902,16 @@ impl Repo {
                 out,
                 &format!("{} {} -> {version}\n", entry.name, entry.version),
             )?;
+            if source.license != entry.license {
+                write_out(
+                    out,
+                    &format!(
+                        "  LICENCE CHANGED: {} -> {}; review license_note in {MANIFEST_PATH} and deny.toml\n",
+                        entry.license.as_deref().unwrap_or("none"),
+                        source.license.as_deref().unwrap_or("none")
+                    ),
+                )?;
+            }
             if files.is_empty() {
                 write_out(out, "  no Mercury changes\n")?;
             }

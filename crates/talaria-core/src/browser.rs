@@ -5,7 +5,13 @@ use crate::{
     ClipboardCommand, ColorScheme, ControlAnswer, ControlId, ControlRect, ControlRequest,
     DEFAULT_ZOOM_PERCENT, ImeInput, KeyboardInput, PageIcon, PointerCursor,
 };
+use crate::{EndFindRequest, FindOutcome, FindRequest, FindSelection, FindState};
 use crate::{PageRequest, PageRequestAnswer, PageRequestId};
+// media session
+use crate::{
+    MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
+    TabAudio,
+};
 
 const DEFAULT_PAGE_TITLE: &str = "New Tab";
 const INITIAL_ADDRESS: &str = "";
@@ -152,6 +158,28 @@ pub enum BrowserCommand {
     // menus
     /// Cut, Copy or Paste chosen in the Edit menu while the page has focus.
     Clipboard(ClipboardCommand),
+    // media session
+    /// Mutes (or unmutes) the page's media elements from script; the page can undo it.
+    SetAudioMuted {
+        muted: bool,
+    },
+    /// `through_engine`: Servo's single media session is known to be this tab's, so the action
+    /// goes through Servo (page handlers, next/previous); otherwise play and pause are done from
+    /// script and other actions are dropped.
+    MediaSessionAction {
+        action: MediaSessionAction,
+        through_engine: bool,
+    },
+    /// Looks into the page's document; the engine answers with `BrowserEvent::MediaProbed`.
+    ProbeMedia,
+    // find
+    /// The find bar opened: read the page's selection (answered by `FindSelectionRead`).
+    BeginFind {
+        request_id: u64,
+    },
+    /// Search the page and select a match (answered by `FindResult`).
+    Find(FindRequest),
+    EndFind(EndFindRequest),
 }
 
 impl BrowserCommand {
@@ -222,6 +250,28 @@ pub enum BrowserEvent {
     FullscreenChanged {
         fullscreen: bool,
     },
+    // downloads
+    /// The top-level page at `url` is the engine's own "Unknown content type" page: the
+    /// response was of a type it cannot show (`mime_type`). `posted` says whether the request
+    /// that fetched it was not a GET (a form, which cannot be fetched again); `None` when that
+    /// request is not known. `referrer` is the page that request came from, if the engine sent
+    /// one.
+    DownloadOffered {
+        url: String,
+        mime_type: String,
+        posted: Option<bool>,
+        referrer: Option<String>,
+    },
+    /// A top-level request is starting: a new navigation, or (`redirect`) the next hop of one.
+    /// `from` is the page the tab showed when it started, if any.
+    /// `user_started`: the embedder decided, synchronously as the request started, that the
+    /// user started this navigation (a gesture in the tab, or the address they typed).
+    DocumentRequestStarted {
+        url: String,
+        redirect: bool,
+        from: Option<String>,
+        user_started: bool,
+    },
     // tabs opened and closed by pages
     /// The page closed its own tab (`window.close()`).
     CloseRequested,
@@ -241,6 +291,11 @@ pub enum BrowserEvent {
     ControlHidden {
         id: ControlId,
     },
+    // openurl
+    /// The page asked for a URL the engine cannot load (`mailto:`, `tel:`, an app's scheme) and
+    /// the engine was refused. The controller queues it for
+    /// `BrowserController::take_external_link_requests`.
+    ExternalLinkRequested(crate::ExternalLinkRequest),
     // dialogs
     /// The page asks the user something; see `page_request`.
     PageRequested(PageRequest),
@@ -262,6 +317,53 @@ pub enum BrowserEvent {
         url: String,
         title: Option<String>,
     },
+    // media session
+    MediaPlaybackChanged {
+        state: MediaPlaybackState,
+    },
+    MediaMetadataChanged {
+        metadata: MediaMetadata,
+    },
+    MediaPositionChanged {
+        position: MediaPosition,
+    },
+    MediaProbed {
+        probe: MediaProbe,
+    },
+    // find
+    FindResult {
+        request_id: u64,
+        outcome: FindOutcome,
+    },
+    /// The answer to `BeginFind`; `None` if the page has no selection or could not be read.
+    FindSelectionRead {
+        request_id: u64,
+        selection: Option<FindSelection>,
+    },
+}
+
+/// A page the engine could not show, offered to the browser as a download.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DownloadOffer {
+    pub url: String,
+    pub mime_type: String,
+    pub posted: Option<bool>,
+    pub referrer: Option<String>,
+}
+
+/// What the downloads work learns from a tab's engine events, in order.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DownloadSignal {
+    /// A top-level request started (`redirect`: the next hop of the same navigation).
+    /// `from` is the page the tab showed when it started.
+    RequestStarted {
+        url: String,
+        redirect: bool,
+        from: Option<String>,
+        user_started: bool,
+    },
+    /// A page the engine could not show.
+    Offered(DownloadOffer),
 }
 
 impl BrowserEvent {
@@ -289,6 +391,12 @@ pub struct BrowserState {
     // controls
     pending_control: Option<(ControlId, ControlRequest)>,
     input_method: Option<(ControlId, ControlRect)>,
+    // media session
+    media: MediaState,
+    /// The user's choice; kept across navigations in the tab.
+    audio_muted: bool,
+    // find
+    find: FindState,
 }
 
 impl Default for BrowserState {
@@ -306,6 +414,11 @@ impl Default for BrowserState {
             fullscreen: false,
             pending_control: None,
             input_method: None,
+            // media session
+            media: MediaState::default(),
+            audio_muted: false,
+            // find
+            find: FindState::default(),
         }
     }
 }
@@ -347,6 +460,15 @@ impl BrowserState {
         self.page_title = title;
     }
 
+    // find
+    pub const fn find(&self) -> &FindState {
+        &self.find
+    }
+
+    pub(crate) fn find_mut(&mut self) -> &mut FindState {
+        &mut self.find
+    }
+
     pub(crate) fn set_zoom_percent(&mut self, percent: u16) {
         self.zoom_percent = percent;
     }
@@ -372,7 +494,47 @@ impl BrowserState {
         self.pending_control.take().map(|(id, _)| id)
     }
 
+    // media session
+    pub fn media(&self) -> &MediaState {
+        &self.media
+    }
+    pub fn is_audio_muted(&self) -> bool {
+        self.audio_muted
+    }
+    pub fn audio_indicator(&self) -> TabAudio {
+        if self.audio_muted {
+            TabAudio::Muted
+        } else if self.media.is_audible() {
+            TabAudio::Playing
+        } else {
+            TabAudio::Silent
+        }
+    }
+    pub(crate) fn set_audio_muted(&mut self, muted: bool) {
+        self.audio_muted = muted;
+    }
+    /// The tab's web view is about to be replaced by a new one.
+    pub(crate) fn forget_media(&mut self) {
+        self.media = MediaState::default();
+    }
+    /// Media belongs to a document: it is forgotten when a new document starts, and when the
+    /// page fails or crashes. Load states and address changes alone keep it (a page can send
+    /// `HeadParsed` by inserting a `<body>`; `pushState` changes the address).
+    fn forget_media_of_a_replaced_document(&mut self, event: &BrowserEvent) {
+        if matches!(
+            event,
+            BrowserEvent::PageLoadStarted
+                | BrowserEvent::LoadStateChanged {
+                    state: LoadState::Failed { .. }
+                }
+        ) {
+            self.forget_media();
+        }
+    }
+
     pub fn apply(&mut self, event: BrowserEvent) {
+        // media session
+        self.forget_media_of_a_replaced_document(&event);
         match event {
             BrowserEvent::AddressChanged { url } => {
                 // dialogs: Servo writes credentials typed into a sign-in into the request URL,
@@ -385,6 +547,8 @@ impl BrowserState {
                     if !same_document(&self.url, &url) {
                         self.page_title = placeholder_title(&url);
                         self.page_icon = None;
+                        // find
+                        self.find.page_changed();
                     }
                     self.url = url;
                 }
@@ -407,6 +571,12 @@ impl BrowserState {
                     // The engine dropped every request of the crashed page.
                     self.pending_control = None;
                     self.input_method = None;
+                    // find
+                    self.find.page_changed();
+                }
+                // find: a load starting (a reload too) replaces the document
+                if state == LoadState::Loading && self.load_state != LoadState::Loading {
+                    self.find.page_changed();
                 }
                 self.load_state = state;
             }
@@ -426,6 +596,8 @@ impl BrowserState {
             BrowserEvent::FullscreenChanged { fullscreen } => {
                 self.fullscreen = fullscreen;
             }
+            // downloads: queued by the controller, not shown.
+            BrowserEvent::DownloadOffered { .. } | BrowserEvent::DocumentRequestStarted { .. } => {}
             // Closing is the controller's business; the tab's own state does not change.
             BrowserEvent::CloseRequested => {}
             BrowserEvent::ControlShown { id, request } => {
@@ -449,10 +621,26 @@ impl BrowserState {
                     self.input_method = None;
                 }
             }
+            // openurl: not part of what the tab shows; see `BrowserController::handle_event`.
+            BrowserEvent::ExternalLinkRequested(_) => {}
             // dialogs: kept by the tab's page requests, not here.
             BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
             // history: read by the controller's visit tracker, not shown.
             BrowserEvent::PageCommitted { .. } | BrowserEvent::PageTitleAt { .. } => {}
+            // media session
+            BrowserEvent::MediaPlaybackChanged { state } => self.media.set_playback(state),
+            BrowserEvent::MediaMetadataChanged { metadata } => self.media.set_metadata(metadata),
+            BrowserEvent::MediaPositionChanged { position } => self.media.set_position(position),
+            BrowserEvent::MediaProbed { probe } => self.media.set_probe(probe),
+            // find
+            BrowserEvent::FindResult {
+                request_id,
+                outcome,
+            } => self.find.apply_result(request_id, outcome),
+            BrowserEvent::FindSelectionRead {
+                request_id,
+                selection,
+            } => self.find.apply_selection(request_id, selection),
         }
     }
 }

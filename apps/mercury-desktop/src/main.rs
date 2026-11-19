@@ -26,7 +26,9 @@ mod cli;
 // controls
 mod controls;
 mod crash_handler;
+mod downloads; // downloads-ui lane
 mod engine;
+mod find;
 mod geolocation;
 mod history_ui;
 mod import_ui; // import-ui lane
@@ -40,7 +42,10 @@ mod macos_terminate;
 mod media_buffers;
 #[cfg(target_os = "macos")]
 mod media_isolation;
+mod media_session;
 mod menus;
+// openurl
+mod openurl;
 mod page_requests; // dialogs
 mod panic_hook;
 // tabs opened and closed by pages
@@ -102,7 +107,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         )
     });
     let options = match parsed {
-        CliOutcome::Run(options) => options,
+        CliOutcome::Run(options) => *options,
         CliOutcome::PrintAndExit { text, code } => {
             if code == 0 {
                 println!("{text}");
@@ -122,6 +127,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     ) {
         Ok(profile) => profile,
         Err(ProfileInUse { root }) => {
+            // openurl: the running browser opens this launch's addresses.
+            if openurl::hand_over_to_running_browser(&root, &options.urls) {
+                return Ok(ExitCode::SUCCESS);
+            }
             eprintln!(
                 "mercury-browser: the profile at {} is in use by another Mercury Browser; \
                  close it or choose another --profile-dir",
@@ -139,6 +148,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     select_hardware_accelerated_backend(options.is_automated())?;
     #[cfg(target_os = "macos")]
     macos_terminate::end_the_run_in_order_on_terminate_requests();
+    // openurl: links and files from other apps, from here on; queued until the window exists.
+    openurl::receive_from_other_apps(options.is_automated());
 
     let window = MainWindow::new()?;
     if let Some((width, height)) = options.window_size {
@@ -179,6 +190,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     )?;
     // settings-ui
     settings::connect(&settings, &window, &controller);
+    // openurl
+    openurl::attach(&window, Rc::clone(&controller), options.is_automated());
+    let handoff = openurl::listen_for_second_launches(&profile);
     sync_ui(&window, &controller.borrow());
     connect_ui_callbacks(
         &window,
@@ -203,7 +217,11 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
     );
-    connect_native_keyboard_input(&window, Rc::clone(&controller), web_view_focused);
+    connect_native_keyboard_input(
+        &window,
+        Rc::clone(&controller),
+        Rc::clone(&web_view_focused),
+    );
     #[cfg(feature = "diagnostics")]
     if options.import_from.is_some() {
         import_ui::run_diagnostic_import(options.import_snapshot.clone()); // import-ui lane
@@ -213,9 +231,35 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     tab_strip::connect(&window, Rc::clone(&controller)); // tabs-plus
     quit::quit_when_the_window_is_closed(&window);
     bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
+    // media-session lane: system Now Playing and power assertions only in interactive launches.
+    media_session::install(
+        &window,
+        Rc::clone(&controller),
+        media_session::uses_system_services(&options),
+    );
+    downloads::start(
+        &window,
+        Rc::clone(&controller),
+        web_view_focused,
+        downloads::DownloadOptions {
+            folder: options.download_dir.clone(),
+            url: options.download_url.clone(),
+            offer_answer: options.download_offer_answer,
+            automated: options.is_automated(),
+            profile_root: profile.paths.as_ref().map(|paths| paths.root.clone()),
+        },
+    ); // downloads-ui lane
+
+    // find
+    find::connect_find_bar(&window, Rc::clone(&controller));
 
     let mut timers = Vec::new();
     timers.extend(session_timer); // session
+    // find: the `--find` diagnostic's timer stops with the others, before the engine shuts down.
+    #[cfg(feature = "diagnostics")]
+    timers.extend(options.find.map(|diagnostic| {
+        find::start_find_diagnostic(&window, Rc::clone(&controller), diagnostic)
+    }));
     let screenshot_result = options.screenshot.map(|screenshot| {
         let result = Rc::new(Cell::new(ScreenshotResult::Pending));
         timers.push(start_screenshot(
@@ -246,6 +290,9 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         settings,
     });
     let run_result = shown.and_then(|()| slint::run_event_loop());
+    // openurl: no more second launches; the socket goes now (a quit signal ends the process
+    // without running destructors).
+    drop(handoff);
 
     // If the session ended (macOS log-out), the terminate handler has already ended the run
     // and AppKit exits; otherwise this ends it.

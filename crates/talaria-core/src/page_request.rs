@@ -34,6 +34,11 @@ pub const MAX_MESSAGE_CHARS: usize = 10_000;
 /// Longest default value of a `prompt()` kept, in characters.
 pub const MAX_PROMPT_VALUE_CHARS: usize = 2_000;
 
+// openurl
+/// Longest address kept in a confirmation to open another app; the rest is cut off.
+pub const MAX_EXTERNAL_URL_CHARS: usize = 2_000;
+const MAX_APP_NAME_CHARS: usize = 100;
+
 /// Identifies one request; unique for the life of the browser process.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord)]
 pub struct PageRequestId(u64);
@@ -135,6 +140,18 @@ pub enum PageRequestKind {
         for_proxy: bool,
     },
     Permission(PagePermission),
+    // openurl
+    /// Open a link the engine cannot load (`mailto:`, `tel:`, an app's scheme) in another app.
+    /// Asked only after a user gesture in the tab. `url` is page-supplied (shown as the sheet's
+    /// detail, sanitised); `app` is the system's handler, when known; `always_label` offers
+    /// "Always allow <site> to open <scheme> links" for the session, when the site can be
+    /// remembered.
+    OpenExternally {
+        url: String,
+        scheme: String,
+        app: Option<String>,
+        always_label: Option<String>,
+    },
 }
 
 impl PageRequestKind {
@@ -165,6 +182,18 @@ impl PageRequestKind {
             } => Self::Prompt {
                 message: sanitize_page_text(&message, true, MAX_MESSAGE_CHARS),
                 default_value: sanitize_page_text(&default_value, false, MAX_PROMPT_VALUE_CHARS),
+            },
+            // openurl
+            Self::OpenExternally {
+                url,
+                scheme,
+                app,
+                always_label,
+            } => Self::OpenExternally {
+                url: sanitize_page_text(&url, false, MAX_EXTERNAL_URL_CHARS),
+                scheme,
+                app: app.map(|app| sanitize_page_text(&app, false, MAX_APP_NAME_CHARS)),
+                always_label,
             },
             other => other,
         }

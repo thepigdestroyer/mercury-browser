@@ -1,0 +1,208 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The find bar, shown as its own row between the toolbar and the page: it is part of the browser's
+// chrome, the page cannot draw over it, and it never covers the match it scrolls into view.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+component FindButton inherits Rectangle {
+    in property <string> label;
+    in property <string> tooltip;
+    in property <bool> enabled: true;
+    in property <bool> checked: false;
+    in property <length> font-size: 15px;
+    callback clicked;
+
+    width: 30px;
+    height: 28px;
+    border-radius: 6px;
+    background: root.checked
+        ? ChromePalette.item-selected
+        : touch.pressed && root.enabled
+            ? ChromePalette.button-pressed
+            : touch.has-hover && root.enabled ? ChromePalette.button-hover : transparent;
+    opacity: root.enabled ? 1 : 0.35;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+    accessible-checked: root.checked;
+
+    Text {
+        text: root.label;
+        // A checked button is filled with the selection colour, so its label takes the selection's
+        // text colour (the hover label colour is an accent and vanishes on that fill).
+        color: root.checked
+            ? ChromePalette.item-selected-text
+            : touch.has-hover && root.enabled
+                ? ChromePalette.button-label-hover
+                : ChromePalette.button-label;
+        font-size: root.font-size;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+export component FindBar inherits Rectangle {
+    // Whether the bar is shown; hiding it also takes focus away from its field.
+    in property <bool> shown: false;
+    in-out property <string> query;
+    // "3 of 7", "No matches", or empty before a search.
+    in property <string> status;
+    in property <bool> no-matches: false;
+    in property <bool> match-case: false;
+    out property <bool> field-focused: field.has-focus;
+
+    callback edited(string);
+    callback next();
+    callback previous();
+    callback close();
+    callback toggle-match-case();
+
+    // Does nothing while the bar is hidden, so an invisible field never takes the keys.
+    public function focus-field() {
+        if root.shown {
+            field.focus();
+            field.select-all();
+        }
+    }
+
+    public function select-all() {
+        field.select-all();
+    }
+
+    changed shown => {
+        if !self.shown {
+            field.clear-focus();
+        }
+    }
+
+    background: ChromePalette.toolbar-background;
+    visible: root.shown;
+
+    HorizontalLayout {
+        padding-left: 14px;
+        padding-right: 14px;
+        padding-top: 6px;
+        padding-bottom: 7px;
+        spacing: 6px;
+
+        Rectangle {
+            width: 280px;
+            border-radius: 7px;
+            border-width: 1px;
+            border-color: root.no-matches && root.query != ""
+                ? ChromePalette.danger
+                : field.has-focus ? ChromePalette.accent : ChromePalette.field-border;
+            background: ChromePalette.field-background;
+
+            if field.text == "": Text {
+                x: 10px;
+                width: parent.width - 20px;
+                height: parent.height;
+                text: "Find in page";
+                color: ChromePalette.placeholder;
+                font-size: 13px;
+                vertical-alignment: center;
+            }
+
+            field := TextInput {
+                x: 10px;
+                width: parent.width - 20px;
+                height: parent.height;
+                text <=> root.query;
+                color: ChromePalette.text;
+                font-size: 13px;
+                vertical-alignment: center;
+                single-line: true;
+                accessible-label: "Find in page";
+
+                edited => {
+                    root.edited(self.text);
+                }
+                // Return finds the next match; Shift+Return the previous one.
+                accepted => {
+                    root.next();
+                }
+                key-pressed(event) => {
+                    if event.text == Key.Return && event.modifiers.shift {
+                        root.previous();
+                        return accept;
+                    }
+                    if event.text == Key.Escape {
+                        root.close();
+                        return accept;
+                    }
+                    reject
+                }
+            }
+        }
+
+        Text {
+            min-width: 76px;
+            text: root.status;
+            color: ChromePalette.button-label;
+            font-size: 12px;
+            vertical-alignment: center;
+            horizontal-alignment: center;
+        }
+
+        FindButton {
+            label: "‹";
+            font-size: 18px;
+            tooltip: "Previous match";
+            enabled: root.query != "";
+            clicked => {
+                root.previous();
+            }
+        }
+
+        FindButton {
+            label: "›";
+            font-size: 18px;
+            tooltip: "Next match";
+            enabled: root.query != "";
+            clicked => {
+                root.next();
+            }
+        }
+
+        FindButton {
+            width: 34px;
+            label: "Aa";
+            font-size: 13px;
+            tooltip: "Match case";
+            checked: root.match-case;
+            clicked => {
+                root.toggle-match-case();
+            }
+        }
+
+        Rectangle {
+            horizontal-stretch: 1;
+        }
+
+        FindButton {
+            label: "×";
+            font-size: 17px;
+            tooltip: "Close find bar";
+            clicked => {
+                root.close();
+            }
+        }
+    }
+
+    Rectangle {
+        x: 0px;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: ChromePalette.toolbar-divider;
+    }
+}

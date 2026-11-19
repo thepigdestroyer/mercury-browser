@@ -17,6 +17,8 @@ use crate::{
 };
 
 const NO_SEARCH: &str = "no search engine is set";
+// openurl
+use crate::ExternalLinkRequest;
 
 /// What `close_tab` did.
 #[must_use]
@@ -35,6 +37,8 @@ pub struct BrowserController {
     next_tab_id: u64,
     command_queue: VecDeque<TabCommand>,
     color_scheme: ColorScheme,
+    /// downloads: top-level requests and pages offered as downloads, oldest first.
+    download_signals: Vec<(TabId, crate::DownloadSignal)>,
     // settings
     /// The system's scheme, as last reported; `color_scheme` is what pages see.
     system_color_scheme: ColorScheme,
@@ -44,6 +48,8 @@ pub struct BrowserController {
     // dialogs
     permission_decisions: Box<dyn PermissionDecisions>,
     visits: VisitTracker,
+    // openurl
+    external_link_requests: Vec<(TabId, ExternalLinkRequest)>,
 }
 
 impl BrowserController {
@@ -56,12 +62,14 @@ impl BrowserController {
             next_tab_id: 2,
             command_queue: VecDeque::new(),
             color_scheme: ColorScheme::default(),
+            download_signals: Vec::new(),
             system_color_scheme: ColorScheme::default(),
             forced_color_scheme: None,
             default_zoom_percent: DEFAULT_ZOOM_PERCENT,
             search: None,
             permission_decisions: Box::new(SessionPermissionDecisions::default()),
             visits: VisitTracker::default(),
+            external_link_requests: Vec::new(),
         }
     }
 
@@ -272,6 +280,9 @@ impl BrowserController {
         self.visits.forget_tab(tab_id);
         self.command_queue
             .retain(|queued| queued.tab_id() != tab_id);
+        // openurl
+        self.external_link_requests
+            .retain(|(request_tab_id, _)| *request_tab_id != tab_id);
 
         if was_active {
             let replacement_index = index.saturating_sub(1).min(self.tabs.len() - 1);
@@ -418,6 +429,38 @@ impl BrowserController {
         if self.tabs.iter().any(|tab| tab.id() == tab_id) {
             self.visits.observe(tab_id, &event);
         }
+        // downloads
+        if self.tabs.iter().any(|tab| tab.id() == tab_id) {
+            let signal = match &event {
+                BrowserEvent::DownloadOffered {
+                    url,
+                    mime_type,
+                    posted,
+                    referrer,
+                } => Some(crate::DownloadSignal::Offered(crate::DownloadOffer {
+                    url: url.clone(),
+                    mime_type: mime_type.clone(),
+                    posted: *posted,
+                    referrer: referrer.clone(),
+                })),
+                BrowserEvent::DocumentRequestStarted {
+                    url,
+                    redirect,
+                    from,
+                    user_started,
+                } => Some(crate::DownloadSignal::RequestStarted {
+                    url: url.clone(),
+                    redirect: *redirect,
+                    from: from.clone(),
+                    user_started: *user_started,
+                }),
+                _ => None,
+            };
+            if let Some(signal) = signal {
+                self.download_signals.push((tab_id, signal));
+                return true;
+            }
+        }
         // dialogs
         self.observe_event_for_page_requests(tab_id, &event);
         // controls
@@ -428,11 +471,27 @@ impl BrowserController {
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
         };
+        // openurl: queued, not shown; nothing in the window changes.
+        if let BrowserEvent::ExternalLinkRequested(request) = event {
+            self.external_link_requests.push((tab_id, request));
+            return false;
+        }
 
         if event.shows_engine_ready() {
             tab.mark_engine_ready();
         }
+        // media session
+        let reapply_mute = tab.state().is_audio_muted()
+            && (reaches_a_new_document(&event) || shows_unmuted_media(&event));
         tab.state_mut().apply(event);
+        // find: an answer or a selection read can ask for the next search
+        let find_follow_up = tab.state_mut().find_mut().take_follow_up();
+        if reapply_mute {
+            self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted: true });
+        }
+        if let Some(command) = find_follow_up {
+            self.queue_command_for(tab_id, command);
+        }
         true
     }
 
@@ -520,6 +579,12 @@ impl BrowserController {
         self.tabs
             .iter()
             .any(|tab| tab.id() == tab_id && tab.is_load_deferred())
+    }
+
+    /// downloads: the top-level requests and the pages offered as downloads since the last
+    /// call, oldest first.
+    pub fn take_download_signals(&mut self) -> Vec<(TabId, crate::DownloadSignal)> {
+        std::mem::take(&mut self.download_signals)
     }
 
     /// Reserves a tab for a web view the engine is creating itself. The tab is inserted
@@ -615,6 +680,85 @@ impl BrowserController {
         }
         self.dismiss_control(tab_id);
         Some(event)
+    }
+
+    // media session
+    /// Flips the tab's mute choice and tells its page. Returns false if there is no such tab.
+    pub fn toggle_audio_muted(&mut self, tab_id: TabId) -> bool {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return false;
+        };
+        let muted = !tab.state().is_audio_muted();
+        tab.state_mut().set_audio_muted(muted);
+        self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted })
+    }
+
+    // openurl
+    /// The pages' requests to open links in other apps, oldest first, each returned once.
+    pub fn take_external_link_requests(&mut self) -> Vec<(TabId, ExternalLinkRequest)> {
+        std::mem::take(&mut self.external_link_requests)
+    }
+
+    // find
+    /// Opens the active tab's find bar; false if it was already open.
+    pub fn open_find(&mut self) -> bool {
+        let command = self.active_find_mut().open();
+        let opened = command.is_some();
+        self.queue_find_command(command);
+        opened
+    }
+
+    /// Records the text in the active tab's find field; `run_due_find` searches it.
+    pub fn set_find_query(&mut self, query: &str) {
+        self.active_find_mut().set_query(query);
+    }
+
+    /// Searches the active tab's query if it changed since its last search (the end of the
+    /// typing debounce).
+    pub fn run_due_find(&mut self) {
+        let command = self.active_find_mut().due_search();
+        self.queue_find_command(command);
+    }
+
+    pub fn find_next(&mut self) {
+        let command = self.active_find_mut().step(true);
+        self.queue_find_command(command);
+    }
+
+    pub fn find_previous(&mut self) {
+        let command = self.active_find_mut().step(false);
+        self.queue_find_command(command);
+    }
+
+    pub fn toggle_find_match_case(&mut self) {
+        let command = self.active_find_mut().toggle_match_case();
+        self.queue_find_command(command);
+    }
+
+    /// The page has not answered find request `request_id` in time (a desktop timer decides).
+    pub fn find_answer_overdue(&mut self, tab_id: TabId, request_id: u64) {
+        if let Some(tab) = self.tab_mut(tab_id) {
+            tab.state_mut().find_mut().answer_overdue(request_id);
+        }
+    }
+
+    pub fn close_find(&mut self) {
+        let command = self.active_find_mut().close();
+        self.queue_find_command(command);
+    }
+
+    fn active_find_mut(&mut self) -> &mut crate::FindState {
+        let tab_id = self.active_tab_id;
+        self.tab_mut(tab_id)
+            .expect("the controller always owns an active tab")
+            .state_mut()
+            .find_mut()
+    }
+
+    fn queue_find_command(&mut self, command: Option<BrowserCommand>) {
+        if let Some(command) = command {
+            self.queue_command(command);
+        }
     }
 
     fn open_blank_tab(&mut self, activation: TabActivation) -> TabId {
@@ -848,6 +992,29 @@ impl BrowserController {
             );
         }
     }
+}
+
+// media session
+/// Mute is applied by script, so each new document of a muted tab needs it again: when it
+/// commits, when it has loaded, and whenever media starts playing (also catching elements the
+/// page created or un-muted since).
+fn reaches_a_new_document(event: &BrowserEvent) -> bool {
+    matches!(
+        event,
+        BrowserEvent::AddressChanged { .. }
+            | BrowserEvent::PageLoadStarted
+            | BrowserEvent::LoadStateChanged {
+                state: LoadState::Loaded
+            }
+            | BrowserEvent::MediaPlaybackChanged {
+                state: crate::MediaPlaybackState::Playing
+            }
+    )
+}
+
+/// The page un-muted media of a muted tab (or added media the mute has not reached yet).
+fn shows_unmuted_media(event: &BrowserEvent) -> bool {
+    matches!(event, BrowserEvent::MediaProbed { probe } if probe.audible > 0)
 }
 
 fn set_tab_initial_url(tab: &mut Tab, url: String) -> bool {

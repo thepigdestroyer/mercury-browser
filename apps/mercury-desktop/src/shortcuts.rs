@@ -46,6 +46,11 @@ pub(crate) enum ShortcutAction {
     Quit,
     /// Escape while the active tab's page is fullscreen.
     ExitFullscreen,
+    // downloads-ui lane
+    /// Save page as… (the page's HTML only).
+    SavePage,
+    /// Opens or closes the list of downloads.
+    ShowDownloads,
     // settings-ui
     ShowSettings,
     // tabs-plus
@@ -76,6 +81,13 @@ pub(crate) enum ShortcutAction {
     /// Restores the last run's tabs when they were not restored at start-up. No default shortcut;
     /// History ▸ "Restore Previous Session".
     RestorePreviousSession,
+    // media-session lane
+    /// Cmd+Shift+M on macOS (Cmd+M stays Minimize), Ctrl+M elsewhere (as Firefox and Edge).
+    ToggleMute,
+    // find
+    Find,
+    FindNext,
+    FindPrevious,
 }
 
 impl ShortcutAction {
@@ -84,7 +96,13 @@ impl ShortcutAction {
     pub(crate) const fn repeats(self) -> bool {
         matches!(
             self,
-            Self::ZoomIn | Self::ZoomOut | Self::NextTab | Self::PreviousTab
+            Self::ZoomIn
+                | Self::ZoomOut
+                | Self::NextTab
+                | Self::PreviousTab
+                // find
+                | Self::FindNext
+                | Self::FindPrevious
         )
     }
 }
@@ -209,10 +227,18 @@ pub(crate) fn shortcut_action(
             (Some("-"), false) => Some(ZoomOut),
             (Some("0"), false) => Some(ZoomReset),
             (Some("9"), false) => Some(SelectLastTab),
+            (Some("s"), false) => Some(SavePage), // downloads-ui lane
             // settings-ui
             (Some(","), false) => Some(ShowSettings),
             // tabs-plus
             (Some("a"), true) => Some(SearchTabs),
+            // media-session lane
+            (Some("m"), true) if platform == Platform::MacOs => Some(ToggleMute),
+            (Some("m"), false) if platform == Platform::Other => Some(ToggleMute),
+            // find
+            (Some("f"), false) => Some(Find),
+            (Some("g"), false) => Some(FindNext),
+            (Some("g"), true) => Some(FindPrevious),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -224,6 +250,8 @@ pub(crate) fn shortcut_action(
         }
 
         return match (platform, key, character, shift) {
+            (Platform::MacOs, _, Some("j"), true) => Some(ShowDownloads), // downloads-ui lane
+            (Platform::Other, _, Some("j"), false) => Some(ShowDownloads), // downloads-ui lane
             (Platform::MacOs, _, Some("["), false) => Some(Back),
             (Platform::MacOs, _, Some("]"), false) => Some(Forward),
             (Platform::MacOs, _, Some("[" | "{"), true) => Some(PreviousTab),
@@ -242,6 +270,11 @@ pub(crate) fn shortcut_action(
             (Platform::Other, Key::Named(NamedKey::Delete), _, true) => Some(ClearBrowsingData),
             _ => None,
         };
+    }
+
+    // find: F3 / Shift+F3 outside macOS
+    if platform == Platform::Other && !primary && !alt && matches!(key, Key::Named(NamedKey::F3)) {
+        return Some(if shift { FindPrevious } else { FindNext });
     }
 
     if platform != Platform::Other || primary || shift {
@@ -408,13 +441,15 @@ pub(crate) fn run_shortcut(
             sync_ui(window, &controller.borrow());
         }
         ShortcutAction::Quit => {
-            if let Err(error) = slint::quit_event_loop() {
-                log::warn!("could not quit: {error}");
-            }
+            // downloads-ui lane: asks first while downloads are running.
+            crate::quit::request_quit_asking();
         }
         ShortcutAction::ExitFullscreen => controller
             .borrow_mut()
             .queue_command(BrowserCommand::ExitFullscreen),
+        // downloads-ui lane
+        ShortcutAction::SavePage => crate::downloads::save_page(controller),
+        ShortcutAction::ShowDownloads => crate::downloads::show_list(),
         // settings-ui
         ShortcutAction::ShowSettings => window.invoke_show_settings(),
         // tabs-plus
@@ -444,6 +479,19 @@ pub(crate) fn run_shortcut(
         ShortcutAction::RestorePreviousSession => {
             crate::session::restore_previous_session(window, controller)
         }
+        // media-session lane
+        ShortcutAction::ToggleMute => {
+            let active_tab_id = controller.borrow().active_tab_id();
+            crate::media_session::toggle_mute(window, controller, active_tab_id);
+        }
+        // find
+        ShortcutAction::Find => crate::find::open_find_bar(window, controller, web_view_focused),
+        ShortcutAction::FindNext | ShortcutAction::FindPrevious => crate::find::step_find(
+            window,
+            controller,
+            web_view_focused,
+            action == ShortcutAction::FindNext,
+        ),
     }
 }
 
@@ -714,6 +762,8 @@ mod tests {
             (ZoomReset, false),
             (Quit, false),
             (ExitFullscreen, false),
+            (SavePage, false),      // downloads-ui lane
+            (ShowDownloads, false), // downloads-ui lane
             (ShowSettings, false),
             (SearchTabs, false),
             (MoveTabLeft, false),
@@ -727,6 +777,10 @@ mod tests {
             (ReopenClosedTab, false),
             (DuplicateTab, false),
             (RestorePreviousSession, false),
+            (ToggleMute, false),
+            (Find, false),
+            (FindNext, true),
+            (FindPrevious, true),
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
@@ -758,7 +812,12 @@ mod tests {
                 | SearchTabs
                 | MoveTabLeft
                 | MoveTabRight
-                | ShowBrowserMenu => {}
+                | ShowBrowserMenu
+                | ToggleMute
+                | Find
+                | FindNext
+                | FindPrevious => {}
+                SavePage | ShowDownloads => {} // downloads-ui lane
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -782,6 +841,28 @@ mod tests {
         );
         assert_eq!(mac(named(NamedKey::Backspace), CMD), None);
         assert_eq!(other(named(NamedKey::Delete), CTRL), None);
+    }
+
+    // find
+    #[test]
+    fn find_on_macos() {
+        assert_eq!(mac(character("f"), CMD), Some(Find));
+        assert_eq!(mac(character("g"), CMD), Some(FindNext));
+        assert_eq!(mac(character("g"), CMD | SHIFT), Some(FindPrevious));
+        // macOS reports the shifted character while Cmd is held.
+        assert_eq!(mac(character("G"), CMD | SHIFT), Some(FindPrevious));
+        assert_eq!(mac(character("f"), CTRL), None);
+        assert_eq!(mac(named(NamedKey::F3), NONE), None);
+    }
+
+    #[test]
+    fn find_elsewhere() {
+        assert_eq!(other(character("f"), CTRL), Some(Find));
+        assert_eq!(other(character("g"), CTRL), Some(FindNext));
+        assert_eq!(other(character("g"), CTRL | SHIFT), Some(FindPrevious));
+        assert_eq!(other(named(NamedKey::F3), NONE), Some(FindNext));
+        assert_eq!(other(named(NamedKey::F3), SHIFT), Some(FindPrevious));
+        assert_eq!(other(character("f"), CMD), None);
     }
 
     const KEY_R: PhysicalKey = PhysicalKey::Code(KeyCode::KeyR);
@@ -970,5 +1051,28 @@ mod tests {
                 None
             );
         }
+    }
+
+    // media-session lane
+    #[test]
+    fn toggle_mute_shortcuts() {
+        assert_eq!(mac(character("m"), CMD | SHIFT), Some(ToggleMute));
+        assert_eq!(mac(character("M"), CMD | SHIFT), Some(ToggleMute));
+        // Cmd+M is the system's Minimize; Ctrl+M belongs to the page on macOS.
+        assert_eq!(mac(character("m"), CMD), None);
+        assert_eq!(mac(character("m"), CTRL), None);
+        assert_eq!(other(character("m"), CTRL), Some(ToggleMute));
+        assert_eq!(other(character("m"), CTRL | SHIFT), None);
+    }
+
+    // downloads-ui lane
+    #[test]
+    fn save_page_and_the_downloads_list() {
+        assert_eq!(mac(character("s"), CMD), Some(SavePage));
+        assert_eq!(other(character("s"), CTRL), Some(SavePage));
+        assert_eq!(mac(character("J"), CMD | SHIFT), Some(ShowDownloads));
+        assert_eq!(mac(character("j"), CMD), None);
+        assert_eq!(other(character("j"), CTRL), Some(ShowDownloads));
+        assert!(!SavePage.repeats() && !ShowDownloads.repeats());
     }
 }

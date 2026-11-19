@@ -209,7 +209,7 @@ fn run_command(
         MenuCommand::System(_) => {}
         MenuCommand::ImportBrowserData => crate::import_ui::show_import_window(window),
         MenuCommand::OpenBookmark(id) => seams::open_bookmark(window, id),
-        MenuCommand::Find | MenuCommand::Stop => {}
+        MenuCommand::Stop => {}
         // tabs-plus
         MenuCommand::TabStrip(command) => {
             crate::tab_strip::run_strip_command(window, controller, command);

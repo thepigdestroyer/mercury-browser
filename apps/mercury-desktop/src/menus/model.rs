@@ -24,7 +24,6 @@ pub(crate) enum MenuCommand {
     /// An entry of the bookmarks bar's first level, by its stable id.
     OpenBookmark(super::seams::BookmarkId),
     // No engine API in Servo 0.8.0: always disabled.
-    Find,
     Stop,
     // tabs-plus
     /// Pinning and "close other tabs" for the active tab (`tab_strip.rs`).
@@ -455,8 +454,14 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 action("Paste", key('v', CMD), Edit(EditCommand::Paste)),
                 action("Select All", key('a', CMD), Edit(EditCommand::SelectAll)),
                 Separator,
-                // Servo 0.8.0 has no find-in-page API.
-                action("Find…", key('f', CMD), Find),
+                // find: the find bar (find in page runs as a script in the page).
+                action("Find…", key('f', CMD), Shortcut(A::Find)),
+                action("Find Next", key('g', CMD), Shortcut(A::FindNext)),
+                action(
+                    "Find Previous",
+                    key('g', SHIFT_CMD),
+                    Shortcut(A::FindPrevious),
+                ),
             ],
         },
         Menu {
@@ -569,7 +574,7 @@ pub(crate) const fn is_available(command: MenuCommand) -> bool {
     match command {
         Shortcut(_) | About | Edit(_) | OpenDocument(_) | System(_) | ImportBrowserData => true,
         OpenBookmark(_) => super::seams::BOOKMARKS_AVAILABLE,
-        Find | Stop => false,
+        Stop => false,
         // tabs-plus
         TabStrip(_) => true,
     }
@@ -683,7 +688,7 @@ impl BrowserMenuItem {
             Self::ZoomIn => MenuCommand::Shortcut(ShortcutAction::ZoomIn),
             Self::ZoomOut => MenuCommand::Shortcut(ShortcutAction::ZoomOut),
             Self::ZoomReset => MenuCommand::Shortcut(ShortcutAction::ZoomReset),
-            Self::Find => MenuCommand::Find,
+            Self::Find => MenuCommand::Shortcut(ShortcutAction::Find),
             Self::Settings => MenuCommand::Shortcut(ShortcutAction::ShowSettings),
             Self::About => MenuCommand::About,
             Self::Help => MenuCommand::OpenDocument(Document::Help),
@@ -904,11 +909,61 @@ mod tests {
                 ("Hide Mercury Browser", "⌘H".to_owned()),
                 ("Hide Others", "⌥⌘H".to_owned()),
                 ("Close Other Tabs", "⌥⌘W".to_owned()),
-                ("Find…", "⌘F".to_owned()),
                 ("Enter Full Screen", "⌃⌘F".to_owned()),
                 ("Minimize", "⌘M".to_owned()),
             ]
         );
+    }
+
+    // find
+    #[test]
+    fn the_edit_menu_finds_in_the_page_with_the_browsers_own_keys() {
+        let edit = menu_bar()
+            .into_iter()
+            .find(|menu| menu.title == "Edit")
+            .expect("an Edit menu");
+        let find_items = edit
+            .items
+            .iter()
+            .filter_map(|item| match *item {
+                MenuItem::Action {
+                    title,
+                    key,
+                    command,
+                    ..
+                } if title.starts_with("Find") => {
+                    Some((title, key.map(|key| key.mac_label()), command))
+                }
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            find_items,
+            vec![
+                (
+                    "Find…",
+                    Some("⌘F".to_owned()),
+                    MenuCommand::Shortcut(ShortcutAction::Find)
+                ),
+                (
+                    "Find Next",
+                    Some("⌘G".to_owned()),
+                    MenuCommand::Shortcut(ShortcutAction::FindNext)
+                ),
+                (
+                    "Find Previous",
+                    Some("⇧⌘G".to_owned()),
+                    MenuCommand::Shortcut(ShortcutAction::FindPrevious)
+                ),
+            ]
+        );
+        let snapshot = MenuSnapshot::default();
+        for (_, _, command) in find_items {
+            assert!(
+                is_enabled(command, &snapshot, EditTarget::None),
+                "{command:?}"
+            );
+        }
     }
 
     #[test]
@@ -981,12 +1036,11 @@ mod tests {
     #[test]
     fn actions_that_do_not_exist_yet_are_disabled() {
         let snapshot = MenuSnapshot::default();
-        for command in [MenuCommand::Find, MenuCommand::Stop] {
-            assert!(
-                !is_enabled(command, &snapshot, EditTarget::AddressBar),
-                "{command:?}"
-            );
-        }
+        // Stop is the one item left without an action: Servo 0.8.0 has no API for it.
+        assert!(
+            !is_enabled(MenuCommand::Stop, &snapshot, EditTarget::AddressBar),
+            "Stop"
+        );
         assert!(is_enabled(
             MenuCommand::Shortcut(ShortcutAction::NewTab),
             &snapshot,
@@ -1110,7 +1164,7 @@ mod tests {
                 ("Duplicate Tab", String::new()),
                 ("Pin Tab", String::new()),
                 ("Close Other Tabs", "⌥⌘W".to_owned()),
-                ("Find…", String::new()),
+                ("Find…", "⌘F".to_owned()),
                 ("Settings…", "⌘,".to_owned()),
                 ("About Mercury Browser", String::new()),
                 ("Mercury Browser Help", String::new()),
@@ -1125,7 +1179,7 @@ mod tests {
                 ("Duplicate Tab", String::new()),
                 ("Pin Tab", String::new()),
                 ("Close Other Tabs", String::new()),
-                ("Find…", String::new()),
+                ("Find…", "Ctrl+F".to_owned()),
                 ("Settings…", "Ctrl+,".to_owned()),
                 ("About Mercury Browser", String::new()),
                 ("Mercury Browser Help", String::new()),
@@ -1212,7 +1266,9 @@ mod tests {
         let quit = matched(Shortcut(ShortcutAction::Quit), true);
         let close = matched(Shortcut(ShortcutAction::CloseTab), true);
         let hide = matched(System(SystemAction::Hide), true);
-        let find = matched(Find, false);
+        // Stop is the one item that is always disabled (no engine API in Servo 0.8.0). Find and
+        // Show All History are real, enabled shortcut items now.
+        let stop = matched(Stop, false);
         let copy_disabled = matched(Edit(EditCommand::Copy), false);
         let undo_disabled = matched(Edit(EditCommand::Undo), false);
 
@@ -1225,8 +1281,8 @@ mod tests {
             ("h", CMD, Browser, false, hide, Perform),
             ("h", CMD, Browser, true, hide, Swallow),
             // A disabled item: press, repeats and release all reach the window, as before.
-            ("f", CMD, Browser, false, find, Decline),
-            ("f", CMD, Browser, true, find, Decline),
+            (".", CMD, Browser, false, stop, Decline),
+            (".", CMD, Browser, true, stop, Decline),
             // Another Mercury window (About, settings): the menu performs the item once.
             ("t", CMD, OtherMercury, false, new_tab, Perform),
             ("t", CMD, OtherMercury, true, new_tab, Swallow),
@@ -1247,7 +1303,7 @@ mod tests {
             // A disabled Edit item with the About window key: the key goes to that window.
             ("c", CMD, OtherMercury, false, copy_disabled, Decline),
             // A disabled item that is not an Edit item stays disabled in a native panel.
-            ("f", CMD, Native, false, find, Decline),
+            (".", CMD, Native, false, stop, Decline),
             // Repeats of keys no item of ours shows: AppKit as usual.
             ("k", CMD, Native, true, Option::None, Perform),
             ("k", CMD, OtherMercury, true, Option::None, Perform),

@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>External links</title>
+<style>
+  body { font: 20px system-ui, sans-serif; margin: 30px; background: #ffe; }
+  #status { font-weight: bold; }
+</style>
+</head>
+<body>
+<!--
+  openurl lane: links to schemes the engine cannot load (mailto:, tel:, app schemes). Serve
+  tests/ with scripts/serve-tests.py and open http://127.0.0.1:<port>/pages/openurl-external.html
+  A timer sets location = "mailto:…" 500 ms after load, with no user gesture: the browser must
+  refuse it (and log "no user gesture"). 300 ms later a second one follows; an automated run
+  started with MERCURY_DIAGNOSTIC_GESTURE_AFTER_REFUSAL=1 grants the tab one gesture after the
+  first refusal, so the second takes the path a click would. The links below need a click.
+-->
+<p>Page at <span id="origin"></span></p>
+<p id="status">waiting for the timer…</p>
+<ul>
+  <li><a href="mailto:someone@example.com?subject=Hello">mailto: link</a></li>
+  <li><a href="tel:+15555550123">tel: link</a></li>
+  <li><a href="zoommtg://zoom.us/join?confno=1">app scheme link</a></li>
+</ul>
+<script>
+  document.getElementById("origin").textContent = location.origin;
+  setTimeout(() => {
+    document.getElementById("status").textContent = "timer fired: location = mailto:timer@example.com";
+    location = "mailto:timer@example.com";
+    setTimeout(() => { location = "mailto:after-gesture@example.com"; }, 300);
+    setTimeout(() => {
+      document.getElementById("status").textContent =
+        "still on this page 1.5 s after location = mailto: (the timer)";
+    }, 1500);
+  }, 500);
+</script>
+</body>
+</html>

@@ -15,7 +15,14 @@ pub(crate) struct LaunchOptions {
     // import-ui lane: diagnostics.
     pub import_from: Option<PathBuf>,
     pub import_snapshot: Option<PathBuf>,
+    /// Diagnostics of the downloads work: `--download` and `--download-dir`.
+    pub download_url: Option<String>,
+    pub download_dir: Option<PathBuf>,
+    pub download_offer_answer: Option<crate::downloads::OfferAnswer>,
     pub exit_request: Option<ExitRequest>,
+    // find: diagnostics build only
+    #[cfg(feature = "diagnostics")]
+    pub find: Option<FindDiagnostic>,
 }
 
 /// Diagnostics: a quit the browser requests of itself, so that quit paths can be exercised
@@ -40,6 +47,16 @@ pub(crate) enum ExitBy {
     LogOut,
 }
 
+/// `--find`: a diagnostic that opens the find bar once the first page has loaded.
+#[cfg(feature = "diagnostics")]
+#[derive(Debug, PartialEq, Eq)]
+pub(crate) struct FindDiagnostic {
+    /// Searched as if typed; empty opens the bar as Cmd+F does (the page's selection, if any).
+    pub query: String,
+    /// Next (positive) or Previous (negative) presses after the first search.
+    pub steps: i32,
+}
+
 impl Default for LaunchOptions {
     fn default() -> Self {
         Self {
@@ -52,7 +69,12 @@ impl Default for LaunchOptions {
             experimental_web_features: true,
             import_from: None,
             import_snapshot: None,
+            download_url: None,
+            download_dir: None,
+            download_offer_answer: None,
             exit_request: None,
+            #[cfg(feature = "diagnostics")]
+            find: None,
         }
     }
 }
@@ -72,8 +94,13 @@ pub(crate) struct ScreenshotOptions {
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum CliOutcome {
-    Run(LaunchOptions),
-    PrintAndExit { text: String, code: i32 },
+    /// Boxed: the options hold every lane's diagnostics too, and are far larger than the other
+    /// variant.
+    Run(Box<LaunchOptions>),
+    PrintAndExit {
+        text: String,
+        code: i32,
+    },
 }
 
 /// `--exit-by logout` sends the browser a log-out quit event; only builds with the
@@ -111,6 +138,10 @@ Options:
                                    feature the settings turned off
   --profile-dir <directory>        Keep cookies and site data in this directory
                                    (screenshot and background runs otherwise use a temporary one)
+  --download <URL>                 Diagnostic: download this address once the browser is up
+  --download-dir <directory>       Diagnostic: save downloads in this directory in this run
+  --download-offer-answer <download|block>
+                                   Diagnostic: answer every 'wants to download' bar this way
   --help                           Print this help and exit
   --version                        Print the version and exit
 
@@ -135,7 +166,7 @@ Exit status:
   On SIGTERM, SIGINT or SIGHUP the browser quits in order and then ends by that same
   signal (a shell reports 128 + its number: 143, 130, 129); a second one ends it at once.";
 
-// import-ui lane: diagnostic options, only in builds with the `diagnostics` feature.
+// import-ui lane, find: diagnostic options, only in builds with the `diagnostics` feature.
 #[cfg(feature = "diagnostics")]
 const DIAGNOSTIC_USAGE: &str = "
 
@@ -145,7 +176,10 @@ Diagnostic options (this build has the `diagnostics` feature):
                                    application-support directory) into the profile, print
                                    what was imported, then exit
   --import-snapshot <file.png>     With --import-from, save the import window as a PNG
-                                   before exiting";
+                                   before exiting
+  --find <text>                    Once the page has loaded, open the find bar, search for
+                                   <text> (empty: use the page's selection) and print the result
+  --find-steps <n>                 Then press Next n times (Previous if negative)";
 #[cfg(not(feature = "diagnostics"))]
 const DIAGNOSTIC_USAGE: &str = "";
 
@@ -159,7 +193,13 @@ pub(crate) fn reject_non_utf8_paths(arguments: &[std::ffi::OsString]) -> Option<
     let pair = arguments.windows(2).find(|pair| {
         matches!(
             pair[0].to_str(),
-            Some("--profile-dir" | "--screenshot" | "--import-from" | "--import-snapshot")
+            Some(
+                "--profile-dir"
+                    | "--screenshot"
+                    | "--import-from"
+                    | "--import-snapshot"
+                    | "--download-dir"
+            )
         ) && pair[1].to_str().is_none()
     })?;
     Some(CliOutcome::PrintAndExit {
@@ -203,8 +243,15 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         expect(unused_mut, reason = "set by diagnostics")
     )]
     let mut import_snapshot = None;
+    let mut download_url = None;
+    let mut download_dir = None;
+    let mut download_offer_answer = None;
     let mut exit_after = None;
     let mut exit_by = None;
+    #[cfg(feature = "diagnostics")]
+    let mut find_query = None;
+    #[cfg(feature = "diagnostics")]
+    let mut find_steps = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -256,6 +303,38 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                 let value = option_value(&mut arguments, "--import-snapshot", "<file.png>")?;
                 import_snapshot = Some(PathBuf::from(value));
             }
+            #[cfg(feature = "diagnostics")]
+            "--find" => find_query = Some(option_value(&mut arguments, "--find", "<text>")?),
+            #[cfg(feature = "diagnostics")]
+            "--find-steps" => {
+                let value = option_value(&mut arguments, "--find-steps", "<n>")?;
+                find_steps = Some(value.parse::<i32>().map_err(|_| {
+                    format!("invalid --find-steps '{value}': expected a whole number")
+                })?);
+            }
+            "--download" => {
+                download_url = Some(option_value(&mut arguments, "--download", "<URL>")?);
+            }
+            "--download-dir" => {
+                let value = option_value(&mut arguments, "--download-dir", "<directory>")?;
+                download_dir = Some(PathBuf::from(value));
+            }
+            "--download-offer-answer" => {
+                let value = option_value(
+                    &mut arguments,
+                    "--download-offer-answer",
+                    "<download|block>",
+                )?;
+                download_offer_answer = Some(match value.as_str() {
+                    "download" => crate::downloads::OfferAnswer::Download,
+                    "block" => crate::downloads::OfferAnswer::Block,
+                    _ => {
+                        return Err(format!(
+                            "invalid --download-offer-answer '{value}': expected download or block"
+                        ));
+                    }
+                });
+            }
             "--exit-after" => {
                 let value = option_value(&mut arguments, "--exit-after", "<milliseconds>")?;
                 let milliseconds = value.parse::<u64>().map_err(|_| {
@@ -305,7 +384,17 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, None) => None,
     };
 
-    Ok(CliOutcome::Run(LaunchOptions {
+    #[cfg(feature = "diagnostics")]
+    let find = match (find_query, find_steps) {
+        (Some(query), steps) => Some(FindDiagnostic {
+            query,
+            steps: steps.unwrap_or(0),
+        }),
+        (None, Some(_)) => return Err("--find-steps requires --find".to_owned()),
+        (None, None) => None,
+    };
+
+    Ok(CliOutcome::Run(Box::new(LaunchOptions {
         urls,
         screenshot,
         window_size,
@@ -315,8 +404,13 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         experimental_web_features,
         import_from,
         import_snapshot,
+        download_url,
+        download_dir,
+        download_offer_answer,
         exit_request,
-    }))
+        #[cfg(feature = "diagnostics")]
+        find,
+    })))
 }
 
 fn option_value(
@@ -352,6 +446,10 @@ mod tests {
         parse_arguments(arguments.iter().map(|argument| (*argument).to_owned()))
     }
 
+    fn run(options: LaunchOptions) -> CliOutcome {
+        CliOutcome::Run(Box::new(options))
+    }
+
     fn exit_code(outcome: &CliOutcome) -> Option<i32> {
         match outcome {
             CliOutcome::Run(_) => None,
@@ -361,14 +459,14 @@ mod tests {
 
     #[test]
     fn no_arguments_run_with_no_urls() {
-        assert_eq!(parse(&[]), CliOutcome::Run(LaunchOptions::default()));
+        assert_eq!(parse(&[]), run(LaunchOptions::default()));
     }
 
     #[test]
     fn urls_are_kept_in_order() {
         assert_eq!(
             parse(&["https://a.test", "b.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned(), "b.test".to_owned()],
                 ..LaunchOptions::default()
             })
@@ -387,7 +485,7 @@ mod tests {
                 "800x600",
                 "https://a.test",
             ]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 screenshot: Some(ScreenshotOptions {
                     path: PathBuf::from("out.png"),
@@ -400,7 +498,12 @@ mod tests {
                 experimental_web_features: true,
                 import_from: None,
                 import_snapshot: None,
+                download_url: None,
+                download_dir: None,
+                download_offer_answer: None,
                 exit_request: None,
+                #[cfg(feature = "diagnostics")]
+                find: None,
             })
         );
     }
@@ -517,7 +620,7 @@ mod tests {
 
         assert_eq!(
             parse(&["--background", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 background: true,
                 ..LaunchOptions::default()
@@ -544,7 +647,7 @@ mod tests {
 
         assert_eq!(
             parse(&["--disable-gpu-canvas", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 gpu_canvas: false,
                 ..LaunchOptions::default()
@@ -566,7 +669,7 @@ mod tests {
     fn profile_dir_is_parsed() {
         assert_eq!(
             parse(&["--profile-dir", "/x", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 profile_dir: Some(PathBuf::from("/x")),
                 ..LaunchOptions::default()
@@ -678,7 +781,7 @@ mod tests {
 
         assert_eq!(
             parse(&["--disable-experimental-web-features", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 experimental_web_features: false,
                 ..LaunchOptions::default()
@@ -814,7 +917,7 @@ mod tests {
     fn macos_process_serial_number_is_ignored() {
         assert_eq!(
             parse(&["-psn_0_123", "https://a.test"]),
-            CliOutcome::Run(LaunchOptions {
+            run(LaunchOptions {
                 urls: vec!["https://a.test".to_owned()],
                 ..LaunchOptions::default()
             })
@@ -829,6 +932,18 @@ mod tests {
             panic!("--help should not run the browser");
         };
         assert!(!text.contains("--import-from"));
+    }
+
+    // find
+    #[cfg(not(feature = "diagnostics"))]
+    #[test]
+    fn without_the_diagnostics_feature_find_is_unknown() {
+        assert_eq!(exit_code(&parse(&["--find", "needle"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--find-steps", "1"])), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(!text.contains("--find"));
     }
 
     #[cfg(feature = "diagnostics")]
@@ -855,5 +970,78 @@ mod tests {
             panic!("--help should not run the browser");
         };
         assert!(text.contains("--import-from <directory>"));
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn the_find_diagnostic_takes_a_query_and_optional_steps() {
+        let CliOutcome::Run(options) = parse(&["--find", "needle", "--find-steps", "-2"]) else {
+            panic!("--find with steps should be accepted");
+        };
+        assert_eq!(
+            options.find,
+            Some(FindDiagnostic {
+                query: "needle".to_owned(),
+                steps: -2,
+            })
+        );
+
+        let CliOutcome::Run(options) = parse(&["--find", ""]) else {
+            panic!("an empty --find query should be accepted");
+        };
+        assert_eq!(
+            options.find,
+            Some(FindDiagnostic {
+                query: String::new(),
+                steps: 0,
+            })
+        );
+    }
+
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn find_steps_need_find_and_a_number() {
+        assert_eq!(exit_code(&parse(&["--find-steps", "2"])), Some(2));
+        assert_eq!(
+            exit_code(&parse(&["--find", "x", "--find-steps", "two"])),
+            Some(2)
+        );
+        assert_eq!(exit_code(&parse(&["--find"])), Some(2));
+    }
+
+    // downloads-ui lane
+    #[test]
+    fn download_diagnostics_are_parsed() {
+        let CliOutcome::Run(options) = parse(&[
+            "--download",
+            "http://127.0.0.1:8000/a.zip",
+            "--download-dir",
+            "/scratch/downloads",
+            "http://127.0.0.1:8000/",
+        ]) else {
+            panic!("the download diagnostics should be accepted");
+        };
+        assert_eq!(
+            options.download_url.as_deref(),
+            Some("http://127.0.0.1:8000/a.zip")
+        );
+        assert_eq!(
+            options.download_dir.as_deref(),
+            Some(std::path::Path::new("/scratch/downloads"))
+        );
+        assert_eq!(options.urls, ["http://127.0.0.1:8000/"]);
+        assert_eq!(exit_code(&parse(&["--download"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--download-dir"])), Some(2));
+        let CliOutcome::Run(options) = parse(&["--download-offer-answer", "block"]) else {
+            panic!("a bar answer should be accepted");
+        };
+        assert_eq!(
+            options.download_offer_answer,
+            Some(crate::downloads::OfferAnswer::Block)
+        );
+        assert_eq!(
+            exit_code(&parse(&["--download-offer-answer", "maybe"])),
+            Some(2)
+        );
     }
 }

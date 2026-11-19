@@ -4,6 +4,7 @@
 // "all tabs" button when the tabs no longer fit, and what the hover preview needs.
 // Colours come only from `ChromePalette`.
 import { ChromePalette } from "../theme/chrome-palette.slint";
+import { TabAudioState } from "../media/tab-audio.slint"; // media-session lane
 
 export struct BrowserTab {
     title: string,
@@ -18,6 +19,8 @@ export struct BrowserTab {
     pinned: bool,
     // The page's address, for the hover preview; empty for a new tab.
     url: string,
+    // media-session lane: whether the tab plays sound or is muted (the speaker button).
+    audio: TabAudioState,
 }
 
 export enum TabMenuCommand {

@@ -132,6 +132,13 @@ pub(crate) fn decide(
     TerminateDecision::QuitThroughTheEventLoop(why)
 }
 
+/// downloads-ui lane: only a Quit the user chose may stop at "Cancel N downloads and quit?". A
+/// session end (log-out, restart, shut down) must not wait for an answer, and a run already
+/// ending has nothing left to ask.
+pub(crate) fn asks_before_quitting(why: Why) -> bool {
+    why == Why::NotASessionEnd
+}
+
 /// Call on the main thread once the backend (and with it winit's event loop and application
 /// delegate) exists.
 pub(crate) fn end_the_run_in_order_on_terminate_requests() {
@@ -168,7 +175,11 @@ unsafe extern "C-unwind" fn application_should_terminate(
         TerminateDecision::QuitThroughTheEventLoop(why) => {
             let _ = std::panic::catch_unwind(|| {
                 log::info!("asked to terminate ({why:?}); quitting in order");
-                crate::quit::request_quit();
+                if asks_before_quitting(why) {
+                    crate::quit::request_quit_asking(); // downloads-ui lane
+                } else {
+                    crate::quit::request_quit();
+                }
             });
             NSApplicationTerminateReply::TerminateCancel
         }
@@ -474,6 +485,19 @@ mod tests {
                 decide(None, entry),
                 TerminateDecision::QuitThroughTheEventLoop(Why::AlreadyEnding)
             );
+        }
+    }
+
+    #[test]
+    fn only_a_quit_the_user_chose_asks_about_running_downloads() {
+        assert!(asks_before_quitting(Why::NotASessionEnd));
+        for why in [
+            Why::AlreadyEnding,
+            Why::InsideSlintCallback,
+            Why::EngineBusy,
+            Why::NestedRunLoop,
+        ] {
+            assert!(!asks_before_quitting(why), "{why:?}");
         }
     }
 

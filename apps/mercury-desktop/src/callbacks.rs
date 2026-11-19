@@ -22,6 +22,9 @@ pub(crate) fn connect_ui_callbacks(
     let navigate_window = window.as_weak();
     window.on_navigate(move |address| {
         let _slint = crate::callback_scope::InSlintCallback::enter();
+        // An address the user typed: a download it leads to was asked for (downloads-ui lane).
+        let tab_id = navigate_controller.borrow().active_tab_id();
+        crate::downloads::note_typed_navigation(tab_id, address.as_str());
         let result = navigate_controller
             .borrow_mut()
             .queue_navigation(address.as_str());

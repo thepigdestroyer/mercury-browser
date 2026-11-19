@@ -1,0 +1,26 @@
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>Find: more than 200,000 nodes</title>
+<style>body { font: 18px/1.5 sans-serif; margin: 24px; } #filler { display: none; }</style>
+</head>
+<body>
+<p>A page with 250,000 elements (500,000 nodes) and one match at its very end.</p>
+<div id="filler"></div>
+<p>The only match: <b>wombat</b>.</p>
+<script>
+  const filler = document.getElementById("filler");
+  for (let i = 0; i < 250000; i++) {
+    const span = document.createElement("span");
+    span.textContent = "a";
+    filler.appendChild(span);
+  }
+  filler.style.display = "block";
+  filler.style.height = "20px";
+  filler.style.overflow = "hidden";
+</script>
+<!-- Expected with `--find wombat` (Return): "1 of 1", or "No matches so far" if the 400 ms
+     limit for Return is reached first; never a frozen page. -->
+</body>
+</html>
