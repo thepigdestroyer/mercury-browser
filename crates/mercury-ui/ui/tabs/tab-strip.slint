@@ -174,7 +174,7 @@ component TabButton inherits Rectangle {
             TabIcon {
                 x: (parent.width - self.width) / 2;
                 height: parent.height;
-                source: root.tab.has-icon ? root.tab.icon : @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
+                source: root.tab.has-icon ? root.tab.icon : @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
             }
 
             if root.tab.loading: Rectangle {
@@ -230,7 +230,7 @@ component TabButton inherits Rectangle {
             }
 
             if !root.compact-audio && !root.tab.has-icon: TabIcon {
-                source: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
+                source: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
             }
 
             Text {
