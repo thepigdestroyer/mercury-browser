@@ -493,8 +493,9 @@ impl InlineFormattingContextBuilder {
                 character_range_in_ifc_text: new_character_range,
                 original_offset: original_size_before,
                 selection: AtomicRefCell::new(selection),
-                paints_caret: info.node.text_node_paints_caret(),
                 needs_caret_placeholder,
+                // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
+                paints_caret: info.node.text_node_paints_caret().into(),
                 offset_map: self.offset_map.clone(),
             }
             .into(),

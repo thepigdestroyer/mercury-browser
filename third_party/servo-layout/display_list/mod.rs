@@ -1575,7 +1575,8 @@ impl Fragment {
             return;
         }
 
-        if !fragment.run_data.paints_caret {
+        // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
+        if !fragment.run_data.paints_caret.load(Ordering::Relaxed) {
             return;
         }
 

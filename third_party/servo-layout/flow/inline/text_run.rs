@@ -4,6 +4,7 @@
 
 use std::mem;
 use std::ops::Range;
+use std::sync::atomic::AtomicBool;
 use std::sync::{Arc, OnceLock};
 
 use app_units::Au;
@@ -349,7 +350,8 @@ pub(crate) struct SharedTextRunData {
     // TODO: make this more compact with a pair of `AtomicUsize`?
     pub selection: AtomicRefCell<Option<RangeAny<Utf32CodeUnits>>>,
     /// Whether a caret should be painted when the selection is an empty range (start == end)
-    pub paints_caret: bool,
+    // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
+    pub paints_caret: AtomicBool,
     /// Whether a caret placeholder should be added for empty text runs or for empty
     /// lines after a forced line break.
     pub needs_caret_placeholder: bool,

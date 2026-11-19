@@ -3,6 +3,8 @@
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
 use std::marker::PhantomData;
+// Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
+use std::sync::atomic::Ordering;
 
 use atomic_refcell::{AtomicRef, AtomicRefCell, AtomicRefMut};
 use layout_api::{
@@ -396,7 +398,11 @@ impl GenericLayoutDataTrait for DOMLayoutData {
         self
     }
 
-    fn set_text_run_selection(&self, new_range: Option<RangeAny<Utf32CodeUnits>>) -> bool {
+    fn set_text_run_selection(
+        &self,
+        new_range: Option<RangeAny<Utf32CodeUnits>>,
+        new_paints_caret: bool,
+    ) -> bool {
         let inner = self.0.borrow();
         // When `::first-letter` is used, one DOM text node can generate multiple text runs
         // so there isn’t a single place to set the new range
@@ -409,6 +415,11 @@ impl GenericLayoutDataTrait for DOMLayoutData {
         }
         if let Some(LayoutBox::Text(text_run)) = &*inner.self_box.borrow() {
             *text_run.borrow().run_data.selection.borrow_mut() = new_range;
+            text_run
+                .borrow()
+                .run_data
+                .paints_caret
+                .store(new_paints_caret, Ordering::Relaxed);
             true
         } else {
             false
