@@ -1644,9 +1644,10 @@ impl DocumentEventHandler {
             TouchEventType::Cancel => "touchcancel",
         };
 
-        let touches = TouchList::new(cx, window, self.active_touch_points.borrow().r());
+        // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
+        let touches = TouchList::new(cx, window, self.active_touch_points.borrow().as_ref_slice());
         let changed_touches = TouchList::new(cx, window, from_ref(&&*changed_touch));
-        let target_touches = TouchList::new(cx, window, target_touches.r());
+        let target_touches = TouchList::new(cx, window, target_touches.as_ref_slice());
 
         let touch_event = TouchEvent::new(
             cx,

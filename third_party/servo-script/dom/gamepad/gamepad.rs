@@ -133,7 +133,8 @@ impl Gamepad {
                 true,
                 0.,
                 mapping_type,
-                buttons.r(),
+                // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
+                buttons.as_ref_slice(),
                 None,
                 GamepadHand::_empty,
                 axis_bounds,

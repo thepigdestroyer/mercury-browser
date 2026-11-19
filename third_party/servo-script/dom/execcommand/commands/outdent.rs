@@ -348,7 +348,8 @@ pub(crate) fn execute_outdent_command(
         let values = record_the_values(sublist.iter().map(|node| node.as_rooted()).collect());
 
         // Step 6.7. Split the parent of sublist.
-        split_the_parent(cx, sublist.r());
+        // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
+        split_the_parent(cx, sublist.as_ref_slice());
 
         // Step 6.8. Fix disallowed ancestors of each member of sublist.
         for node in sublist.iter() {

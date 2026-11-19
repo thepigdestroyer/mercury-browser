@@ -607,7 +607,8 @@ impl Selection {
                     .and_then(|child| child.GetParentNode())
                     .is_some_and(|parent_of_child| parent_of_child != start_block)
                 {
-                    split_the_parent(cx, children.r());
+                    // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
+                    split_the_parent(cx, children.as_ref_slice());
                     continue;
                 }
                 break;

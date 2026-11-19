@@ -2308,7 +2308,8 @@ impl Node {
             self.remove_self(cx);
         } else {
             rooted_vec!(let children <- self.children().map(|child| DomRoot::as_traced(&child)));
-            split_the_parent(cx, children.r());
+            // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
+            split_the_parent(cx, children.as_ref_slice());
         }
     }
 
