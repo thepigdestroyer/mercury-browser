@@ -61,12 +61,13 @@ jobs:
 
   # Formatting, then clippy and the tests of every workspace crate that
   # depends on neither Servo nor Slint, on both platforms (some of those crates
-  # have platform-specific code). Minutes, not hours: nothing here compiles the
-  # engine.
+  # have platform-specific code), then the unit tests of the vendored Servo crates
+  # that need no engine. Minutes, not hours: nothing here compiles Servo itself
+  # (the vendored tests build Stylo and WebRender, hence the longer limit).
   fast:
     name: Fast checks (${{ matrix.name }})
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 20
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -106,6 +107,12 @@ jobs:
           read -r -a packages <<<"${arguments}"
           cargo clippy --locked --release "${packages[@]}" --all-targets -- -D warnings
           cargo test --locked --release "${packages[@]}"
+
+      # The vendored Servo crates' own unit tests that need no engine (preferences, the Stylo
+      # preference bridge, message types). The vendored crates are not workspace members, so the
+      # step above never runs them; the heavier ones (servo-net, servo-script) are not run here.
+      - name: Test the vendored crates that need no engine
+        run: make vendored-tests
 
   test-linux:
     name: Linux quality checks

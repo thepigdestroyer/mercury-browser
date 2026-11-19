@@ -64,6 +64,7 @@ INSTALL_FILTER_LISTS_RELEASE = $(INSTALL_FILTER_LISTS) --release
 	ci-tools \
 	lint-scripts \
 	servo-patches-check \
+	vendored-tests \
 	deny \
 	build \
 	build-release \
@@ -102,6 +103,7 @@ help:
 		'ci-tools' 'Download the pinned shellcheck, actionlint and cargo-deny.' \
 		'lint-scripts' 'Lint scripts/ (shellcheck; py_compile of the leftover scripts/serve-tests.py), the workflows (actionlint), licence headers and vendored crates.' \
 		'servo-patches-check' 'Check that each crate in third_party/ is the published crate plus its exported patch.' \
+		'vendored-tests' 'Run the unit tests of the vendored Servo crates that need no engine (preferences, message types).' \
 		'deny' 'Check dependencies against the policy in deny.toml.' \
 		'build' 'Build the complete workspace in debug mode.' \
 		'build-release' 'Build the complete workspace in release mode.' \
@@ -273,6 +275,18 @@ lint-scripts:
 # crate from crates.io when Cargo's cache lacks it (vendored crates never are in it).
 servo-patches-check:
 	"$(CARGO)" run --locked --quiet $(CARGO_FLAGS) --package mercury-servo-patches -- check
+
+# The vendored crates' own unit tests that need neither GStreamer nor a window, so that this also
+# runs on the Linux CI runner: Servo's preferences, the Stylo preference bridge and the message
+# types the browser and the engine exchange. They are not part of `make test` (a vendored crate is
+# not a workspace member). The tests of servo-net and servo-script (`cargo test -p servo-net --lib`,
+# `-p servo-script --lib`) build the engine and are run on a Servo upgrade, not here.
+vendored-tests:
+	"$(CARGO)" test --locked --release \
+		-p servo-config \
+		-p stylo_static_prefs \
+		-p servo-embedder-traits \
+		-p servo-constellation-traits
 
 deny:
 	@$(CI_TOOLS_PATH); export PATH; \
