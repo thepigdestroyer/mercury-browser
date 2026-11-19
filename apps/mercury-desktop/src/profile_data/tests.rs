@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicI64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -23,6 +23,11 @@ const DAY_MS: i64 = 86_400_000;
 const NOW: i64 = 1_800_000_000_000;
 /// Generous: CI machines are slow, and a locked database takes the store's 5 s busy timeout.
 const PATIENCE: Duration = Duration::from_secs(30);
+/// The service has to keep answering, not to finish by a fixed time: a wait fails when no
+/// wake-up comes for `QUIET` (a stuck service) or when `LIMIT` has passed in all (a service
+/// that wakes for ever and never finishes). Under load a long import is slow but keeps waking.
+const QUIET: Duration = Duration::from_secs(30);
+const LIMIT: Duration = Duration::from_secs(600);
 
 fn deadline() -> Instant {
     Instant::now() + PATIENCE
@@ -76,14 +81,19 @@ impl Harness {
         self.directory.path().join("places.sqlite")
     }
 
-    /// Delivers replies until `done` holds.
+    /// Delivers replies until `done` holds. Every delivery, progress included, wakes the UI
+    /// and so restarts the quiet period; `LIMIT` bounds the wait in all.
     fn settle(&self, done: impl Fn() -> bool) {
-        let deadline = deadline();
+        let limit = Instant::now() + LIMIT;
         while !done() {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = limit.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero(),
+                "the service did not finish within {LIMIT:?}"
+            );
             self.wakes
-                .recv_timeout(left)
-                .expect("the service should answer");
+                .recv_timeout(left.min(QUIET))
+                .expect("the service should answer: no wake-up within the quiet period");
             self.data.deliver_replies();
         }
     }
@@ -219,7 +229,28 @@ fn wake_ups_are_coalesced_until_the_replies_are_delivered() {
         let count = Rc::clone(&answered);
         harness.data.downloads(1, move |_| *count.borrow_mut() += 1);
     }
-    std::thread::sleep(Duration::from_millis(300));
+    // Jobs run in order, so once the sentinel has run the service has queued all 50 replies,
+    // however busy the machine is.
+    let reached = Arc::new(AtomicBool::new(false));
+    let flag = Arc::clone(&reached);
+    harness.data.request::<()>(
+        None,
+        move |_, _| {
+            flag.store(true, Ordering::Release);
+            Ok(())
+        },
+        |_| {},
+    );
+    let give_up = deadline();
+    while !reached.load(Ordering::Acquire) {
+        assert!(
+            Instant::now() < give_up,
+            "the service did not run the requests"
+        );
+        std::thread::sleep(Duration::from_millis(5));
+    }
+    // A short wait after it, so that a wrongly sent extra wake-up would still show.
+    std::thread::sleep(Duration::from_millis(50));
 
     assert_eq!(harness.wakes.try_iter().count(), 1);
     harness.data.deliver_replies();
@@ -1120,12 +1151,35 @@ fn a_visit_import_runs_in_chunks_with_progress() {
 #[test]
 fn requests_are_answered_while_an_import_runs() {
     let harness = Harness::new();
+    // A gate in front, so that the import and the probe are both queued before the service
+    // goes on: it then reads the probe before the import's first chunk (requests go first),
+    // whatever the speed of this thread.
+    let (open, closed) = mpsc::channel::<()>();
+    harness.data.request::<()>(
+        None,
+        move |_, _| {
+            let _opened = closed.recv_timeout(PATIENCE);
+            Ok(())
+        },
+        |_| {},
+    );
     let run = ImportRun::visits(&harness, visits_to_import(IMPORT_CHUNK * 10));
+    // The reply callbacks run in the order of the replies, so the import cannot have
+    // finished when the probe's runs unless the probe waited for the whole import.
+    let import_unfinished = Rc::new(RefCell::new(None));
+    let record = Rc::clone(&import_unfinished);
+    let summary = Rc::clone(&run.summary);
+    harness.data.downloads(1, move |result| {
+        result.unwrap();
+        *record.borrow_mut() = Some(summary.borrow().is_none());
+    });
+    open.send(()).unwrap();
 
-    harness.sync();
+    harness.settle(|| import_unfinished.borrow().is_some());
 
-    assert!(
-        run.summary.borrow().is_none(),
+    assert_eq!(
+        *import_unfinished.borrow(),
+        Some(true),
         "the request waited for the whole import"
     );
     run.finish(&harness);
