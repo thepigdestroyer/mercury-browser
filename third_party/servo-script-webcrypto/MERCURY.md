@@ -12,8 +12,20 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane K0 (engine base, 19 Nov 2026).
+
+### SpiderMonkey 153.7.0 (`mozjs` 0.27.0) — `Cargo.toml`
+
+- **What:** the `js` dependency (package `mozjs`) is `=0.27.0`, not `=0.26.13`, with a `# Mercury:` comment
+  (servo/servo#49907, merge date 14 Nov 2026). `Cargo.lock` moves exactly `mozjs`, `mozjs_sys` (153.6.0-1 to 153.7.0-0) and
+  the twelve `mozjs_*` glue crates (153.6.0 to 153.7.0). The same one-line change is in `servo-script` and
+  `servo-script-bindings`.
+- **Why:** SpiderMonkey 153.7.0 carries security fixes. `servo-script`, `servo-script-bindings` and this crate all pin
+  `mozjs` exactly, so this crate had to be vendored (unchanged, in its own commit) to move the pin. Source files are
+  unchanged.
+- **Tested by:** `make deny` and the full build and test gates of lane K0.
+- **Drop when:** the Servo bump that contains PR #49907 (B1). To go back to SpiderMonkey 153.6.0, revert the commit
+  "build: SpiderMonkey 153.7.0 (mozjs 0.27.0) for its security fixes" and re-export.
 
 ## Removing this directory
 

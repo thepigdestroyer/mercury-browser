@@ -12,8 +12,21 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message scaffold (R14 section 3.4).
+
+### Mercury messages between the script thread, the embedder and the constellation — `lib.rs`, `from_script_message.rs`, new `mercury/`
+
+- **What:** `pub mod mercury;` and `pub use mercury::*;` in `lib.rs`; new variants
+  `ScriptToConstellationMessage::Mercury(MercuryScriptToConstellation)` (`from_script_message.rs`, after
+  `ReleaseWakeLock`; the enum is `Serialize + Deserialize`, so the script-side lane enums are too) and
+  `EmbedderToConstellationMessage::Mercury(MercuryEmbedderToConstellation)` (`lib.rs`, after `SetNetworkOnlineState`).
+  `mercury/` has, per lane `Core`, `A11y`, `Media`, `Page`, `Text`, one file with `<Lane>ScriptMsg` and
+  `<Lane>EmbedderMsg`; both `CoreScriptMsg` and `CoreEmbedderMsg` have `Probe(u64)` (tests). The lane files are private
+  modules whose public items are re-exported by glob; `mercury` itself is public so `servo` can re-export the lane types.
+  `Debug` prints only the variant path, as in `servo-embedder-traits`.
+- **Why:** a lane adds its messages in its own file and none edits the shared enums.
+- **Tested by:** `cargo test --release -p servo-constellation-traits mercury` (3 tests).
+- **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
 ## Removing this directory
 

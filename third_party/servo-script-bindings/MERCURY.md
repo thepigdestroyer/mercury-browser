@@ -34,3 +34,12 @@ It is part of the media-capture patch described in
 
 Drop when: Servo implements `stop()`/`readyState` and Mercury enables WebRTC
 or Servo gives capture its own preference.
+
+### K0 (19 Nov 2026)
+
+4. **servo/servo#49649** (`10c279fae`, "Rename `DomSlice` `r()` to `as_ref_slice()`"): `root.rs` (the `DomSlice` trait and its
+   impl for `[Dom<T>]`) and `codegen/codegen.py` (`process_arg`: a variadic or sequence interface argument is passed as
+   `.as_ref_slice()` in the generated glue; vendored Python edited by one line, as upstream did). The call sites are listed in
+   `third_party/servo-script/MERCURY.md`, change 8. Drop at the Servo bump that contains it (B1).
+5. **SpiderMonkey 153.7.0:** the `js` dependency (package `mozjs`) is `=0.27.0` instead of `=0.26.13` in `Cargo.toml`
+   (servo/servo#49907); see `third_party/servo-script-webcrypto/MERCURY.md`. Drop at B1.

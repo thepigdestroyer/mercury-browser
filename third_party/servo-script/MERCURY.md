@@ -113,6 +113,87 @@ with these changes.
 
 See `third_party/servo-media-gstreamer/MERCURY.md`, change 3.
 
+## Changes: post-0.8 Servo changes and K0 fixes (lane K0, 19 Nov 2026)
+
+Post-0.8 changes from servo/servo, taken so that `document.execCommand`, contenteditable editing, the caret and WebGL2
+behave like current Servo, plus one notification fix and SpiderMonkey 153.7.0. Each hunk starts with a
+`Mercury: backport of servo/servo#N (merge commit)` comment. Upstream's tests (`tests/wpt`) are not vendored;
+`tests/pages/compat-editing.html` and `tests/pages/webgl2-textures.html` exercise the changes. All are dropped at the
+Servo bump that contains them (B1; a bump that contains the pull request turns the hunk into a no-op conflict to
+resolve in favour of upstream).
+
+### 8. Editing backports (ED9)
+
+Editing is on in Mercury (`dom_exec_command_enabled`).
+
+- **servo/servo#49541** (`e35a02ebd`, "Use saturating addition in contenteditable code to avoid overflow"),
+  `dom/range/range.rs` (the live-range update after `CharacterData::replaceData`, about line 1631): `offset + count` is
+  `offset.saturating_add(count)`. A huge `count` (`text.replaceData(9, 4294967295, ..)` with a live range) panicked the script
+  thread by u32 overflow in debug builds. Test: the "range with huge offsets" line of `compat-editing.html`.
+- **servo/servo#47459** (`189034510`, "Implement `outdent` editing command"): `dom/execcommand/commands/outdent.rs` (new,
+  upstream MPL header), `commands/{mod,delete,indent}.rs`, `basecommand.rs`, `execcommands.rs`, `contenteditable/node.rs`.
+  Adds `outdent`, moves `normalize_sublists` from `indent.rs` to `Node::normalize_sublists` and uses it in the delete
+  command (steps 7.1 and 7.2 were TODOs). Test: "indent then outdent" and "outdent a blockquote".
+- **servo/servo#49649** (`10c279fae`, "Rename `DomSlice` `r()` to `as_ref_slice()`"): the 6 call sites in this crate
+  (`dom/document/document_event_handler.rs`, `dom/gamepad/gamepad.rs`, `dom/node/node.rs`, `dom/execcommand/{commands/outdent.rs,
+  contenteditable/node.rs, contenteditable/selection.rs}`); the trait is in `servo-script-bindings` (`root.rs`). A rename,
+  taken because the next backports call the new name. Mercury's own code does not use `DomSlice`.
+- **servo/servo#48253** (`cd332167d`, "Render caret inside of contenteditable elements"): `dom/selection.rs` (a `paints_caret`
+  flag and `should_paint_caret`: a text-input shadow host, or a collapsed selection whose editing host is the focused element
+  while `dom_exec_command_enabled` is on; `paints_caret_for_layout`), `dom/node/layout_dom.rs` (`text_node_paints_caret`),
+  `dom/characterdata/characterdata.rs` and `dom/html/form_controls/input_type/text_input_widget.rs` (`set_text_run_selection`
+  takes the new flag), `dom/html/htmlelement.rs` (adding or removing `contenteditable` marks the selection dirty). Needs the
+  `servo-layout` and `servo-layout-api` hunks. Only the active page's focused host draws the caret (upstream rule: no caret in
+  a window without system focus). Test: the caret box at the top of `compat-editing.html`.
+- **servo/servo#49797** (`8d0f0d77f`, "Implement logic for collapsed line break"): `dom/execcommand/contenteditable/node.rs`
+  (`Node::is_collapsed_line_break`), `commands/insertlinebreak.rs` (step 10: an extra `br` after a collapsed one),
+  `commands/inserttext.rs` (step 14.1) and `is_collapsed_block_prop`. Test: "insertLineBreak at line end".
+- **servo/servo#49818** (`d1eff56d7`, "Insert line break when paragraph container is disallowed child"):
+  `commands/insertparagraph.rs` step 11.5.1 runs insertLineBreak instead of doing nothing (w3c/editing#552). Test:
+  "insertParagraph in an inline editing host".
+- **servo/servo#49884, #49917, #49920** (`ba4852dce`, `824dae490`, `d9656e7a2`, "Insert newline characters in pre-formatted
+  styling for insertlinebreak", "Check styling of parent if start container is a text node", "Fix collapsed line break
+  consideration for parent block nodes"): hand-ported, not applied with `git apply`, because their context contains
+  servo/servo#49552 ("pass `JSContext` to `Element::style`", 37 files), which Mercury does not take. The code is the same in
+  0.8's forms (`element.style()`, `is_collapsed_line_break(cx.no_gc())`, the `computed_values::white_space_collapse` import);
+  `commands/insertlinebreak.rs` and `contenteditable/node.rs` (`move_preserving_ranges<Move, Return>`,
+  `is_collapsed_line_break`). Test: "insertLineBreak in white-space: pre-wrap". Take all three or none: revert
+  `c812a3f`, `e844e14` and `23c80bf` together (the commit message of the last one names a wrong merge hash; the right one is
+  above). Drop with the bump that contains #49552 and these three.
+
+### 9. WebGL2 conformance backports (ED10) — `dom/webgl/`
+
+- **servo/servo#49632** (`e690242e4`), `webglrenderingcontext.rs`, `getParameter` (0.8.0 line about 2363): the four texture
+  binding constants share one arm; a constant that the context's WebGL version does not have (for example
+  `TEXTURE_BINDING_2D_ARRAY` on WebGL1) sets `INVALID_ENUM` and returns null, where 0.8 panicked on `unwrap`.
+- **servo/servo#49912** (`43753d9b4`), `validations/tex_image_2d.rs`, `TexStorageValidator` (line about 783):
+  `texStorage2D` and `texStorage3D` reject a compressed format whose extension is not enabled (`INVALID_ENUM`) and a depth or
+  depth-stencil format for `TEXTURE_3D` (`INVALID_OPERATION`).
+- **servo/servo#49436** (`c2c5117bf`), `webgltexture.rs`, `WebGLTexture::storage` (line about 626): only a `TEXTURE_3D` halves its
+  depth with each level; a 2D array keeps its layer count. This is the script half of the zero-initialisation in `servo-webgl`.
+- Tested by `tests/pages/webgl2-textures.html`. Not taken: #49404 and #49902 (they need `servo-canvas-traits`, not vendored).
+  Consequence: `framebufferTextureLayer` on a `TEXTURE_2D_ARRAY` texture is rejected with `INVALID_OPERATION` in 0.8.
+
+### 10. Show a notification that has no icon, image or badge (EF4) — `dom/serviceworker/notification.rs`
+
+- **What:** in `Notification::fetch_resources_and_show_when_ready` (about line 884), after the `pending_requests` list is built:
+  `if pending_requests.is_empty() { self.show(); return; }`. An unparsable icon URL also gives an empty list and shows at once,
+  which matches the spec's "on failure, continue".
+- **Why:** `show()` was called only from the fetch-completion path, so a notification with nothing to fetch (the common case)
+  was never handed to the embedder and never fired `show`. `show()` is safe there: it sends `EmbedderMsg::ShowNotification` and
+  queues the `show` event as a task, so the event still fires after the constructor returns; `pending_request_ids` is only
+  inserted into together with a `pending_requests` entry, so none dangles. The idea is that of patch 0002 of Zervo
+  (github.com/Goddv/Zervo, `patches/servo/0002-script-show-notification-without-resources.patch`); written from its
+  description, not copied (credit in `THIRD-PARTY-NOTICES.md`).
+- **Tested by:** `tests/pages/notification-no-icon.html` (PASS, FAIL or SKIP; SKIP when the permission cannot be granted).
+- **Drop when:** the Servo bump that contains the same fix (check `Notification` in `servo-script` at B1; not fixed in 0.8.0).
+
+### 11. SpiderMonkey 153.7.0 (`mozjs` 0.27.0) — `Cargo.toml`
+
+The `js` dependency (package `mozjs`) is `=0.27.0` instead of `=0.26.13`, with a `# Mercury:` comment (servo/servo#49907, for
+SpiderMonkey's security fixes); the same line is changed in `servo-script-bindings` and `servo-script-webcrypto`. See
+`third_party/servo-script-webcrypto/MERCURY.md`. Drop at the bump that contains it (B1).
+
 ## Warnings
 
 Cargo does not cap lints for path dependencies, so compiling this crate in

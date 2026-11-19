@@ -12,8 +12,21 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message scaffold (R14 section 3.4).
+
+### Router for the Mercury messages — `constellation.rs`, `embedder.rs`, `tracing.rs`, new `mercury/`
+
+- **What:** `mercury/mod.rs` dispatches each message to one `impl Constellation` function per lane file
+  (`mercury/{core,a11y,media,page,text}.rs`; `Core::Probe` only traces; the others are `match message {}` until a
+  lane gives them variants). `constellation.rs` declares the module with `#[path = "mercury/mod.rs"] mod mercury;`
+  (not in `lib.rs`) so that it is a child of `constellation` and the lane files can use `Constellation`'s private
+  fields and methods without editing this file again, and gets two match arms: `handle_request_from_embedder` (after
+  `SetNetworkOnlineState`) and `handle_request_from_script` (after `ReleaseWakeLock`). `embedder.rs`:
+  `ConstellationToEmbedderMsg::Mercury(Option<WebViewId>, MercuryEmbedderMsg)`. `tracing.rs`: two `LogTarget` arms
+  (`constellation<embedder@Mercury`, `constellation<script@Mercury`). `lib.rs` is unchanged.
+- **Why:** lanes implement their handlers only in `mercury/<lane>.rs`.
+- **Tested by:** the `talaria-servo` router tests and the integration build; no unit test lives in this crate.
+- **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
 ## Removing this directory
 

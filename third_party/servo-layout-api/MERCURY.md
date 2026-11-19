@@ -12,8 +12,16 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane K0 (engine base, 19 Nov 2026).
+
+### Caret in contenteditable (servo/servo#48253) — `lib.rs`
+
+- **What:** backport of servo/servo#48253 "Render caret inside of contenteditable elements" (merge commit `cd332167d`).
+  `GenericLayoutDataTrait::set_text_run_selection` takes a second argument, `new_paints_caret: bool` (`lib.rs`, about line
+  94). Implemented in `servo-layout` (`dom.rs`) and called from `servo-script` (`dom/characterdata/characterdata.rs`).
+- **Why:** see `third_party/servo-layout/MERCURY.md`.
+- **Tested by:** `tests/pages/compat-editing.html`.
+- **Drop when:** the Servo bump that contains PR #48253 (B1).
 
 ## Removing this directory
 
