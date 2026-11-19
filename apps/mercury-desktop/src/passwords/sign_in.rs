@@ -500,3 +500,137 @@ mod save_problem_tests {
         assert_eq!(save_problem(), None);
     }
 }
+
+// passwords-ui (review round 3): the notice on a real browser window, from the failed save to
+// Retry and Dismiss, through `connect_main_window` and the window's own buttons.
+#[cfg(test)]
+mod main_window_tests {
+    use i_slint_backend_testing::{AccessibleRole, ElementHandle};
+    use mercury_password_manager::Interaction;
+
+    use super::*;
+    use crate::passwords::tests::{install_deferred, install_fakes};
+    use crate::settings::tests::init_slint;
+
+    const ORIGIN: &str = "https://example.com";
+    const PROBLEM: &str = "Couldn't save the login for example.com.";
+
+    /// The notice's button with this label, as the window draws it (the only control of the
+    /// window with that label).
+    fn button(window: &MainWindow, label: &str) -> Option<ElementHandle> {
+        let mut found = ElementHandle::find_by_accessible_label(window, label)
+            .filter(|element| element.accessible_role() != Some(AccessibleRole::Text));
+        let first = found.next();
+        assert!(
+            found.next().is_none(),
+            "more than one control is labelled {label:?}"
+        );
+        first
+    }
+
+    /// The user ticked the save choice and signed in, and the page loaded. A control character
+    /// in the user name makes the store refuse the login.
+    fn sign_in_that_cannot_be_saved(passwords: &Rc<Passwords>) {
+        let tab = TabId::new(1);
+        sign_in_sent(tab, ORIGIN, "bob\u{1}", "fake-b");
+        observe_event(passwords, tab, &BrowserEvent::PageLoadStarted);
+        observe_event(
+            passwords,
+            tab,
+            &BrowserEvent::LoadStateChanged {
+                state: LoadState::Loaded,
+            },
+        );
+    }
+
+    #[test]
+    fn a_failed_save_is_shown_on_the_window_and_its_buttons_retry_and_dismiss() {
+        init_slint();
+        let _settings = crate::settings::SettingsHandle::start(None);
+        let (passwords, _, _) = install_deferred();
+        let window = MainWindow::new().expect("the main window");
+        connect_main_window(&window);
+        assert_eq!(window.get_password_save_problem(), "");
+        assert!(button(&window, "Retry").is_none(), "no notice yet");
+
+        // Nothing is said while the save is still under way (macOS may be asking).
+        sign_in_that_cannot_be_saved(&passwords);
+        assert_eq!(passwords.worker.pending(), 1);
+        assert_eq!(window.get_password_save_problem(), "");
+        passwords.worker.run_queued();
+        assert_eq!(window.get_password_save_problem(), PROBLEM);
+        assert!(button(&window, "Dismiss").is_some(), "the notice is drawn");
+
+        // Retry, the window's own button: the notice goes while the save runs again, and comes
+        // back when that fails too.
+        button(&window, "Retry")
+            .expect("a Retry button")
+            .invoke_accessible_default_action();
+        assert_eq!(window.get_password_save_problem(), "");
+        assert_eq!(passwords.worker.pending(), 1, "Retry saves again");
+        assert_eq!(
+            passwords.worker.last_interaction(),
+            Some(Interaction::Allowed),
+            "a gesture: macOS may ask"
+        );
+        passwords.worker.run_queued();
+        assert_eq!(window.get_password_save_problem(), PROBLEM);
+
+        // Dismiss: the notice goes and the sign-in is forgotten, unsaved.
+        button(&window, "Dismiss")
+            .expect("a Dismiss button")
+            .invoke_accessible_default_action();
+        assert_eq!(window.get_password_save_problem(), "");
+        assert_eq!(save_problem(), None);
+        assert!(button(&window, "Retry").is_none(), "the notice is gone");
+        assert_eq!(passwords.worker.pending(), 0, "Dismiss saves nothing");
+        assert!(passwords.logins.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_retry_that_works_clears_the_notice_and_lists_the_login() {
+        init_slint();
+        let _settings = crate::settings::SettingsHandle::start(None);
+        let (passwords, _, _) = install_fakes();
+        let window = MainWindow::new().expect("the main window");
+        connect_main_window(&window);
+        sign_in_that_cannot_be_saved(&passwords);
+        assert_eq!(window.get_password_save_problem(), PROBLEM);
+        // The memory store has no transient failure to offer, such as a locked keychain that
+        // the user has since unlocked. This stands in for it: the kept sign-in becomes one the
+        // store accepts, and Retry saves what was kept.
+        passwords
+            .failed_save
+            .borrow_mut()
+            .as_mut()
+            .expect("the failed sign-in is kept")
+            .key = LoginKey::http_auth(Origin::parse(ORIGIN).expect("valid"), "", "bob");
+
+        button(&window, "Retry")
+            .expect("a Retry button")
+            .invoke_accessible_default_action();
+
+        assert_eq!(window.get_password_save_problem(), "");
+        assert_eq!(save_problem(), None);
+        assert!(button(&window, "Retry").is_none(), "the notice is gone");
+        assert_eq!(
+            saved_sign_in_username(ORIGIN, false).as_deref(),
+            Some("bob"),
+            "the login is saved and listed"
+        );
+    }
+
+    #[test]
+    fn a_save_that_failed_before_the_window_was_connected_is_shown_when_it_is() {
+        init_slint();
+        let _settings = crate::settings::SettingsHandle::start(None);
+        let (passwords, _, _) = install_fakes();
+        sign_in_that_cannot_be_saved(&passwords);
+        assert!(passwords.failed_save.borrow().is_some());
+
+        let window = MainWindow::new().expect("the main window");
+        connect_main_window(&window);
+
+        assert_eq!(window.get_password_save_problem(), PROBLEM);
+    }
+}

@@ -312,7 +312,7 @@ pub(crate) mod tests {
 
     type Fakes = (Rc<Passwords>, Rc<FakeAuthenticator>, Rc<FakePasteboard>);
 
-    fn install_with(worker: StoreWorker) -> Fakes {
+    pub(crate) fn install_with(worker: StoreWorker) -> Fakes {
         let authenticator = Rc::new(FakeAuthenticator::default());
         let pasteboard = Rc::new(FakePasteboard::default());
         let passwords = Passwords::new(worker, true, authenticator.clone(), pasteboard.clone());

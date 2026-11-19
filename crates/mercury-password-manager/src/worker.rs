@@ -409,3 +409,44 @@ mod panic_tests {
         });
     }
 }
+
+// passwords-ui (review round 3): `WorkerFailure::Stopped` had no test.
+#[cfg(test)]
+mod stopped_tests {
+    use std::time::{Duration, Instant};
+
+    use super::*;
+
+    #[test]
+    fn a_worker_thread_that_is_gone_reports_stopped_for_every_later_job() {
+        // A delivery that panics ends the worker thread (only the job itself runs under
+        // `catch_unwind`), which is the one way the thread can be lost.
+        let deliver: Deliver = Arc::new(|_, _| panic!("the thread ends (expected in this test)"));
+        let worker = StoreWorker::spawn(AnyBackend::memory(), deliver).expect("a thread");
+        let failures = Rc::new(RefCell::new(Vec::new()));
+        let seen = Rc::clone(&failures);
+        worker.set_on_failure(Box::new(move |failure| seen.borrow_mut().push(failure)));
+        let replied = Rc::new(Cell::new(false));
+
+        // The first job reaches the thread and kills it on delivery; jobs sent while it is still
+        // going down wait for a reply that never comes, so keep sending until the channel is
+        // closed.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while failures.borrow().is_empty() && Instant::now() < deadline {
+            let seen = Rc::clone(&replied);
+            worker.run(Interaction::Allowed, |_| (), move |()| seen.set(true));
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert_eq!(*failures.borrow(), vec![WorkerFailure::Stopped]);
+        assert!(!replied.get(), "no reply ever comes from a stopped worker");
+        let waiting = worker.pending();
+        worker.run(Interaction::Allowed, |_| (), |()| {});
+        assert_eq!(
+            *failures.borrow(),
+            vec![WorkerFailure::Stopped, WorkerFailure::Stopped],
+            "every later job is told too"
+        );
+        assert_eq!(worker.pending(), waiting, "and none is left waiting");
+    }
+}

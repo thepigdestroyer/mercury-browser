@@ -911,10 +911,12 @@ mod worker_tests {
 // passwords-ui (review round 2): written before the fix.
 #[cfg(test)]
 mod failure_tests {
-    use mercury_password_manager::Interaction;
+    use std::time::{Duration, Instant};
+
+    use mercury_password_manager::{AnyBackend, Deliver, Interaction, StoreWorker};
 
     use super::*;
-    use crate::passwords::tests::install_deferred;
+    use crate::passwords::tests::{install_deferred, install_with};
     use crate::settings::tests::init_slint;
 
     #[test]
@@ -934,5 +936,27 @@ mod failure_tests {
         passwords.worker.run_queued();
 
         assert_eq!(ui(&window).get_status(), STORE_FAILED);
+    }
+
+    #[test]
+    fn a_store_thread_that_is_gone_says_so_in_the_settings_window() {
+        init_slint();
+        // A delivery that panics ends the store thread (only a job itself runs under
+        // `catch_unwind`); the browser's own delivery never panics.
+        let deliver: Deliver = std::sync::Arc::new(|_, _| panic!("the thread ends (expected)"));
+        let worker = StoreWorker::spawn(AnyBackend::memory(), deliver).expect("a thread");
+        let (passwords, _, _) = install_with(worker);
+        let window = SettingsWindow::new().expect("a window");
+        connect_settings_window(&window);
+
+        // Jobs sent while the thread is still going down wait for a reply that never comes;
+        // keep sending until its channel is closed.
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while ui(&window).get_status() != STORE_STOPPED && Instant::now() < deadline {
+            passwords.worker.run(Interaction::Allowed, |_| (), |()| {});
+            std::thread::sleep(Duration::from_millis(5));
+        }
+
+        assert_eq!(ui(&window).get_status(), STORE_STOPPED);
     }
 }
