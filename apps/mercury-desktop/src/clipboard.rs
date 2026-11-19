@@ -3,12 +3,13 @@
 
 // The clipboard pages use (clipboard lane).
 //
-// A normal run gives pages the system clipboard, behind the engine's gate (`talaria_core::
-// ClipboardGate`: writes after a user gesture, a script's reads only once the engine names the
-// frame that asks, and the Cut, Copy and Paste the user chooses). Automated runs
+// A normal run gives the user's Cut, Copy and Paste the system clipboard, behind the engine's gate
+// (`talaria_core::ClipboardGate`). Pages get `navigator.clipboard` only while `talaria_core::
+// ASYNC_CLIPBOARD_OFFERED` is on (off today); then the gate also allows a page's writes after a
+// user gesture and its reads only once the engine names the frame that asks. Automated runs
 // (`--screenshot`, `--background`, `--import-from`) and tests get a clipboard in memory, so that
 // they never read or overwrite the user's: in such a run `MERCURY_TEST_CLIPBOARD_TEXT` sets its
-// starting text, for test pages that check a read is refused.
+// starting text, for test pages that check what a page can read.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;

@@ -17,9 +17,12 @@
 //! - everything else is refused. Servo cannot tell a page that a write was refused (its
 //!   `writeText()` promise resolves anyway), and a refused read gives the page empty text.
 //!
-//! Known limit while the request names no frame: the tab's user activation and the user's Cut
-//! and Copy also let the page's frames from other sites write, and the user's Paste lets them
-//! read, in the short window each grants.
+//! `navigator.clipboard` itself is not offered to pages while `ASYNC_CLIPBOARD_OFFERED` is off, so
+//! until then every request that reaches the gate is the user's own Cut, Copy or Paste.
+//!
+//! Known limit once the API is offered while the request names no frame: the tab's user
+//! activation and the user's Cut and Copy also let the page's frames from other sites write, and
+//! the user's Paste lets them read, in the short window each grants.
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -29,6 +32,28 @@ use crate::{ClipboardCommand, ContextMenuAction, KeyState, KeyboardInput};
 /// How long after the user chose Cut, Copy or Paste the page's clipboard access for it is
 /// allowed. Servo performs the edit on the page's script thread, which may be busy for a moment.
 pub const USER_CLIPBOARD_ACTION_WINDOW: Duration = Duration::from_secs(2);
+
+/// Whether pages get `navigator.clipboard` at all (Servo's `dom_async_clipboard_enabled`). Off,
+/// as it was before the clipboard lane: the user's own Cut, Copy and Paste work, a site's own
+/// Copy button does not.
+///
+/// Servo 0.8.0 names no frame in its clipboard requests, so with the API on, a frame from
+/// another site (an advert) shares every window this module grants the page: it can overwrite
+/// the clipboard within a second of any click or key press in the tab or within two seconds of
+/// the user's Copy or Cut, and its `readText()` can race Servo's own read for the user's Paste
+/// and get what the user is pasting (a password copied from the password manager, say). Turn on
+/// either when the vendored `servo-script` frame gate patch lands (same change as
+/// `CLIPBOARD_READ_FRAME_GATE`, see below), or when the owner has accepted that limit in
+/// writing. Turning it on is one flip of this constant, plus:
+/// - the preference test `async_clipboard_stays_disabled` and the count of enabled experimental
+///   preferences in `talaria-servo`'s `runtime.rs` (the clipboard API is excluded from the
+///   experimental features today);
+/// - `tests/pages/clipboard.html` and its screenshot check in
+///   `docs/developer-guide/testing.md` (the page then shows `navigator.clipboard: present`);
+/// - the hands-on checklist (`docs/developer-guide/hands-on-checklist.md`, Clipboard), the user
+///   guide (`docs/user-guide/privacy-and-security.md`, Clipboard) and the help text of
+///   `--disable-experimental-web-features` in the desktop app's `cli.rs`.
+pub const ASYNC_CLIPBOARD_OFFERED: bool = false;
 
 /// The switch for a script's clipboard reads (`navigator.clipboard.readText()`) behind the
 /// user's permission. Off until the vendored `servo-script` refuses the clipboard to a document
@@ -53,9 +78,15 @@ pub const USER_CLIPBOARD_ACTION_WINDOW: Duration = Duration::from_secs(2);
 /// - text copied from Mercury's own password manager lands on this same clipboard, so a
 ///   user-approved read would expose it while it is there (passwords lane: it clears the
 ///   clipboard after a timeout; check that it is short enough);
+/// - `ASYNC_CLIPBOARD_OFFERED` must be on, or no page has a `readText()` to ask with;
 /// - flipping the constant also turns on `PagePermission::ClipboardRead::is_promptable`: update
-///   `docs/developer-guide/hands-on-checklist.md` (Clipboard, step 3) and
-///   `docs/user-guide/privacy-and-security.md` (Clipboard) in the same change.
+///   the tests that pin it off (`script_reads_and_the_clipboard_api_stay_off` below, and
+///   `clipboard_reading_is_not_asked_while_script_reads_are_off` in `tests/page_requests.rs`),
+///   `docs/developer-guide/hands-on-checklist.md` (Clipboard) and
+///   `docs/user-guide/privacy-and-security.md` (Clipboard), in the same change.
+///
+/// While it is off, the password manager's "copy password" is safe from a page's script: a
+/// script's read is refused here (and, with `ASYNC_CLIPBOARD_OFFERED` off, no page has one).
 pub const CLIPBOARD_READ_FRAME_GATE: bool = false;
 
 /// The text clipboard pages read and write. The browser uses the system clipboard in a normal
@@ -239,7 +270,7 @@ pub const fn context_menu_clipboard_command(action: ContextMenuAction) -> Option
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{KeyLocation, KeyboardModifiers};
+    use crate::{KeyLocation, KeyboardModifiers, PagePermission};
 
     const fn ms(value: u64) -> Duration {
         Duration::from_millis(value)
@@ -379,13 +410,38 @@ mod tests {
         );
     }
 
+    /// The pin for the password manager's "copy password" (a copied password sits on the same
+    /// clipboard): no page may read the clipboard on its own until the engine names the frame that
+    /// asks. This fails the moment either constant is turned on; whoever does that must work
+    /// through the turn-on checklists in the doc comments of both constants (frame gate patch,
+    /// blocking Paste, password manager, docs) and change this test in the same commit.
     #[test]
-    fn script_reads_stay_off_until_the_engine_names_the_frame() {
-        assert_eq!(
-            ClipboardGate::default().script_reads,
-            CLIPBOARD_READ_FRAME_GATE
+    fn script_reads_and_the_clipboard_api_stay_off() {
+        let (api_offered, reads_gate) = (ASYNC_CLIPBOARD_OFFERED, CLIPBOARD_READ_FRAME_GATE);
+        assert!(
+            !api_offered,
+            "ASYNC_CLIPBOARD_OFFERED is on: see its doc comment for what must hold first"
         );
-        let mut gate = ClipboardGate::new(false);
+        assert!(
+            !reads_gate,
+            "CLIPBOARD_READ_FRAME_GATE is on: see its doc comment for what must hold first \
+             (frame gate engine patch, the blocking Paste, the password manager)"
+        );
+        // What the tabs actually use, not just the constants.
+        assert!(
+            !ClipboardGate::default().script_reads,
+            "a tab's gate offers script reads: the password manager's copied passwords are exposed"
+        );
+        assert!(
+            !PagePermission::ClipboardRead.is_promptable(),
+            "a script's clipboard read would be asked"
+        );
+    }
+
+    #[test]
+    fn a_script_read_is_refused_by_the_gate_a_tab_starts_with() {
+        // `ClipboardGate::default()` is what every tab starts with.
+        let mut gate = ClipboardGate::default();
         let mut activation_taken = false;
         assert_eq!(
             gate.read(ms(0), || {

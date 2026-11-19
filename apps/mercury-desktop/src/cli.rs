@@ -104,8 +104,8 @@ Options:
   --disable-gpu-canvas             Draw 2D canvases on the CPU
   --disable-experimental-web-features
                                    Leave off Servo's experimental web-platform features
-                                   (servoshell's list minus WebGPU, which is always
-                                   off; the clipboard API stays on)
+                                   (servoshell's list minus the async clipboard and
+                                   WebGPU, which are always off)
                                    Both --disable options turn the feature off for this
                                    run whatever the setting says; they cannot turn on a
                                    feature the settings turned off

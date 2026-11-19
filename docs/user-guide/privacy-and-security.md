@@ -25,9 +25,9 @@ Pages are cached on disk as well as in memory: for the default profile in `~/Lib
 
 Cut, Copy and Paste work in pages as usual: with their shortcuts, from the page's context menu, and from the Edit menu while the page has keyboard focus.
 
-A page's script can put text on the clipboard (a site's **Copy** button) only within about a second of your click or key press in that tab, or within about two seconds after you cut or copy in it. At any other time the page is told the copy worked, but your clipboard is left alone. On its own, a script cannot read the clipboard: `navigator.clipboard.readText()` gets empty text. A page sees what is on the clipboard only when you paste into it.
+A page sees what is on your clipboard only when you paste into it, and it can change your clipboard only through your own Cut or Copy. Mercury does not yet offer pages the clipboard API (`navigator.clipboard`): a site's own **Copy** button, which uses it, does not work yet (select the text and copy it yourself), and no script can read or overwrite your clipboard on its own.
 
-Mercury cannot yet tell which frame of a page is asking. So in those same moments a frame from another site inside the page (an advert, for example) is treated like the page itself: it could also put text on the clipboard, and for about two seconds after you paste, its first read could be taken for your paste and get the text you are pasting. Closing this gap needs a change inside the engine.
+The reason is that Mercury cannot yet tell which frame of a page is asking. With the API on, a frame from another site inside the page (an advert, for example) would be treated like the page itself: it could put text on your clipboard shortly after you click, and it could read what you are pasting, such as a password you copied from the password manager. The API will be offered once the engine can tell the frames apart.
 
 ## Proxy servers
 

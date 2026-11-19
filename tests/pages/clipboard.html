@@ -12,15 +12,19 @@
 </head>
 <body>
   <h1>Clipboard test page</h1>
-  <p>Without a click or key press, the page writes to the clipboard and then reads it.
-     Mercury must refuse both: the clipboard keeps what it held (Servo says the write succeeded
-     anyway), and the read gets empty text, not what was on the clipboard.</p>
+  <p>Mercury does not offer <code>navigator.clipboard</code> to pages yet, so the first line below
+     must say <code>missing</code>. Your own Cut, Copy and Paste still work: try the box at the
+     bottom.</p>
+  <p>If the API is ever offered (<code>ASYNC_CLIPBOARD_OFFERED</code>), the page tries, without a
+     click or key press, to write to the clipboard and then to read it. Mercury must refuse both:
+     the clipboard keeps what it held (Servo says the write succeeded anyway), and the read gets
+     empty text, not what was on the clipboard.</p>
   <p id="api">Checking navigator.clipboard…</p>
   <p id="write">writeText not called yet.</p>
   <p id="read">readText not called yet.</p>
   <p>By hand: <button id="copy">Copy "Mercury copy button"</button>
      <button id="paste">Read the clipboard</button>
-     (a script's read gets empty text, click or not)</p>
+     (a script's read gets empty text, click or not; with the API missing, both say so)</p>
   <p id="manual"></p>
   <p>Your own paste: copy some text, click in the box, paste (Cmd+V, Edit, Paste, or the context
      menu). The box fills, and the line below shows what the page's paste handler was given.</p>
@@ -31,15 +35,22 @@
   const quoted = text => JSON.stringify(text);
   document.getElementById("box").addEventListener("paste", event =>
     show("pasted", "paste event: " + quoted(event.clipboardData.getData("text/plain"))));
-  document.getElementById("copy").addEventListener("click", () =>
-    navigator.clipboard.writeText("Mercury copy button").then(() => show("manual", "Copied.")));
-  document.getElementById("paste").addEventListener("click", () =>
+  const missing = () => show("manual", "navigator.clipboard is missing.");
+  document.getElementById("copy").addEventListener("click", () => {
+    if (!("clipboard" in navigator)) return missing();
+    navigator.clipboard.writeText("Mercury copy button").then(() => show("manual", "Copied."));
+  });
+  document.getElementById("paste").addEventListener("click", () => {
+    if (!("clipboard" in navigator)) return missing();
     navigator.clipboard.readText().then(
       text => show("manual", "Read " + quoted(text)),
-      error => show("manual", "Read rejected: " + error.name)));
+      error => show("manual", "Read rejected: " + error.name));
+  });
   window.addEventListener("load", () => setTimeout(async () => {
     if (!("clipboard" in navigator)) {
       show("api", "navigator.clipboard: missing");
+      show("write", "writeText: no API to call.");
+      show("read", "readText: no API to call.");
       return;
     }
     show("api", "navigator.clipboard: present");

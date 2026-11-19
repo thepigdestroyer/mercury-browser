@@ -91,8 +91,8 @@ pub struct RuntimeOptions {
     /// Where Servo keeps cookies, HSTS, HTTP authentication and site storage. `None` keeps
     /// nothing across runs.
     pub config_dir: Option<PathBuf>,
-    /// Turn on servoshell's experimental web-platform features, except WebGPU (see
-    /// `EXCLUDED_EXPERIMENTAL_PREFS`); the async clipboard is on either way.
+    /// Turn on servoshell's experimental web-platform features, except the async clipboard and
+    /// WebGPU (see `EXCLUDED_EXPERIMENTAL_PREFS`).
     pub experimental_web_features: bool,
     // settings
     /// Block ads and trackers from the start; changed later through `ServoRuntime::switches`.
@@ -376,13 +376,15 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
             preferences.set_value(name, PrefValue::Bool(true));
         }
     }
-    // clipboard: always on, also without the experimental features. Servo 0.8.0 checks neither
+    // clipboard: off, as `talaria_core::ASYNC_CLIPBOARD_OFFERED` says (its doc comment is the
+    // turn-on checklist), also with the experimental features. Servo 0.8.0 checks neither
     // permission nor user activation for `navigator.clipboard` (`dom/clipboard/clipboard.rs`, the
-    // "check clipboard read permission" step is a TODO); every web view's `ClipboardDelegate`
-    // (`crate::clipboard`) does: writes need a user gesture; a script's reads are refused until
-    // `talaria_core::CLIPBOARD_READ_FRAME_GATE` is on, then need a gesture and the user's
-    // permission.
-    preferences.dom_async_clipboard_enabled = true;
+    // "check clipboard read permission" step is a TODO) and its requests name no frame, so any
+    // frame of a page, an advert too, could write the clipboard after any click of the user's,
+    // and its `readText()` could race the user's Paste for what is being pasted. Every web view's
+    // `ClipboardDelegate` (`crate::clipboard`) gates the requests that do reach it, which with
+    // the API off are the user's own Cut, Copy and Paste.
+    preferences.dom_async_clipboard_enabled = talaria_core::ASYNC_CLIPBOARD_OFFERED;
     // Always off while Mercury does not build Servo's `webgpu` cargo feature: the preference alone
     // exposes `GPUCanvasContext` and other WebGPU names over unimplemented stubs, which makes
     // feature detection report WebGPU that is not there.
@@ -488,7 +490,7 @@ const EXPERIMENTAL_PREFS: &[&str] = &[
 
 /// Entries of `EXPERIMENTAL_PREFS` that Mercury leaves off; the reasons are given where they
 /// are pinned in `mercury_preferences`.
-const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &["dom_webgpu_enabled"];
+const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &["dom_async_clipboard_enabled", "dom_webgpu_enabled"];
 
 /// Servo's user agent already names the Firefox release it matches, but carries a `Servo/x.y`
 /// token where Firefox has `Gecko/20100101`; some sites refuse to serve unrecognised browsers.
@@ -1176,22 +1178,30 @@ mod tests {
         let preferences = preferences_with_experimental_web_features(true);
 
         assert_eq!(EXPERIMENTAL_PREFS.len(), 18);
-        assert_eq!(EXCLUDED_EXPERIMENTAL_PREFS, &["dom_webgpu_enabled"]);
+        assert_eq!(
+            EXCLUDED_EXPERIMENTAL_PREFS,
+            &["dom_async_clipboard_enabled", "dom_webgpu_enabled"]
+        );
         let enabled = EXPERIMENTAL_PREFS
             .iter()
             .filter(|name| !EXCLUDED_EXPERIMENTAL_PREFS.contains(name))
             .collect::<Vec<_>>();
-        assert_eq!(enabled.len(), 17);
+        assert_eq!(enabled.len(), 16);
         for name in enabled {
             assert_eq!(preferences.get_value(name), PrefValue::Bool(true), "{name}");
         }
     }
 
     #[test]
-    fn async_clipboard_is_on_behind_mercurys_clipboard_delegate() {
+    fn async_clipboard_stays_disabled() {
+        // `navigator.clipboard` stays off until `talaria_core::ASYNC_CLIPBOARD_OFFERED` is turned
+        // on, which its doc comment lets happen only with the engine's frame gate (or the
+        // owner's written acceptance of the cross-origin limit). Nothing here may turn it on
+        // for the experimental features or any other setting.
         for enabled in [true, false] {
             assert!(
-                preferences_with_experimental_web_features(enabled).dom_async_clipboard_enabled
+                !preferences_with_experimental_web_features(enabled).dom_async_clipboard_enabled,
+                "the async clipboard is on: see ASYNC_CLIPBOARD_OFFERED for what must hold first"
             );
         }
     }
@@ -1213,12 +1223,7 @@ mod tests {
         let preferences = preferences_with_experimental_web_features(false);
         let defaults = Preferences::default();
 
-        // The async clipboard is the one entry that is on either way, behind Mercury's clipboard
-        // delegate (see `async_clipboard_is_on_behind_mercurys_clipboard_delegate`).
-        for name in EXPERIMENTAL_PREFS
-            .iter()
-            .filter(|name| **name != "dom_async_clipboard_enabled")
-        {
+        for name in EXPERIMENTAL_PREFS {
             assert_eq!(
                 preferences.get_value(name),
                 defaults.get_value(name),
