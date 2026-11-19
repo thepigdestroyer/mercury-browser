@@ -16,7 +16,10 @@
 <script>
   // Runs after the load event, so the page has finished loading when the request appears.
   window.addEventListener("load", () => setTimeout(() => {
-    // Mercury has no camera access, so this must be denied without a prompt.
+    // On macOS the camera permission is promptable (PagePermission::is_promptable): a bubble
+    // appears under the address bar and the page stays "Not answered yet." until it is answered;
+    // Block makes it say "camera permission: denied.". On other systems the request is denied
+    // at once, without a prompt.
     navigator.permissions.request({ name: "camera" }).then(status =>
       document.getElementById("result").textContent = "camera permission: " + status.state + ".");
   }, 0));

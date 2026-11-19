@@ -41,7 +41,7 @@ have. On Linux it is ++ctrl+m++, as in Firefox and Edge.
 
 ++cmd+left++ and ++cmd+right++ go back and forward only when no text field has the keyboard; in a text field they move to the start or end of the line as usual. The editing keys (++cmd+z++, ++shift+cmd+z++, ++cmd+x++, ++cmd+c++, ++cmd+v++, ++cmd+a++) work in the address bar and in the page. Holding a zoom or tab-switching shortcut, ++cmd+g++ or ++shift+cmd+g++ repeats it; other shortcuts run once per press.
 
-On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go back and forward, ++f5++ reloads, ++alt+d++ goes to the address bar, ++ctrl+page-down++ and ++ctrl+page-up++ switch tabs, ++ctrl+h++ opens the history, ++ctrl+shift+delete++ clears browsing data, ++ctrl+shift+o++ opens the bookmarks manager, and Close Other Tabs has no key.
+On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go back and forward, ++f5++ reloads, ++f3++ and ++shift+f3++ go to the next and previous match (as do ++ctrl+g++ and ++ctrl+shift+g++), ++alt+d++ goes to the address bar, ++ctrl+page-down++ and ++ctrl+page-up++ switch tabs, ++ctrl+h++ opens the history, ++ctrl+shift+delete++ clears browsing data, ++ctrl+shift+o++ opens the bookmarks manager, and Close Other Tabs has no key.
 
 ## The menu bar
 
@@ -83,7 +83,7 @@ Right-click (or Control-click) in a page:
 
 - **Alerts, confirmations and text prompts** appear as a sheet headed "*site* says" over the dimmed page. They don't put the cursor in a text field until you click it or press ++tab++. If a page keeps showing dialogs, the second one offers **Don't allow this page to show more dialogs**.
 - **HTTP sign-in** shows a sheet asking for a user name and password for the site. The address bar never shows them afterwards.
-- **"Leave this page?"** prompts appear when a page asks for them on a reload or a navigation. Closing a tab skips them.
+- **"Leave this page?"** prompts appear when a page asks for them on a reload or a navigation. The sheet is headed "Leave this page?" (buttons **Leave** and **Stay**) and says "Changes you made may not be saved."; when your own navigation was a reload, it is headed "Reload this page?" (buttons **Reload** and **Stay**). Closing a tab skips them.
 - **Permission prompts** appear under the address bar; see [Privacy and security](privacy-and-security.md#permissions).
 
 None of these take the keyboard from the address bar or the page while you type.
