@@ -37,8 +37,12 @@ for name in \
     status=$?
     # The whole output of each test (INFO lines, panics) goes to RUN_TESTS_FULL_LOG when it is set.
     if [ -n "${RUN_TESTS_FULL_LOG:-}" ]; then cat "$log" >>"$RUN_TESTS_FULL_LOG"; fi
-    if grep '^RESULT ' "$log"; then
-        grep -q "^RESULT ${id} pass\|^RESULT ${id} skip" "$log" || failures=$((failures + 1))
+    if grep -o 'RESULT t[0-9][0-9] .*' "$log"; then
+        grep -q "RESULT ${id} pass\|RESULT ${id} skip" "$log" || failures=$((failures + 1))
+        if [ "$status" -ne 0 ] && grep -q "RESULT ${id} pass" "$log"; then
+            printf 'RESULT %s fail the test printed pass but its process ended with status %s (a crash while shutting down)\n' "$id" "$status"
+            failures=$((failures + 1))
+        fi
     else
         printf 'RESULT %s fail the test process ended with status %s and printed no RESULT line (a libwebrtc abort or a build error); last output: %s\n' \
             "$id" "$status" "$(tail -n 3 "$log" | tr '\n' ' ')"

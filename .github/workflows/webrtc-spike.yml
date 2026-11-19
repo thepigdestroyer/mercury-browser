@@ -311,6 +311,19 @@ jobs:
           cat "${LOG_DIR}/sizes.tsv"
           cat "${LOG_DIR}/otool-vtool.txt"
 
+      # A crash (the first runs of route S ended in SIGSEGV) leaves a report here; the files are text.
+      - name: Collect crash reports
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          mkdir -p "${LOG_DIR}/crash"
+          find "${HOME}/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports -maxdepth 1 -type f -mmin -180 \
+            \( -name 'calls-*' -o -name 'capture-*' -o -name 'concurrent-*' -o -name 'slow_sink-*' -o -name 'threads-*' -o -name 'remote-*' \) \
+            -exec cp {} "${LOG_DIR}/crash/" \; 2>/dev/null || true
+          ls -la "${LOG_DIR}/crash"
+
       - name: Report
         if: always()
         shell: bash
