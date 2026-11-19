@@ -714,6 +714,7 @@ mod tests {
             final_url: Url::parse(&format!("https://cdn.example.com/{name}")).unwrap(),
             etag: Some("\"v1\"".into()),
             last_modified: None,
+            attachment: false,
         }
     }
 

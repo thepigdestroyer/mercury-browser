@@ -32,7 +32,7 @@ description: Save links, images and pages, find your downloads, and what Mercury
 ## Files the engine cannot show
 
 Mercury's engine, Servo, does not download files itself. When a link leads to a file it cannot
-display (a ZIP archive, a PDF, an installer), Mercury notices, goes back to the page you were
+display (a ZIP archive, an installer), Mercury notices, goes back to the page you were
 on, and fetches the file again itself:
 
 - **If you clicked the link or typed the address,** the file downloads straight away.
@@ -45,6 +45,20 @@ on, and fetches the file again itself:
   - files made by the page itself (`blob:` and `data:` addresses).
 
   The downloads list says so.
+- **PDF files are the exception.** They open in the tab, in Mercury's own PDF viewer (see
+  [PDF viewer](pdf-viewer.md)), and the tab stays on the PDF's address. Settings, Downloads, **PDF
+  files** changes that:
+  - **Open in Mercury Browser** (the default);
+  - **Open in the system's PDF app** saves the file in your Downloads folder and opens it in
+    Preview, or whatever app you chose for PDFs. It does so only when you clicked the link or typed
+    the address, never for a page that started it on its own, and never when Mercury is run for a
+    screenshot or in the background;
+  - **Download** saves a PDF like any other file.
+
+  A site that sends a PDF as a file to save (a `Content-Disposition: attachment` header) is always
+  downloaded. If the viewer is not available (its PDF library is missing), PDFs behave as the second
+  choice. PDFs from a form's POST, and `blob:` and `data:` PDFs, cannot be opened, as for other
+  files.
 - **Links that work only once** (some download tokens and expiring links) may fail, because the
   file is fetched a second time. The list then says "The site did not send the file again;
   download it from the page".
@@ -53,6 +67,8 @@ on, and fetches the file again itself:
     The engine has already fetched the whole file by the time Mercury notices it, and that copy
     is thrown away; Mercury then fetches it again. A large download therefore uses twice the
     bandwidth. Fixing this needs a change inside the engine, which is planned.
+    A PDF shown in the viewer is fetched again the same way, into a private copy that is removed
+    when you close the tab or leave the page.
 
 Files of types the engine *can* show (text, images) open in the tab even when the site marks
 them as downloads. To save one, use **Save page as…**.

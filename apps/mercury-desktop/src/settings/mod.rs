@@ -669,6 +669,18 @@ pub(crate) fn password_saving_allowed(origin: &str) -> bool {
         })
 }
 
+// pdf-viewer
+/// What a PDF file does (`web.pdf`): the stored choice, or the default before the settings are
+/// loaded. Read each time a PDF is offered, so a change in the settings window applies to the
+/// next one.
+pub(crate) fn pdf_action() -> mercury_settings::PdfAction {
+    HANDLE
+        .with(|current| current.borrow().upgrade())
+        .map_or_else(mercury_settings::PdfAction::default, |handle| {
+            handle.settings.borrow().web.pdf
+        })
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use mercury_settings::Theme;

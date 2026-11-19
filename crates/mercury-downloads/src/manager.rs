@@ -105,6 +105,10 @@ pub enum DownloadEvent {
         final_url: url::Url,
         etag: Option<String>,
         last_modified: Option<String>,
+        /// The response said `Content-Disposition: attachment` (any type but `inline`): the
+        /// server means the file to be saved, not shown. Read from the final response, as the
+        /// file name is.
+        attachment: bool,
     },
     /// At most about four a second, and once more when the body is complete.
     Progress {

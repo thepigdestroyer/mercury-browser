@@ -32,6 +32,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::watch;
 use url::Url;
 
+use crate::disposition;
 use crate::error::TransferError;
 use crate::manager::{DownloadEvent, DownloadId, DownloadRequest, ResumeFrom, Timeouts};
 use crate::naming::{self, PART_SUFFIX};
@@ -299,6 +300,13 @@ impl Transfer {
             .and_then(|value| value.split(';').next().map(str::trim).map(str::to_owned))
             .filter(|essence| !essence.is_empty())
             .map(|essence| essence.to_ascii_lowercase());
+        // The server's wish to have the file saved rather than shown (the PDF viewer asks).
+        let attachment = disposition::is_attachment(
+            headers
+                .get(header::CONTENT_DISPOSITION)
+                .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
+                .as_deref(),
+        );
         let total = if appending {
             content_range_total(headers)
                 .or_else(|| response.content_length().map(|rest| offset + rest))
@@ -350,6 +358,7 @@ impl Transfer {
             final_url: final_url.clone(),
             etag,
             last_modified,
+            attachment,
         });
 
         let received = self

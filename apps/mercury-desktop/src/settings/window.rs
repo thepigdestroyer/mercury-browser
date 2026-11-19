@@ -94,6 +94,7 @@ pub(crate) fn fill(window: &SettingsWindow, settings: &Settings, save_problem: O
     window.set_save_problem(save_problem.unwrap_or_default().into());
 
     window.set_startup_index(index_of(&edit::STARTUP_CHOICES, &settings.startup));
+    window.set_pdf_index(index_of(&edit::PDF_CHOICES, &settings.web.pdf)); // pdf-viewer
     let engines = settings.search.engines();
     let builtin_ids = builtin_engines()
         .into_iter()

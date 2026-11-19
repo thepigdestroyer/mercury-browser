@@ -9,12 +9,17 @@
 //! never carry a name that lies about what it is.
 
 mod content_disposition;
+pub mod disposition;
 mod error;
 mod manager;
 pub mod naming;
 mod quarantine;
 mod transfer;
 
+pub use disposition::{
+    Attachment, Disposition, Facts, PDF_MARKER_WINDOW, PdfPreference, PdfRefusal, is_attachment,
+    is_pdf_mime, looks_like_pdf, pdf_disposition,
+};
 pub use manager::{
     DownloadEvent, DownloadId, DownloadManager, DownloadRequest, ResumeFrom, Timeouts,
 };

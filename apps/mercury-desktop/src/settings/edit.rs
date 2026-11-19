@@ -7,7 +7,7 @@
 use std::path::PathBuf;
 
 use mercury_settings::{
-    DEFAULT_ENGINE_ID, MAX_CUSTOM_ENGINES, MAX_ENGINE_ID_BYTES, SearchEngine, Settings,
+    DEFAULT_ENGINE_ID, MAX_CUSTOM_ENGINES, MAX_ENGINE_ID_BYTES, PdfAction, SearchEngine, Settings,
     SettingsError, StartupBehavior, Theme, homepage_url, is_plausible_language_tag,
 };
 use talaria_core::ZOOM_STEPS;
@@ -18,6 +18,12 @@ pub(crate) const STARTUP_CHOICES: [StartupBehavior; 3] = [
     StartupBehavior::RestoreSession,
 ];
 pub(crate) const THEME_CHOICES: [Theme; 3] = [Theme::System, Theme::Light, Theme::Dark];
+// pdf-viewer: the order of the "PDF files" list in the Downloads section
+pub(crate) const PDF_CHOICES: [PdfAction; 3] = [
+    PdfAction::OpenInMercury,
+    PdfAction::OpenInSystemViewer,
+    PdfAction::Download,
+];
 
 /// The text fields of the window, by name.
 pub(crate) const TEXT_FIELDS: [&str; 3] = ["homepage", "download-directory", "language"];
@@ -95,6 +101,11 @@ pub(crate) fn apply_choice(settings: &mut Settings, name: &str, index: usize) ->
         "theme" => THEME_CHOICES
             .get(index)
             .map(|&choice| settings.appearance.theme = choice)
+            .is_some(),
+        // pdf-viewer
+        "pdf" => PDF_CHOICES
+            .get(index)
+            .map(|&choice| settings.web.pdf = choice)
             .is_some(),
         "search-engine" => settings
             .search
@@ -336,6 +347,21 @@ mod tests {
             }
         }
         assert!(!apply_toggle(&mut settings, "no-such-setting", true));
+    }
+
+    #[test]
+    fn the_pdf_choice_sets_what_a_pdf_file_does() {
+        let mut settings = Settings::default();
+        assert_eq!(settings.web.pdf, PdfAction::OpenInMercury);
+
+        assert!(apply_choice(&mut settings, "pdf", 1));
+        assert_eq!(settings.web.pdf, PdfAction::OpenInSystemViewer);
+        assert!(apply_choice(&mut settings, "pdf", 2));
+        assert_eq!(settings.web.pdf, PdfAction::Download);
+        assert!(apply_choice(&mut settings, "pdf", 0));
+        assert_eq!(settings.web.pdf, PdfAction::OpenInMercury);
+        assert!(!apply_choice(&mut settings, "pdf", 3));
+        assert_eq!(settings.web.pdf, PdfAction::OpenInMercury);
     }
 
     #[test]
