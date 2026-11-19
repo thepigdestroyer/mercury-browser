@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mercury editing compatibility</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html, body { margin: 0; background: #ffffff; color: #000000; }
+  body { padding: 10px 16px; font: 14px/1.3 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  p.note { margin: 0 0 6px; font-size: 12px; color: #444444; }
+  /* The caret check: focused on load, never touched by the scenarios, a red caret on large text. */
+  #caret { font-size: 30px; line-height: 1.3; padding: 4px 10px; margin: 0 0 6px;
+           border: 2px solid #1a4f8b; caret-color: #d00000; outline: none; }
+  #summary { font: bold 16px/1.4 Menlo, monospace; margin: 2px 0; }
+  /* The editing lab: the scenarios rewrite and edit this host with document.execCommand. */
+  #lab, #inline-row { border: 1px dashed #999999; padding: 2px 8px; margin: 4px 0; font-size: 13px;
+                      overflow: hidden; }
+  #lab { height: 52px; }
+  #lab p, #lab blockquote { margin: 0; }
+  #inline-host { border-bottom: 1px dotted #999999; }
+  #log { font: 13px/17px Menlo, monospace; }
+  #log div { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .pass { color: #006400; }
+  #log .fail { white-space: normal; }
+  .fail { color: #b00000; font-weight: bold; }
+  .skip { color: #666666; }
+  .info { color: #1a4f8b; }
+</style>
+</head>
+<body>
+<!--
+  Mercury test page for the editing backports (K0, ED9): the caret in a contenteditable host
+  (servo#48253), outdent (#47459), the line-break fixes (#49797, #49818, and #49884 / #49917 /
+  #49920 when they are in) and a Range with huge offsets (#49541).
+
+  Open it from a test server or file://, for example
+    mercury-browser --screenshot out.png --window-size 1000x800 --screenshot-delay 1600 \
+      file:///path/to/tests/pages/compat-editing.html
+  The scenarios run in one go when the page loads and every line starts with PASS, FAIL, SKIP or
+  INFO. Afterwards the focus goes back to the box at the top, with the selection collapsed at the end
+  of its text, so a blinking caret must be drawn there. Servo blinks it with a half cycle of 600 ms
+  (editing_caret_blink_time), visible first: it shows in the windows [t, t+600), [t+1200, t+1800),
+  ... after the first paint at t (the page prints t as "caret restored at"). The default
+  --screenshot-delay of 1000 falls in a hidden half; 1600 is the middle of the second visible window
+  (retry with 400 or 2800 if the caret is missing, and check that the window has focus: Servo draws
+  no caret in a window without system focus). A crash page in the screenshot is a failure.
+  The beforeinput+input checks follow the editing spec (Servo fires both for execCommand); Chromium
+  fires only input for execCommand, so those checks FAIL there, which is not a Servo problem.
+-->
+<h1>Editing compatibility</h1>
+<p class="note">The red caret must blink in the box below. The lines under it come from document.execCommand scenarios.</p>
+<div id="caret" contenteditable="true" spellcheck="false" autofocus>Type here, the caret is at the end of this line</div>
+<div id="summary">running</div>
+<div id="lab" contenteditable="true" spellcheck="false"></div>
+<div id="inline-row">inline editing host: <span id="inline-host" contenteditable="true" spellcheck="false">onetwo</span></div>
+<div id="log"></div>
+<script>
+  "use strict";
+
+  const caretBox = document.getElementById("caret");
+  const lab = document.getElementById("lab");
+  const inlineHost = document.getElementById("inline-host");
+  const logBox = document.getElementById("log");
+  const summary = document.getElementById("summary");
+  const selection = window.getSelection();
+  const counts = { PASS: 0, FAIL: 0, SKIP: 0, INFO: 0 };
+
+  function line(status, name, detail) {
+    counts[status]++;
+    const row = document.createElement("div");
+    row.className = status.toLowerCase();
+    row.textContent = status + " " + name + (detail ? " - " + detail : "");
+    row.title = row.textContent;
+    logBox.appendChild(row);
+  }
+
+  // One line per scenario: PASS lists what was checked, FAIL lists what was not as expected, SKIP
+  // says why the scenario does not apply to this engine yet. A scenario that throws is a FAIL.
+  function scenario(name, body) {
+    const passed = [];
+    const failed = [];
+    let skipped = null;
+    const t = {
+      ok(condition, what, actual) {
+        if (condition) {
+          passed.push(what);
+        } else {
+          failed.push(what + (actual === undefined ? "" : " [got " + actual + "]"));
+        }
+        return Boolean(condition);
+      },
+      skip(reason) {
+        skipped = reason;
+      },
+    };
+    try {
+      body(t);
+    } catch (error) {
+      failed.push("threw " + error);
+    }
+    if (failed.length > 0) {
+      line("FAIL", name, failed.join("; "));
+    } else if (skipped !== null) {
+      line("SKIP", name, skipped);
+    } else {
+      line("PASS", name, passed.join(", "));
+    }
+  }
+
+  // The logger a rich-text editor such as ProseMirror installs: beforeinput and input on the
+  // editing host, with inputType, cancelable and getTargetRanges().
+  const recorded = [];
+  function record(event) {
+    let ranges;
+    try {
+      const list = event.getTargetRanges();
+      ranges = Array.isArray(list) ? list.length : "not an array";
+    } catch (error) {
+      ranges = "threw " + error;
+    }
+    recorded.push({
+      type: event.type,
+      inputType: event.inputType,
+      cancelable: event.cancelable,
+      target: event.target,
+      ranges: ranges,
+    });
+  }
+  for (const host of [lab, inlineHost]) {
+    host.addEventListener("beforeinput", record);
+    host.addEventListener("input", record);
+  }
+
+  function exec(command, value) {
+    recorded.length = 0;
+    const run = { result: undefined, error: null, events: [] };
+    try {
+      run.result = document.execCommand(command, false, value === undefined ? "" : value);
+    } catch (error) {
+      run.error = error;
+    }
+    run.events = recorded.slice();
+    return run;
+  }
+
+  function supported(command) {
+    try {
+      return document.queryCommandSupported(command);
+    } catch (error) {
+      return false;
+    }
+  }
+
+  function describeEvents(run) {
+    return run.events.map((event) => event.type + ":" + event.inputType).join(" ") || "none";
+  }
+
+  const rangeNotes = [];
+  function eventsOk(t, run, inputType, host) {
+    const before = run.events[0];
+    const input = run.events[1];
+    const ok = run.events.length === 2 &&
+      before.type === "beforeinput" && input.type === "input" &&
+      before.inputType === inputType && input.inputType === inputType &&
+      before.cancelable === true && input.cancelable === false &&
+      before.target === host && input.target === host;
+    t.ok(ok, "beforeinput+input " + inputType, describeEvents(run));
+    if (before) {
+      rangeNotes.push(inputType + " " + before.ranges);
+    }
+  }
+
+  function firstText(root) {
+    return document.createTreeWalker(root, NodeFilter.SHOW_TEXT).nextNode();
+  }
+
+  function select(startNode, startOffset, endNode, endOffset) {
+    const range = document.createRange();
+    range.setStart(startNode, startOffset);
+    range.setEnd(endNode === undefined ? startNode : endNode,
+                 endOffset === undefined ? startOffset : endOffset);
+    selection.removeAllRanges();
+    selection.addRange(range);
+  }
+
+  function shape(root) {
+    return Array.from(root.childNodes).map((node) =>
+      node.nodeType === Node.TEXT_NODE ? JSON.stringify(node.data) : "<" + node.localName + ">"
+    ).join(" ");
+  }
+
+  function hasIndentation(root) {
+    if (root.querySelector("blockquote")) {
+      return true;
+    }
+    return Array.from(root.querySelectorAll("[style]")).some((element) =>
+      /margin|padding/.test(element.getAttribute("style")));
+  }
+
+  const BOLD = "b, strong, [style*='font-weight']";
+  const ITALIC = "i, em, [style*='font-style']";
+
+  // 1. The caret box is focused on load and holds a collapsed selection.
+  caretBox.focus();
+  selection.collapse(caretBox.firstChild, caretBox.firstChild.length);
+  scenario("focus on load", (t) => {
+    t.ok(document.activeElement === caretBox, "the box has focus", String(document.activeElement));
+    t.ok(selection.rangeCount === 1 && selection.isCollapsed &&
+         caretBox.contains(selection.anchorNode), "selection collapsed inside it");
+    t.ok(typeof document.execCommand === "function", "document.execCommand exists");
+  });
+
+  document.execCommand("styleWithCSS", false, "false");
+
+  scenario("commands supported", (t) => {
+    const names = ["bold", "italic", "indent", "outdent", "insertParagraph", "insertLineBreak"];
+    const missing = names.filter((name) => !supported(name));
+    t.ok(missing.length === 0, names.join(" "), "missing " + missing.join(" "));
+  });
+
+  scenario("bold", (t) => {
+    lab.innerHTML = "<p>hello world</p>";
+    const text = firstText(lab);
+    select(text, 6, text, 11);
+    const run = exec("bold");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    const bold = lab.querySelector(BOLD);
+    t.ok(bold && bold.textContent === "world", "wraps the selection", lab.innerHTML);
+    t.ok(document.queryCommandState("bold") === true, "state on");
+    eventsOk(t, run, "formatBold", lab);
+    const again = exec("bold");
+    t.ok(again.result === true && lab.querySelector(BOLD) === null, "toggles off", lab.innerHTML);
+  });
+
+  scenario("italic", (t) => {
+    lab.innerHTML = "<p>hello world</p>";
+    const text = firstText(lab);
+    select(text, 0, text, 5);
+    const run = exec("italic");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    const italic = lab.querySelector(ITALIC);
+    t.ok(italic && italic.textContent === "hello", "wraps the selection", lab.innerHTML);
+    t.ok(document.queryCommandState("italic") === true, "state on");
+    eventsOk(t, run, "formatItalic", lab);
+  });
+
+  scenario("insertOrderedList", (t) => {
+    if (!supported("insertOrderedList")) {
+      const run = exec("insertOrderedList");
+      t.skip("not supported yet (arrives with the ordered-list lane); execCommand returns " + run.result);
+      return;
+    }
+    lab.innerHTML = "<p>one</p><p>two</p>";
+    const paragraphs = lab.querySelectorAll("p");
+    select(paragraphs[0].firstChild, 0, paragraphs[1].firstChild, 3);
+    const run = exec("insertOrderedList");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    const items = Array.from(lab.querySelectorAll("ol > li")).map((item) => item.textContent);
+    t.ok(items.length === 2 && items[0] === "one" && items[1] === "two", "two list items",
+         JSON.stringify(items));
+    eventsOk(t, run, "insertOrderedList", lab);
+  });
+
+  scenario("indent then outdent", (t) => {
+    lab.innerHTML = "<p>indent me</p>";
+    select(firstText(lab), 3);
+    const run = exec("indent");
+    t.ok(run.result === true && run.error === null, "indent returns true", run.error || run.result);
+    t.ok(hasIndentation(lab), "indentation added", lab.innerHTML);
+    t.ok(lab.textContent === "indent me", "text kept", lab.textContent);
+    eventsOk(t, run, "formatIndent", lab);
+    const back = exec("outdent");
+    t.ok(back.result === true && back.error === null, "outdent returns true", back.error || back.result);
+    t.ok(!hasIndentation(lab) && lab.querySelector("p") !== null, "indentation removed", lab.innerHTML);
+    eventsOk(t, back, "formatOutdent", lab);
+  });
+
+  scenario("outdent a blockquote (servo#47459)", (t) => {
+    lab.innerHTML = "<blockquote><p>outdent me</p></blockquote>";
+    select(firstText(lab), 3);
+    const run = exec("outdent");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    t.ok(lab.querySelector("blockquote") === null, "blockquote removed", lab.innerHTML);
+    t.ok(lab.textContent === "outdent me", "text kept", lab.textContent);
+  });
+
+  scenario("insertParagraph", (t) => {
+    lab.innerHTML = "<p>onetwo</p>";
+    select(firstText(lab), 3);
+    const run = exec("insertParagraph");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    const paragraphs = Array.from(lab.querySelectorAll("p")).map((p) => p.textContent);
+    t.ok(paragraphs.length === 2 && paragraphs[0] === "one" && paragraphs[1] === "two",
+         "splits into two paragraphs", JSON.stringify(paragraphs));
+    eventsOk(t, run, "insertParagraph", lab);
+  });
+
+  scenario("insertLineBreak", (t) => {
+    lab.innerHTML = "<p>onetwo</p>";
+    select(firstText(lab), 3);
+    const run = exec("insertLineBreak");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    const paragraph = lab.querySelector("p");
+    t.ok(paragraph && shape(paragraph) === '"one" <br> "two"', "one br in the middle",
+         paragraph && shape(paragraph));
+    eventsOk(t, run, "insertLineBreak", lab);
+  });
+
+  scenario("insertLineBreak at line end, collapsed br (servo#49797)", (t) => {
+    lab.innerHTML = "<p>one</p>";
+    select(firstText(lab), 3);
+    const run = exec("insertLineBreak");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    const paragraph = lab.querySelector("p");
+    t.ok(paragraph && shape(paragraph) === '"one" <br> <br>', "an extra br makes the new line visible",
+         paragraph && shape(paragraph));
+  });
+
+  scenario("insertLineBreak in white-space: pre-wrap (servo#49884, #49917, #49920)", (t) => {
+    lab.innerHTML = '<p style="white-space: pre-wrap">onetwo</p>';
+    select(firstText(lab), 3);
+    const run = exec("insertLineBreak");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    const paragraph = lab.querySelector("p");
+    t.ok(paragraph && paragraph.textContent === "one\ntwo" && paragraph.querySelector("br") === null,
+         "a newline character, no br", paragraph && shape(paragraph));
+  });
+
+  scenario("insertParagraph in an inline editing host (servo#49818)", (t) => {
+    inlineHost.textContent = "onetwo";
+    select(inlineHost.firstChild, 3);
+    const run = exec("insertParagraph");
+    t.ok(run.result === true && run.error === null, "returns true", run.error || run.result);
+    t.ok(inlineHost.querySelector("br") !== null && inlineHost.textContent === "onetwo",
+         "a line break instead of a paragraph", inlineHost.innerHTML);
+  });
+
+  scenario("beforeinput preventDefault stops the command", (t) => {
+    lab.innerHTML = "<p>keep me plain</p>";
+    const text = firstText(lab);
+    select(text, 0, text, 4);
+    const stop = (event) => event.preventDefault();
+    lab.addEventListener("beforeinput", stop);
+    const run = exec("bold");
+    lab.removeEventListener("beforeinput", stop);
+    t.ok(run.result === false, "execCommand returns false", String(run.result));
+    t.ok(lab.innerHTML === "<p>keep me plain</p>", "the DOM is untouched", lab.innerHTML);
+    t.ok(run.events.length === 1 && run.events[0].type === "beforeinput", "no input event",
+         describeEvents(run));
+  });
+
+  // The servo#49541 case: offset + count overflowed u32 and panicked the script thread.
+  scenario("range with huge offsets (servo#49541)", (t) => {
+    const node = document.createTextNode("fuzz");
+    const range = document.createRange();
+    range.selectNodeContents(node);
+    node.appendData("A".repeat(4096));
+    node.replaceData(9, 4294967295, ".cls");
+    t.ok(node.data === "fuzzAAAAA.cls", "replaceData with count 2^32-1", node.data);
+    t.ok(range.startOffset === 0 && range.endOffset === 4, "range kept", range.startOffset + "," + range.endOffset);
+    const inner = document.createRange();
+    inner.setStart(node, 6);
+    inner.setEnd(node, 8);
+    node.replaceData(5, 4294967295, "x");
+    t.ok(node.data === "fuzzAx", "second replaceData", node.data);
+    t.ok(inner.startOffset === 5 && inner.endOffset === 5, "boundary points move to the offset",
+         inner.startOffset + "," + inner.endOffset);
+  });
+
+  scenario("getTargetRanges()", (t) => {
+    t.ok(typeof InputEvent === "function" && typeof InputEvent.prototype.getTargetRanges === "function",
+         "InputEvent.getTargetRanges exists");
+    const bad = rangeNotes.filter((note) => !/ \d+$/.test(note));
+    t.ok(rangeNotes.length > 0 && bad.length === 0, "returns an array for every beforeinput", bad.join(", "));
+  });
+  line("INFO", "target ranges", rangeNotes.join(", ") + " (0 until Servo fills them in)");
+
+  // Back to the caret box: focus it and collapse the selection at the end of its text. The caret
+  // is drawn only for a collapsed selection in the focused editing host.
+  function restoreCaret() {
+    caretBox.focus();
+    selection.collapse(caretBox.firstChild, caretBox.firstChild.length);
+  }
+  restoreCaret();
+  line("INFO", "caret restored at", Math.round(performance.now()) +
+       " ms after navigation start; visible every 1200 ms for 600 ms from the first paint");
+
+  const failures = counts.FAIL;
+  summary.textContent = (failures === 0 ? "PASS" : "FAIL") + ": " + counts.PASS + " passed, " +
+    failures + " failed, " + counts.SKIP + " skipped";
+  summary.className = failures === 0 ? "pass" : "fail";
+  document.title = "compat-editing " + (failures === 0 ? "PASS" : "FAIL");
+
+  setTimeout(() => {
+    line("PASS", "still alive", "the page was still running 400 ms after the scenarios (no crash)");
+    summary.textContent += ", still alive";
+  }, 400);
+</script>
+</body>
+</html>
