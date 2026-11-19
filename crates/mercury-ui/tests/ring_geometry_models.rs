@@ -2,11 +2,15 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The ring geometry's glue to the Slint structs of `ui/groups/models.slint`, without a window:
 //! the four SPEC §4.1 structs are built field by field, `RingModel` orders and filters the rows,
-//! and the row ids reach `ArcSeg::tab`.
+//! and the row ids reach `ArcSeg::tab`. The last tests cross the modules: on the 22-tab mockup
+//! ring, `hit_test` of the middle of every drawn shape returns the tab or group it draws.
 
+use mercury_ui::ring_geometry::hit::hit_test;
 use mercury_ui::ring_geometry::paths;
 use mercury_ui::ring_geometry::slint_models::{GlyphColours, RingModel, glyph_to_slint};
-use mercury_ui::ring_geometry::{GlyphPlacement, GlyphRole, Point, RingSpec};
+use mercury_ui::ring_geometry::{
+    GlyphPlacement, GlyphRole, Hit, Point, RingLayout, RingSpec, point_on_circle,
+};
 use mercury_ui::{ArcGlyph, ArcSeg, GroupRow, TabRow};
 use slint::Color;
 
@@ -325,4 +329,119 @@ fn sixty_four_groups_of_every_size_make_a_valid_model() {
     let band_ids: Vec<i32> = bands.iter().map(|b| b.tab).collect();
     let want: Vec<i32> = groups.iter().map(|g| g.id).collect();
     assert_eq!(band_ids, want);
+}
+
+// ---- cross-module golden test: what is drawn is what is hit
+
+/// The hub ring of the mockup `ring-open` (SVG centre (338, 342)): 22 tabs in groups of
+/// 5, 4, 6, 3, 2 and 2.
+fn mockup_spec() -> RingSpec {
+    RingSpec {
+        centre: Point::new(338.0, 342.0),
+        ..RingSpec::default()
+    }
+}
+
+const MOCKUP_GROUPS: [usize; 6] = [5, 4, 6, 3, 2, 2];
+
+#[test]
+fn the_middle_of_every_drawn_segment_and_label_band_hits_what_it_draws() {
+    let layout = RingLayout::new(mockup_spec(), &MOCKUP_GROUPS);
+    let segments = paths::segments(&layout);
+    assert_eq!(segments.len(), 22);
+    for (index, segment) in segments.iter().enumerate() {
+        assert_eq!(segment.tab, index);
+        assert_eq!(
+            hit_test(&layout, segment.mid, None),
+            Hit::Tab(index),
+            "the middle of segment {index} at {:?}",
+            segment.mid
+        );
+    }
+    let bands = paths::label_bands(&layout);
+    assert_eq!(bands.len(), 6);
+    for band in &bands {
+        assert_eq!(
+            hit_test(&layout, band.mid, None),
+            Hit::Group(band.tab),
+            "the middle of the label band of group {} at {:?}",
+            band.tab,
+            band.mid
+        );
+    }
+}
+
+#[test]
+fn the_inside_corners_of_every_drawn_segment_hit_its_tab_and_the_gaps_between_groups_hit_nothing() {
+    let layout = RingLayout::new(mockup_spec(), &MOCKUP_GROUPS);
+    let spec = layout.spec;
+    let at = |radius: f32, deg: f32| point_on_circle(spec.centre, radius, deg);
+    // A hair inside each of the four corners of the drawn shape (0.02 degrees, 0.2 px).
+    for arc in &layout.tabs {
+        for deg in [arc.start_deg + 0.02, arc.end_deg - 0.02] {
+            for radius in [spec.inner_radius() + 0.2, spec.outer_radius() - 0.2] {
+                assert_eq!(
+                    hit_test(&layout, at(radius, deg), None),
+                    Hit::Tab(arc.tab),
+                    "corner of tab {} at {deg} degrees, radius {radius}",
+                    arc.tab
+                );
+            }
+        }
+    }
+    // The middle of the gap after each group (the last one is followed by the reserve) is
+    // nothing, on the tab band and on the label band.
+    for pair in layout.groups.windows(2) {
+        let gap_mid = (pair[0].end_deg + pair[1].start_deg) / 2.0;
+        assert_eq!(
+            hit_test(&layout, at(spec.radius, gap_mid), None),
+            Hit::Outside
+        );
+        assert_eq!(
+            hit_test(&layout, at(spec.label_radius(), gap_mid), None),
+            Hit::Outside
+        );
+    }
+}
+
+#[test]
+fn the_ids_of_the_slint_shapes_lead_back_to_the_same_rows_through_the_hit_test() {
+    // Six groups with ids that are not their positions, 22 tabs listed in a shuffled row order.
+    let group_ids = [40, 7, 93, 12, 61, 5];
+    let groups: Vec<GroupRow> = group_ids.iter().map(|&id| group(id)).collect();
+    let mut tabs = Vec::new();
+    let mut next_id = 700;
+    for (position, &size) in MOCKUP_GROUPS.iter().enumerate() {
+        for slot in 0..size as i32 {
+            tabs.push(tab(next_id, group_ids[position], slot));
+            next_id += 1;
+        }
+    }
+    tabs.reverse();
+    let model = RingModel::new(mockup_spec(), &groups, &tabs);
+    assert_eq!(model.layout.tabs.len(), 22);
+
+    let shapes = model.segments_for_slint();
+    assert_eq!(shapes.len(), 22);
+    for shape in &shapes {
+        let Hit::Tab(flat) = hit_test(&model.layout, Point::new(shape.mid_x, shape.mid_y), None)
+        else {
+            panic!("the middle of tab {} hits a tab", shape.tab)
+        };
+        assert_eq!(
+            model.tab_id(flat),
+            Some(shape.tab),
+            "tab at ring position {flat}"
+        );
+        // The row that the ring position came from carries the same id.
+        assert_eq!(tabs[model.tab_rows[flat]].id, shape.tab);
+    }
+    for band in &model.label_bands_for_slint() {
+        let Hit::Group(g) = hit_test(&model.layout, Point::new(band.mid_x, band.mid_y), None)
+        else {
+            panic!("the middle of the band of group {} hits a group", band.tab)
+        };
+        assert_eq!(model.group_id(g), Some(band.tab), "group at ring index {g}");
+        assert_eq!(groups[g].id, band.tab);
+    }
 }
