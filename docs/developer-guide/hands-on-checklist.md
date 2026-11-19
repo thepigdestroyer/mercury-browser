@@ -9,8 +9,8 @@ a person can see. Each step says what should happen. Note anything that differs 
 you can) and the commit you tried (`git log --oneline -1`).
 
 This list covers what is on the `mercury` branch. Session restore, history, bookmarks, importing,
-downloads, find in page, links from other apps, the tab audio indicator, camera and microphone are
-still being merged; their sections are added as they land.
+downloads, find in page, links from other apps, the tab audio indicator, camera and microphone have
+been merged; their sections are still to be added.
 
 ## Before you start
 
@@ -51,8 +51,8 @@ Use the test pages (server above), then a real site if you like.
    Tab reaches them too.
 5. `permission-camera.html`: on macOS a bubble under the address bar asks to use the camera (**Block** makes the page report the request was denied; see [Media capture](media-capture.md) for the rest of the camera checks); on other systems **no** prompt, and the page reports the request was denied.
 6. `http-auth.html`: a sign-in sheet for the test server (user `alice`, password `secret`). The cursor
-   is not in a field until you click one or press Tab. After signing in, the address bar does **not**
-   show `alice:secret@`.
+   is not in a field until you click one or press Tab. The sheet may also offer to save the login:
+   leave that unticked. After signing in, the address bar does **not** show `alice:secret@`.
 
 ## Form controls and the context menu
 
@@ -72,8 +72,10 @@ Open `controls.html`.
 
 ## Menus and the About window
 
-1. Open each menu in the menu bar. Every item shows its shortcut; Find…, Stop, Reopen Closed Tab,
-   the History items after Forward and the Bookmarks menu are greyed out.
+1. Open each menu in the menu bar. Every item that has a shortcut shows it. Stop is greyed out, and
+   so are Reopen Closed Tab until you close a tab and Restore Previous Session unless the last run
+   quit in order and its tabs were not reopened at start-up. Find…, Show All History, Clear Browsing
+   Data… and the Bookmarks menu are enabled.
 2. With three tabs open, the Window menu lists them; choosing one switches to it.
 3. Press each shortcut once with the page focused, then with the address bar focused: each runs
    exactly once (for example ⌘T opens one tab, not two).
@@ -127,11 +129,13 @@ When `ASYNC_CLIPBOARD_OFFERED` is turned on (see its doc comment), add:
 
 ## Quitting
 
-1. Close the window, Cmd+Q, and Dock → right-click → Quit: each time Mercury quits within a second or two.
+1. Close the window, Cmd+Q, and Dock → right-click → Quit: each time Mercury quits within a second or
+   two (with a download running, it first asks "Cancel 1 download and quit?").
 2. **Log out with Mercury open** (save your other work first): log-out must **not** be held up or
    cancelled by Mercury. Log back in.
-3. **Log out with a file panel open in Mercury** (step 3 of the previous section): macOS should say
-   Mercury cancelled the log-out, and Mercury quits by itself. This is expected; log out again.
+3. **Log out with a file panel open in Mercury** (step 3 of Form controls and the context menu):
+   macOS should say Mercury cancelled the log-out, and Mercury quits by itself. This is expected;
+   log out again.
 4. In Terminal: start `"dist/Mercury Browser.app/Contents/MacOS/mercury-browser"`, then press Ctrl-C:
    it quits cleanly (no crash report).
 

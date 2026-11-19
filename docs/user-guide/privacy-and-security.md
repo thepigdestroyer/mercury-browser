@@ -81,6 +81,8 @@ The exception lasts until Mercury quits. **Know the limit:** Mercury cannot yet 
 | What | Where |
 | --- | --- |
 | Settings | `~/Library/Application Support/Mercury Browser/Default/settings.json` |
+| History, bookmarks and the downloads list | `places.sqlite` in the same profile |
+| Open and recently closed tabs (addresses and titles), for restoring them | `session.json` in the same profile, with `session.previous.json` and `session.recovery.json` |
 | Updated filter lists (only after an update has downloaded a newer version) | the `filter-lists` folder in the same profile |
 | Cookies and site data (local and session storage, IndexedDB, Cache Storage) | the `servo` folder in the same profile |
 | The HTTP cache | `~/Library/Caches/io.github.thepigdestroyer.mercury-browser/Default/http-cache` |
@@ -88,16 +90,17 @@ The exception lasts until Mercury quits. **Know the limit:** Mercury cannot yet 
 
 Cookies without an expiry date (session cookies) are removed when Mercury quits. Runs with `--screenshot` or `--background` use a temporary profile that is removed when they end, unless `--profile-dir` names another one.
 
-Mercury doesn't keep a history of visited pages, bookmarks or saved passwords in this build. Those features are being merged.
+Saved logins are not in the profile: they are in your login keychain (see [Saved passwords](#saved-passwords)).
 
 ### Clearing data when Mercury quits
 
 In **Settings → Privacy and security → When Mercury Browser quits, clear** you can choose:
 
+- **Browsing and download history**;
 - **Cookies and site data**;
 - **Cached files** (the HTTP cache).
 
-They are cleared when Mercury quits, or at the next start if Mercury did not quit normally. **Browsing history** is in the list too but does nothing until the history feature is merged, and the **Clear browsing data…** button is greyed out for the same reason.
+They are cleared when Mercury quits, or at the next start if Mercury did not quit normally (for history, only if the quit had begun). The **Clear browsing data…** button (also in the **History** menu) clears now: choose a time range and what to clear. Cookies, site data and cached files are always cleared for all time, because the engine cannot clear them by date. Bookmarks, downloaded files and the saved tabs are kept.
 
 ## Outside services
 

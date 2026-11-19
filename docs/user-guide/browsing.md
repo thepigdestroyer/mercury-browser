@@ -11,6 +11,7 @@ description: Keyboard shortcuts, the macOS menu bar, the browser menu, the right
 | --- | --- |
 | ++cmd+t++ / ++cmd+w++ | New tab / close tab |
 | ++shift+cmd+t++ | Reopen the last closed tab |
+| ++shift+cmd+a++ / ++alt+cmd+w++ | Search tabs / close other tabs |
 | ++cmd+l++ | Go to the address bar and select it |
 | ++cmd+r++ | Reload |
 | ++cmd+bracket-left++ or ++cmd+left++ / ++cmd+bracket-right++ or ++cmd+right++ | Back / forward |
@@ -21,6 +22,8 @@ description: Keyboard shortcuts, the macOS menu bar, the browser menu, the right
 | ++cmd+equal++ / ++cmd+minus++ / ++cmd+0++ | Zoom in / zoom out / actual size |
 | ++cmd+f++ | Find in the page |
 | ++cmd+g++ / ++shift+cmd+g++ | Next / previous match |
+| ++cmd+d++ / ++shift+cmd+b++ / ++alt+cmd+b++ | Bookmark this page / show or hide the bookmarks bar / bookmarks manager |
+| ++cmd+y++ / ++shift+cmd+backspace++ | History / clear browsing data |
 | ++shift+cmd+m++ | Mute or unmute the active tab |
 | ++cmd+s++ | Save the page |
 | ++shift+cmd+j++ | Downloads |
@@ -36,34 +39,34 @@ belong to the system, and Mercury leaves Control shortcuts to the page on macOS 
 text-editing key there). Chrome's ++shift+cmd+m++ opens its profile menu, which Mercury does not
 have. On Linux it is ++ctrl+m++, as in Firefox and Edge.
 
-++cmd+left++ and ++cmd+right++ go back and forward only when no text field has the keyboard; in a text field they move to the start or end of the line as usual. The editing keys (++cmd+z++, ++shift+cmd+z++, ++cmd+x++, ++cmd+c++, ++cmd+v++, ++cmd+a++) work in the address bar and in the page. Holding a zoom or tab-switching shortcut repeats it; other shortcuts run once per press.
+++cmd+left++ and ++cmd+right++ go back and forward only when no text field has the keyboard; in a text field they move to the start or end of the line as usual. The editing keys (++cmd+z++, ++shift+cmd+z++, ++cmd+x++, ++cmd+c++, ++cmd+v++, ++cmd+a++) work in the address bar and in the page. Holding a zoom or tab-switching shortcut, ++cmd+g++ or ++shift+cmd+g++ repeats it; other shortcuts run once per press.
 
-On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go back and forward, ++f5++ reloads, ++alt+d++ goes to the address bar, and ++ctrl+page-down++ and ++ctrl+page-up++ switch tabs.
+On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go back and forward, ++f5++ reloads, ++alt+d++ goes to the address bar, ++ctrl+page-down++ and ++ctrl+page-up++ switch tabs, ++ctrl+h++ opens the history, ++ctrl+shift+delete++ clears browsing data, ++ctrl+shift+o++ opens the bookmarks manager, and Close Other Tabs has no key.
 
 ## The menu bar
 
 | Menu | Items |
 | --- | --- |
 | Mercury Browser | About Mercury Browser, Settings…, Services, Hide, Hide Others, Show All, Quit |
-| File | New Tab, Open Location…, Close Tab, Reopen Closed Tab |
-| Edit | Undo, Redo, Cut, Copy, Paste, Select All, Find… |
+| File | New Tab, Duplicate Tab, Open Location…, Close Tab, Close Other Tabs, Reopen Closed Tab, Import… |
+| Edit | Undo, Redo, Cut, Copy, Paste, Select All, Find…, Find Next, Find Previous |
 | View | Reload Page, Stop, Actual Size, Zoom In, Zoom Out, Enter Full Screen |
 | History | Back, Forward, Show All History, Clear Browsing Data…, Restore Previous Session |
-| Bookmarks | Bookmark This Page…, Show Bookmarks Bar, Bookmarks Manager |
-| Window | Minimize, Zoom, Show Next Tab, Show Previous Tab, then one item per open tab |
+| Bookmarks | Bookmark This Page…, Show Bookmarks Bar, Bookmarks Manager, then one item per bookmark or folder on the bookmarks bar |
+| Window | Minimize, Zoom, Show Next Tab, Show Previous Tab, Search Tabs…, Move Tab Left, Move Tab Right, Pin Tab, Unpin Tab, then one item per open tab |
 | Help | Mercury Browser Help (opens this site in a new tab) |
 
 Some items are greyed out:
 
-- **Find…** and **Stop**: Servo 0.8 has no way for Mercury to search a page or stop a load.
-- **Reopen Closed Tab**, the History items after Forward, and the whole **Bookmarks** menu: these features are being merged and will work in later builds.
+- **Stop**: Servo 0.8 has no way for Mercury to stop a load.
+- **Reopen Closed Tab** until you have closed a tab, and **Restore Previous Session** unless the last run's tabs are still waiting to be restored.
 - **Undo**, **Redo** and **Select All** while the page has the keyboard: Servo offers only cut, copy and paste to Mercury.
 
 **About Mercury Browser** shows the version, the engine and media versions, the copyright and licence, and links to the licence and the third-party notices.
 
 ## The browser menu
 
-The ⋮ button at the end of the toolbar opens the browser menu: New Tab, a zoom row with the current zoom, Find… (greyed out), Settings, About Mercury Browser, Help and Quit. The arrow keys move through it, ++return++ chooses and ++escape++ closes it.
+The ⋮ button at the end of the toolbar opens the browser menu: New Tab, Search Tabs…, Duplicate Tab, Pin Tab (Unpin Tab while the tab is pinned), Close Other Tabs, a zoom row with the current zoom, Find…, Settings, About Mercury Browser, Help and Quit. The arrow keys move through it, ++return++ chooses and ++escape++ closes it.
 
 ## The right-click menu
 
@@ -71,6 +74,7 @@ Right-click (or Control-click) in a page:
 
 - on a link: **Open link in new tab** (in the background) and **Copy link address**;
 - on an image: **Open image in new tab** and **Copy image address**;
+- on a password field, when logins are saved for the site: **Fill login…** at the top (see [Saved passwords](privacy-and-security.md#saved-passwords));
 - below those, and anywhere else in the page: Cut, Copy, Paste, Select all, Back, Forward and Reload, each greyed out when it doesn't apply there.
 
 `javascript:` and `blob:` addresses are neither opened nor copied, and `data:` addresses can be copied but not opened.
