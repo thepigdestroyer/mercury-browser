@@ -23,7 +23,7 @@
 //!   ! videoconvert ! tee allow-not-linked=true name=t
 //!   t. ! queue(max-size-buffers=2,max-size-bytes=0,max-size-time=0,leaky=downstream)
 //!      ! videoconvert ! capsfilter(video/x-raw,format=I420)
-//!      ! appsink(sync=false,drop=true,max-buffers=2,emit-signals=false)      # one per sink
+//!      ! appsink(sync=false,async=false,drop=true,max-buffers=2,emit-signals=false)  # one per sink
 //! ```
 //!
 //! Audio, `fake_microphone`:
@@ -33,7 +33,7 @@
 //!   ! capsfilter(audio/x-raw,format=S16LE,rate=48000,channels=N,layout=interleaved)
 //!   ! audiobuffersplit(output-buffer-duration=1/100) ! tee allow-not-linked=true name=t
 //!   t. ! queue(max-size-buffers=0,max-size-bytes=0,max-size-time=500ms,leaky=downstream)
-//!      ! appsink(sync=false,drop=true,max-buffers=50,emit-signals=false)     # one per sink
+//!      ! appsink(sync=false,async=false,drop=true,max-buffers=50,emit-signals=false)  # one per sink
 //! ```
 //!
 //! Remote, `RemoteSource` (the chains `create_video_from` and `create_audio_from` build, plus an

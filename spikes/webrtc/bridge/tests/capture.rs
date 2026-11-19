@@ -384,10 +384,10 @@ struct Stopper {
 
 impl MediaFrameSink for Stopper {
     fn video_frame(&self, _: RawVideoFrame<'_>) {
-        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == 2 {
-            if let Some(stream) = self.stream.upgrade() {
-                stream.stop();
-            }
+        if self.calls.fetch_add(1, Ordering::SeqCst) + 1 == 2
+            && let Some(stream) = self.stream.upgrade()
+        {
+            stream.stop();
         }
     }
     fn ended(&self) {
@@ -458,7 +458,13 @@ fn the_frames_carry_real_pixels_with_usable_strides() {
     assert_eq!(checker.bad_strides.load(Ordering::SeqCst), 0);
 }
 
-fn check_clock(stream: &CaptureStream, seen: &[Seen], what: &str, max_median_lag_us: i64) {
+fn check_clock(
+    stream: &CaptureStream,
+    seen: &[Seen],
+    what: &str,
+    max_median_lag_us: i64,
+    max_ahead_us: i64,
+) {
     let _ = wall_micros();
     assert!(seen.len() >= 20, "{what}: only {} frames", seen.len());
     assert!(
@@ -479,7 +485,7 @@ fn check_clock(stream: &CaptureStream, seen: &[Seen], what: &str, max_median_lag
         "RESULT clock {what}: lag capture->sink median {median_lag} us, min {min_lag} us, max {max_lag} us (anchor +-{uncertainty} us)"
     );
     assert!(
-        min_lag >= -(2_000 + uncertainty),
+        min_lag >= -(max_ahead_us + uncertainty),
         "{what}: a frame is {min_lag} us in the future"
     );
     assert!(
@@ -507,7 +513,7 @@ fn video_timestamps_do_not_go_backwards_and_agree_with_the_wall_clock() {
     assert!(wait_until(STARTUP, || rec.video_count() >= 5));
     std::thread::sleep(Duration::from_millis(1500));
     let seen = rec.video_times();
-    check_clock(&stream, &seen, "video", 150_000);
+    check_clock(&stream, &seen, "video", 150_000, 2_000);
     let deltas: Vec<i64> = seen
         .windows(2)
         .map(|w| w[1].timestamp.0 - w[0].timestamp.0)
@@ -526,7 +532,7 @@ fn audio_timestamps_do_not_go_backwards_and_agree_with_the_wall_clock() {
     assert!(wait_until(STARTUP, || rec.audio_count() >= 10));
     std::thread::sleep(Duration::from_millis(1500));
     let seen = rec.audio_times();
-    check_clock(&stream, &seen, "audio", 150_000);
+    check_clock(&stream, &seen, "audio", 150_000, 13_000);
     let span = seen.last().unwrap().timestamp.0 - seen.first().unwrap().timestamp.0;
     let per_block = span as f64 / (seen.len() - 1) as f64;
     println!("RESULT clock audio: mean block interval {per_block:.0} us (10000 expected)");
@@ -560,4 +566,34 @@ fn a_camera_and_a_microphone_started_apart_share_one_time_scale() {
         first_audio - first_video
     );
     assert!((last_audio - last_video).abs() < 250_000);
+}
+
+#[test]
+fn a_microphone_with_ten_millisecond_buffers_is_never_ahead_of_the_wall_clock() {
+    let _ = wall_micros();
+    let stream = CaptureStream::fake_microphone_with_buffer(
+        MicrophoneConfig {
+            channels: 2,
+            frequency: 440.0,
+        },
+        Some(480),
+    )
+    .unwrap();
+    let rec = Arc::new(Recorder::new());
+    stream.add_frame_sink(rec.clone()).unwrap();
+    assert!(wait_until(STARTUP, || rec.audio_count() >= 10));
+    std::thread::sleep(Duration::from_millis(1500));
+    let seen = rec.audio_times();
+    check_clock(
+        &stream,
+        &seen,
+        "audio (10 ms source buffers)",
+        150_000,
+        2_000,
+    );
+    assert_eq!(rec.invalid_count(), 0);
+    assert!(matches!(
+        CaptureStream::fake_microphone_with_buffer(MicrophoneConfig::default(), Some(0)),
+        Err(BridgeError::Config(_))
+    ));
 }

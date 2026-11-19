@@ -5,6 +5,7 @@
 //! ```text
 //! measure perf  [seconds]   CPU and per-frame latency at 1280x720@30, I420 and NV12 sources, 1 and 3 sinks
 //! measure drift [seconds]   pipeline clock against std::time::Instant, and frame timestamps against it
+//! measure remote           cost of RemoteSource::push_video and push_audio
 //! ```
 //!
 //! Run from the crate directory after `eval "$(scripts/macos/gstreamer.sh env)"`:
@@ -18,7 +19,8 @@ use std::time::{Duration, Instant};
 
 use mercury_frame_sink::{ClockMap, MediaFrameSink, Micros, RawAudioFrame, RawVideoFrame};
 use mercury_rtc_bridge::{
-    CameraConfig, CaptureStream, MicrophoneConfig, SourceFormat, TestPattern, clock_now,
+    CameraConfig, CaptureStream, MicrophoneConfig, RemoteSource, SourceFormat, TestPattern,
+    clock_now,
 };
 
 /// Records the delay from the frame's capture timestamp to the sink call.
@@ -223,6 +225,71 @@ fn drift_run(seconds: u64) {
     }
 }
 
+/// Cost of pushing remote frames into an appsrc: the copy into a GStreamer buffer, and the time
+/// from the push to the frame at the end of the pipeline.
+fn remote_run() {
+    let (width, height) = (1280u32, 720u32);
+    let len_y = (width * height) as usize;
+    let len_c = (width * height / 4) as usize;
+    let (y, u, v) = (vec![17u8; len_y], vec![128u8; len_c], vec![129u8; len_c]);
+    let source = RemoteSource::video(width, height).expect("remote video");
+    let mut pushes = Vec::new();
+    let mut trips = Vec::new();
+    for k in 0..300i64 {
+        let frame = RawVideoFrame {
+            width,
+            height,
+            y: &y,
+            u: &u,
+            v: &v,
+            stride_y: width as usize,
+            stride_u: width as usize / 2,
+            stride_v: width as usize / 2,
+            timestamp: Micros(clock_now().0 + k),
+        };
+        let started = Instant::now();
+        source.push_video(frame).expect("push");
+        pushes.push(started.elapsed().as_micros() as i64);
+        if source.pull_sample(Duration::from_secs(2)).is_some() {
+            trips.push(started.elapsed().as_micros() as i64);
+        }
+    }
+    pushes.sort_unstable();
+    trips.sort_unstable();
+    println!(
+        "REMOTE 1280x720 I420 push_video (copy into a buffer): p50 {} us, p95 {} us, max {} us; push to appsink p50 {} us, p95 {} us ({} frames)",
+        percentile(&pushes, 0.5),
+        percentile(&pushes, 0.95),
+        pushes.last().copied().unwrap_or(0),
+        percentile(&trips, 0.5),
+        percentile(&trips, 0.95),
+        trips.len()
+    );
+    let audio = RemoteSource::audio(2).expect("remote audio");
+    let samples = vec![1000i16; 960];
+    let mut pushes = Vec::new();
+    for k in 0..1000i64 {
+        let started = Instant::now();
+        audio
+            .push_audio(RawAudioFrame {
+                samples: &samples,
+                channels: 2,
+                sample_rate: 48_000,
+                timestamp: Micros(clock_now().0 + k * 10_000),
+            })
+            .expect("push");
+        pushes.push(started.elapsed().as_micros() as i64);
+        let _ = audio.pull_sample(Duration::from_secs(1));
+    }
+    pushes.sort_unstable();
+    println!(
+        "REMOTE stereo S16 10 ms push_audio: p50 {} us, p95 {} us, max {} us",
+        percentile(&pushes, 0.5),
+        percentile(&pushes, 0.95),
+        pushes.last().copied().unwrap_or(0)
+    );
+}
+
 fn main() {
     let mut args = std::env::args().skip(1);
     let seconds = |args: &mut dyn Iterator<Item = String>, default| {
@@ -241,6 +308,7 @@ fn main() {
             }
         }
         Some("drift") => drift_run(seconds(&mut args, 180)),
-        _ => eprintln!("usage: measure perf [seconds] | measure drift [seconds]"),
+        Some("remote") => remote_run(),
+        _ => eprintln!("usage: measure perf [seconds] | measure drift [seconds] | measure remote"),
     }
 }

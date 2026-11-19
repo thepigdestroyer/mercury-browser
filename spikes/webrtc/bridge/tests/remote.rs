@@ -167,8 +167,10 @@ fn s16_round_trip(channels: u16) {
     for k in 0..30i64 {
         let bytes = pattern(k as u32 + 7, per_block * 2);
         let samples: Vec<i16> = bytes
-            .chunks_exact(2)
-            .map(|p| i16::from_le_bytes([p[0], p[1]]))
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .map(|p| i16::from_le_bytes(*p))
             .collect();
         let ts = Micros(source.feeder().now().0 + k * 10_000);
         source
@@ -294,17 +296,17 @@ struct Loopback {
 
 impl MediaFrameSink for Loopback {
     fn video_frame(&self, frame: RawVideoFrame<'_>) {
-        if let Some(remote) = &self.video {
-            if remote.push_video(frame).is_err() {
-                self.failures.fetch_add(1, Ordering::SeqCst);
-            }
+        if let Some(remote) = &self.video
+            && remote.push_video(frame).is_err()
+        {
+            self.failures.fetch_add(1, Ordering::SeqCst);
         }
     }
     fn audio_frame(&self, frame: RawAudioFrame<'_>) {
-        if let Some(remote) = &self.audio {
-            if remote.push_audio(frame).is_err() {
-                self.failures.fetch_add(1, Ordering::SeqCst);
-            }
+        if let Some(remote) = &self.audio
+            && remote.push_audio(frame).is_err()
+        {
+            self.failures.fetch_add(1, Ordering::SeqCst);
         }
     }
 }

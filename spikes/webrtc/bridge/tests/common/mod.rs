@@ -195,3 +195,42 @@ pub fn median(mut values: Vec<i64>) -> i64 {
     values.sort_unstable();
     values.get(values.len() / 2).copied().unwrap_or(0)
 }
+
+/// Everything worth knowing about a stream that does not deliver: element states, the flow result
+/// of every pad, and every message left on the pipeline's bus.
+pub fn dump_stream(stream: &mercury_rtc_bridge::CaptureStream) -> String {
+    use gstreamer::prelude::*;
+    let pipeline = stream.pipeline();
+    let mut text = String::new();
+    let (result, current, pending) = pipeline.state(gstreamer::ClockTime::ZERO);
+    text += &format!(
+        "pipeline {}: {result:?} current {current:?} pending {pending:?}\n",
+        pipeline.name()
+    );
+    for element in pipeline.iterate_elements().into_iter().flatten() {
+        let (result, current, pending) = element.state(gstreamer::ClockTime::ZERO);
+        text += &format!(
+            "  {}: {result:?} {current:?} -> {pending:?}\n",
+            element.name()
+        );
+        for pad in element.pads() {
+            text += &format!(
+                "    pad {} peer {:?} last flow {:?} active {}\n",
+                pad.name(),
+                pad.peer().map(|p| p.parent().map(|o| o.name().to_string())),
+                pad.last_flow_result(),
+                pad.is_active() as u8
+            );
+        }
+    }
+    if let Some(bus) = pipeline.bus() {
+        while let Some(message) = bus.pop() {
+            text += &format!(
+                "  bus: {:?} from {:?}\n",
+                message.type_(),
+                message.src().map(|s| s.name().to_string())
+            );
+        }
+    }
+    text
+}

@@ -19,7 +19,6 @@ fn device_elements() -> Vec<String> {
         ["auto", "videosink"].concat(),
         ["auto", "audiosrc"].concat(),
         ["auto", "videosrc"].concat(),
-        ["coreaudio"].concat(),
         ["avf", "deviceprovider"].concat(),
     ]
 }

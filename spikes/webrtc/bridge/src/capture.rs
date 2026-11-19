@@ -250,8 +250,24 @@ impl CaptureStream {
 
     /// A fake microphone: `audiotestsrc is-live=true`, 48 kHz S16 interleaved, 10 ms blocks.
     ///
+    /// The source makes buffers of 1024 samples (21.3 ms, `audiotestsrc`'s default), which
+    /// `audiobuffersplit` cuts into 10 ms blocks, the way a real microphone's irregular buffers
+    /// would be. A live `audiotestsrc` pushes each buffer when its first sample is due, so the
+    /// blocks cut from one buffer arrive together and the later ones carry timestamps up to
+    /// about 11 ms ahead of their delivery (a real source stamps capture time, in the past).
+    ///
     /// Nothing runs until the first sink is added.
     pub fn fake_microphone(cfg: MicrophoneConfig) -> Result<CaptureStream, BridgeError> {
+        Self::fake_microphone_with_buffer(cfg, None)
+    }
+
+    /// Like [`CaptureStream::fake_microphone`], with the number of samples per source buffer
+    /// chosen. `Some(480)` makes the source produce exactly 10 ms buffers: one block per push, no
+    /// bursts, and timestamps that are never ahead of delivery.
+    pub fn fake_microphone_with_buffer(
+        cfg: MicrophoneConfig,
+        samples_per_buffer: Option<u32>,
+    ) -> Result<CaptureStream, BridgeError> {
         init()?;
         if !(1..=2).contains(&cfg.channels) {
             return Err(BridgeError::Config(format!(
@@ -272,6 +288,14 @@ impl CaptureStream {
             .property("volume", 0.8f64)
             .build()
             .map_err(|_| BridgeError::MissingElement("audiotestsrc"))?;
+        if let Some(samples) = samples_per_buffer {
+            if !(1..=48_000).contains(&samples) {
+                return Err(BridgeError::Config(format!(
+                    "{samples} samples per buffer is outside 1..=48000"
+                )));
+            }
+            source.set_property("samplesperbuffer", samples as i32);
+        }
         let convert = make("audioconvert")?;
         let resample = make("audioresample")?;
         let caps = gst::Caps::builder("audio/x-raw")
@@ -483,6 +507,9 @@ impl Inner {
             .map_err(|_| BridgeError::MissingElement("queue"))?;
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", false)
+            // Not async: a sink that must preroll turns every state change of the live pipeline into an
+            // asynchronous one, and a sink added to a running pipeline can leave it waiting in PAUSED.
+            .property("async", false)
             .property("drop", true)
             .property("emit-signals", false)
             .build()
@@ -553,18 +580,23 @@ impl Inner {
             self.discard(elements, Some(&tee_pad));
             return Err(BridgeError::Pipeline("the queue has no sink pad".into()));
         };
-        if let Err(error) = tee_pad.link(&queue_sink) {
-            self.discard(elements, Some(&tee_pad));
-            return Err(BridgeError::Pipeline(format!(
-                "linking the tee to the branch failed: {error:?}"
-            )));
-        }
+        // On a running pipeline the branch is brought up first and linked to the tee afterwards,
+        // so the tee never pushes into an inactive pad.
         let started = (|| -> Result<(), BridgeError> {
-            for element in elements {
-                element.sync_state_with_parent()?;
+            if control.playing {
+                for element in elements {
+                    element.sync_state_with_parent()?;
+                }
             }
+            tee_pad.link(&queue_sink).map_err(|error| {
+                BridgeError::Pipeline(format!("linking the tee to the branch failed: {error:?}"))
+            })?;
             if !control.playing {
                 self.pipeline.set_state(gst::State::Playing)?;
+                // The appsinks are not async (see `build_branch`), so this returns at once; the
+                // wait only turns a failed start into an error here instead of a silent stall.
+                let (result, _, _) = self.pipeline.state(gst::ClockTime::from_seconds(5));
+                result?;
                 control.playing = true;
             }
             Ok(())

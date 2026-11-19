@@ -201,6 +201,7 @@ impl RemoteSource {
         let pipeline = new_pipeline(name);
         let appsink = gst::ElementFactory::make("appsink")
             .property("sync", false)
+            .property("async", false)
             .property("drop", true)
             .property("max-buffers", 64u32)
             .property("emit-signals", false)
