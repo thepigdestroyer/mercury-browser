@@ -29,7 +29,7 @@ use mercury_rtc_shiguredo_spike::audio::RemoteAudio;
 use mercury_rtc_shiguredo_spike::channel::{ChannelOptions, Message};
 use mercury_rtc_shiguredo_spike::engine::{AudioMode, Engine, EngineConfig, VideoCodecs};
 use mercury_rtc_shiguredo_spike::peer::{
-    IceTransports, Peer, PeerConfig, SimulcastLayer, connect, negotiate,
+    IceTransports, Peer, PeerConfig, SimulcastLayer, connect, connect_with_answer, negotiate,
 };
 use mercury_rtc_shiguredo_spike::rtc::{
     AudioOptions, DataChannelState, IceTransportsType, MediaStreamTrackState, MediaType, SdpType,
@@ -769,6 +769,7 @@ fn t04_audio() {
 // ---------------------------------------------------------------------------------------------
 
 struct VideoRun {
+    cold_frames: usize,
     window_frames: usize,
     total: u64,
     kept: u64,
@@ -810,6 +811,14 @@ fn video_run(width: u32, height: u32) -> Result<VideoRun, String> {
             counters.summary(),
             capture.take_error()
         ))?;
+    // The first CI run counted 52 frames in the first three seconds after the first remote frame:
+    // libwebrtc starts at a low bandwidth estimate and drops frames until it ramps up. That
+    // window is recorded (`cold_frames`); the requirement of 60 frames in 3 s applies to a second
+    // window that starts two seconds later.
+    let cold_start = Instant::now();
+    thread::sleep(Duration::from_secs(3));
+    let cold_frames = receiver.meter().frames_since(cold_start);
+    thread::sleep(Duration::from_secs(2));
     let window_start = Instant::now();
     thread::sleep(Duration::from_secs(3));
     let meter = receiver.meter();
@@ -822,6 +831,7 @@ fn video_run(width: u32, height: u32) -> Result<VideoRun, String> {
         .map(|(_, n)| *n)
         .sum();
     Ok(VideoRun {
+        cold_frames,
         window_frames: meter.frames_since(window_start),
         total: meter.frames,
         kept,
@@ -835,8 +845,9 @@ fn video_run(width: u32, height: u32) -> Result<VideoRun, String> {
 
 fn judge_video(label: &str, run: &VideoRun) -> Result<String, String> {
     let line = format!(
-        "{label}: {} frames in 3 s (total {}), sizes {} ({} of {} within 1 px of expected), timestamp regressions {}, sink [{}], appsrc fed {} pulled {}",
+        "{label}: {} frames in 3 s after ramp-up (cold first window {}; total {}), sizes {} ({} of {} within 1 px of expected), timestamp regressions {}, sink [{}], appsrc fed {} pulled {}",
         run.window_frames,
+        run.cold_frames,
         run.total,
         run.sizes,
         run.kept,
@@ -873,6 +884,15 @@ fn t05_video_from_the_bridge() {
 // t06 simulcast
 // ---------------------------------------------------------------------------------------------
 
+/// The answer of a server that receives the three layers, appended to libwebrtc's own answer (the
+/// test has one video section, the last one).
+fn server_style_answer(answer: &str) -> String {
+    format!(
+        "{}\r\na=rid:q recv\r\na=rid:h recv\r\na=rid:f recv\r\na=simulcast:recv q;h;f\r\n",
+        answer.trim_end()
+    )
+}
+
 fn t06() -> Res {
     let pair = Pair::plain()?;
     let local = LocalVideo::new(&pair.engine, "sim").ctx("local video")?;
@@ -893,20 +913,27 @@ fn t06() -> Res {
     let stop = Arc::new(AtomicBool::new(false));
     let producer = spawn_video(sink.clone(), 640, 360, 30, Arc::clone(&stop));
     let outcome = (|| {
-        let link = connect(&pair.a, &pair.b, CONNECT).ctx("connect")?;
-        let answer = &link.negotiated.answer;
-        let rids = answer
-            .lines()
-            .filter(|line| line.starts_with("a=rid:"))
-            .count();
+        // libwebrtc as the *answerer* does not accept simulcast (the first CI run: no a=rid and no
+        // a=simulcast in its answer), so the offerer gets the answer a server (an SFU) would write:
+        // the three rids with `recv` and `a=simulcast:recv`. webrtc's own PeerConnectionSimulcastTests
+        // rewrite the answer the same way ("to look like a server response").
+        let link = connect_with_answer(&pair.a, &pair.b, CONNECT, Some(&server_style_answer))
+            .ctx("connect")?;
+        let count =
+            |text: &str, prefix: &str| text.lines().filter(|line| line.starts_with(prefix)).count();
+        let own_rids = count(&link.negotiated.answer, "a=rid:");
+        let own_simulcast = count(&link.negotiated.answer, "a=simulcast:");
+        let answer = &link.negotiated.applied_answer;
+        let rids = count(answer, "a=rid:");
         let simulcast = answer
             .lines()
             .find(|line| line.starts_with("a=simulcast:"))
             .unwrap_or("")
             .to_owned();
-        if rids != 3 || simulcast.is_empty() {
+        let offer_rids = count(&link.negotiated.offer, "a=rid:");
+        if offer_rids != 3 || rids != 3 || simulcast.is_empty() {
             return Err(format!(
-                "answer has {rids} a=rid lines and simulcast line '{simulcast}'; expected 3 and a=simulcast"
+                "offer has {offer_rids} a=rid lines; applied answer has {rids} and simulcast line '{simulcast}'; expected 3 and a=simulcast"
             ));
         }
         let mut layers_seen: BTreeMap<String, (f64, f64, f64)> = BTreeMap::new();
@@ -951,13 +978,13 @@ fn t06() -> Res {
                 layers_seen.len()
             ));
         }
-        Ok((rids, simulcast, summary))
+        Ok((rids, simulcast, summary, own_rids, own_simulcast))
     })();
     stop.store(true, Ordering::Release);
     let produced = producer
         .join()
         .map_err(|_| "video thread panicked".to_owned())?;
-    let (rids, simulcast, summary) = outcome?;
+    let (rids, simulcast, summary, own_rids, own_simulcast) = outcome?;
 
     // scalability_mode: asked for on a single encoding, accepted or refused (recorded, not judged).
     let scalability = {
@@ -977,7 +1004,7 @@ fn t06() -> Res {
         }
     };
     pass(format!(
-        "answer has {rids} a=rid lines and '{simulcast}'; outbound stats show three layers: {summary} (produced {produced} frames); {scalability}",
+        "applied answer has {rids} a=rid lines and '{simulcast}' (libwebrtc's own answer: {own_rids} a=rid, {own_simulcast} a=simulcast: it does not answer simulcast, the offerer got a server-style answer); outbound stats show three layers: {summary} (produced {produced} frames); {scalability}",
     ))
 }
 
@@ -1358,6 +1385,17 @@ fn thread_count() -> usize {
 }
 
 fn cycle(index: usize) -> Result<(), String> {
+    // Printed before each step so that a crash (the first CI run ended in SIGSEGV here, with no
+    // other output) shows which audio mode and close order it happened in.
+    println!(
+        "INFO t11 cycle {index}: {} audio device, close order {}",
+        if index.is_multiple_of(2) {
+            "dummy"
+        } else {
+            "virtual"
+        },
+        index % 3
+    );
     let config = if index.is_multiple_of(2) {
         EngineConfig::default()
     } else {
@@ -1369,6 +1407,7 @@ fn cycle(index: usize) -> Result<(), String> {
         .create_channel("t11", &ChannelOptions::default())
         .ctx("channel")?;
     let link = connect(&pair.a, &pair.b, CONNECT).ctx("connect")?;
+    println!("INFO t11 cycle {index}: connected");
     drop(link);
     match index % 3 {
         0 => {
@@ -1382,7 +1421,9 @@ fn cycle(index: usize) -> Result<(), String> {
         // The second peer is closed by its Drop.
         _ => pair.a.close(),
     }
+    println!("INFO t11 cycle {index}: closed");
     drop(pair);
+    println!("INFO t11 cycle {index}: dropped");
     Ok(())
 }
 

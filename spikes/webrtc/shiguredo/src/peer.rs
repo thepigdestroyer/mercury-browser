@@ -603,20 +603,38 @@ impl Drop for CandidateRelay {
 pub struct Negotiated {
     /// The offer SDP.
     pub offer: String,
-    /// The answer SDP.
+    /// The answer SDP the answerer wrote.
     pub answer: String,
+    /// The answer the offerer applied (the same unless the negotiation rewrote it).
+    pub applied_answer: String,
 }
 
 /// One offer/answer exchange, `offerer` to `answerer`. Candidates are not moved: start a
 /// [`CandidateRelay`] first (or use [`connect`]).
 pub fn negotiate(offerer: &Peer, answerer: &Peer) -> Result<Negotiated> {
+    negotiate_with_answer(offerer, answerer, None)
+}
+
+/// Like [`negotiate`], but the offerer applies `rewrite(answer)` instead of the answer libwebrtc
+/// wrote. libwebrtc as an answerer does not accept simulcast, so t06 rewrites its answer the way a
+/// server's would look, as webrtc's own `PeerConnectionSimulcastTests` do.
+pub fn negotiate_with_answer(
+    offerer: &Peer,
+    answerer: &Peer,
+    rewrite: Option<&dyn Fn(&str) -> String>,
+) -> Result<Negotiated> {
     let offer = offerer.create_offer()?;
     offerer.set_local(SdpType::Offer, &offer)?;
     answerer.set_remote(SdpType::Offer, &offer)?;
     let answer = answerer.create_answer()?;
     answerer.set_local(SdpType::Answer, &answer)?;
-    offerer.set_remote(SdpType::Answer, &answer)?;
-    Ok(Negotiated { offer, answer })
+    let applied_answer = rewrite.map_or_else(|| answer.clone(), |rewrite| rewrite(&answer));
+    offerer.set_remote(SdpType::Answer, &applied_answer)?;
+    Ok(Negotiated {
+        offer,
+        answer,
+        applied_answer,
+    })
 }
 
 /// Two connected peers: the relay stays alive as long as this does.
@@ -630,9 +648,19 @@ pub struct Link {
 
 /// Negotiates `offerer` to `answerer`, relays candidates and waits until both are `Connected`.
 pub fn connect(offerer: &Peer, answerer: &Peer, timeout: Duration) -> Result<Link> {
+    connect_with_answer(offerer, answerer, timeout, None)
+}
+
+/// [`connect`] with an answer rewrite, see [`negotiate_with_answer`].
+pub fn connect_with_answer(
+    offerer: &Peer,
+    answerer: &Peer,
+    timeout: Duration,
+    rewrite: Option<&dyn Fn(&str) -> String>,
+) -> Result<Link> {
     let started = Instant::now();
     let relay = CandidateRelay::start(offerer, answerer);
-    let negotiated = negotiate(offerer, answerer)?;
+    let negotiated = negotiate_with_answer(offerer, answerer, rewrite)?;
     for peer in [offerer, answerer] {
         if !peer.wait_connected(timeout.saturating_sub(started.elapsed())) {
             let events = peer.with_state(|s| s.events.join(" | "));
