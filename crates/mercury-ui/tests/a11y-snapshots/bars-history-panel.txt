@@ -1,0 +1,27 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+region | History | |
+text-input | Search history | | placeholder "Search history"
+button | Clear browsing data | |
+button | Close history | |
+list | Visited pages | |
+text | Today | |
+list-item | Example Domain | https://example.com/, 10:42 | item 1 of 7
+button | Open in new tab | Example Domain |
+button | Delete all visits to example.com | Example Domain |
+button | Delete | Example Domain |
+list-item | Rust documentation | https://doc.rust-lang.org/std/, 09:15 | item 2 of 7
+button | Open in new tab | Rust documentation |
+button | Delete all visits to doc.rust-lang.org | Rust documentation |
+button | Delete | Rust documentation |
+list-item | file:///tmp/notes.txt | 08:03 | item 3 of 7
+button | Open in new tab | file:///tmp/notes.txt |
+button | Delete | file:///tmp/notes.txt |
+text | Yesterday | |
+list-item | Servo | https://servo.org/, 21:30 | item 5 of 7
+button | Open in new tab | Servo |
+button | Delete all visits to servo.org | Servo |
+button | Delete | Servo |
+button | Show more | |

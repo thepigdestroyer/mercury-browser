@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+tab-list | Tabs | |
+tab | Tab 1 | | unselected, item 0 of 8
+tab | Tab 2 | Playing sound | unselected, item 1 of 8
+button | Mute tab: Tab 2 | The page can override this |
+tab | Tab 3 | Playing sound | selected, item 2 of 8
+button | Mute tab: Tab 3 | The page can override this |
+button | Close tab | Tab 3 |
+tab | Tab 4 | | unselected, item 3 of 8
+tab | Tab 5 | Muted | unselected, item 4 of 8
+button | Unmute tab: Tab 5 | |
+tab | Tab 6 | | unselected, item 5 of 8
+tab | Tab 7 | | unselected, item 6 of 8
+tab | Tab 8 | | unselected, item 7 of 8

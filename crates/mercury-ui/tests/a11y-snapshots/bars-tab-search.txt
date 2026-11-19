@@ -1,0 +1,11 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+search | Search tabs | |
+text-input | Search tabs | | placeholder "Search tabs"
+list | Open tabs | |
+list-item | Mail | Pinned tab, https://mail.example.com/ | selected, item 0 of 4
+list-item | Slint documentation | Current tab, https://docs.slint.dev/ | unselected, item 1 of 4
+list-item | Rust Weekly | https://this-week-in-rust.org/ | unselected, item 2 of 4
+list-item | Untitled tab | | unselected, item 3 of 4

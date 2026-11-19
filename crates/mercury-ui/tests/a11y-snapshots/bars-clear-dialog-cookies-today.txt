@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+groupbox | Clear browsing data | |
+text | Time range | |
+radio-button | Last hour | | unchecked, item 0 of 4
+radio-button | Today | | checked, item 1 of 4
+radio-button | Last 7 days | | unchecked, item 2 of 4
+radio-button | All time | | unchecked, item 3 of 4
+text | What to clear | |
+checkbox | Browsing and download history | | checked
+text | The pages you visited and the list of your downloads. Downloaded files are kept, and downloads still running stay in the list. | |
+checkbox | Cookies and site data | | checked
+checkbox | Cached files | | unchecked
+text | Cookies, site data and cached files are cleared for all time: the engine cannot clear them by date. | |
+button | Cancel | |
+button | Clear data | |
