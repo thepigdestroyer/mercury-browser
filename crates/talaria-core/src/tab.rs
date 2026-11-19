@@ -191,12 +191,12 @@ impl Tab {
         self.crashed
     }
 
-    #[allow(dead_code)] // groups-core skeleton: `groups-status` uses it; delete this line then
+    /// The controller's activation count when the tab was last the active tab; 0 if it never
+    /// was. A larger number is more recent.
     pub(crate) const fn last_shown(&self) -> u64 {
         self.last_shown
     }
 
-    #[allow(dead_code)] // groups-core skeleton: `groups-strip` uses it; delete this line then
     pub(crate) fn set_group(&mut self, group: Option<GroupId>) {
         self.group = group;
     }
@@ -205,7 +205,6 @@ impl Tab {
         self.unread = unread;
     }
 
-    #[allow(dead_code)] // groups-core skeleton: `groups-status` uses it; delete this line then
     pub(crate) fn set_crashed(&mut self, crashed: bool) {
         self.crashed = crashed;
     }

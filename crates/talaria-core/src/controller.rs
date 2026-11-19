@@ -1328,6 +1328,9 @@ fn set_tab_initial_url(tab: &mut Tab, url: String) -> bool {
 }
 
 fn show_loading(tab: &mut Tab, url: String) {
+    // groups-core: this applies a load start without going through `handle_event`, so the crash
+    // mark that a new load clears has to be cleared here too
+    tab.set_crashed(false);
     let state = tab.state_mut();
     state.apply(BrowserEvent::AddressChanged { url });
     state.apply(BrowserEvent::LoadStateChanged {
