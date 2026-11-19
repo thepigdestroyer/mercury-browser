@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-pdf"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The PDF viewer without PDFium and without Servo or Slint: the shared types, the protocol between
+# the browser and the PDF helper process, the client and the helper's request loop, the viewer's
+# page layout, tile cache, text selection and find state, and a fake backend for tests. The real
+# backend, which loads PDFium, is the crate `mercury-pdfium`. Light crate: it builds and tests
+# without the engine (see scripts/ci/light-crates.sh). Dependencies are added by the lane items
+# that need them, each named here with the reason.
+[dependencies]
