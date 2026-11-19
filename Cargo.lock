@@ -5953,9 +5953,6 @@ dependencies = [
 [[package]]
 name = "mercury-tab-snapshots"
 version = "0.2.0"
-dependencies = [
- "image",
-]
 
 [[package]]
 name = "mercury-ui"

@@ -12,7 +12,7 @@ license.workspace = true
 # inside: the picture type, the downscale, the memory-capped least-recently-used store and the
 # policy that decides when a picture is taken. `apps/mercury-desktop/src/tab_snapshots.rs` takes
 # the pixels from the web view's rendering context and hands them to this crate.
-[dependencies]
-# `imageops::thumbnail`, the box filter for the downscale (the crate is already in the build
-# through Servo and the desktop app; no format feature is needed here).
-image.workspace = true
+#
+# No dependencies: the downscale is a small box filter written here, because
+# `image::imageops::thumbnail` loses a source column at 46 widths in 481..3000 (see the module
+# doc of `src/downscale.rs`).
