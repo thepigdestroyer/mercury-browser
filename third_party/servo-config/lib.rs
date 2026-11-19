@@ -10,6 +10,8 @@
 
 #![deny(unsafe_code)]
 
+// Mercury: Stylo preferences by name (K0, ED2); reached as `prefs::apply_stylo_prefs`.
+mod mercury_stylo;
 pub mod opts;
 pub mod pref_util;
 pub mod prefs;

@@ -1569,6 +1569,24 @@ mod tests {
         }
     }
 
+    #[test]
+    fn mercury_hands_its_stylo_preferences_to_the_engine() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert_eq!(
+                preferences.stylo_prefs,
+                "layout.css.nth-child-of.enabled=true"
+            );
+            // Every name is one Stylo has (the engine ignores names it does not know).
+            assert!(servo::prefs::apply_stylo_prefs(&preferences.stylo_prefs).is_empty());
+            assert_eq!(
+                servo::prefs::stylo_bool_pref("layout.css.nth-child-of.enabled"),
+                Some(true)
+            );
+        }
+    }
+
     use crate::proxy::ProxyServer;
 
     fn proxy_preferences(preferences: &Preferences) -> [&str; 3] {

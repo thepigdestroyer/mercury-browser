@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use servo_config_macro::ServoPreferences;
 
 pub use crate::pref_util::PrefValue;
+// Mercury: Stylo preferences by name (K0, ED2), reached from the embedder as `servo::prefs::...`.
+pub use crate::mercury_stylo::{apply_stylo_prefs, stylo_bool_pref};
 
 static PREFERENCES: RwLock<Preferences> = RwLock::new(Preferences::const_default());
 
@@ -72,6 +74,9 @@ pub fn set(preferences: Preferences) {
         "layout.css.writing-mode.enabled",
         preferences.layout_css_writing_mode_enabled
     );
+    // Mercury: any other Stylo preference, by its Gecko name (K0, ED2). After the lines above, so
+    // a name in the list wins over them.
+    crate::mercury_stylo::apply_stylo_prefs(&preferences.stylo_prefs);
 
     *PREFERENCES.write().unwrap() = preferences;
 

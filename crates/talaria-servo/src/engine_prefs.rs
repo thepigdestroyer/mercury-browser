@@ -14,6 +14,24 @@
 
 use servo::{PrefValue, Preferences};
 
+/// Stylo (style system) preferences, by their Gecko names, that Mercury sets. They are joined into
+/// `Preferences::stylo_prefs`, which `servo::prefs::set` applies to Stylo (Servo forwards only
+/// seven of them by itself). A Stylo preference is turned on by the lane that implements the
+/// layout it needs, not before.
+pub(crate) const STYLO_PREFS: &[(&str, bool)] = &[
+    // `:nth-child(An+B of S)`: Servo's selector parser knows it and Stylo matches it.
+    ("layout.css.nth-child-of.enabled", true),
+];
+
+/// `STYLO_PREFS` as the comma-separated list `Preferences::stylo_prefs` holds.
+fn stylo_prefs_list() -> String {
+    STYLO_PREFS
+        .iter()
+        .map(|(name, value)| format!("{name}={value}"))
+        .collect::<Vec<_>>()
+        .join(",")
+}
+
 /// Feature switches that are off for now and stay pinned off, so that neither a change of Servo's
 /// default nor the experimental-features list can turn one on by accident. The lane that makes a
 /// feature work removes its line here (and turns the preference on in [`apply`]).
@@ -36,8 +54,9 @@ const PINNED_OFF: &[&str] = &[
     "network_cookie_samesite_lax_default",
     "dom_web_locks_enabled",
     "dom_cookiestore_enabled",
+    // Interfaces that are stubs in Servo 0.8 stay hidden, so that feature detection does not
+    // report what is not there, until their items land.
     "dom_serviceworker_enabled",
-    // Servo 0.8's Web Animations is incomplete.
     "dom_web_animations_enabled",
     // The accessibility tree is built for the active tab only, by its own lane.
     "accessibility_enabled",
@@ -58,6 +77,7 @@ pub(crate) fn apply(preferences: &mut Preferences) {
     preferences.media_autoplay_allow_origins.clear();
     preferences.media_autoplay_block_origins.clear();
     preferences.media_webrtc_ip_policy.clear();
+    preferences.stylo_prefs = stylo_prefs_list();
 }
 
 #[cfg(test)]
@@ -110,6 +130,30 @@ mod tests {
         assert_eq!(preferences.media_autoplay_allow_origins, "");
         assert_eq!(preferences.media_autoplay_block_origins, "");
         assert_eq!(preferences.media_webrtc_ip_policy, "");
+    }
+
+    #[test]
+    fn the_stylo_list_is_joined_into_the_preferences() {
+        assert_eq!(
+            applied().stylo_prefs,
+            "layout.css.nth-child-of.enabled=true"
+        );
+    }
+
+    #[test]
+    fn every_stylo_name_exists_and_is_applied_by_servo() {
+        let list = applied().stylo_prefs;
+
+        let unknown = servo::prefs::apply_stylo_prefs(&list);
+
+        assert!(unknown.is_empty(), "Stylo has no preference {unknown:?}");
+        for (name, value) in STYLO_PREFS {
+            assert_eq!(servo::prefs::stylo_bool_pref(name), Some(*value), "{name}");
+        }
+        assert_eq!(
+            servo::prefs::stylo_bool_pref("layout.css.nth-child-of.enabled"),
+            Some(true)
+        );
     }
 
     #[test]
