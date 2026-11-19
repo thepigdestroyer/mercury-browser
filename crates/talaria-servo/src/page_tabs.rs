@@ -53,6 +53,8 @@ pub(crate) struct PageTabs {
     pub(crate) after_engine_cleanup: Option<Rc<AfterEngineCleanup>>,
     /// geolocation: gives every tab its `WebViewGeolocation`; `None` while geolocation is off.
     pub(crate) geolocation: Option<Rc<GeolocationService>>,
+    // site security
+    pub(crate) https_policy: crate::site_security::SharedHttpsPolicy,
 }
 
 impl PageTabs {

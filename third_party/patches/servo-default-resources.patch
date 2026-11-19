@@ -1,0 +1,15 @@
+# Mercury's changes to servo-default-resources 0.8.0, against the crate as published on crates.io
+# (SHA-256 8bd5df0724a6b49aba27fbfaeb124abd646cc8c362a013c6bf87d9cc8d2315b4). Written by `mercury-servo-patches export`; do not edit by hand.
+# The changed files stay under the licence of servo-default-resources.
+diff --git a/lib.rs b/lib.rs
+--- a/lib.rs
++++ b/lib.rs
+@@ -36,4 +36,7 @@
+     }
+ }
+
+-embedder_traits::submit_resource_reader!(&DefaultResourceReader);
++// Mercury: not registered here. Servo allows one resource reader per process and picks one at
++// random when there are two (`servo-embedder-traits` `resources.rs`); Mercury registers its own
++// (`talaria-servo` `resources.rs`), which serves these files for every resource it does not
++// replace. Upstream registered `DefaultResourceReader` with `submit_resource_reader!` here.

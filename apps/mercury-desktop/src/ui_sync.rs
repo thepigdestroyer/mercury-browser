@@ -58,9 +58,10 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     window.set_page_title(state.page_title().into());
     // tabs: keep what the user is typing unless the active tab changed.
     let tab_changed = SYNCED_TAB.with(|synced| synced.tab_changed(controller.active_tab_id()));
-    window.set_committed_address(state.url().into());
+    let shown_address = crate::site_security::display_address(state.url()); // site-security
+    window.set_committed_address(shown_address.as_str().into());
     if let Some(address) =
-        address_bar_update(state.url(), window.get_address_has_focus(), tab_changed)
+        address_bar_update(&shown_address, window.get_address_has_focus(), tab_changed)
     {
         window.invoke_reset_address(address.into());
     }
@@ -125,6 +126,7 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     window.set_content_message(content_message.into());
     crate::page_requests::sync_page_request(window, controller); // dialogs
     crate::media_capture::sync_capture(window, controller); // media-capture
+    crate::site_security::sync_window(window, controller); // site-security
     // controls
     crate::controls::sync(window, controller);
     // session: every change the window shows may need saving (before the menus read it)

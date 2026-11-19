@@ -18,6 +18,7 @@ pub(crate) fn connect_ui_callbacks(
     web_view_focused: Rc<Cell<bool>>,
 ) {
     crate::page_requests::connect_page_request_callbacks(window, Rc::clone(&controller)); // dialogs
+    crate::site_security::connect_site_security_callbacks(window, Rc::clone(&controller)); // site-security
     let navigate_controller = Rc::clone(&controller);
     let navigate_window = window.as_weak();
     window.on_navigate(move |address| {

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MPL-2.0
-use std::collections::VecDeque;
+use std::collections::{BTreeSet, VecDeque};
 use std::time::Duration;
 
 use crate::address::{AddressResolutionError, NavigationTarget, SearchUrlBuilder, resolve_address};
@@ -16,6 +16,12 @@ use crate::{
 use crate::{
     PageRequestAnswer, PageRequestId, PageRequestReply, PendingPageRequest, PermissionDecisions,
     SessionPermissionDecisions,
+};
+// site security
+use crate::site_security::{PendingUpgrade, same_address};
+use crate::{
+    ErrorPageKind, HttpsOnlyInterstitial, HttpsPolicy, PagePermission, PermissionDecision,
+    SecurityIndicator, security_indicator, typed_https_upgrade,
 };
 
 const NO_SEARCH: &str = "no search engine is set";
@@ -52,6 +58,10 @@ pub struct BrowserController {
     visits: VisitTracker,
     // openurl
     external_link_requests: Vec<(TabId, ExternalLinkRequest)>,
+    // site security
+    https_policy: HttpsPolicy,
+    /// Hosts whose invalid certificate the user accepted this session.
+    certificate_exceptions: BTreeSet<String>,
 }
 
 impl BrowserController {
@@ -72,6 +82,8 @@ impl BrowserController {
             permission_decisions: Box::new(SessionPermissionDecisions::default()),
             visits: VisitTracker::default(),
             external_link_requests: Vec::new(),
+            https_policy: HttpsPolicy::default(),
+            certificate_exceptions: BTreeSet::new(),
         }
     }
 
@@ -80,6 +92,8 @@ impl BrowserController {
     /// initial URL again and the engine recreates the tab's web view with it.
     pub fn queue_navigation(&mut self, input: &str) -> Result<(), AddressResolutionError> {
         let url = self.resolve_address(input)?.to_string();
+        // site security: a typed http:// address is tried over HTTPS first
+        let (url, upgrade) = self.typed_upgrade(url);
         let tab_id = self.active_tab_id;
         self.visits
             .set_origin(tab_id, NavigationOrigin::Typed, Some(&url));
@@ -98,6 +112,8 @@ impl BrowserController {
                 queued.tab_id() != tab_id || !queued.command().targets_the_current_page()
             });
         }
+        // site security
+        self.start_site_security_navigation(tab_id, upgrade);
         Ok(())
     }
 
@@ -465,6 +481,8 @@ impl BrowserController {
         }
         // dialogs
         self.observe_event_for_page_requests(tab_id, &event);
+        // site security
+        self.observe_event_for_site_security(tab_id, &event);
         // controls
         let event = match self.route_control_request(tab_id, event) {
             Some(event) => event,
@@ -1012,6 +1030,231 @@ impl BrowserController {
                     answer: answer.clone(),
                 },
             );
+        }
+    }
+}
+
+// site security
+impl BrowserController {
+    /// What the address bar's security indicator shows for the tab.
+    pub fn security_indicator(&self, tab_id: TabId) -> SecurityIndicator {
+        let Some(tab) = self.tabs.iter().find(|tab| tab.id() == tab_id) else {
+            return SecurityIndicator::None;
+        };
+        let url = tab.state().url();
+        let error_page = tab
+            .site_security()
+            .error_page
+            .as_ref()
+            .filter(|(_, error_url)| same_address(error_url, url))
+            .map(|(kind, _)| *kind);
+        let host = url::Url::parse(url)
+            .ok()
+            .and_then(|url| url.host_str().map(str::to_ascii_lowercase));
+        let exception = host.is_some_and(|host| self.certificate_exceptions.contains(&host));
+        security_indicator(url, error_page, exception)
+    }
+
+    /// The Mercury error page the tab shows, if any.
+    pub fn error_page(&self, tab_id: TabId) -> Option<ErrorPageKind> {
+        let tab = self.tabs.iter().find(|tab| tab.id() == tab_id)?;
+        let (kind, url) = tab.site_security().error_page.as_ref()?;
+        same_address(url, tab.state().url()).then_some(*kind)
+    }
+
+    /// The HTTPS-only interstitial the tab shows, if any.
+    pub fn https_only_interstitial(&self, tab_id: TabId) -> Option<&HttpsOnlyInterstitial> {
+        self.tabs
+            .iter()
+            .find(|tab| tab.id() == tab_id)?
+            .site_security()
+            .interstitial
+            .as_ref()
+    }
+
+    pub const fn https_policy(&self) -> &HttpsPolicy {
+        &self.https_policy
+    }
+
+    /// HTTPS-only mode on or off. Turning it off removes every interstitial.
+    pub fn set_https_only(&mut self, on: bool) {
+        self.https_policy.https_only = on;
+        if !on {
+            for tab in &mut self.tabs {
+                tab.site_security_mut().interstitial = None;
+            }
+        }
+    }
+
+    /// See `HttpsPolicy::upgrade_local_names`.
+    pub fn set_upgrade_local_names(&mut self, on: bool) {
+        self.https_policy.upgrade_local_names = on;
+    }
+
+    /// Lets HTTPS-only mode load the host over HTTP again (or not). Returns whether it changed.
+    pub fn set_https_exception(&mut self, host: &str, allowed: bool) -> bool {
+        if allowed {
+            self.https_policy.add_exception(host)
+        } else {
+            self.https_policy.remove_exception(host)
+        }
+    }
+
+    /// The user accepted an invalid certificate for `host` (ASCII form).
+    pub fn add_certificate_exception(&mut self, host: &str) {
+        self.certificate_exceptions
+            .insert(host.to_ascii_lowercase());
+    }
+
+    pub fn has_certificate_exception(&self, host: &str) -> bool {
+        self.certificate_exceptions
+            .contains(&host.to_ascii_lowercase())
+    }
+
+    /// The interstitial's "Continue to the site": the host may load over HTTP for the rest of
+    /// the session, and the tab loads the `http` address. Returns the host, or None if the tab
+    /// shows no interstitial.
+    pub fn continue_to_http_site(&mut self, tab_id: TabId) -> Option<String> {
+        let interstitial = self
+            .tab_mut(tab_id)?
+            .site_security_mut()
+            .interstitial
+            .take()?;
+        let host = interstitial.host();
+        self.https_policy.add_exception(&host);
+        self.queue_command_for(
+            tab_id,
+            BrowserCommand::Navigate {
+                url: interstitial.http_url,
+            },
+        );
+        Some(host)
+    }
+
+    /// The interstitial's "Go back": the previous page, or a new-tab page if there is none.
+    pub fn leave_https_only_interstitial(&mut self, tab_id: TabId) -> bool {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return false;
+        };
+        if tab.site_security_mut().interstitial.take().is_none() {
+            return false;
+        }
+        let command = if tab.state().can_go_back() {
+            BrowserCommand::GoBack
+        } else {
+            BrowserCommand::Navigate {
+                url: "about:blank".to_owned(),
+            }
+        };
+        self.queue_command_for(tab_id, command)
+    }
+
+    /// The permissions remembered for `origin` (a serialised origin).
+    pub fn site_permissions(&self, origin: &str) -> Vec<(PagePermission, PermissionDecision)> {
+        self.permission_decisions.decisions_for(origin)
+    }
+
+    /// Forgets a remembered permission: the site asks again next time.
+    pub fn forget_site_permission(&mut self, origin: &str, permission: PagePermission) {
+        self.permission_decisions.forget(origin, permission);
+    }
+
+    /// The URL to navigate to for typed input, and the `http` URL it replaces if it is an
+    /// HTTPS upgrade.
+    fn typed_upgrade(&self, url: String) -> (String, Option<PendingUpgrade>) {
+        let Some(upgraded) = url::Url::parse(&url)
+            .ok()
+            .and_then(|parsed| typed_https_upgrade(&self.https_policy, &parsed))
+        else {
+            return (url, None);
+        };
+        let https = upgraded.to_string();
+        let upgrade = PendingUpgrade {
+            https: https.clone(),
+            http: url,
+            strict: self.https_policy.https_only,
+        };
+        (https, Some(upgrade))
+    }
+
+    fn start_site_security_navigation(&mut self, tab_id: TabId, upgrade: Option<PendingUpgrade>) {
+        if let Some(tab) = self.tab_mut(tab_id) {
+            let security = tab.site_security_mut();
+            security.interstitial = None;
+            security.pending_upgrade = upgrade;
+        }
+    }
+
+    fn observe_event_for_site_security(&mut self, tab_id: TabId, event: &BrowserEvent) {
+        let Some(tab) = self.tab_mut(tab_id) else {
+            return;
+        };
+        let security = tab.site_security_mut();
+        match event {
+            BrowserEvent::PageLoadStarted => security.error_page = None,
+            BrowserEvent::AddressChanged { url } => {
+                let involved = |address: &str| same_address(address, url);
+                let stays = security
+                    .pending_upgrade
+                    .as_ref()
+                    .is_some_and(|upgrade| involved(&upgrade.https) || involved(&upgrade.http))
+                    || security.interstitial.as_ref().is_some_and(|interstitial| {
+                        involved(&interstitial.http_url)
+                            || interstitial
+                                .failed_https_url
+                                .as_deref()
+                                .is_some_and(involved)
+                    });
+                if !stays {
+                    security.pending_upgrade = None;
+                    security.interstitial = None;
+                }
+            }
+            BrowserEvent::HttpsUpgraded { from, to } => {
+                security.interstitial = None;
+                security.pending_upgrade = Some(PendingUpgrade {
+                    https: to.clone(),
+                    http: from.clone(),
+                    strict: true,
+                });
+                // The engine cancelled the `http` load; the tab loads the HTTPS address. A tab
+                // whose first page never committed gets a new web view for it.
+                if tab.is_engine_ready() {
+                    self.queue_command_for(tab_id, BrowserCommand::Navigate { url: to.clone() });
+                } else {
+                    tab.replace_initial_url(to.clone());
+                    show_loading(tab, to.clone());
+                }
+            }
+            BrowserEvent::HttpsOnlyBlocked { url } => {
+                security.pending_upgrade = None;
+                security.interstitial = Some(HttpsOnlyInterstitial {
+                    http_url: url.clone(),
+                    failed_https_url: None,
+                });
+            }
+            BrowserEvent::ErrorPageShown { kind, url } => {
+                security.error_page = Some((*kind, url.clone()));
+                let failed_upgrade = security
+                    .pending_upgrade
+                    .take_if(|upgrade| same_address(&upgrade.https, url));
+                match failed_upgrade {
+                    Some(upgrade) if upgrade.strict => {
+                        security.interstitial = Some(HttpsOnlyInterstitial {
+                            http_url: upgrade.http,
+                            failed_https_url: Some(upgrade.https),
+                        });
+                    }
+                    Some(upgrade) => {
+                        self.queue_command_for(
+                            tab_id,
+                            BrowserCommand::Navigate { url: upgrade.http },
+                        );
+                    }
+                    None => {}
+                }
+            }
+            _ => {}
         }
     }
 }

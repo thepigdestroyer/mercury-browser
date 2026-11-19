@@ -72,6 +72,15 @@ path = "components/shared/constellation"
 license = "MPL-2.0"
 
 [[crate]]
+name = "servo-default-resources"
+version = "0.8.0"
+checksum = "8bd5df0724a6b49aba27fbfaeb124abd646cc8c362a013c6bf87d9cc8d2315b4"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/default-resources"
+license = "MPL-2.0"
+
+[[crate]]
 name = "servo-embedder-traits"
 version = "0.8.0"
 checksum = "76d97f10b2d5979cd0ff330ab257a69addcf08e853811f6f97ff12db5f7468af"

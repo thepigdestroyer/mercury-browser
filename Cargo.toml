@@ -9,6 +9,7 @@ members = [
     "crates/mercury-passwords",
     "crates/mercury-servo-patches",
     "crates/mercury-settings",
+    "crates/mercury-site-security",
     "crates/mercury-store",
     "crates/mercury-ui",
     "crates/talaria-core",
@@ -96,6 +97,8 @@ servo-canvas = { path = "third_party/servo-canvas" }
 servo-config = { path = "third_party/servo-config" }
 servo-constellation = { path = "third_party/servo-constellation" }
 servo-constellation-traits = { path = "third_party/servo-constellation-traits" }
+# site-security: Mercury registers its own resource reader (third_party/servo-default-resources/MERCURY.md).
+servo-default-resources = { path = "third_party/servo-default-resources" }
 servo-embedder-traits = { path = "third_party/servo-embedder-traits" }
 servo-layout = { path = "third_party/servo-layout" }
 servo-layout-api = { path = "third_party/servo-layout-api" }

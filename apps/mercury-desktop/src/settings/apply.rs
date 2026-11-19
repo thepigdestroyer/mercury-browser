@@ -91,6 +91,7 @@ pub(crate) fn apply_to_controller(controller: &mut BrowserController, settings: 
     controller.set_search_url_builder(search_url_builder(&settings.search));
     controller.set_default_zoom_percent(settings.appearance.default_zoom_percent);
     controller.set_forced_color_scheme(forced_color_scheme(settings.appearance.theme));
+    controller.set_https_only(settings.privacy.https_only); // site-security
 }
 
 #[cfg(test)]

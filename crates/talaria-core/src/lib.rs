@@ -13,6 +13,7 @@ mod media;
 mod navigation_policy;
 mod page_icon;
 mod page_request;
+mod site_security;
 mod tab;
 mod visits;
 mod web_view;
@@ -53,6 +54,11 @@ pub use page_request::{
     PageRequestAnswer, PageRequestId, PageRequestKind, PageRequestReply, PendingPageRequest,
     PermissionDecision, PermissionDecisions, SIGN_IN_RETRY_INTERVAL, SUCCESSIVE_DIALOG_INTERVAL,
     SessionPermissionDecisions, sanitize_page_text, strip_user_info,
+};
+// site security
+pub use site_security::{
+    ErrorPageKind, HttpsOnlyInterstitial, HttpsPolicy, HttpsUpgradeChain, MainFrameLoad,
+    SecurityIndicator, is_local_host, main_frame_load, security_indicator, typed_https_upgrade,
 };
 pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
 pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};

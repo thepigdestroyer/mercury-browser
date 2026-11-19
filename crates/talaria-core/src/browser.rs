@@ -345,6 +345,22 @@ pub enum BrowserEvent {
         request_id: u64,
         selection: Option<FindSelection>,
     },
+    // site security
+    /// The tab shows one of Mercury's own error pages for `url`.
+    ErrorPageShown {
+        kind: crate::ErrorPageKind,
+        url: String,
+    },
+    /// HTTPS-only mode: the engine replaced a top-level load of `from` with one of `to`.
+    HttpsUpgraded {
+        from: String,
+        to: String,
+    },
+    /// HTTPS-only mode: the engine refused a top-level load of `url`, which it could not
+    /// upgrade (a form submission, or a site that sends its HTTPS address back to HTTP).
+    HttpsOnlyBlocked {
+        url: String,
+    },
 }
 
 /// A page the engine could not show, offered to the browser as a download.
@@ -648,6 +664,10 @@ impl BrowserState {
                 request_id,
                 selection,
             } => self.find.apply_selection(request_id, selection),
+            // site security: kept by the tab's site security, not here.
+            BrowserEvent::ErrorPageShown { .. }
+            | BrowserEvent::HttpsUpgraded { .. }
+            | BrowserEvent::HttpsOnlyBlocked { .. } => {}
         }
     }
 }

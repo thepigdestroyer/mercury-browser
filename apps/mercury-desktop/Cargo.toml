@@ -34,6 +34,8 @@ surfman.workspace = true
 talaria-core = { path = "../../crates/talaria-core" }
 talaria-servo = { path = "../../crates/talaria-servo" }
 thiserror.workspace = true
+# site-security: how addresses are shown, and parsing them for the site-information popover.
+mercury-site-security = { path = "../../crates/mercury-site-security" }
 # media-session lane: the page's host in Now Playing (url is already a workspace dependency);
 # openurl.
 url.workspace = true

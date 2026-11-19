@@ -332,8 +332,14 @@ impl PermissionDecision {
 pub trait PermissionDecisions: fmt::Debug {
     fn decision(&self, origin: &str, permission: PagePermission) -> Option<PermissionDecision>;
     fn remember(&mut self, origin: &str, permission: PagePermission, decision: PermissionDecision);
-    /// media-capture: forgets the decision, so that the site is asked again.
+    /// Forgets the decision for `permission` on `origin`, so that the site is asked again (media-capture
+    /// and site-security). Required, so that a store cannot silently keep a decision.
     fn forget(&mut self, origin: &str, permission: PagePermission);
+    // site security
+    /// Every decision remembered for `origin`. A store that cannot list them reports none.
+    fn decisions_for(&self, _origin: &str) -> Vec<(PagePermission, PermissionDecision)> {
+        Vec::new()
+    }
 }
 
 /// Remembers decisions until the browser exits.
@@ -352,6 +358,18 @@ impl PermissionDecisions for SessionPermissionDecisions {
     fn remember(&mut self, origin: &str, permission: PagePermission, decision: PermissionDecision) {
         self.decisions
             .insert((origin.to_owned(), permission), decision);
+    }
+
+    // site security
+    fn decisions_for(&self, origin: &str) -> Vec<(PagePermission, PermissionDecision)> {
+        let mut decisions = self
+            .decisions
+            .iter()
+            .filter(|((decided_origin, _), _)| decided_origin == origin)
+            .map(|((_, permission), decision)| (*permission, *decision))
+            .collect::<Vec<_>>();
+        decisions.sort_by_key(|(permission, _)| permission.description());
+        decisions
     }
 
     fn forget(&mut self, origin: &str, permission: PagePermission) {

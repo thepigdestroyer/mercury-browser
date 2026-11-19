@@ -1,6 +1,6 @@
 ---
 title: Vendored Patches
-description: Maintain and eventually remove Mercury's focused gaol, Surfman and servo-canvas compatibility patches and its Servo engine patches, and re-vendor them on a Servo upgrade.
+description: Maintain and eventually remove Mercury's focused gaol, Surfman, servo-canvas and servo-default-resources compatibility patches and its Servo engine patches, and re-vendor them on a Servo upgrade.
 ---
 
 # Vendored patches
@@ -89,12 +89,13 @@ The removal commit should say which upstream release absorbed the patch.
 | `third_party/gaol` | 0.2.1 | In the Linux sandbox profile: system calls that current Rust, glibc, SpiderMonkey and Servo need, and no zero file-size limit, which killed content processes sizing their shared-memory IPC regions |
 | `third_party/surfman` | 0.14.0 | Avoid process-global `DRI_PRIME=1` selection and its race with media initialization |
 | `third_party/servo-canvas` | 0.8.0 | Make Servo's GPU 2D-canvas backend (`vello` feature) build against wgpu 30, fall back to the CPU backend when it cannot start, survive failed renders and read-backs, share one GPU device, and fix GPU drawing defects (lost drawing, clips, oversized canvases, shapes with shadows) |
+| `third_party/servo-default-resources` | 0.8.0 | Stop it registering Servo's default resource reader, so that Mercury's own reader (its error and certificate-error pages, Servo's files for everything else) is the only one; see its `MERCURY.md` |
 | `third_party/servo-script` | 0.8.0 | Home of Mercury's engine patches. Camera and microphone: ask before opening a device, expose device names only with permission, `MediaStreamTrack.stop()`, release devices when a document goes away, camera and microphone `'self'` in frames and refused to workers |
 | `third_party/servo-script-bindings` | 0.8.0 | WebIDL for the above (`stop()`, `readyState`, `[SecureContext]` `mediaDevices`); WebRTC moved behind `dom_webrtc_transceiver_enabled` so capture can be on without it |
 | `third_party/servo-media-streams` | 0.8.0 | `MediaStream::stop()`, so a device can be released |
 | `third_party/servo-media-gstreamer` | 0.8.0 | Its GStreamer implementation, and a caps-field fix for fractional constraints |
 
-The gaol and Surfman patches date from before the fork and Mercury continues to carry them ([Origins and credits](origins.md)). Mercury added the servo-canvas patch and the Servo engine patches (`servo-script` and the three crates vendored with it, see [The Servo engine patches](#the-servo-engine-patches-servo-script-and-friends)). The `gaol` and Surfman patches concern Linux. The `gaol` patch adjusts the Linux sandbox profile (its seccomp allow-list and file-size limit), which takes effect only when Servo's `sandbox` option is on; Mercury keeps it off on every platform (see [Process isolation](servo-integration.md#process-isolation)). The Surfman patch changes how Mesa's GPU is chosen.
+The gaol and Surfman patches date from before the fork and Mercury continues to carry them ([Origins and credits](origins.md)). Mercury added the servo-canvas and servo-default-resources patches and the Servo engine patches (`servo-script` and the three crates vendored with it, see [The Servo engine patches](#the-servo-engine-patches-servo-script-and-friends)). The `gaol` and Surfman patches concern Linux. The `gaol` patch adjusts the Linux sandbox profile (its seccomp allow-list and file-size limit), which takes effect only when Servo's `sandbox` option is on; Mercury keeps it off on every platform (see [Process isolation](servo-integration.md#process-isolation)). The Surfman patch changes how Mesa's GPU is chosen.
 
 ## Validate the gaol patch
 
