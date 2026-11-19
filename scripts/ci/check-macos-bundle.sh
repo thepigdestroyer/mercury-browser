@@ -30,8 +30,13 @@
 #   - Contents/Resources holds LICENSE, NOTICE, THIRD-PARTY-NOTICES.md (the IJG
 #     credit and the offer of the LGPL sources are in them) and
 #     LICENSES/LGPL-2.1.txt;
+#   - Contents/Resources/credits/credits.html is the credits page (the licence
+#     text of every crate built into the executable): it passes
+#     credits_problem in scripts/macos/lib.sh, the rule bundle.sh applies too
+#     (a real page, over 100000 bytes, crediting at least 500 crates, no script);
 #   - scripts/macos/test-bundle.sh passes, including its checks of the notice
-#     files (LICENSE, NOTICE, THIRD-PARTY-NOTICES.md) in this bundle.
+#     files (LICENSE, NOTICE, THIRD-PARTY-NOTICES.md) and the credits page in
+#     this bundle.
 #
 # With --require-media, also:
 #   - Contents/MacOS/lib/ holds libgstreamer-1.0.0.dylib and every plugin
@@ -396,6 +401,16 @@ if [ -z "$missing_licence_files" ]; then
     pass "Contents/Resources holds LICENSE, NOTICE, THIRD-PARTY-NOTICES.md and LICENSES/LGPL-2.1.txt"
 else
     fail "Contents/Resources lacks:$missing_licence_files"
+fi
+# The licence text, copyright line and notices of every crate in the executable, written by
+# `mercury-credits generate` at package time; the About window opens it from here. The rule is
+# credits_problem in lib.sh (shared with bundle.sh), which prints why the file is not usable.
+CREDITS_PAGE="$RESOURCES/credits/credits.html"
+credits_reason="$(credits_problem "$CREDITS_PAGE")"
+if [ -z "$credits_reason" ]; then
+    pass "Contents/Resources/credits/credits.html is the credits page ($(wc -c <"$CREDITS_PAGE" | tr -d ' ') bytes)"
+else
+    fail "Contents/Resources/credits/credits.html: $credits_reason"
 fi
 if [ "$REQUIRE_MEDIA" = 1 ]; then
     if [ -d "$RESOURCES/gstreamer-licenses" ] && [ -n "$(ls -A "$RESOURCES/gstreamer-licenses")" ]; then

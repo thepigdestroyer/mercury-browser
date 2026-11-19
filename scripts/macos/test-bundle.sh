@@ -3,14 +3,17 @@
 # SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 # Checks the parts of scripts/macos/bundle.sh that can be tested without a
 # build or a signing identity: the identity checks, which entitlement file each
-# identity gets and what the files grant, the notice files every bundle
-# carries, and the helpers in lib.sh that parse otool and codesign output.
+# identity gets and what the files grant, the notice files and the credits page
+# every bundle carries, and the helpers in lib.sh that parse otool and codesign
+# output.
 #
 #   scripts/macos/test-bundle.sh      (or: make test-bundle-macos)
 #   MERCURY_TEST_BUNDLE="dist/Mercury Browser.app" scripts/macos/test-bundle.sh
-#                                     also checks the notice files in a built bundle
+#                                     also checks the notice files and the credits
+#                                     page in a built bundle
 #
-# Prints one line per check and exits non-zero if any fails. Writes nothing.
+# Prints one line per check and exits non-zero if any fails. Writes nothing
+# except temporary files (the sample credits pages), which it removes.
 set -euo pipefail
 
 cd "$(dirname -- "${BASH_SOURCE[0]}")/../.."
@@ -228,6 +231,8 @@ if [ -n "${MERCURY_TEST_BUNDLE:-}" ]; then
     check "the licence texts are in the bundle's LICENSES/" yes \
         "$(cmp -s LICENSES/PolyForm-Noncommercial-1.0.0.md "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSES/PolyForm-Noncommercial-1.0.0.md" &&
             cmp -s LICENSES/MPL-2.0.txt "$MERCURY_TEST_BUNDLE/Contents/Resources/LICENSES/MPL-2.0.txt" && echo yes || echo no)"
+    check "the credits page in $MERCURY_TEST_BUNDLE is usable" "" \
+        "$(credits_problem "$MERCURY_TEST_BUNDLE/Contents/Resources/credits/credits.html")"
 fi
 
 # ── No bundle without its media libraries ─────────────────────────────────
@@ -256,6 +261,91 @@ check "the repository's filter lists match their manifest" 5 \
     "$(filter_list_files crates/talaria-servo/resources/adblock 2>/dev/null | wc -l | tr -d ' ')"
 check "a directory without a manifest is refused" fails \
     "$(status filter_list_files "$NO_OUT-lists" 2>/dev/null)"
+
+# ── The credits page ──────────────────────────────────────────────────────
+# credits_problem is the one rule for the page (crates/mercury-credits writes it): bundle.sh
+# applies it before it builds anything, check-macos-bundle.sh on the finished bundle. The
+# sample pages are written here; no real page is needed.
+CREDITS_TMP="$(mktemp -d "${TMPDIR:-/tmp}/mercury-test-credits.XXXXXX")"
+trap 'rm -rf -- "$CREDITS_TMP"' EXIT
+GENERATOR_TAG='<meta name="generator" content="mercury-credits 0.2.0">'
+COUNT_TAG='<meta name="credits-crates" content="882">'
+# credits_page <generator tag> <crate-count tag> <lines of licence text>
+credits_page() {
+    printf '<!doctype html>\n<html><head><meta charset="utf-8">\n%s\n%s\n<title>Mercury Browser: third-party notices</title></head>\n<body><pre>\n' "$1" "$2"
+    awk -v lines="$3" 'BEGIN { for (i = 0; i < lines; i++) print "Permission is hereby granted, free of charge, to any person obtaining a copy of this software" }'
+    printf '</pre></body></html>\n'
+}
+# The reason credits_problem gives for a sample page made from the arguments of credits_page.
+sample_problem() {
+    credits_page "$@" >"$CREDITS_TMP/sample.html"
+    credits_problem "$CREDITS_TMP/sample.html"
+}
+credits_page "$GENERATOR_TAG" "$COUNT_TAG" 2000 >"$CREDITS_TMP/good.html"
+check "the good sample page is over the size floor" yes \
+    "$([ "$(wc -c <"$CREDITS_TMP/good.html")" -gt 100000 ] && echo yes || echo no)"
+check "a credits page of the expected shape is accepted" "" "$(credits_problem "$CREDITS_TMP/good.html")"
+check "a missing credits page is refused" yes \
+    "$(contains_text "$(credits_problem "$CREDITS_TMP/none.html")" 'none.html is missing or empty')"
+: >"$CREDITS_TMP/empty.html"
+check "an empty credits page is refused" yes \
+    "$(contains_text "$(credits_problem "$CREDITS_TMP/empty.html")" 'empty.html is missing or empty')"
+check "a directory is not a credits page" yes \
+    "$(contains_text "$(credits_problem "$CREDITS_TMP")" 'is missing or empty')"
+check "a page under 100000 bytes is refused" yes \
+    "$(contains_text "$(sample_problem "$GENERATOR_TAG" "$COUNT_TAG" 10)" 'sample.html is only ')"
+check "a page from another generator is refused" yes \
+    "$(contains_text "$(sample_problem '<meta name="generator" content="cargo-about 0.6">' "$COUNT_TAG" 2000)" 'was not written by mercury-credits')"
+check "generator text that is only escaped inside the page is refused" yes \
+    "$(contains_text "$(sample_problem '&lt;meta name="generator" content="mercury-credits 0.2.0"&gt;' "$COUNT_TAG" 2000)" 'was not written by mercury-credits')"
+check "a page without a crate count is refused" yes \
+    "$(contains_text "$(sample_problem "$GENERATOR_TAG" '' 2000)" 'no usable credits-crates tag')"
+check "a crate count that is not a number is refused" yes \
+    "$(contains_text "$(sample_problem "$GENERATOR_TAG" '<meta name="credits-crates" content="many">' 2000)" 'no usable credits-crates tag')"
+check "a crate count of twenty digits is refused" yes \
+    "$(contains_text "$(sample_problem "$GENERATOR_TAG" '<meta name="credits-crates" content="12345678901234567890">' 2000)" 'no usable credits-crates tag')"
+check "499 crates are too few" yes \
+    "$(contains_text "$(sample_problem "$GENERATOR_TAG" '<meta name="credits-crates" content="499">' 2000)" 'credits only 499 crates')"
+check "500 crates are enough" "" \
+    "$(sample_problem "$GENERATOR_TAG" '<meta name="credits-crates" content="500">' 2000)"
+check "a count with a leading zero is read as decimal (0882)" "" \
+    "$(sample_problem "$GENERATOR_TAG" '<meta name="credits-crates" content="0882">' 2000)"
+check "a count with a leading zero is read as decimal (0499)" yes \
+    "$(contains_text "$(sample_problem "$GENERATOR_TAG" '<meta name="credits-crates" content="0499">' 2000)" 'credits only 499 crates')"
+{ credits_page "$GENERATOR_TAG" "$COUNT_TAG" 2000; printf '<SCRIPT>alert(1)</SCRIPT>\n'; } >"$CREDITS_TMP/script.html"
+check "a page with a script is refused" yes \
+    "$(contains_text "$(credits_problem "$CREDITS_TMP/script.html")" 'contains a script tag')"
+
+# bundle.sh against a made-up GStreamer prefix (it only looks for the one library) and the
+# sample pages. Each run stops at or before its executable check, so nothing is written.
+mkdir -p "$CREDITS_TMP/gstreamer/lib" "$CREDITS_TMP/good" "$CREDITS_TMP/small"
+: >"$CREDITS_TMP/gstreamer/lib/libgstreamer-1.0.0.dylib"
+cp "$CREDITS_TMP/good.html" "$CREDITS_TMP/good/credits.html"
+credits_page "$GENERATOR_TAG" "$COUNT_TAG" 10 >"$CREDITS_TMP/small/credits.html"
+credits_bundle_status() { (unset MERCURY_CREDITS_DIR; bundle_status --gstreamer-prefix "$CREDITS_TMP/gstreamer" "$@"); }
+check "bundle.sh refuses to build without a credits page" yes \
+    "$(contains_text "$(credits_bundle_status)" 'no credits page: pass --credits or set MERCURY_CREDITS_DIR')"
+check "an empty MERCURY_CREDITS_DIR is refused too" yes \
+    "$(contains_text "$(MERCURY_CREDITS_DIR='' bundle_status --gstreamer-prefix "$CREDITS_TMP/gstreamer")" 'no credits page')"
+check "a credits directory without credits.html is refused" yes \
+    "$(contains_text "$(credits_bundle_status --credits "$CREDITS_TMP/gstreamer")" 'credits.html is missing or empty')"
+check "a damaged credits page is refused" yes \
+    "$(contains_text "$(credits_bundle_status --credits "$CREDITS_TMP/small")" 'credits.html is only ')"
+check "a good credits page passes; the next check is the executable" yes \
+    "$(contains_text "$(credits_bundle_status --credits "$CREDITS_TMP/good" --binary "$CREDITS_TMP/no-such-executable")" 'no executable at')"
+check "MERCURY_CREDITS_DIR works like --credits" yes \
+    "$(contains_text "$(MERCURY_CREDITS_DIR="$CREDITS_TMP/good" bundle_status --gstreamer-prefix "$CREDITS_TMP/gstreamer" --binary "$CREDITS_TMP/no-such-executable")" 'no executable at')"
+check "the credits refusals wrote nothing" no "$([ -e "$NO_OUT" ] && echo yes || echo no)"
+# The patterns are bundle.sh's literal text, so nothing in them is meant to expand.
+# shellcheck disable=SC2016
+check "bundle.sh copies the credits page into Contents/Resources/credits" yes \
+    "$(grep -q -F 'cp "$CREDITS_DIR/credits.html" "$RES_DIR/credits/credits.html"' scripts/macos/bundle.sh && echo yes || echo no)"
+# shellcheck disable=SC2016
+check "bundle.sh checks the page it is given before it builds anything" yes \
+    "$(grep -q -F 'problem="$(credits_problem "$CREDITS_DIR/credits.html")"' scripts/macos/bundle.sh && echo yes || echo no)"
+# The signing job has no build tools by design (release.yml), so this script takes the page as a file.
+check "bundle.sh runs neither cargo nor make" no \
+    "$(grep -Eq '^[[:space:]]*(cargo|make|rustc|rustup|"\$\{?(CARGO|MAKE)\}?")[[:space:]]' scripts/macos/bundle.sh && echo yes || echo no)"
 
 [ "$failures" -eq 0 ] || { printf '%d check(s) failed\n' "$failures"; exit 1; }
 printf 'all checks passed\n'

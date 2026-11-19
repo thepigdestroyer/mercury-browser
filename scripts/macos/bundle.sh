@@ -8,9 +8,10 @@
 #
 # Assemble, sign and optionally package Mercury Browser.app.
 #
-#   scripts/macos/bundle.sh --gstreamer-prefix <dir> [--binary <path>] [--out <dir>]
-#                           [--identity <id>] [--dmg]
-#   (or MERCURY_GSTREAMER_PREFIX instead of --gstreamer-prefix; one of them is required)
+#   scripts/macos/bundle.sh --gstreamer-prefix <dir> --credits <dir> [--binary <path>]
+#                           [--out <dir>] [--identity <id>] [--dmg]
+#   (or MERCURY_GSTREAMER_PREFIX instead of --gstreamer-prefix and MERCURY_CREDITS_DIR
+#   instead of --credits; both are required)
 #   scripts/macos/bundle.sh [--identity <id>] --print-entitlements
 #
 #   --binary <path>            the arm64 executable to bundle
@@ -29,6 +30,15 @@
 #                              $MERCURY_GSTREAMER_PREFIX). Required: the
 #                              executable cannot start without its media
 #                              libraries, so no bundle is built without them
+#   --credits <dir>            the directory that holds credits.html, the licence text
+#                              and copyright of every crate built into the
+#                              executable (make credits, or `mercury-credits
+#                              generate`; default $MERCURY_CREDITS_DIR); copied to
+#                              Contents/Resources/credits. Required: a bundle
+#                              without it would break those crates' notice
+#                              duties, so none is built. This script never runs
+#                              cargo (the signing job has no build tools); it
+#                              takes the page as a finished file and checks it
 #   --dmg                      also build Mercury-Browser-<version>-macos-arm64.dmg
 #                              and its .sha256
 #   --print-entitlements       print the entitlements file the identity would
@@ -67,12 +77,13 @@ BINARY="target/release/mercury-browser"
 OUT="dist"
 IDENTITY="${MERCURY_SIGN_IDENTITY:--}"
 GSTREAMER_PREFIX="${MERCURY_GSTREAMER_PREFIX:-}"
+CREDITS_DIR="${MERCURY_CREDITS_DIR:-}"
 MAKE_DMG=0
 PRINT_ENTITLEMENTS=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --binary | --out | --identity | --gstreamer-prefix)
+        --binary | --out | --identity | --gstreamer-prefix | --credits)
             [ "$#" -ge 2 ] || die "$1 needs a value"
             case "$1" in
                 --binary) BINARY="$2" ;;
@@ -80,6 +91,7 @@ while [ "$#" -gt 0 ]; do
                 # An empty identity is reported by identity_problem below.
                 --identity) IDENTITY="$2" ;;
                 --gstreamer-prefix) GSTREAMER_PREFIX="$2" ;;
+                --credits) CREDITS_DIR="$2" ;;
             esac
             shift 2
             ;;
@@ -101,6 +113,10 @@ if [ -n "$GSTREAMER_PREFIX" ]; then
     GSTREAMER_PREFIX="$(absolute "$GSTREAMER_PREFIX")"
     [ -d "$GSTREAMER_PREFIX" ] || die "GStreamer prefix $GSTREAMER_PREFIX does not exist"
 fi
+# An empty value is reported below, as "no credits page".
+if [ -n "$CREDITS_DIR" ]; then
+    CREDITS_DIR="$(absolute "$CREDITS_DIR")"
+fi
 
 REPO="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
@@ -119,6 +135,17 @@ COLLECTOR="scripts/macos/collect-gstreamer.sh"
 [ -f "$GSTREAMER_PREFIX/lib/libgstreamer-1.0.0.dylib" ] ||
     die "$GSTREAMER_PREFIX is not a GStreamer prefix (no lib/libgstreamer-1.0.0.dylib)"
 [ -f "$COLLECTOR" ] || die "$COLLECTOR is missing"
+
+# The credits page holds the licence text, copyright line and notices of the hundreds of crates
+# built into the executable; shipping the app without it breaks their notice duties, so no
+# bundle is built without it, and a damaged one stops here, before anything is written. It is
+# generated at package time (make credits; make app-macos and make package-macos do it) and
+# never committed. This script does not run cargo: the signing job has no build tools and
+# receives the page as a checked artefact.
+[ -n "$CREDITS_DIR" ] ||
+    die "no credits page: pass --credits or set MERCURY_CREDITS_DIR to the directory that holds credits.html (make credits writes it to target/<profile>/credits; make app-macos does this)"
+problem="$(credits_problem "$CREDITS_DIR/credits.html")"
+[ -z "$problem" ] || die "$problem"
 
 for tool in codesign ditto file hdiutil install_name_tool lipo otool plutil shasum; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool not found (install the Xcode command-line tools)"
@@ -196,6 +223,12 @@ done < <(bundled_notice_files)
 missing="$(missing_notice_files "$RES_DIR")"
 [ -z "$missing" ] || die "notice files missing from $RES_DIR: $(tr '\n' ' ' <<<"$missing")"
 ditto LICENSES "$RES_DIR/LICENSES"
+# The credits page, copied unchanged: the third-party notices of the crates in the executable.
+# The About window opens it from here. The copy is checked again, since it is what ships.
+mkdir -p "$RES_DIR/credits"
+cp "$CREDITS_DIR/credits.html" "$RES_DIR/credits/credits.html"
+problem="$(credits_problem "$RES_DIR/credits/credits.html")"
+[ -z "$problem" ] || die "$problem"
 # The ad and tracker filter lists: data files the browser reads at start-up (blocklists).
 # Exactly the manifest and the lists it names, each checked against its SHA-256.
 LIST_SOURCE="crates/talaria-servo/resources/adblock"
