@@ -326,22 +326,20 @@ impl Expr {
     /// branch of an `OR`. (MPL-2.0 then obliges Mercury to point to the source.)
     pub fn requires(&self, taken: &TakenSet, id: &str) -> bool {
         let usable = |expr: &Self| expr.satisfied(&|term| taken.contains(term));
-        fn walk(expr: &Expr, taken: &TakenSet, id: &str, usable: &dyn Fn(&Expr) -> bool) -> bool {
+        fn walk(expr: &Expr, id: &str, usable: &dyn Fn(&Expr) -> bool) -> bool {
             match expr {
                 Expr::Term(term) => term.exception.is_none() && term.id.eq_ignore_ascii_case(id),
-                Expr::And(branches) => branches
-                    .iter()
-                    .any(|branch| walk(branch, taken, id, usable)),
+                Expr::And(branches) => branches.iter().any(|branch| walk(branch, id, usable)),
                 Expr::Or(branches) => {
                     let usable_branches: Vec<&Expr> =
                         branches.iter().filter(|branch| usable(branch)).collect();
                     !usable_branches.is_empty()
                         && usable_branches
                             .iter()
-                            .all(|branch| walk(branch, taken, id, usable))
+                            .all(|branch| walk(branch, id, usable))
                 }
             }
         }
-        usable(self) && walk(self, taken, id, &usable)
+        usable(self) && walk(self, id, &usable)
     }
 }

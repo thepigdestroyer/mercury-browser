@@ -204,9 +204,9 @@ fn write_source(out: &mut String, collected: &Collected) {
         out.push_str("</section>\n");
         return;
     }
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "<p>The {} crates below are used under the Mozilla Public License 2.0. Their source is available here.</p>\n",
+        "<p>The {} crates below are used under the Mozilla Public License 2.0. Their source is available here.</p>",
         mpl.len()
     );
     out.push_str(
@@ -325,9 +325,9 @@ fn write_block(out: &mut String, index: usize, block: &Block, crates: &[Credited
 
 fn write_crates(out: &mut String, collected: &Collected) {
     out.push_str("<section id=\"crates\">\n<h2>Rust crates</h2>\n");
-    let _ = write!(
+    let _ = writeln!(
         out,
-        "<p>{} Rust crates are built into this version: {} from crates.io, {} vendored in the Mercury repository under third_party/, and {} of Mercury's own.</p>\n",
+        "<p>{} Rust crates are built into this version: {} from crates.io, {} vendored in the Mercury repository under third_party/, and {} of Mercury's own.</p>",
         collected.credited_count(),
         collected.registry_count(),
         collected.vendored_count(),

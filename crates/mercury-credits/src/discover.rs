@@ -164,10 +164,10 @@ pub fn discover(package_root: &Path, extras: &[String]) -> Discovery {
         let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
             continue;
         };
-        if let Some(kind) = kind_of_name(name) {
-            if regular_file_inside(&path, &canonical_root) {
-                take(&mut discovery, &path, kind, false);
-            }
+        if let Some(kind) = kind_of_name(name)
+            && regular_file_inside(&path, &canonical_root)
+        {
+            take(&mut discovery, &path, kind, false);
         }
     }
     // `LICENSES/` (REUSE) and `licenses/`: every file is a licence text, whatever its name

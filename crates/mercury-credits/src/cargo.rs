@@ -153,7 +153,7 @@ impl Metadata {
     }
 
     pub fn is_workspace_member(&self, package: &Package) -> bool {
-        self.workspace_members.iter().any(|id| *id == package.id)
+        self.workspace_members.contains(&package.id)
     }
 
     /// The package a tree entry stands for: the same name and version, and for a path crate the
@@ -173,9 +173,16 @@ impl Metadata {
 }
 
 fn run(options: &Options, subcommand: &str, arguments: &[&str]) -> Result<Vec<u8>> {
+    let root = options.root();
+    if !root.is_dir() {
+        return Err(Error::Cargo(format!(
+            "{} is not a directory; run mercury-credits in the repository root or pass --manifest-path",
+            root.display()
+        )));
+    }
     let mut command = Command::new(&options.cargo);
     command
-        .current_dir(options.root())
+        .current_dir(&root)
         .arg(subcommand)
         .arg("--locked")
         .arg("--manifest-path")

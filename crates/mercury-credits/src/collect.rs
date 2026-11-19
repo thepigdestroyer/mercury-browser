@@ -204,14 +204,13 @@ fn copyright_line(
             fold_key(licence) == fold_key(key)
                 || fold_key(licence) == fold_key(&term_of_key(key).id)
         });
-        if for_this_licence {
-            if let Some(line) = clarify
+        if for_this_licence
+            && let Some(line) = clarify
                 .copyright
                 .as_deref()
                 .filter(|line| !line.trim().is_empty())
-            {
-                return line.trim().to_owned();
-            }
+        {
+            return line.trim().to_owned();
         }
     }
     let authors: Vec<String> = package

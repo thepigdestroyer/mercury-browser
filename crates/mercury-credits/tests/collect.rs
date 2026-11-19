@@ -414,7 +414,7 @@ fn extra_files_are_credited_with_their_note_and_name_the_path() {
     let mut fake = Fake::new();
     fake.add("native-sys", "1.0.0", "MIT");
     fake.crate_file("native-sys", "LICENSE", MIT);
-    fake.crate_file("native-sys", "deps/lz4/LICENSE", &common::BSD3);
+    fake.crate_file("native-sys", "deps/lz4/LICENSE", common::BSD3);
     fake.write(
         "crates/mercury-credits/credits.toml",
         "[[extra]]\ncrate = \"native-sys\"\nfiles = [\"deps/lz4/LICENSE\"]\nnote = \"LZ4 (deps/lz4)\"\n",
