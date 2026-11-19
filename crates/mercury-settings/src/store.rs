@@ -20,7 +20,13 @@
 //!
 //! A version bump is needed for any change an older reader would misread or reject: a new enum
 //! value (an older reader would call the file damaged), a renamed or retyped field. Adding a
-//! field with a default needs none.
+//! field with a default needs none, so `appearance.layout`, `appearance.palette_light`,
+//! `appearance.palette_dark` and `appearance.tab_groups` did not bump `SETTINGS_FORMAT_VERSION`
+//! (version 1 files written before them load with their defaults and no repairs). A layout or
+//! palette id from a later version needs none either, because they are validated strings, not
+//! enums: an older reader repairs a layout it does not know and keeps a palette id it does not
+//! know. A new variant of `DockStart`, `DialCorner` or `KeyCapture` does need a bump, as a new
+//! `Theme` would.
 
 use std::io;
 use std::path::{Path, PathBuf};

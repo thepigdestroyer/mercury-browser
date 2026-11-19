@@ -7,7 +7,7 @@
 //!
 //! - **Open-ended values are validated strings**, not enums: the layout and the palette ids. A
 //!   file written by a later Mercury that knows more layouts or palettes must still load in this
-//!   one, so an unknown value becomes the default with a [`Repair`](crate::Repair) instead of
+//!   one, so an unknown value becomes the default with a [`Repair`] instead of
 //!   making the whole file "damaged".
 //! - **Closed sets are enums** ([`DockStart`], [`DialCorner`], [`KeyCapture`]). Adding a variant
 //!   later is a change an older reader would misread, so it needs a
@@ -15,8 +15,26 @@
 //!
 //! Which palettes exist is not known here: `mercury-appearance` owns that, and checks the ids
 //! when it resolves them. This module checks only that an id is well formed.
+//!
+//! # What loading repairs
+//!
+//! `AppearanceSettings::validate` runs from [`Settings::validated`](crate::Settings::validated),
+//! so it applies to every load and every save. A value it refuses is replaced by the default and
+//! reported as one [`Repair`], never clamped (the convention of the page zoom). None of these
+//! damages the file: a damaged file is one serde cannot read at all, such as a `dial_corner` that
+//! names no corner, exactly as for `theme` today.
+//!
+//! | Field | Rule | Becomes |
+//! | --- | --- | --- |
+//! | `layout` | exactly one of [`LAYOUT_IDS`] | [`DEFAULT_LAYOUT`] |
+//! | `palette_light`, `palette_dark` | well formed: 1 to [`MAX_PALETTE_ID_BYTES`] bytes, `a-z` or `0-9` first, then `a-z`, `0-9` or `-`; whether the palette exists is not checked | [`DEFAULT_PALETTE`] |
+//! | `tab_groups.snapshot_cap_mb` | [`MIN_SNAPSHOT_CAP_MB`] to [`MAX_SNAPSHOT_CAP_MB`] | [`DEFAULT_SNAPSHOT_CAP_MB`] |
+//! | `tab_groups.keys.hold_ms` | [`MIN_KEY_HOLD_MS`] to [`MAX_KEY_HOLD_MS`] | [`DEFAULT_KEY_HOLD_MS`] |
+//! | `tab_groups.keys.default_sequence` | ASCII capitals, none twice, at most [`MAX_KEY_SEQUENCE_LEN`] | its ASCII letters in capitals, the first of each kept; [`DEFAULT_KEY_SEQUENCE`] when none is left; empty stays empty |
 
 use serde::{Deserialize, Serialize};
+
+use crate::settings::{AppearanceSettings, Repair, quoted};
 
 /// The id of the Mercury layout: the toolbar on top, the group dock at the bottom.
 pub const LAYOUT_MERCURY: &str = "mercury";
@@ -162,4 +180,133 @@ impl Default for TabGroupSettings {
             keys: GroupKeySettings::default(),
         }
     }
+}
+
+impl AppearanceSettings {
+    /// Repairs the layout, the palette ids and the tab-group settings, appending one [`Repair`]
+    /// per field changed, in field order: `layout`, `palette_light`, `palette_dark`,
+    /// `tab_groups.snapshot_cap_mb`, `tab_groups.keys.hold_ms`,
+    /// `tab_groups.keys.default_sequence`. The rules are in the module documentation. The page
+    /// zoom is checked by [`Settings::validated`](crate::Settings::validated) itself.
+    pub(crate) fn validate(&mut self, repairs: &mut Vec<Repair>) {
+        if !LAYOUT_IDS.contains(&self.layout.as_str()) {
+            repairs.push(Repair {
+                field: "appearance.layout",
+                reason: format!(
+                    "{} is not a layout this version knows ({LAYOUT_MERCURY:?} or \
+                     {LAYOUT_CLASSIC:?}); using {DEFAULT_LAYOUT:?}",
+                    quoted(&self.layout)
+                ),
+            });
+            DEFAULT_LAYOUT.clone_into(&mut self.layout);
+        }
+
+        repair_palette_id("appearance.palette_light", &mut self.palette_light, repairs);
+        repair_palette_id("appearance.palette_dark", &mut self.palette_dark, repairs);
+
+        let groups = &mut self.tab_groups;
+
+        let cap = groups.snapshot_cap_mb;
+        if !(MIN_SNAPSHOT_CAP_MB..=MAX_SNAPSHOT_CAP_MB).contains(&cap) {
+            repairs.push(Repair {
+                field: "appearance.tab_groups.snapshot_cap_mb",
+                reason: format!(
+                    "{cap} is outside {MIN_SNAPSHOT_CAP_MB}-{MAX_SNAPSHOT_CAP_MB}; \
+                     using {DEFAULT_SNAPSHOT_CAP_MB}"
+                ),
+            });
+            groups.snapshot_cap_mb = DEFAULT_SNAPSHOT_CAP_MB;
+        }
+
+        let hold = groups.keys.hold_ms;
+        if !(MIN_KEY_HOLD_MS..=MAX_KEY_HOLD_MS).contains(&hold) {
+            repairs.push(Repair {
+                field: "appearance.tab_groups.keys.hold_ms",
+                reason: format!(
+                    "{hold} is outside {MIN_KEY_HOLD_MS}-{MAX_KEY_HOLD_MS}; \
+                     using {DEFAULT_KEY_HOLD_MS}"
+                ),
+            });
+            groups.keys.hold_ms = DEFAULT_KEY_HOLD_MS;
+        }
+
+        let sequence = &groups.keys.default_sequence;
+        let kept = key_letters(sequence);
+        if kept != *sequence {
+            let (reason, replacement) = if kept.is_empty() {
+                (
+                    format!(
+                        "{} has no ASCII letter; using {DEFAULT_KEY_SEQUENCE:?}",
+                        quoted(sequence)
+                    ),
+                    DEFAULT_KEY_SEQUENCE.to_owned(),
+                )
+            } else {
+                (
+                    format!(
+                        "{} is not capital letters without repeats; using {}",
+                        quoted(sequence),
+                        quoted(&kept)
+                    ),
+                    kept,
+                )
+            };
+            repairs.push(Repair {
+                field: "appearance.tab_groups.keys.default_sequence",
+                reason,
+            });
+            groups.keys.default_sequence = replacement;
+        }
+    }
+}
+
+/// Puts [`DEFAULT_PALETTE`] in place of `id` if it is not well formed, and reports it.
+fn repair_palette_id(field: &'static str, id: &mut String, repairs: &mut Vec<Repair>) {
+    if is_well_formed_palette_id(id) {
+        return;
+    }
+    repairs.push(Repair {
+        field,
+        reason: format!(
+            "{} is not a well formed palette id (1-{MAX_PALETTE_ID_BYTES} bytes of a-z, 0-9 and \
+             \"-\", not starting with \"-\"); using {DEFAULT_PALETTE:?}",
+            quoted(id)
+        ),
+    });
+    DEFAULT_PALETTE.clone_into(id);
+}
+
+/// Whether `id` has the form of a palette id: 1 to [`MAX_PALETTE_ID_BYTES`] bytes, the first
+/// `a-z` or `0-9`, the rest `a-z`, `0-9` or `-`. Whether a palette of that id exists is for
+/// `mercury-appearance` to say.
+fn is_well_formed_palette_id(id: &str) -> bool {
+    let bytes = id.as_bytes();
+    let Some((first, rest)) = bytes.split_first() else {
+        return false;
+    };
+    bytes.len() <= MAX_PALETTE_ID_BYTES
+        && (first.is_ascii_lowercase() || first.is_ascii_digit())
+        && rest
+            .iter()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || *byte == b'-')
+}
+
+/// The ASCII letters of `text` in capitals, the first of each kept, at most
+/// [`MAX_KEY_SEQUENCE_LEN`] of them. Works on bytes: every byte of a multi-byte character is
+/// non-ASCII, so none of them is taken for a letter.
+fn key_letters(text: &str) -> String {
+    let mut seen = 0_u32;
+    let mut kept = String::new();
+    for byte in text.bytes().filter(u8::is_ascii_alphabetic) {
+        let letter = byte.to_ascii_uppercase();
+        let bit = 1_u32 << (letter - b'A');
+        if seen & bit == 0 {
+            seen |= bit;
+            kept.push(char::from(letter));
+            if kept.len() == MAX_KEY_SEQUENCE_LEN {
+                break;
+            }
+        }
+    }
+    kept
 }

@@ -5,8 +5,8 @@ use std::path::{Path, PathBuf};
 
 use mercury_settings::{
     Loaded, MAX_CUSTOM_ENGINES, MAX_ENGINE_NAME_BYTES, MAX_KEYWORD_BYTES, MAX_NEVER_SAVE_ORIGINS,
-    MAX_SETTINGS_FILE_BYTES, MAX_TEMPLATE_BYTES, MAX_URL_BYTES, SETTINGS_FORMAT_VERSION,
-    SearchEngine, Settings, SettingsError, SettingsStore,
+    MAX_PALETTE_ID_BYTES, MAX_SETTINGS_FILE_BYTES, MAX_TEMPLATE_BYTES, MAX_URL_BYTES,
+    SETTINGS_FORMAT_VERSION, SearchEngine, Settings, SettingsError, SettingsStore,
 };
 
 fn profile() -> tempfile::TempDir {
@@ -533,6 +533,11 @@ fn the_largest_valid_settings_fit_under_the_file_limit() {
             )
         })
         .collect();
+    // The new appearance strings at their longest: two 64-byte palette ids and all 26 letters.
+    settings.appearance.layout = "classic".to_owned();
+    settings.appearance.palette_light = "p".repeat(MAX_PALETTE_ID_BYTES);
+    settings.appearance.palette_dark = "d".repeat(MAX_PALETTE_ID_BYTES);
+    settings.appearance.tab_groups.keys.default_sequence = ('A'..='Z').collect::<String>();
     let (settings, repairs) = settings.validated();
     assert!(repairs.is_empty(), "{repairs:?}");
 

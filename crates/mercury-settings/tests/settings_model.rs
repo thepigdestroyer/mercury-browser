@@ -93,6 +93,11 @@ fn the_defaults_are_the_documented_ones() {
     assert_eq!(settings.appearance.default_zoom_percent, 100);
     assert!(settings.appearance.show_bookmarks_bar);
     assert!(!settings.appearance.show_home_button);
+    assert_eq!(settings.appearance.layout, "mercury");
+    assert_eq!(settings.appearance.palette_light, "mercury-b2");
+    assert_eq!(settings.appearance.palette_dark, "mercury-b2");
+    // The tab-group defaults are listed one by one in appearance_settings.rs.
+    assert!(settings.appearance.tab_groups.dial);
     assert!(settings.privacy.block_ads_and_trackers);
     assert!(settings.privacy.update_filter_lists);
     assert!(!settings.privacy.https_only);
