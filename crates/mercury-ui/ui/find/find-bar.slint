@@ -28,9 +28,13 @@ component FindButton inherits Rectangle {
 
     Text {
         text: root.label;
-        color: root.checked || (touch.has-hover && root.enabled)
-            ? ChromePalette.button-label-hover
-            : ChromePalette.button-label;
+        // A checked button is filled with the selection colour, so its label takes the selection's
+        // text colour (the hover label colour is an accent and vanishes on that fill).
+        color: root.checked
+            ? ChromePalette.item-selected-text
+            : touch.has-hover && root.enabled
+                ? ChromePalette.button-label-hover
+                : ChromePalette.button-label;
         font-size: root.font-size;
         font-weight: 500;
         horizontal-alignment: center;

@@ -87,6 +87,45 @@ const SCALE: f32 = 2.0;
 const WIDTH: u32 = 1800;
 const HEIGHT: u32 = 400;
 
+/// The checked "Aa" button, in image pixels: x from 908 to 976, y from 132 to 188.
+const TOGGLE_LEFT: u32 = 912;
+const TOGGLE_RIGHT: u32 = 972;
+const TOGGLE_TOP: u32 = 136;
+const TOGGLE_BOTTOM: u32 = 184;
+
+/// WCAG relative luminance of a pixel.
+fn luminance(pixel: &PremultipliedRgbaColor) -> f64 {
+    let channel = |value: u8| {
+        let value = f64::from(value) / 255.0;
+        if value <= 0.03928 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    };
+    0.2126 * channel(pixel.red) + 0.7152 * channel(pixel.green) + 0.0722 * channel(pixel.blue)
+}
+
+/// The contrast between the fill of the checked "Aa" button (read at its top edge, above the
+/// label) and the pixel of its area that differs most from that fill: the label.
+fn checked_toggle_label_contrast(pixels: &[PremultipliedRgbaColor]) -> f64 {
+    let at = |x: u32, y: u32| &pixels[(y * WIDTH + x) as usize];
+    let fill = luminance(at((TOGGLE_LEFT + TOGGLE_RIGHT) / 2, TOGGLE_TOP));
+    let mut most = 1.0_f64;
+    for y in TOGGLE_TOP..TOGGLE_BOTTOM {
+        for x in TOGGLE_LEFT..TOGGLE_RIGHT {
+            let other = luminance(at(x, y));
+            let (light, dark) = if other > fill {
+                (other, fill)
+            } else {
+                (fill, other)
+            };
+            most = most.max((light + 0.05) / (dark + 0.05));
+        }
+    }
+    most
+}
+
 struct Fixture {
     window: Rc<MinimalSoftwareWindow>,
     harness: Harness,
@@ -275,6 +314,13 @@ fn the_find_bar_renders_and_answers_keys_and_clicks() {
         harness.set_no_matches(false);
         harness.set_match_case(true);
         fixture.save(&format!("find-bar-{name}-count"));
+        // The checked "Aa" button is filled with the selection colour; its label must be
+        // readable on that fill (WCAG AA, 4.5).
+        let contrast = checked_toggle_label_contrast(&fixture.render());
+        assert!(
+            contrast >= 4.5,
+            "the checked match-case label has contrast {contrast:.2} in the {name} theme"
+        );
         harness.set_query("absent".into());
         harness.set_status("No matches".into());
         harness.set_no_matches(true);
