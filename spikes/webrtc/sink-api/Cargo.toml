@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# The frame-sink contract shared by the WebRTC spike crates (sp-rtc lane). Standard library only.
+# Its own cargo workspace: nothing here is part of the default build. Run cargo from this directory.
+[package]
+name = "mercury-frame-sink"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "PolyForm-Noncommercial-1.0.0"
+description = "Frame-sink trait, raw frame types and clock mapping between a capture stream and a WebRTC sender"
+
+[workspace]
+
+[dependencies]

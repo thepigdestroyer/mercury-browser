@@ -107,6 +107,7 @@ path = [
   "tests/pages/unstyled.html",
   "tests/pages/untitled.html",
   "tests/pages/webgl-multi.html",
+  "spikes/webrtc/sink-api/Cargo.lock",
   "THIRD-PARTY-NOTICES.md",
   "crates/talaria-servo/resources/adblock/manifest.json",
   "tests/filter-lists/brave-unbreak.txt",
