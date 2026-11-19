@@ -1,0 +1,314 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# What `mercury-credits` cannot find by itself: licence files deeper inside a package (native code
+# that a -sys crate compiles into the application), copyright lines for packages that carry no
+# licence file, and the licence files a person has read and accepted although the tool does not
+# recognise their wording. docs/developer-guide/licence-compliance.md explains each table.
+#
+# Every `files` path was checked to exist in the package as it is in the cargo registry on
+# 19 Nov 2026 (`mercury-credits check` fails when one is missing). Paths are relative to the
+# package root. Only the texts of the bundled projects that are compiled into the application are
+# named: build tooling inside a package (Python packages, test suites, documentation tools) is not.
+#
+# A crate that `links` native code and has no `[[extra]]` entry at all gets a warning from
+# `mercury-credits check`, so crates that were read and bundle nothing else have an entry with an
+# empty `files` list.
+
+# ---------------------------------------------------------------------------------------------
+# mozjs_sys 153.6.0-1 (SpiderMonkey). The package root holds no licence file; `mozjs/LICENSE` only
+# points at Firefox's `toolkit/content/license.html`, which is not in the package. MPL-2.0 is the
+# crate's licence, and the projects below are compiled into `libjs_static`. Not listed on purpose:
+#   third_party/python/**, tools/**, testing/**, devtools/**, build/pgo/** and every test directory
+#   (build and test tooling); nsprpub/ (NSPR is not part of the standalone engine build);
+#   js/src/vtune/ and mozglue/baseprofiler/core/vtune/ (Intel's ittnotify, "GPL-2.0 OR BSD-3-Clause";
+#   only built for VTune profiling, and Mercury would take the BSD branch).
+# Files inside SpiderMonkey that carry their own notice in the source header (Apache-2.0 for the
+# WebAssembly code, BSD-3-Clause for VIXL, BSD-2-Clause for Apple's assembler, MIT for Float16)
+# are listed in THIRD-PARTY-NOTICES.md, because the tool can only show whole files.
+# ---------------------------------------------------------------------------------------------
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/js/src/irregexp/LICENSE.v8"]
+note = "irregexp, the regular-expression engine from the V8 project (js/src/irregexp)"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/mfbt/double-conversion/LICENSE"]
+note = "double-conversion, number to string conversion (mfbt/double-conversion)"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/mozglue/static/lz4/LICENSE"]
+note = "LZ4 (mozglue/static/lz4)"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/js/src/xsum/LICENSE"]
+note = "xsum, exact summation of floating-point numbers, by Radford M. Neal (js/src/xsum)"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/js/src/zydis/Zydis/LICENSE", "mozjs/js/src/zydis/Zycore/LICENSE"]
+note = "Zydis and Zycore, the x86 disassembler (js/src/zydis); compiled only when the jitspew feature is on"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/modules/fdlibm/src/LICENSE"]
+note = "fdlibm, the math functions (modules/fdlibm), from FreeBSD's msun"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/third_party/fmt/LICENSE"]
+note = "{fmt}, text formatting (third_party/fmt, compiled into mozglue)"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/third_party/function2/LICENSE.txt"]
+note = "function2, a move-only function wrapper (third_party/function2)"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/third_party/gemmology/LICENSE"]
+note = "gemmology, integer matrix multiplication for WebAssembly (third_party/gemmology)"
+
+[[extra]]
+crate = "mozjs_sys"
+files = ["mozjs/third_party/xsimd/LICENSE"]
+note = "xsimd, portable SIMD (third_party/xsimd)"
+
+# The other mozjs crates are Rust glue (MPL-2.0) and bundle nothing else; stylo's Python build
+# tooling (properties/vendored_python) runs at build time and ships none of its code.
+[[extra]]
+crate = "mozjs_collator_glue"
+files = []
+
+[[extra]]
+crate = "mozjs_locale_glue"
+files = []
+
+[[extra]]
+crate = "mozjs_normalizer_glue"
+files = []
+
+[[extra]]
+crate = "mozjs_properties_glue"
+files = []
+
+[[extra]]
+crate = "mozjs_unicode_bidi_ffi"
+files = []
+
+[[extra]]
+crate = "stylo"
+files = []
+
+# ---------------------------------------------------------------------------------------------
+# Other -sys crates that compile native code into the application.
+# ---------------------------------------------------------------------------------------------
+
+# aws-lc-sys: AWS-LC (rustls's crypto). `aws-lc/LICENSE` is the same text as the package root's
+# LICENSE and lists every part, with the licence Amazon elects for each: Apache-2.0 OR ISC for
+# AWS-LC's own files; ISC, OpenSSL and SSLeay-era copyright lines for the code inherited from
+# BoringSSL; the Jitter Entropy library under BSD-3-Clause (not GPL-2.0); fiat-crypto (MIT);
+# s2n-bignum (Apache-2.0 OR ISC OR MIT-0). Its test-only parts are marked "NOT compiled".
+[[extra]]
+crate = "aws-lc-sys"
+files = ["aws-lc/LICENSE"]
+note = "AWS-LC, with the BoringSSL, OpenSSL, mlkem-native, mldsa-native, Jitter Entropy and s2n-bignum parts it lists"
+
+[[extra]]
+crate = "aws-lc-sys"
+files = ["aws-lc/third_party/fiat/LICENSE"]
+note = "fiat-crypto, generated field arithmetic (aws-lc/third_party/fiat)"
+
+[[extra]]
+crate = "aws-lc-rs"
+files = []
+
+# mozangle: ANGLE's shader translator and the GL ES front end that WebGL needs. The Vulkan
+# loader (volk) and the Vulkan headers in its source tree are not built on macOS or Linux.
+[[extra]]
+crate = "mozangle"
+files = ["gfx/angle/checkout/LICENSE"]
+note = "ANGLE, Google's OpenGL ES implementation and shader translator (gfx/angle)"
+
+# fontsan: the OpenType Sanitiser and the LZ4 it uses, compiled by build.rs. The WOFF2 decoder is
+# `wuff` (Rust, in the graph), not Google's woff2.
+[[extra]]
+crate = "fontsan"
+files = ["src/deps/ots/LICENSE"]
+note = "OTS, the OpenType Sanitiser (src/deps/ots)"
+
+[[extra]]
+crate = "fontsan"
+files = ["src/deps/lz4/lib/LICENSE"]
+note = "LZ4 (src/deps/lz4)"
+
+# harfbuzz-sys: HarfBuzz, compiled from harfbuzz/src/harfbuzz.cc by the "bundled" feature that
+# servo-fonts turns on. `COPYING` is HarfBuzz's "Old MIT" licence and lists the copyright holders.
+[[extra]]
+crate = "harfbuzz-sys"
+files = ["harfbuzz/COPYING"]
+note = "HarfBuzz, text shaping, under its \"Old MIT\" licence (harfbuzz)"
+
+[[extra]]
+crate = "harfbuzz-sys"
+files = ["harfbuzz/src/ms-use/COPYING"]
+note = "Microsoft's Universal Shaping Engine data, from which HarfBuzz's shaping tables are generated (harfbuzz/src/ms-use)"
+
+# zstd-sys: Zstandard. The upstream project offers BSD-3-Clause or GPL-2.0 (`zstd/COPYING`);
+# Mercury takes BSD-3-Clause, and the GPL text is not listed. The package root's three LICENSE
+# files (the bindings, and the legacy decoders' BSD-2-Clause) are picked up by themselves.
+[[extra]]
+crate = "zstd-sys"
+files = ["zstd/LICENSE"]
+note = "Zstandard, used under its BSD-3-Clause licence (zstd)"
+
+# libz-sys: the zlib source is compiled only when the system has no zlib or static linking is
+# asked for; the macOS application links Apple's libz. Credited anyway, the safe side. Its
+# zlib-ng sources (feature `zlib-ng`) are not used.
+[[extra]]
+crate = "libz-sys"
+files = ["src/zlib/LICENSE"]
+note = "zlib (src/zlib), compiled only where no system zlib is used"
+
+# libsqlite3-sys: the SQLite amalgamation (sqlite3/) is in the public domain and has no licence
+# file; THIRD-PARTY-NOTICES.md says so. `sqlcipher/` (BSD-style) is built only with the
+# sqlcipher features, which Mercury does not enable.
+[[extra]]
+crate = "libsqlite3-sys"
+files = []
+
+# glslopt: Mesa-derived GLSL optimiser that WebRender's build script runs on its shaders.
+[[extra]]
+crate = "glslopt"
+files = ["glsl-optimizer/license.txt"]
+note = "GLSL Optimizer, derived from Mesa (glsl-optimizer)"
+
+# Crates that link a system library or are bindings only: read, nothing else bundled.
+[[extra]]
+crate = "clang-sys"
+files = []
+
+[[extra]]
+crate = "encoding_c"
+files = []
+
+[[extra]]
+crate = "encoding_c_mem"
+files = []
+
+[[extra]]
+crate = "prettyplease"
+files = []
+
+[[extra]]
+crate = "rayon-core"
+files = []
+
+[[extra]]
+crate = "wuff-capi"
+files = []
+
+# servo-script-bindings (vendored): "MPL-2.0 AND BSD-3-Clause". The BSD-3-Clause part is PLY, the
+# Python lex and yacc library in third_party/ply, which the build script runs to read the WebIDL
+# files; none of it is in the executable. Its licence text is in the header of
+# third_party/ply/ply/lex.py and yacc.py, and no separate file exists.
+[[extra]]
+crate = "servo-script-bindings"
+files = []
+
+[[clarify]]
+crate = "servo-script-bindings"
+licence = "BSD-3-Clause"
+copyright = "Copyright (c) 2001-2017 David M. Beazley (Dabeaz LLC). All rights reserved."
+source = "third_party/servo-script-bindings/third_party/ply/ply/lex.py, lines 3-5; PKG-INFO says Author: David Beazley, License: BSD"
+
+# ---------------------------------------------------------------------------------------------
+# Licence files deeper in packages whose data or code is compiled into the application.
+# ---------------------------------------------------------------------------------------------
+
+# regex-syntax: its Unicode tables are generated from the Unicode Character Database.
+[[extra]]
+crate = "regex-syntax"
+files = ["src/unicode_tables/LICENSE-UNICODE"]
+note = "Unicode Character Database tables (src/unicode_tables)"
+
+# rustybuzz: its Universal Shaping Engine table is generated from Microsoft's data.
+[[extra]]
+crate = "rustybuzz"
+files = ["scripts/ms-use/COPYING"]
+note = "Microsoft's Universal Shaping Engine data (scripts/ms-use)"
+
+# tracing-core: `src/spin` is a copy of the `spin` crate's lock code.
+[[extra]]
+crate = "tracing-core"
+files = ["src/spin/LICENSE"]
+note = "a copy of the spin crate's locks (src/spin)"
+
+# vello_shaders: the WGSL compute shaders are embedded in the executable.
+[[extra]]
+crate = "vello_shaders"
+files = ["shader/UNLICENSE"]
+note = "the compute shaders (shader/)"
+
+# Copyright lines for packages that carry neither a licence file nor a usable `authors` field and
+# whose holder a person has read. Every other crate without a file or holder stays on the tool's
+# fallback line ("Copyright (c) the <name> authors (<repository>)"); see the list in
+# docs/developer-guide/licence-compliance.md.
+
+# nom-language is published from the same repository as nom 8.0.0 with the same `authors` field (an
+# e-mail address, not a name); nom's LICENSE gives the holder.
+[[clarify]]
+crate = "nom-language"
+licence = "MIT"
+copyright = "Copyright (c) 2014-2019 Geoffroy Couprie"
+source = "nom-8.0.0/LICENSE (repository https://github.com/rust-bakery/nom)"
+
+# ---------------------------------------------------------------------------------------------
+# macOS only (aarch64-apple-darwin): the Objective-C runtime's C shim. `objc2` links Apple's own
+# runtime; nothing is bundled. `mercury-credits check --target x86_64-unknown-linux-gnu` therefore
+# reports this entry as not in the app.
+# ---------------------------------------------------------------------------------------------
+[[extra]]
+crate = "objc-sys"
+files = []
+
+# ---------------------------------------------------------------------------------------------
+# Linux only (x86_64-unknown-linux-gnu): crates that the macOS application does not contain.
+# `mercury-credits check --target aarch64-apple-darwin` therefore reports these as not in the app.
+# ---------------------------------------------------------------------------------------------
+
+# yeslogic-fontconfig-sys links the system's Fontconfig through pkg-config; nothing is bundled.
+[[extra]]
+crate = "yeslogic-fontconfig-sys"
+files = []
+
+# freetype-sys: FreeType 2.13.3 and libpng, compiled by the "bundled" feature that servo-fonts
+# turns on. FreeType is offered under the FreeType Licence (FTL) or the GPL-2.0; Mercury takes the
+# FTL, whose credit line is in THIRD-PARTY-NOTICES.md. The FTL, FreeType's licence overview and
+# libpng's licence have wording the tool does not classify; they were read and are accepted.
+[[extra]]
+crate = "freetype-sys"
+files = ["freetype2/LICENSE.TXT", "freetype2/docs/FTL.TXT"]
+note = "FreeType, used under the FreeType Licence (FTL) (freetype2)"
+
+[[extra]]
+crate = "freetype-sys"
+files = ["libpng/LICENSE"]
+note = "libpng (libpng)"
+
+[[extra]]
+crate = "wayland-protocols"
+files = ["protocols/COPYING"]
+note = "the Wayland protocol definitions (protocols/)"
+
+# Read as unclassified licence files and accepted: each is a licence text that a person has read,
+# for a project Mercury may use (permissive, or the option Mercury takes of a dual licence).
+[accept_unclassified]
+crates = [
+    # FTL.TXT (the FreeType Licence), LICENSE.TXT (FreeType's licence overview) and libpng's
+    # PNG Reference Library License 2.0.
+    "freetype-sys",
+]
