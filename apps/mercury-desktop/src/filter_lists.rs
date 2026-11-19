@@ -392,7 +392,9 @@ mod tests {
         );
 
         let diagnostic = LaunchOptions {
-            filter_list_server: Some(url::Url::parse("http://127.0.0.1:8765/l/").unwrap()),
+            filter_list_server: Some(Box::new(
+                url::Url::parse("http://127.0.0.1:8765/l/").unwrap(),
+            )),
             ..automated
         };
         let Updates::On {

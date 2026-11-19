@@ -17,8 +17,9 @@ pub(crate) struct LaunchOptions {
     pub import_snapshot: Option<PathBuf>,
     pub exit_request: Option<ExitRequest>,
     // blocklists
-    /// Diagnostics: fetch filter-list updates from this loopback server at start-up.
-    pub filter_list_server: Option<url::Url>,
+    /// Diagnostics: fetch filter-list updates from this loopback server at start-up. Boxed so
+    /// that `CliOutcome::Run` stays small (clippy::large_enum_variant).
+    pub filter_list_server: Option<Box<url::Url>>,
 }
 
 /// Diagnostics: a quit the browser requests of itself, so that quit paths can be exercised
@@ -299,7 +300,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                              127.0.0.1, [::1] or localhost"
                         )
                     })?;
-                filter_list_server = Some(url);
+                filter_list_server = Some(Box::new(url));
             }
             _ if argument.starts_with("-psn_") => {}
             _ if argument.starts_with('-') => {
@@ -858,7 +859,10 @@ mod tests {
             panic!("a run");
         };
         assert_eq!(
-            options.filter_list_server.map(String::from).as_deref(),
+            options
+                .filter_list_server
+                .map(|url| String::from(*url))
+                .as_deref(),
             Some("http://127.0.0.1:8765/filter-lists/")
         );
         for refused in [
