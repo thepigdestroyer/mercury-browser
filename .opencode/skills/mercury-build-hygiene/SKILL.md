@@ -20,7 +20,7 @@ whatever you do. Follow the rules below so that it never deletes something you s
   `make build-release` share one release build: a round compiles Servo once, not twice. Binaries are in
   `target/release/`. Use the same profile for any `cargo` command you run by hand (`--release`).
 - **Every build command** (`cargo build|test|clippy|check|run|doc`, `make lint|test|build|build-release|check|app-macos|run`,
-  `scripts/macos/bundle.sh`) runs through `scripts/dev/build-slot.sh`. It waits until one of the three
+  `scripts/macos/bundle.sh`) runs through `scripts/dev/build-slot.sh`. It waits until one of the six
   build slots is free and at least 40 GB of disk is free, shares the cores between the builds running
   (`CARGO_BUILD_JOBS`, at least 2), then runs your command unchanged and returns
   its exit status. While it waits it prints `mercury-disk-guard: waiting …`. Exit status 75 means it gave
@@ -44,7 +44,7 @@ whatever you do. Follow the rules below so that it never deletes something you s
 
 ## Build budget: get many fixes out of one build
 
-Servo builds are the bottleneck: a cold one takes 20–60 minutes, and only three can run at once.
+Servo builds are the bottleneck: a cold one takes 20–60 minutes, and only six can run at once.
 Spend them carefully.
 
 - **Most crates don't need Servo.** `talaria-core`, `mercury-ui`, `mercury-store`, `mercury-settings`,

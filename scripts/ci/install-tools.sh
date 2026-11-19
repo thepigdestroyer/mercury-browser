@@ -13,9 +13,9 @@
 # GitHub release pages, and each is checked against the checksum recorded here
 # before anything is unpacked; a mismatch stops the script. Nothing is
 # installed system-wide and nothing is run as root. Works on Linux x86-64 (CI)
-# and macOS arm64. Re-running skips a tool already present at its version.
+# and macOS (arm64 and x86-64). Re-running skips a tool already present at its version.
 #
-# To move a version, change it below together with both checksums, taken from
+# To move a version, change it below together with every checksum, taken from
 # the project's published checksum file (actionlint's checksums.txt,
 # cargo-deny's .sha256 files) or, for shellcheck, which publishes none, from
 # the asset digest GitHub shows on the release page.
@@ -53,7 +53,8 @@ done
 case "$(uname -s)/$(uname -m)" in
     Linux/x86_64) PLATFORM=linux-x86_64 ;;
     Darwin/arm64) PLATFORM=macos-arm64 ;;
-    *) die "no pinned tools for $(uname -s)/$(uname -m); Linux x86-64 and macOS arm64 are supported" ;;
+    Darwin/x86_64) PLATFORM=macos-x86_64 ;;
+    *) die "no pinned tools for $(uname -s)/$(uname -m); Linux x86-64 and macOS arm64/x86-64 are supported" ;;
 esac
 
 if command -v sha256sum >/dev/null 2>&1; then
@@ -82,6 +83,12 @@ describe() {
             SUM=56affdd8de5527894dca6dc3d7e0a99a873b0f004d7aabc30ae407d3f48b0a79
             MEMBER="shellcheck-v$SHELLCHECK_VERSION/shellcheck"
             ;;
+        shellcheck/macos-x86_64)
+            base="shellcheck-v$SHELLCHECK_VERSION.darwin.x86_64"
+            URL="https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/$base.tar.xz"
+            SUM=3c89db4edcab7cf1c27bff178882e0f6f27f7afdf54e859fa041fca10febe4c6
+            MEMBER="shellcheck-v$SHELLCHECK_VERSION/shellcheck"
+            ;;
         actionlint/linux-x86_64)
             URL="https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
             SUM=8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
@@ -90,6 +97,11 @@ describe() {
         actionlint/macos-arm64)
             URL="https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_darwin_arm64.tar.gz"
             SUM=aba9ced2dee8d27fecca3dc7feb1a7f9a52caefa1eb46f3271ea66b6e0e6953f
+            MEMBER="actionlint"
+            ;;
+        actionlint/macos-x86_64)
+            URL="https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/actionlint_${ACTIONLINT_VERSION}_darwin_amd64.tar.gz"
+            SUM=5b44c3bc2255115c9b69e30efc0fecdf498fdb63c5d58e17084fd5f16324c644
             MEMBER="actionlint"
             ;;
         cargo-deny/linux-x86_64)
@@ -102,6 +114,12 @@ describe() {
             base="cargo-deny-$CARGO_DENY_VERSION-aarch64-apple-darwin"
             URL="https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/$base.tar.gz"
             SUM=fe67d82a10d8597a3549364cb733a3f9cc1bfff9031b7ae46384a9f2a72090c3
+            MEMBER="$base/cargo-deny"
+            ;;
+        cargo-deny/macos-x86_64)
+            base="cargo-deny-$CARGO_DENY_VERSION-x86_64-apple-darwin"
+            URL="https://github.com/EmbarkStudios/cargo-deny/releases/download/$CARGO_DENY_VERSION/$base.tar.gz"
+            SUM=248da7f581724e470071990c088ffc55c811981715f4cbdb258621fb79f8b7a6
             MEMBER="$base/cargo-deny"
             ;;
         *) die "no pin for $1 on $PLATFORM" ;;

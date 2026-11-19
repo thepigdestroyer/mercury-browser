@@ -26,7 +26,7 @@ if [ "$pool" = light ]; then
     min_free_gb="${MERCURY_LIGHT_MIN_FREE_GB:-10}"
     slot_root="$state_dir/light-slots"
 else
-    slots="${MERCURY_BUILD_SLOTS:-3}"
+    slots="${MERCURY_BUILD_SLOTS:-6}"
     min_free_gb="${MERCURY_MIN_FREE_GB:-40}"
     slot_root="$state_dir/slots"
 fi
@@ -122,11 +122,12 @@ trap 'exit 130' INT
 trap 'exit 143' TERM
 trap 'exit 129' HUP
 
-# Share the cores between the builds running now (at least two jobs each). A command that sets
+# Share the cores evenly between all the slots (at least two jobs each), not just the builds running
+# now: a build that starts alone would otherwise keep every core for its whole run. A command that sets
 # CARGO_BUILD_JOBS itself still wins, since it runs after this.
 if [ -z "${CARGO_BUILD_JOBS:-}" ]; then
     cores="$(sysctl -n hw.ncpu 2>/dev/null || echo 8)"
-    running="$(find "$slot_root" -mindepth 1 -maxdepth 1 -type d | wc -l | tr -d ' ')"
+    running="$slots"
     jobs=$((cores / (running > 0 ? running : 1)))
     export CARGO_BUILD_JOBS=$((jobs > 2 ? jobs : 2))
 fi
