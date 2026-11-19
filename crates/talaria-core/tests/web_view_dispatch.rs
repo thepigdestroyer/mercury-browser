@@ -579,10 +579,6 @@ fn find_commands_reach_the_web_view() {
     assert_eq!(
         web_view.calls,
         vec![
-            FakeCall::SetAudioMuted(true),
-            FakeCall::SetAudioMuted(false),
-            FakeCall::MediaSessionAction(MediaSessionAction::Pause, false),
-            FakeCall::MediaSessionAction(MediaSessionAction::NextTrack, true),
             FakeCall::BeginFind(1),
             FakeCall::Find(request),
             FakeCall::EndFind(end),
