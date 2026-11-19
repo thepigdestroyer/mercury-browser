@@ -9,16 +9,27 @@
 //! the `Pasteboard` the browser installs with `ServoRuntime::set_pasteboard`, a
 //! `MemoryPasteboard` until then. A script's read (`navigator.clipboard.readText()`) asks the
 //! user only once `talaria_core::CLIPBOARD_READ_FRAME_GATE` is on; until then it is refused.
+//!
+//! While `talaria_core::ASYNC_CLIPBOARD_OFFERED` is off, pages have no `navigator.clipboard`, and
+//! every request that reaches the delegate is the user's own Cut, Copy or Paste. The tab must be
+//! told about each of those before Servo performs it (`TabClipboard::key_pressed`,
+//! `context_menu_chosen` and `user_command`, called from `web_view.rs`): a Paste that was not
+//! noted reads as a script's read and inserts empty text.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use servo::StringRequest;
 use talaria_core::{
-    ClipboardCommand, ClipboardGate, ClipboardReadDecision, MemoryPasteboard, Pasteboard, TabId,
+    ClipboardCommand, ClipboardGate, ClipboardReadDecision, ContextMenuAction, KeyboardInput,
+    MemoryPasteboard, Pasteboard, TabId, clipboard_shortcut, context_menu_clipboard_command,
 };
 
 use crate::page_request_clock;
+
+/// Whether Cut, Copy and Paste are the Command key's (macOS) or the Control key's; Servo maps the
+/// same keys the same way.
+pub(crate) const COMMAND_KEY_IS_META: bool = cfg!(target_os = "macos");
 
 /// What a user activation check is for.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -103,6 +114,22 @@ impl TabClipboard {
         self.gate
             .borrow_mut()
             .user_command(command, page_request_clock());
+    }
+
+    /// A key press the user made in this tab's page: if it is Cut, Copy or Paste, Servo performs
+    /// the edit itself, and the edit's clipboard request that follows is the user's.
+    pub(crate) fn key_pressed(&self, input: &KeyboardInput) {
+        if let Some(command) = clipboard_shortcut(input, COMMAND_KEY_IS_META) {
+            self.user_command(command);
+        }
+    }
+
+    /// The user chose `action` in the page's context menu: its Cut, Copy and Paste, and copying a
+    /// link or image address, are the user's own clipboard commands.
+    pub(crate) fn context_menu_chosen(&self, action: ContextMenuAction) {
+        if let Some(command) = context_menu_clipboard_command(action) {
+            self.user_command(command);
+        }
     }
 
     pub(crate) fn document_started(&self) {
@@ -198,15 +225,25 @@ impl<R: StringAnswer> ClipboardReadRequest<R> {
     }
 }
 
+/// Fakes for the tests of this module and of `web_view`, which drives a tab's clipboard the way
+/// the engine does.
 #[cfg(test)]
-mod tests {
+pub(crate) mod test_support {
     use std::cell::RefCell;
+    use std::rc::Rc;
 
-    use super::*;
+    use talaria_core::{
+        KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, MemoryPasteboard, Pasteboard,
+        TabId,
+    };
 
-    type Answers = Rc<RefCell<Vec<Option<String>>>>;
+    use super::{ActivationUse, COMMAND_KEY_IS_META, ClipboardAccess, StringAnswer, TabClipboard};
 
-    struct FakeAnswer(Answers);
+    /// What the page was told for each read: `Some(text)`, or `None` for a refusal.
+    pub(crate) type Answers = Rc<RefCell<Vec<Option<String>>>>;
+
+    /// Servo's answer object for a read, recording what the page was told.
+    pub(crate) struct FakeAnswer(pub(crate) Answers);
 
     impl StringAnswer for FakeAnswer {
         fn succeed(self, text: String) {
@@ -217,6 +254,64 @@ mod tests {
             self.0.borrow_mut().push(None);
         }
     }
+
+    /// The activation uses a tab's clipboard asked about, in order.
+    pub(crate) type ActivationLog = Rc<RefCell<Vec<ActivationUse>>>;
+
+    /// A tab built the way the runtime builds every tab (`TabClipboard::new`, so with the gate a
+    /// tab really starts with), over a clipboard in memory holding `text`. `activation` is what
+    /// the tab's user activation check says; the uses it was asked about are logged.
+    pub(crate) fn runtime_tab(
+        text: &str,
+        activation: bool,
+    ) -> (TabClipboard, Rc<MemoryPasteboard>, ActivationLog) {
+        let pasteboard = Rc::new(MemoryPasteboard::with_text(text));
+        let access = Rc::new(ClipboardAccess::default());
+        access.set_pasteboard(Rc::clone(&pasteboard) as Rc<dyn Pasteboard>);
+        let uses = ActivationLog::default();
+        let logged = Rc::clone(&uses);
+        access.set_user_activation_check(Rc::new(move |_tab_id, activation_use| {
+            logged.borrow_mut().push(activation_use);
+            activation
+        }));
+        (TabClipboard::new(TabId::new(9), access), pasteboard, uses)
+    }
+
+    /// A key press down; with the platform's command key (Command on macOS, Control elsewhere)
+    /// held when `with_command_key`.
+    pub(crate) fn key_press(key: &str, with_command_key: bool) -> KeyboardInput {
+        KeyboardInput {
+            state: KeyState::Down,
+            key: key.to_owned(),
+            code: String::new(),
+            location: KeyLocation::Standard,
+            modifiers: KeyboardModifiers {
+                alt: false,
+                control: with_command_key && !COMMAND_KEY_IS_META,
+                meta: with_command_key && COMMAND_KEY_IS_META,
+                shift: false,
+            },
+            repeat: false,
+            is_composing: false,
+        }
+    }
+
+    /// What the page is told when it reads now: the text, or `None` when the read is refused.
+    pub(crate) fn page_read(clipboard: &TabClipboard) -> Option<String> {
+        let answers = Answers::default();
+        let _read = clipboard.read(FakeAnswer(Rc::clone(&answers)));
+        let told = answers.borrow().clone();
+        assert_eq!(told.len(), 1, "a read is answered at once, once");
+        told.into_iter().next().flatten()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::cell::RefCell;
+
+    use super::test_support::{Answers, FakeAnswer, key_press, page_read, runtime_tab};
+    use super::*;
 
     /// A tab whose activation is `activation`, with the activation uses logged; its gate offers
     /// script reads, as once `CLIPBOARD_READ_FRAME_GATE` is on.
@@ -371,5 +466,128 @@ mod tests {
             clipboard.read(FakeAnswer(Rc::clone(&answers))),
             ClipboardRead::Refused
         ));
+    }
+    /// The pin for what tabs really start with (`TabClipboard::new`; the tests above build the
+    /// gate by hand): no page may read the clipboard on its own, with or without a click, until
+    /// `CLIPBOARD_READ_FRAME_GATE` is turned on. The password manager's copied passwords rely on
+    /// it. Changed together with the turn-on checklist, not before.
+    #[test]
+    fn a_tab_as_the_runtime_builds_it_refuses_a_script_read_even_after_a_click() {
+        let (clipboard, _pasteboard, uses) = runtime_tab("a copied password", true);
+
+        // A script's `readText()` straight after a click: the case that would ask the user once
+        // script reads are offered. It is refused, and the click is left alone.
+        let answers = Answers::default();
+        assert!(matches!(
+            clipboard.read(FakeAnswer(Rc::clone(&answers))),
+            ClipboardRead::Refused
+        ));
+        assert_eq!(*answers.borrow(), vec![None]);
+        assert!(uses.borrow().is_empty());
+
+        // Neither the user's Copy or Cut nor a new document changes that.
+        clipboard.user_command(ClipboardCommand::Copy);
+        clipboard.user_command(ClipboardCommand::Cut);
+        clipboard.document_started();
+        assert_eq!(page_read(&clipboard), None);
+        assert!(uses.borrow().is_empty());
+    }
+
+    #[test]
+    fn a_tab_as_the_runtime_builds_it_still_pastes_for_the_user_once() {
+        let (clipboard, _pasteboard, uses) = runtime_tab("pasted text", true);
+        clipboard.user_command(ClipboardCommand::Paste);
+        assert_eq!(page_read(&clipboard).as_deref(), Some("pasted text"));
+        // The paste is used up: whatever reads next, a script, is refused.
+        assert_eq!(page_read(&clipboard), None);
+        assert!(uses.borrow().is_empty());
+    }
+
+    #[test]
+    fn without_a_noted_command_the_users_paste_would_insert_nothing() {
+        // Why `key_pressed`, `context_menu_chosen` and the Edit menu's `user_command` must be
+        // called for every command the user gives: Servo's Paste asks like any read.
+        let (clipboard, _pasteboard, _uses) = runtime_tab("pasted text", false);
+        assert_eq!(page_read(&clipboard), None);
+    }
+
+    #[test]
+    fn the_command_key_with_v_is_the_users_paste() {
+        let (clipboard, _pasteboard, _uses) = runtime_tab("pasted text", false);
+        clipboard.key_pressed(&key_press("v", true));
+        assert_eq!(page_read(&clipboard).as_deref(), Some("pasted text"));
+        assert_eq!(page_read(&clipboard), None);
+    }
+
+    #[test]
+    fn the_command_key_with_c_or_x_lets_the_page_write_what_the_user_copied() {
+        for letter in ["c", "x"] {
+            let (clipboard, pasteboard, _uses) = runtime_tab("old", false);
+            assert!(!clipboard.write_text("before the key"), "{letter}");
+            clipboard.key_pressed(&key_press(letter, true));
+            // A copy the page handles itself clears, then writes.
+            assert!(clipboard.clear(), "{letter}");
+            assert!(clipboard.write_text("the selection"), "{letter}");
+            assert_eq!(pasteboard.text().as_deref(), Some("the selection"));
+            // A key press alone is not a paste.
+            assert_eq!(page_read(&clipboard), None, "{letter}");
+        }
+    }
+
+    #[test]
+    fn plain_typing_is_not_a_clipboard_command() {
+        let (clipboard, pasteboard, _uses) = runtime_tab("kept", false);
+        for letter in ["v", "c", "x", "a"] {
+            clipboard.key_pressed(&key_press(letter, false));
+        }
+        clipboard.key_pressed(&key_press("a", true));
+        assert_eq!(page_read(&clipboard), None);
+        assert!(!clipboard.write_text("typed"));
+        assert_eq!(pasteboard.text().as_deref(), Some("kept"));
+    }
+
+    #[test]
+    fn the_context_menus_paste_is_the_users_paste() {
+        let (clipboard, _pasteboard, _uses) = runtime_tab("pasted text", false);
+        clipboard.context_menu_chosen(ContextMenuAction::Paste);
+        assert_eq!(page_read(&clipboard).as_deref(), Some("pasted text"));
+        assert_eq!(page_read(&clipboard), None);
+    }
+
+    #[test]
+    fn the_context_menus_copies_let_servo_write_the_clipboard() {
+        for action in [
+            ContextMenuAction::Copy,
+            ContextMenuAction::Cut,
+            ContextMenuAction::CopyLink,
+            ContextMenuAction::CopyImageLink,
+        ] {
+            let (clipboard, pasteboard, _uses) = runtime_tab("old", false);
+            clipboard.context_menu_chosen(action);
+            assert!(clipboard.write_text("https://example.test/"), "{action:?}");
+            assert_eq!(
+                pasteboard.text().as_deref(),
+                Some("https://example.test/"),
+                "{action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_other_context_menu_items_are_not_clipboard_commands() {
+        let (clipboard, pasteboard, _uses) = runtime_tab("kept", false);
+        for action in [
+            ContextMenuAction::GoBack,
+            ContextMenuAction::GoForward,
+            ContextMenuAction::Reload,
+            ContextMenuAction::OpenLinkInNewView,
+            ContextMenuAction::OpenImageInNewView,
+            ContextMenuAction::SelectAll,
+        ] {
+            clipboard.context_menu_chosen(action);
+        }
+        assert_eq!(page_read(&clipboard), None);
+        assert!(!clipboard.write_text("page"));
+        assert_eq!(pasteboard.text().as_deref(), Some("kept"));
     }
 }

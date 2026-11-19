@@ -870,9 +870,9 @@ fn persistent_storage_and_geolocation_are_asked_and_every_other_permission_is_de
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
-        // clipboard: reading the clipboard is asked once a script's reads are offered.
+        // clipboard: reading the clipboard is not asked, whichever way the gate is set here;
+        // `clipboard_reading_is_not_asked_while_script_reads_are_off` says why.
         if feature == PagePermission::PersistentStorage
-            || (feature == PagePermission::ClipboardRead && CLIPBOARD_READ_FRAME_GATE)
             || (feature == PagePermission::Geolocation && GEOLOCATION_OFFERED)
         {
             assert!(feature.is_promptable());
@@ -891,6 +891,36 @@ fn persistent_storage_and_geolocation_are_asked_and_every_other_permission_is_de
             );
         }
     }
+}
+
+// clipboard
+/// Pins a script's clipboard read as never asked (the password manager's copied passwords depend
+/// on it). Unlike a check that follows the constant, this fails when `CLIPBOARD_READ_FRAME_GATE`
+/// is turned on: whoever does that works through the checklist in the constant's doc comment and
+/// changes this test and the one above in the same commit.
+#[test]
+fn clipboard_reading_is_not_asked_while_script_reads_are_off() {
+    let reads_gate = CLIPBOARD_READ_FRAME_GATE;
+    assert!(
+        !reads_gate,
+        "CLIPBOARD_READ_FRAME_GATE is on: work through its turn-on checklist and change this test"
+    );
+    assert!(!PagePermission::ClipboardRead.is_promptable());
+
+    let (mut controller, tab_id) = ready_controller();
+    receive(
+        &mut controller,
+        tab_id,
+        permission(1, PAGE, PagePermission::ClipboardRead),
+    );
+    assert_eq!(pending_id(&controller, tab_id), None);
+    assert_eq!(
+        drain(&mut controller),
+        vec![TabCommand::new(
+            tab_id,
+            answer(1, PageRequestAnswer::Decline)
+        )]
+    );
 }
 
 #[test]
