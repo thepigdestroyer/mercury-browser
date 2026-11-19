@@ -63,7 +63,7 @@ const PUSHES = /\bgit\b[^;&|\n]*\bpush\b/
 // The pinned checking tools (cargo-deny, shellcheck, actionlint; `make ci-tools`) are shared by every
 // worktree here instead of living in each target/, which is deleted after every round.
 const CI_TOOLS = path.join(HOME, "Library", "Caches", "mercury-browser", "ci-tools")
-const KEPT_IN_CACHE = new Set(["gstreamer", "ci-tools"])
+const KEPT_IN_CACHE = new Set(["gstreamer", "ci-tools", "webrtc"])
 
 // A build is "light" when every cargo invocation in it names its packages (-p/--package) and none of
 // them, through workspace dependencies including dev-dependencies, depends on Servo. Light builds take
