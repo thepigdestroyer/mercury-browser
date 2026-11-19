@@ -28,6 +28,27 @@
 //! | `ring_geometry/dock.rs` | `dock_scales`, `dock_layout` |
 //! | `ring_geometry/orbit.rs` | `planet_layout`, `preview_layout` |
 //! | `ring_geometry/slint_models.rs` | conversions to the Slint structs of `ui/groups/models.slint` |
+//!
+//! # Entry points for the components
+//!
+//! One frame of a ring, in the order the components use it:
+//!
+//! 1. [`slint_models::RingModel::new`] orders the `GroupRow`s and `TabRow`s into a [`RingLayout`]
+//!    (or call [`RingLayout::new`] directly with the tab count of every group). Presets:
+//!    [`RingSpec::hub`], [`RingSpec::dial_fan`], [`RingSpec::planet`].
+//! 2. [`slint_models::RingModel::segments_for_slint`] and
+//!    [`slint_models::RingModel::label_bands_for_slint`] give the filled shapes
+//!    ([`paths::segments`], [`paths::label_bands`], [`paths::lifted_segment`] for the hovered tab).
+//!    The path commands are ring-local: the Slint `Path` must set `viewbox-width` and
+//!    `viewbox-height` to the size of the ring's box so that the commands are not rescaled.
+//! 3. [`label_glyphs`] places one group's curved label (`ApproxMetrics` is an estimate;
+//!    implement [`GlyphMetrics`] with measured advances to replace it) and
+//!    [`slint_models::glyph_to_slint`] turns each glyph into an `ArcGlyph` with the palette colours.
+//! 4. [`hit_test`] answers the pointer: pass the hovered tab as `lifted` so that its raised zone
+//!    does not flicker. [`hit::hit_test_polar`] takes a radius and angle for keyboard callers.
+//!
+//! The group dock uses [`magnified_layout`] (or [`dock_scales`] on [`unscaled_centres`] and then
+//! [`dock_layout`]); Orbit uses [`planet_layout`] and [`preview_layout`].
 
 pub mod dock;
 pub mod hit;
@@ -38,6 +59,13 @@ pub mod paths;
 pub mod slint_models;
 mod types;
 
+pub use dock::{DockLayout, dock_layout, dock_scales, magnified_layout, unscaled_centres};
+pub use hit::hit_test;
+pub use labels::{
+    ApproxMetrics, GlyphMetrics, LabelFit, LabelLayout, LabelRequest, LabelStyle, is_flipped,
+    label_glyphs,
+};
+pub use orbit::{PlanetLayout, planet_layout, preview_layout};
 pub use types::{
     ArcSegment, Ellipse, GlyphPlacement, GlyphRole, GroupArc, Hit, Point, RingLayout, RingSpec,
     TabArc, normalise_deg, point_on_circle,
