@@ -40,6 +40,7 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |
 | `crates/mercury-filter-lists` | The ad and tracker filter lists as data files with a manifest, the engine built from them at start-up, and the background updates |
 | `crates/mercury-site-security` | Internationalised names shown safely, Mercury's network, certificate and crash pages, and the certificate-exception request |
+| `crates/mercury-tab-snapshots` | Small pictures of the open tabs, for the Orbit view, kept in memory only: the shrink to at most 480 by 300 pixels, the store under a 128 MB cap and the rules for when a picture is taken ([details](servo-integration.md#tab-snapshots)) |
 | `crates/mercury-release` | Writes, signs and checks the update manifest (`update.json`) that each release carries |
 | `crates/mercury-servo-patches` | The tool that vendors, patches, checks and upgrades the crates in `third_party/` |
 | `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset |
