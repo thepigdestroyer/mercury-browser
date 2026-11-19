@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The rows and shapes that the tab-group components share (SPEC design/ui-final/SPEC.md §4.1).
+// The ring geometry (src/ring_geometry*) computes `ArcSeg` and `ArcGlyph` in Rust; the browser
+// fills `GroupRow` and `TabRow`. Slint only draws what it is given.
+
+// One tab group: its colours are resolved by Rust (the palette is data, not Slint).
+export struct GroupRow {
+    id: int,
+    name: string,
+    colour: color,
+    tint: color,
+    deep: color,
+    key-label: string,
+    count: int,
+    last-used: string,
+    active: bool,
+    any-loading: bool,
+    any-audible: bool,
+    any-unread: bool,
+}
+
+// One tab as a ring segment, an Orbit planet's moon or a dock sliver. `shade` is the tab's colour
+// within its group; `group` is a `GroupRow.id`.
+export struct TabRow {
+    id: int,
+    group: int,
+    index-in-group: int,
+    title: string,
+    host: string,
+    shade: color,
+    favicon: image,
+    active: bool,
+    pinned: bool,
+    loading: bool,
+    progress: float,
+    audible: bool,
+    muted: bool,
+    unread: bool,
+    crashed: bool,
+    capture: bool,
+    matches-query: bool,
+}
+
+// One filled arc shape for a `Path`: `commands` are SVG path commands in the ring's box.
+// `tab` is a tab id for a segment and a group id for a label band.
+export struct ArcSeg {
+    tab: int,
+    commands: string,
+    mid-x: length,
+    mid-y: length,
+}
+
+// One glyph of a curved label: a `Text` centred on (x, y) and rotated by `angle`.
+export struct ArcGlyph {
+    text: string,
+    x: length,
+    y: length,
+    angle: angle,
+    size: length,
+    weight: int,
+    colour: color,
+}
