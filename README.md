@@ -160,7 +160,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 - There are no Media Source Extensions. Big video sites mostly stream through that API, in adaptive chunks, so their videos may not play. A plain MP4 or WebM file plays fine.
 - DRM, passkeys, extensions, printing, spell-checking, picture-in-picture and WebRTC video calls are all missing too. Camera and microphone capture works on a Mac, but a video-calling site will say your browser isn't supported.
 - Servo has no Permissions Policy, and its requests don't say which frame sent them. So location and a page's own clipboard API (`navigator.clipboard`, which a site's own Copy button uses) stay off for now, and in a few places Mercury treats frames more strictly than other browsers do.
-- Mercury offers to continue past a certificate warning only for addresses on your own network. When you accept one, Servo accepts that certificate for the rest of the session for any site that presents it, not just the one you were visiting. A Servo patch to tie it to the site is planned and has to land before the first public release; until then, don't accept certificate warnings on a network you don't trust.
+- Mercury offers to continue past a certificate warning only for addresses on your own network, and never for a site that insists on HTTPS. What you accept is that one certificate for that one site name, until you quit Mercury: the same certificate under another name, or a different certificate under the same name, is refused. You cannot take an exception back before you quit, and a public site has no way past a certificate error.
 - "Leave this page?" shows up on reloads and ordinary navigations. Closing a tab skips it.
 - Refuse a navigation while a page is still loading and the page can get stranded in its loading state, because Servo has already stopped it by the time it asks Mercury.
 - Content processes don't get an operating-system sandbox.
@@ -178,7 +178,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 ## What's still pending
 
 - Eleven features were in progress; ten have merged (session, history, bookmarks and import, downloads, find, links from other apps, media, camera and microphone, and filter lists). Location is the last: it's built but stays off until a Servo patch tells Mercury which frame is asking.
-- The approved Servo patches, each kept in `third_party/` with a note explaining it. The one that ties a certificate exception to its site has to land before the first public release.
+- The approved Servo patches, each kept in `third_party/` with a note explaining it.
 - A ground-up redesign of the interface, with themes, layouts and a toolbar you arrange yourself.
 - Accessibility for Mercury's own windows.
 - The outside services in the table above, once providers and keys are settled.
