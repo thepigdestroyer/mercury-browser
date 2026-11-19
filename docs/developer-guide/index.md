@@ -18,11 +18,12 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 5. [Hands-on checklist](hands-on-checklist.md): what to try by hand, because automated runs can't click.
 6. [Vendored patches](vendored-patches.md): the rules for the few patched dependencies.
 7. [Continuous integration](continuous-integration.md): what CI and the release workflow check, and the dependency policy.
-8. [Origins and credits](origins.md): what came from Hermes Browser and what Mercury added.
-9. [Saved logins](passwords.md): the Keychain store, the password manager and the worker that keeps Keychain calls off the interface thread.
-10. [Camera and microphone](media-capture.md): how pages get them, and testing with fake devices only.
-11. [Releases](releases.md): the macOS disk image, the Linux archive, the update manifest and the documentation site.
-12. [Contributing](contributing.md): how to prepare a focused, reviewable change.
+8. [Licence compliance](licence-compliance.md): what Mercury must credit and publish when it ships, how the credits page is generated, and the notes on the LGPL libraries, Slint, codecs and patents.
+9. [Origins and credits](origins.md): what came from Hermes Browser and what Mercury added.
+10. [Saved logins](passwords.md): the Keychain store, the password manager and the worker that keeps Keychain calls off the interface thread.
+11. [Camera and microphone](media-capture.md): how pages get them, and testing with fake devices only.
+12. [Releases](releases.md): the macOS disk image, the Linux archive, the update manifest and the documentation site.
+13. [Contributing](contributing.md): how to prepare a focused, reviewable change.
 
 ## Repository map
 
@@ -41,6 +42,7 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `crates/mercury-filter-lists` | The ad and tracker filter lists as data files with a manifest, the engine built from them at start-up, and the background updates |
 | `crates/mercury-site-security` | Internationalised names shown safely, Mercury's network, certificate and crash pages, and the certificate-exception request |
 | `crates/mercury-release` | Writes, signs and checks the update manifest (`update.json`) that each release carries |
+| `crates/mercury-credits` | The credits tool: writes the page of licence texts, copyright lines, notices and MPL source pointers for every crate built into the app, and checks that every crate can be credited ([details](licence-compliance.md#the-credits-page-and-its-tool)) |
 | `crates/mercury-servo-patches` | The tool that vendors, patches, checks and upgrades the crates in `third_party/` |
 | `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset |
 | `crates/mercury-devtools` | Development and CI tools in Rust: the loopback server for `tests/`, the smoke test's screenshot checker, the CI scripts' helpers |
