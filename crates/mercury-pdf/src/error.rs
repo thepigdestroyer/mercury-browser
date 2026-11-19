@@ -8,8 +8,10 @@
 
 use std::fmt;
 
+use serde::{Deserialize, Serialize};
+
 /// A failure of the PDF helper process, its backend or a request to them.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub enum PdfError {
     /// The file is encrypted and no password was given.
     PasswordRequired,

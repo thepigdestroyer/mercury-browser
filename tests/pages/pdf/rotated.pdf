@@ -1,0 +1,90 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 14 0 R /PageMode /UseOutlines >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 8 0 R 10 0 R 12 0 R] /Count 4 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Title (Mercury rotated test) /Producer (Mercury test generator) >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R /CropBox [50 60 450 360] /Rotate 90 /Annots [7 0 R] >>
+endobj
+6 0 obj
+<< /Length 161 >>
+stream
+BT /F1 12 Tf 0 1 -1 0 96 96 Tm (Rotated page 1) Tj ET
+BT /F1 12 Tf 0 1 -1 0 110 96 Tm (Upright text here) Tj ET
+BT /F1 12 Tf 0 1 -1 0 124 96 Tm (FindMe 1) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /Link /Rect [100 96 112 186] /Border [0 0 0] /A << /S /URI /URI (https://example.com/rotated) >> >>
+endobj
+8 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 595 842] /Resources << /Font << /F1 3 0 R >> >> /Contents 9 0 R /CropBox [20 30 575 800] /Rotate 270 >>
+endobj
+9 0 obj
+<< /Length 165 >>
+stream
+BT /F1 12 Tf 0 -1 1 0 529 764 Tm (Rotated page 2) Tj ET
+BT /F1 12 Tf 0 -1 1 0 515 764 Tm (Upright text here) Tj ET
+BT /F1 12 Tf 0 -1 1 0 501 764 Tm (FindMe 2) Tj ET
+endstream
+endobj
+10 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 11 0 R /CropBox [10 20 410 320] /Rotate 180 >>
+endobj
+11 0 obj
+<< /Length 165 >>
+stream
+BT /F1 12 Tf -1 0 0 -1 374 66 Tm (Rotated page 3) Tj ET
+BT /F1 12 Tf -1 0 0 -1 374 80 Tm (Upright text here) Tj ET
+BT /F1 12 Tf -1 0 0 -1 374 94 Tm (FindMe 3) Tj ET
+endstream
+endobj
+12 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 13 0 R /CropBox [36 72 576 720] >>
+endobj
+13 0 obj
+<< /Length 159 >>
+stream
+BT /F1 12 Tf 1 0 0 1 72 674 Tm (Rotated page 4) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 660 Tm (Upright text here) Tj ET
+BT /F1 12 Tf 1 0 0 1 72 646 Tm (FindMe 4) Tj ET
+endstream
+endobj
+14 0 obj
+<< /Type /Outlines /First 15 0 R /Last 15 0 R /Count 1 >>
+endobj
+15 0 obj
+<< /Title (First) /Parent 14 0 R /Dest [5 0 R /Fit] >>
+endobj
+xref
+0 16
+0000000000 65535 f 
+0000000015 00000 n 
+0000000104 00000 n 
+0000000181 00000 n 
+0000000278 00000 n 
+0000000364 00000 n 
+0000000542 00000 n 
+0000000753 00000 n 
+0000000893 00000 n 
+0000001056 00000 n 
+0000001271 00000 n 
+0000001436 00000 n 
+0000001652 00000 n 
+0000001805 00000 n 
+0000002015 00000 n 
+0000002089 00000 n 
+trailer
+<< /Size 16 /Root 1 0 R /Info 4 0 R >>
+startxref
+2160
+%%EOF

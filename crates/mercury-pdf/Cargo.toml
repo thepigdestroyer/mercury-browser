@@ -15,3 +15,17 @@ license.workspace = true
 # without the engine (see scripts/ci/light-crates.sh). Dependencies are added by the lane items
 # that need them, each named here with the reason.
 [dependencies]
+# The wire messages of the helper protocol (JSON headers) and their derives on the shared types.
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Diagnostics of the client and the request loop (never document contents or passwords).
+log.workspace = true
+# Wipes the buffers that held a password (the serialised open request) before they are freed.
+zeroize.workspace = true
+
+# `src/bin/pdf-fake-worker.rs` is a test-only helper process that serves the fake backend; the
+# client's integration tests start it through CARGO_BIN_EXE_pdf-fake-worker.
+[[bin]]
+name = "pdf-fake-worker"
+path = "src/bin/pdf-fake-worker.rs"
+test = false

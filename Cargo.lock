@@ -5924,11 +5924,19 @@ dependencies = [
 [[package]]
 name = "mercury-pdf"
 version = "0.2.0"
+dependencies = [
+ "log",
+ "serde",
+ "serde_json",
+ "zeroize",
+]
 
 [[package]]
 name = "mercury-pdfium"
 version = "0.2.0"
 dependencies = [
+ "libc",
+ "log",
  "mercury-pdf",
  "pdfium-render",
 ]

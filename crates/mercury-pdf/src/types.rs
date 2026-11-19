@@ -15,6 +15,8 @@
 
 use std::ops::Range;
 
+use serde::{Deserialize, Serialize};
+
 use crate::error::PdfError;
 
 /// What Mercury accepts from a PDF and from a request. The helper process enforces them; the
@@ -49,7 +51,7 @@ pub mod limits {
 }
 
 /// A rectangle in page space.
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Rect {
     pub left: f32,
     pub top: f32,
@@ -114,7 +116,7 @@ impl Rect {
 }
 
 /// A quarter-turn rotation of a page, clockwise, on top of the page's own `/Rotate`.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Rotation {
     #[default]
     Deg0,
@@ -162,7 +164,7 @@ impl Rotation {
 }
 
 /// The size of one page in points, with its own `/Rotate` applied.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct PageSize {
     pub width: f32,
     pub height: f32,
@@ -213,7 +215,7 @@ impl DocumentInfo {
 /// The page is rendered at `scale` device pixels per point, rotated clockwise by `rotation` on
 /// top of its own `/Rotate`; the whole page is then `PageSize::pixel_size(scale, rotation)`
 /// pixels, and this tile is the `width × height` area whose top-left pixel is `(x, y)`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct TileRequest {
     pub page: u32,
     pub scale: f32,
@@ -309,14 +311,14 @@ impl PageText {
 }
 
 /// How a find query is matched.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FindOptions {
     pub match_case: bool,
     pub whole_word: bool,
 }
 
 /// One place a find query matches.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SearchHit {
     pub page: u32,
     /// Index into the page's [`PageText::chars`] where the match starts, and how many it covers.
@@ -327,7 +329,7 @@ pub struct SearchHit {
 }
 
 /// Where a link goes.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum LinkTarget {
     /// An address outside the document, as the PDF wrote it (never opened without the user
     /// clicking, and only as an ordinary navigation).
@@ -338,14 +340,14 @@ pub enum LinkTarget {
 }
 
 /// A clickable area of a page.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Link {
     pub rect: Rect,
     pub target: LinkTarget,
 }
 
 /// One entry of the document outline (bookmarks).
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct OutlineItem {
     pub title: String,
     pub target: Option<LinkTarget>,

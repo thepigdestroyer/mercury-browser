@@ -1,0 +1,99 @@
+%PDF-1.4
+%‚„œ”
+1 0 obj
+<< /Type /Catalog /Pages 2 0 R /Outlines 14 0 R /PageMode /UseOutlines >>
+endobj
+2 0 obj
+<< /Type /Pages /Kids [5 0 R 9 0 R 11 0 R] /Count 3 >>
+endobj
+3 0 obj
+<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>
+endobj
+4 0 obj
+<< /Title (Mercury three-page test) /Producer (Mercury test generator) >>
+endobj
+5 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 6 0 R /Annots [7 0 R 8 0 R] >>
+endobj
+6 0 obj
+<< /Length 343 >>
+stream
+BT /F1 12 Tf 1 0 0 1 36 746 Tm (Mercury PDF test page 1) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 732 Tm (The quick brown fox jumps over the lazy dog.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 718 Tm (The word fox appears on page 1.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 704 Tm (Visit the example site.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 690 Tm (Jump to the last page.) Tj ET
+endstream
+endobj
+7 0 obj
+<< /Type /Annot /Subtype /Link /Rect [36 702 166 714] /Border [0 0 0] /A << /S /URI /URI (https://example.com/mercury) >> >>
+endobj
+8 0 obj
+<< /Type /Annot /Subtype /Link /Rect [36 688 166 700] /Border [0 0 0] /Dest [11 0 R /XYZ 0 692 0] >>
+endobj
+9 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 10 0 R >>
+endobj
+10 0 obj
+<< /Length 343 >>
+stream
+BT /F1 12 Tf 1 0 0 1 36 746 Tm (Mercury PDF test page 2) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 732 Tm (The quick brown fox jumps over the lazy dog.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 718 Tm (The word fox appears on page 2.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 704 Tm (Visit the example site.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 690 Tm (Jump to the last page.) Tj ET
+endstream
+endobj
+11 0 obj
+<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents 12 0 R /Annots [13 0 R] >>
+endobj
+12 0 obj
+<< /Length 343 >>
+stream
+BT /F1 12 Tf 1 0 0 1 36 746 Tm (Mercury PDF test page 3) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 732 Tm (The quick brown fox jumps over the lazy dog.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 718 Tm (The word fox appears on page 3.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 704 Tm (Visit the example site.) Tj ET
+BT /F1 12 Tf 1 0 0 1 36 690 Tm (Jump to the last page.) Tj ET
+endstream
+endobj
+13 0 obj
+<< /Type /Annot /Subtype /Link /Rect [36 688 166 700] /Border [0 0 0] /Dest [5 0 R /Fit] >>
+endobj
+14 0 obj
+<< /Type /Outlines /First 15 0 R /Last 16 0 R /Count 3 >>
+endobj
+15 0 obj
+<< /Title (Chapter 1) /Parent 14 0 R /Next 16 0 R /Dest [5 0 R /Fit] >>
+endobj
+16 0 obj
+<< /Title (Chapter 2) /Parent 14 0 R /Prev 15 0 R /First 17 0 R /Last 17 0 R /Count 1 /Dest [9 0 R /Fit] >>
+endobj
+17 0 obj
+<< /Title (Section 2.1) /Parent 16 0 R /Dest [11 0 R /Fit] >>
+endobj
+xref
+0 18
+0000000000 65535 f 
+0000000015 00000 n 
+0000000104 00000 n 
+0000000174 00000 n 
+0000000271 00000 n 
+0000000360 00000 n 
+0000000508 00000 n 
+0000000901 00000 n 
+0000001041 00000 n 
+0000001157 00000 n 
+0000001284 00000 n 
+0000001678 00000 n 
+0000001823 00000 n 
+0000002217 00000 n 
+0000002325 00000 n 
+0000002399 00000 n 
+0000002487 00000 n 
+0000002611 00000 n 
+trailer
+<< /Size 18 /Root 1 0 R /Info 4 0 R >>
+startxref
+2689
+%%EOF
