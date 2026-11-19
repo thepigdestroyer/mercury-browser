@@ -8,7 +8,7 @@ use crate::browser::{BrowserCommand, BrowserEvent, BrowserState, placeholder_tit
 use crate::page_request::{Answered, decision_to_remember};
 use crate::visits::{NavigationOrigin, VisitTracker, VisitUpdate};
 // media-capture
-use crate::{CaptureAccess, PagePermission};
+use crate::CaptureAccess;
 use crate::{
     ColorScheme, ControlAnswer, ControlId, ControlRequest, DEFAULT_ZOOM_PERCENT, RestoredTab, Tab,
     TabActivation, TabCommand, TabId, ZOOM_STEPS,
