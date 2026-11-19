@@ -89,6 +89,10 @@ enum Command {
     SetAutomatic(bool),
 }
 
+/// How the worker builds its downloader (a runtime and an HTTP client, which can fail, for
+/// example when the process is out of file descriptors). A seam so that a test can make it fail.
+type MakeFetcher = Box<dyn Fn(Sources, Timeouts, Canceller) -> std::io::Result<Fetcher> + Send>;
+
 /// The running service. Dropping it without [`shut_down`](Self::shut_down) stops it too, but
 /// without waiting.
 pub struct FilterListService {
@@ -103,6 +107,14 @@ impl FilterListService {
         config: ServiceConfig,
         on_event: impl Fn(ServiceEvent) + Send + 'static,
     ) -> std::io::Result<Self> {
+        Self::start_with(config, on_event, Box::new(Fetcher::new))
+    }
+
+    fn start_with(
+        config: ServiceConfig,
+        on_event: impl Fn(ServiceEvent) + Send + 'static,
+        make_fetcher: MakeFetcher,
+    ) -> std::io::Result<Self> {
         let (commands, receiver) = mpsc::channel();
         let canceller = Canceller::new();
         let worker = Worker {
@@ -110,6 +122,7 @@ impl FilterListService {
             commands: receiver,
             canceller: canceller.clone(),
             on_event: Box::new(on_event),
+            make_fetcher,
             started: Instant::now(),
             status: Status::default(),
         };
@@ -173,6 +186,7 @@ struct Worker {
     commands: Receiver<Command>,
     canceller: Canceller,
     on_event: Box<dyn Fn(ServiceEvent) + Send>,
+    make_fetcher: MakeFetcher,
     started: Instant,
     status: Status,
 }
@@ -266,6 +280,8 @@ impl Worker {
                         settle_delay,
                     );
                     if due.is_zero() {
+                        // Whatever `check` does, it must leave the next check not due (it
+                        // records the check, or ends the loop); otherwise this would spin.
                         self.check(&mut loaded);
                         automatic = self.drain_check_requests(automatic);
                     }
@@ -407,6 +423,27 @@ impl Worker {
         true
     }
 
+    /// Records a check that failed before it began, because the downloader could not be built,
+    /// like one that reached no publisher: it is counted as a failure, so the next automatic
+    /// check waits out the back-off, and the settings window says what went wrong.
+    fn record_failed_start(&mut self, loaded: &mut Loaded, error: &std::io::Error) {
+        loaded.state.last_check = Some(now_seconds());
+        loaded.state.consecutive_failures = loaded.state.consecutive_failures.saturating_add(1);
+        loaded.state.last_error = Some(crate::cache::bounded(&format!(
+            "a problem starting the updater: {error}"
+        )));
+        if let Some(Err(error)) = loaded
+            .cache
+            .as_ref()
+            .map(|cache| cache.save_state(&loaded.state))
+        {
+            log::warn!("filter lists: could not save the cache state: {error}");
+        }
+        self.status.last_check = loaded.state.last_check;
+        self.status.last_error = loaded.state.last_error.clone();
+        self.emit_status();
+    }
+
     fn check(&mut self, loaded: &mut Loaded) {
         if !self.updates_possible() || self.canceller.is_cancelled() {
             return;
@@ -416,7 +453,7 @@ impl Worker {
             return;
         };
         if loaded.fetcher.is_none() {
-            match Fetcher::new(
+            match (self.make_fetcher)(
                 sources.clone(),
                 self.config.timeouts,
                 self.canceller.clone(),
@@ -424,6 +461,9 @@ impl Worker {
                 Ok(fetcher) => loaded.fetcher = Some(fetcher),
                 Err(error) => {
                     log::warn!("filter lists: cannot start the updater: {error}");
+                    // A check that could not start still counts as a failed one: without that,
+                    // it would stay due, and the loop in `run` would retry it without pause.
+                    self.record_failed_start(loaded, &error);
                     return;
                 }
             }
@@ -527,6 +567,7 @@ mod tests {
     use crate::engine::tests::{SNAPSHOT, blocks, bundle};
     use crate::test_server::{Reply, TestServer};
     use std::path::Path;
+    use std::sync::atomic::{AtomicUsize, Ordering};
     use std::sync::{Arc, Mutex};
 
     const ADS: &str = "||ads.example^\n||ads2.example^\n";
@@ -769,6 +810,105 @@ mod tests {
         assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
 
         assert_eq!(saved_state(&cache).consecutive_failures, 0);
+    }
+
+    /// A downloader that cannot be built, and how many times it was tried.
+    fn broken_fetcher() -> (Arc<AtomicUsize>, MakeFetcher) {
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let counter = Arc::clone(&attempts);
+        let make: MakeFetcher = Box::new(move |_, _, _| {
+            counter.fetch_add(1, Ordering::SeqCst);
+            Err(std::io::Error::other("too many open files"))
+        });
+        (attempts, make)
+    }
+
+    #[test]
+    fn a_downloader_that_cannot_be_built_is_a_failed_check_and_not_a_busy_loop() {
+        let (_directory, bundled, cache) = setup();
+        let (attempts, make_fetcher) = broken_fetcher();
+        let (events, sink) = collect();
+        // Automatic, settled, never checked: due as soon as the engine is built.
+        let config = ServiceConfig {
+            updates: Updates::On {
+                sources: Sources::Publishers,
+                automatic: true,
+                settle_delay: Duration::ZERO,
+                check_at_start: false,
+            },
+            ..off(&bundled, &cache)
+        };
+
+        let mut service = FilterListService::start_with(config, sink, make_fetcher).unwrap();
+        wait_until("the first attempt", || attempts.load(Ordering::SeqCst) >= 1);
+        // Long enough for a loop that retries at once to show.
+        std::thread::sleep(Duration::from_millis(300));
+        assert_eq!(
+            attempts.load(Ordering::SeqCst),
+            1,
+            "the next check waits out the back-off"
+        );
+        wait_until("the failure to be reported", || {
+            last_status(&events).is_some_and(|status| status.last_error.is_some())
+        });
+        assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
+
+        let status = last_status(&events).unwrap();
+        assert!(status.last_check.is_some());
+        assert_eq!(status.last_success, None);
+        assert!(
+            status
+                .last_error
+                .as_deref()
+                .is_some_and(|error| error.contains("too many open files"))
+        );
+        assert_eq!(engines(&events).len(), 1, "the engine is kept");
+        let state = saved_state(&cache);
+        assert!(state.last_check.is_some());
+        assert_eq!(state.consecutive_failures, 1);
+        assert!(state.last_error.is_some());
+        // So the next check is an hour away, not due.
+        let wait = wait_before_check(
+            state.last_check,
+            state.consecutive_failures,
+            now_seconds(),
+            Duration::from_secs(600),
+            Duration::ZERO,
+        );
+        assert!(wait > Duration::from_secs(30 * 60), "waits {wait:?}");
+    }
+
+    #[test]
+    fn update_now_tries_a_downloader_that_could_not_be_built_again_and_says_so() {
+        let (_directory, bundled, cache) = setup();
+        let (attempts, make_fetcher) = broken_fetcher();
+        let (events, sink) = collect();
+        let config = ServiceConfig {
+            updates: Updates::On {
+                sources: Sources::Publishers,
+                automatic: false,
+                settle_delay: Duration::ZERO,
+                check_at_start: true,
+            },
+            ..off(&bundled, &cache)
+        };
+
+        let mut service = FilterListService::start_with(config, sink, make_fetcher).unwrap();
+        wait_until("the check at start", || {
+            attempts.load(Ordering::SeqCst) == 1
+        });
+        service.check_now();
+        wait_until("the second attempt", || {
+            attempts.load(Ordering::SeqCst) == 2
+        });
+        wait_until("both failures to be saved", || {
+            saved_state(&cache).consecutive_failures == 2
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(service.shut_down(Instant::now() + Duration::from_secs(5)));
+
+        assert_eq!(attempts.load(Ordering::SeqCst), 2, "one try per request");
+        assert!(!last_status(&events).unwrap().checking);
     }
 
     #[test]

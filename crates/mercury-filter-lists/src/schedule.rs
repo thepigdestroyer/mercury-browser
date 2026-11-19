@@ -8,6 +8,7 @@
 //! start-up. After a check that could not reach them (no network, a time-out, a server error),
 //! nothing was downloaded, so the next one comes sooner: 1 hour after the first such failure in
 //! a row, then 2, 4, 8 and 16 hours, and 24 hours from the sixth on ([`retry_interval`]). A
+//! check that could not even start (the downloader could not be built) counts the same. A
 //! cancelled check (the browser quit during it) does not count. A check is also due when the
 //! last one is recorded in the future (the clock was set back), so a wrong clock cannot hold
 //! updates off for long. "Update now" ignores this.
