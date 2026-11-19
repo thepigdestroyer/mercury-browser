@@ -107,6 +107,24 @@ jobs:
           cargo clippy --locked --release "${packages[@]}" --all-targets -- -D warnings
           cargo test --locked --release "${packages[@]}"
 
+      # Every crate built into the app needs a licence text the credits page can
+      # carry (crates/mercury-credits). A new dependency, or a Servo or Slint
+      # bump, that adds a crate nothing can credit fails here and not at the
+      # release. This job and not the macOS one because it takes minutes, the
+      # tool's dependencies were just built (release profile) by the step
+      # above, and the two legs cover both product targets: the Makefile
+      # checks aarch64-apple-darwin on the macOS leg and x86_64-unknown-linux-gnu
+      # on the Linux leg. The check reads the package of every crate, the other
+      # platforms' included, so the whole graph is fetched first (a download,
+      # nothing compiled).
+      - name: Check that every crate in the app can be credited
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          cargo fetch --locked
+          make credits-check CARGO_FLAGS=--release
+
   test-linux:
     name: Linux quality checks
     runs-on: ubuntu-22.04
@@ -347,7 +365,9 @@ jobs:
 
       - name: Assemble Mercury Browser.app
         # The executable is already built; this signs ad hoc and bundles the
-        # GStreamer libraries from MERCURY_GSTREAMER_PREFIX.
+        # GStreamer libraries from MERCURY_GSTREAMER_PREFIX. It first generates
+        # the credits page (mercury-credits, from Cargo.lock), which bundle.sh
+        # refuses to build without, and the next step checks it in the bundle.
         run: make app-macos
 
       - name: Check the bundle
