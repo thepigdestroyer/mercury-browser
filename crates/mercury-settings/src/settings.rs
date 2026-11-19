@@ -152,6 +152,9 @@ impl Default for AppearanceSettings {
 pub struct PrivacySettings {
     /// Block ads and trackers.
     pub block_ads_and_trackers: bool,
+    /// Fetch updated filter lists from their publishers in the background, at most once a
+    /// day (blocklists).
+    pub update_filter_lists: bool,
     /// Load pages over HTTPS only.
     pub https_only: bool,
     /// Block pop-up windows.
@@ -166,6 +169,7 @@ impl Default for PrivacySettings {
     fn default() -> Self {
         Self {
             block_ads_and_trackers: true,
+            update_filter_lists: true,
             https_only: false,
             block_popups: true,
             global_privacy_control: true,

@@ -109,7 +109,7 @@ pie showData title Work packages, 17 November 2026
 | macOS menu bar and About window | ✅ Done | |
 | Quitting cleanly from the window, ⌘Q, the Dock, log-out or a terminal signal | ✅ Done | |
 | Audio and video through GStreamer 1.28, bundled with the app | ✅ Done | |
-| Ad and tracker blocking at the network level | ✅ Done | EasyList, EasyPrivacy, uBlock Origin and Brave lists |
+| Ad and tracker blocking at the network level | ✅ Done | EasyList, EasyPrivacy and Brave lists |
 | System proxy settings and an HTTP disk cache | ✅ Done | |
 | Password storage in the Keychain, profile import, download engine | ✅ Done | The windows for these are in progress |
 | Session restore and reopening closed tabs | 🔄 In progress | |

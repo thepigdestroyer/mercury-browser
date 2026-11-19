@@ -5733,6 +5733,7 @@ dependencies = [
  "libc",
  "log",
  "mercury-downloads",
+ "mercury-filter-lists",
  "mercury-import",
  "mercury-password-manager",
  "mercury-passwords",
@@ -5772,6 +5773,23 @@ dependencies = [
  "objc2-foundation 0.3.2",
  "percent-encoding",
  "reqwest",
+ "thiserror 2.0.21",
+ "tokio",
+ "url",
+]
+
+[[package]]
+name = "mercury-filter-lists"
+version = "0.2.0"
+dependencies = [
+ "adblock",
+ "log",
+ "mercury-settings",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "sha2 0.10.9",
+ "tempfile",
  "thiserror 2.0.21",
  "tokio",
  "url",

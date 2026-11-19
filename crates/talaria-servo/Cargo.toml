@@ -39,9 +39,6 @@ libc.workspace = true
 [target.'cfg(any(target_os = "linux", target_os = "macos"))'.dependencies]
 servo = { workspace = true, features = ["media-gstreamer"] }
 
-[build-dependencies]
-adblock.workspace = true
-
 # The location source for pages (`geolocation/core_location.rs`): CoreLocation's
 # `CLLocationManager`, in the objc2 0.6 generation the desktop app already uses.
 # media-capture: gstreamer is the fake camera and microphone of

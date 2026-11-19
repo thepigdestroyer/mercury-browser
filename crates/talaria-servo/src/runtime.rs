@@ -289,6 +289,12 @@ impl ServoRuntime {
         self.switches.clone()
     }
 
+    // blocklists
+    /// Where compiled filter-list engines are handed to the content blocker.
+    pub fn filter_engine_slot(&self) -> crate::FilterEngineSlot {
+        self.page_tabs.content_blocker.engine_slot()
+    }
+
     /// What pages see as the screen and window geometry; `None` lets Servo use its defaults.
     pub fn set_screen_metrics(&self, metrics: Option<ScreenMetrics>) {
         self.screen_metrics.set(metrics);

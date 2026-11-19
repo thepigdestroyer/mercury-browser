@@ -28,6 +28,7 @@ mod controls;
 mod crash_handler;
 mod downloads; // downloads-ui lane
 mod engine;
+mod filter_lists; // blocklists
 mod find;
 mod geolocation;
 mod history_ui;
@@ -221,6 +222,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             &settings,
         ),
     )?;
+    // blocklists: builds the content blocker's engine off the UI thread and updates the lists.
+    filter_lists::start(&options, &profile, &settings);
     // settings-ui
     settings::connect(&settings, &window, &controller);
     // openurl

@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
+use std::sync::{Arc, Mutex};
 
 use adblock::Engine;
 use adblock::request::Request;
@@ -10,28 +12,92 @@ use url::Url;
 
 use crate::exit_clearing::EngineSwitches;
 
-const COMPILED_ENGINE: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/adblock-engine.dat"));
+/// Where a compiled engine is handed to the content blocker from any thread. The blocker takes
+/// it at its next decision, so loads that started earlier finish with the engine they had.
+/// Only the newest engine offered is kept.
+#[derive(Clone, Default)]
+pub struct FilterEngineSlot {
+    offered: Arc<Mutex<Option<Vec<u8>>>>,
+}
+
+impl FilterEngineSlot {
+    /// Offers a serialized engine (adblock-rust =0.13.5, as `mercury-filter-lists` builds it).
+    pub fn offer(&self, serialized: Vec<u8>) {
+        *self
+            .offered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(serialized);
+    }
+
+    fn take(&self) -> Option<Vec<u8>> {
+        self.offered
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+    }
+}
 
 pub(crate) struct ContentBlocker {
-    engine: Engine,
+    /// `None` until the filter lists have been loaded: until then nothing is blocked.
+    engine: RefCell<Option<Rc<Engine>>>,
+    incoming: FilterEngineSlot,
     blocked_requests: Cell<u64>,
+    /// Requests let through because no engine was ready yet.
+    unchecked_requests: Cell<u64>,
     /// Whether the user wants blocking; read at every load.
     switches: EngineSwitches,
 }
 
 impl ContentBlocker {
     pub(crate) fn new(switches: EngineSwitches) -> Self {
-        let mut engine = Engine::default();
-        engine
-            .deserialize(COMPILED_ENGINE)
-            .expect("the bundled adblock engine is compiled by this exact adblock-rust version");
-
-        info!("ad and tracker blocking enabled with the Brave default filter snapshot");
+        info!("ad and tracker blocking is inactive until the filter lists are loaded");
         Self {
-            engine,
+            engine: RefCell::new(None),
+            incoming: FilterEngineSlot::default(),
             blocked_requests: Cell::new(0),
+            unchecked_requests: Cell::new(0),
             switches,
         }
+    }
+
+    /// Where the filter-list service hands its engines.
+    pub(crate) fn engine_slot(&self) -> FilterEngineSlot {
+        self.incoming.clone()
+    }
+
+    /// The engine for the next decision: a newly offered one if there is one, else the
+    /// current one. A decision holds its own handle, so a swap never changes it midway.
+    fn current_engine(&self) -> Option<Rc<Engine>> {
+        if let Some(serialized) = self.incoming.take() {
+            let mut engine = Engine::default();
+            let started = std::time::Instant::now();
+            let loaded = engine.deserialize(&serialized);
+            debug!(
+                "filter-list engine of {} bytes deserialised in {:.2} ms",
+                serialized.len(),
+                started.elapsed().as_secs_f64() * 1000.0
+            );
+            match loaded {
+                Ok(()) => {
+                    let first = self.engine.borrow().is_none();
+                    *self.engine.borrow_mut() = Some(Rc::new(engine));
+                    if first {
+                        info!(
+                            "ad and tracker blocking active ({} requests were loaded before the filter lists were ready)",
+                            self.unchecked_requests.get()
+                        );
+                    } else {
+                        info!("ad and tracker blocking now uses the updated filter lists");
+                    }
+                }
+                Err(error) => {
+                    log::warn!(
+                        "the filter-list engine could not be loaded ({error:?}); keeping the previous one"
+                    );
+                }
+            }
+        }
+        self.engine.borrow().clone()
     }
 
     pub(crate) fn handle_web_resource_load(
@@ -97,12 +163,17 @@ impl ContentBlocker {
             return false;
         }
 
+        let Some(engine) = self.current_engine() else {
+            self.unchecked_requests
+                .set(self.unchecked_requests.get() + 1);
+            return false;
+        };
         let Ok(request) = Request::new(url, source_url, resource_type, method) else {
             debug!("could not classify web resource for ad blocking: {url}");
             return false;
         };
 
-        self.engine.check_network_request(&request).should_block()
+        engine.check_network_request(&request).should_block()
     }
 }
 
@@ -138,11 +209,115 @@ fn resource_type(destination: Destination) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use adblock::lists::{FilterSet, ParseOptions, RuleTypes};
+
     use super::*;
+
+    /// An engine compiled from `rules`, as the filter-list service hands it over.
+    fn compiled(rules: &[&str]) -> Vec<u8> {
+        let mut filter_set = FilterSet::new(false);
+        filter_set.add_filter_list(
+            rules.join("\n"),
+            ParseOptions {
+                rule_types: RuleTypes::NetworkOnly,
+                ..ParseOptions::default()
+            },
+        );
+        Engine::new_with_filter_set(filter_set).serialize()
+    }
+
+    /// The bundled lists, compiled the way the filter-list service compiles them.
+    fn bundled_engine() -> Vec<u8> {
+        let directory = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("resources/adblock");
+        let mut filter_set = FilterSet::new(false);
+        for file in [
+            "easylist.txt",
+            "easyprivacy.txt",
+            "brave-firstparty.txt",
+            "brave-specific.txt",
+            "brave-unbreak.txt",
+        ] {
+            let text = std::fs::read_to_string(directory.join(file)).expect("a bundled list");
+            filter_set.add_filter_list(
+                text,
+                ParseOptions {
+                    rule_types: RuleTypes::NetworkOnly,
+                    ..ParseOptions::default()
+                },
+            );
+        }
+        Engine::new_with_filter_set(filter_set).serialize()
+    }
+
+    fn blocker_with(engine: Vec<u8>, switches: EngineSwitches) -> ContentBlocker {
+        let blocker = ContentBlocker::new(switches);
+        blocker.engine_slot().offer(engine);
+        blocker
+    }
+
+    fn blocks(blocker: &ContentBlocker, url: &str) -> bool {
+        blocker.should_block_url(url, "https://example.com/article", "script", "GET", false)
+    }
+
+    #[test]
+    fn nothing_is_blocked_until_an_engine_arrives() {
+        let blocker = ContentBlocker::new(EngineSwitches::default());
+        assert!(!blocks(&blocker, "https://ads.example/a.js"));
+        assert_eq!(blocker.unchecked_requests.get(), 1);
+
+        blocker.engine_slot().offer(compiled(&["||ads.example^"]));
+
+        assert!(blocks(&blocker, "https://ads.example/a.js"));
+    }
+
+    #[test]
+    fn a_new_engine_is_used_from_the_next_decision_and_an_old_one_finishes_its_own() {
+        let blocker = blocker_with(compiled(&["||ads.example^"]), EngineSwitches::default());
+        assert!(blocks(&blocker, "https://ads.example/a.js"));
+        // A decision in progress holds the engine it started with.
+        let in_flight = blocker.current_engine().expect("an engine");
+
+        blocker
+            .engine_slot()
+            .offer(compiled(&["||trackers.example^"]));
+        let request = Request::new(
+            "https://ads.example/a.js",
+            "https://example.com/",
+            "script",
+            "GET",
+        )
+        .unwrap();
+        assert!(in_flight.check_network_request(&request).should_block());
+
+        assert!(!blocks(&blocker, "https://ads.example/a.js"));
+        assert!(blocks(&blocker, "https://trackers.example/t.js"));
+    }
+
+    #[test]
+    fn an_engine_that_does_not_load_keeps_the_previous_one() {
+        let blocker = blocker_with(compiled(&["||ads.example^"]), EngineSwitches::default());
+        assert!(blocks(&blocker, "https://ads.example/a.js"));
+
+        blocker.engine_slot().offer(b"damaged".to_vec());
+
+        assert!(blocks(&blocker, "https://ads.example/a.js"));
+    }
+
+    #[test]
+    fn only_the_newest_offered_engine_is_taken() {
+        let blocker = ContentBlocker::new(EngineSwitches::default());
+        blocker.engine_slot().offer(compiled(&["||ads.example^"]));
+        blocker
+            .engine_slot()
+            .offer(compiled(&["||trackers.example^"]));
+
+        assert!(!blocks(&blocker, "https://ads.example/a.js"));
+        assert!(blocks(&blocker, "https://trackers.example/t.js"));
+    }
 
     #[test]
     fn bundled_brave_filters_block_ads_and_trackers() {
-        let blocker = ContentBlocker::new(EngineSwitches::default());
+        let blocker = blocker_with(bundled_engine(), EngineSwitches::default());
 
         assert!(blocker.should_block_url(
             "https://googleads.g.doubleclick.net/pagead/id",
@@ -170,7 +345,7 @@ mod tests {
     #[test]
     fn a_switched_off_blocker_blocks_nothing_until_switched_on_again() {
         let switches = EngineSwitches::default();
-        let blocker = ContentBlocker::new(switches.clone());
+        let blocker = blocker_with(compiled(&["||doubleclick.net^"]), switches.clone());
         let ad = |blocker: &ContentBlocker| {
             blocker.should_block_url(
                 "https://googleads.g.doubleclick.net/pagead/id",
@@ -190,7 +365,7 @@ mod tests {
 
     #[test]
     fn top_level_navigation_is_left_to_the_browser() {
-        let blocker = ContentBlocker::new(EngineSwitches::default());
+        let blocker = blocker_with(compiled(&["||doubleclick.net^"]), EngineSwitches::default());
 
         assert!(!blocker.should_block_url(
             "https://googleads.g.doubleclick.net/pagead/id",

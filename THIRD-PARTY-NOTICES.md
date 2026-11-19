@@ -128,14 +128,25 @@ table does not match what it collected):
 The filter lists in `crates/talaria-servo/resources/adblock/` are data files read by the content
 blocker, redistributed unmodified from the Brave mirror snapshot commit named in
 `crates/talaria-servo/resources/adblock/README.md`; they are not part of Mercury Browser's source
-code and keep their own licences.
+code and keep their own licences, with their own headers. They ship as separate files beside the
+program, never compiled into it: `Contents/Resources/filter-lists/` in the macOS application and
+`filter-lists/` in the Linux archive, with `manifest.json` (name, file, source URL, licence, version
+or date, SHA-256 of each list). In the Linux archive `filter-lists/` also holds `NOTICE.md` (each
+list's name, credit, licence and source) and `LICENSES/` with the licence texts of the lists, and
+the archive carries this file and the repository's `LICENSES/` as the macOS application does.
+Mercury Browser downloads newer versions of each list in the background, at most once a day
+(retrying sooner, after 1, 2, 4, 8 and 16 hours, only when a check could not reach a publisher:
+no network, a time-out or a server error), from the URL given below ("Fetched from") and keeps
+them in the user's profile (`filter-lists/`); only their network rules are used. The engine
+compiled from them is built on the user's computer and never distributed. No GPL-only list is
+bundled or fetched: the uBlock filters (uBlockOrigin/uAssets, GPL-3.0) were removed on 18 Nov 2026 so that everything
+Mercury Browser ships can be used in a commercial product.
 
-- EasyList — The EasyList authors, https://easylist.to/ (source repository https://github.com/easylist/easylist) — local file `easylist.txt` — dual licensed under the GNU General Public License version 3 or (at your option) any later version, and Creative Commons Attribution-ShareAlike 3.0 Unported or (at your option) any later version; "The EasyList authors (https://easylist.to/)" should be attributed as the source. Stated at https://easylist.to/pages/licence.html, the page named by the list's `! Licence:` header. Texts: `LICENSES/GPL-3.0.txt`, `LICENSES/CC-BY-SA-3.0.txt`.
-- EasyPrivacy — The EasyList authors, https://easylist.to/ (source repository https://github.com/easylist/easylist) — local file `easyprivacy.txt` — same licence and attribution as EasyList, stated at https://easylist.to/pages/licence.html, the page named by the list's `! Licence:` header. Texts: `LICENSES/GPL-3.0.txt`, `LICENSES/CC-BY-SA-3.0.txt`.
-- uBlock filters — uBlock Origin uAssets, https://github.com/uBlockOrigin/uAssets (`filters/filters.txt`) — local file `ublock-filters.txt` — GNU General Public License version 3, the text in the repository's `LICENSE` file (read at commit `e140ffc75aee8c1af136f579126389d6defae5ed`), which the list's `! License:` header names. Text: `LICENSES/GPL-3.0.txt`.
-- Brave Firstparty specific filters — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-firstparty.txt`) — local file `brave-firstparty.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
-- Brave Specific — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-specific.txt`) — local file `brave-specific.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
-- Brave unbreak list (its only line is `! Brave desktop filters`) — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-unbreak.txt`) — local file `brave-unbreak.txt` — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSE`.
+- EasyList — The EasyList authors, https://easylist.to/ (source repository https://github.com/easylist/easylist) — local file `easylist.txt` — fetched from https://easylist.to/easylist/easylist.txt — used under Creative Commons Attribution-ShareAlike 3.0 Unported (CC-BY-SA-3.0); the EasyList authors offer it under that licence or any later version, or alternatively under the GNU GPL version 3 or later, which Mercury Browser does not use. Credit: "The EasyList authors (https://easylist.to/)". Stated at https://easylist.to/pages/licence.html, the page named by the list's `! Licence:` header. Text: `LICENSES/CC-BY-SA-3.0.txt`.
+- EasyPrivacy — The EasyList authors, https://easylist.to/ (source repository https://github.com/easylist/easylist) — local file `easyprivacy.txt` — fetched from https://easylist.to/easylist/easyprivacy.txt — used under CC-BY-SA-3.0 like EasyList, with the same credit: "The EasyList authors (https://easylist.to/)". Stated at https://easylist.to/pages/licence.html, the page named by the list's `! Licence:` header. Text: `LICENSES/CC-BY-SA-3.0.txt`.
+- Brave Firstparty specific filters — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-firstparty.txt`) — local file `brave-firstparty.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-firstparty.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
+- Brave Specific — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-specific.txt`) — local file `brave-specific.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-specific.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
+- Brave unbreak list (its only line is `! Brave desktop filters`) — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-unbreak.txt`) — local file `brave-unbreak.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-unbreak.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
 
 ## Build tools
 

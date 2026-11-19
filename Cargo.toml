@@ -4,6 +4,7 @@ resolver = "3"
 members = [
     "apps/mercury-desktop",
     "crates/mercury-downloads",
+    "crates/mercury-filter-lists",
     "crates/mercury-iconset",
     "crates/mercury-import",
     "crates/mercury-password-manager",
@@ -54,6 +55,7 @@ rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", 
 security-framework = "3.7"
 serde = "1"
 serde_json = "1"
+sha2 = "0.10"
 # The `vello` (GPU canvas) feature is on through the vendored fix in `third_party/servo-canvas`:
 # servo-canvas 0.8.0's vello backend does not compile against wgpu 30 as published
 # (`vello_backend.rs:756`, `get_mapped_range` returns a `Result`). See its MERCURY.md.

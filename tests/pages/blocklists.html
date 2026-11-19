@@ -1,0 +1,42 @@
+<!doctype html>
+<!-- blocklists: requests the bundled filter lists block, one they allow, and one that only an
+     updated list blocks: tests/filter-lists/brave-unbreak.txt, fetched by a run with
+     --filter-list-server http://127.0.0.1:<port>/filter-lists/ (the other lists are not there,
+     so only that one updates). Serve tests/ with scripts/serve-tests.py; nothing here leaves
+     127.0.0.1. -->
+<html>
+<head>
+<meta charset="utf-8">
+<title>Filter lists</title>
+<style>
+  body { font: 20px sans-serif; margin: 32px; }
+  li { margin: 12px 0; }
+  .loaded { color: #11691f; font-weight: bold; }
+  .blocked { color: #b00020; font-weight: bold; }
+  .waiting { color: #555; }
+</style>
+</head>
+<body>
+<h1>Filter lists</h1>
+<ul>
+  <li>/pages/blocklists/__utm.gif (EasyPrivacy rule <code>/__utm.gif</code>):
+    <span id="utm" class="waiting">waiting</span></li>
+  <li>/pages/blocklists/allowed.gif (no rule):
+    <span id="allowed" class="waiting">waiting</span></li>
+  <li>/pages/blocklists/update-probe.gif (only in the updated Brave unbreak list):
+    <span id="probe" class="waiting">waiting</span></li>
+</ul>
+<script>
+  function probe(id, path) {
+    const image = new Image();
+    const label = document.getElementById(id);
+    image.onload = () => { label.textContent = "loaded"; label.className = "loaded"; };
+    image.onerror = () => { label.textContent = "blocked"; label.className = "blocked"; };
+    image.src = path + "?" + Date.now();
+  }
+  probe("utm", "/pages/blocklists/__utm.gif");
+  probe("allowed", "/pages/blocklists/allowed.gif");
+  probe("probe", "/pages/blocklists/update-probe.gif");
+</script>
+</body>
+</html>

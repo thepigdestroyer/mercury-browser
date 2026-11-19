@@ -195,7 +195,8 @@ jobs:
           cargo build \
             --locked \
             --release \
-            --package mercury-desktop
+            --package mercury-desktop \
+            --package mercury-filter-lists
 
       - name: Verify Linux compatibility
         shell: bash
@@ -258,6 +259,16 @@ jobs:
           strip --strip-unneeded \
             "${output_directory}/mercury-browser"
 
+          # The filter lists are data files beside the program, never compiled into it.
+          if LC_ALL=C grep -q -a -F \
+            -e "advanced-ads-" \
+            -e "scorecardresearch" \
+            -e "Brave Firstparty specific filters" \
+            "${output_directory}/mercury-browser"; then
+            echo "error: mercury-browser contains filter-list text" >&2
+            exit 1
+          fi
+
           cp README.md \
             "${output_directory}/README.md"
 
@@ -265,6 +276,17 @@ jobs:
             cp LICENSE \
               "${output_directory}/LICENSE"
           fi
+
+          # The notices and the licence texts they refer to (the filter lists' too).
+          cp THIRD-PARTY-NOTICES.md \
+            "${output_directory}/THIRD-PARTY-NOTICES.md"
+          cp -R LICENSES \
+            "${output_directory}/LICENSES"
+
+          # The ad and tracker filter lists, read by the browser at start-up, with their
+          # NOTICE.md and licence texts.
+          target/release/mercury-filter-lists install \
+            "${output_directory}/filter-lists"
 
           tar \
             -C dist \

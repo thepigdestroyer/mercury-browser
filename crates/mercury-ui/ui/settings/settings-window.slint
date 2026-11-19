@@ -3,6 +3,7 @@
 import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-widgets.slint";
 import { ChromePalette } from "../theme/chrome-palette.slint";
 import { PasswordsSection } from "../passwords/passwords-section.slint";
+import { FilterListsGroup } from "filter-lists.slint";
 
 // One search engine as the settings window lists it.
 export struct SearchEngineRow {
@@ -189,6 +190,15 @@ export component SettingsWindow inherits Window {
     callback clear-browsing-data();
     callback close-settings();
     callback quit-browser();
+
+    // --- blocklists ---
+    in-out property <bool> update-filter-lists: true;
+    in property <string> filter-lists-publishers;
+    in property <string> filter-lists-status;
+    in property <[string]> filter-lists;
+    in property <bool> filter-lists-can-update;
+    callback update-filter-lists-now();
+    // --- end blocklists ---
 
     title: "Settings";
     icon: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
@@ -573,6 +583,21 @@ export component SettingsWindow inherits Window {
 
                         Note {
                             text: "Applies to everything loaded from now on; reload a page to apply it there.";
+                        }
+
+                        // blocklists
+                        FilterListsGroup {
+                            update-automatically <=> root.update-filter-lists;
+                            publishers: root.filter-lists-publishers;
+                            status: root.filter-lists-status;
+                            lists: root.filter-lists;
+                            can-update: root.filter-lists-can-update;
+                            toggled(on) => {
+                                root.toggled("update-filter-lists", on);
+                            }
+                            update-now => {
+                                root.update-filter-lists-now();
+                            }
                         }
 
                         CheckBox {

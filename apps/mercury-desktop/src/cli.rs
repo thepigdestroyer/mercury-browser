@@ -32,6 +32,10 @@ pub(crate) struct LaunchOptions {
     /// media-capture: `--fake-system-denies-capture` (fake-device runs only): behave as if macOS
     /// refused Mercury the camera and the microphone.
     pub fake_system_denies_capture: bool,
+    // blocklists
+    /// Diagnostics: fetch filter-list updates from this loopback server at start-up. Boxed so
+    /// that `CliOutcome::Run` stays small (clippy::large_enum_variant).
+    pub filter_list_server: Option<Box<url::Url>>,
 }
 
 /// media-capture: the answer `--answer-permission-prompts` gives every permission prompt.
@@ -94,6 +98,7 @@ impl Default for LaunchOptions {
             fake_media_devices: false,
             answer_permission_prompts: None,
             fake_system_denies_capture: false,
+            filter_list_server: None,
         }
     }
 }
@@ -175,6 +180,11 @@ Diagnostics:
                                    sends it (terminate); in diagnostic builds only, the
                                    quit Apple event of a log-out, sent to this process
                                    only (logout)
+  --filter-list-server <http://127.0.0.1:port/path/>
+                                   Check for filter-list updates once at start-up, from
+                                   <path><list file> on this loopback server only, also in
+                                   screenshot and background runs (which otherwise never
+                                   update); the publishers are not contacted
 
 Exit status:
   0  Success
@@ -274,6 +284,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut fake_media_devices = false;
     let mut answer_permission_prompts = None;
     let mut fake_system_denies_capture = false;
+    let mut filter_list_server = None;
 
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -400,6 +411,20 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                     }
                 });
             }
+            // blocklists
+            "--filter-list-server" => {
+                let value = option_value(&mut arguments, "--filter-list-server", "<loopback URL>")?;
+                let url = url::Url::parse(&value)
+                    .ok()
+                    .filter(|url| mercury_filter_lists::fetch::Sources::local_server(url).is_some())
+                    .ok_or_else(|| {
+                        format!(
+                            "invalid --filter-list-server '{value}': expected an http URL on \
+                             127.0.0.1, [::1] or localhost"
+                        )
+                    })?;
+                filter_list_server = Some(Box::new(url));
+            }
             _ if argument.starts_with("-psn_") => {}
             _ if argument.starts_with('-') => {
                 return Err(format!("unknown option '{argument}'"));
@@ -466,6 +491,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         fake_media_devices,
         answer_permission_prompts,
         fake_system_denies_capture,
+        filter_list_server,
     })))
 }
 
@@ -563,6 +589,7 @@ mod tests {
                 fake_media_devices: false,
                 answer_permission_prompts: None,
                 fake_system_denies_capture: false,
+                filter_list_server: None,
             })
         );
     }
@@ -1093,6 +1120,47 @@ mod tests {
     fn capture_diagnostics_are_not_in_the_help() {
         assert!(!USAGE.contains("--answer-permission-prompts"));
         assert!(!USAGE.contains("--fake-system-denies-capture"));
+    }
+
+    // blocklists
+    #[test]
+    fn filter_list_server_must_be_a_loopback_url() {
+        let CliOutcome::Run(options) = parse(&[
+            "--filter-list-server",
+            "http://127.0.0.1:8765/filter-lists/",
+            "--background",
+        ]) else {
+            panic!("a run");
+        };
+        assert_eq!(
+            options
+                .filter_list_server
+                .map(|url| String::from(*url))
+                .as_deref(),
+            Some("http://127.0.0.1:8765/filter-lists/")
+        );
+        for refused in [
+            "https://easylist.to/easylist/",
+            "http://192.168.0.2/",
+            "not a url",
+        ] {
+            assert_eq!(
+                exit_code(&parse(&["--filter-list-server", refused])),
+                Some(2),
+                "{refused}"
+            );
+        }
+        assert_eq!(exit_code(&parse(&["--filter-list-server"])), Some(2));
+    }
+
+    // blocklists
+    #[test]
+    fn help_lists_the_filter_list_server_under_diagnostics() {
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("help");
+        };
+        let diagnostics = text.split("Diagnostics:").nth(1).expect("a section");
+        assert!(diagnostics.contains("--filter-list-server"));
     }
 
     #[cfg(not(feature = "diagnostics"))]

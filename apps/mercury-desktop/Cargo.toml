@@ -22,6 +22,7 @@ image.workspace = true
 libc.workspace = true
 log.workspace = true
 mercury-downloads = { path = "../../crates/mercury-downloads" }
+mercury-filter-lists = { path = "../../crates/mercury-filter-lists" }
 mercury-import = { path = "../../crates/mercury-import" }
 # passwords-ui
 mercury-password-manager = { path = "../../crates/mercury-password-manager" }

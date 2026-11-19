@@ -5,7 +5,7 @@ description: What Mercury Browser blocks, what it asks, what it stores and clear
 
 # Privacy and security
 
-Mercury blocks ads and trackers by default, contacts no outside service of its own, and asks before pages get extra permissions. It is not yet a hardened browser: its content processes have no operating-system sandbox. Both facts matter.
+Mercury blocks ads and trackers by default, contacts no outside service except the publishers of its filter lists (to update them, which you can turn off), and asks before pages get extra permissions. It is not yet a hardened browser: its content processes have no operating-system sandbox. Both facts matter.
 
 ## Do not use Mercury for sensitive browsing yet
 
@@ -18,17 +18,22 @@ The app is also signed only ad hoc, not with an Apple Developer ID, and is not n
 
 ## Content blocking
 
-Mercury blocks ads and trackers at the network level. Its blocker is built into the app from snapshots of these filter lists:
+Mercury blocks ads and trackers at the network level, using the network rules of five filter lists:
 
-- EasyList and EasyPrivacy;
-- uBlock Origin's filters;
-- Brave's first-party, site-specific and unbreak lists.
+- EasyList and EasyPrivacy (by the EasyList authors, https://easylist.to/, used under CC BY-SA 3.0);
+- Brave's first-party, site-specific and unbreak lists (MPL 2.0).
+
+Lists available only under the GPL, such as the uBlock Origin filters, are not included. Element-hiding (cosmetic) rules are not used.
 
 A request from a page that matches a rule is cancelled before anything is fetched. The page itself (the document in the address bar) is never blocked, because Mercury has no page yet that could explain why a blocked page is empty.
 
+The lists ship with Mercury as separate files, not inside the program. At start-up Mercury prepares them in the background; until that is done (usually a fraction of a second) nothing is blocked, so the very first page of a session may load a few trackers.
+
+**Updates.** With **Settings → Privacy and security → Update filter lists automatically** on (the default), Mercury asks each list's publisher for a newer version about a minute after start-up and then at most once a day: easylist.to for EasyList and EasyPrivacy, GitHub for the Brave lists. If a check cannot reach a publisher (no network, a time-out or a server error), Mercury tries again sooner: after 1 hour, then after 2, 4, 8 and 16 hours, and then daily until a check gets through. Only the lists are downloaded, nothing about you is sent beyond an ordinary web request, and an unchanged list costs no download (Mercury sends back the list's `ETag` and date, which a publisher could in principle use to recognise repeat requests from the same profile). A download that is damaged, looks like a web page, or has fewer than half the rules of the list in use or of the copy that shipped with Mercury is ignored, so a failed update never turns blocking off. **Update now** checks at once; the section shows when the lists were last updated and each list's version. Updated lists are kept in your profile.
+
 Turn blocking off and on in **Settings → Privacy and security → Block ads and trackers**. The change applies to everything loaded afterwards; reload a page to apply it there.
 
-Not available yet: per-site exceptions, hiding page elements (cosmetic filtering), a count of blocked requests, and updating the lists without a new version of Mercury. Filter lists that update in the background are being worked on.
+Not available yet: per-site exceptions, hiding page elements (cosmetic filtering) and a count of blocked requests.
 
 ## Pop-ups
 
@@ -47,6 +52,7 @@ Every other permission a page can ask for is refused without a prompt, because M
 | What | Where |
 | --- | --- |
 | Settings | `~/Library/Application Support/Mercury Browser/Default/settings.json` |
+| Updated filter lists (only after an update has downloaded a newer version) | the `filter-lists` folder in the same profile |
 | Cookies and site data (local and session storage, IndexedDB, Cache Storage) | the `servo` folder in the same profile |
 | The HTTP cache | `~/Library/Caches/io.github.thepigdestroyer.mercury-browser/Default/http-cache` |
 | Copies of media while it plays | `~/Library/Caches/io.github.thepigdestroyer.mercury-browser/media-buffers/`, removed when Mercury quits ([details](media.md#how-the-bundled-gstreamer-is-kept-separate)) |
@@ -66,7 +72,7 @@ They are cleared when Mercury quits, or at the next start if Mercury did not qui
 
 ## Outside services
 
-Mercury itself sends nothing to any server: no crash reports, no usage statistics, no update checks, no search suggestions. The only requests are the ones you cause: the pages you open, and your search engine when you search from the address bar. **Help** opens this documentation site in a tab.
+Mercury sends nothing to any server of its own: no crash reports, no usage statistics, no update checks for the app, no search suggestions. The requests are the ones you cause (the pages you open, and your search engine when you search from the address bar) and the filter-list updates: with **Update filter lists automatically** on, Mercury asks easylist.to and GitHub (raw.githubusercontent.com) for newer versions of the filter lists, as described under [Content blocking](#content-blocking). Turn that setting off and Mercury contacts them only when you press **Update now**. **Help** opens this documentation site in a tab.
 
 The settings for search suggestions and HTTPS-only browsing are greyed out because those features aren't there yet. Phishing protection, password breach checks, translation and update checks are planned; each will say which service it uses and can be turned off.
 

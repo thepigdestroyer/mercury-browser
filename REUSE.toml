@@ -107,6 +107,12 @@ path = [
   "tests/pages/untitled.html",
   "tests/pages/webgl-multi.html",
   "THIRD-PARTY-NOTICES.md",
+  "crates/talaria-servo/resources/adblock/manifest.json",
+  "tests/filter-lists/brave-unbreak.txt",
+  "tests/pages/blocklists.html",
+  "tests/pages/blocklists/__utm.gif",
+  "tests/pages/blocklists/allowed.gif",
+  "tests/pages/blocklists/update-probe.gif",
 ]
 SPDX-FileCopyrightText = "2026 Mrinal Joshi and the Mercury Browser contributors"
 SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
@@ -115,13 +121,7 @@ SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
 path = [
   "apps/mercury-desktop/resources/macos/entitlements.plist",
   "apps/mercury-desktop/resources/macos/Info.plist.in",
-  "crates/talaria-servo/resources/adblock/brave-firstparty.txt",
-  "crates/talaria-servo/resources/adblock/brave-specific.txt",
-  "crates/talaria-servo/resources/adblock/brave-unbreak.txt",
-  "crates/talaria-servo/resources/adblock/easylist.txt",
-  "crates/talaria-servo/resources/adblock/easyprivacy.txt",
   "crates/talaria-servo/resources/adblock/README.md",
-  "crates/talaria-servo/resources/adblock/ublock-filters.txt",
   "docs/developer-guide/architecture.md",
   "docs/developer-guide/contributing.md",
   "docs/developer-guide/index.md",
@@ -147,4 +147,25 @@ path = [
   "tests/media/tone.mp3",
   "tests/media/tone.wav",
 ]
+SPDX-License-Identifier = "MPL-2.0"
+
+# blocklists: the bundled filter lists, unmodified upstream data (see THIRD-PARTY-NOTICES.md,
+# "Bundled data"). EasyList and EasyPrivacy are dual-licensed upstream (GPL-3.0-or-later or
+# CC-BY-SA-3.0-or-later); Mercury Browser uses and ships them under CC-BY-SA-3.0.
+[[annotations]]
+path = [
+  "crates/talaria-servo/resources/adblock/easylist.txt",
+  "crates/talaria-servo/resources/adblock/easyprivacy.txt",
+]
+SPDX-FileCopyrightText = "The EasyList authors (https://easylist.to/)"
+SPDX-License-Identifier = "CC-BY-SA-3.0"
+
+# The Brave lists carry no licence line; brave/adblock-lists is MPL-2.0.
+[[annotations]]
+path = [
+  "crates/talaria-servo/resources/adblock/brave-firstparty.txt",
+  "crates/talaria-servo/resources/adblock/brave-specific.txt",
+  "crates/talaria-servo/resources/adblock/brave-unbreak.txt",
+]
+SPDX-FileCopyrightText = "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)"
 SPDX-License-Identifier = "MPL-2.0"

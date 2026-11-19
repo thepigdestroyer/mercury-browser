@@ -73,7 +73,7 @@ Keep platform-specific event decoding in the desktop crate and engine-specific m
 
 ## Content blocking
 
-`talaria-servo`'s build script compiles the filter lists in `crates/talaria-servo/resources/adblock/` (EasyList, EasyPrivacy, uBlock Origin's filters and three Brave lists, pinned snapshots described in that folder's `README.md`) into a serialised `adblock` engine, so start-up neither parses text lists nor contacts a server. For each subresource request, the web view delegate maps Servo's request destination to an ad-block resource type and checks the request before it loads.
+The filter lists are data files (`crates/talaria-servo/resources/adblock/`, installed beside the executable as `filter-lists/` with `manifest.json`), never compiled into the binary. `crates/mercury-filter-lists` builds a serialized `adblock` engine from them on a background thread (or reads it compiled from the profile's `filter-lists/` cache), updates the lists from their publishers at most once a day (retrying after 1, 2, 4, 8 and 16 hours while a check cannot reach a publisher; see `schedule.rs`), and hands each engine to `ServoRuntime::filter_engine_slot()`; the content blocker takes it at its next decision and blocks nothing until the first one arrives. For each subresource request, the WebView delegate maps Servo's content destination to an ad-block resource type and checks the request before it loads.
 
 Matched subresources are cancelled. Main-frame navigations are always allowed, until Mercury has a page that can explain why a document was blocked. The **Block ads and trackers** setting flips a shared switch (`set_content_blocking`) that the delegate reads for every request, so a change applies to the next request without a restart.
 

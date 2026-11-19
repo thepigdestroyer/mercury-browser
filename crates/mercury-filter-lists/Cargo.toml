@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-filter-lists"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+adblock.workspace = true
+log.workspace = true
+mercury-settings = { path = "../mercury-settings" }
+reqwest.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["macros", "rt", "sync", "time"] }
+url.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

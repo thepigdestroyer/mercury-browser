@@ -94,7 +94,7 @@ hide:
     <article class="mercury-card">
       <span class="mercury-card__number">05</span>
       <h3>Blocking and privacy</h3>
-      <p>Ads and trackers blocked at the network level with EasyList, EasyPrivacy, uBlock Origin and Brave lists. Choose what is cleared when Mercury quits.</p>
+      <p>Ads and trackers blocked at the network level with EasyList, EasyPrivacy and Brave lists, updated in the background. Choose what is cleared when Mercury quits.</p>
     </article>
     <article class="mercury-card">
       <span class="mercury-card__number">06</span>

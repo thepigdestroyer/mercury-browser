@@ -224,6 +224,9 @@ impl EndOfRun for Steps {
         // downloads-ui lane: interrupts the running downloads (keeping what can be resumed) and
         // queues how each ended, before the history database closes.
         crate::downloads::shut_down(deadline);
+        // blocklists: stops the filter-list updater (cancelling a download at once, waiting at
+        // most a second) before the profile can be removed.
+        crate::filter_lists::shut_down(deadline);
         // Slot (history): queues "clear history on exit" if the settings ask for it, then
         // closes the history database, waiting for its queued work (that clear included).
         self.settings.clear_history_on_exit_if_asked();

@@ -251,5 +251,11 @@ check "a directory that is not a GStreamer prefix is refused" yes \
     "$(contains_text "$(bundle_status --gstreamer-prefix "$PWD/scripts")" 'is not a GStreamer prefix')"
 check "the refusals wrote nothing" no "$([ -e "$NO_OUT" ] && echo yes || echo no)"
 
+# ── Filter lists (blocklists) ─────────────────────────────────────────────
+check "the repository's filter lists match their manifest" 5 \
+    "$(filter_list_files crates/talaria-servo/resources/adblock 2>/dev/null | wc -l | tr -d ' ')"
+check "a directory without a manifest is refused" fails \
+    "$(status filter_list_files "$NO_OUT-lists" 2>/dev/null)"
+
 [ "$failures" -eq 0 ] || { printf '%d check(s) failed\n' "$failures"; exit 1; }
 printf 'all checks passed\n'

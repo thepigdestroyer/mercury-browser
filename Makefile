@@ -41,6 +41,11 @@ COLLECT_GSTREAMER =
 TEST_LIBRARY_PATH =
 endif
 
+# blocklists: the filter lists are data files beside the executable, not compiled into it
+# (the mercury-filter-lists tool checks their SHA-256 against the manifest and copies them).
+INSTALL_FILTER_LISTS = "$(CARGO)" run --quiet --package mercury-filter-lists --bin mercury-filter-lists
+INSTALL_FILTER_LISTS_RELEASE = $(INSTALL_FILTER_LISTS) --release
+
 .PHONY: \
 	help \
 	doctor \
@@ -279,17 +284,27 @@ deny:
 build:
 	$(GSTREAMER_ENV) "$(CARGO)" build --workspace
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) $(COLLECT_GSTREAMER) target/debug/lib)
+	$(INSTALL_FILTER_LISTS) -- install target/debug/filter-lists
 
 build-release:
 	$(GSTREAMER_ENV) "$(CARGO)" build --workspace --release
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) $(COLLECT_GSTREAMER) target/release/lib)
+	$(INSTALL_FILTER_LISTS_RELEASE) -- install target/release/filter-lists
 
 package-linux: build-release
 	mkdir -p "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)"
 	cp "target/release/mercury-browser" "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/mercury-browser"
 	"$(STRIP)" --strip-unneeded "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/mercury-browser"
+# blocklists: the filter lists are data files beside the program, never compiled into it.
+	@if LC_ALL=C grep -q -a -F -e "advanced-ads-" -e "scorecardresearch" -e "Brave Firstparty specific filters" "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/mercury-browser"; then \
+		echo "error: mercury-browser contains filter-list text" >&2; exit 1; \
+	fi
 	cp README.md "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/README.md"
 	cp LICENSE "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/LICENSE"
+	cp THIRD-PARTY-NOTICES.md "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/THIRD-PARTY-NOTICES.md"
+	rm -rf "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/LICENSES"
+	cp -R LICENSES "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/LICENSES"
+	$(INSTALL_FILTER_LISTS_RELEASE) -- install "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/filter-lists"
 	tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/$(LINUX_ARCHIVE)" "$(LINUX_PACKAGE_NAME)"
 	cd "$(DIST_DIR)" && sha256sum "$(LINUX_ARCHIVE)" > "$(LINUX_ARCHIVE).sha256"
 
@@ -322,11 +337,13 @@ test-capture-macos:
 run:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) "$(CARGO)" build --package "$(APP_PACKAGE)" --release)
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) $(COLLECT_GSTREAMER) target/release/lib)
+	$(INSTALL_FILTER_LISTS_RELEASE) -- install target/release/filter-lists
 	$(GSTREAMER_ENV) RUST_LOG="$(RUST_LOG)" "$(CARGO)" run --package "$(APP_PACKAGE)" --release -- $(ARGS)
 
 run-debug:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) "$(CARGO)" build --package "$(APP_PACKAGE)")
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) $(COLLECT_GSTREAMER) target/debug/lib)
+	$(INSTALL_FILTER_LISTS) -- install target/debug/filter-lists
 	$(GSTREAMER_ENV) RUST_LOG="$(RUST_LOG)" "$(CARGO)" run --package "$(APP_PACKAGE)" -- $(ARGS)
 
 run-release: run

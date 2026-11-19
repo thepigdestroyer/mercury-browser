@@ -161,3 +161,24 @@ entitlements_match() {
     actual="$(plist_grants -)" || return 1
     [ "$expected" = "$actual" ]
 }
+
+# blocklists: the list files named by the filter-list manifest in directory $1,
+# one per line, after checking each one's SHA-256 against the manifest. Prints
+# the problem to standard error and fails if a name is unsafe, a file is missing
+# or damaged, or the manifest names no list. (The manifest's other fields are
+# checked by the Rust tests of crates/mercury-filter-lists.)
+filter_list_files() {
+    local directory="$1" index=0 file sum actual
+    [ -f "$directory/manifest.json" ] || { printf 'no manifest.json in %s\n' "$directory" >&2; return 1; }
+    while file="$(plutil -extract "lists.$index.file" raw -o - "$directory/manifest.json" 2>/dev/null)"; do
+        case "$file" in
+            "" | */* | .*) printf 'unsafe list file name %s\n' "$file" >&2; return 1 ;;
+        esac
+        sum="$(plutil -extract "lists.$index.sha256" raw -o - "$directory/manifest.json" 2>/dev/null)" || sum=""
+        actual="$(shasum -a 256 "$directory/$file" 2>/dev/null)" || { printf 'cannot read %s\n' "$file" >&2; return 1; }
+        [ "${actual%% *}" = "$sum" ] || { printf '%s does not match its SHA-256 in the manifest\n' "$file" >&2; return 1; }
+        printf '%s\n' "$file"
+        index=$((index + 1))
+    done
+    [ "$index" -gt 0 ] || { printf 'the manifest names no lists\n' >&2; return 1; }
+}
