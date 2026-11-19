@@ -81,7 +81,7 @@ fn rows() -> (ModelRc<BrowserMenuEntry>, ModelRc<BrowserMenuEntry>) {
             false,
         )])),
         ModelRc::new(VecModel::from(vec![
-            entry("Find…", "", false, BrowserMenuCommand::Find, false),
+            entry("Find…", "⌘F", true, BrowserMenuCommand::Find, false),
             entry("Settings…", "⌘,", true, BrowserMenuCommand::Settings, true),
             entry(
                 "About Mercury Browser",
@@ -106,6 +106,32 @@ fn rows() -> (ModelRc<BrowserMenuEntry>, ModelRc<BrowserMenuEntry>) {
             ),
         ])),
     )
+}
+
+/// Where the browser menu's panel starts: the "⋮" button ends 14 px before the window's right
+/// edge, and the popup is 264 px wide (`BrowserMenu` in `browser-menu.slint`).
+const MENU_LEFT: u32 = 900 - 14 - 264;
+/// A row's height (`BrowserMenuRow`).
+const MENU_ROW_HEIGHT: u32 = 30;
+
+/// The top of the row the arrow keys chose. A column 7 px inside the row's left edge (past its
+/// rounded corner, before its title and the separators) shows the selection colour for exactly
+/// that row, so a menu with no chosen row, or with two, fails here.
+fn chosen_row_top(pixels: &SharedPixelBuffer<slint::Rgba8Pixel>, selected: [u8; 3]) -> u32 {
+    // The panel's padding (6 px), then the 7 px.
+    let column = MENU_LEFT + 6 + 7;
+    let rows: Vec<u32> = (0..pixels.height())
+        .filter(|&y| pixel(pixels, column, y) == selected)
+        .collect();
+    let (Some(&first), Some(&last)) = (rows.first(), rows.last()) else {
+        panic!("no row of the menu is chosen");
+    };
+    assert_eq!(
+        (rows.len() as u32, last - first + 1),
+        (MENU_ROW_HEIGHT, MENU_ROW_HEIGHT),
+        "one row, {MENU_ROW_HEIGHT} px tall, is chosen: {rows:?}"
+    );
+    first
 }
 
 fn press(window: &slint::Window, key: impl Into<slint::SharedString> + Clone) {
@@ -141,12 +167,24 @@ fn render_browser_menu_in_window(theme: ChromeTheme, name: &str) {
     assert_eq!(pixel(&pixels, 900 - 14 - 4, 140), panel);
     assert_ne!(pixel(&pixels, 900 - 14 + 4, 140), panel);
 
-    // New Tab, then past the disabled "Find…" to Settings, then "About Mercury Browser".
-    press(window.window(), Key::DownArrow);
-    press(window.window(), Key::DownArrow);
-    press(window.window(), Key::DownArrow);
-    let pixels = window.window().take_snapshot().expect("the window renders");
-    save(&pixels, &format!("browser-menu-keyboard-{name}.png"));
+    // The arrow keys walk the enabled rows in order: New Tab, Find…, Settings…, then "About
+    // Mercury Browser". Each stop is lower than the one before it, and Find… is a stop.
+    let selected = rgb(window.global::<ChromePalette>().get_item_selected());
+    let mut tops = Vec::new();
+    for stop in 0..4 {
+        press(window.window(), Key::DownArrow);
+        let pixels = window.window().take_snapshot().expect("the window renders");
+        tops.push(chosen_row_top(&pixels, selected));
+        if stop == 3 {
+            save(&pixels, &format!("browser-menu-keyboard-{name}.png"));
+        }
+    }
+    assert!(
+        tops.windows(2).all(|stops| stops[0] < stops[1]),
+        "{name}: {tops:?}"
+    );
+    // Settings… has a separator above it, so it sits more than a row below Find….
+    assert!(tops[2] - tops[1] > MENU_ROW_HEIGHT, "{name}: {tops:?}");
     press(window.window(), Key::Return);
     assert_eq!(*chosen.borrow(), [BrowserMenuCommand::About]);
     window.hide().expect("the main window can be hidden");
