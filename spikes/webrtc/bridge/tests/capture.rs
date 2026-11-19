@@ -146,21 +146,26 @@ fn audio_one_second(channels: u16) {
         "no block arrived: {:?}",
         stream.take_error()
     );
-    std::thread::sleep(Duration::from_millis(1100));
+    // The rate is counted over three seconds: on a shared 3-core virtual machine (the CI runner) a
+    // scheduling hiccup of 50 to 100 ms moves up to ten blocks across the edge of a one-second window
+    // (91 and 98 blocks were seen there), while the average over three seconds is within 3 %.
+    std::thread::sleep(Duration::from_millis(3100));
     let seen = rec.audio_times();
     let first = seen[0].at;
-    let blocks = seen
-        .iter()
-        .filter(|s| s.at.duration_since(first) < Duration::from_secs(1))
-        .count();
+    let in_window = |seconds: u64| {
+        seen.iter()
+            .filter(|s| s.at.duration_since(first) < Duration::from_secs(seconds))
+            .count()
+    };
+    let (blocks, first_second) = (in_window(3), in_window(1));
     let peak = *rec.peak_sample.lock().unwrap();
     println!(
-        "RESULT microphone {channels} ch: {blocks} blocks in 1 s, invalid {}, peak {peak}",
+        "RESULT microphone {channels} ch: {blocks} blocks in 3 s ({first_second} in the first second), invalid {}, peak {peak}",
         rec.invalid_count()
     );
     assert!(
-        (95..=105).contains(&blocks),
-        "{blocks} blocks in 1 s with {channels} channels"
+        (285..=315).contains(&blocks),
+        "{blocks} blocks in 3 s with {channels} channels (95 to 105 a second)"
     );
     assert_eq!(
         rec.invalid_count(),
