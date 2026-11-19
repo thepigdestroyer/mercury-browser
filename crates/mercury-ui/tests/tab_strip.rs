@@ -10,7 +10,8 @@ use std::rc::Rc;
 use std::time::Duration;
 
 use mercury_ui::{
-    BrowserTab, ChromePalette, ChromeTheme, MainWindow, TabMenuCommand, TabSearchRow,
+    BrowserTab, ChromePalette, ChromeTheme, MainWindow, TabAudioState, TabMenuCommand,
+    TabSearchRow, update_tab_rows,
 };
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
@@ -24,6 +25,12 @@ impl Platform for SoftwarePlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
         Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
     }
+}
+
+/// Slint's platform belongs to the thread, and a test thread may be reused for a second test
+/// when tests run one at a time.
+fn init_platform() {
+    let _ = slint::platform::set_platform(Box::new(SoftwarePlatform));
 }
 
 const WIDTH: f32 = 1000.0;
@@ -544,9 +551,412 @@ fn the_tab_menu_duplicates() {
     window.hide().expect("the window can be hidden");
 }
 
+// ---- The sound indicator (media-session lane, ported onto this strip) ----
+
+/// A copy of `tab` with this sound state.
+fn sound(mut tab: BrowserTab, audio: TabAudioState) -> BrowserTab {
+    tab.audio = audio;
+    tab
+}
+
+/// `sample_tabs()` with sound: the first pinned tab plays, the second is muted, the active tab
+/// (id 4) plays and the last (id 5) is muted.
+fn sound_tabs() -> Vec<BrowserTab> {
+    sample_tabs()
+        .into_iter()
+        .map(|tab| match tab.id {
+            1 | 4 => sound(tab, TabAudioState::Playing),
+            2 | 5 => sound(tab, TabAudioState::Muted),
+            _ => tab,
+        })
+        .collect()
+}
+
+/// The left edge of the pinned tab `index`.
+fn pinned_left(index: usize) -> f32 {
+    STRIP_X + index as f32 * PINNED_STRIDE
+}
+
+/// The left edge of the unpinned tab `index` (counted from the first unpinned tab), when two
+/// pinned tabs come first and the tabs are 184 px wide.
+fn tab_left(index: usize) -> f32 {
+    tab_x(index) - 92.0
+}
+
+/// The middle of the speaker of a 184 px tab with its close button shown: it spans 124 to 146 px
+/// from the tab's left edge.
+fn speaker_x(left: f32) -> f32 {
+    left + 135.0
+}
+
+/// The middle of a pinned tab's sound badge (16 px at the bottom right of the 40 x 38 px tab,
+/// which starts 7 px from the top).
+fn badge_at(index: usize) -> (f32, f32) {
+    (pinned_left(index) + 30.0, 34.0)
+}
+
+fn snapshot(window: &MainWindow) -> SharedPixelBuffer<slint::Rgba8Pixel> {
+    window.window().take_snapshot().expect("the window renders")
+}
+
+/// Pixels in a box that differ from the box's top-left pixel: whatever is drawn in it.
+fn ink(pixels: &SharedPixelBuffer<slint::Rgba8Pixel>, x: (f32, f32), y: (f32, f32)) -> usize {
+    let at = |x: u32, y: u32| pixels.as_slice()[(y * pixels.width() + x) as usize];
+    let background = at(x.0 as u32, y.0 as u32);
+    (y.0 as u32..y.1 as u32)
+        .flat_map(|row| (x.0 as u32..x.1 as u32).map(move |column| (column, row)))
+        .filter(|(column, row)| at(*column, *row) != background)
+        .count()
+}
+
+/// The rows a 184 px speaker spans (22 px centred on `TAB_Y`).
+const SPEAKER_Y: (f32, f32) = (15.0, 37.0);
+
+fn click_at(window: &slint::Window, x: f32, y: f32) {
+    let position = LogicalPosition::new(x, y);
+    pointer(window, WindowEvent::PointerMoved { position });
+    pointer(
+        window,
+        WindowEvent::PointerPressed {
+            position,
+            button: PointerEventButton::Left,
+        },
+    );
+    pointer(
+        window,
+        WindowEvent::PointerReleased {
+            position,
+            button: PointerEventButton::Left,
+        },
+    );
+}
+
+fn move_at(window: &slint::Window, x: f32, y: f32) {
+    pointer(
+        window,
+        WindowEvent::PointerMoved {
+            position: LogicalPosition::new(x, y),
+        },
+    );
+}
+
+fn rest(milliseconds: u64) {
+    std::thread::sleep(Duration::from_millis(milliseconds));
+    slint::platform::update_timers_and_animations();
+}
+
+/// Whether the hover preview shows for the tab whose left edge is `left`.
+fn preview_shows_at(window: &MainWindow, left: f32) -> bool {
+    let popup = rgb(window.global::<ChromePalette>().get_popup_background());
+    pixel(&snapshot(window), left + 4.0, 70.0) == popup
+}
+
+type Log<T> = Rc<RefCell<Vec<T>>>;
+
+fn recorded_toggles(window: &MainWindow) -> Log<i32> {
+    let log = Log::default();
+    let recorded = Rc::clone(&log);
+    window.on_toggle_tab_muted(move |id| recorded.borrow_mut().push(id));
+    log
+}
+
+fn recorded_selects(window: &MainWindow) -> Log<i32> {
+    let log = Log::default();
+    let recorded = Rc::clone(&log);
+    window.on_select_tab(move |index| recorded.borrow_mut().push(index));
+    log
+}
+
+fn recorded_moves(window: &MainWindow) -> Log<(i32, i32, bool)> {
+    let log = Log::default();
+    let recorded = Rc::clone(&log);
+    window.on_move_tab(move |id, index, pinned| recorded.borrow_mut().push((id, index, pinned)));
+    log
+}
+
+// Clicking the speaker of a pinned or another tab mutes by tab id, selects nothing and starts no
+// drag; the id is the right one after a drag has reordered the tabs.
+#[test]
+fn clicking_the_speaker_mutes_by_id_without_selecting_or_dragging() {
+    init_platform();
+    let window = window_with(ChromeTheme::Dark, sound_tabs(), 2);
+    let toggled = recorded_toggles(&window);
+    let selected = recorded_selects(&window);
+    let moves = recorded_moves(&window);
+
+    // Pinned tabs (ids 1, 2): the badge. Other tabs (ids 4, 5): the speaker.
+    for index in 0..2 {
+        let (x, y) = badge_at(index);
+        click_at(window.window(), x, y);
+    }
+    for index in [1, 2] {
+        click_at(window.window(), speaker_x(tab_left(index)), TAB_Y);
+    }
+    assert_eq!(*toggled.borrow(), [1, 2, 4, 5]);
+    assert!(selected.borrow().is_empty(), "{:?}", selected.borrow());
+
+    // A press on the speaker that moves away is no drag, and no click.
+    for (x, y) in [badge_at(0), (speaker_x(tab_left(2)), TAB_Y)] {
+        move_at(window.window(), x, y);
+        pointer(
+            window.window(),
+            WindowEvent::PointerPressed {
+                position: LogicalPosition::new(x, y),
+                button: PointerEventButton::Left,
+            },
+        );
+        for step in 1..=8 {
+            move_at(window.window(), x + 12.0 * step as f32, y);
+        }
+        pointer(
+            window.window(),
+            WindowEvent::PointerReleased {
+                position: LogicalPosition::new(x + 96.0, y),
+                button: PointerEventButton::Left,
+            },
+        );
+    }
+    assert!(moves.borrow().is_empty(), "{:?}", moves.borrow());
+    assert!(selected.borrow().is_empty(), "{:?}", selected.borrow());
+    assert_eq!(toggled.borrow().len(), 4);
+
+    // Drag the last tab (id 5) in front of the first unpinned one, and let the application's
+    // sync reorder the rows: the speaker at the third place now belongs to id 5, not index 2.
+    drag(window.window(), tab_x(2), tab_x(0));
+    assert_eq!(*moves.borrow(), [(5, 2, false)]);
+    let selected_by_the_drag = selected.borrow().len();
+    let mut rows = sound_tabs();
+    let moved = rows.remove(4);
+    rows.insert(2, moved);
+    with_rows(&window, |model| update_tab_rows(model, rows));
+    click_at(window.window(), speaker_x(tab_left(0)), TAB_Y);
+    click_at(window.window(), speaker_x(tab_left(2)), TAB_Y);
+    assert_eq!(toggled.borrow()[4..], [5, 4]);
+    assert_eq!(selected.borrow().len(), selected_by_the_drag);
+    window.hide().expect("the window can be hidden");
+}
+
+// Resting the pointer on the speaker (or the pinned badge) keeps the tab hovered, so its preview
+// stays; leaving the tab hides it.
+#[test]
+fn resting_on_the_speaker_keeps_the_hover_preview() {
+    init_platform();
+    let window = window_with(ChromeTheme::Dark, sound_tabs(), 2);
+
+    for (left, body, speaker) in [
+        (
+            tab_left(2),
+            (tab_left(2) + 60.0, TAB_Y),
+            (speaker_x(tab_left(2)), TAB_Y),
+        ),
+        (pinned_left(0), (pinned_left(0) + 10.0, TAB_Y), badge_at(0)),
+    ] {
+        move_at(window.window(), 900.0, 100.0);
+        rest(300);
+        assert!(!preview_shows_at(&window, left), "no preview yet");
+        if left > pinned_left(1) {
+            // The tab is 184 px wide and its title is short: the speaker is the only thing that
+            // can be drawn in its box.
+            let speaker = (speaker_x(left) - 11.0, speaker_x(left) + 11.0);
+            assert!(
+                ink(&snapshot(&window), speaker, SPEAKER_Y) > 20,
+                "a speaker"
+            );
+        }
+        move_at(window.window(), body.0, body.1);
+        rest(700);
+        assert!(preview_shows_at(&window, left), "the preview shows");
+        move_at(window.window(), speaker.0, speaker.1);
+        rest(400);
+        assert!(
+            preview_shows_at(&window, left),
+            "the preview stays while the pointer is on the speaker"
+        );
+        // A click on it gets the preview out of the way until the pointer leaves the tab.
+        click_at(window.window(), speaker.0, speaker.1);
+        rest(800);
+        assert!(
+            !preview_shows_at(&window, left),
+            "no preview after a click on the speaker"
+        );
+        move_at(window.window(), 900.0, 100.0);
+        rest(400);
+        assert!(
+            !preview_shows_at(&window, left),
+            "leaving hides the preview"
+        );
+    }
+    window.hide().expect("the window can be hidden");
+}
+
+// A row whose sound changes is updated in place, so a drag in progress survives it, and the
+// dragged copy shows the new state.
+#[test]
+fn a_drag_survives_a_tab_whose_sound_changes() {
+    init_platform();
+    let window = window_with(ChromeTheme::Dark, sound_tabs(), 2);
+    let moves = recorded_moves(&window);
+
+    // Pick up the last tab (id 5, muted) and let it start to play, while the quiet tab (id 3)
+    // is muted and the first pinned tab (id 1) falls silent.
+    press_at(window.window(), tab_x(2), PointerEventButton::Left);
+    move_to(window.window(), tab_x(2) - 40.0);
+    with_rows(&window, |rows| {
+        rows.set_row_data(4, sound(rows.row_data(4).unwrap(), TabAudioState::Playing));
+        rows.set_row_data(2, sound(rows.row_data(2).unwrap(), TabAudioState::Muted));
+        rows.set_row_data(0, sound(rows.row_data(0).unwrap(), TabAudioState::Silent));
+    });
+    move_to(window.window(), tab_x(0));
+    // The copy under the pointer shows the speaker; the tab's own place shows none.
+    let pixels = snapshot(&window);
+    let ghost_left = tab_x(0) - 92.0;
+    assert!(
+        ink(&pixels, (ghost_left + 124.0, ghost_left + 146.0), SPEAKER_Y) > 20,
+        "the dragged copy shows the speaker"
+    );
+    release_at(window.window(), tab_x(0));
+
+    assert_eq!(*moves.borrow(), [(5, 2, false)]);
+    assert!(preview_shows_after_resting(&window), "the drag ended");
+    window.hide().expect("the window can be hidden");
+}
+
+// The dragged copy shows the indicator but takes no input, and the tab's own place hides it.
+#[test]
+fn the_dragged_copy_shows_the_speaker_but_takes_no_input() {
+    init_platform();
+    // A short title, so that nothing but the speaker can be drawn in its box.
+    let mut tabs = sound_tabs();
+    tabs[3].title = "Song".into();
+    let window = window_with(ChromeTheme::Dark, tabs, 2);
+    let toggled = recorded_toggles(&window);
+
+    // Pick up the active tab (id 4, playing) and carry it left over the third tab.
+    press_at(window.window(), tab_x(1), PointerEventButton::Left);
+    for step in 1..=8 {
+        move_to(window.window(), tab_x(1) - 12.0 * step as f32);
+    }
+    let ghost_left = tab_left(1) - 96.0;
+    let pixels = snapshot(&window);
+    save(&pixels, "tab-strip-dragging-sound.png");
+    assert!(
+        ink(&pixels, (ghost_left + 124.0, ghost_left + 146.0), SPEAKER_Y) > 20,
+        "the dragged copy shows the speaker"
+    );
+    let slot = tab_left(1);
+    assert_eq!(
+        ink(&pixels, (slot + 124.0, slot + 146.0), SPEAKER_Y),
+        0,
+        "the tab's place is an empty outline"
+    );
+
+    // A click on the copy's speaker mutes nothing.
+    click_at(window.window(), speaker_x(ghost_left), TAB_Y);
+    assert!(toggled.borrow().is_empty(), "{:?}", toggled.borrow());
+    window.hide().expect("the window can be hidden");
+}
+
+// The narrow-tab rule: a tab with sound that is narrower than 160 px shows its speaker where the
+// page icon goes, so it never moves when the pointer arrives and the title keeps room; the close
+// button then takes its own place at the right, shown for the active tab and under the pointer.
+// From 160 px the speaker sits before the close button, which is always shown.
+//
+// `count` tabs: the first is active and quiet, the second plays, the third is muted. 5 tabs are
+// 182 px wide, 6 are 150.7 px, 7 are 128.3 px and 15 are 112 px.
+fn a_tab_with_sound_keeps_its_speaker_and_close_button(count: usize) {
+    let tabs = (1..=count as i32)
+        .map(|id| match id {
+            2 => sound(tab(id, "Page 2", false, false), TabAudioState::Playing),
+            3 => sound(tab(id, "Page 3", false, false), TabAudioState::Muted),
+            _ => tab(id, &format!("Page {id}"), id == 1, false),
+        })
+        .collect::<Vec<_>>();
+    let window = window_with(ChromeTheme::Dark, tabs, 0);
+    let toggled = recorded_toggles(&window);
+    let selected = recorded_selects(&window);
+    let closed = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&closed);
+    window.on_close_tab(move |index| recorded.borrow_mut().push(index));
+
+    // The strip is 934 px wide, or 894 px with the "all tabs" button.
+    let room = if count * 118 - 6 > 934 { 894.0 } else { 934.0 };
+    let width = ((room + 6.0) / count as f32 - 6.0).clamp(112.0, 184.0);
+    let compact = width < 160.0;
+    let mut expected_toggles = Vec::new();
+    let mut expected_closes = Vec::new();
+    for index in [1usize, 2] {
+        let left = STRIP_X + index as f32 * (width + 6.0);
+        let speaker = if compact {
+            (left + 8.0, left + 30.0)
+        } else {
+            (left + width - 60.0, left + width - 38.0)
+        };
+        let close = (left + width - 30.0, left + width - 8.0);
+        assert!(speaker.1 <= close.0, "the speaker and × never overlap");
+        let title = if compact {
+            (left + 36.0, close.0 - 6.0)
+        } else {
+            (left + 38.0, speaker.0 - 8.0)
+        };
+        let middle = |range: (f32, f32)| (range.0 + range.1) / 2.0;
+        let label = format!("{width} px, tab {}", index + 1);
+
+        // At rest.
+        move_at(window.window(), 500.0, 100.0);
+        let pixels = snapshot(&window);
+        assert!(ink(&pixels, speaker, SPEAKER_Y) > 20, "{label}: speaker");
+        assert!(
+            ink(&pixels, title, (18.0, 34.0)) > 5,
+            "{label}: the title keeps room"
+        );
+        if compact {
+            assert_eq!(ink(&pixels, close, SPEAKER_Y), 0, "{label}: no × at rest");
+        } else {
+            assert!(ink(&pixels, close, SPEAKER_Y) > 0, "{label}: × at rest");
+        }
+
+        // Under the pointer: the × shows and nothing moves.
+        move_at(window.window(), left + 50.0, TAB_Y);
+        let pixels = snapshot(&window);
+        if index == 1 {
+            save(&pixels, &format!("tab-strip-sound-{count}-tabs.png"));
+        }
+        assert!(ink(&pixels, close, SPEAKER_Y) > 0, "{label}: × on hover");
+        assert!(ink(&pixels, speaker, SPEAKER_Y) > 20, "{label}: speaker");
+        move_at(window.window(), middle(speaker), TAB_Y);
+        let pixels = snapshot(&window);
+        assert!(ink(&pixels, close, SPEAKER_Y) > 0, "{label}: × stays");
+        assert!(ink(&pixels, speaker, SPEAKER_Y) > 20, "{label}: speaker");
+
+        // Each button does its own thing, and the tab is not selected.
+        click_at(window.window(), middle(speaker), TAB_Y);
+        expected_toggles.push(index as i32 + 1);
+        assert_eq!(*toggled.borrow(), expected_toggles, "{label}");
+        move_at(window.window(), left + 50.0, TAB_Y);
+        move_at(window.window(), middle(close), TAB_Y);
+        click_at(window.window(), middle(close), TAB_Y);
+        expected_closes.push(index as i32);
+        assert_eq!(*closed.borrow(), expected_closes, "{label}");
+        assert!(
+            selected.borrow().is_empty(),
+            "{label}: {:?}",
+            selected.borrow()
+        );
+    }
+    window.hide().expect("the window can be hidden");
+}
+
+#[test]
+fn a_tab_with_sound_keeps_its_speaker_and_close_button_at_every_width() {
+    init_platform();
+    for count in [5, 6, 7, 15] {
+        a_tab_with_sound_keeps_its_speaker_and_close_button(count);
+    }
+}
+
 #[test]
 fn the_tab_strip_renders_and_responds() {
-    slint::platform::set_platform(Box::new(SoftwarePlatform)).expect("no platform is set yet");
+    init_platform();
 
     for (theme, name) in [
         (ChromeTheme::Light, "light"),

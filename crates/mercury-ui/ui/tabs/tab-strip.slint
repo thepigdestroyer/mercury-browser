@@ -4,7 +4,7 @@
 // "all tabs" button when the tabs no longer fit, and what the hover preview needs.
 // Colours come only from `ChromePalette`.
 import { ChromePalette } from "../theme/chrome-palette.slint";
-import { TabAudioState } from "../media/tab-audio.slint"; // media-session lane
+import { TabAudioButton, TabAudioState } from "../media/tab-audio.slint"; // media-session lane
 
 export struct BrowserTab {
     title: string,
@@ -70,6 +70,10 @@ component TabButton inherits Rectangle {
     out property <bool> hovered: touch.has-hover;
     callback selected;
     callback closed;
+    // The speaker (or the badge on a pinned tab) was clicked: mute or unmute the tab. It is a
+    // button of its own inside the tab's touch area: a press on it does not select the tab, start
+    // a drag or touch the strip's pointer state.
+    callback audio-clicked;
     // A right-click or Control-click: open the tab's menu at this x within the tab.
     callback menu-requested(length);
     // The pointer x within the tab where the drag started, then where it is now.
@@ -83,6 +87,21 @@ component TabButton inherits Rectangle {
     property <bool> left-pressed;
     property <bool> drag-active;
     property <length> press-x;
+
+    // Narrow tabs with sound. A tab narrower than 160 px has little room for the title once the
+    // speaker (22 px) and the close button (22 px) are both in it, so its layout changes:
+    //  - the speaker takes the page icon's place at the left, so it is visible at any width and
+    //    never moves when the pointer arrives;
+    //  - the close button keeps its own place at the right edge, which is reserved so the title
+    //    does not change either; it shows on the active tab and under the pointer (the speaker
+    //    stays clickable and the tab hovered while the pointer is on either button);
+    //  - the title keeps at least 40 px (112 px tabs) between the two.
+    // From 160 px the speaker sits before the close button, which is always shown, and the title
+    // has at least 54 px. A pinned tab has its own badge instead.
+    property <bool> compact-audio: !root.tab.pinned && root.tab.audio != TabAudioState.silent && root.width < 160px;
+    // Narrow inactive tabs show their close button only under the pointer, leaving room for the
+    // title; with sound they show it that way up to 160 px (see above).
+    property <bool> show-close: root.tab.active || touch.has-hover || (!root.compact-audio && root.width >= 150px);
 
     border-radius: 8px;
     background: root.dragged ? transparent : root.tab.active || root.ghost
@@ -166,18 +185,51 @@ component TabButton inherits Rectangle {
                 border-radius: 3px;
                 background: ChromePalette.accent;
             }
+
+            // The sound badge: 16 px at the bottom right (x 22 to 38, y 19 to 35 of the 40 x 38 px
+            // tab), clear of the loading dot above it (y 7 to 13) and of the active tab's line
+            // below it (y 36). It has the tab's own colour behind it so it reads over the icon.
+            if root.tab.audio != TabAudioState.silent: TabAudioButton {
+                x: parent.width - self.width - 2px;
+                y: parent.height - self.height - 3px;
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                icon-size: 12px;
+                resting-background: root.tab.active || root.ghost ? ChromePalette.tab-active : touch.has-hover ? ChromePalette.tab-hover : ChromePalette.window-background;
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                tab-title: root.tab.title;
+                interactive: !root.ghost;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
         }
 
         if !root.tab.pinned && !root.dragged: HorizontalLayout {
-            padding-left: 12px;
+            padding-left: root.compact-audio ? 8px : 12px;
             padding-right: 8px;
-            spacing: 8px;
+            spacing: root.compact-audio ? 6px : 8px;
 
-            if root.tab.has-icon: TabIcon {
+            // A narrow tab with sound: the speaker where the page icon would be (see
+            // `compact-audio`).
+            if root.compact-audio: TabAudioButton {
+                y: (parent.height - self.height) / 2;
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                tab-title: root.tab.title;
+                interactive: !root.ghost;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
+
+            if !root.compact-audio && root.tab.has-icon: TabIcon {
                 source: root.tab.icon;
             }
 
-            if !root.tab.has-icon: TabIcon {
+            if !root.compact-audio && !root.tab.has-icon: TabIcon {
                 source: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
             }
 
@@ -200,9 +252,28 @@ component TabButton inherits Rectangle {
                 background: ChromePalette.accent;
             }
 
-            // Narrow inactive tabs show their close button only under the pointer, leaving room for
-            // the title.
-            if root.tab.active || root.width >= 150px || touch.has-hover: Rectangle {
+            // The speaker of a tab with room for it: between the title (and loading dot) and the
+            // close button. Inside the tab's touch area like the close button, so the pointer on
+            // it keeps the tab hovered.
+            if !root.compact-audio && root.tab.audio != TabAudioState.silent: TabAudioButton {
+                y: (parent.height - self.height) / 2;
+                state: root.tab.audio;
+                active-tab: root.tab.active;
+                tab-title: root.tab.title;
+                interactive: !root.ghost;
+                clicked => {
+                    root.audio-clicked();
+                }
+            }
+
+            // The close button's place on a narrow tab with sound, kept while the button is
+            // hidden so nothing moves when it shows.
+            if root.compact-audio && !root.show-close: Rectangle {
+                width: 22px;
+                accessible-role: none;
+            }
+
+            if root.show-close: Rectangle {
                 width: 22px;
                 height: 22px;
                 y: (parent.height - self.height) / 2;
@@ -413,6 +484,9 @@ export component TabStrip inherits Rectangle {
 
     callback select-tab(int);
     callback close-tab(int);
+    // The speaker (or muted speaker) of the tab with this id was clicked: mute or unmute it. The
+    // id, not the index, so the command still means this tab if the strip changes meanwhile.
+    callback audio-clicked(int);
     // The tab with this id goes to this index in the strip, pinned or not.
     callback move-tab(int, int, bool);
     callback tab-menu-activated(int, TabMenuCommand);
@@ -601,6 +675,13 @@ export component TabStrip inherits Rectangle {
                     closed => {
                         root.preview-index = -1;
                         root.close-tab(index);
+                    }
+                    audio-clicked => {
+                        // Not selected, dragged or pressed: only the preview gets out of the way
+                        // until the pointer leaves the tab.
+                        root.preview-index = -1;
+                        root.preview-suppressed = index;
+                        root.audio-clicked(tab.id);
                     }
                     menu-requested(x) => {
                         root.preview-index = -1;

@@ -14,6 +14,14 @@ export component TabAudioButton inherits Rectangle {
     in property <TabAudioState> state;
     in property <bool> active-tab;
     in property <string> tab-title;
+    // False for the copy of a tab that follows the pointer while it is dragged: drawn only. It
+    // takes no input, shows no tooltip and is announced as unavailable.
+    in property <bool> interactive: true;
+    // The speaker's size; the badge on a pinned tab makes the button and the speaker smaller.
+    in property <length> icon-size: 14px;
+    // Behind the speaker while the pointer is elsewhere: transparent, or the tab's own colour
+    // for the badge on a pinned tab, so the speaker stays readable over the page icon.
+    in property <brush> resting-background: transparent;
     callback clicked;
 
     // Muting is done inside the page, which can undo it; the label says so.
@@ -31,26 +39,36 @@ export component TabAudioButton inherits Rectangle {
     width: 22px;
     height: 22px;
     border-radius: 6px;
-    background: touch.pressed ? root.pressed-background : touch.has-hover ? root.hover-background : transparent;
+    background: touch.pressed ? root.pressed-background : touch.has-hover ? root.hover-background : root.resting-background;
     accessible-role: button;
     accessible-label: root.action-text;
+    accessible-enabled: root.interactive;
+    accessible-action-default => {
+        if root.interactive {
+            root.clicked();
+        }
+    }
 
+    // Decorative: the button's label already says what it does, so the picture is not announced
+    // as an image of its own.
     Image {
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
-        width: 14px;
-        height: 14px;
+        width: root.icon-size;
+        height: root.icon-size;
         source: root.state == TabAudioState.muted ? @image-url("speaker-muted.svg") : @image-url("speaker.svg");
         colorize: touch.has-hover ? root.icon-hover-color : root.state == TabAudioState.muted ? root.muted-icon-color : root.icon-color;
         image-fit: contain;
+        accessible-role: none;
     }
 
-    Tooltip {
+    if root.interactive: Tooltip {
         // Fixed text only: no page text goes through markdown.
         text: root.state == TabAudioState.muted ? @markdown("Unmute tab") : @markdown("Mute tab (the page can override this)");
     }
 
     touch := TouchArea {
+        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => {
             root.clicked();

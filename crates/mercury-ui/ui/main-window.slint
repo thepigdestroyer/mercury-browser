@@ -184,6 +184,8 @@ export component MainWindow inherits Window {
     callback restore-previous-session();
     // --- end session ---
     // --- media-session ---
+    // Mute or unmute a tab. The argument is the tab's id (`BrowserTab.id`), not its index in the
+    // strip, so it still means that tab if the strip changed since the click.
     callback toggle-tab-muted(int);
     // --- end media-session ---
 
@@ -589,6 +591,9 @@ export component MainWindow inherits Window {
                     }
                     close-tab(index) => {
                         root.close-tab(index);
+                    }
+                    audio-clicked(id) => {
+                        root.toggle-tab-muted(id);
                     }
                     move-tab(id, index, pinned) => {
                         root.move-tab(id, index, pinned);

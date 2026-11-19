@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! Renders the browser chrome with the "Pop-up blocked" indicator in each appearance (Light,
-//! Dark, System) to PNG files without a display, through Slint's software renderer.
+//! Dark, System) to PNG files without a display, through Slint's software renderer. The tab strip
+//! shows a tab that plays sound and a muted one.
 //!
 //! `cargo run --release -p mercury-ui --example render_tabs -- <output directory>`
 
@@ -10,7 +11,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
-use mercury_ui::{BrowserTab, ChromePalette, ChromeTheme, MainWindow};
+use mercury_ui::{BrowserTab, ChromePalette, ChromeTheme, MainWindow, TabAudioState};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PlatformError, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, Image, ModelRc, PhysicalSize, VecModel};
@@ -64,17 +65,20 @@ fn render(
 fn window_with_blocked_pop_up(theme: ChromeTheme) -> Result<MainWindow, Box<dyn Error>> {
     let window = MainWindow::new()?;
     window.global::<ChromePalette>().set_theme(theme);
-    let tab = |title: &str, active: bool| BrowserTab {
+    let tab = |title: &str, active: bool, audio: TabAudioState| BrowserTab {
         title: title.into(),
         icon: Image::default(),
         has_icon: false,
         active,
         loading: false,
+        audio,
         ..Default::default()
     };
+    // A tab that plays sound and one that is muted show the tab strip's speaker.
     window.set_tabs(ModelRc::new(VecModel::from(vec![
-        tab("Opener", true),
-        tab("Example Domain", false),
+        tab("Opener", true, TabAudioState::Silent),
+        tab("Example Domain", false, TabAudioState::Playing),
+        tab("Muted page", false, TabAudioState::Muted),
     ])));
     window.set_address("https://news.example/article".into());
     window.set_is_new_tab(false);
