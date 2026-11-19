@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Notification without an icon</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 24px/1.4 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 24px; }
+  h1 { margin: 0 0 12px; font-size: 32px; }
+  .line { margin-bottom: 8px; word-break: break-all; }
+  b { font-family: Menlo, monospace; }
+  .PASS { color: #006400; font-weight: bold; }
+  .FAIL { color: #b00000; font-weight: bold; }
+  .SKIP { color: #6b4e00; font-weight: bold; }
+</style>
+</head>
+<body>
+<h1>Notification without an icon</h1>
+<p>K0 (EF4): <code>new Notification("K0 test")</code> has no icon, image, badge or action
+icon to fetch. Before the fix to <code>servo-script</code> the browser never received it, so no
+<code>show</code> event fired. With the fix the <code>show</code> event fires and the browser's
+<code>show_notification</code> runs (it logs the title at debug level).</p>
+<div id="results"></div>
+<script>
+  "use strict";
+  const TIMEOUT_MS = 4000;
+  const results = document.getElementById("results");
+
+  function line(label, value, className) {
+    const item = document.createElement("div");
+    item.className = "line";
+    const name = document.createElement("b");
+    name.textContent = label + ": ";
+    item.appendChild(name);
+    const text = document.createElement("span");
+    if (className) {
+      text.className = className;
+    }
+    text.textContent = String(value);
+    item.appendChild(text);
+    results.appendChild(item);
+  }
+
+  let finished = false;
+  function finish(outcome, detail) {
+    if (finished) {
+      return;
+    }
+    finished = true;
+    // The first word is PASS, FAIL or SKIP, so a script can grep the page text for it.
+    line("result", outcome + " " + detail, outcome);
+    document.title = "Notification without an icon: " + outcome;
+  }
+
+  if (!("Notification" in window)) {
+    line("'Notification' in window", false);
+    finish("SKIP", "the Notification API is not present (dom_notification_enabled is off)");
+  } else {
+    line("'Notification' in window", true);
+    line("permission before", Notification.permission);
+    Promise.resolve(Notification.requestPermission()).then((permission) => {
+      line("permission after request", permission);
+      if (permission !== "granted") {
+        // Without permission the constructor only queues an "error" event: nothing is shown, so
+        // the fix cannot be observed. A run without a way to answer the prompt ends here.
+        const notification = new Notification("K0 test");
+        notification.onerror = () => {
+          finish("SKIP", "permission was not granted (" + permission + "); the error event fired, " +
+                         "as the spec says, and the fix could not be observed");
+        };
+        setTimeout(() => finish("SKIP", "permission was not granted (" + permission +
+                                        "); no event within " + TIMEOUT_MS + " ms"), TIMEOUT_MS);
+        return;
+      }
+      const started = performance.now();
+      let done = false;
+      const notification = new Notification("K0 test");
+      notification.onshow = () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        line("event", "show after " + Math.round(performance.now() - started) + " ms");
+        finish("PASS", "the notification without an icon was shown");
+      };
+      notification.onerror = () => {
+        if (done) {
+          return;
+        }
+        done = true;
+        line("event", "error");
+        finish("FAIL", "the notification raised an error event");
+      };
+      setTimeout(() => {
+        if (!done) {
+          done = true;
+          line("event", "none within " + TIMEOUT_MS + " ms");
+          finish("FAIL", "no show or error event: the notification was never handed to the browser");
+        }
+      }, TIMEOUT_MS);
+    }).catch((error) => {
+      finish("FAIL", "requestPermission threw: " + error);
+    });
+  }
+</script>
+</body>
+</html>

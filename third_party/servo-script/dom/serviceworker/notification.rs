@@ -881,6 +881,19 @@ impl Notification {
             }
         }
 
+        // Mercury: a notification with no image, icon, badge or action icon to fetch (or only
+        // ones whose URL does not parse) has nothing that would call `show()` later, so it was
+        // never shown. Show it now. No `pending_request_ids` entry exists in this case: an id is
+        // inserted only together with its `pending_requests` entry above. `show()` only sends the
+        // embedder message and queues the `show` event as a task, so it is safe to run it here,
+        // inside the constructor. The idea is that of patch 0002 of Zervo (github.com/Goddv/Zervo,
+        // `patches/servo/0002-script-show-notification-without-resources.patch`); this code is
+        // written from its description, not copied.
+        if pending_requests.is_empty() {
+            self.show();
+            return;
+        }
+
         for (request, resource_type) in pending_requests {
             self.fetch_and_show_when_ready(request, resource_type);
         }
