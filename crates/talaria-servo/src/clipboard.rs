@@ -7,7 +7,8 @@
 //! default one, which reads and writes the system clipboard for any page, is never used. What a
 //! page may do is decided by the tab's `ClipboardGate` (`talaria-core`); the clipboard itself is
 //! the `Pasteboard` the browser installs with `ServoRuntime::set_pasteboard`, a
-//! `MemoryPasteboard` until then.
+//! `MemoryPasteboard` until then. A script's read (`navigator.clipboard.readText()`) asks the
+//! user only once `talaria_core::CLIPBOARD_READ_FRAME_GATE` is on; until then it is refused.
 
 use std::cell::RefCell;
 use std::rc::Rc;
@@ -86,9 +87,13 @@ pub(crate) enum ClipboardRead<R: StringAnswer = StringRequest> {
 
 impl TabClipboard {
     pub(crate) fn new(tab_id: TabId, access: Rc<ClipboardAccess>) -> Self {
+        Self::with_gate(tab_id, access, ClipboardGate::default())
+    }
+
+    fn with_gate(tab_id: TabId, access: Rc<ClipboardAccess>, gate: ClipboardGate) -> Self {
         Self {
             tab_id,
-            gate: Rc::default(),
+            gate: Rc::new(RefCell::new(gate)),
             access,
         }
     }
@@ -213,7 +218,8 @@ mod tests {
         }
     }
 
-    /// A tab whose activation is `activation`, with the activation uses logged.
+    /// A tab whose activation is `activation`, with the activation uses logged; its gate offers
+    /// script reads, as once `CLIPBOARD_READ_FRAME_GATE` is on.
     fn tab(
         pasteboard: &Rc<MemoryPasteboard>,
         activation: bool,
@@ -227,7 +233,8 @@ mod tests {
             logged.borrow_mut().push(activation_use);
             activation
         }));
-        (TabClipboard::new(TabId::new(7), access), uses)
+        let gate = ClipboardGate::new(true);
+        (TabClipboard::with_gate(TabId::new(7), access, gate), uses)
     }
 
     #[test]
@@ -240,6 +247,38 @@ mod tests {
         clipboard.user_command(ClipboardCommand::Copy);
         assert!(clipboard.write_text("copied"));
         assert_eq!(access.pasteboard().read_text().as_deref(), Some("copied"));
+    }
+
+    #[test]
+    fn a_tabs_script_read_is_refused_while_the_frame_gate_is_off() {
+        let pasteboard = Rc::new(MemoryPasteboard::with_text("secret"));
+        let access = Rc::new(ClipboardAccess::default());
+        access.set_pasteboard(Rc::clone(&pasteboard) as Rc<dyn Pasteboard>);
+        let uses = Rc::new(RefCell::new(Vec::new()));
+        let logged = Rc::clone(&uses);
+        access.set_user_activation_check(Rc::new(move |_tab_id, activation_use| {
+            logged.borrow_mut().push(activation_use);
+            true
+        }));
+        let clipboard = TabClipboard::with_gate(TabId::new(3), access, ClipboardGate::new(false));
+        let answers = Answers::default();
+        assert!(matches!(
+            clipboard.read(FakeAnswer(Rc::clone(&answers))),
+            ClipboardRead::Refused
+        ));
+        assert_eq!(*answers.borrow(), vec![None]);
+        // The click is not used up by the refused read; a write in the same gesture still goes
+        // through (and only looks at it).
+        assert!(uses.borrow().is_empty());
+        assert!(clipboard.write_text("copy button"));
+        assert_eq!(*uses.borrow(), vec![ActivationUse::Peek]);
+        // The user's own Paste reads.
+        clipboard.user_command(ClipboardCommand::Paste);
+        let answers = Answers::default();
+        assert!(matches!(
+            clipboard.read(FakeAnswer(Rc::clone(&answers))),
+            ClipboardRead::Text(text) if text == "copy button"
+        ));
     }
 
     #[test]

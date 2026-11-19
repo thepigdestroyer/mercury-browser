@@ -6,14 +6,20 @@
 //! Servo 0.8.0 sends every clipboard access of a page to the embedder the same way, whether the
 //! user chose Copy or Paste or a script called `navigator.clipboard`: the request names the
 //! web view and nothing else. The browser therefore knows what the user asked for itself:
-//! - Cut, Copy and Paste the user chose (Edit menu, its shortcuts, the page's context menu)
-//!   allow the writes, and one read, that follow within `USER_CLIPBOARD_ACTION_WINDOW`;
+//! - Cut and Copy the user chose (Edit menu, its shortcuts, the page's context menu) allow the
+//!   writes that follow within `USER_CLIPBOARD_ACTION_WINDOW`; Paste allows the first read that
+//!   follows within it, and no writes;
 //! - otherwise a page may write only while it has a user activation (a click or key press in
-//!   it, see the desktop app's `activation.rs`), and may read only after such an activation and
-//!   the user's permission (`PagePermission::ClipboardRead`), asked for each read unless the
-//!   user chose to remember the answer for the site;
+//!   it, see the desktop app's `activation.rs`); a script's read (`navigator.clipboard.
+//!   readText()`) is refused while `CLIPBOARD_READ_FRAME_GATE` is off; once it is on, it is
+//!   asked as `PagePermission::ClipboardRead` (only after such an activation) and allowed only
+//!   if the user, or a decision remembered earlier, says yes;
 //! - everything else is refused. Servo cannot tell a page that a write was refused (its
-//!   `writeText()` promise resolves anyway), and a refused read resolves with empty text.
+//!   `writeText()` promise resolves anyway), and a refused read gives the page empty text.
+//!
+//! Known limit while the request names no frame: the tab's user activation and the user's Cut
+//! and Copy also let the page's frames from other sites write, and the user's Paste lets them
+//! read, in the short window each grants.
 
 use std::cell::RefCell;
 use std::time::Duration;
@@ -23,6 +29,34 @@ use crate::{ClipboardCommand, ContextMenuAction, KeyState, KeyboardInput};
 /// How long after the user chose Cut, Copy or Paste the page's clipboard access for it is
 /// allowed. Servo performs the edit on the page's script thread, which may be busy for a moment.
 pub const USER_CLIPBOARD_ACTION_WINDOW: Duration = Duration::from_secs(2);
+
+/// The switch for a script's clipboard reads (`navigator.clipboard.readText()`) behind the
+/// user's permission. Off until the vendored `servo-script` refuses the clipboard to a document
+/// that is not same-origin with its top-level document (the frame gate engine patch planned for
+/// geolocation, `GEOLOCATION_FRAME_GATE`, applied to `Clipboard::ReadText` too). Servo 0.8.0's
+/// request names only the web view, so without the patch a cross-origin frame (an advert) would
+/// read the clipboard under the top-level site's name, and silently for as long as a remembered
+/// "Allow" exists for that site (the core can remember a permission decision; the desktop app
+/// offers no remember choice for permission prompts today). Turn on in the change that lands
+/// the patch.
+///
+/// Before turning it on:
+/// - the vendored `servo-script` patch must refuse `Clipboard::ReadText` to any document that is
+///   not same-origin with its top-level document (same patch family as `GEOLOCATION_FRAME_GATE`
+///   in `page_request.rs`; procedure in `docs/developer-guide/vendored-patches.md`);
+/// - Servo's user Paste does a blocking `recv` of `GetClipboardText` on the page's script thread
+///   (`fire_clipboard_event`, servo-script 0.8.0 `dom/document/editing.rs`). A Paste read that
+///   reaches the delegate after `USER_CLIPBOARD_ACTION_WINDOW` is therefore classified as a
+///   script read and, with the gate on and a user activation in the page, would raise a
+///   permission prompt while the script thread is blocked. The patch (or the grant's lifetime)
+///   must make that impossible;
+/// - text copied from Mercury's own password manager lands on this same clipboard, so a
+///   user-approved read would expose it while it is there (passwords lane: it clears the
+///   clipboard after a timeout; check that it is short enough);
+/// - flipping the constant also turns on `PagePermission::ClipboardRead::is_promptable`: update
+///   `docs/developer-guide/hands-on-checklist.md` (Clipboard, step 3) and
+///   `docs/user-guide/privacy-and-security.md` (Clipboard) in the same change.
+pub const CLIPBOARD_READ_FRAME_GATE: bool = false;
 
 /// The text clipboard pages read and write. The browser uses the system clipboard in a normal
 /// run and a `MemoryPasteboard` in automated runs and tests, which must never read or change
@@ -82,15 +116,34 @@ pub enum ClipboardReadDecision {
 }
 
 /// One tab's clipboard state. Times are on one monotonic clock chosen by the caller.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct ClipboardGate {
     /// When the user last chose Cut or Copy (or a context-menu copy) in this tab.
     user_write_at: Option<Duration>,
-    /// When the user last chose Paste in this tab and the page has not read it yet.
+    /// When the user last chose Paste in this tab; the first read after it uses it up.
     user_paste_at: Option<Duration>,
+    /// Whether a script's read may ask the user (`CLIPBOARD_READ_FRAME_GATE`).
+    script_reads: bool,
+}
+
+/// The gate a tab starts with: a script's reads are offered as `CLIPBOARD_READ_FRAME_GATE` says.
+impl Default for ClipboardGate {
+    fn default() -> Self {
+        Self::new(CLIPBOARD_READ_FRAME_GATE)
+    }
 }
 
 impl ClipboardGate {
+    /// A gate with no grants; `script_reads`: whether a script's read after a user activation
+    /// asks the user (otherwise it is refused).
+    pub const fn new(script_reads: bool) -> Self {
+        Self {
+            user_write_at: None,
+            user_paste_at: None,
+            script_reads,
+        }
+    }
+
     /// The user chose `command` for this tab's page.
     pub fn user_command(&mut self, command: ClipboardCommand, now: Duration) {
         match command {
@@ -100,14 +153,16 @@ impl ClipboardGate {
     }
 
     /// Whether the page may write to (or clear) the clipboard now. `page_has_user_activation`:
-    /// the page has a user activation that has not expired; it is not used up.
+    /// the page has a user activation that has not expired (a write does not use it up).
     pub fn may_write(&self, now: Duration, page_has_user_activation: bool) -> bool {
         page_has_user_activation || within_window(self.user_write_at, now)
     }
 
-    /// Decides a read. A Paste the user chose is used up by the first read; otherwise
-    /// `take_user_activation` is called, and uses up the page's activation if it has one, so
-    /// that one click asks at most once.
+    /// Decides a read. A Paste the user chose is used up by the first read after it, even one
+    /// too late to use it; otherwise, if script reads are offered, `take_user_activation` is
+    /// called: it uses up the page's user activation if it has one and says whether it did, so
+    /// that one click asks at most once. With script reads off it is not called, and the
+    /// activation is left alone.
     pub fn read(
         &mut self,
         now: Duration,
@@ -115,16 +170,18 @@ impl ClipboardGate {
     ) -> ClipboardReadDecision {
         if within_window(self.user_paste_at.take(), now) {
             ClipboardReadDecision::Read
-        } else if take_user_activation() {
+        } else if self.script_reads && take_user_activation() {
             ClipboardReadDecision::AskPermission
         } else {
             ClipboardReadDecision::Refuse
         }
     }
 
-    /// A new document started loading in the tab: the last one's grants do not carry over.
+    /// A new document started loading in the tab: the Cut, Copy and Paste noted for the last one
+    /// do not carry over. Whether script reads are offered is the gate's, not the document's, and
+    /// stays.
     pub fn document_started(&mut self) {
-        *self = Self::default();
+        *self = Self::new(self.script_reads);
     }
 }
 
@@ -133,10 +190,11 @@ fn within_window(at: Option<Duration>, now: Duration) -> bool {
 }
 
 /// The clipboard edit a key press asks Servo to perform in the page: Command-X, C or V on
-/// macOS (`command_is_meta`), Control-X, C or V elsewhere, with no other modifier, in either
-/// case, held or not. Servo maps the same keys itself (`editing_action_from_keyboard_event`,
-/// exact modifiers, any case, auto-repeat included); the browser notes them as the
-/// user's command when it forwards them, so that the page's paste is not taken for a script's.
+/// macOS (`command_is_meta`), Control-X, C or V elsewhere, with no other modifier, whether the
+/// letter is upper or lower case and whether the key is held down or not. Servo maps the same
+/// keys itself (`editing_action_from_keyboard_event`, exact modifiers, any case, auto-repeat
+/// included); the browser notes them as the user's command when it forwards them, so that the
+/// page's paste is not taken for a script's.
 pub fn clipboard_shortcut(
     input: &KeyboardInput,
     command_is_meta: bool,
@@ -235,7 +293,7 @@ mod tests {
 
     #[test]
     fn paste_allows_one_read_without_asking() {
-        let mut gate = ClipboardGate::default();
+        let mut gate = ClipboardGate::new(true);
         gate.user_command(ClipboardCommand::Paste, ms(500));
         let mut activation_taken = false;
         assert_eq!(
@@ -273,8 +331,27 @@ mod tests {
     }
 
     #[test]
+    fn a_paste_read_after_the_window_is_taken_for_a_script_read() {
+        // Servo blocks the page's script thread for a user Paste (see
+        // `CLIPBOARD_READ_FRAME_GATE`): one that reaches the gate too late is a script's read.
+        let mut gate = ClipboardGate::new(true);
+        gate.user_command(ClipboardCommand::Paste, ms(0));
+        assert_eq!(
+            gate.read(USER_CLIPBOARD_ACTION_WINDOW, || true),
+            ClipboardReadDecision::AskPermission
+        );
+        // One just inside the window is still the user's.
+        let mut gate = ClipboardGate::new(true);
+        gate.user_command(ClipboardCommand::Paste, ms(0));
+        assert_eq!(
+            gate.read(USER_CLIPBOARD_ACTION_WINDOW - ms(1), || true),
+            ClipboardReadDecision::Read
+        );
+    }
+
+    #[test]
     fn a_script_read_after_an_activation_asks() {
-        let mut gate = ClipboardGate::default();
+        let mut gate = ClipboardGate::new(true);
         assert_eq!(
             gate.read(ms(0), || true),
             ClipboardReadDecision::AskPermission
@@ -283,18 +360,45 @@ mod tests {
 
     #[test]
     fn a_script_read_without_an_activation_is_refused() {
-        let mut gate = ClipboardGate::default();
+        let mut gate = ClipboardGate::new(true);
         assert_eq!(gate.read(ms(0), || false), ClipboardReadDecision::Refuse);
     }
 
     #[test]
     fn a_new_document_drops_the_users_commands() {
-        let mut gate = ClipboardGate::default();
+        let mut gate = ClipboardGate::new(true);
         gate.user_command(ClipboardCommand::Copy, ms(0));
         gate.user_command(ClipboardCommand::Paste, ms(0));
         gate.document_started();
         assert!(!gate.may_write(ms(1), false));
         assert_eq!(gate.read(ms(1), || false), ClipboardReadDecision::Refuse);
+        // The switch is the gate's, not the document's.
+        assert_eq!(
+            gate.read(ms(1), || true),
+            ClipboardReadDecision::AskPermission
+        );
+    }
+
+    #[test]
+    fn script_reads_stay_off_until_the_engine_names_the_frame() {
+        assert_eq!(
+            ClipboardGate::default().script_reads,
+            CLIPBOARD_READ_FRAME_GATE
+        );
+        let mut gate = ClipboardGate::new(false);
+        let mut activation_taken = false;
+        assert_eq!(
+            gate.read(ms(0), || {
+                activation_taken = true;
+                true
+            }),
+            ClipboardReadDecision::Refuse
+        );
+        // The click is left for whatever else the page does with it (a popup, a write).
+        assert!(!activation_taken);
+        // The user's own Paste still reads.
+        gate.user_command(ClipboardCommand::Paste, ms(10));
+        assert_eq!(gate.read(ms(20), || false), ClipboardReadDecision::Read);
     }
 
     #[test]

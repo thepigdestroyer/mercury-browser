@@ -92,12 +92,14 @@ impl PagePermission {
     /// - screen wake lock: its engine preference (`dom_wakelock_enabled`) is off. Add it here
     ///   when it is turned on.
     ///
-    /// Clipboard reading is asked as well (clipboard lane); Servo never asks for it itself.
+    /// Clipboard reading is asked as well once a script's reads are offered
+    /// (`CLIPBOARD_READ_FRAME_GATE`, clipboard lane); Servo never asks for it itself.
     ///
     /// A page can still name any of these in `navigator.permissions.request()`.
     pub const fn is_promptable(self) -> bool {
-        matches!(self, Self::PersistentStorage | Self::ClipboardRead)
+        matches!(self, Self::PersistentStorage)
             || (GEOLOCATION_OFFERED && matches!(self, Self::Geolocation))
+            || (crate::CLIPBOARD_READ_FRAME_GATE && matches!(self, Self::ClipboardRead))
     }
 
     /// Completes "<site> wants to …".

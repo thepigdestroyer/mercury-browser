@@ -379,7 +379,8 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
     // clipboard: always on, also without the experimental features. Servo 0.8.0 checks neither
     // permission nor user activation for `navigator.clipboard` (`dom/clipboard/clipboard.rs`, the
     // "check clipboard read permission" step is a TODO); every web view's `ClipboardDelegate`
-    // (`crate::clipboard`) does: writes need a user gesture, reads a gesture and the user's
+    // (`crate::clipboard`) does: writes need a user gesture; a script's reads are refused until
+    // `talaria_core::CLIPBOARD_READ_FRAME_GATE` is on, then need a gesture and the user's
     // permission.
     preferences.dom_async_clipboard_enabled = true;
     // Always off while Mercury does not build Servo's `webgpu` cargo feature: the preference alone
@@ -908,7 +909,7 @@ impl BrowserDelegate {
 impl servo::ClipboardDelegate for BrowserDelegate {
     fn clear(&self, _web_view: servo::WebView) {
         if !self.clipboard.clear() {
-            info!(
+            log::debug!(
                 "tab {}: refused a page's clipboard clear without a user gesture",
                 self.tab_id.value()
             );
@@ -927,8 +928,8 @@ impl servo::ClipboardDelegate for BrowserDelegate {
                 PageRequestKind::Permission(talaria_core::PagePermission::ClipboardRead),
                 ServoPageRequest::ClipboardRead(request),
             ),
-            ClipboardRead::Refused => info!(
-                "tab {}: refused a page's clipboard read without a user gesture",
+            ClipboardRead::Refused => log::debug!(
+                "tab {}: refused a page's clipboard read (no user gesture, or script reads are off)",
                 self.tab_id.value()
             ),
         }
@@ -936,7 +937,7 @@ impl servo::ClipboardDelegate for BrowserDelegate {
 
     fn set_text(&self, _web_view: servo::WebView, new_contents: String) {
         if !self.clipboard.write_text(&new_contents) {
-            info!(
+            log::debug!(
                 "tab {}: refused a page's clipboard write without a user gesture",
                 self.tab_id.value()
             );
@@ -1212,7 +1213,12 @@ mod tests {
         let preferences = preferences_with_experimental_web_features(false);
         let defaults = Preferences::default();
 
-        for name in EXPERIMENTAL_PREFS {
+        // The async clipboard is the one entry that is on either way, behind Mercury's clipboard
+        // delegate (see `async_clipboard_is_on_behind_mercurys_clipboard_delegate`).
+        for name in EXPERIMENTAL_PREFS
+            .iter()
+            .filter(|name| **name != "dom_async_clipboard_enabled")
+        {
             assert_eq!(
                 preferences.get_value(name),
                 defaults.get_value(name),

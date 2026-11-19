@@ -21,7 +21,7 @@ pub use browser::{
     display_origin, placeholder_title,
 };
 pub use clipboard::{
-    ClipboardGate, ClipboardReadDecision, MemoryPasteboard, Pasteboard,
+    CLIPBOARD_READ_FRAME_GATE, ClipboardGate, ClipboardReadDecision, MemoryPasteboard, Pasteboard,
     USER_CLIPBOARD_ACTION_WINDOW, clipboard_shortcut, context_menu_clipboard_command,
 };
 pub use controller::{BrowserController, CloseTabOutcome};

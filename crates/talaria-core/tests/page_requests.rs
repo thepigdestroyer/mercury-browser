@@ -2,9 +2,9 @@
 use std::time::Duration;
 
 use talaria_core::{
-    BrowserCommand, BrowserController, BrowserEvent, CloseTabOutcome, GEOLOCATION_OFFERED,
-    HttpCredentials, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, LoadState,
-    PagePermission, PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind,
+    BrowserCommand, BrowserController, BrowserEvent, CLIPBOARD_READ_FRAME_GATE, CloseTabOutcome,
+    GEOLOCATION_OFFERED, HttpCredentials, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers,
+    LoadState, PagePermission, PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind,
     PageRequestReply, PermissionDecision, PermissionDecisions, PointerButton, PointerButtonAction,
     SessionPermissionDecisions, TabCommand, TabId,
 };
@@ -870,9 +870,9 @@ fn persistent_storage_and_geolocation_are_asked_and_every_other_permission_is_de
         let id = index as u64 + 1;
         receive(&mut controller, tab_id, permission(id, PAGE, feature));
 
-        // clipboard: reading the clipboard is asked too.
+        // clipboard: reading the clipboard is asked once a script's reads are offered.
         if feature == PagePermission::PersistentStorage
-            || feature == PagePermission::ClipboardRead
+            || (feature == PagePermission::ClipboardRead && CLIPBOARD_READ_FRAME_GATE)
             || (feature == PagePermission::Geolocation && GEOLOCATION_OFFERED)
         {
             assert!(feature.is_promptable());
