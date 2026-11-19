@@ -1,0 +1,23 @@
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -72,7 +72,7 @@
+     pub use webrtc_sys::webrtc::ffi::create_random_uuid;
+ 
+     pub use crate::imp::{
+-        apm, audio_mixer, audio_resampler, frame_cryptor, packet_trailer, yuv_helper,
++        apm, audio_mixer, audio_resampler, packet_trailer, yuv_helper,
+     };
+ }
+ 
+diff -ruN a/src/native/mod.rs b/src/native/mod.rs
+--- a/src/native/mod.rs
++++ b/src/native/mod.rs
+@@ -23,7 +23,6 @@
+ pub mod data_channel;
+ #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+ pub mod desktop_capturer;
+-pub mod frame_cryptor;
+ pub mod ice_candidate;
+ pub mod media_stream;
+ pub mod media_stream_track;

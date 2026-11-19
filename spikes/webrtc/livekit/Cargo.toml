@@ -1,0 +1,46 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# The WebRTC spike, route L: libwebrtc through LiveKit's Rust bindings (libwebrtc 0.4.1 over
+# webrtc-sys 0.3.54) on the pinned Shiguredo prebuilt (scripts/macos/webrtc.sh). Its own cargo
+# workspace: nothing here is part of the default build. Run cargo from this directory, after
+#   ./prepare.sh
+#   eval "$(../../../scripts/macos/webrtc.sh env libwebrtc)"      # LK_CUSTOM_WEBRTC
+#   eval "$(./fetch-libcxx.sh env)"                                # MERCURY_LIBCXX_DIR
+# The code is for aarch64-apple-darwin only: the archive is arm64 (an Intel Mac can compile and
+# link it with --target aarch64-apple-darwin, and cannot run it).
+[package]
+name = "mercury-rtc-livekit-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "PolyForm-Noncommercial-1.0.0"
+description = "WebRTC spike, route L: libwebrtc through LiveKit's bindings on the pinned Shiguredo prebuilt"
+
+[workspace]
+
+[dependencies]
+libwebrtc = "=0.4.1"
+tokio = { version = "=1.54.1", default-features = false, features = ["sync", "macros", "time", "rt-multi-thread"] }
+mercury-frame-sink = { path = "../sink-api" }
+
+[dev-dependencies]
+mercury-rtc-bridge = { path = "../bridge" }
+gstreamer = "=0.25.4"
+tokio-stream = "=0.1.19"
+# The local replacement (webrtc-sys-build-local) is exercised by t12.
+webrtc-sys-build = "=0.3.21"
+# G5: the C libraries Mercury links (the same versions as the root Cargo.lock) are linked into the test
+# binary next to libwebrtc.a, which carries its own zlib, BoringSSL and libvpx, and t10 calls them.
+libz-sys = { version = "=1.1.33", default-features = false, features = ["static"] }
+libsqlite3-sys = { version = "=0.36.0", features = ["bundled"] }
+aws-lc-sys = "=0.47.0"
+
+# prepare.sh copies webrtc-sys 0.3.54 and libwebrtc 0.4.1 from the cargo registry into vendor/ (git-ignored),
+# checks their SHA-256 and applies patches/<crate>-<version>.patch. Without that step cargo cannot find
+# vendor/ and stops: that is the fail-closed design (a forgotten prepare.sh never builds the unpatched
+# crates, whose build script would download LiveKit's prebuilt).
+# webrtc-sys-build is replaced by a local crate of the same version that has no downloader.
+[patch.crates-io]
+webrtc-sys = { path = "vendor/webrtc-sys" }
+libwebrtc = { path = "vendor/libwebrtc" }
+webrtc-sys-build = { path = "webrtc-sys-build-local" }

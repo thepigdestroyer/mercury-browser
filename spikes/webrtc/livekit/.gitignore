@@ -1,0 +1,6 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Build output and the patched copy of webrtc-sys that prepare.sh makes from the cargo registry.
+# Third-party source is never committed (D7).
+target/
+vendor/

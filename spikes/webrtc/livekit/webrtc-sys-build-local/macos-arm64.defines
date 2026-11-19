@@ -1,0 +1,56 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Preprocessor defines for C++ that is compiled against the headers in Shiguredo's
+# webrtc.macos_arm64.tar.gz (webrtc-build m150.7871.3.5, libwebrtc commit 1f975dfd). Upstream's
+# webrtc-sys reads these from LiveKit's webrtc.ninja and desktop_capture.ninja, which this archive
+# does not have. One define per line, NAME or NAME=VALUE; # starts a comment. Each block names the
+# file and the lines it was read from; the GN args are Shiguredo's (run.py COMMON_GN_ARGS:
+# rtc_use_h264=false, rtc_use_perfetto=false, is_component_build=false, use_rtti=true,
+# rtc_include_tests=false) on macos_arm64 with is_debug=false.
+
+# webrtc BUILD.gn @1f975dfd, config("common_inherited_config") lines 169-255
+PROTOBUF_ENABLE_DEBUG_LOGGING_MAY_LEAK_PII=0
+# (!rtc_use_perfetto, !rtc_include_tests) lines 207-219
+WEBRTC_NON_STATIC_TRACE_EVENT_HANDLERS=0
+# (deprecate_plan_b = true, webrtc.gni line 147) line 206
+WEBRTC_DEPRECATE_PLAN_B
+WEBRTC_POSIX
+WEBRTC_MAC
+
+# webrtc BUILD.gn @1f975dfd, config("common_config") lines 305-376 and 443-445
+WEBRTC_ENABLE_PROTOBUF=1
+WEBRTC_STRICT_FIELD_TRIALS=0
+WEBRTC_INCLUDE_INTERNAL_AUDIO_DEVICE
+RTC_ENABLE_VP9
+# Shiguredo's h265.patch turns rtc_use_h265 on for macOS (hardware H.265 only); webrtc-rs defines
+# it as well (webrtc/CMakeLists.txt, macos_arm64 block).
+RTC_ENABLE_H265
+RTC_DAV1D_IN_INTERNAL_DECODER_FACTORY
+WEBRTC_HAVE_SCTP
+# (rtc_video_psnr = true, webrtc.gni line 317)
+WEBRTC_ENCODER_PSNR_STATS
+WEBRTC_ARCH_ARM64
+WEBRTC_HAS_NEON
+
+# chromium build @d296a9fe, config("release") in config/BUILD.gn lines 131-141 (is_debug=false,
+# dcheck_always_on=false: RTC_DCHECK_IS_ON is 0)
+NDEBUG
+NVALGRIND
+DYNAMIC_ANNOTATIONS_ENABLED=0
+
+# chromium build @d296a9fe, config/compiler/BUILD.gn lines 2090-2096 (__STDC_*), lines 1725-1726
+# (use_safe_libcxx) and config/c++/BUILD.gn lines 27-52 (runtime_library, !libcxx_is_shared)
+__STDC_CONSTANT_MACROS
+__STDC_FORMAT_MACROS
+_LIBCPP_HARDENING_MODE=_LIBCPP_HARDENING_MODE_EXTENSIVE
+_LIBCPP_DISABLE_VISIBILITY_ANNOTATIONS
+_LIBCXXABI_DISABLE_VISIBILITY_ANNOTATIONS
+_LIBCPP_INSTRUMENTED_WITH_ASAN=0
+# VERSIONS: WEBRTC_SRC_THIRD_PARTY_LIBCXX_SRC_COMMIT
+CR_LIBCXX_REVISION=5abc7f839700f0f17338434e1c1c6a8c87c00c11
+
+# shiguredo/webrtc-rs 0.157.0 webrtc/CMakeLists.txt, macos_arm64 block (lines 614-650): the two
+# libc++ defines for macOS that are not in the Chromium files above (the namespace and ABI version
+# come from buildtools' __config_site, _LIBCPP_ABI_NAMESPACE=__Cr, so they are not repeated here)
+_LIBCPP_DISABLE_AVAILABILITY
+_LIBCPP_ENABLE_NODISCARD

@@ -1,0 +1,121 @@
+diff -ruN a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -16,6 +16,8 @@
+ use std::path::PathBuf;
+ use std::{env, path, process::Command};
+ 
++mod mercury_libcxx;
++
+ fn main() {
+     if env::var("DOCS_RS").is_ok() {
+         return;
+@@ -37,7 +39,6 @@
+         "src/audio_track.rs",
+         "src/video_track.rs",
+         "src/data_channel.rs",
+-        "src/frame_cryptor.rs",
+         "src/jsep.rs",
+         "src/candidate.rs",
+         "src/rtp_parameters.rs",
+@@ -91,7 +92,6 @@
+         "src/synthetic_audio_device.cpp",
+         "src/adm_proxy.cpp",
+         "src/audio_resampler.cpp",
+-        "src/frame_cryptor.cpp",
+         "src/global_task_queue.cpp",
+         "src/prohibit_libsrtp_initialization.cpp",
+         "src/apm.cpp",
+@@ -340,6 +340,7 @@
+             println!("cargo:rustc-link-lib=framework=ScreenCaptureKit");
+ 
+             configure_darwin_sysroot(&mut builder);
++            mercury_libcxx::configure(&mut builder, &webrtc_include);
+ 
+             builder
+                 .file("src/objc_video_factory.mm")
+diff -ruN a/include/livekit/adm_proxy.h b/include/livekit/adm_proxy.h
+--- a/include/livekit/adm_proxy.h
++++ b/include/livekit/adm_proxy.h
+@@ -228,7 +228,7 @@
+   int GetRecordAudioParameters(webrtc::AudioParameters* params) const override;
+ #endif
+ 
+-  int32_t SetObserver(webrtc::AudioDeviceObserver* observer) override;
++  int32_t SetObserver(webrtc::AudioDeviceObserver* observer);
+ 
+  private:
+   // Runs fn on the worker thread, inline when already on it.
+diff -ruN a/include/livekit/synthetic_audio_device.h b/include/livekit/synthetic_audio_device.h
+--- a/include/livekit/synthetic_audio_device.h
++++ b/include/livekit/synthetic_audio_device.h
+@@ -21,6 +21,7 @@
+ #include "api/environment/environment.h"
+ #include "api/task_queue/task_queue_base.h"
+ #include "modules/audio_device/include/audio_device.h"
++#include "livekit/mercury_compat.h"
+ #include "rtc_base/synchronization/mutex.h"
+ #include "rtc_base/task_utils/repeating_task.h"
+ 
+@@ -114,7 +115,7 @@
+   int GetRecordAudioParameters(webrtc::AudioParameters* params) const override;
+ #endif  // WEBRTC_IOS
+ 
+-  int32_t SetObserver(webrtc::AudioDeviceObserver* sink) override;
++  int32_t SetObserver(webrtc::AudioDeviceObserver* sink);
+ 
+  private:
+   mutable webrtc::Mutex mutex_;
+diff -ruN a/src/adm_proxy.cpp b/src/adm_proxy.cpp
+--- a/src/adm_proxy.cpp
++++ b/src/adm_proxy.cpp
+@@ -158,10 +158,7 @@
+     }
+   }
+ 
+-  // Re-register an observer set before the ADM existed
+-  if (audio_observer_) {
+-    platform_adm_->SetObserver(audio_observer_);
+-  }
++  // Mercury: libwebrtc has no AudioDeviceModule::SetObserver; the observer is only kept.
+ 
+   // Re-apply the channel configuration the voice engine requested at factory
+   // init, before the ADM existed
+@@ -886,9 +883,6 @@
+     // Stored (including nullptr to clear) so a registration made before the
+     // Platform ADM exists is re-applied once it is created
+     audio_observer_ = observer;
+-    if (platform_adm_) {
+-      return platform_adm_->SetObserver(observer);
+-    }
+     return 0;
+   });
+ }
+diff -ruN a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -23,7 +23,6 @@
+ pub mod data_channel;
+ #[cfg(any(target_os = "macos", target_os = "windows", target_os = "linux"))]
+ pub mod desktop_capturer;
+-pub mod frame_cryptor;
+ pub mod helper;
+ pub mod jsep;
+ pub mod media_stream;
+diff -ruN a/src/video_track.cpp b/src/video_track.cpp
+--- a/src/video_track.cpp
++++ b/src/video_track.cpp
+@@ -94,11 +94,11 @@
+ }
+ 
+ void VideoTrack::set_should_receive(bool should_receive) const {
+-  track()->set_should_receive(should_receive);
++  (void)should_receive;  // Mercury: not in upstream libwebrtc
+ }
+ 
+ bool VideoTrack::should_receive() const {
+-  return track()->should_receive();
++  return true;
+ }
+ 
+ ContentHint VideoTrack::content_hint() const {

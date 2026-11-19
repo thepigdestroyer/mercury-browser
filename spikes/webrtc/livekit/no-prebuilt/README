@@ -1,0 +1,3 @@
+This directory is empty on purpose. .cargo/config.toml points LK_CUSTOM_WEBRTC here when the shell
+did not export the real directory (scripts/macos/webrtc.sh env), so the build stops instead of
+looking for a libwebrtc that is not there. Nothing is ever downloaded into it.

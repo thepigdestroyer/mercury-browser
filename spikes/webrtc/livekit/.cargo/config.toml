@@ -1,0 +1,15 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Cargo also reads the repository root's .cargo/config.toml, which says MACOSX_DEPLOYMENT_TARGET =
+# "13.0". The Shiguredo archive is built for macOS 14 (its DEPS file: MACOS_DEPLOYMENT_TARGET=14), so
+# this crate says 14.0. It is a plain string, not { value, force = true }: cargo cannot merge a
+# table with the root's string and stops ("failed to merge key"). A shell export still wins over
+# both entries, so webrtc-sys-build (local) refuses to build when the value in force is below 14.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"
+# Fail closed (D8). Upstream's webrtc-sys-build would download LiveKit's own prebuilt into a
+# LK_CUSTOM_WEBRTC directory that does not exist. The local webrtc-sys-build has no downloader at
+# all; this default is the second lock. It names an existing in-tree directory with no libwebrtc
+# in it, so a build that did not get the real directory from `webrtc.sh env` stops at once. A
+# value exported by the shell wins (the entry is not forced).
+LK_CUSTOM_WEBRTC = { value = "no-prebuilt", relative = true }

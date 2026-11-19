@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Mercury's own replacement for LiveKit's `webrtc-sys-build` 0.3.21 (the build helper of
+# `webrtc-sys`). The upstream crate downloads LiveKit's libwebrtc zip when a directory is missing
+# and carries reqwest, zip, regex, scratch, fs2, semver and anyhow for that. This one only says
+# where the pinned archive is and which preprocessor defines it was built with; it has no
+# dependencies and no network code. Same name and version so that [patch.crates-io] replaces it.
+[package]
+name = "webrtc-sys-build"
+version = "0.3.21"
+edition = "2021"
+publish = false
+license = "PolyForm-Noncommercial-1.0.0"
+description = "Where the pinned libwebrtc is and which defines it needs; no downloader"
+
+[lib]
+name = "webrtc_sys_build"
+path = "src/lib.rs"
+
+[dependencies]
