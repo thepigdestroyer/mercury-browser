@@ -148,6 +148,29 @@ When `ASYNC_CLIPBOARD_OFFERED` is turned on (see its doc comment), add:
 4. With macOS in Dark mode, a plain page (`unstyled.html`) is black text on white.
 5. A news site: noticeably fewer ads and trackers than in a browser without blocking.
 
+## PDF viewer
+
+Do this section once on an **Apple Silicon** Mac with the application bundle (`make app-macos`): the
+arm64 PDFium library has only been checked statically on the Intel development Mac, so this is its
+first real run. The test PDFs are at `http://127.0.0.1:8765/pages/pdf/three-pages.pdf` and
+`.../rotated.pdf` (server above); any PDF from the web will do for steps 4 and 5.
+
+1. Open `three-pages.pdf`: the viewer appears in the tab with page 1 drawn crisp within a second,
+   the toolbar says "1 / 3", and Activity Monitor shows a second `mercury-browser` process while the
+   tab is open (the helper), which is gone after you close the tab.
+2. Scroll with the trackpad: it follows your fingers with no stutter; pages that come into view are
+   drawn at once or after a brief blur. Pinch in and out: the zoom changes in steps and the pages
+   stay sharp.
+3. Cmd+F, type a word of the file, press Return: "1 of n", the matches are marked, the next one is
+   scrolled into view. Select text by dragging, press Cmd+C, paste it into TextEdit.
+4. A long PDF (hundreds of pages): the page number is correct while dragging the scroll bar, and
+   the helper's memory stays under about 200 MB.
+5. A PDF with a password: the viewer asks, a wrong password says so, the right one opens it.
+6. Settings, Downloads, PDF files: "Download" saves the file as before; "Open in the system's PDF
+   app" opens Preview after a link click but not in a background tab.
+7. In Terminal run `pkill -KILL -f pdf-worker` while a PDF is open: the viewer says it stopped
+   working on this file and offers Try again; the browser itself keeps working.
+
 ## Reporting
 
 For each step that differs, note the step number, what you saw, and the commit. Crash reports, if any,
