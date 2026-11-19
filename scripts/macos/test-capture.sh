@@ -81,9 +81,15 @@ check "the normal build refuses --fake-media-devices" "2|yes" \
     "$code|$(if grep -q "fake-media-devices refused: .*libgstapplemedia.dylib" "$TMP/refused.out"; then echo yes; else echo no; fi)"
 
 # ── Pages ─────────────────────────────────────────────────────────────────
-python3 scripts/serve-tests.py >"$TMP/port" 2>"$TMP/server.log" &
+# The Rust server (crates/mercury-devtools): the port is its first output line and $! is the server.
+# The first run builds it, which can take a while, so wait up to two minutes (and not past its exit).
+scripts/serve-tests.sh >"$TMP/port" 2>"$TMP/server.log" &
 SERVER_PID=$!
-for _ in $(seq 50); do [ -s "$TMP/port" ] && break; sleep 0.1; done
+for _ in $(seq 1200); do
+    [ -s "$TMP/port" ] && break
+    kill -0 "$SERVER_PID" 2>/dev/null || break
+    sleep 0.1
+done
 PORT="$(head -n 1 "$TMP/port")"
 [ -n "$PORT" ] || { printf 'FAIL the test server did not start\n'; exit 1; }
 

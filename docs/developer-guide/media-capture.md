@@ -68,7 +68,7 @@ A normal build therefore cannot use it. Each content process checks the director
    - `MERCURY_GSTREAMER_EXTRA_PLUGINS="videotestsrc audiotestsrc"`. The collector accepts only those two extras, and never for an application bundle;
 3. checks the copy;
 4. checks that the normal build refuses the option;
-5. runs `tests/pages/capture.html` from `scripts/serve-tests.py`.
+5. runs `tests/pages/capture.html` from `scripts/serve-tests.sh`.
 
 The page writes its results into the document title, which the window-title log carries out (`RUST_LOG=winit::window=debug`). The fake devices write a line to standard error when the engine opens one, and GStreamer's `GST_PARENTAGE` log shows a source taken out of its pipeline (released). Set `MERCURY_TEST_CAPTURE_KEEP=<directory>` to keep the screenshots and logs.
 
@@ -95,7 +95,7 @@ Verified only by unit tests and component renderings, because they need a click:
 
 ## The owner's checklist (real devices; never automated)
 
-Run a release bundle (`make app-macos`) opened from Finder, so that macOS attributes the devices to Mercury Browser and not to a terminal. Use a camera test page on a site you trust, or `tests/pages/capture.html` from `scripts/serve-tests.py`. Note that this page plays nothing aloud; it never attaches the microphone to an output.
+Run a release bundle (`make app-macos`) opened from Finder, so that macOS attributes the devices to Mercury Browser and not to a terminal. Use a camera test page on a site you trust, or `tests/pages/capture.html` from `scripts/serve-tests.sh`. Note that this page plays nothing aloud; it never attaches the microphone to an output.
 
 1. The page asks: one bubble for camera and microphone. Block: the page reports `NotAllowedError`, and macOS's camera light stays off.
 2. Reload, Allow: macOS asks for the camera (the first time) and then the microphone. Allow both. The video shows you, and the camera light and the menu-bar dot come on. Tab and address bar show the red marks.
