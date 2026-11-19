@@ -186,6 +186,42 @@ fn a_document_through_the_real_helper() {
     assert!(!process_exists(pid), "no helper is left after the drop");
 }
 
+/// The integration check "five opened and closed documents leave no helper": five documents are
+/// open at once, each in its own helper, and every helper is gone once its client is dropped.
+#[test]
+fn five_documents_opened_and_closed_leave_no_helper() {
+    let Some(library) = library() else { return };
+    let path = fixture("three-pages.pdf");
+    let mut open = Vec::new();
+    for _ in 0..5 {
+        let (client, events) = start(Some(library.clone()));
+        let pid = client.process_id().unwrap();
+        client.open(&path, None);
+        let ClientEvent::Opened(Ok(info)) = next(&events) else {
+            panic!("expected Opened");
+        };
+        assert_eq!(info.page_count(), 3);
+        assert!(
+            process_exists(pid),
+            "the helper runs while the document is open"
+        );
+        open.push((client, events, pid));
+    }
+    let pids: Vec<u32> = open.iter().map(|(_, _, pid)| *pid).collect();
+    let mut distinct = pids.clone();
+    distinct.sort_unstable();
+    distinct.dedup();
+    assert_eq!(distinct.len(), 5, "one helper per document");
+    drop(open);
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while pids.iter().any(|pid| process_exists(*pid)) && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    for pid in pids {
+        assert!(!process_exists(pid), "helper {pid} is gone");
+    }
+}
+
 #[test]
 fn a_password_through_the_real_helper() {
     let Some(library) = library() else { return };
