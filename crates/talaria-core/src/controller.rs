@@ -27,6 +27,11 @@ use crate::{
 const NO_SEARCH: &str = "no search engine is set";
 // openurl
 use crate::ExternalLinkRequest;
+// groups-core: the group operations and the status flags live in child modules (new files);
+// this file keeps only the hook lines.
+use crate::GroupBook;
+mod group_ops;
+mod group_status;
 
 /// What `close_tab` did.
 #[must_use]
@@ -62,13 +67,18 @@ pub struct BrowserController {
     https_policy: HttpsPolicy,
     /// Hosts whose invalid certificate the user accepted this session.
     certificate_exceptions: BTreeSet<String>,
+    // groups-core
+    /// The window's tab groups, in strip order; see `group_ops`.
+    groups: GroupBook,
+    /// Counts activations: a tab's `last_shown` is the count when it last became active.
+    activation_clock: u64,
 }
 
 impl BrowserController {
     pub fn new(state: BrowserState) -> Self {
         let initial_tab_id = TabId::new(1);
 
-        Self {
+        let mut controller = Self {
             tabs: vec![Tab::new(initial_tab_id, state)],
             active_tab_id: initial_tab_id,
             next_tab_id: 2,
@@ -84,7 +94,12 @@ impl BrowserController {
             external_link_requests: Vec::new(),
             https_policy: HttpsPolicy::default(),
             certificate_exceptions: BTreeSet::new(),
-        }
+            groups: GroupBook::new(),
+            activation_clock: 0,
+        };
+        // groups-core: the first tab is the one shown
+        controller.activate(initial_tab_id);
+        controller
     }
 
     /// Navigates the active tab. If the tab's first page has not committed yet, the engine
@@ -194,7 +209,7 @@ impl BrowserController {
 
     pub fn select_tab(&mut self, tab_id: TabId) -> bool {
         if self.tabs.iter().any(|tab| tab.id() == tab_id) {
-            self.active_tab_id = tab_id;
+            self.activate(tab_id); // groups-core
             true
         } else {
             false
@@ -206,7 +221,8 @@ impl BrowserController {
             return false;
         };
 
-        self.active_tab_id = tab.id();
+        let tab_id = tab.id();
+        self.activate(tab_id); // groups-core
         true
     }
 
@@ -222,12 +238,13 @@ impl BrowserController {
             (active_index + 1) % self.tabs.len()
         };
 
-        self.active_tab_id = self.tabs[next_index].id();
+        let tab_id = self.tabs[next_index].id();
+        self.activate(tab_id); // groups-core
     }
 
     pub fn select_last_tab(&mut self) {
-        if let Some(tab) = self.tabs.last() {
-            self.active_tab_id = tab.id();
+        if let Some(tab_id) = self.tabs.last().map(Tab::id) {
+            self.activate(tab_id); // groups-core
         }
     }
 
@@ -299,7 +316,8 @@ impl BrowserController {
 
         if was_active {
             let replacement_index = index.saturating_sub(1).min(self.tabs.len() - 1);
-            self.active_tab_id = self.tabs[replacement_index].id();
+            let replacement = self.tabs[replacement_index].id();
+            self.activate(replacement); // groups-core
         }
 
         CloseTabOutcome::Closed
@@ -495,6 +513,8 @@ impl BrowserController {
             Some(event) => event,
             None => return true,
         };
+        // groups-core: what a background tab shows now, to compare after the event is applied
+        let watch = self.watch_event(tab_id, &event);
         let Some(tab) = self.tab_mut(tab_id) else {
             return false;
         };
@@ -513,6 +533,7 @@ impl BrowserController {
         tab.state_mut().apply(event);
         // find: an answer or a selection read can ask for the next search
         let find_follow_up = tab.state_mut().find_mut().take_follow_up();
+        self.settle_event(tab_id, watch); // groups-core: unread and crashed flags
         if reapply_mute {
             self.queue_command_for(tab_id, BrowserCommand::SetAudioMuted { muted: true });
         }
@@ -629,7 +650,7 @@ impl BrowserController {
         // tabs-plus: never among the pinned tabs
         self.insert_tab(opener_index + 1, Tab::opened_by_page(tab_id, state));
         if activation == TabActivation::Foreground {
-            self.active_tab_id = tab_id;
+            self.activate(tab_id); // groups-core
         }
         Some(tab_id)
     }
@@ -795,7 +816,7 @@ impl BrowserController {
         state.set_zoom_percent(self.default_zoom_percent);
         self.insert_tab(self.tabs.len(), Tab::new(tab_id, state)); // tabs-plus
         if activation == TabActivation::Foreground {
-            self.active_tab_id = tab_id;
+            self.activate(tab_id); // groups-core
         }
         tab_id
     }
@@ -1482,7 +1503,7 @@ impl BrowserController {
         for tab_id in closing.iter().copied() {
             self.forget_closed_tab(tab_id);
         }
-        self.active_tab_id = keep;
+        self.activate(keep); // groups-core
         closing.len()
     }
 
@@ -1499,7 +1520,7 @@ impl BrowserController {
         }
         match self.tabs.iter().find(|tab| !tab.is_pinned()).map(Tab::id) {
             Some(unpinned) => {
-                self.active_tab_id = unpinned;
+                self.activate(unpinned); // groups-core
                 PinnedCloseOutcome::SelectedUnpinned
             }
             None => {

@@ -8,6 +8,8 @@ mod controller;
 mod controls;
 mod cursor;
 mod find;
+// groups-core
+mod groups;
 mod input;
 mod media;
 // openurl
@@ -47,6 +49,12 @@ pub use cursor::{ColorScheme, PointerCursor};
 pub use find::{
     CONTINUATION_ROUNDS, EndFindRequest, FindMatches, FindOutcome, FindRequest, FindSelection,
     FindState, FindStatus, FindStep,
+};
+// groups-core
+pub use groups::{
+    ClosedGroup, DEFAULT_GROUP_KEY_SEQUENCE, GroupBook, GroupColour, GroupError, GroupId, GroupKey,
+    GroupPreset, GroupSummary, MAX_GROUP_ID, MAX_GROUP_NAME_BYTES, MAX_GROUPS, RestoredGroup,
+    TabGroup, TabStatus, clean_group_name, load_progress_estimate,
 };
 pub use input::{
     ClipboardCommand, CompositionState, ImeInput, KeyLocation, KeyState, KeyboardInput,
