@@ -15,7 +15,7 @@
 //! - [`contrast`]: the rules that every palette that can be chosen must pass.
 //! - [`group_colour`]: the 14 tab-group colours, custom colours, and tab shades.
 //! - [`keymap`]: the one-letter ⌥ group keys and their validation.
-//! - [`resolve`]: turns the stored [`mercury_settings::AppearanceSettings`] into what the
+//! - [`resolve`](mod@resolve): turns the stored [`mercury_settings::AppearanceSettings`] into what the
 //!   interface needs, with notes for anything it had to fall back from.
 
 #![deny(missing_docs)]
@@ -31,3 +31,13 @@ pub mod palettes;
 pub mod resolve;
 
 pub use colour::Colour;
+pub use contrast::{EXEMPT, Measurement, Minimum, RULES, Rule, Violation, check, measure};
+pub use group_colour::{GroupColour, PRESETS, Preset, Swatch, auto_colour, tab_shade};
+pub use keymap::{
+    Assign, DeadKey, DeadKeyTable, KeyIssue, KeyMap, LetterKey, OptionChar, dead_key_note,
+    parse_sequence,
+};
+pub use oklab::{Oklab, delta_e};
+pub use palette::{Palette, Role, SUN_INK, SUN_STOPS, Scheme};
+pub use palettes::default_palette;
+pub use resolve::{KeyPolicy, Layout, Resolved, TabGroupPolicy, resolve};
