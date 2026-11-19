@@ -74,6 +74,9 @@ pub struct CreditedCrate {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub enum BlockKind {
     License,
+    /// A file that says which licences apply (a bare SPDX expression, "dual-licensed under A
+    /// or B", a path to another file) without being a licence text.
+    Statement,
     Notice,
     Patents,
     /// A licence file whose wording the tool does not know; kept verbatim.
@@ -235,6 +238,7 @@ struct Collector<'a> {
     report: Report,
     unclassified: BTreeSet<String>,
     left_out: BTreeMap<String, BTreeSet<String>>,
+    off_list: BTreeSet<String>,
     standard_crates: BTreeSet<CrateRef>,
     native_without_extra: BTreeSet<String>,
 }
@@ -367,7 +371,7 @@ impl Collector<'_> {
 
         // Which texts are kept, and which licences they cover.
         let mut covered: BTreeSet<String> = BTreeSet::new();
-        let mut unknown_kept = false;
+        let mut unknown_accepted = false;
         for file in &discovery.files {
             let via = file.extra.then_some(file.path.as_str());
             let note = note_of_path.get(&file.path).map(String::as_str);
@@ -397,15 +401,58 @@ impl Collector<'_> {
                     );
                 }
                 FileKind::License => {
-                    let found = classify::detect(&file.text);
-                    if found.is_empty() {
-                        unknown_kept = true;
-                        if !self.config.accepts_unclassified(&package.name) {
-                            self.unclassified.insert(format!("{label}: {}", file.path));
+                    let found = match classify::classify(&file.text) {
+                        classify::Class::Licenses(found) => found,
+                        classify::Class::Statement => {
+                            self.add(
+                                BlockKind::Statement,
+                                &[],
+                                &file.text,
+                                &krate,
+                                &declared,
+                                via,
+                                note,
+                                false,
+                            );
+                            continue;
                         }
+                        classify::Class::Unknown => {
+                            // A person who has read the text and listed the crate in
+                            // `[accept_unclassified]` says it is the crate's licence text.
+                            if self.config.accepts_unclassified(&package.name) {
+                                unknown_accepted = true;
+                            } else {
+                                self.unclassified.insert(format!("{label}: {}", file.path));
+                            }
+                            self.add(
+                                BlockKind::Unclassified,
+                                &[],
+                                &file.text,
+                                &krate,
+                                &declared,
+                                via,
+                                note,
+                                false,
+                            );
+                            continue;
+                        }
+                    };
+                    let kept: Vec<String> = found
+                        .iter()
+                        .filter_map(|id| taken.spelling(id).map(str::to_owned))
+                        .collect();
+                    if kept.is_empty() && file.extra {
+                        // A person named this file in credits.toml because code compiled into
+                        // the app carries it: it is credited whatever its licence, and the
+                        // allow-list is told about it.
+                        self.off_list.insert(format!(
+                            "{label}: {} ({})",
+                            file.path,
+                            found.join(", ")
+                        ));
                         self.add(
-                            BlockKind::Unclassified,
-                            &[],
+                            BlockKind::License,
+                            &found,
                             &file.text,
                             &krate,
                             &declared,
@@ -415,10 +462,6 @@ impl Collector<'_> {
                         );
                         continue;
                     }
-                    let kept: Vec<String> = found
-                        .iter()
-                        .filter_map(|id| taken.spelling(id).map(str::to_owned))
-                        .collect();
                     if kept.is_empty() {
                         self.left_out
                             .entry(found.join(", "))
@@ -449,7 +492,7 @@ impl Collector<'_> {
             .map(|key| fold_key(key))
             .collect();
         let is_covered = |term: &Term| {
-            unknown_kept
+            unknown_accepted
                 || covered.contains(&fold_key(&term.key()))
                 || (term.exception.is_some()
                     && covered.contains(&fold_key(&term.id))
@@ -600,6 +643,7 @@ pub fn collect(inputs: &Inputs<'_>) -> Result<Collected> {
         report: Report::default(),
         unclassified: BTreeSet::new(),
         left_out: BTreeMap::new(),
+        off_list: BTreeSet::new(),
         standard_crates: BTreeSet::new(),
         native_without_extra: BTreeSet::new(),
     };
@@ -740,6 +784,14 @@ pub fn collect(inputs: &Inputs<'_>) -> Result<Collected> {
             groups.join("; ")
         ));
     }
+    if !collector.off_list.is_empty() {
+        let files = collector.off_list.clone();
+        collector.warn(format!(
+            "{} [[extra]] files hold licences that are not on deny.toml's allow-list; they are credited because a person named them: {}",
+            files.len(),
+            files.iter().cloned().collect::<Vec<_>>().join("; ")
+        ));
+    }
     if !collector.native_without_extra.is_empty() {
         collector.warn(format!(
             "{} crates link native code (`links` in Cargo.toml) and have no [[extra]] entry; check whether they bundle other licences: {}",
@@ -769,8 +821,14 @@ pub fn collect(inputs: &Inputs<'_>) -> Result<Collected> {
                     .collect(),
             })
             .collect();
+        // Texts of the same licences end up together, the shipped ones before the standard ones.
         blocks.sort_by(|a, b| {
-            (a.kind, a.ids.join(", "), &a.body).cmp(&(b.kind, b.ids.join(", "), &b.body))
+            (a.kind, a.ids.join(", "), a.standard_only(), &a.body).cmp(&(
+                b.kind,
+                b.ids.join(", "),
+                b.standard_only(),
+                &b.body,
+            ))
         });
         blocks
     };

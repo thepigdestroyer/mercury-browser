@@ -209,17 +209,8 @@ pub fn discover(package_root: &Path, extras: &[String]) -> Discovery {
             .and_then(|name| name.to_str())
             .unwrap_or_default();
         let kind = kind_of_name(name).unwrap_or(FileKind::License);
-        let before = discovery.files.len();
-        // A file already found in the usual places stays as it was.
+        // A file already found in the usual places stays as it was (`take` ignores it).
         take(&mut discovery, &path, kind, true);
-        if discovery.files.len() == before
-            && !discovery
-                .skipped
-                .iter()
-                .any(|s| s.starts_with(extra.as_str()))
-        {
-            // Found earlier (or empty): nothing to add.
-        }
     }
     discovery
 }

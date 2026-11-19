@@ -7,26 +7,33 @@
 //! another column, or in a Markdown file, is still found. A text may be several licences at once
 //! (aws-lc's `LICENSE` holds four); every one found is reported.
 
-/// Lowercases, turns typographic quotes and dashes into plain ones and collapses all white
-/// space, so that line breaks and indentation do not matter.
+/// Lowercases, turns typographic quotes and dashes into plain ones, drops the comment markers
+/// (`//`, `#`, `*`, `>`) at the start of lines and collapses all white space, so that line
+/// breaks, indentation and a licence kept in a source comment do not matter.
 pub fn fold(text: &str) -> String {
     let mut folded = String::with_capacity(text.len());
-    let mut pending_space = false;
-    for c in text.chars() {
-        let c = match c {
-            '\u{2018}' | '\u{2019}' | '\u{0060}' => '\'',
-            '\u{201C}' | '\u{201D}' => '"',
-            '\u{2013}' | '\u{2014}' | '\u{2010}' | '\u{2011}' => '-',
-            c => c,
-        };
-        if c.is_whitespace() || c == '\u{feff}' {
-            pending_space = !folded.is_empty();
-        } else {
-            if pending_space {
-                folded.push(' ');
-                pending_space = false;
+    for line in text.lines() {
+        let line = line
+            .trim_start()
+            .trim_start_matches(['/', '#', '*', '>', ';']);
+        // A line break is a space.
+        let mut pending_space = !folded.is_empty();
+        for c in line.chars() {
+            let c = match c {
+                '\u{2018}' | '\u{2019}' | '\u{0060}' => '\'',
+                '\u{201C}' | '\u{201D}' => '"',
+                '\u{2013}' | '\u{2014}' | '\u{2010}' | '\u{2011}' => '-',
+                c => c,
+            };
+            if c.is_whitespace() || c == '\u{feff}' {
+                pending_space = !folded.is_empty();
+            } else {
+                if pending_space {
+                    folded.push(' ');
+                    pending_space = false;
+                }
+                folded.extend(c.to_lowercase());
             }
-            folded.extend(c.to_lowercase());
         }
     }
     folded
@@ -163,6 +170,20 @@ pub fn detect(text: &str) -> Vec<String> {
     if has(&folded, "mozilla public license version 1.1") {
         found.push("MPL-1.1");
     }
+    // HarfBuzz's "Old MIT" licence: its own wording of the MIT grant.
+    if has(
+        &folded,
+        "permission is hereby granted, without written agreement and without license or royalty fees, to use, copy, modify, and distribute this software and its documentation",
+    ) {
+        found.push("MIT");
+    }
+    if has(title, "attribution-noderivatives 4.0 international") {
+        found.push("CC-BY-ND-4.0");
+    } else if has(title, "attribution-sharealike 4.0 international") {
+        found.push("CC-BY-SA-4.0");
+    } else if has(title, "attribution 4.0 international") {
+        found.push("CC-BY-4.0");
+    }
     if has(&folded, "unicode license v3") {
         found.push("Unicode-3.0");
     }
@@ -228,6 +249,96 @@ pub fn detect(text: &str) -> Vec<String> {
     found.sort_unstable();
     found.dedup();
     found.into_iter().map(str::to_owned).collect()
+}
+
+/// Wording that only a licence text (or a notice carrying one) has.
+const GRANT_WORDS: &[&str] = &[
+    "permission is hereby granted",
+    "permission to use",
+    "redistribution and use",
+    "warranty",
+    "warranties",
+    "liable",
+    "liability",
+    "merchantability",
+    "terms and conditions",
+    "hereby grants",
+    "grant of license",
+];
+
+/// How a text says which licences apply.
+const STATEMENT_PHRASES: &[&str] = &[
+    "licensed under",
+    "dual-licensed",
+    "dual licensed",
+    "triple-licensed",
+    "tri-licensed",
+    "licensed only under",
+    "released under",
+    "available under",
+    "is licensed",
+    "are licensed",
+];
+
+/// Whether a text only says which licences apply (a bare SPDX expression, a path to another
+/// file, an SPDX document, "dual-licensed under A and B", the Apache boilerplate notice) and
+/// grants nothing itself.
+pub fn is_statement(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    let folded = fold(trimmed);
+    if trimmed.len() < 200 && crate::spdx::parse(trimmed).is_ok() {
+        return true;
+    }
+    if trimmed.len() < 200
+        && !trimmed.contains(char::is_whitespace)
+        && (folded.contains("licen") || folded.contains("copying"))
+    {
+        return true;
+    }
+    if folded.starts_with("spdxversion:") {
+        return true;
+    }
+    // The Apache boilerplate notice ("Licensed under the Apache License, Version 2.0 (the
+    // "License"); you may not use this file except...") and Mozilla's variant of it.
+    if trimmed.len() < 3000
+        && has(&folded, "licensed under the apache license")
+        && (has(&folded, "you may obtain a copy of the license at")
+            || has(&folded, "you may obtain copies of the licenses at")
+            || has(&folded, "at your option"))
+    {
+        return true;
+    }
+    // "dual-licensed under A and B", "Licensed under X or Y at your option", with nothing that
+    // grants a right or disclaims a warranty. A custom licence does not say it is "licensed
+    // under" itself, so it stays unknown and gets a warning.
+    folded.len() <= 8000
+        && STATEMENT_PHRASES.iter().any(|phrase| has(&folded, phrase))
+        && !GRANT_WORDS.iter().any(|word| has(&folded, word))
+}
+
+/// What a licence file turned out to be.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Class {
+    /// The text of these licences (several for a composite file).
+    Licenses(Vec<String>),
+    /// A statement of which licences apply, not a licence text.
+    Statement,
+    /// Wording the tool does not know.
+    Unknown,
+}
+
+pub fn classify(text: &str) -> Class {
+    let found = detect(text);
+    if !found.is_empty() {
+        Class::Licenses(found)
+    } else if is_statement(text) {
+        Class::Statement
+    } else {
+        Class::Unknown
+    }
 }
 
 /// What makes two texts one block of the page: line ends as LF, trailing white space trimmed on

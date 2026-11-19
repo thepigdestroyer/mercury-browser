@@ -5,7 +5,7 @@
 //! Every string that comes from outside the tool (licence texts, crate names, authors,
 //! repository URLs) is untrusted and goes through [`escape`]; only `http://` and `https://`
 //! URLs become links. The page is a pure function of its inputs: sorted, no timestamps.
-use crate::collect::{Block, BlockKind, Collected, CreditedCrate, Kind, Member};
+use crate::collect::{Block, BlockKind, Collected, CrateRef, CreditedCrate, Kind, Member};
 use std::fmt::Write as _;
 
 /// The repository the source pointers use.
@@ -85,7 +85,8 @@ pub fn mercury_tree_url(version: &str, path: &str) -> String {
     format!("{REPOSITORY}/tree/v{}/{path}", url_segment(version))
 }
 
-fn block_title(block: &Block) -> String {
+/// What the texts of a group have in common: the licences, or the kind of file.
+fn group_title(block: &Block) -> String {
     match block.kind {
         BlockKind::License => {
             let ids = block.ids.join(", ");
@@ -95,9 +96,33 @@ fn block_title(block: &Block) -> String {
                 ids
             }
         }
+        BlockKind::Statement => "Licence statements".to_owned(),
         BlockKind::Notice => "NOTICE files".to_owned(),
         BlockKind::Patents => "PATENTS files".to_owned(),
-        BlockKind::Unclassified => "Licence files the tool could not classify".to_owned(),
+        BlockKind::Unclassified => "Licence texts of unknown wording".to_owned(),
+    }
+}
+
+/// The heading of one text.
+fn block_title(block: &Block) -> String {
+    match block.kind {
+        BlockKind::License => group_title(block),
+        BlockKind::Statement => with_first_member("Licence statement", block),
+        BlockKind::Notice => with_first_member("NOTICE file", block),
+        BlockKind::Patents => with_first_member("PATENTS file", block),
+        BlockKind::Unclassified => with_first_member("Licence text of unknown wording", block),
+    }
+}
+
+/// `Title: crate version[ and N more]`, so that the many small texts of one kind can be told
+/// apart in the index.
+fn with_first_member(title: &str, block: &Block) -> String {
+    let Some(first) = block.members.first() else {
+        return title.to_owned();
+    };
+    match block.members.len() - 1 {
+        0 => format!("{title}: {}", first.krate.label()),
+        more => format!("{title}: {} and {more} more", first.krate.label()),
     }
 }
 
@@ -195,13 +220,7 @@ fn write_source(out: &mut String, collected: &Collected) {
         out.push_str("</td><td>");
         match (krate.kind, &krate.vendor) {
             (Kind::Vendored, Some(vendor)) => {
-                let path = format!(
-                    "third_party/{}",
-                    vendor
-                        .path
-                        .as_deref()
-                        .map_or(krate.krate.name.as_str(), |_| krate.krate.name.as_str())
-                );
+                let path = format!("third_party/{}", krate.krate.name);
                 link(
                     out,
                     Some(&mercury_tree_url(version, &path)),
@@ -332,20 +351,32 @@ fn write_crates(out: &mut String, collected: &Collected) {
         out.push_str(&ignored.join("; "));
         out.push_str(".</p>\n");
     }
+    // The index: one line for each run of texts with the same licences (the blocks are sorted,
+    // so a run is contiguous), linking to its first text.
     out.push_str("<h3>Index</h3>\n<ul class=\"index\">\n");
-    for (position, block) in collected.blocks.iter().enumerate() {
+    let mut position = 0;
+    while position < collected.blocks.len() {
+        let title = group_title(&collected.blocks[position]);
+        let end = collected.blocks[position..]
+            .iter()
+            .position(|block| group_title(block) != title)
+            .map_or(collected.blocks.len(), |offset| position + offset);
+        let group = &collected.blocks[position..end];
+        let crates: std::collections::BTreeSet<&CrateRef> = group
+            .iter()
+            .flat_map(|block| block.members.iter().map(|member| &member.krate))
+            .collect();
         let _ = write!(out, "<li><a href=\"#t-{}\">", position + 1);
-        escape_into(out, &block_title(block));
-        let _ = write!(
+        escape_into(out, &title);
+        let _ = writeln!(
             out,
-            "</a> <span class=\"muted\">({} {})</span></li>\n",
-            block.members.len(),
-            if block.members.len() == 1 {
-                "crate"
-            } else {
-                "crates"
-            }
+            "</a> <span class=\"muted\">({} {}, {} {})</span></li>",
+            group.len(),
+            if group.len() == 1 { "text" } else { "texts" },
+            crates.len(),
+            if crates.len() == 1 { "crate" } else { "crates" },
         );
+        position = end;
     }
     out.push_str("</ul>\n");
     for (position, block) in collected.blocks.iter().enumerate() {
