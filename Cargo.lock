@@ -10456,8 +10456,6 @@ dependencies = [
 [[package]]
 name = "servo-script-webcrypto"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c57ab02cc56817713f0a8a18a125c90604f66d20479a2cd6e572874b2b5c4d7b"
 dependencies = [
  "aes",
  "aes-gcm",
