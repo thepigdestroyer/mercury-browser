@@ -349,7 +349,7 @@ impl Collector<'_> {
             for file in &extra.files {
                 extra_paths.push(file.clone());
                 if let Some(note) = &extra.note {
-                    note_of_path.insert(file.clone(), note.clone());
+                    note_of_path.insert(discover::normalise(file), note.clone());
                 }
             }
         }

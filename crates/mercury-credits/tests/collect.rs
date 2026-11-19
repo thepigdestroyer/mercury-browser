@@ -677,3 +677,19 @@ fn the_llvm_exception_is_covered_by_its_own_text_or_by_a_plain_alternative() {
     );
     assert!(block.members[0].standard);
 }
+
+#[test]
+fn an_extra_path_written_with_dot_segments_still_gets_its_note() {
+    let mut fake = Fake::new();
+    fake.add("native-sys", "1.0.0", "MIT");
+    fake.crate_file("native-sys", "LICENSE", MIT);
+    fake.crate_file("native-sys", "deps/lz4/LICENSE", common::BSD3);
+    fake.write(
+        "crates/mercury-credits/credits.toml",
+        "[[extra]]\ncrate = \"native-sys\"\nfiles = [\"./deps//lz4/./LICENSE\"]\nnote = \"LZ4\"\n",
+    );
+    let collected = collected(&fake);
+    let bsd = with_ids(&collected, &["BSD-3-Clause"]);
+    assert_eq!(bsd[0].members[0].notes, ["LZ4"]);
+    assert_eq!(bsd[0].members[0].via, ["deps/lz4/LICENSE"]);
+}

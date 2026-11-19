@@ -95,9 +95,12 @@ pub fn write_page(out: &Path, page: &str) -> Result<PathBuf> {
     })?;
     let temporary = out.join(format!(".credits.html.{}.tmp", std::process::id()));
     let target = out.join("credits.html");
-    std::fs::write(&temporary, page).map_err(|source| Error::Write {
-        path: temporary.clone(),
-        source,
+    std::fs::write(&temporary, page).map_err(|source| {
+        let _ = std::fs::remove_file(&temporary);
+        Error::Write {
+            path: temporary.clone(),
+            source,
+        }
     })?;
     std::fs::rename(&temporary, &target).map_err(|source| {
         let _ = std::fs::remove_file(&temporary);

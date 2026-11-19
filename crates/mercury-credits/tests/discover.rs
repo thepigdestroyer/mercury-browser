@@ -279,3 +279,10 @@ fn names_are_classified_by_prefix_in_any_case() {
     assert_eq!(discover::kind_of_name("license.rs"), None);
     assert_eq!(discover::kind_of_name("not-a-license"), None);
 }
+
+#[test]
+fn paths_are_shown_with_slashes_and_without_dot_segments() {
+    assert_eq!(discover::normalise("./a//b/./c"), "a/b/c");
+    assert_eq!(discover::normalise("a/b/LICENSE"), "a/b/LICENSE");
+    assert_eq!(discover::normalise("LICENSE"), "LICENSE");
+}

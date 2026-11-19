@@ -109,6 +109,16 @@ fn read_text(path: &Path) -> Result<Option<String>, String> {
     Ok((!text.trim().is_empty()).then_some(text))
 }
 
+/// A path relative to a package root as it is shown: components joined with `/`, `.` dropped.
+pub fn normalise(path: &str) -> String {
+    Path::new(path)
+        .components()
+        .filter(|component| !matches!(component, Component::CurDir))
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 fn relative(path: &Path, root: &Path) -> String {
     path.strip_prefix(root)
         .unwrap_or(path)

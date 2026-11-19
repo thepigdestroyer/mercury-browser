@@ -22,7 +22,11 @@ options:
 Run it from the repository root: cargo run --release -p mercury-credits -- check --package mercury-desktop --target aarch64-apple-darwin
 Exit status: 0 success (warnings are printed), 1 a crate cannot be credited or a tool failed, 2 bad usage.
 The tool reads cargo tree, cargo metadata, deny.toml, third_party/vendor.toml, NOTICE, THIRD-PARTY-NOTICES.md,
-LICENSES/ and crates/mercury-credits/credits.toml, and uses no network of its own.
+LICENSES/ and crates/mercury-credits/credits.toml, and uses no network of its own; the crate sources must be
+in cargo's cache (run `cargo fetch --locked` first). $CARGO names the cargo to run. Messages go to standard
+error; the last line of a successful run is
+`mercury-credits: N crates credited (R registry, V vendored, M Mercury's own), T distinct licence texts,
+S crates on a standard text, X bytes`.
 ";
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
