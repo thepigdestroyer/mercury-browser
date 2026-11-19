@@ -159,9 +159,13 @@ export component BookmarksManager inherits Window {
                     width: parent.width - 2px;
                     height: parent.height - 8px;
 
-                    for folder[index] in root.folders: Rectangle {
+                    for folder[index] in root.folders: folder-item := Rectangle {
+                        // The selected folder is filled with `item-selected`: what is drawn on it
+                        // takes `item-selected-text` (the ordinary text colours do not read there).
+                        property <bool> is-selected: index == root.folder-index && !root.searching;
+
                         height: 28px;
-                        background: index == root.folder-index && !root.searching
+                        background: folder-item.is-selected
                             ? ChromePalette.item-selected
                             : folder-touch.has-hover ? ChromePalette.item-hover : transparent;
                         accessible-role: list-item;
@@ -178,13 +182,13 @@ export component BookmarksManager inherits Window {
 
                                 BookmarkIcon {
                                     folder: true;
-                                    stroke: ChromePalette.text;
+                                    stroke: folder-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text;
                                 }
                             }
 
                             Text {
                                 text: folder.title == "" ? "(untitled)" : folder.title;
-                                color: ChromePalette.text;
+                                color: folder-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text;
                                 font-size: 13px;
                                 font-weight: folder.depth == 0 ? 600 : 400;
                                 vertical-alignment: center;
@@ -308,9 +312,13 @@ export component BookmarksManager inherits Window {
                             width: parent.width - 2px;
                             height: parent.height - 8px;
 
-                            for row[index] in root.rows: Rectangle {
+                            for row[index] in root.rows: row-item := Rectangle {
+                                // As in the folder tree: the selected row's text, icon and separator
+                                // take `item-selected-text`.
+                                property <bool> is-selected: index == root.row-index;
+
                                 height: 30px;
-                                background: index == root.row-index
+                                background: row-item.is-selected
                                     ? ChromePalette.item-selected
                                     : row-touch.has-hover ? ChromePalette.item-hover : transparent;
                                 accessible-role: list-item;
@@ -322,7 +330,7 @@ export component BookmarksManager inherits Window {
                                     y: parent.height / 2;
                                     width: parent.width - 24px;
                                     height: 1px;
-                                    background: ChromePalette.separator;
+                                    background: row-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.separator;
                                 }
 
                                 if row.kind != BookmarkRowKind.separator: HorizontalLayout {
@@ -335,7 +343,7 @@ export component BookmarksManager inherits Window {
 
                                         BookmarkIcon {
                                             folder: row.kind == BookmarkRowKind.folder;
-                                            stroke: ChromePalette.text;
+                                            stroke: row-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text;
                                         }
                                     }
 
@@ -344,7 +352,7 @@ export component BookmarksManager inherits Window {
                                         min-width: 0px;
                                         preferred-width: 0px;
                                         text: row.title == "" ? "(untitled)" : row.title;
-                                        color: ChromePalette.text;
+                                        color: row-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text;
                                         font-size: 13px;
                                         vertical-alignment: center;
                                         overflow: elide;
@@ -355,7 +363,7 @@ export component BookmarksManager inherits Window {
                                         min-width: 0px;
                                         preferred-width: 0px;
                                         text: row.url;
-                                        color: ChromePalette.text-secondary;
+                                        color: row-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text-secondary;
                                         font-size: 12px;
                                         vertical-alignment: center;
                                         overflow: elide;

@@ -72,10 +72,14 @@ export component SuggestionList inherits Rectangle {
     VerticalLayout {
         padding: 6px;
 
-        for row[index] in root.rows: Rectangle {
+        for row[index] in root.rows: item := Rectangle {
+            // The selected row is filled with `item-selected`: everything drawn on it takes
+            // `item-selected-text`, since the ordinary text colours do not read on that fill.
+            property <bool> is-selected: index == root.selected;
+
             height: root.row-height;
             border-radius: 7px;
-            background: index == root.selected
+            background: item.is-selected
                 ? ChromePalette.item-selected
                 : touch.has-hover ? ChromePalette.item-hover : transparent;
 
@@ -89,7 +93,7 @@ export component SuggestionList inherits Rectangle {
 
                     if row.is-bookmark: Text {
                         text: "★";
-                        color: ChromePalette.accent;
+                        color: item.is-selected ? ChromePalette.item-selected-text : ChromePalette.accent;
                         font-size: 15px;
                         horizontal-alignment: center;
                         vertical-alignment: center;
@@ -104,7 +108,7 @@ export component SuggestionList inherits Rectangle {
                         commands: row.is-search
                             ? "M 6 1.5 A 4.5 4.5 0 1 1 5.99 1.5 Z M 9.3 9.3 L 13 13"
                             : "M 7 1 A 6 6 0 1 1 6.99 1 Z M 7 3.6 L 7 7 L 9.4 8.4";
-                        stroke: ChromePalette.text-secondary;
+                        stroke: item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text-secondary;
                         stroke-width: 1.5px;
                         fill: transparent;
                     }
@@ -118,7 +122,7 @@ export component SuggestionList inherits Rectangle {
                         before: row.title-before;
                         match: row.title-match;
                         after: row.title-after;
-                        color: ChromePalette.text;
+                        color: item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text;
                         size: 13px;
                     }
 
@@ -126,7 +130,7 @@ export component SuggestionList inherits Rectangle {
                         before: row.url-before;
                         match: row.url-match;
                         after: row.url-after;
-                        color: ChromePalette.text-secondary;
+                        color: item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text-secondary;
                         size: 12px;
                     }
                 }
