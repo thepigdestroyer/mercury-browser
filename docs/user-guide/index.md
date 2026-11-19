@@ -44,11 +44,12 @@ On the `mercury` branch today:
 - saved logins in the Keychain, managed in Settings, with a manual fill from the right-click menu;
 - site information, error pages for network and certificate problems, and an HTTPS-only mode;
 - camera and microphone on macOS;
-- cut, copy and paste in pages.
+- cut, copy and paste in pages;
+- screen-reader labels for Mercury's own windows (the toolbar, tabs, address bar, menus, dialogs, Settings and the other windows), written into the code and covered by automated tests, but not yet tried with VoiceOver on a real Mac. Web pages are not readable by a screen reader yet: to VoiceOver a page is one item, "Page content".
 
 Not in the app yet: location, which is built but stays off until a Servo patch tells Mercury which frame is asking; video calls (WebRTC); a page's own clipboard API (`navigator.clipboard`); and the download folder settings, which are stored but not used. Mercury doesn't fill in or save the logins you type into a page's own sign-in form on its own.
 
-Planned: a complete redesign of the interface, accessibility of Mercury's own windows, phishing protection, search suggestions, translation, update checks, and releases signed with an Apple Developer ID.
+Planned: a complete redesign of the interface, accessibility of web pages (a screen reader reading what a page says), phishing protection, search suggestions, translation, update checks, and releases signed with an Apple Developer ID.
 
 ## What Servo can't do yet
 

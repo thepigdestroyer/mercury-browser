@@ -68,6 +68,51 @@ Desktop tests exercise event routing, bounded command dispatch, shortcuts, key c
 
 `crates/mercury-ui/tests/page_request_render.rs` and `render_menus.rs` render Mercury's Slint components with Slint's software renderer, so they can be checked without a window. The examples in `crates/mercury-ui/examples/` (`render_settings`, `render_controls`, `render_tabs`) render the settings window, the page controls and the tab strip to PNGs for review.
 
+### Accessibility of the interface
+
+Slint's `accessibility` feature is on (the workspace `Cargo.toml`), so VoiceOver, through AccessKit, can read and press Mercury's own windows: the tab strip, toolbar, address bar, menus, sheets and prompts, the history panel, and the Settings, Bookmarks, Import and About windows. A web page is not part of that yet: the page area is a single node, "Page content", whose description says that Mercury does not pass page content to assistive technology yet. The engine's own accessibility tree will be hung from that node later.
+
+**What is checked.** `crates/mercury-ui/tests/a11y_*.rs` show each window or component on Slint's testing platform (no window, no display, no input) and read it the way an assistive technology does, through `ElementHandle`:
+
+- every control and landmark of an area is found by its role and label, so a renamed label or a lost role fails a test;
+- the control's default action (`invoke_accessible_default_action`, which is what VoiceOver's "press" runs, and which needs no keyboard focus) does what a click does, and does nothing while the control is disabled;
+- the labelling rule below holds in every state the area can be in (`assert_labelled`);
+- the reading order of the main states is compared with a golden file in `crates/mercury-ui/tests/a11y-snapshots/`, one line per element, `role | label | description | flags`, with no geometry, so a changed word, a changed order or a glyph read twice shows up as a diff;
+- the rectangle each control hands to the assistive technology has an area and lies inside the window and its landmark or overlay; the toolbar buttons are checked to the pixel (36 x 34 px, 8 px apart).
+
+The helper is `crates/mercury-ui/tests/common/a11y.rs` (`init`, `reading_order`, `subtree` for a popup, `control`, `assert_labelled`, `assert_snapshot`, `assert_bounds`), and `tests/a11y_harness.rs` tests the helper itself. A popup's content is read with `subtree` on its own: the testing platform lists a popup before its owner's other children, and a screen reader lists it after them. Slint's debug info, which `ElementHandle` needs, comes only from the `test-support` feature of `mercury-ui`, and a `slint::slint!` block inside a test carries none, so the tests use the real components.
+
+**Run them** with the feature on. A test filter matches test names, not file names, so name the test files:
+
+```bash
+cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+```
+
+Add `--no-fail-fast` to see the failures of every file at once. These tests need `--features test-support`, so they run in `make test` and are linted by `make lint` (both use `--all-features`), and not in `make qa-fast`, which builds the engine-free crates without features.
+
+**Bless the golden files** after a change you meant. A missing file fails and prints what it would hold; an existing one fails with a line diff (`-` the golden file, `+` the interface now). Read the new order the way a VoiceOver user would hear it (does it follow the screen, does each button say what it does and not its glyph, is anything read twice), then rewrite the files and review the diff:
+
+```bash
+MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+git diff crates/mercury-ui/tests/a11y-snapshots
+```
+
+The leading `#` lines of a golden file (its licence lines and the command above) are ignored when comparing.
+
+**The labelling rule.** Every interface component follows it, and the tests enforce it:
+
+1. Every control has an `accessible-role`, an `accessible-label` and an `accessible-action-default`. The role is a constant, because Slint cannot bind it to a state: `button`, `tab`, `list-item`, `checkbox`, `radio-button`, `switch`, `combobox`, `slider` or `text-input`. The label says what the control does in words ("Back", "Close tab"), never its glyph ("‹", "×", "⋮"); it may be a binding. The default action does what a click does, and nothing while the control is disabled.
+2. State goes in properties: `accessible-enabled` (mirror `enabled`), `accessible-checkable` with `accessible-checked`, `accessible-item-selectable` with `accessible-item-selected`, `accessible-item-index` and `accessible-item-count` for rows and tabs, `accessible-expandable` with `accessible-expanded`, and `accessible-value`. A state that has no property (loading, playing sound, pinned) goes in `accessible-description`.
+3. What is inside a labelled control is hidden. `Text`, `Image` and `Path` are accessible by default, so the glyph or caption inside a button, and every decorative image, separator and focus ring, carries `accessible-role: none`; otherwise the control is read twice.
+4. A text field has an `accessible-label` for its purpose (not its current text) and, when it draws a placeholder, the same words as `accessible-placeholder-text`, with the drawn placeholder hidden.
+5. Slint 1.17 has no toolbar, dialog or heading role. The toolbar is a `navigation` landmark, the address bar a `search` landmark, the page a `main` landmark, a tab strip a `tab-list`, a menu or a list a `list`, and a sheet, prompt or popover a `groupbox` whose label is its heading (keyboard focus moves into it when it opens). Every landmark has a label.
+6. Within one window state no two controls share both role and label; rows and tabs with an item index are exempt, and static text may repeat. What a page causes, such as a dialog, a prompt or a pop-up notice, names the page's origin in its label or description, as it does on screen. Some tests find a control by its label (the desktop tests look for "Retry" and "Dismiss"), so a label a test uses stays as it is.
+7. Toolbar buttons carry no shortcut text in their label or description: `shortcuts.rs` is the one source. Menu rows keep their shortcut as the description.
+8. A new component gets a headless test that finds its controls by role and label, presses each default action, runs `assert_labelled` in every state and compares its reading order with a golden file. A test file starts with `#![cfg(feature = "test-support")]` and `mod common;`.
+9. Edits to `main-window.slint` stay line-level and carry a `// a11y-base` comment, so the layout rewrite can find them and move them.
+
+What the tests cannot say is whether VoiceOver reads the result well on a real Mac. That is the VoiceOver section of the [hands-on checklist](hands-on-checklist.md).
+
 ### Menus and the About window
 
 `apps/mercury-desktop/src/menus/model.rs` holds the menu bar as a table. Its tests check that every item shows the key that runs its action in `shortcuts.rs`, and that each key has exactly one owner: either the window's key path or the native menu. `decide_key_equivalent` holds the main menu's whole decision for a key equivalent; it is tested as a table that covers the browser window, other Mercury windows and native panels, with and without auto-repeat. `crates/mercury-ui/tests/render_menus.rs` renders the browser menu and the About window with Slint's software renderer, with the chrome theme set to Light, Dark and System. It also opens the browser menu in the browser window and drives it with the arrow keys and Return. Set `MERCURY_UI_RENDER_DIR` to keep the PNGs.
