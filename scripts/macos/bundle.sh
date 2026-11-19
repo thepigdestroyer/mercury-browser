@@ -29,7 +29,7 @@
 #                              $MERCURY_GSTREAMER_PREFIX). Required: the
 #                              executable cannot start without its media
 #                              libraries, so no bundle is built without them
-#   --dmg                      also build mercury-browser-<version>-macos-arm64.dmg
+#   --dmg                      also build Mercury-Browser-<version>-macos-arm64.dmg
 #                              and its .sha256
 #   --print-entitlements       print the entitlements file the identity would
 #                              be signed with, and exit without building
@@ -188,6 +188,8 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null || die "Info.plist does not v
 printf 'APPL????' >"$APP/Contents/PkgInfo"
 
 cp "$RESOURCES_SRC/AppIcon.icns" "$RES_DIR/AppIcon.icns"
+# The licence, its Required Notice (with the IJG credit and the LGPL offer) and the notices
+# stay with the application when it is dragged out of the disk image.
 while IFS= read -r notice; do
     cp "$notice" "$RES_DIR/"
 done < <(bundled_notice_files)
@@ -322,7 +324,7 @@ say "built $APP"
 
 # ── Disk image ────────────────────────────────────────────────────────────
 if [ "$MAKE_DMG" = 1 ]; then
-    DMG_NAME="mercury-browser-$VERSION-macos-arm64.dmg"
+    DMG_NAME="Mercury-Browser-$VERSION-macos-arm64.dmg"
     DMG="$OUT/$DMG_NAME"
     rm -rf -- "$STAGE"
     mkdir -p "$STAGE"
@@ -330,6 +332,9 @@ if [ "$MAKE_DMG" = 1 ]; then
     # ditto keeps the signature, extended attributes and symlinks intact.
     ditto "$APP" "$STAGE/$APP_NAME.app"
     ln -s /Applications "$STAGE/Applications"
+    # The licence and its Required Notice travel with every copy, next to the
+    # app; they and the full texts are in the app's Contents/Resources too.
+    cp LICENSE NOTICE "$STAGE/"
 
     say "creating $DMG"
     rm -f -- "$DMG" "$DMG.sha256"

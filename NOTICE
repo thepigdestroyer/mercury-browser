@@ -18,5 +18,13 @@ Each file names its licence in an SPDX-License-Identifier header, or in REUSE.to
 cannot hold one; LICENSE explains the split. Versions published before 17 November 2026 were
 released entirely under the MPL-2.0 and remain available under it.
 
+The macOS application bundles libjpeg-turbo. This software is based in part on the work of the
+Independent JPEG Group.
+
+The macOS application also bundles LGPL libraries (GStreamer, FFmpeg, GLib, proxy-libintl and
+libnice) as separate, replaceable dynamic libraries. Their corresponding source is published
+with every release as Mercury-Browser-<version>-lgpl-sources.tar, and THIRD-PARTY-NOTICES.md
+says where it came from and how to replace a library.
+
 Third-party code, vendored dependencies and bundled data keep their own licences and notices; see
 THIRD-PARTY-NOTICES.md and the LICENSES directory.
