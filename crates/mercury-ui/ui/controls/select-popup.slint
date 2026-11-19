@@ -38,6 +38,11 @@ export component SelectPopup inherits Rectangle {
     drop-shadow-offset-y: 4px;
     drop-shadow-color: root.colors.shadow;
     clip: true;
+    // a11y-base: the list of options, named by the page it comes from (the caption below shows
+    // the same origin), so it cannot pass for a list of the browser's own.
+    accessible-role: AccessibleRole.list; // spelled out: `list` is the id of the ListView below
+    accessible-label: root.origin == "" ? "Options" : "Options from " + root.origin;
+    accessible-description: root.multiple ? "Several options can be chosen. Choose Done when finished." : "";
 
     Text {
         x: 10px;
@@ -49,6 +54,7 @@ export component SelectPopup inherits Rectangle {
         font-size: 11px;
         vertical-alignment: center;
         overflow: elide;
+        accessible-role: none; // a11y-base: the list's label
     }
 
     list := ListView {
@@ -56,6 +62,8 @@ export component SelectPopup inherits Rectangle {
         y: 20px;
         width: parent.width;
         height: parent.height - 20px - root.footer-height;
+        // a11y-base: ListView is a list of its own (an unlabelled one); the popup is the list.
+        accessible-role: none;
 
             for row[index] in root.rows: Rectangle {
                 height: 24px;
@@ -77,6 +85,7 @@ export component SelectPopup inherits Rectangle {
                     color: parent.label-color;
                     font-size: 13px;
                     vertical-alignment: center;
+                    accessible-role: none; // a11y-base: the row's selected state says this
                 }
 
                 Text {
@@ -90,6 +99,30 @@ export component SelectPopup inherits Rectangle {
                     vertical-alignment: center;
                     overflow: elide;
                     wrap: no-wrap;
+                    accessible-role: none; // a11y-base: the row below carries the label
+                }
+
+                // a11y-base: what assistive technology sees of the row. The role of an element
+                // cannot follow the row's kind, so an option and an option group's heading
+                // each get an invisible element over the row. The position counts headings.
+                if !row.heading: Rectangle {
+                    accessible-role: list-item;
+                    accessible-label: row.label;
+                    accessible-enabled: !row.disabled;
+                    accessible-item-selectable: true;
+                    accessible-item-selected: row.selected;
+                    accessible-item-index: index;
+                    accessible-item-count: root.rows.length;
+                    accessible-action-default => {
+                        if !row.disabled {
+                            root.row-clicked(index);
+                        }
+                    }
+                }
+
+                if row.heading: Rectangle {
+                    accessible-role: text;
+                    accessible-label: row.label;
                 }
 
                 TouchArea {
