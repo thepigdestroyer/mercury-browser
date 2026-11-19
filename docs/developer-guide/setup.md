@@ -1,18 +1,20 @@
 ---
 title: Development Setup
-description: Prepare a Mercury Browser development environment on macOS (Apple Silicon), build and run it, and build this documentation.
+description: Prepare a Mercury Browser development environment on macOS (Apple Silicon or Intel), build and run it, and build this documentation.
 ---
 
 # Development setup
 
-Mercury is developed on macOS with Apple silicon, and that is where its full path (Metal rendering, the bundled GStreamer, the app bundle, the menu bar) is exercised. Linux builds too; see [Linux](#linux) at the end.
+Mercury is developed on macOS, on Apple silicon and on Intel Macs, and that is where its full path (Metal rendering, the bundled GStreamer, the app bundle, the menu bar) is exercised. Linux builds too; see [Linux](#linux) at the end.
+
+Both kinds of Mac build, lint, test and run the browser from source in the same way. The app bundle and the disk image are Apple silicon only: `make app-macos` and `make package-macos` build an arm64 app; on an Intel Mac they compile the release build and then stop at `scripts/macos/bundle.sh`, which refuses an executable that isn't arm64. Use `make run` there.
 
 ## What you need
 
-- A Mac with Apple silicon and macOS 13 or later.
+- A Mac with Apple silicon or an Intel processor, and macOS 13 or later.
 - The Xcode command-line tools (`xcode-select --install`). Full Xcode is not needed.
 - [rustup](https://rustup.rs/). The Rust version is pinned in `rust-toolchain.toml` and installs itself on the first build.
-- Python 3.11 or later, or `uv`, on `PATH` (Homebrew's `/opt/homebrew/bin` is enough). Servo's own build scripts need it; Mercury has no Python code of its own.
+- Python 3.11 or later, or `uv`, on `PATH` (on Apple silicon, Homebrew's `/opt/homebrew/bin` is enough; without Homebrew, as on an Intel Mac that has none, install `uv` with [its standalone installer](https://docs.astral.sh/uv/getting-started/installation/) and check that `uv --version` works in a new shell). Servo's own build scripts need it: they try `uv run python` first, then `python3`, then `python`. Mercury's own tools are Rust or POSIX shell, not Python (`scripts/serve-tests.py` is the one leftover helper; a Rust tool replaces it and it is deleted once the lanes in progress have merged).
 - Free disk space: a cold build compiles all of Servo and needs 15–20 GB while it runs, plus about 5 GB for the unpacked GStreamer.
 
 ## Clone and prepare
@@ -24,7 +26,9 @@ git checkout mercury
 make setup     # on macOS: fetches and unpacks GStreamer, checks the tools, adds rustfmt and Clippy, fetches the crates
 ```
 
-`make setup` runs `make gstreamer-macos` and `make doctor` first, then installs the `rustfmt` and `clippy` components and fetches the locked dependencies with `--locked`. `make doctor` alone reports the Rust toolchain and checks the GStreamer copy.
+`make setup` runs `make gstreamer-macos` and `make doctor` first, then installs the `rustfmt` and `clippy` components and fetches the locked dependencies with `--locked`. `make doctor` alone reports the Rust toolchain and checks the GStreamer copy. It does not look for `uv` or Python, so check `uv --version` (or `python3 --version`) yourself: with neither, the first engine build stops in a Servo build script with "No suitable python found!".
+
+`make lint-scripts` and `make deny` need shellcheck, actionlint and cargo-deny. `make ci-tools` downloads the pinned versions into `target/ci-tools/bin` (`CI_TOOLS_DIR` changes the place), checks each download's SHA-256 and installs nothing system-wide. The pins cover Linux x86-64 and macOS on both Apple silicon and Intel.
 
 ## Build and run
 
@@ -42,11 +46,29 @@ make run ARGS="https://servo.org/" RUST_LOG="talaria_servo=debug,servo=info"
 
 `make run-release` is an alias for `make run`. `make run-debug` builds the development profile, which keeps debug information for Mercury's code; use it for debugging, not for judging speed or media.
 
-Build, lint and test in release mode, so that one set of compiled Servo artefacts serves all three: pass `CARGO_FLAGS=--release` to `make check`, `make lint` and `make test`, and use `--release` for any `cargo` command you run by hand. Crates that don't depend on Servo (`talaria-core`, `mercury-ui`, `mercury-settings`, `mercury-store`, `mercury-passwords`, `mercury-downloads`, `mercury-import`) build and test in minutes on their own:
+The ad and tracker filter lists are data files, not compiled into the program. `make run`, `make run-debug`, `make build` and `make build-release` copy them to `target/<profile>/filter-lists` with the `mercury-filter-lists` tool, checking each file's SHA-256 against the manifest. A binary started without that step logs that it found no `filter-lists` folder.
+
+Build, lint and test in release mode, so that one set of compiled Servo artefacts serves all three: pass `CARGO_FLAGS=--release` to `make check`, `make lint` and `make test`, and use `--release` for any `cargo` command you run by hand. Crates that don't depend on Servo (`talaria-core`, `mercury-ui`, `mercury-settings`, `mercury-store`, `mercury-passwords`, `mercury-password-manager`, `mercury-downloads`, `mercury-import`, `mercury-filter-lists`, `mercury-site-security`, `mercury-devtools`, `mercury-release` and `mercury-servo-patches`) build and test in minutes on their own:
 
 ```bash
 cargo test --release -p talaria-core -p mercury-ui
 ```
+
+`make qa-fast` checks formatting, then lints and tests only the crates that need neither Servo nor Slint; `scripts/ci/light-crates.sh --explain` says which those are and why.
+
+`make test` runs the whole workspace, and on a busy Mac a few of the desktop app's largest tests (the 10,000-entry import tests) can time out waiting for their service thread although nothing is wrong. They pass when run alone. When several builds share the machine, limit the test threads:
+
+```bash
+RUST_TEST_THREADS=2 make test CARGO_FLAGS=--release
+```
+
+CI runs the macOS checks on Apple silicon only, so an Intel Mac is checked by hand.
+
+### Build slots
+
+Servo builds are heavy, so the AI coding agents' builds on the development Mac, an Intel Core i7 with 12 threads and 32 GB, run at most six at once. `scripts/dev/build-slot.sh` holds the slots; nothing in the Makefile calls it, so a build you start yourself isn't slotted. A build that goes through it and compiles Servo waits until one of the **six heavy slots** is free and at least 40 GB of disk is free, then runs with `CARGO_BUILD_JOBS` set to the Mac's cores divided by the number of slots, never fewer than two: **two jobs each** here. The cores are shared out by slot rather than by the builds running now, so a build that starts alone doesn't keep every core for its whole run. Builds that name only crates without Servo (`cargo test --release -p talaria-core …`) use a separate pool of four light slots and need 10 GB free, so they never queue behind a Servo build. A build that has waited six hours gives up with exit status 75.
+
+The OpenCode disk guard in `.opencode/plugins/` sends the AI coding agents' build commands (for example `cargo build`, `test`, `clippy`, `check`, `run`, `doc`; `make lint`, `test`, `build-release`, `app-macos`, `run`) through the script, and deletes build output after every round, as `.opencode/skills/mercury-build-hygiene/SKILL.md` describes. The limits are `MERCURY_BUILD_SLOTS` (6), `MERCURY_MIN_FREE_GB` (40), `MERCURY_LIGHT_SLOTS` (4), `MERCURY_LIGHT_MIN_FREE_GB` (10) and `MERCURY_SLOT_WAIT_MINUTES` (360), read from the environment with these defaults; change them if your Mac differs.
 
 ## Command-line options
 
@@ -63,6 +85,8 @@ cargo test --release -p talaria-core -p mercury-ui
 | `--disable-gpu-canvas` | Draws 2D canvases on the CPU |
 | `--disable-experimental-web-features` | Leaves Servo's experimental web-platform features off |
 | `--exit-after <ms>`, `--exit-by …` | Diagnostics: quit from inside the browser, as the close button, the quit shortcut or the Quit menu item would ([Testing](testing.md#quit-paths)) |
+| `--download <URL>`, `--download-dir <directory>`, `--download-offer-answer <answer>` | Diagnostics: download an address once the browser is up, save into this directory, and answer every "wants to download" bar the same way (`download` or `block`) |
+| `--filter-list-server <http://127.0.0.1:port/path/>` | Diagnostics: check for filter-list updates once at start-up from this loopback server only, also in screenshot and background runs, which otherwise never update |
 
 Exit statuses: 0 success, 1 failure (or a screenshot that couldn't be saved), 2 a wrong command line, 3 the screenshot's page didn't finish loading, 4 the profile is in use by another Mercury. On `SIGTERM`, `SIGINT` or `SIGHUP` the browser quits in order and then ends by that signal.
 
@@ -75,7 +99,7 @@ gstreamer.freedesktop.org. Mercury does not install them system-wide and needs n
 `scripts/macos/gstreamer.sh` downloads the runtime and development packages, checks their
 SHA-256 (a download that fails the check is deleted), and unpacks them into
 `~/Library/Caches/mercury-browser/gstreamer/<version>/` (override with `MERCURY_GSTREAMER_CACHE`).
-The pinned version and checksums are at the top of that script.
+The pinned version and checksums are at the top of that script. The packages are the universal ones, so the same step serves Apple silicon and Intel Macs, and the collector below copies only the executable's own architecture.
 
 ```bash
 make gstreamer-macos      # fetch, unpack, check
@@ -165,6 +189,8 @@ make docs         # build into target/mkdocs with strict checks
 
 `make docs` runs MkDocs in strict mode: a broken link, a page missing from the navigation or a configuration warning fails the build. `docs/superpowers/` holds design notes and plans and is excluded from the site.
 
+The published site is <https://thepigdestroyer.github.io/mercury-browser/>. `.github/workflows/pages.yml` builds it with the same strict `make docs` and deploys it whenever a push to `master` changes `docs/` (the repository's Pages source has to be set to GitHub Actions). **Mercury Browser Help** in the Help menu opens it.
+
 Screenshots in `docs/screenshots/` are taken from a release build with `--screenshot`, for example:
 
 ```bash
@@ -182,6 +208,6 @@ make setup
 make run
 ```
 
-On Linux, Mercury draws Servo's frames through Vulkan, so Slint's Vulkan WGPU backend is needed, and media uses the system's GStreamer. Linux-only code (`#[cfg(target_os = "linux")]`) can't be compiled on a Mac; CI's Linux job checks it.
+On Linux, Mercury draws Servo's frames through Vulkan, so Slint's Vulkan WGPU backend is needed, and media uses the system's GStreamer. Linux-only code (`#[cfg(target_os = "linux")]`) can't be compiled on a Mac; CI's Linux job checks it. The merge trains' own checks ran on macOS, so the recent camera and microphone, saved logins, clipboard and tab-strip work has not been verified on Linux beyond what CI's Linux job reports.
 
 Windows is not built at the moment.
