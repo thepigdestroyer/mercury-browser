@@ -200,7 +200,7 @@ interface; `apps/mercury-desktop/src/passwords/` connects it to the windows, the
 | Settings section | `passwords/section.rs`, `ui/passwords/passwords-section.slint` | List (`login_rows`, untrusted text made safe by `display_text`), search (`filter_rows`), open, copy the user name, show or copy the password, edit (`update_login`: a new user name saves the new key before removing the old), delete (asks first), the generator, CSV import (`import_csv`: never overwrites or reads a saved password) and export (`export_csv` + `write_private_file`: a new `0600` file renamed over the chosen path). The Slint side talks only through the `PasswordManagerUi` global. |
 | Store worker | `StoreWorker`, `passwords/mod.rs` | No Keychain call runs on the interface thread: one thread owns the store, jobs after a gesture may make macOS ask (`Interaction::Allowed`), everything else runs with Keychain user interaction off (`Interaction::Never`), a job that panics is reported and the worker goes on, and the list of saved logins (no passwords) is kept in memory. See below. |
 | Authentication | `Authenticator`, `AuthGate`, `passwords/local_auth.rs` | Showing, copying and exporting a password first asks `LAContext.evaluatePolicy(.deviceOwnerAuthentication)` (Touch ID or the login password). One success lasts `AUTH_GRACE_PERIOD` (60 s of wall-clock time, so sleep counts) or until the settings window closes. |
-| Copying | `Pasteboard`, `CopiedSecret`, `passwords/system_pasteboard.rs` | A password is copied for this Mac only (`NSPasteboardContentsCurrentHostOnly`: never to Universal Clipboard), as one item that carries the string and the `org.nspasteboard.ConcealedType` and `TransientType` markers, written with a single `writeObjects:` after `prepareForNewContentsWithOptions:`, and removed after `CLIPBOARD_CLEAR_DELAY` (60 s) or at quit (`post_run`) if the pasteboard has not changed since. |
+| Copying | `Pasteboard`, `CopiedSecret`, `passwords/system_pasteboard.rs` | A password is copied with a request to keep it on this Mac (`NSPasteboardContentsCurrentHostOnly`, which AppKit does not let a program read back), as one item that carries the string and the `org.nspasteboard.ConcealedType` and `TransientType` markers, written with a single `writeObjects:` after `prepareForNewContentsWithOptions:`, and removed after `CLIPBOARD_CLEAR_DELAY` (60 s) or at quit (`post_run`) if the pasteboard has not changed since. |
 | Manual fill | `passwords/fill.rs`, `controls/context_menu.rs`, `talaria_core::LoginFill` | See below. |
 | HTTP sign-in | `passwords/sign_in.rs`, `SignInSaves`, `page_requests.rs` | See below. |
 
@@ -335,9 +335,14 @@ these has run for real:
   (on Sign in, on the save after a sign-in, on Retry, on opening the section) have not been seen
   on a Mac.
 - **Touch ID** and the login-password fallback behind `LAContext.evaluatePolicy`.
-- **The real pasteboard.** The single `writeObjects:` of one item with the string, the concealed
-  and transient markers and `CurrentHostOnly` has not been read back from a real `NSPasteboard`
-  or a clipboard manager.
+- **The real pasteboard.** `passwords/system_pasteboard.rs` has tests that write to a private
+  `NSPasteboard` (`pasteboardWithUniqueName`, never the general one) and read it back: one item
+  with the string, `ConcealedType` and `TransientType`; a plain copy without the markers; each
+  copy replacing the last. Not verified: that `CurrentHostOnly` is still in force after the
+  `writeObjects:` (AppKit has no call to read it back, and no second device was paired to see
+  Universal Clipboard refuse the item), the general pasteboard itself, and that a clipboard
+  manager honours the two markers. The user guide therefore says Mercury *asks* macOS to keep
+  a copied password on this Mac, not that it is guaranteed.
 - **A real HTTP save.** A sign-in against a real server whose login is then saved to the real
   login keychain, and the "Couldn't save" notice and Retry on a real failure.
 - **Linux.** `cargo check -p mercury-desktop --all-targets` for Linux has not been run (it cannot
