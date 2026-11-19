@@ -137,6 +137,10 @@ fn sample_settings_window() -> Result<SettingsWindow, Box<dyn Error>> {
     ]));
     window.set_filter_lists_can_update(true);
     window.set_block_popups(true);
+    // The history lane's "clear on quit" choice and "Clear browsing data…" button, as the
+    // browser wires them (the button is enabled there).
+    window.set_clear_history_on_exit(true);
+    window.set_clear_browsing_data_available(true);
     window.set_clear_cookies_on_exit(true);
     window.set_offer_to_save_passwords(true);
     window.set_never_save_origins(strings(&["https://bank.example", "http://localhost:8080"]));
