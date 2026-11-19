@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+tab-list | Settings sections | |
+tab | General | | unselected, item 0 of 6
+tab | Appearance | | selected, item 1 of 6
+tab | Privacy and security | | unselected, item 2 of 6
+tab | Downloads | | unselected, item 3 of 6
+tab | Passwords | | unselected, item 4 of 6
+tab | Advanced | | unselected, item 5 of 6
+text | Appearance | |
+combobox | Theme | | collapsed, value "Follow the system"
+text | Changes the browser's own colours and the colour scheme pages are told to use. | |
+checkbox | Show the home button | | unchecked
+text | Show the home button | |
+checkbox | Show the bookmarks bar | | checked
+text | Show the bookmarks bar | |

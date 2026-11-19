@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+text | Import stopped | |
+text | Imported 500 visits from Chrome — Work. | |
+text | Problem: Bookmarks could not be imported: Chrome kept writing to its files while they were being read. Quit Chrome and try again. | |
+text | Problem: The import of history stopped before it finished: 500 of 38,912 had been imported. | |
+button | Done | |

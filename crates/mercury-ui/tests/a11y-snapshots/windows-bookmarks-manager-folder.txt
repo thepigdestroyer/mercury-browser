@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+text-input | Search bookmarks | | placeholder "Search bookmarks"
+button | New folder | |
+button | New separator | |
+button | Import bookmarks from file… | |
+button | Export bookmarks… | |
+list | Folders | |
+list-item | Bookmarks Bar | | unselected, item 0 of 5
+list-item | News | Level 2 | selected, item 1 of 5
+list-item | Local | Level 3 | unselected, item 2 of 5
+list-item | (untitled) | Level 2 | unselected, item 3 of 5
+list-item | Other Bookmarks | | unselected, item 4 of 5
+text | News | |
+button | Move up | | disabled
+button | Move down | | disabled
+button | Delete | |
+list | Folder contents | |
+list-item | Local | Folder | unselected, item 0 of 5
+list-item | BBC News | https://www.bbc.co.uk/news | selected, item 1 of 5
+list-item | (untitled) | https://untitled.example/ | unselected, item 2 of 5
+list-item | Separator | | unselected, item 3 of 5
+list-item | Hacker News | https://news.ycombinator.com/ | unselected, item 4 of 5
+text | 5 items. | |

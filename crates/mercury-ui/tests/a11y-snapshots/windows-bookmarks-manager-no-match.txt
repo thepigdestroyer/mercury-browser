@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+text-input | Search bookmarks | | placeholder "Search bookmarks", value "guardian"
+button | New folder | |
+button | New separator | |
+button | Import bookmarks from file… | |
+button | Export bookmarks… | |
+list | Folders | |
+list-item | Bookmarks Bar | | unselected, item 0 of 5
+list-item | News | Level 2 | unselected, item 1 of 5
+list-item | Local | Level 3 | unselected, item 2 of 5
+list-item | (untitled) | Level 2 | unselected, item 3 of 5
+list-item | Other Bookmarks | | unselected, item 4 of 5
+text | No results for “guardian” | |
+button | Move up | | disabled
+button | Move down | | disabled
+button | Delete | | disabled
+text | No bookmarks match. | |
+list | Search results | |
+text | 5 items. | |

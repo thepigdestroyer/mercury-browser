@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+text | Import finished | |
+text | Imported 1,204 bookmarks and 38,912 visits from Firefox — default-release. | |
+text | 12 bookmarks and 1,000 visits were already in Mercury Browser and were left out. | |
+text | Problem: 2 visits could not be kept (for example, an address that is too long or a date in the future). | |
+button | Done | |
