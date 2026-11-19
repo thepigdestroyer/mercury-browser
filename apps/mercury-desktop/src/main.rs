@@ -23,6 +23,7 @@ mod bookmarks;
 mod callback_scope;
 mod callbacks;
 mod cli;
+mod clipboard;
 // controls
 mod controls;
 mod crash_handler;
@@ -212,6 +213,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         options.window_size.is_some(),
     );
     let web_view_focused = Rc::new(Cell::new(false));
+    // clipboard: automated runs never touch the system clipboard
+    clipboard::configure(options.is_automated());
 
     connect_servo_runtime(
         &window,

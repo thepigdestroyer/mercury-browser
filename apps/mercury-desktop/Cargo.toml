@@ -11,6 +11,11 @@ name = "mercury-browser"
 path = "src/main.rs"
 
 [dependencies]
+# clipboard lane: the system clipboard pages use in a normal run (text only, `src/clipboard.rs`).
+# Servo 0.8.0 already depends on arboard "3" through its `clipboard` feature, with the default
+# features plus `wayland-data-control`; ours turns the defaults off (the image-data default stays
+# in the build through Servo, so Cargo unifies the features and no extra crate is built).
+arboard = { version = "3.7", default-features = false, features = ["wayland-data-control"] }
 backtrace.workspace = true
 dirs.workspace = true
 dpi.workspace = true

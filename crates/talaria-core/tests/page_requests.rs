@@ -2,9 +2,9 @@
 use std::time::Duration;
 
 use talaria_core::{
-    BrowserCommand, BrowserController, BrowserEvent, CloseTabOutcome, GEOLOCATION_OFFERED,
-    HttpCredentials, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers, LoadState,
-    PagePermission, PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind,
+    BrowserCommand, BrowserController, BrowserEvent, CLIPBOARD_READ_FRAME_GATE, CloseTabOutcome,
+    GEOLOCATION_OFFERED, HttpCredentials, KeyLocation, KeyState, KeyboardInput, KeyboardModifiers,
+    LoadState, PagePermission, PageRequest, PageRequestAnswer, PageRequestId, PageRequestKind,
     PageRequestReply, PermissionDecision, PermissionDecisions, PointerButton, PointerButtonAction,
     SessionPermissionDecisions, TabCommand, TabId,
 };
@@ -847,7 +847,7 @@ fn credentials_never_appear_in_debug_output() {
 
 // Review round 1
 
-const EVERY_PERMISSION: [PagePermission; 13] = [
+const EVERY_PERMISSION: [PagePermission; 14] = [
     PagePermission::Geolocation,
     PagePermission::Notifications,
     PagePermission::Push,
@@ -861,6 +861,8 @@ const EVERY_PERMISSION: [PagePermission; 13] = [
     PagePermission::PersistentStorage,
     PagePermission::ScreenWakeLock,
     PagePermission::Gamepad,
+    // clipboard
+    PagePermission::ClipboardRead,
 ];
 
 #[test]
@@ -873,6 +875,8 @@ fn storage_camera_microphone_and_geolocation_are_asked_and_the_rest_denied_witho
         // media-capture: camera and microphone are asked too, on macOS (the only platform
         // where pages can use them).
         let capture = matches!(feature, PagePermission::Camera | PagePermission::Microphone);
+        // clipboard: reading the clipboard is not asked, whichever way the gate is set here;
+        // `clipboard_reading_is_not_asked_while_script_reads_are_off` says why.
         if feature == PagePermission::PersistentStorage
             || (capture && cfg!(target_os = "macos"))
             || (feature == PagePermission::Geolocation && GEOLOCATION_OFFERED)
@@ -893,6 +897,36 @@ fn storage_camera_microphone_and_geolocation_are_asked_and_the_rest_denied_witho
             );
         }
     }
+}
+
+// clipboard
+/// Pins a script's clipboard read as never asked (the password manager's copied passwords depend
+/// on it). Unlike a check that follows the constant, this fails when `CLIPBOARD_READ_FRAME_GATE`
+/// is turned on: whoever does that works through the checklist in the constant's doc comment and
+/// changes this test and the one above in the same commit.
+#[test]
+fn clipboard_reading_is_not_asked_while_script_reads_are_off() {
+    let reads_gate = CLIPBOARD_READ_FRAME_GATE;
+    assert!(
+        !reads_gate,
+        "CLIPBOARD_READ_FRAME_GATE is on: work through its turn-on checklist and change this test"
+    );
+    assert!(!PagePermission::ClipboardRead.is_promptable());
+
+    let (mut controller, tab_id) = ready_controller();
+    receive(
+        &mut controller,
+        tab_id,
+        permission(1, PAGE, PagePermission::ClipboardRead),
+    );
+    assert_eq!(pending_id(&controller, tab_id), None);
+    assert_eq!(
+        drain(&mut controller),
+        vec![TabCommand::new(
+            tab_id,
+            answer(1, PageRequestAnswer::Decline)
+        )]
+    );
 }
 
 #[test]

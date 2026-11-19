@@ -89,6 +89,41 @@ Open `controls.html`.
    and the blue one is shown under its own address.
 3. `opener.html?close`, after allowing pop-ups: the opened page closes its own tab again.
 
+## Clipboard
+
+Open `clipboard.html`. Mercury does not offer pages `navigator.clipboard` yet
+(`ASYNC_CLIPBOARD_OFFERED` in `talaria-core`), so what must keep working is your own Cut, Copy and
+Paste. Every one of them goes through Mercury's clipboard gate, which refuses a Paste it was not told
+was yours (the page then gets empty text), so these steps are the only check of the real engine, the
+Edit menu and the system clipboard together. The units drive the same code with a recorder in place of
+the engine.
+
+1. The page says `navigator.clipboard: missing`, and **Copy** and **Read the clipboard** both say
+   `navigator.clipboard is missing.`
+2. Copy a word in another app, then reload the page and wait a few seconds: you still have your word
+   on the clipboard (nothing the page does changes it).
+3. Your own Copy: select some page text, Edit → Copy, then again with Cmd+C and with the context
+   menu's Copy: paste in another app each time: you get the text. Right-click a link and an image:
+   "Copy link address" and "Copy image address" put the address on the clipboard.
+4. Your own Paste shows the page what it pasted: copy a word in another app, click in the text box,
+   and paste with Cmd+V, then with Edit → Paste, then with the context menu's Paste. Each time the
+   word appears in the box and the line under it reads `paste event: "<your word>"` (a Paste that
+   Mercury did not take as yours shows an empty box and `paste event: ""`). No prompt appears.
+5. Your own Cut: type something in the box, select it and press Cmd+X: it leaves the box, and you can
+   paste it in another app.
+
+When `ASYNC_CLIPBOARD_OFFERED` is turned on (see its doc comment), add:
+
+- Reload the page: on load it tries to write and read without a click and reports `writeText
+  resolved` (Servo says so even when Mercury refuses the write) and `readText resolved with ""`. Your
+  clipboard still holds your word, not "written by the page".
+- Click **Copy** (an ordinary click: a script's write is allowed only within a second of the press):
+  the page says "Copied."; paste in another app: you get "Mercury copy button".
+- Click **Read the clipboard**: no prompt appears and the page says `Read ""`, whatever the
+  clipboard holds. A script's read stays off until the engine can tell which frame asks
+  (`CLIPBOARD_READ_FRAME_GATE`); then a bubble will ask whether "127.0.0.1:8765 wants to see text
+  you copied".
+
 ## Quitting
 
 1. Close the window, Cmd+Q, and Dock → right-click → Quit: each time Mercury quits within a second or two.

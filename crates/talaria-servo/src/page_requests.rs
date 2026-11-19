@@ -173,6 +173,8 @@ pub(crate) enum ServoPageRequest {
     Unload(AllowOrDenyRequest),
     Authentication(AuthenticationRequest),
     Permission(PermissionRequest),
+    // clipboard: a page's `navigator.clipboard.readText()`, asked as `PagePermission::ClipboardRead`.
+    ClipboardRead(crate::clipboard::ClipboardReadRequest),
 }
 
 impl EngineRequest for ServoPageRequest {
@@ -198,6 +200,9 @@ impl EngineRequest for ServoPageRequest {
             ),
             (Self::Permission(request), Accept) => request.allow(),
             (Self::Permission(request), Decline) => request.deny(),
+            // clipboard
+            (Self::ClipboardRead(request), Accept) => request.allow(),
+            (Self::ClipboardRead(request), _) => request.deny(),
             // Anything else carries no meaning for the request: leave it to the default.
             (_, _) => {}
         }

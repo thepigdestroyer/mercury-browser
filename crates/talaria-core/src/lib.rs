@@ -3,6 +3,7 @@ mod address;
 mod browser;
 // media-capture
 mod capture;
+mod clipboard;
 mod controller;
 mod controls;
 mod cursor;
@@ -30,6 +31,11 @@ pub use browser::{
 };
 // media-capture
 pub use capture::CaptureAccess;
+pub use clipboard::{
+    ASYNC_CLIPBOARD_OFFERED, CLIPBOARD_READ_FRAME_GATE, ClipboardGate, ClipboardReadDecision,
+    MemoryPasteboard, Pasteboard, USER_CLIPBOARD_ACTION_WINDOW, clipboard_shortcut,
+    context_menu_clipboard_command,
+};
 pub use controller::{BrowserController, CloseTabOutcome};
 // tabs-plus
 pub use controller::{PinnedCloseOutcome, tab_matches_query};

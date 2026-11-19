@@ -22,6 +22,7 @@ use talaria_core::{PageRequestAnswer, PageRequestId};
 use talaria_core::MediaSessionAction;
 use url::Url;
 
+use crate::clipboard::TabClipboard;
 use crate::document_starts::DocumentStarts;
 use crate::embedder_controls::EmbedderControls;
 use crate::find_in_page;
@@ -52,6 +53,8 @@ pub struct ServoWebView {
     document_start: Rc<DocumentStarts>,
     // tabs
     page_feedback: Rc<PageFeedback>,
+    // clipboard: the user's Cut, Copy and Paste in this tab's page
+    clipboard: TabClipboard,
     // geolocation: told when the web view is shown or hidden
     geolocation: Option<Rc<WebViewGeolocation>>,
     // media session, find
@@ -67,6 +70,7 @@ pub(crate) struct TabParts {
     pub(crate) page_requests: ClosesOnDrop<ServoPageRequest>,
     pub(crate) document_start: Rc<DocumentStarts>,
     pub(crate) page_feedback: Rc<PageFeedback>,
+    pub(crate) clipboard: TabClipboard, // clipboard
     /// The tab's geolocation (also Servo's geolocation delegate); `None` while it is off.
     pub(crate) geolocation: Option<Rc<WebViewGeolocation>>,
     // media session
@@ -86,6 +90,7 @@ impl ServoWebView {
             page_requests,
             document_start,
             page_feedback,
+            clipboard,
             geolocation,
             browser_event_sender,
         } = parts;
@@ -98,6 +103,7 @@ impl ServoWebView {
             page_requests,
             document_start,
             page_feedback,
+            clipboard,
             geolocation,
             browser_event_sender,
         }
@@ -290,21 +296,8 @@ impl TalariaWebView for ServoWebView {
     }
 
     fn keyboard_input(&mut self, event: KeyboardInput) -> Result<(), Self::Error> {
-        let keyboard_event = ServoKeyboardEvent::new_without_event(
-            servo_key_state(event.state),
-            event
-                .key
-                .parse()
-                .unwrap_or(Key::Named(NamedKey::Unidentified)),
-            event.code.parse().unwrap_or(Code::Unidentified),
-            servo_key_location(event.location),
-            servo_modifiers(event.modifiers),
-            event.repeat,
-            event.is_composing,
-        );
-        let _event_id = self
-            .inner
-            .notify_input_event(InputEvent::Keyboard(keyboard_event));
+        // clipboard: also notes a Cut, Copy or Paste key as the user's command.
+        send_keyboard_input(&self.clipboard, &*self.inner, event);
         Ok(())
     }
 
@@ -353,7 +346,10 @@ impl TalariaWebView for ServoWebView {
 
     // controls
     fn answer_control(&mut self, id: ControlId, answer: ControlAnswer) -> Result<(), Self::Error> {
-        self.controls.answer(id, answer);
+        // clipboard: also notes a context-menu Cut, Copy or Paste as the user's command.
+        answer_control_in_tab(&self.clipboard, id, answer, |id, answer| {
+            self.controls.answer(id, answer);
+        });
         Ok(())
     }
 
@@ -384,9 +380,8 @@ impl TalariaWebView for ServoWebView {
 
     // menus
     fn clipboard(&mut self, command: ClipboardCommand) -> Result<(), Self::Error> {
-        let _event_id = self
-            .inner
-            .notify_input_event(InputEvent::EditingAction(servo_clipboard_action(command)));
+        // clipboard: the Edit menu's command is the user's, and is noted before Servo performs it.
+        send_clipboard_command(&self.clipboard, &*self.inner, command);
         Ok(())
     }
 
@@ -482,6 +477,66 @@ impl TalariaWebView for ServoWebView {
             });
         Ok(())
     }
+}
+
+// clipboard
+// What the user's Cut, Copy and Paste do in a tab, apart from the engine and the controls the
+// tab owns, so that the tests drive the same code the tab runs: Servo performs each of them as a
+// request that reads or writes the clipboard (`crate::clipboard`), and the tab's clipboard
+// answers it only if it was told the command was the user's first. A command that is not noted
+// pastes empty text.
+
+/// Where a tab's input events go: its Servo web view, or a recorder in the tests.
+trait InputEventSink {
+    fn send(&self, event: InputEvent);
+}
+
+impl InputEventSink for servo::WebView {
+    fn send(&self, event: InputEvent) {
+        let _event_id = self.notify_input_event(event);
+    }
+}
+
+/// Sends a key press to the page, noting it first when it is the user's Cut, Copy or Paste key.
+fn send_keyboard_input(clipboard: &TabClipboard, sink: &impl InputEventSink, event: KeyboardInput) {
+    clipboard.key_pressed(&event);
+    let keyboard_event = ServoKeyboardEvent::new_without_event(
+        servo_key_state(event.state),
+        event
+            .key
+            .parse()
+            .unwrap_or(Key::Named(NamedKey::Unidentified)),
+        event.code.parse().unwrap_or(Code::Unidentified),
+        servo_key_location(event.location),
+        servo_modifiers(event.modifiers),
+        event.repeat,
+        event.is_composing,
+    );
+    sink.send(InputEvent::Keyboard(keyboard_event));
+}
+
+/// Has the page perform the Edit menu's Cut, Copy or Paste, noting it first.
+fn send_clipboard_command(
+    clipboard: &TabClipboard,
+    sink: &impl InputEventSink,
+    command: ClipboardCommand,
+) {
+    clipboard.user_command(command);
+    sink.send(InputEvent::EditingAction(servo_clipboard_action(command)));
+}
+
+/// Hands the user's answer to a control to `deliver`, noting it first when it is a context-menu
+/// Cut, Copy or Paste (or the copying of a link or image address).
+fn answer_control_in_tab(
+    clipboard: &TabClipboard,
+    id: ControlId,
+    answer: ControlAnswer,
+    deliver: impl FnOnce(ControlId, ControlAnswer),
+) {
+    if let ControlAnswer::ContextMenu(action) = &answer {
+        clipboard.context_menu_chosen(*action);
+    }
+    deliver(id, answer);
 }
 
 /// The same editing Servo performs for Cmd/Ctrl+X, C and V in the page.
@@ -705,5 +760,195 @@ mod tests {
             servo_composition_state(CompositionState::End),
             ServoCompositionState::End
         );
+    }
+    // clipboard: the user's Cut, Copy and Paste in a tab. `send_keyboard_input`,
+    // `send_clipboard_command` and `answer_control_in_tab` are what `ServoWebView::keyboard_input`,
+    // `::clipboard` and `::answer_control` run, with the engine's side replaced by a recorder and
+    // the tab's clipboard built the way the runtime builds it. Without the noting they do, every
+    // Paste of the user's would insert empty text.
+
+    use crate::clipboard::test_support::{key_press, page_read, runtime_tab};
+    use talaria_core::ContextMenuAction;
+
+    #[derive(Default)]
+    struct RecordedEvents(std::cell::RefCell<Vec<InputEvent>>);
+
+    impl InputEventSink for RecordedEvents {
+        fn send(&self, event: InputEvent) {
+            self.0.borrow_mut().push(event);
+        }
+    }
+
+    impl RecordedEvents {
+        fn editing_actions(&self) -> Vec<ClipboardAction> {
+            self.0
+                .borrow()
+                .iter()
+                .filter_map(|event| match event {
+                    InputEvent::EditingAction(action) => Some(*action),
+                    _other => None,
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn the_paste_key_reaches_the_page_and_its_read_gets_the_clipboard() {
+        let (clipboard, _pasteboard, uses) = runtime_tab("pasted text", false);
+        let events = RecordedEvents::default();
+        let input = key_press("v", true);
+
+        send_keyboard_input(&clipboard, &events, input.clone());
+
+        // The key goes to Servo as it came...
+        let events = events.0.borrow();
+        let [InputEvent::Keyboard(forwarded)] = events.as_slice() else {
+            panic!("expected one keyboard event, got {events:?}");
+        };
+        assert_eq!(forwarded.event.state, ServoKeyState::Down);
+        assert_eq!(forwarded.event.key, Key::Character("v".to_owned()));
+        assert_eq!(forwarded.event.modifiers, servo_modifiers(input.modifiers));
+        // ...and Servo's read for the Paste it performs is answered, once, without asking.
+        assert_eq!(page_read(&clipboard).as_deref(), Some("pasted text"));
+        assert_eq!(page_read(&clipboard), None);
+        assert!(uses.borrow().is_empty());
+    }
+
+    #[test]
+    fn typing_reaches_the_page_without_a_clipboard_grant() {
+        let (clipboard, pasteboard, _uses) = runtime_tab("kept", false);
+        let events = RecordedEvents::default();
+
+        for input in [
+            key_press("v", false),
+            key_press("c", false),
+            key_press("x", false),
+            key_press("a", true),
+        ] {
+            send_keyboard_input(&clipboard, &events, input);
+        }
+
+        assert_eq!(events.0.borrow().len(), 4);
+        assert_eq!(page_read(&clipboard), None);
+        assert!(!clipboard.write_text("typed"));
+        assert_eq!(pasteboard.text().as_deref(), Some("kept"));
+    }
+
+    #[test]
+    fn the_copy_and_cut_keys_reach_the_page_and_its_write_reaches_the_clipboard() {
+        for letter in ["c", "x"] {
+            let (clipboard, pasteboard, _uses) = runtime_tab("old", false);
+            let events = RecordedEvents::default();
+
+            send_keyboard_input(&clipboard, &events, key_press(letter, true));
+
+            assert_eq!(events.0.borrow().len(), 1, "{letter}");
+            assert!(clipboard.write_text("the selection"), "{letter}");
+            assert_eq!(pasteboard.text().as_deref(), Some("the selection"));
+        }
+    }
+
+    #[test]
+    fn the_edit_menus_paste_reaches_the_page_and_its_read_gets_the_clipboard() {
+        let (clipboard, _pasteboard, uses) = runtime_tab("pasted text", false);
+        let events = RecordedEvents::default();
+
+        send_clipboard_command(&clipboard, &events, ClipboardCommand::Paste);
+
+        assert_eq!(events.editing_actions(), vec![ClipboardAction::Paste]);
+        assert_eq!(page_read(&clipboard).as_deref(), Some("pasted text"));
+        assert_eq!(page_read(&clipboard), None);
+        assert!(uses.borrow().is_empty());
+    }
+
+    #[test]
+    fn the_edit_menus_copy_and_cut_reach_the_page_and_their_write_reaches_the_clipboard() {
+        for (command, action) in [
+            (ClipboardCommand::Copy, ClipboardAction::Copy),
+            (ClipboardCommand::Cut, ClipboardAction::Cut),
+        ] {
+            let (clipboard, pasteboard, _uses) = runtime_tab("old", false);
+            let events = RecordedEvents::default();
+
+            send_clipboard_command(&clipboard, &events, command);
+
+            assert_eq!(events.editing_actions(), vec![action]);
+            assert!(clipboard.write_text("the selection"), "{command:?}");
+            assert_eq!(pasteboard.text().as_deref(), Some("the selection"));
+            assert_eq!(page_read(&clipboard), None, "{command:?}");
+        }
+    }
+
+    #[test]
+    fn the_context_menus_paste_is_delivered_and_its_read_gets_the_clipboard() {
+        let (clipboard, _pasteboard, _uses) = runtime_tab("pasted text", false);
+        let mut delivered = Vec::new();
+
+        answer_control_in_tab(
+            &clipboard,
+            ControlId::new(4),
+            ControlAnswer::ContextMenu(ContextMenuAction::Paste),
+            |id, answer| delivered.push((id, answer)),
+        );
+
+        assert_eq!(
+            delivered,
+            vec![(
+                ControlId::new(4),
+                ControlAnswer::ContextMenu(ContextMenuAction::Paste)
+            )]
+        );
+        assert_eq!(page_read(&clipboard).as_deref(), Some("pasted text"));
+        assert_eq!(page_read(&clipboard), None);
+    }
+
+    #[test]
+    fn the_context_menus_copies_are_delivered_and_their_write_reaches_the_clipboard() {
+        for action in [
+            ContextMenuAction::Copy,
+            ContextMenuAction::Cut,
+            ContextMenuAction::CopyLink,
+            ContextMenuAction::CopyImageLink,
+        ] {
+            let (clipboard, pasteboard, _uses) = runtime_tab("old", false);
+            let mut delivered = 0;
+
+            answer_control_in_tab(
+                &clipboard,
+                ControlId::new(1),
+                ControlAnswer::ContextMenu(action),
+                |_id, _answer| delivered += 1,
+            );
+
+            assert_eq!(delivered, 1, "{action:?}");
+            assert!(clipboard.write_text("https://example.test/"), "{action:?}");
+            assert_eq!(
+                pasteboard.text().as_deref(),
+                Some("https://example.test/"),
+                "{action:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn other_answers_are_delivered_and_are_no_clipboard_command() {
+        let (clipboard, pasteboard, _uses) = runtime_tab("kept", false);
+        let mut delivered = 0;
+
+        for answer in [
+            ControlAnswer::ContextMenu(ContextMenuAction::Reload),
+            ControlAnswer::ContextMenu(ContextMenuAction::SelectAll),
+            ControlAnswer::Select(vec![0]),
+            ControlAnswer::Dismiss,
+        ] {
+            answer_control_in_tab(&clipboard, ControlId::new(2), answer, |_id, _answer| {
+                delivered += 1;
+            });
+        }
+
+        assert_eq!(delivered, 4);
+        assert_eq!(page_read(&clipboard), None);
+        assert!(!clipboard.write_text("page"));
+        assert_eq!(pasteboard.text().as_deref(), Some("kept"));
     }
 }

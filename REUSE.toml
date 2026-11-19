@@ -61,6 +61,7 @@ path = [
   "tests/pages/capture-frame-inner.html",
   "tests/pages/capture-frame.html",
   "tests/pages/capture.html",
+  "tests/pages/clipboard.html",
   "tests/pages/color-scheme-optin.html",
   "tests/pages/colors.html",
   "tests/pages/colour-partial.html",

@@ -12,6 +12,7 @@ is a secure context, which permission requests need.
 | `dialog-twice.html` | two alerts waiting at once (the page and a frame on `localhost`), with "Don't allow this page to show more dialogs" |
 | `permission.html` | `navigator.storage.persist()`: the permission prompt under the address bar |
 | `permission-camera.html` | `navigator.permissions.request({name: "camera"})`: denied without a prompt |
+| `clipboard.html` | `navigator.clipboard` is missing while Mercury does not offer the clipboard API (`ASYNC_CLIPBOARD_OFFERED`): the page says so. If the API is ever offered, the page calls `writeText()` then `readText()` on load, without a gesture: both refused (Servo resolves the write anyway), the read resolves with `""`; run with `MERCURY_TEST_CLIPBOARD_TEXT=seed` to give the run's in-memory clipboard a text the page must not see. By hand, in a normal run: a text box whose `paste` handler shows the text the user's paste gave the page (and, with the API offered, buttons for a script's copy and read) |
 | `http-auth.html` | a frame loading `/private`: the sign-in sheet (Servo asks only for navigations, not for `fetch()`) |
 | `navigate-then-head-alert.html?port=N` | navigates (by script) to `head-alert.html` on port `N`, another origin, whose `<head>` alerts; run with `RUST_LOG=talaria_servo=debug` to see whether the new address or the new document's dialog reaches the browser first. Needs a second `serve-tests.py --port N`. The run ends with exit 3, because the head alert keeps the page from loading. |
 

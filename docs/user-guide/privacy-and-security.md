@@ -87,6 +87,14 @@ Mercury keeps saved logins in your login keychain. Open **Settings > Passwords**
 - An exported file holds every password in clear text and is readable only by you. Delete it once you no longer need it, and do not open it in a spreadsheet.
 - Runs with `--profile-dir`, `--screenshot` or `--background` keep logins only until Mercury quits and never use the keychain.
 
+## Clipboard
+
+Cut, Copy and Paste work in pages as usual: with their shortcuts, from the page's context menu, and from the Edit menu while the page has keyboard focus.
+
+A page sees what is on your clipboard only when you paste into it, and it can change your clipboard only through your own Cut or Copy. Mercury does not yet offer pages the clipboard API (`navigator.clipboard`): a site's own **Copy** button, which uses it, does not work yet (select the text and copy it yourself), and no script can read or overwrite your clipboard on its own.
+
+The reason is that Mercury cannot yet tell which frame of a page is asking. With the API on, a frame from another site inside the page (an advert, for example) would be treated like the page itself: it could put text on your clipboard shortly after you click, and it could read what you are pasting, such as a password you copied from the password manager. The API will be offered once the engine can tell the frames apart.
+
 ## Proxy servers
 
 On macOS, Mercury uses the proxies set in **System Settings > Network > (your network) > Details > Proxies**, read when Mercury starts; a change takes effect at the next start. The `http_proxy`, `https_proxy` and `no_proxy` environment variables, if set, are used instead (on Linux they are the only source).

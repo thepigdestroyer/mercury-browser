@@ -71,6 +71,10 @@ pub enum PagePermission {
     PersistentStorage,
     ScreenWakeLock,
     Gamepad,
+    // clipboard
+    /// Reading text from the clipboard (`navigator.clipboard.readText()`); asked by Mercury itself,
+    /// not by Servo, see `ClipboardGate`.
+    ClipboardRead,
 }
 
 /// The switch for geolocation in normal runs. Off until the vendored `servo-script` refuses
@@ -98,6 +102,9 @@ impl PagePermission {
     /// - screen wake lock: its engine preference (`dom_wakelock_enabled`) is off. Add it here
     ///   when it is turned on.
     ///
+    /// Clipboard reading is asked as well once a script's reads are offered
+    /// (`CLIPBOARD_READ_FRAME_GATE`, clipboard lane); Servo never asks for it itself.
+    ///
     /// A page can still name any of these in `navigator.permissions.request()`.
     pub const fn is_promptable(self) -> bool {
         match self {
@@ -105,6 +112,8 @@ impl PagePermission {
             // Only macOS gives pages `navigator.mediaDevices`.
             Self::Camera | Self::Microphone => cfg!(target_os = "macos"),
             Self::Geolocation => GEOLOCATION_OFFERED,
+            // Clipboard reading is asked only once a script's reads are offered (clipboard lane).
+            Self::ClipboardRead => crate::CLIPBOARD_READ_FRAME_GATE,
             _ => false,
         }
     }
@@ -127,6 +136,8 @@ impl PagePermission {
             Self::PersistentStorage => "store data permanently on this device",
             Self::ScreenWakeLock => "keep your screen on",
             Self::Gamepad => "use your game controllers",
+            // clipboard
+            Self::ClipboardRead => "see text you copied",
         }
     }
 }
@@ -1203,6 +1214,10 @@ mod tests {
         assert_eq!(
             PagePermission::Geolocation.description(),
             "know your location"
+        );
+        assert_eq!(
+            PagePermission::ClipboardRead.description(),
+            "see text you copied"
         );
     }
 }

@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
 mod adblocker;
+mod clipboard;
 mod content_process;
 mod document_starts;
 mod download_offers;
@@ -42,6 +43,7 @@ pub use resources::record_error_page_secret;
 pub use site_information::SiteDataSummary;
 
 pub use adblocker::FilterEngineSlot;
+pub use clipboard::{ActivationUse, UserActivationCheck};
 pub use content_process::{
     ContentProcessArgumentError, record_browser_process_id, run_content_process_if_requested,
 };
