@@ -623,7 +623,11 @@ impl WebGLTexture {
 
             width = cmp::max(1, width / 2);
             height = cmp::max(1, height / 2);
-            depth = cmp::max(1, depth / 2);
+            // Mercury: backport of servo/servo#49436 (merge commit c2c5117bf). Only a 3D texture halves its
+            // depth with each level; a 2D array keeps its layer count.
+            if target == TexImageTarget::Texture3D {
+                depth = cmp::max(1, depth / 2);
+            }
         }
 
         self.immutable_levels.set(Some(levels));
