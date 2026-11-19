@@ -65,7 +65,10 @@ fn window(theme: ChromeTheme, address: &str) -> MainWindow {
         has_icon: false,
         active: true,
         loading: false,
-        audio: TabAudioState::Silent, // media-session: the field train 20 added
+        id: 1,
+        pinned: false,
+        url: "https://example.com/".into(),
+        audio: TabAudioState::Silent,
     }])));
     window.set_is_new_tab(false);
     window.set_address(address.into());
