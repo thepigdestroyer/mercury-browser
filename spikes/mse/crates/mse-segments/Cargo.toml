@@ -1,0 +1,12 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mse-segments"
+description = "Splits fragmented MP4 and WebM files into init and media segments, the pieces an MSE player appends. Pure Rust, no GStreamer."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+thiserror = { workspace = true }

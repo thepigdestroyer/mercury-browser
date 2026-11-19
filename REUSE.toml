@@ -108,6 +108,8 @@ path = [
   "tests/pages/untitled.html",
   "tests/pages/webgl-multi.html",
   "THIRD-PARTY-NOTICES.md",
+  "spikes/mse/Cargo.lock",
+  "spikes/mse/README.md",
   "crates/talaria-servo/resources/adblock/manifest.json",
   "tests/filter-lists/brave-unbreak.txt",
   "tests/pages/blocklists.html",

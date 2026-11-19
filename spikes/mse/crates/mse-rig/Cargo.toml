@@ -1,0 +1,20 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mse-rig"
+description = "The GstMSE test rig: private GStreamer set-up, a thin backend over gstreamer-mse (the sketch for MED-1), pipelines with counting sinks, an event log and the report types."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+glib = { workspace = true }
+gstreamer = { workspace = true }
+gstreamer-app = { workspace = true }
+gstreamer-mse = { workspace = true }
+gstreamer-play = { workspace = true }
+gstreamer-video = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
