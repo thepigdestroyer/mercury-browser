@@ -108,6 +108,13 @@ path = [
   "tests/pages/untitled.html",
   "tests/pages/webgl-multi.html",
   "spikes/webrtc/sink-api/Cargo.lock",
+  "spikes/webrtc/bridge/Cargo.lock",
+  "spikes/webrtc/livekit/Cargo.lock",
+  "spikes/webrtc/livekit/README.md",
+  "spikes/webrtc/livekit/no-prebuilt/README",
+  "spikes/webrtc/shiguredo/Cargo.lock",
+  "spikes/webrtc/shiguredo/README.md",
+  "spikes/webrtc/README.md",
   "THIRD-PARTY-NOTICES.md",
   "crates/talaria-servo/resources/adblock/manifest.json",
   "tests/filter-lists/brave-unbreak.txt",
@@ -171,3 +178,23 @@ path = [
 ]
 SPDX-FileCopyrightText = "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)"
 SPDX-License-Identifier = "MPL-2.0"
+
+# sp-rtc spike (spikes/webrtc): patches to Apache-2.0 crates of LiveKit (webrtc-sys, libwebrtc) and
+# Shiguredo (shiguredo_webrtc). A patch file is made of the upstream files' lines, so it keeps the
+# upstream licence; the one new file the Shiguredo patch adds carries its own PolyForm header
+# inside the patch. Nothing of the upstream crates is committed (prepare.sh copies them from the
+# cargo registry), see THIRD-PARTY-NOTICES.md.
+[[annotations]]
+path = [
+  "spikes/webrtc/livekit/patches/libwebrtc-0.4.1.patch",
+  "spikes/webrtc/livekit/patches/webrtc-sys-0.3.54.patch",
+]
+SPDX-FileCopyrightText = "2025 LiveKit, Inc."
+SPDX-License-Identifier = "Apache-2.0"
+
+[[annotations]]
+path = [
+  "spikes/webrtc/shiguredo/patches/shiguredo_webrtc-0.157.0.patch",
+]
+SPDX-FileCopyrightText = "The shiguredo_webrtc authors (https://github.com/shiguredo/webrtc-rs)"
+SPDX-License-Identifier = "Apache-2.0"
