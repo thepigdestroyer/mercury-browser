@@ -75,6 +75,7 @@ component ProfileRowView inherits Rectangle {
         spacing: 2px;
         Text {
             text: root.profile.browser + " — " + root.profile.name;
+            accessible-role: none;
             font-size: 14px;
             font-weight: 600;
             color: root.selected ? Palette.selection-foreground : Palette.foreground;
@@ -83,6 +84,7 @@ component ProfileRowView inherits Rectangle {
 
         Text {
             text: root.profile.holds;
+            accessible-role: none;
             font-size: 12px;
             color: (root.selected ? Palette.selection-foreground : Palette.foreground).with-alpha(0.7);
             overflow: elide;
@@ -231,7 +233,8 @@ export component ImportWindow inherits Window {
 
                 ProgressIndicator {
                     indeterminate: true;
-                    accessible-label: "Looking for other browsers";
+                    // The heading above says what is going on; the label names the bar.
+                    accessible-label: "Search progress";
                 }
 
                 Rectangle {
@@ -307,12 +310,14 @@ export component ImportWindow inherits Window {
                         text: "Bookmarks";
                         enabled: root.current.bookmarks;
                         checked <=> root.import-bookmarks;
+                        accessible-description: root.current.bookmarks ? "" : "This profile has no bookmarks to import.";
                     }
 
                     CheckBox {
                         text: "History";
                         enabled: root.current.history;
                         checked <=> root.import-history;
+                        accessible-description: root.current.history ? "" : "This profile has no history to import.";
                     }
                 }
 
@@ -338,8 +343,12 @@ export component ImportWindow inherits Window {
                         text: "Import";
                         primary: true;
                         enabled: root.can-start;
+                        accessible-description: root.can-start ? "" : "Tick Bookmarks or History first.";
                         clicked => {
-                            root.start-import();
+                            // Disabled: nothing happens, even if assistive technology presses it.
+                            if root.can-start {
+                                root.start-import();
+                            }
                         }
                     }
                 }
@@ -365,7 +374,10 @@ export component ImportWindow inherits Window {
                         text: "Import bookmarks from a file…";
                         enabled: root.can-import-from-file;
                         clicked => {
-                            root.import-from-file();
+                            // Disabled: nothing happens, even if assistive technology presses it.
+                            if root.can-import-from-file {
+                                root.import-from-file();
+                            }
                         }
                     }
                 }
@@ -395,7 +407,9 @@ export component ImportWindow inherits Window {
                 ProgressIndicator {
                     indeterminate: !root.progress-known;
                     progress: root.progress;
-                    accessible-label: root.progress-title;
+                    // The heading above carries `progress-title`; the label names the bar, and the bar's value
+                    // (0 to 1, none while indeterminate) is the std widget's.
+                    accessible-label: "Import progress";
                 }
 
                 Note {
@@ -416,7 +430,10 @@ export component ImportWindow inherits Window {
                         text: "Cancel";
                         enabled: !root.cancelling;
                         clicked => {
-                            root.cancel-import();
+                            // Disabled: nothing happens, even if assistive technology presses it.
+                            if !root.cancelling {
+                                root.cancel-import();
+                            }
                         }
                     }
                 }
@@ -438,6 +455,9 @@ export component ImportWindow inherits Window {
                         width: parent.width;
                         height: parent.height;
                         text: (line.problem ? "⚠  " : "✓  ") + line.text;
+                        // The mark is drawn, not read: a problem says so in words, as the warning colour and
+                        // mark do on screen.
+                        accessible-label: (line.problem ? "Problem: " : "") + line.text;
                         font-size: 13px;
                         color: line.problem ? root.problem-color : Palette.foreground;
                         wrap: word-wrap;

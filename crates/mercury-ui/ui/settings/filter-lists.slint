@@ -20,6 +20,8 @@ export component FilterListsGroup inherits VerticalLayout {
     callback update-now();
 
     spacing: 8px;
+    accessible-role: groupbox;
+    accessible-label: "Filter lists";
 
     CheckBox {
         text: "Update filter lists automatically";
@@ -44,8 +46,14 @@ export component FilterListsGroup inherits VerticalLayout {
         Button {
             text: "Update now";
             enabled: root.can-update;
+            accessible-description: root.can-update
+                ? "Downloads newer versions of the filter lists."
+                : "Not available now; the text beside it says why.";
             clicked => {
-                root.update-now();
+                // Disabled: nothing happens, even if assistive technology presses it.
+                if root.can-update {
+                    root.update-now();
+                }
             }
         }
 

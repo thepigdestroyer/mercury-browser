@@ -112,7 +112,10 @@ export component BookmarksManager inherits Window {
                 text: "New folder";
                 enabled: root.can-add;
                 clicked => {
-                    root.new-folder();
+                    // Disabled: nothing happens, even if assistive technology presses it.
+                    if root.can-add {
+                        root.new-folder();
+                    }
                 }
             }
 
@@ -120,7 +123,10 @@ export component BookmarksManager inherits Window {
                 text: "New separator";
                 enabled: root.can-add;
                 clicked => {
-                    root.new-separator();
+                    // Disabled: nothing happens, even if assistive technology presses it.
+                    if root.can-add {
+                        root.new-separator();
+                    }
                 }
             }
 
@@ -128,7 +134,10 @@ export component BookmarksManager inherits Window {
                 text: "Import bookmarks from file…";
                 enabled: !root.busy;
                 clicked => {
-                    root.import-file();
+                    // Disabled: nothing happens, even if assistive technology presses it.
+                    if !root.busy {
+                        root.import-file();
+                    }
                 }
             }
 
@@ -136,7 +145,10 @@ export component BookmarksManager inherits Window {
                 text: "Export bookmarks…";
                 enabled: !root.busy;
                 clicked => {
-                    root.export-file();
+                    // Disabled: nothing happens, even if assistive technology presses it.
+                    if !root.busy {
+                        root.export-file();
+                    }
                 }
             }
         }
@@ -154,6 +166,7 @@ export component BookmarksManager inherits Window {
                 background: ChromePalette.content-background;
 
                 ListView {
+                    accessible-label: "Folders";
                     x: 1px;
                     y: 4px;
                     width: parent.width - 2px;
@@ -169,8 +182,17 @@ export component BookmarksManager inherits Window {
                             ? ChromePalette.item-selected
                             : folder-touch.has-hover ? ChromePalette.item-hover : transparent;
                         accessible-role: list-item;
-                        accessible-label: folder.title;
-                        accessible-item-selected: index == root.folder-index;
+                        accessible-label: folder.title == "" ? "(untitled)" : folder.title;
+                        // The indentation says how deep a folder lies; there is no tree role here.
+                        accessible-description: folder.depth > 0 ? "Level " + (folder.depth + 1) : "";
+                        accessible-item-selectable: true;
+                        // As drawn: while a search shows its results no folder is highlighted.
+                        accessible-item-selected: folder-item.is-selected;
+                        accessible-item-index: index;
+                        accessible-item-count: root.folders.length;
+                        accessible-action-default => {
+                            root.folder-selected(index);
+                        }
 
                         HorizontalLayout {
                             padding-left: 8px + folder.depth * 16px;
@@ -188,6 +210,7 @@ export component BookmarksManager inherits Window {
 
                             Text {
                                 text: folder.title == "" ? "(untitled)" : folder.title;
+                                accessible-role: none;
                                 color: folder-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text;
                                 font-size: 13px;
                                 font-weight: folder.depth == 0 ? 600 : 400;
@@ -227,7 +250,10 @@ export component BookmarksManager inherits Window {
                         text: "Move up";
                         enabled: root.can-move-up;
                         clicked => {
-                            root.move-up();
+                            // Disabled: nothing happens, even if assistive technology presses it.
+                            if root.can-move-up {
+                                root.move-up();
+                            }
                         }
                     }
 
@@ -235,7 +261,10 @@ export component BookmarksManager inherits Window {
                         text: "Move down";
                         enabled: root.can-move-down;
                         clicked => {
-                            root.move-down();
+                            // Disabled: nothing happens, even if assistive technology presses it.
+                            if root.can-move-down {
+                                root.move-down();
+                            }
                         }
                     }
 
@@ -243,7 +272,10 @@ export component BookmarksManager inherits Window {
                         text: "Delete";
                         enabled: root.row-index >= 0;
                         clicked => {
-                            root.delete-selected();
+                            // Disabled: nothing happens, even if assistive technology presses it.
+                            if root.row-index >= 0 {
+                                root.delete-selected();
+                            }
                         }
                     }
 
@@ -307,6 +339,7 @@ export component BookmarksManager inherits Window {
                         }
 
                         ListView {
+                            accessible-label: root.searching ? "Search results" : "Folder contents";
                             x: 1px;
                             y: 4px;
                             width: parent.width - 2px;
@@ -322,8 +355,18 @@ export component BookmarksManager inherits Window {
                                     ? ChromePalette.item-selected
                                     : row-touch.has-hover ? ChromePalette.item-hover : transparent;
                                 accessible-role: list-item;
-                                accessible-label: row.kind == BookmarkRowKind.separator ? "Separator" : row.title;
+                                accessible-label: row.kind == BookmarkRowKind.separator ? "Separator" : row.title == "" ? "(untitled)" : row.title;
+                                // The address of a bookmark, the word "Folder" for a folder (the icon says so on screen).
+                                accessible-description: row.kind == BookmarkRowKind.bookmark ? row.url : row.kind == BookmarkRowKind.folder ? "Folder" : "";
+                                accessible-item-selectable: true;
                                 accessible-item-selected: index == root.row-index;
+                                accessible-item-index: index;
+                                accessible-item-count: root.rows.length;
+                                // A click selects the row; Return opens it once the list has the keyboard focus.
+                                accessible-action-default => {
+                                    list-focus.focus();
+                                    root.select-row(index);
+                                }
 
                                 if row.kind == BookmarkRowKind.separator: Rectangle {
                                     x: 12px;
@@ -352,6 +395,7 @@ export component BookmarksManager inherits Window {
                                         min-width: 0px;
                                         preferred-width: 0px;
                                         text: row.title == "" ? "(untitled)" : row.title;
+                                        accessible-role: none;
                                         color: row-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text;
                                         font-size: 13px;
                                         vertical-alignment: center;
@@ -363,6 +407,7 @@ export component BookmarksManager inherits Window {
                                         min-width: 0px;
                                         preferred-width: 0px;
                                         text: row.url;
+                                        accessible-role: none;
                                         color: row-item.is-selected ? ChromePalette.item-selected-text : ChromePalette.text-secondary;
                                         font-size: 12px;
                                         vertical-alignment: center;
@@ -399,6 +444,7 @@ export component BookmarksManager inherits Window {
                         Text {
                             width: 70px;
                             text: "Name";
+                            accessible-role: none;
                             color: ChromePalette.text;
                             font-size: 13px;
                             vertical-alignment: center;
@@ -419,6 +465,7 @@ export component BookmarksManager inherits Window {
                         Text {
                             width: 70px;
                             text: "Address";
+                            accessible-role: none;
                             color: ChromePalette.text;
                             font-size: 13px;
                             vertical-alignment: center;
@@ -439,6 +486,7 @@ export component BookmarksManager inherits Window {
                         Text {
                             width: 70px;
                             text: "Move to";
+                            accessible-role: none;
                             color: ChromePalette.text;
                             font-size: 13px;
                             vertical-alignment: center;

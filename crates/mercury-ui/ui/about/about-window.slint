@@ -9,12 +9,19 @@ export enum AboutLink {
 }
 
 component LinkText inherits Text {
+    // What pressing it does, for assistive technology (nothing on screen says it).
+    in property <string> hint;
     callback clicked;
 
     color: touch.has-hover ? ChromePalette.button-label-hover : ChromePalette.accent;
     font-size: 12px;
     accessible-role: button;
     accessible-label: self.text;
+    accessible-description: root.hint;
+    // The same as a click on the text.
+    accessible-action-default => {
+        root.clicked();
+    }
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -162,6 +169,7 @@ export component AboutWindow inherits Window {
 
                 LinkText {
                     text: "Licence";
+                    hint: "Opens the licence terms in a new tab.";
                     clicked => {
                         root.open-link(AboutLink.licence);
                     }
@@ -169,6 +177,7 @@ export component AboutWindow inherits Window {
 
                 LinkText {
                     text: "Third-party notices";
+                    hint: "Opens the list of third-party notices in a new tab.";
                     clicked => {
                         root.open-link(AboutLink.third-party-notices);
                     }
