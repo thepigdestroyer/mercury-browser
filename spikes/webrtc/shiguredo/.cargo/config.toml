@@ -1,0 +1,13 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Cargo reads this file from the working directory and also the repository root's
+# .cargo/config.toml, which says 13.0 for the product. The archive behind libwebrtc_c was built for
+# macOS 14 (sp-rtc brief, D5), so this crate links with 14.0; Mercury's own minimum is not changed.
+#
+# The value must be a plain string: the table form `{ value = "14.0", force = true }` cannot be
+# merged with the root file's string and makes cargo stop ("failed to merge key
+# `MACOSX_DEPLOYMENT_TARGET`"). Without `force`, an exported MACOSX_DEPLOYMENT_TARGET wins over this
+# value; build.rs prints the value it sees, and `MACOSX_DEPLOYMENT_TARGET=13.0 cargo build ...` is
+# how the 13.0 link of the report was measured.
+[env]
+MACOSX_DEPLOYMENT_TARGET = "14.0"

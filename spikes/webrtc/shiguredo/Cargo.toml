@@ -1,0 +1,39 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Route S of the libwebrtc spike (sp-rtc lane, item 4): Shiguredo's own binding crate
+# `shiguredo_webrtc` over the pinned `libwebrtc_c` prebuilt. Its own cargo workspace: nothing here
+# is part of the default build. Run `./prepare.sh` once, then cargo from this directory, with the
+# environment of `scripts/macos/webrtc.sh env` and, for the tests, `scripts/macos/gstreamer.sh env`.
+# The prebuilt is arm64 only: on an Intel Mac add `--target aarch64-apple-darwin` (it links, it
+# cannot run).
+[package]
+name = "mercury-rtc-shiguredo-spike"
+version = "0.0.0"
+edition = "2024"
+publish = false
+license = "PolyForm-Noncommercial-1.0.0"
+description = "libwebrtc through Shiguredo's shiguredo_webrtc crate, for the WebRTC spike"
+build = "build.rs"
+
+# The patched copy of shiguredo_webrtc lives in vendor/ (git-ignored); it is not a member.
+[workspace]
+exclude = ["vendor"]
+
+[dependencies]
+shiguredo_webrtc = "=0.157.0"
+mercury-frame-sink = { path = "../sink-api" }
+
+[dev-dependencies]
+mercury-rtc-bridge = { path = "../bridge" }
+# The same version as the bridge and the root Cargo.lock.
+gstreamer = "=0.25.4"
+serde_json = "=1.0.154"
+
+# `prepare.sh` creates vendor/shiguredo_webrtc: the crate from the registry (checksum checked) plus
+# patches/shiguredo_webrtc-0.157.0.patch. Without it cargo stops here, so the unpatched build
+# script (which downloads libwebrtc_c with curl) can never run by mistake.
+[patch.crates-io]
+shiguredo_webrtc = { path = "vendor/shiguredo_webrtc" }
+
+[lints.rust]
+unsafe_op_in_unsafe_fn = "deny"

@@ -1,0 +1,110 @@
+--- a/build.rs
++++ b/build.rs
+@@ -6,6 +6,9 @@
+ 
+ use nojson::RawJson;
+ 
++// Mercury (sp-rtc spike): the pinned, verified prebuilt replaces the download; see mercury_prebuilt.rs.
++mod mercury_prebuilt;
++
+ struct BuildMetadata {
+     webrtc_build_version: String,
+     webrtc_base_url: String,
+@@ -108,6 +111,7 @@
+ }
+ 
+ fn main() {
++    mercury_prebuilt::refuse_unpinned(); // Mercury: stop unless MERCURY_WEBRTC_C_DIR is a verified directory
+     // Cargo.toml か build.rs が更新されたら、依存ライブラリを再ビルドする
+     println!("cargo::rerun-if-changed=Cargo.toml");
+     println!("cargo::rerun-if-changed=build.rs");
+@@ -712,6 +716,10 @@
+ /// - 外部ネットワークからファイルをダウンロードする。
+ /// - `out_dir` 配下へファイル作成、展開、コピー、削除を行う。
+ fn download_prebuilt(target: &str, out_dir: &Path) -> Result<PrebuiltPaths, String> {
++    // Mercury: take the pinned prebuilt; the download below is never reached (refuse_unpinned ran).
++    if let Some(lib_path) = mercury_prebuilt::pinned_lib(target, out_dir) {
++        return Ok(PrebuiltPaths { lib_path });
++    }
+     let version = env::var("CARGO_PKG_VERSION").map_err(|e| e.to_string())?;
+     let base_url = format!(
+         "https://github.com/shiguredo/webrtc-rs/releases/download/{}",
+--- a/mercury_prebuilt.rs
++++ b/mercury_prebuilt.rs
+@@ -0,0 +1,76 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++//! Mercury's replacement for the download in `build.rs` (sp-rtc spike, route S).
++//!
++//! The upstream build script fetches `libwebrtc_c-<platform>.tar.gz` with `curl` and checks it
++//! against a `.sha256` file that comes from the same server. Mercury pins the archive in
++//! `scripts/macos/webrtc.sh` (a SHA-256 computed locally and equal to GitHub's digest) and never
++//! downloads from a build script. This module takes `lib/libwebrtc_c.a` and `bindings.rs` from the
++//! directory in `MERCURY_WEBRTC_C_DIR`, which `scripts/macos/webrtc.sh env` exports only after
++//! `check` has re-hashed the archive and the unpacked files. It refuses to run without it: no
++//! download, no CMake, no libclang, no source build.
++
++use std::env;
++use std::fs;
++use std::path::{Path, PathBuf};
++
++const DIR_VAR: &str = "MERCURY_WEBRTC_C_DIR";
++/// Written by `webrtc.sh unpack` next to the files: one line, the sha256 of the archive.
++const MARKER: &str = ".mercury-webrtc-verified";
++
++fn refuse(reason: &str) -> ! {
++    panic!(
++        "Mercury: {reason}\n\
++         shiguredo_webrtc only links the pinned, verified libwebrtc_c prebuilt (macOS arm64).\n\
++         Run: eval \"$(scripts/macos/webrtc.sh env libwebrtc-c)\"   (fetch and unpack first)\n\
++         and build with --target aarch64-apple-darwin. Nothing is downloaded by this build."
++    );
++}
++
++/// The first call of `main`: stops the build unless it is the pinned prebuilt on macOS arm64.
++pub fn refuse_unpinned() {
++    println!("cargo:rerun-if-env-changed={DIR_VAR}");
++    for var in ["CARGO_FEATURE_SOURCE_BUILD", "WEBRTC_BUILD_ROOT"] {
++        if env::var_os(var).is_some() {
++            refuse(&format!("{var} asks for a build from source, which is not allowed"));
++        }
++    }
++    let os = env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
++    let arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap_or_default();
++    if (os.as_str(), arch.as_str()) != ("macos", "aarch64") {
++        refuse(&format!("target {arch}-{os} has no pinned prebuilt"));
++    }
++    // Checks the directory now so that the message is the first thing the user sees.
++    let _ = verified_dir();
++}
++
++fn verified_dir() -> PathBuf {
++    let Some(dir) = env::var_os(DIR_VAR).map(PathBuf::from) else {
++        refuse(&format!("{DIR_VAR} is not set"));
++    };
++    let marker = dir.join(MARKER);
++    println!("cargo:rerun-if-changed={}", marker.display());
++    let recorded = fs::read_to_string(&marker).unwrap_or_default();
++    let recorded = recorded.trim();
++    if recorded.len() != 64 || !recorded.bytes().all(|b| b.is_ascii_hexdigit()) {
++        refuse(&format!("{} is not a verified directory (no valid {MARKER})", dir.display()));
++    }
++    for file in ["lib/libwebrtc_c.a", "bindings.rs"] {
++        if !dir.join(file).is_file() {
++            refuse(&format!("{} has no {file}", dir.display()));
++        }
++    }
++    dir
++}
++
++/// Replaces `download_prebuilt`: copies `bindings.rs` to `out_dir` as upstream does and returns the
++/// path of the static library inside the pinned directory (no 600 MB copy).
++pub fn pinned_lib(_target: &str, out_dir: &Path) -> Option<PathBuf> {
++    let dir = verified_dir();
++    let bindings = dir.join("bindings.rs");
++    println!("cargo:rerun-if-changed={}", bindings.display());
++    if let Err(error) = fs::copy(&bindings, out_dir.join("bindings.rs")) {
++        refuse(&format!("cannot copy {}: {error}", bindings.display()));
++    }
++    Some(dir.join("lib").join("libwebrtc_c.a"))
++}
