@@ -145,7 +145,8 @@ pie showData title Work packages, 19 November 2026
 | Filter lists as separate files, updated in the background | ✅ Done | |
 | Servo patches: safety checks, frame identity, password autofill hooks, leave-page prompts and more | 🗓️ Planned | Approved. The camera work has landed, and most Servo crates are vendored as published, ready for the rest |
 | A completely redesigned, highly customisable interface | 🗓️ Planned | Replaces the look inherited from Hermes |
-| Accessibility of Mercury's own windows | 🗓️ Planned | |
+| Screen-reader labels for Mercury's own windows (toolbar, tabs, address bar, menus, dialogs, Settings and the other windows) | ✅ Done | Written into the code and covered by automated tests, but not yet tried with VoiceOver on a real Mac. Web pages are not readable by a screen reader yet: VoiceOver sees a page as one item |
+| Accessibility of web pages (a screen reader reading what a page says) | 🗓️ Planned | Needs Servo patches |
 | Phishing protection, search suggestions, password breach checks, translation, update checks | 🗓️ Planned | Waiting for decisions on providers and keys |
 | macOS disk image built and published by CI, signed ad hoc | ✅ Done | No release has been published yet |
 | With each release: SHA-256 checksums, a build-provenance attestation, the source of the bundled LGPL libraries and a signed update manifest | ✅ Done | The release workflow makes them once the owner has set up the update signing key. The browser does not check for updates yet |
@@ -180,7 +181,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 - Eleven features were in progress; ten have merged (session, history, bookmarks and import, downloads, find, links from other apps, media, camera and microphone, and filter lists). Location is the last: it's built but stays off until a Servo patch tells Mercury which frame is asking.
 - The approved Servo patches, each kept in `third_party/` with a note explaining it. The one that ties a certificate exception to its site has to land before the first public release.
 - A ground-up redesign of the interface, with themes, layouts and a toolbar you arrange yourself.
-- Accessibility for Mercury's own windows.
+- Accessibility of web pages, and trying the labels of Mercury's own windows with VoiceOver on a real Mac.
 - The outside services in the table above, once providers and keys are settled.
 - An update check in the browser, using the signed update manifest each release already carries.
 - Developer ID signing and notarisation of the macOS release, once there's a Developer ID.
