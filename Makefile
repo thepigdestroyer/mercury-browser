@@ -52,6 +52,7 @@ INSTALL_FILTER_LISTS_RELEASE = $(INSTALL_FILTER_LISTS) --release
 	setup \
 	install-linux-deps \
 	gstreamer-macos \
+	pdfium-macos \
 	test-media-macos \
 	fetch \
 	check \
@@ -90,6 +91,7 @@ help:
 		'setup' 'Install Rust components and fetch dependencies.' \
 		'install-linux-deps' 'Install Linux dependencies for the current Slint backend.' \
 		'gstreamer-macos' 'Download and unpack GStreamer for macOS (no sudo).' \
+		'pdfium-macos' 'Download and unpack PDFium (the PDF viewer library) for macOS (no sudo).' \
 		'test-media-macos' 'Check the macOS GStreamer scripts (needs gstreamer-macos for all checks).' \
 		'fetch' 'Download Cargo dependencies without building.' \
 		'check' 'Type-check every workspace target and feature.' \
@@ -194,6 +196,15 @@ gstreamer-macos:
 	scripts/macos/gstreamer.sh fetch
 	scripts/macos/gstreamer.sh unpack
 	scripts/macos/gstreamer.sh check
+
+# PDFium for the PDF viewer (scripts/macos/pdfium.sh): this Mac's architecture, or arm64 for the
+# application bundle (below). The viewer finds the library in this cache while it runs from the
+# build tree, and in Contents/MacOS/lib inside the bundle.
+PDFIUM_ARCH_ARGS = $(if $(PDFIUM_ARCH),--arch $(PDFIUM_ARCH))
+pdfium-macos:
+	scripts/macos/pdfium.sh $(PDFIUM_ARCH_ARGS) fetch
+	scripts/macos/pdfium.sh $(PDFIUM_ARCH_ARGS) unpack
+	scripts/macos/pdfium.sh $(PDFIUM_ARCH_ARGS) check
 
 test-media-macos:
 	scripts/macos/test-media.sh
@@ -320,6 +331,9 @@ REQUIRE_MACOS = @[ "$$(uname -s)" = Darwin ] || { \
 
 # The bundle needs its media libraries (bundle.sh refuses to build without a GStreamer
 # prefix); both steps run with the GStreamer environment, and the prefix it names is passed on.
+# The bundle is arm64 only and carries the arm64 PDFium, whatever Mac builds it (pdf-viewer).
+app-macos package-macos: PDFIUM_ARCH = arm64
+app-macos package-macos: pdfium-macos
 app-macos:
 	$(REQUIRE_MACOS)
 	$(GSTREAMER_ENV) "$(CARGO)" build --release --package "$(APP_PACKAGE)"

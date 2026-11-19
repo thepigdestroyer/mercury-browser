@@ -9,7 +9,7 @@
 # Assemble, sign and optionally package Mercury Browser.app.
 #
 #   scripts/macos/bundle.sh --gstreamer-prefix <dir> [--binary <path>] [--out <dir>]
-#                           [--identity <id>] [--dmg]
+#                           [--identity <id>] [--pdfium-prefix <dir>] [--dmg]
 #   (or MERCURY_GSTREAMER_PREFIX instead of --gstreamer-prefix; one of them is required)
 #   scripts/macos/bundle.sh [--identity <id>] --print-entitlements
 #
@@ -29,6 +29,12 @@
 #                              $MERCURY_GSTREAMER_PREFIX). Required: the
 #                              executable cannot start without its media
 #                              libraries, so no bundle is built without them
+#   --pdfium-prefix <dir>      the arm64 PDFium unpacked by scripts/macos/pdfium.sh
+#                              (default: that script's prefix for --arch arm64);
+#                              scripts/macos/collect-pdfium.sh puts libpdfium.dylib
+#                              in Contents/MacOS/lib and its licences in
+#                              Contents/Resources/pdfium-licenses. Required: the PDF
+#                              viewer renders with it
 #   --dmg                      also build Mercury-Browser-<version>-macos-arm64.dmg
 #                              and its .sha256
 #   --print-entitlements       print the entitlements file the identity would
@@ -67,12 +73,13 @@ BINARY="target/release/mercury-browser"
 OUT="dist"
 IDENTITY="${MERCURY_SIGN_IDENTITY:--}"
 GSTREAMER_PREFIX="${MERCURY_GSTREAMER_PREFIX:-}"
+PDFIUM_PREFIX="" # pdf-viewer: empty = the cache prefix of scripts/macos/pdfium.sh
 MAKE_DMG=0
 PRINT_ENTITLEMENTS=0
 
 while [ "$#" -gt 0 ]; do
     case "$1" in
-        --binary | --out | --identity | --gstreamer-prefix)
+        --binary | --out | --identity | --gstreamer-prefix | --pdfium-prefix)
             [ "$#" -ge 2 ] || die "$1 needs a value"
             case "$1" in
                 --binary) BINARY="$2" ;;
@@ -80,6 +87,7 @@ while [ "$#" -gt 0 ]; do
                 # An empty identity is reported by identity_problem below.
                 --identity) IDENTITY="$2" ;;
                 --gstreamer-prefix) GSTREAMER_PREFIX="$2" ;;
+                --pdfium-prefix) PDFIUM_PREFIX="$2" ;;
             esac
             shift 2
             ;;
@@ -101,6 +109,9 @@ if [ -n "$GSTREAMER_PREFIX" ]; then
     GSTREAMER_PREFIX="$(absolute "$GSTREAMER_PREFIX")"
     [ -d "$GSTREAMER_PREFIX" ] || die "GStreamer prefix $GSTREAMER_PREFIX does not exist"
 fi
+if [ -n "$PDFIUM_PREFIX" ]; then # pdf-viewer
+    PDFIUM_PREFIX="$(absolute "$PDFIUM_PREFIX")"
+fi
 
 REPO="$(cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 cd "$REPO"
@@ -119,6 +130,15 @@ COLLECTOR="scripts/macos/collect-gstreamer.sh"
 [ -f "$GSTREAMER_PREFIX/lib/libgstreamer-1.0.0.dylib" ] ||
     die "$GSTREAMER_PREFIX is not a GStreamer prefix (no lib/libgstreamer-1.0.0.dylib)"
 [ -f "$COLLECTOR" ] || die "$COLLECTOR is missing"
+
+# pdf-viewer: the PDF viewer renders with PDFium (arm64), collected below; checked here, before anything is built.
+PDFIUM_COLLECTOR="scripts/macos/collect-pdfium.sh"
+[ -f "$PDFIUM_COLLECTOR" ] || die "$PDFIUM_COLLECTOR is missing"
+if [ -z "$PDFIUM_PREFIX" ]; then
+    PDFIUM_PREFIX="$(bash scripts/macos/pdfium.sh --arch arm64 prefix)" || die "cannot work out the PDFium prefix (scripts/macos/pdfium.sh)"
+fi
+[ -f "$PDFIUM_PREFIX/lib/libpdfium.dylib" ] ||
+    die "$PDFIUM_PREFIX is not an unpacked arm64 PDFium (no lib/libpdfium.dylib): run make pdfium-macos (or scripts/macos/pdfium.sh --arch arm64 fetch unpack), or pass --pdfium-prefix"
 
 for tool in codesign ditto file hdiutil install_name_tool lipo otool plutil shasum; do
     command -v "$tool" >/dev/null 2>&1 || die "$tool not found (install the Xcode command-line tools)"
@@ -233,6 +253,16 @@ while IFS= read -r project; do
         ditto "$GSTREAMER_PREFIX/share/licenses/$project" "$RES_DIR/gstreamer-licenses/$project"
     fi
 done <<<"$PROJECTS"
+
+# ── PDF library ───────────────────────────────────────────────────────────
+# pdf-viewer: PDFium, loaded at run time from the directory of the media libraries
+# (mercury_pdfium::locate_library finds <executable dir>/lib/libpdfium.dylib). The collector
+# verifies the pinned build before it copies anything, and puts the licence texts in
+# Contents/Resources/pdfium-licenses. The signing loop below signs the library with the rest.
+say "collecting PDFium from $PDFIUM_PREFIX"
+bash "$PDFIUM_COLLECTOR" "$PDFIUM_PREFIX" "$BIN_DIR/lib" "$RES_DIR" || die "collecting PDFium failed"
+[ -f "$BIN_DIR/lib/libpdfium.dylib" ] || die "libpdfium.dylib is missing from $BIN_DIR/lib"
+[ -s "$RES_DIR/pdfium-licenses/LICENSE" ] || die "the PDFium licences are missing from $RES_DIR/pdfium-licenses"
 
 # The executable finds the bundled libraries through this rpath. Builds that
 # already link it in are left alone; editing the load commands invalidates the

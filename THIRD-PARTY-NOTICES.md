@@ -172,3 +172,71 @@ Mercury Browser ships can be used in a commercial product.
 Libraries linked only into Mercury's own build tools, never into the browser or its app bundle.
 
 - resvg 0.48 — https://github.com/linebender/resvg — Apache-2.0 OR MIT (used under MIT; Copyright 2017 the Resvg Authors; the text is in `LICENSES/MIT-resvg.txt`) — the SVG renderer of `crates/mercury-iconset`, which `scripts/macos/make-icns.sh` runs to render the app icon's iconset. Mercury's source contains none of its code.
+
+## PDF viewer (PDFium)
+
+Mercury Browser draws PDF files with **PDFium**, the PDF library of the Chromium project. PDFium is
+C++ and is not part of Mercury Browser's source code: it is a separate dynamic library that the
+browser loads when a PDF is opened in its own viewer, and it keeps its own licences. **The build is
+without V8 and without XFA** (no V8, no XFA): no JavaScript inside a PDF file runs, and XFA forms are not supported.
+
+- **Origin.** The prebuilt library of the pdfium-binaries project, https://github.com/bblanchon/pdfium-binaries,
+  release `chromium/8165` (PDFium 160.0.8165.0, published 16 November 2026;
+  https://github.com/bblanchon/pdfium-binaries/releases/tag/chromium%2F8165). The packaging scripts of that project are
+  MIT, Copyright 2014-2025 Benoit Blanchon (`LICENSES/MIT-pdfium-binaries.txt`). `scripts/macos/pdfium.sh` downloads
+  `pdfium-mac-arm64.tgz` (SHA-256 `112e74d717f3e0310273b70f3c8780e8a61ff11b34834124465c8305c841d350`) and, for
+  development on an Intel Mac, `pdfium-mac-x64.tgz` (SHA-256 `07285915b564e46a432a9909dbc1f15892885ca6489e3faeefc70dee77ed371a`),
+  stops on any other checksum, and checks that the tarball's `args.gn` says `pdf_enable_v8 = false` and
+  `pdf_enable_xfa = false`. The `pdfium-v8-*` builds (which run form JavaScript) are never used. The library inside
+  the arm64 tarball, `lib/libpdfium.dylib`, has SHA-256 `d421e426bd487de02fa3bd1f2aeaf56947261f790e6116951e26f729ced1b018`.
+- **Unmodified, and separate.** `Mercury Browser.app/Contents/MacOS/lib/libpdfium.dylib` (arm64) is that file byte for
+  byte, except that `scripts/macos/bundle.sh` signs it again with the application's signature (its install name,
+  `@rpath/libpdfium.dylib`, is the one it was built with). Nothing from it is linked into `mercury-browser`: the
+  `mercury-pdfium` crate loads it at run time, in a helper process of its own (`mercury-browser --pdf-worker`). A
+  compatible build with the same file name can replace it, signed again as described for the GStreamer libraries above;
+  none of its licences requires that.
+- **Licence texts.** Each component's text, as the tarball ships it, is in `LICENSES/` (named after its licence and
+  project, below) and, under the tarball's own file names, in `Contents/Resources/pdfium-licenses/` of the application.
+  The texts were copied from the tarball, not retyped; `scripts/macos/test-pdfium.sh --online` checks that they still
+  are identical to it.
+- **Credits that licences ask for.** FreeType (used under the FreeType Licence, FTL): "Portions of this software are
+  copyright © 2026 The FreeType Project (www.freetype.org). All rights reserved." (2026 is the year of the FreeType
+  snapshot that PDFium 160.0.8165.0 is built from.) libjpeg-turbo (IJG): "This software is based in part on the work
+  of the Independent JPEG Group."
+
+What the library contains (all as built into PDFium 160.0.8165.0; the project of each is the Chromium copy named by PDFium's
+`DEPS`; versions are those pinned there):
+
+| Component | Used for | Licence | Text |
+|---|---|---|---|
+| PDFium, Copyright 2014 The PDFium Authors | the PDF engine | BSD-3-Clause AND Apache-2.0 (both texts are in its licence file) | `LICENSES/BSD-3-Clause-pdfium.txt` |
+| Abseil C++ | utility library | Apache-2.0 | `LICENSES/Apache-2.0-abseil.txt` |
+| Anti-Grain Geometry 2.3 (agg23), Copyright 2002-2005 Maxim Shemanarev | 2D rasteriser | AGG 2.3 permission notice (copy, use, modify, sell and distribute, if the notice stays) | `LICENSES/LicenseRef-agg23.txt` |
+| dragonbox | floating-point to text | BSL-1.0 OR Apache-2.0 WITH LLVM-exception | `LICENSES/BSL-1.0-dragonbox.txt`, `LICENSES/Apache-2.0-LLVM-exception-dragonbox.txt` |
+| fast_float | text to floating-point | MIT (upstream: Apache-2.0 OR MIT OR BSL-1.0) | `LICENSES/MIT-fast_float.txt` |
+| FreeType | fonts | FTL (upstream: FTL OR GPL-2.0-only; **used under the FTL**, with the credit above) | `LICENSES/FTL-freetype.txt` |
+| HarfBuzz | text shaping | "Old MIT" | `LICENSES/MIT-harfbuzz.txt` |
+| Highway | SIMD helpers | Apache-2.0 (upstream: Apache-2.0 OR BSD-3-Clause) | `LICENSES/Apache-2.0-highway.txt` |
+| ICU | Unicode text handling | Unicode-3.0 (the file also carries the notices of the data it includes) | `LICENSES/Unicode-3.0-icu.txt` |
+| Little CMS (lcms2) | colour management | MIT | `LICENSES/MIT-lcms.txt` |
+| libjpeg-turbo | JPEG images | IJG AND BSD-3-Clause AND Zlib, with the credit above | `LICENSES/IJG-libjpeg-turbo.txt`, `LICENSES/BSD-3-Clause-libjpeg-turbo.md` |
+| OpenJPEG | JPEG 2000 images | BSD-2-Clause | `LICENSES/BSD-2-Clause-openjpeg.txt` |
+| libpng | PNG images | libpng-2.0 | `LICENSES/libpng-2.0-libpng.txt` |
+| llvm-libc | C library functions | Apache-2.0 WITH LLVM-exception | `LICENSES/Apache-2.0-LLVM-exception-llvm-libc.txt` |
+| simdutf | UTF conversion | MIT (upstream: Apache-2.0 OR MIT) | `LICENSES/MIT-simdutf.txt` |
+| zlib | compression | Zlib | `LICENSES/Zlib-zlib.txt` |
+
+Rust crates that load and wrap the library are compiled into `mercury-browser` and keep their own licences:
+
+- `pdfium-render` 0.9.5 — https://github.com/ajrcarey/pdfium-render — MIT OR Apache-2.0 (used under MIT; Copyright Alastair
+  Carey, the crate's author; the crate's licence file, `LICENSES/MIT-pdfium-render.md`, only names the two licences) — the
+  safe wrapper over PDFium's C interface, with the features `pdfium_8125` and `thread_safe`; its `pdfium_enable_v8` and
+  `pdfium_enable_xfa` features are off.
+- `maybe-owned` 0.3.4 — https://github.com/rustonaut/maybe-owned — MIT OR Apache-2.0 (used under MIT; Copyright (c)
+  2016 Philipp Korber; `LICENSES/MIT-maybe-owned.txt`) — a dependency of `pdfium-render`.
+- `piston-float` 1.0.1 — https://github.com/pistondevelopers/float — MIT (Copyright (c) 2015 PistonDevelopers;
+  `LICENSES/MIT-piston-float.txt`) — a dependency of `pdfium-render` (through `vecmath`).
+- `utf16string` 0.2.0 — https://github.com/getsentry/utf16string — MIT OR Apache-2.0 (used under MIT; Copyright (c)
+  2020 Armin Ronacher, 2019 Manish Goregaokar; `LICENSES/MIT-utf16string.txt`) — a dependency of `pdfium-render`.
+- `vecmath` 1.0.0 — https://github.com/pistondevelopers/vecmath — MIT (Copyright (c) 2014 PistonDevelopers;
+  `LICENSES/MIT-vecmath.txt`) — a dependency of `pdfium-render`.

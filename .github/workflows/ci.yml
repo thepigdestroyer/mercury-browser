@@ -345,6 +345,11 @@ jobs:
         id: build
         run: cargo build --locked --release --package mercury-desktop
 
+      # pdf-viewer: the arm64 PDFium that goes into the bundle, pinned by SHA-256 in
+      # scripts/macos/pdfium.sh (a few megabytes, so no cache).
+      - name: Fetch and unpack PDFium
+        run: make pdfium-macos
+
       - name: Assemble Mercury Browser.app
         # The executable is already built; this signs ad hoc and bundles the
         # GStreamer libraries from MERCURY_GSTREAMER_PREFIX.

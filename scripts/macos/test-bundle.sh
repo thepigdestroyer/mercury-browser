@@ -10,7 +10,8 @@
 #   MERCURY_TEST_BUNDLE="dist/Mercury Browser.app" scripts/macos/test-bundle.sh
 #                                     also checks the notice files in a built bundle
 #
-# Prints one line per check and exits non-zero if any fails. Writes nothing.
+# Prints one line per check and exits non-zero if any fails. Writes nothing (the PDFium script checks use a
+# temporary directory of their own and remove it).
 set -euo pipefail
 
 cd "$(dirname -- "${BASH_SOURCE[0]}")/../.."
@@ -250,6 +251,15 @@ check "a prefix that does not exist is refused" yes \
 check "a directory that is not a GStreamer prefix is refused" yes \
     "$(contains_text "$(bundle_status --gstreamer-prefix "$PWD/scripts")" 'is not a GStreamer prefix')"
 check "the refusals wrote nothing" no "$([ -e "$NO_OUT" ] && echo yes || echo no)"
+
+# ── PDFium (pdf-viewer) ───────────────────────────────────────────────────
+# The supply scripts' own checks (pdfium.sh, collect-pdfium.sh, bundle.sh's PDFium lines), offline.
+pdfium_checks_pass() { scripts/macos/test-pdfium.sh >/dev/null 2>&1; }
+check "scripts/macos/test-pdfium.sh passes" ok "$(status pdfium_checks_pass)"
+# The pattern matches bundle.sh's literal text, so nothing in it is meant to expand.
+# shellcheck disable=SC2016
+check "bundle.sh collects PDFium with collect-pdfium.sh" yes \
+    "$(grep -q '^bash "\$PDFIUM_COLLECTOR" "\$PDFIUM_PREFIX" "\$BIN_DIR/lib" "\$RES_DIR"' scripts/macos/bundle.sh && echo yes || echo no)"
 
 # ── Filter lists (blocklists) ─────────────────────────────────────────────
 check "the repository's filter lists match their manifest" 5 \
