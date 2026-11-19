@@ -19,6 +19,8 @@ pub(crate) mod insertlinebreak;
 pub(crate) mod insertparagraph;
 pub(crate) mod inserttext;
 pub(crate) mod italic;
+// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
+pub(crate) mod outdent;
 pub(crate) mod removeformat;
 pub(crate) mod strikethrough;
 pub(crate) mod stylewithcss;
