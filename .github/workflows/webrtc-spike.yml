@@ -243,14 +243,34 @@ jobs:
           fi
           cd "${CRATE_DIR}"
           status=0
+          # The sockets the tests open (evidence for the sandbox profile, SBX-1): the internet
+          # sockets of every process, sampled every two seconds while the tests run.
+          (
+            while :; do
+              lsof -nP -i 2>/dev/null >>"${LOG_DIR}/lsof-samples.txt" || true
+              sleep 2
+            done
+          ) &
+          sampler=$!
           started="$(date +%s)"
-          # DYLD_FALLBACK_LIBRARY_PATH is set on the cargo command line itself: macOS strips DYLD_*
-          # when a SIP-protected shell starts, and the test binaries need the GStreamer libraries.
-          DYLD_FALLBACK_LIBRARY_PATH="${MERCURY_GSTREAMER_PREFIX}/lib" \
-            GST_PLUGIN_SYSTEM_PATH_1_0="${MERCURY_GSTREAMER_PREFIX}/lib/gstreamer-1.0" \
-            cargo test --release -- --nocapture --test-threads=1 2>&1 | tee "${LOG_DIR}/test.log" || status=$?
+          if [ -f run-tests.sh ]; then
+            # One process per test: a libwebrtc CHECK failure aborts the process and cannot be
+            # caught, so it must cost one test, not the rest of the run. run-tests.sh sets the
+            # GStreamer variables itself (macOS strips DYLD_* when a SIP-protected shell starts).
+            RUN_TESTS_FULL_LOG="${LOG_DIR}/test-full.log" bash ./run-tests.sh --release 2>&1 | tee "${LOG_DIR}/test.log" || status=$?
+          else
+            # DYLD_FALLBACK_LIBRARY_PATH is set on the cargo command line itself, for the same reason.
+            DYLD_FALLBACK_LIBRARY_PATH="${MERCURY_GSTREAMER_PREFIX}/lib" \
+              GST_PLUGIN_SYSTEM_PATH_1_0="${MERCURY_GSTREAMER_PREFIX}/lib/gstreamer-1.0" \
+              cargo test --release --no-fail-fast -- --nocapture --test-threads=1 2>&1 | tee "${LOG_DIR}/test.log" || status=$?
+          fi
           finished="$(date +%s)"
+          kill "${sampler}" 2>/dev/null || true
           echo "$((finished - started))" >"${LOG_DIR}/test.seconds"
+          if [ -f "${LOG_DIR}/lsof-samples.txt" ]; then
+            { head -n 1 "${LOG_DIR}/lsof-samples.txt"; grep -v '^COMMAND' "${LOG_DIR}/lsof-samples.txt" | sort -u; } >"${LOG_DIR}/lsof.txt"
+            rm -f "${LOG_DIR}/lsof-samples.txt"
+          fi
           exit "${status}"
 
       - name: Measure the test binaries (size, libraries, deployment target)
@@ -261,9 +281,19 @@ jobs:
           set -euo pipefail
 
           baseline_bytes="$(cat "${LOG_DIR}/baseline-hello.bytes")"
-          deps="${CRATE_DIR}/target/release/deps"
+          # The same environment as the build step, or cargo would run the build scripts again.
+          if [ -n "${WEBRTC_IDS}" ]; then
+            read -r -a ids <<<"${WEBRTC_IDS}"
+            env_lines="$(scripts/macos/webrtc.sh env "${ids[@]}")"
+            eval "${env_lines}"
+          fi
           : >"${LOG_DIR}/sizes.tsv"
-          find "${deps}" -maxdepth 1 -type f -perm -u+x ! -name '*.*' ! -name 'build_script_*' ! -name 'build-script-*' | sort |
+          # Cargo 1.100 keeps test executables under target/release/build/<package>/<hash>/out/, not in
+          # deps/, so ask cargo for their paths (everything is built already: this only prints them).
+          (cd "${CRATE_DIR}" && cargo test --release --no-run --message-format=json 2>/dev/null) |
+            sed -n 's/.*"executable":"\([^"]*\)".*/\1/p' | grep -v -E 'build[_-]script[_-]build' | sort -u >"${LOG_DIR}/executables.txt" || true
+          cat "${LOG_DIR}/executables.txt"
+          sort -u "${LOG_DIR}/executables.txt" |
             while IFS= read -r binary; do
               name="$(basename "${binary}")"
               cp "${binary}" "${LOG_DIR}/${name}.stripped"

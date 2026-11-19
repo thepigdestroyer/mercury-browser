@@ -17,6 +17,13 @@ cd "$here" || exit 1
 if [ "$#" -eq 0 ]; then
     set -- --release
 fi
+# GStreamer for t05, t07 and t10: the plugin directory and the libraries, set here because macOS
+# removes DYLD_* variables when a SIP-protected shell starts this script.
+if [ -n "${MERCURY_GSTREAMER_PREFIX:-}" ]; then
+    DYLD_FALLBACK_LIBRARY_PATH="$MERCURY_GSTREAMER_PREFIX/lib"
+    GST_PLUGIN_SYSTEM_PATH_1_0="$MERCURY_GSTREAMER_PREFIX/lib/gstreamer-1.0"
+    export DYLD_FALLBACK_LIBRARY_PATH GST_PLUGIN_SYSTEM_PATH_1_0
+fi
 log="$(mktemp "${TMPDIR:-/tmp}/mercury-shiguredo-tests.XXXXXX")"
 trap 'rm -f "$log"' EXIT INT TERM HUP
 
@@ -28,6 +35,8 @@ for name in \
     id="$(printf '%s' "$name" | cut -c1-3)"
     cargo test "$@" --test calls "$name" -- --exact --nocapture --test-threads=1 >"$log" 2>&1
     status=$?
+    # The whole output of each test (INFO lines, panics) goes to RUN_TESTS_FULL_LOG when it is set.
+    if [ -n "${RUN_TESTS_FULL_LOG:-}" ]; then cat "$log" >>"$RUN_TESTS_FULL_LOG"; fi
     if grep '^RESULT ' "$log"; then
         grep -q "^RESULT ${id} pass\|^RESULT ${id} skip" "$log" || failures=$((failures + 1))
     else
