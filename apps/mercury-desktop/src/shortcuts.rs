@@ -508,6 +508,8 @@ pub(crate) fn unfocus_web_view(
 
 #[cfg(test)]
 mod tests {
+    use std::collections::{BTreeMap, BTreeSet, HashMap};
+
     use super::*;
     use ShortcutAction::*;
     use winit::keyboard::KeyCode;
@@ -1074,5 +1076,293 @@ mod tests {
         assert_eq!(mac(character("j"), CMD), None);
         assert_eq!(other(character("j"), CTRL), Some(ShowDownloads));
         assert!(!SavePage.repeats() && !ShowDownloads.repeats());
+    }
+
+    // --- the merged table: no two actions share a key ---
+    //
+    // Several lanes added keys to the one table (tab search, moving tabs and the browser menu,
+    // mute, find, downloads, bookmarks, history). `shortcut_action` answers with one action per
+    // key, so a clash shows as a key that no longer reaches the action it was written for (an
+    // arm above it takes the key) or as an action that gained a key. The test below tries every
+    // key with every modifier combination, on both platforms, and compares what each action
+    // answers to with the table written out in `bindings`.
+
+    /// The keys tried: letters, digits, punctuation, the named keys that have shortcuts and a
+    /// few that never do. `plus` is the key `+` (it stands apart in `chord` strings).
+    fn scanned_keys() -> Vec<String> {
+        let mut keys = ('a'..='z')
+            .chain('0'..='9')
+            .map(String::from)
+            .collect::<Vec<_>>();
+        keys.extend(
+            [
+                "=",
+                "plus",
+                "-",
+                ",",
+                ".",
+                "/",
+                ";",
+                "'",
+                "[",
+                "]",
+                "{",
+                "}",
+                "\\",
+                "`",
+                "tab",
+                "pageup",
+                "pagedown",
+                "left",
+                "right",
+                "up",
+                "down",
+                "home",
+                "end",
+                "backspace",
+                "delete",
+                "escape",
+                "enter",
+                "space",
+            ]
+            .map(String::from),
+        );
+        keys.extend((1..=12).map(|number| format!("f{number}")));
+        keys
+    }
+
+    fn key_for(token: &str) -> Key {
+        let key = match token {
+            "tab" => NamedKey::Tab,
+            "pageup" => NamedKey::PageUp,
+            "pagedown" => NamedKey::PageDown,
+            "left" => NamedKey::ArrowLeft,
+            "right" => NamedKey::ArrowRight,
+            "up" => NamedKey::ArrowUp,
+            "down" => NamedKey::ArrowDown,
+            "home" => NamedKey::Home,
+            "end" => NamedKey::End,
+            "backspace" => NamedKey::Backspace,
+            "delete" => NamedKey::Delete,
+            "escape" => NamedKey::Escape,
+            "enter" => NamedKey::Enter,
+            "space" => NamedKey::Space,
+            "f1" => NamedKey::F1,
+            "f2" => NamedKey::F2,
+            "f3" => NamedKey::F3,
+            "f4" => NamedKey::F4,
+            "f5" => NamedKey::F5,
+            "f6" => NamedKey::F6,
+            "f7" => NamedKey::F7,
+            "f8" => NamedKey::F8,
+            "f9" => NamedKey::F9,
+            "f10" => NamedKey::F10,
+            "f11" => NamedKey::F11,
+            "f12" => NamedKey::F12,
+            "plus" => return character("+"),
+            text => return character(text),
+        };
+        named(key)
+    }
+
+    /// A key with its modifiers, always written ctrl, alt, shift, cmd, then the key.
+    fn show(token: &str, modifiers: ModifiersState) -> String {
+        let mut text = String::new();
+        for (flag, name) in [(CTRL, "ctrl"), (ALT, "alt"), (SHIFT, "shift"), (CMD, "cmd")] {
+            if modifiers.contains(flag) {
+                text.push_str(name);
+                text.push('+');
+            }
+        }
+        text + token
+    }
+
+    /// `spec` ("cmd+shift+m", "ctrl+plus", "f10": modifiers in any order, then the key) as
+    /// `show` writes it.
+    fn chord(spec: &str) -> String {
+        let mut modifiers = NONE;
+        let mut token = None;
+        for part in spec.split('+') {
+            match part {
+                "ctrl" => modifiers |= CTRL,
+                "alt" => modifiers |= ALT,
+                "shift" => modifiers |= SHIFT,
+                "cmd" => modifiers |= CMD,
+                key => token = Some(key),
+            }
+        }
+        show(token.expect("a chord names a key"), modifiers)
+    }
+
+    /// Every key the table binds on `platform`, by action (its `Debug` name).
+    fn bound_keys(platform: Platform) -> BTreeMap<String, BTreeSet<String>> {
+        let mut bound = BTreeMap::<String, BTreeSet<String>>::new();
+        for token in scanned_keys() {
+            let key = key_for(&token);
+            for combination in 0..16_u32 {
+                let modifiers = [CTRL, ALT, SHIFT, CMD]
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(bit, _)| (combination >> *bit) & 1 == 1)
+                    .fold(NONE, |all, (_, flag)| all | flag);
+                if let Some(action) = shortcut_action(&key, modifiers, platform) {
+                    bound
+                        .entry(format!("{action:?}"))
+                        .or_default()
+                        .insert(show(&token, modifiers));
+                }
+            }
+        }
+        bound
+    }
+
+    /// What each action answers to: (action, on macOS, elsewhere). Written out in full on
+    /// purpose, so that a key taken from one lane's action by another fails the test below.
+    /// Actions with no default key are left out (`DuplicateTab`, `RestorePreviousSession`), and
+    /// Escape for `ExitFullscreen` is not a `shortcut_action` key.
+    fn bindings() -> Vec<(String, Vec<String>, Vec<String>)> {
+        let row =
+            |action: &str, mac: &[&str], other: &[&str]| -> (String, Vec<String>, Vec<String>) {
+                (
+                    action.to_owned(),
+                    mac.iter().map(|spec| (*spec).to_owned()).collect(),
+                    other.iter().map(|spec| (*spec).to_owned()).collect(),
+                )
+            };
+        let mut table = vec![
+            row("NewTab", &["cmd+t"], &["ctrl+t"]),
+            row("CloseTab", &["cmd+w"], &["ctrl+w"]),
+            row(
+                "NextTab",
+                &["ctrl+tab", "cmd+shift+]", "cmd+shift+}"],
+                &["ctrl+tab", "ctrl+pagedown"],
+            ),
+            row(
+                "PreviousTab",
+                &["ctrl+shift+tab", "cmd+shift+[", "cmd+shift+{"],
+                &["ctrl+shift+tab", "ctrl+pageup"],
+            ),
+            row("SelectLastTab", &["cmd+9"], &["ctrl+9"]),
+            row("Back", &["cmd+[", "cmd+left"], &["alt+left"]),
+            row("Forward", &["cmd+]", "cmd+right"], &["alt+right"]),
+            row("Reload", &["cmd+r"], &["ctrl+r", "f5"]),
+            row("FocusAddressBar", &["cmd+l"], &["ctrl+l", "alt+d"]),
+            row(
+                "ZoomIn",
+                &["cmd+=", "cmd+shift+=", "cmd+plus", "cmd+shift+plus"],
+                &["ctrl+=", "ctrl+shift+=", "ctrl+plus", "ctrl+shift+plus"],
+            ),
+            row("ZoomOut", &["cmd+-"], &["ctrl+-"]),
+            row("ZoomReset", &["cmd+0"], &["ctrl+0"]),
+            row("Quit", &["cmd+q"], &["ctrl+q"]),
+            // downloads-ui lane
+            row("SavePage", &["cmd+s"], &["ctrl+s"]),
+            row("ShowDownloads", &["cmd+shift+j"], &["ctrl+j"]),
+            // settings-ui
+            row("ShowSettings", &["cmd+,"], &["ctrl+,"]),
+            // tabs-plus: Alt+F is Alt, not Ctrl, so it does not meet Find's Ctrl+F
+            row("SearchTabs", &["cmd+shift+a"], &["ctrl+shift+a"]),
+            row("MoveTabLeft", &[], &["ctrl+shift+pageup"]),
+            row("MoveTabRight", &[], &["ctrl+shift+pagedown"]),
+            row("ShowBrowserMenu", &[], &["alt+f", "alt+e", "f10"]),
+            // history
+            row("ShowHistory", &["cmd+y"], &["ctrl+h"]),
+            row(
+                "ClearBrowsingData",
+                &["cmd+shift+backspace"],
+                &["ctrl+shift+delete"],
+            ),
+            // bookmarks
+            row("BookmarkPage", &["cmd+d"], &["ctrl+d"]),
+            row("ToggleBookmarksBar", &["cmd+shift+b"], &["ctrl+shift+b"]),
+            row("ShowBookmarksManager", &["cmd+alt+b"], &["ctrl+shift+o"]),
+            // session
+            row("ReopenClosedTab", &["cmd+shift+t"], &["ctrl+shift+t"]),
+            // media-session lane: Cmd+M stays Minimize on macOS
+            row("ToggleMute", &["cmd+shift+m"], &["ctrl+m"]),
+            // find
+            row("Find", &["cmd+f"], &["ctrl+f"]),
+            row("FindNext", &["cmd+g"], &["ctrl+g", "f3"]),
+            row(
+                "FindPrevious",
+                &["cmd+shift+g"],
+                &["ctrl+shift+g", "shift+f3"],
+            ),
+        ];
+        for number in 1..=8_usize {
+            table.push(row(
+                &format!("SelectTab({})", number - 1),
+                &[format!("cmd+{number}").as_str()],
+                &[format!("ctrl+{number}").as_str()],
+            ));
+        }
+        table
+    }
+
+    #[test]
+    fn no_two_actions_share_a_key_and_every_action_keeps_its_own() {
+        let table = bindings();
+        for platform in [Platform::MacOs, Platform::Other] {
+            // The table itself gives no key to two actions...
+            let mut owners = HashMap::<String, &String>::new();
+            let mut expected = BTreeMap::<String, BTreeSet<String>>::new();
+            for (action, mac, other) in &table {
+                let specs = if platform == Platform::MacOs {
+                    mac
+                } else {
+                    other
+                };
+                for spec in specs {
+                    let key = chord(spec);
+                    if let Some(first) = owners.insert(key.clone(), action) {
+                        panic!("{platform:?}: {key} is written for both {first} and {action}");
+                    }
+                    expected.entry(action.clone()).or_default().insert(key);
+                }
+            }
+
+            // ...and the code answers to exactly those keys: none is shadowed or taken by
+            // another action, and no action has a key the table does not list.
+            let bound = bound_keys(platform);
+            let actions = expected.keys().chain(bound.keys()).collect::<BTreeSet<_>>();
+            for action in actions {
+                assert_eq!(
+                    bound.get(action),
+                    expected.get(action),
+                    "{platform:?}: the keys of {action}"
+                );
+            }
+        }
+    }
+
+    /// The keys that the lanes merged here chose side by side, spelled out.
+    #[test]
+    fn mute_tab_search_moving_tabs_the_browser_menu_and_find_keep_their_own_keys() {
+        // macOS: Cmd+M is the system's Minimize, so mute is Cmd+Shift+M; Cmd+Shift+A is not
+        // Select All (Cmd+A); there is no tab-moving or browser-menu key.
+        assert_eq!(mac(character("m"), CMD | SHIFT), Some(ToggleMute));
+        assert_eq!(mac(character("a"), CMD | SHIFT), Some(SearchTabs));
+        assert_eq!(mac(character("f"), CMD), Some(Find));
+        assert_eq!(mac(character("m"), CMD), None);
+        assert_eq!(mac(character("f"), ALT), None);
+        assert_eq!(mac(named(NamedKey::PageUp), CMD | SHIFT), None);
+
+        // Elsewhere: Ctrl+M mutes, Ctrl+Shift+A searches tabs, Ctrl+Shift+PageUp/PageDown move
+        // the tab (Ctrl+PageUp/PageDown still switch), Ctrl+F finds and Alt+F opens the browser
+        // menu: Alt, not Ctrl, so they do not meet.
+        assert_eq!(other(character("m"), CTRL), Some(ToggleMute));
+        assert_eq!(other(character("a"), CTRL | SHIFT), Some(SearchTabs));
+        assert_eq!(other(character("f"), CTRL), Some(Find));
+        assert_eq!(other(character("f"), ALT), Some(ShowBrowserMenu));
+        assert_eq!(other(character("f"), CTRL | ALT), None);
+        assert_eq!(other(character("m"), CTRL | SHIFT), None);
+        assert_eq!(other(character("m"), ALT), None);
+        assert_eq!(
+            other(named(NamedKey::PageUp), CTRL | SHIFT),
+            Some(MoveTabLeft)
+        );
+        assert_eq!(other(named(NamedKey::PageUp), CTRL), Some(PreviousTab));
+        assert_eq!(other(named(NamedKey::F10), NONE), Some(ShowBrowserMenu));
+        assert_eq!(other(named(NamedKey::F3), NONE), Some(FindNext));
     }
 }

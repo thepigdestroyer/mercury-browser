@@ -42,7 +42,7 @@ pub(crate) fn strip_rows(controller: &BrowserController) -> Vec<BrowserTab> {
                 id: id_for_ui(tab.id()),
                 pinned: tab.is_pinned(),
                 url: state.url().into(),
-                // media-session lane
+                // media-session lane: the speaker or muted mark on the tab
                 audio: crate::media_session::tab_audio_state(state.audio_indicator()),
             }
         })
@@ -300,7 +300,9 @@ pub(crate) fn connect(window: &MainWindow, controller: Rc<RefCell<BrowserControl
 
 #[cfg(test)]
 mod tests {
-    use talaria_core::{BrowserEvent, CloseTabOutcome, TabActivation};
+    use talaria_core::{
+        BrowserEvent, CloseTabOutcome, MediaPlaybackState, MediaProbe, TabActivation,
+    };
 
     use super::*;
 
@@ -346,6 +348,64 @@ mod tests {
         assert!(rows[1].active);
     }
 
+    // media-session lane
+    #[test]
+    fn strip_rows_carry_the_audio_state_with_the_pinned_flag_the_id_and_the_address() {
+        use mercury_ui::TabAudioState::{Muted, Playing, Silent};
+
+        let (mut controller, ids) = controller_with_tabs(3);
+        for (tab_id, url) in
+            ids.iter()
+                .zip(["https://a.test/", "https://b.test/", "https://c.test/"])
+        {
+            assert!(
+                controller.handle_event(*tab_id, BrowserEvent::AddressChanged { url: url.into() })
+            );
+        }
+        // The first tab plays, the second is muted and pinned (so it moves to the front).
+        for event in [
+            BrowserEvent::MediaPlaybackChanged {
+                state: MediaPlaybackState::Playing,
+            },
+            BrowserEvent::MediaProbed {
+                probe: MediaProbe {
+                    playing: 1,
+                    audible: 1,
+                    unseen: false,
+                    fullscreen_video: false,
+                },
+            },
+        ] {
+            assert!(controller.handle_event(ids[0], event));
+        }
+        assert!(controller.toggle_audio_muted(ids[1]));
+        assert!(controller.set_tab_pinned(ids[1], true));
+
+        let rows = strip_rows(&controller)
+            .into_iter()
+            .map(|row| (row.id, row.audio, row.pinned, row.url.to_string()))
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            rows,
+            [
+                (id_for_ui(ids[1]), Muted, true, "https://b.test/".to_owned()),
+                (
+                    id_for_ui(ids[0]),
+                    Playing,
+                    false,
+                    "https://a.test/".to_owned()
+                ),
+                (
+                    id_for_ui(ids[2]),
+                    Silent,
+                    false,
+                    "https://c.test/".to_owned()
+                ),
+            ]
+        );
+    }
+
     #[test]
     fn tab_search_lists_the_matching_tabs() {
         let (mut controller, ids) = controller_with_tabs(3);
@@ -388,6 +448,73 @@ mod tests {
         sync(&window, &controller);
         assert!(before == window.get_tabs(), "the same model, not a new one");
         assert_eq!(window.get_tabs().row_count(), 3);
+    }
+
+    // media-session lane
+    /// Everything a row shows but its icon and its sound. (`BrowserTab` cannot be compared as a
+    /// whole: Slint's `Image` with no picture is never equal to another one, so a row with no
+    /// icon never equals even its own copy.)
+    fn look(row: &BrowserTab) -> (i32, String, String, bool, bool, bool, bool) {
+        (
+            row.id,
+            row.title.to_string(),
+            row.url.to_string(),
+            row.pinned,
+            row.active,
+            row.loading,
+            row.has_icon,
+        )
+    }
+
+    /// Muting changes the tab's row where it stands: the same model, the same rows in the same
+    /// order (the pinned one first), and only the sound of the muted tab's row differs, so the
+    /// strip's tab items (a drag in progress, a hover) live on.
+    #[test]
+    fn a_mute_changes_its_row_in_place_a_pinned_tab_included() {
+        use mercury_ui::TabAudioState::{Muted, Silent};
+
+        crate::settings::tests::init_slint();
+        let window = MainWindow::new().expect("the main window can be created");
+        let (mut controller, ids) = controller_with_tabs(3);
+        assert!(controller.set_tab_pinned(ids[2], true));
+        sync(&window, &controller);
+        let model = window.get_tabs();
+        let before = model.iter().collect::<Vec<_>>();
+        assert_eq!(
+            before.iter().map(|row| row.id).collect::<Vec<_>>(),
+            [ids[2], ids[0], ids[1]].map(id_for_ui)
+        );
+        assert!(before.iter().all(|row| row.audio == Silent));
+
+        // The pinned tab, then an unpinned one.
+        for (index, tab_id) in [(0, ids[2]), (2, ids[1])] {
+            assert!(controller.toggle_audio_muted(tab_id));
+            sync(&window, &controller);
+
+            assert!(model == window.get_tabs(), "the same model, not a new one");
+            let after = window.get_tabs().iter().collect::<Vec<_>>();
+            assert_eq!(after.len(), 3);
+            assert_eq!(window.get_pinned_tab_count(), 1);
+            assert_eq!(after[index].pinned, index == 0);
+            // The muted tab's row says so and shows nothing else differently; no other row
+            // changed at all.
+            for (row, (new, old)) in after.iter().zip(&before).enumerate() {
+                assert_eq!(look(new), look(old), "row {row}");
+                let want = if row == index { Muted } else { Silent };
+                assert_eq!(new.audio, want, "row {row}");
+            }
+
+            // Unmuted again: the rows are what they were at the start.
+            assert!(controller.toggle_audio_muted(tab_id));
+            sync(&window, &controller);
+            assert!(model == window.get_tabs());
+            let again = window.get_tabs().iter().collect::<Vec<_>>();
+            assert_eq!(again.len(), 3);
+            for (row, (new, old)) in again.iter().zip(&before).enumerate() {
+                assert_eq!(look(new), look(old), "row {row}");
+                assert_eq!(new.audio, Silent, "row {row}");
+            }
+        }
     }
 
     #[test]
