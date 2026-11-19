@@ -2009,7 +2009,12 @@ fn test_security_info_for_https_connection() {
     // The server certificate is self-signed, so we need to add an override
     // so that the connection works properly.
     for certificate in server.certificates.as_ref().unwrap().iter() {
-        context.state.override_manager.add_override(certificate);
+        // Mercury: exceptions are bound to the host name; the test server is reached as `localhost`.
+        context
+            .state
+            .override_manager
+            .add_override("localhost", certificate)
+            .expect("localhost is a valid host name");
     }
 
     let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)

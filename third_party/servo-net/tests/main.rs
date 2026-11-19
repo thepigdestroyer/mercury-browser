@@ -5,6 +5,8 @@
 #![cfg(test)]
 #![expect(dead_code)]
 
+// Mercury: certificate exceptions bound to (host, certificate); see certificate_exceptions.rs.
+mod certificate_exceptions;
 mod cookie;
 mod cookie_http_state;
 mod data_loader;
