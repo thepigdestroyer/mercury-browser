@@ -15,6 +15,7 @@ use libwebrtc::peer_connection::{
     AnswerOptions, IceGatheringState, OfferOptions, PeerConnection, PeerConnectionState,
 };
 use libwebrtc::peer_connection_factory::{PeerConnectionFactory, RtcConfiguration};
+use libwebrtc::session_description::{SdpType, SessionDescription};
 use tokio::sync::{mpsc, watch};
 use tokio::task::JoinHandle;
 use tokio::time::{sleep, timeout};
@@ -154,8 +155,10 @@ pub struct Pair {
 pub struct Sdps {
     /// The offer.
     pub offer: String,
-    /// The answer.
+    /// The answer the answerer wrote.
     pub answer: String,
+    /// The answer the offerer applied (the same unless the negotiation rewrote it).
+    pub applied_answer: String,
 }
 
 impl Pair {
@@ -196,6 +199,18 @@ impl Pair {
     /// Runs one offer/answer exchange with trickled ICE, whatever the peers have added so far
     /// (tracks, transceivers, data channels).
     pub async fn negotiate(&self, offer_options: OfferOptions) -> Result<Sdps, String> {
+        self.negotiate_with_answer(offer_options, None).await
+    }
+
+    /// Like [`Pair::negotiate`], but the offerer receives `rewrite(answer)` instead of the answer
+    /// libwebrtc wrote. libwebrtc as an answerer does not accept simulcast, so t06 rewrites its
+    /// answer the way a server's would look, as webrtc's own `PeerConnectionSimulcastTests` do.
+    /// `Sdps::answer` is always the answerer's own text; `Sdps::applied_answer` what the offerer got.
+    pub async fn negotiate_with_answer(
+        &self,
+        offer_options: OfferOptions,
+        rewrite: Option<&(dyn Fn(&str) -> String + Sync)>,
+    ) -> Result<Sdps, String> {
         self.forward(&self.offerer, &self.answerer);
         self.forward(&self.answerer, &self.offerer);
         let (a, b) = (&self.offerer.pc, &self.answerer.pc);
@@ -219,12 +234,22 @@ impl Pair {
         b.set_local_description(answer.clone())
             .await
             .map_err(|e| err("answerer set_local_description", e))?;
-        a.set_remote_description(answer)
+        let (for_offerer, applied_text) = match rewrite {
+            None => (answer, answer_text.clone()),
+            Some(rewrite) => {
+                let text = rewrite(&answer_text);
+                let parsed = SessionDescription::parse(&text, SdpType::Answer)
+                    .map_err(|e| format!("the rewritten answer does not parse: {e:?}"))?;
+                (parsed, text)
+            }
+        };
+        a.set_remote_description(for_offerer)
             .await
             .map_err(|e| err("offerer set_remote_description", e))?;
         Ok(Sdps {
             offer: offer_text,
             answer: answer_text,
+            applied_answer: applied_text,
         })
     }
 
