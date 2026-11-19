@@ -16,10 +16,87 @@
 //! know the value and cannot pass for one. The certificate page sends the same value with the
 //! user's "Continue" to `CERTIFICATE_EXCEPTION_SCHEME`, which is how the browser knows the
 //! request came from its own page.
+//!
+//! The browser answers that request (see `exception_request`): a success status when it accepted
+//! the certificate, and the page reloads, or a refusal with a code as the body, and the page shows
+//! one line from its own fixed table (`certificate_refusal_line`) and does not reload. The text
+//! of an answer is only ever a key of that table, never shown and never made into markup. If the
+//! answer cannot be read at all, or the request fails, the page reloads whatever happened, which
+//! shows the same page again after a refusal.
 
 /// The scheme of the address the certificate page asks for when the user continues:
 /// `<scheme>:allow?secret=…&host=…&certificate=…` (the certificate in base64, no padding).
 pub const CERTIFICATE_EXCEPTION_SCHEME: &str = "mercury-certificate-exception";
+
+/// What the certificate page says when the browser refuses an exception, by the code of the
+/// refusal (`ExceptionRefusal::code`). Plain sentences: they are placed in the page's script as
+/// strings and in the page as text, never as markup.
+const REFUSAL_LINES: [(&str, &str); 8] = [
+    ("not-from-mercury", REFUSAL_FALLBACK),
+    ("malformed", REFUSAL_FALLBACK),
+    (
+        "public-host",
+        "Mercury lets you continue only to sites on this computer or your local network.",
+    ),
+    ("invalid-host", REFUSAL_FALLBACK),
+    (
+        "hsts-host",
+        "This site asked to be reached only with a valid certificate, so Mercury cannot continue.",
+    ),
+    (
+        "no-failure-recorded",
+        "Mercury has no record of this certificate failing. Reload this page and check again.",
+    ),
+    (
+        "certificate-changed",
+        "The certificate of this site changed after this page was shown. Reload this page and check again.",
+    ),
+    ("refused", REFUSAL_FALLBACK),
+];
+
+/// The line for a code the table does not have, and for the codes that have nothing more to say.
+const REFUSAL_FALLBACK: &str = "Mercury could not continue.";
+
+/// The line the certificate page shows for the refusal `code` (the body of the browser's answer);
+/// `Mercury could not continue.` for a code it does not know.
+pub fn certificate_refusal_line(code: &str) -> &'static str {
+    REFUSAL_LINES
+        .iter()
+        .find(|(known, _)| *known == code)
+        .map_or(REFUSAL_FALLBACK, |(_, line)| line)
+}
+
+/// `text` as a single-quoted script string that can sit in a `<script>` element: quotes,
+/// backslashes, angle brackets, ampersands and line breaks are escaped.
+fn script_string(text: &str) -> String {
+    let mut literal = String::from("'");
+    for character in text.chars() {
+        match character {
+            '\\' => literal.push_str("\\\\"),
+            '\'' => literal.push_str("\\'"),
+            '<' => literal.push_str("\\u003c"),
+            '>' => literal.push_str("\\u003e"),
+            '&' => literal.push_str("\\u0026"),
+            '\n' => literal.push_str("\\n"),
+            '\r' => literal.push_str("\\r"),
+            '\u{2028}' => literal.push_str("\\u2028"),
+            '\u{2029}' => literal.push_str("\\u2029"),
+            other => literal.push(other),
+        }
+    }
+    literal.push('\'');
+    literal
+}
+
+/// The script's table of lines, `{ 'code': 'line', … }`, from `REFUSAL_LINES`.
+fn refusal_lines_script() -> String {
+    let entries = REFUSAL_LINES
+        .iter()
+        .map(|(code, line)| format!("  {}: {}", script_string(code), script_string(line)))
+        .collect::<Vec<_>>()
+        .join(",\n");
+    format!("{{\n{entries}\n}}")
+}
 
 /// Script the browser runs in a finished page: returns the marker's content, or "".
 pub const ERROR_PAGE_PROBE_SCRIPT: &str = "(function () { var marker = \
@@ -79,6 +156,7 @@ details { margin-top: 24px; color: var(--secondary); }
 summary { cursor: pointer; }
 #reason { font: 12px/1.4 ui-monospace, monospace; white-space: pre-wrap; word-break: break-all;
   margin: 8px 0 0; }
+#refusal { color: var(--warning); margin: 12px 0 0; }
 [hidden] { display: none !important; }
 </style>";
 
@@ -97,6 +175,8 @@ document.addEventListener('DOMContentLoaded', function () {
 /// presses "Continue" as soon as the page has loaded.
 pub fn certificate_error_page(secret: &str, proceed_automatically: bool) -> String {
     let secret = attribute_safe(secret);
+    let refusal_lines = refusal_lines_script();
+    let fallback_line = script_string(REFUSAL_FALLBACK);
     format!(
         "<!DOCTYPE html>
 <html lang=\"en\" class=\"warning\">
@@ -109,7 +189,8 @@ pub fn certificate_error_page(secret: &str, proceed_automatically: bool) -> Stri
 {FILL_SCRIPT}
 <script>
 // The browser accepts exceptions only for names on this computer or the local network
-// (`talaria_core::is_local_host`, checked again where the request arrives); this mirrors it.
+// (`talaria_core::certificate_exception_allowed`, which applies `is_local_host`, checked again
+// where the request arrives); this mirrors the rule for local names.
 function isLocalName(host) {{
   // A name may end in dots (`nas..` is valid); the browser's rule ignores all of them.
   host = host.toLowerCase().replace(/[.]+$/, '');
@@ -135,11 +216,19 @@ function isLocalName(host) {{
   }}
   return host.indexOf('.') < 0;
 }}
+// What the page says when the browser refuses, by the code in the body of its answer. The text of
+// an answer is only ever looked up here, never shown and never made into markup.
+var refusalLines = {refusal_lines};
+function refusalLine(code) {{
+  return Object.prototype.hasOwnProperty.call(refusalLines, code) ? refusalLines[code] :
+    {fallback_line};
+}}
 document.addEventListener('DOMContentLoaded', function () {{
   var certificate = document.querySelector('meta[name=\"mercury-certificate\"]').content;
   var secret = document.querySelector('meta[name=\"mercury-error-page\"]').content.split(' ')[1];
   var back = document.getElementById('back');
   var proceed = document.getElementById('proceed');
+  var refusal = document.getElementById('refusal');
   if (history.length > 1) {{
     back.onclick = function () {{ history.back(); }};
   }} else {{
@@ -152,10 +241,23 @@ document.addEventListener('DOMContentLoaded', function () {{
   document.getElementById('advanced').hidden = false;
   proceed.onclick = function () {{
     proceed.disabled = true;
+    refusal.hidden = true;
     var query = new URLSearchParams({{ secret: secret, host: location.hostname,
       certificate: certificate }});
     var reload = function () {{ location.reload(); }};
-    fetch('{CERTIFICATE_EXCEPTION_SCHEME}:allow?' + query.toString()).then(reload, reload);
+    var refuse = function (code) {{
+      refusal.textContent = refusalLine(code);
+      refusal.hidden = false;
+      proceed.disabled = false;
+    }};
+    fetch('{CERTIFICATE_EXCEPTION_SCHEME}:allow?' + query.toString()).then(function (response) {{
+      // Accepted: reload, and the page is the site. An answer the page cannot read (status 0,
+      // an opaque cross-origin answer) is not a refusal it knows of: reload, as when the request
+      // failed (the second function), which shows this page again if the browser refused.
+      if (response.ok || response.status === 0) {{ reload(); return; }}
+      return response.text().then(function (code) {{ refuse(String(code).trim()); }},
+        function () {{ refuse(''); }});
+    }}, reload);
   }};
   if ({proceed_automatically}) {{ proceed.click(); }}
 }});
@@ -176,6 +278,7 @@ numbers.</p>
 valid, for example because it is your own test server, you can continue anyway for the rest of
 this session.</p>
 <div class=\"actions\"><button id=\"proceed\">Continue anyway (not secure)</button></div>
+<p id=\"refusal\" role=\"alert\" hidden></p>
 </div>
 </details>
 </main>
@@ -250,4 +353,37 @@ document.addEventListener('DOMContentLoaded', function () {{
 /// value can never end the attribute it sits in.
 fn attribute_safe(secret: &str) -> String {
     secret.chars().filter(char::is_ascii_alphanumeric).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{REFUSAL_LINES, script_string};
+    use crate::ExceptionRefusal;
+
+    #[test]
+    fn the_table_has_the_codes_of_the_refusals_in_their_order() {
+        let codes = REFUSAL_LINES
+            .iter()
+            .map(|(code, _)| *code)
+            .collect::<Vec<_>>();
+        assert_eq!(codes, ExceptionRefusal::CODES);
+    }
+
+    #[test]
+    fn a_script_string_cannot_end_its_string_or_its_script() {
+        assert_eq!(script_string("plain text."), "'plain text.'");
+        let hostile = "it's \\ </script><b>&\n\u{2028}";
+        let literal = script_string(hostile);
+        for forbidden in ["</", "<", ">", "&", "\n", "\u{2028}"] {
+            assert!(!literal.contains(forbidden), "{forbidden}: {literal}");
+        }
+        // Every quote inside is escaped, and the string is closed once, at its end.
+        let inner = &literal[1..literal.len() - 1];
+        assert!(literal.starts_with('\'') && literal.ends_with('\''));
+        assert_eq!(inner.matches('\'').count(), inner.matches("\\'").count());
+        assert_eq!(
+            literal,
+            "'it\\'s \\\\ \\u003c/script\\u003e\\u003cb\\u003e\\u0026\\n\\u2028'"
+        );
+    }
 }

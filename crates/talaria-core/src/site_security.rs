@@ -281,7 +281,9 @@ fn is_loopback(host: &Host<&str>) -> bool {
 
 /// Whether `host` (ASCII, IPv6 addresses in brackets) names this computer or the local network:
 /// loopback and private addresses, `localhost`, single-label names, `.local`, `.internal`,
-/// `.home.arpa`, `.lan`. Text that is not a host is not local.
+/// `.home.arpa`, `.lan`. Text that is not a host is not local. Every trailing dot is ignored here;
+/// certificate exceptions use `certificate_exception_allowed`, which applies this rule to the
+/// host in the one form exceptions are kept in.
 pub fn is_local_host(host: &str) -> bool {
     match Host::parse(host) {
         Ok(Host::Domain(name)) => is_local_name(&Host::Domain(name.as_str())),

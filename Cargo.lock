@@ -5932,6 +5932,7 @@ dependencies = [
 name = "mercury-site-security"
 version = "0.2.0"
 dependencies = [
+ "boa_engine",
  "rcgen",
  "rustls",
  "talaria-core",

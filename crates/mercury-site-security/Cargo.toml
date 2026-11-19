@@ -19,5 +19,8 @@ url.workspace = true
 # Only for `examples/tls_test_server.rs`, a loopback HTTPS server with a self-signed certificate
 # made at start, for the certificate-error checks. Nothing is added to any trust store.
 [dev-dependencies]
+# certificate exceptions: runs the certificate page's script in a JavaScript engine written in
+# Rust (tests only; already in the lock for `talaria-servo`'s find-in-page tests).
+boa_engine.workspace = true
 rcgen = { version = "0.14", default-features = false, features = ["aws_lc_rs", "crypto"] }
 rustls.workspace = true

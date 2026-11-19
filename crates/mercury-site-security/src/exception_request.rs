@@ -2,35 +2,128 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 
 //! The request Mercury's certificate page makes when the user continues to a site whose
-//! certificate is not valid (see `error_pages`).
+//! certificate is not valid (see `error_pages`), and the answer the browser gives it.
+//!
+//! The request is `<scheme>:allow?secret=…&host=…&certificate=…`. It is answered with status 200
+//! and the body `accepted` (`CERTIFICATE_EXCEPTION_ACCEPTED`), or, when refused, with
+//! `ExceptionRefusal::status` and `ExceptionRefusal::code` as the body (`text/plain`). The page
+//! looks the code up in a fixed table of its own lines and never shows the text of the answer;
+//! a request without the secret gets a network error and nothing else.
 
 use url::Url;
+
+/// The body of the answer to a request the browser accepted.
+pub const CERTIFICATE_EXCEPTION_ACCEPTED: &str = "accepted";
 
 /// A certificate the user accepted for a host.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CertificateException {
-    /// The host the page was for, in ASCII.
+    /// The host the page was for, in ASCII, in the form certificate exceptions use
+    /// (`talaria_core::certificate_exception_host`: lower-case, no trailing dot, IPv6 literals
+    /// in brackets).
     pub host: String,
     /// The certificate, DER-encoded.
     pub certificate: Vec<u8>,
 }
 
+/// Why the engine refused to accept a certificate. The engine says it with a code (the `code`
+/// of `servo-net`'s `CertificateExceptionRefusal`), which the handler passes on.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum EngineRefusal {
+    /// The engine cannot name the host (`invalid-host`).
+    InvalidHost,
+    /// The host asked to be reached only with a valid certificate, by HSTS or the preload list
+    /// (`hsts-host`).
+    Hsts,
+    /// The engine has no record that this host failed with a certificate (`no-failure-recorded`).
+    NoFailureRecorded,
+    /// The host's failing certificate is not the one the user saw (`certificate-changed`).
+    CertificateChanged,
+    /// A code this version does not know.
+    Other,
+}
+
+impl EngineRefusal {
+    /// The refusal for an engine code; any code that is not one of the four is `Other`.
+    pub fn from_code(code: &str) -> Self {
+        match code {
+            "invalid-host" => Self::InvalidHost,
+            "hsts-host" => Self::Hsts,
+            "no-failure-recorded" => Self::NoFailureRecorded,
+            "certificate-changed" => Self::CertificateChanged,
+            _ => Self::Other,
+        }
+    }
+
+    /// The code the answer carries: the engine's own for the four it has, `refused` for `Other`.
+    pub const fn code(self) -> &'static str {
+        match self {
+            Self::InvalidHost => "invalid-host",
+            Self::Hsts => "hsts-host",
+            Self::NoFailureRecorded => "no-failure-recorded",
+            Self::CertificateChanged => "certificate-changed",
+            Self::Other => "refused",
+        }
+    }
+}
+
 /// Why a request for an exception was refused.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ExceptionRefusal {
-    /// Not `<scheme>:allow?…` with this run's secret: it did not come from Mercury's page.
+    /// Not `<scheme>:allow?…` with this run's secret: it did not come from Mercury's page. The
+    /// browser answers it with a network error, which tells a caller that is not Mercury's page
+    /// nothing.
     NotFromMercury,
-    /// The host or the certificate is missing or does not decode.
+    /// The host or the certificate is missing or does not decode, or the host is not one an
+    /// exception can name.
     Malformed,
-    /// The host is on the public internet. Servo 0.8 accepts an exception for the certificate
-    /// on every host, so one accepted for a public site would let whoever holds its key pass
-    /// for any site; until the engine binds exceptions to a host, only names on this computer
-    /// or the local network (`talaria_core::is_local_host`) get one.
+    /// The host is not on this computer or the local network, the only hosts that may get an
+    /// exception (`talaria_core::certificate_exception_allowed`; the reason is there). Carries
+    /// the host in its exception form.
     PublicHost(String),
+    /// The engine refused to accept the certificate.
+    Engine(EngineRefusal),
 }
 
-/// The exception `url` asks for: `<scheme>:allow?…` carrying `secret`, a local host and a
-/// certificate that decodes.
+impl ExceptionRefusal {
+    /// Every code `code` can give, for the certificate page's table of lines.
+    pub const CODES: &'static [&'static str] = &[
+        "not-from-mercury",
+        "malformed",
+        "public-host",
+        "invalid-host",
+        "hsts-host",
+        "no-failure-recorded",
+        "certificate-changed",
+        "refused",
+    ];
+
+    /// The status of the answer: 400 for a request that is not well formed, 403 for every
+    /// refusal of the browser's policy or the engine (and for a request that did not come from
+    /// Mercury, which is answered with a network error and never with this status).
+    pub fn status(&self) -> u16 {
+        match self {
+            Self::Malformed => 400,
+            Self::NotFromMercury | Self::PublicHost(_) | Self::Engine(_) => 403,
+        }
+    }
+
+    /// The body of the answer: one word out of `CODES`, fixed per refusal. Nothing from the
+    /// request or the engine is ever put in it.
+    pub fn code(&self) -> &'static str {
+        match self {
+            Self::NotFromMercury => "not-from-mercury",
+            Self::Malformed => "malformed",
+            Self::PublicHost(_) => "public-host",
+            Self::Engine(refusal) => refusal.code(),
+        }
+    }
+}
+
+/// The exception `url` asks for: `<scheme>:allow?…` carrying `secret`, a host that
+/// `talaria_core::certificate_exception_allowed` accepts (the host is returned in its exception
+/// form) and a certificate that decodes. Whether the engine accepts the certificate for the host
+/// is its decision, not this function's.
 pub fn parse_certificate_exception_request(
     url: &Url,
     secret: &str,
@@ -60,15 +153,17 @@ pub fn parse_certificate_exception_request(
     {
         return Err(ExceptionRefusal::NotFromMercury);
     }
+    // The one form of the host every part of the browser uses; text that is not a host cannot
+    // be named by an exception.
     let host = host
         .filter(|host| !host.is_empty())
-        .ok_or(ExceptionRefusal::Malformed)?
-        .to_ascii_lowercase();
+        .and_then(|host| talaria_core::certificate_exception_host(&host))
+        .ok_or(ExceptionRefusal::Malformed)?;
     let certificate = certificate
         .and_then(|certificate| decode_base64(&certificate))
         .filter(|bytes| !bytes.is_empty())
         .ok_or(ExceptionRefusal::Malformed)?;
-    if !talaria_core::is_local_host(&host) {
+    if !talaria_core::certificate_exception_allowed(&host) {
         return Err(ExceptionRefusal::PublicHost(host));
     }
     Ok(CertificateException { host, certificate })

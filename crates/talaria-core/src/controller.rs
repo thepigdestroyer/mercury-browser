@@ -18,6 +18,7 @@ use crate::{
     SessionPermissionDecisions,
 };
 // site security
+use crate::certificate_exception::certificate_exception_host;
 use crate::site_security::{PendingUpgrade, same_address};
 use crate::{
     ErrorPageKind, HttpsOnlyInterstitial, HttpsPolicy, PagePermission, PermissionDecision,
@@ -60,7 +61,8 @@ pub struct BrowserController {
     external_link_requests: Vec<(TabId, ExternalLinkRequest)>,
     // site security
     https_policy: HttpsPolicy,
-    /// Hosts whose invalid certificate the user accepted this session.
+    /// Hosts whose invalid certificate the user accepted this session, in the form of
+    /// `certificate_exception_host` (the engine keeps the certificates).
     certificate_exceptions: BTreeSet<String>,
 }
 
@@ -1059,7 +1061,7 @@ impl BrowserController {
             .map(|(kind, _)| *kind);
         let host = url::Url::parse(url)
             .ok()
-            .and_then(|url| url.host_str().map(str::to_ascii_lowercase));
+            .and_then(|url| url.host_str().and_then(certificate_exception_host));
         let exception = host.is_some_and(|host| self.certificate_exceptions.contains(&host));
         security_indicator(url, error_page, exception)
     }
@@ -1109,15 +1111,21 @@ impl BrowserController {
         }
     }
 
-    /// The user accepted an invalid certificate for `host` (ASCII form).
+    /// The user accepted an invalid certificate for `host`, in any spelling that
+    /// `certificate_exception_host` reads (case, one trailing dot, IPv6 brackets as in an
+    /// address). Text that is not a host is ignored: no exception can name it.
     pub fn add_certificate_exception(&mut self, host: &str) {
-        self.certificate_exceptions
-            .insert(host.to_ascii_lowercase());
+        if let Some(host) = certificate_exception_host(host) {
+            self.certificate_exceptions.insert(host);
+        }
     }
 
+    /// Whether the user accepted an invalid certificate for `host` this session (the same
+    /// spellings). The indicator warns on every page of such a host, on any port: the engine
+    /// does not say which certificate a page used.
     pub fn has_certificate_exception(&self, host: &str) -> bool {
-        self.certificate_exceptions
-            .contains(&host.to_ascii_lowercase())
+        certificate_exception_host(host)
+            .is_some_and(|host| self.certificate_exceptions.contains(&host))
     }
 
     /// The interstitial's "Continue to the site": the host may load over HTTP for the rest of
