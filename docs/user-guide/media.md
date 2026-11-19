@@ -37,7 +37,7 @@ Servo 0.8 has no Media Source Extensions (MSE). Most large video sites, YouTube 
 
 When a site's video doesn't play, open a direct MP4 or WebM file to tell a site problem from a media problem: if the file plays, the site depends on something Servo doesn't support yet.
 
-Also not available: DRM-protected video (Encrypted Media Extensions), picture-in-picture, and camera and microphone (WebRTC and `getUserMedia` are off; camera and microphone support is being merged). The tab audio indicator, muting a tab and macOS Now Playing are being merged too.
+Also not available: DRM-protected video (Encrypted Media Extensions), picture-in-picture and video calls (WebRTC is off). On macOS pages can ask to use your camera and microphone; see [Camera and microphone](camera-and-microphone.md). The tab audio indicator, muting a tab and macOS Now Playing are being merged too.
 
 ## How the bundled GStreamer is kept separate
 

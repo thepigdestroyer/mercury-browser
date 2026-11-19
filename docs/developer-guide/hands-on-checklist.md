@@ -49,7 +49,7 @@ Use the test pages (server above), then a real site if you like.
 4. `permission.html`: a bubble under the address bar ("wants to store data permanently"). It never takes
    the keyboard: keep typing in the address bar while it is shown. Block and Allow work with the mouse;
    Tab reaches them too.
-5. `permission-camera.html`: **no** prompt; the page reports the request was denied.
+5. `permission-camera.html`: on macOS a bubble under the address bar asks to use the camera (**Block** makes the page report the request was denied; see [Media capture](media-capture.md) for the rest of the camera checks); on other systems **no** prompt, and the page reports the request was denied.
 6. `http-auth.html`: a sign-in sheet for the test server (user `alice`, password `secret`). The cursor
    is not in a field until you click one or press Tab. After signing in, the address bar does **not**
    show `alice:secret@`.

@@ -89,7 +89,7 @@ Some settings are already in the window but do nothing yet, because the feature 
 - **Show the bookmarks bar** (bookmarks);
 - **Browsing history** under "When Mercury Browser quits, clear" (history), and the **Clear browsing data…** button;
 - the **Downloads** and **Passwords** sections (their windows);
-- **Show search suggestions while typing** and **Load pages over HTTPS only**, which are greyed out;
+- **Show search suggestions while typing**, which is greyed out;
 - **Language**: Mercury is only in English for now.
 
 ## Where your data is kept

@@ -45,7 +45,28 @@ The same rule applies to the colour picker and the file panel: a page cannot ope
 
 When a page asks to **store data permanently on this device**, a prompt appears under the address bar with **Block** and **Allow**. It never takes the keyboard from you; use the mouse, or ++tab++ to reach the buttons. The answer applies to that one request.
 
-Every other permission a page can ask for is refused without a prompt, because Mercury doesn't support the feature behind it yet: location, notifications and push messages, camera, microphone, speakers and media device lists, MIDI, Bluetooth, game controllers, background sync and keeping the screen on. Camera and microphone support and location are being worked on. Location stays off until a Servo patch lets Mercury refuse requests from other sites' frames: Servo 0.8 doesn't say which frame asked.
+On macOS, a page that asks to use your **camera** or **microphone** gets a prompt too, with **Block** and **Allow**; see [Camera and microphone](camera-and-microphone.md). On other systems those requests are refused.
+
+Every other permission a page can ask for is refused without a prompt, because Mercury doesn't support the feature behind it yet: location, notifications and push messages, speakers and media device lists, MIDI, Bluetooth, game controllers, background sync and keeping the screen on. Location stays off until a Servo patch lets Mercury refuse requests from other sites' frames: Servo 0.8 doesn't say which frame asked. Pages get at the clipboard only through your own Cut, Copy and Paste: `navigator.clipboard` is off (see [Clipboard](#clipboard)).
+
+## Site security
+
+The icon before the address says how the page was loaded. A padlock means an HTTPS page whose certificate was accepted; **Not secure** means the page came over plain HTTP; a warning mark means you chose to continue past a certificate error. A new tab and Mercury's own pages show no padlock. Click the icon for **site information**: the permissions the site has been given (each with **Reset**), the cookies and site data it holds (with **Clear**), and any exception you made for the site.
+
+### HTTPS-only mode
+
+With **Settings → Privacy and security → Load pages over HTTPS only** on, Mercury opens the HTTPS address of every page you open or follow a link to over HTTP. If the site has no HTTPS version, Mercury shows **The secure version of this site is not available** with **Go back** and **Continue to the site (not secure)**; nothing is loaded over HTTP until you choose to. Some things are outside it:
+
+- Only the page itself is upgraded. Images, scripts and frames a page loads over HTTP are loaded as the page asks.
+- A page that sends you back to its HTTP address after every upgrade (with a script or a meta refresh) is upgraded a few times and then stopped.
+- If you choose **Continue** after Mercury blocked a form that was being sent, the page is opened again with a plain request: the form's data is not sent a second time.
+- A page that a link opened in a new tab may lose its connection to the page that opened it when it is upgraded.
+
+### Certificate errors
+
+When a site's certificate is not valid, Mercury shows an error page instead of the site. Under **Details**, a **Continue anyway** button is offered only for your own computer and the local network (`localhost`, private addresses, and names such as `printer.local`), and only for a page of its own, not a frame inside another page. For every other site there is no way past the error.
+
+The exception lasts until Mercury quits. **Know the limit:** Mercury cannot yet tie an exception to the one site it was made for. Until it can, a certificate you accept is accepted for every site until you quit, so someone on the same local network who presents that certificate could pass as another site. Continue only for devices you control, and quit Mercury afterwards if you are on a shared network.
 
 ## What Mercury stores
 
@@ -74,7 +95,7 @@ They are cleared when Mercury quits, or at the next start if Mercury did not qui
 
 Mercury sends nothing to any server of its own: no crash reports, no usage statistics, no update checks for the app, no search suggestions. The requests are the ones you cause (the pages you open, and your search engine when you search from the address bar) and the filter-list updates: with **Update filter lists automatically** on, Mercury asks easylist.to and GitHub (raw.githubusercontent.com) for newer versions of the filter lists, as described under [Content blocking](#content-blocking). Turn that setting off and Mercury contacts them only when you press **Update now**. **Help** opens this documentation site in a tab.
 
-The settings for search suggestions and HTTPS-only browsing are greyed out because those features aren't there yet. Phishing protection, password breach checks, translation and update checks are planned; each will say which service it uses and can be turned off.
+The setting for search suggestions is greyed out because that feature isn't there yet. Phishing protection, password breach checks, translation and update checks are planned; each will say which service it uses and can be turned off.
 
 ## Saved passwords
 
