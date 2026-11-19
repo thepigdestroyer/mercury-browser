@@ -60,6 +60,10 @@ Desktop tests exercise event routing, bounded command dispatch, shortcuts, key c
 
 The macOS menu bar cannot be opened without input. To read it back, use the diagnostic `MERCURY_MENU_DIAGNOSTICS`. It is compiled only with the `menu-diagnostics` feature of `mercury-desktop`, which `make build-release` and the app bundle leave off; build a binary for it with `cargo build --release -p mercury-desktop --features menu-diagnostics` in the GStreamer environment, then run `make build-release` again afterwards. Run a background launch with `MERCURY_MENU_DIAGNOSTICS=<directory>`. The log then says whether Mercury's menu is the main menu after start-up, while the About window is open and after it closes, and while the settings window is open and after it closes. The About window, drawn by the app's renderer, is saved as `about-window.png` in that directory. Use `RUST_LOG=mercury_browser=info` or more to see the log lines.
 
+### Clipboard
+
+`crates/talaria-core/src/clipboard.rs` decides which clipboard writes and reads of a page go through, and which keys and context-menu items are the user's own Cut, Copy and Paste; `crates/talaria-servo/src/clipboard.rs` tests one tab's handling with a fake answer object. Both run without Servo. Automated runs (`--screenshot`, `--background`, `--import-from`) and tests use a clipboard in memory, never the user's. `MERCURY_TEST_CLIPBOARD_TEXT=<text>` gives that clipboard a starting text; a normal run ignores it. To check that a script cannot read the clipboard, serve `tests/` with `scripts/serve-tests.py` and take a `--screenshot` of `tests/pages/clipboard.html`, once as it is and once with `MERCURY_TEST_CLIPBOARD_TEXT=seed`: both must show `readText resolved with ""`. Real Cut, Copy and Paste, and a page's **Copy** button after a click, need input and are in the hands-on checklist.
+
 ### Vendored dependencies
 
 Each Mercury-specific upstream regression needs a focused test close to the patch. The `gaol` shared-memory test protects the `memfd` and `ftruncate` behavior that originally killed isolated Servo children with `SIGXFSZ`.

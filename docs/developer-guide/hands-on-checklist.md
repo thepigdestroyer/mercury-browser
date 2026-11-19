@@ -73,13 +73,24 @@ Open `controls.html`.
 
 Open `clipboard.html`.
 
-1. On load the page reports `readText resolved with ""`: it could not read the clipboard without a
-   click, whatever you had copied.
-2. Click **Copy**: paste in another app; you get "Mercury copy button".
-3. Click **Read the clipboard**: a bubble asks whether "127.0.0.1:8765 wants to see text you copied".
-   Block: the page reads `""`. Click again and Allow: it reads what you copied.
-4. Select some page text, Edit → Copy (and Cmd+C); paste it into the text box with Cmd+V and with
-   Edit → Paste, and with the context menu's Paste: no prompt appears for any of these.
+1. Copy a word in another app, then open the page. On load it tries to write and read without a
+   click and reports `writeText resolved` (Servo says so even when Mercury refuses the write) and
+   `readText resolved with ""`. Paste in another app: you still get your word, not "written by the
+   page".
+2. Click **Copy** (an ordinary click: a script's write is allowed only within a second of the
+   press): the page says "Copied."; paste in another app: you get "Mercury copy button".
+3. Click **Read the clipboard**: no prompt appears and the page says `Read ""`, whatever the
+   clipboard holds. A script's read stays off until the engine can tell which frame asks
+   (`CLIPBOARD_READ_FRAME_GATE`); then a bubble will ask whether "127.0.0.1:8765 wants to see text
+   you copied".
+4. Your own Cut, Copy and Paste still work, and a paste shows the page what it pasted:
+   - Select some page text, Edit → Copy, then again with Cmd+C and with the context menu's Copy:
+     paste in another app each time: you get the text.
+   - Copy a word in another app, click in the text box, and paste with Cmd+V, then with Edit →
+     Paste, then with the context menu's Paste. Each time the word appears in the box and the line
+     under it reads `paste event: "<your word>"`. No prompt appears for any of these.
+   - Type something in the box, select it and press Cmd+X: it leaves the box, and you can paste
+     it in another app.
 5. Copy text in another app, reload the page, wait: no prompt, and step 1 again.
 
 ## Quitting

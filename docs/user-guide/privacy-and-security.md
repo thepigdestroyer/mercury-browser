@@ -21,6 +21,14 @@ The current preview does not implement persistent sessions, history, bookmarks, 
 
 Pages are cached on disk as well as in memory: for the default profile in `~/Library/Caches/io.github.thepigdestroyer.mercury-browser/Default/http-cache` (macOS), for a `--profile-dir` profile in its `http-cache` folder. In Settings, **When Mercury Browser quits, clear > Cached files** removes it when Mercury quits (or at the next start, if Mercury did not quit normally).
 
+## Clipboard
+
+Cut, Copy and Paste work in pages as usual: with their shortcuts, from the page's context menu, and from the Edit menu while the page has keyboard focus.
+
+A page's script can put text on the clipboard (a site's **Copy** button) only within about a second of your click or key press in that tab, or within about two seconds after you cut or copy in it. At any other time the page is told the copy worked, but your clipboard is left alone. On its own, a script cannot read the clipboard: `navigator.clipboard.readText()` gets empty text. A page sees what is on the clipboard only when you paste into it.
+
+Mercury cannot yet tell which frame of a page is asking. So in those same moments a frame from another site inside the page (an advert, for example) is treated like the page itself: it could also put text on the clipboard, and for about two seconds after you paste, its first read could be taken for your paste and get the text you are pasting. Closing this gap needs a change inside the engine.
+
 ## Proxy servers
 
 On macOS, Mercury uses the proxies set in **System Settings > Network > (your network) > Details > Proxies**, read when Mercury starts; a change takes effect at the next start. The `http_proxy`, `https_proxy` and `no_proxy` environment variables, if set, are used instead (on Linux they are the only source).

@@ -12,7 +12,7 @@ is a secure context, which permission requests need.
 | `dialog-twice.html` | two alerts waiting at once (the page and a frame on `localhost`), with "Don't allow this page to show more dialogs" |
 | `permission.html` | `navigator.storage.persist()`: the permission prompt under the address bar |
 | `permission-camera.html` | `navigator.permissions.request({name: "camera"})`: denied without a prompt |
-| `clipboard.html` | `navigator.clipboard.writeText()` then `readText()` on load, without a gesture: both refused, the read resolves with `""`. Run with `MERCURY_TEST_CLIPBOARD_TEXT=seed` to give the run's in-memory clipboard a text the page must not see |
+| `clipboard.html` | `navigator.clipboard.writeText()` then `readText()` on load, without a gesture: both refused (Servo resolves the write anyway), the read resolves with `""`. Run with `MERCURY_TEST_CLIPBOARD_TEXT=seed` to give the run's in-memory clipboard a text the page must not see. By hand, in a normal run: buttons for a script's copy (works after the click) and read (always `""`), and a text box whose `paste` handler shows the text the user's paste gave the page |
 | `http-auth.html` | a frame loading `/private`: the sign-in sheet (Servo asks only for navigations, not for `fetch()`) |
 | `navigate-then-head-alert.html?port=N` | navigates (by script) to `head-alert.html` on port `N`, another origin, whose `<head>` alerts; run with `RUST_LOG=talaria_servo=debug` to see whether the new address or the new document's dialog reaches the browser first. Needs a second `serve-tests.py --port N`. The run ends with exit 3, because the head alert keeps the page from loading. |
 
