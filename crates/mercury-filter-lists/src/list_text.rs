@@ -30,7 +30,7 @@ pub enum Rejection {
     NotText,
     #[error("it looks like a web page, not a filter list")]
     LooksLikeHtml,
-    #[error("it has {got} network rules, fewer than half of the {current} in the copy in use")]
+    #[error("it has {got} network rules, fewer than half of the {current} expected")]
     TooFewRules { got: usize, current: usize },
 }
 
@@ -106,7 +106,8 @@ pub fn check_text(bytes: &[u8]) -> Result<String, Rejection> {
     Ok(text.to_owned())
 }
 
-/// The shrink rule: a list with fewer than half the usable rules of the copy in use is refused.
+/// The shrink rule: a list with fewer than half of `current` usable rules is refused, where
+/// `current` is the larger of the counts of the copy in use and of the bundled copy.
 pub fn check_shrink(got: usize, current: usize) -> Result<(), Rejection> {
     if got.saturating_mul(2) < current {
         Err(Rejection::TooFewRules { got, current })

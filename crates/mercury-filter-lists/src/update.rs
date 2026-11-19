@@ -16,7 +16,7 @@ use crate::list_text::{Rejection, check_shrink, check_text, count_network_rules,
 /// How the updater measures one kind of list.
 pub trait ListKind {
     /// The rules in `text` that would be used. A download with fewer than half of the copy in
-    /// use is refused.
+    /// use, or of the bundled copy, is refused.
     fn usable_rules(&self, text: &str) -> usize;
 }
 
@@ -574,7 +574,7 @@ mod tests {
     #[test]
     fn a_download_must_keep_half_the_bundled_rules_too() {
         let setup = Setup::new();
-        // The copy in use is an update with one rule; the bundled copy has two.
+        // The copy in use is an update with one rule; the bundled copy has four (the baselines).
         let mut state = CacheState::default();
         let (file, sha256) = setup.cache.write_list("ads", "||ads.example^\n").unwrap();
         state.lists.insert(
@@ -590,10 +590,7 @@ mod tests {
             },
         );
         let files = files(vec![
-            (
-                "/lists/ads.txt",
-                Reply::ok("||x.example^\n! nothing else\n".repeat(0) + "! empty\n"),
-            ),
+            ("/lists/ads.txt", Reply::ok("! empty\n")),
             ("/lists/trackers.txt", Reply::ok(TRACKERS)),
         ]);
         let server = server(&files);

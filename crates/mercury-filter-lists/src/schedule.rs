@@ -7,12 +7,15 @@
 //! reached the publishers, counted from its start, and never before [`SETTLE_DELAY`] after
 //! start-up. After a check that could not reach them (no network, a time-out, a server error),
 //! nothing was downloaded, so the next one comes sooner: 1 hour after the first such failure in
-//! a row, then 2, 4, 8 and 16 hours, and 24 hours from the sixth on ([`retry_interval`]). A check is also due when the last one is recorded in the future (the clock was
-//! set back), so a wrong clock cannot hold updates off for long. "Update now" ignores this.
+//! a row, then 2, 4, 8 and 16 hours, and 24 hours from the sixth on ([`retry_interval`]). A
+//! cancelled check (the browser quit during it) does not count. A check is also due when the
+//! last one is recorded in the future (the clock was set back), so a wrong clock cannot hold
+//! updates off for long. "Update now" ignores this.
 
 use std::time::Duration;
 
-/// The shortest time between two automatic checks.
+/// The time between two automatic checks after one that reached the publishers, and the
+/// longest back-off after checks that did not.
 pub const UPDATE_INTERVAL: Duration = Duration::from_secs(24 * 60 * 60);
 /// How long after start-up the first automatic check waits, so it never competes with the
 /// first pages.
@@ -35,7 +38,8 @@ pub fn retry_interval(failures: u32) -> Duration {
 
 /// How long to wait before the next automatic check, from `now` (seconds since the Unix
 /// epoch). `last_check` is when the last check started and `failures` how many checks in a row
-/// could not reach the publishers; `since_start` is how long this run has been going. `Duration::ZERO` means a check is due now. The result is never longer than
+/// could not reach the publishers; `since_start` is how long this run has been going.
+/// `Duration::ZERO` means a check is due now. The result is never longer than
 /// [`RECHECK_INTERVAL`]: the caller asks again after waiting.
 pub fn wait_before_check(
     last_check: Option<u64>,

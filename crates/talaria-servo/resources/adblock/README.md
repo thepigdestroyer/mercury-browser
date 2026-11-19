@@ -35,5 +35,5 @@ manifest and copies them beside the executable (`Contents/Resources/filter-lists
 bundle, `filter-lists/` in the Linux archive and in `target/<profile>/` after `make build-release`).
 At start-up `crates/mercury-filter-lists` builds the network-rule engine off the UI thread from the
 newest valid copy of each list (this one, or an update in the profile's `filter-lists/` cache) and
-caches it compiled; it fetches updates from the publisher URLs at most once a day. Cosmetic
+caches it compiled; it fetches updates from the publisher URLs once a day, sooner after a check that failed. Cosmetic
 (element-hiding) rules are not used.
