@@ -13,6 +13,8 @@
 //! - `save_url` for "Save link as…" and "Save image as…" (the context menu);
 //! - `save_page` for "Save page as…" (Cmd+S);
 //! - `show_list` for the downloads shortcut;
+//! - `note_typed_navigation` for an address typed in the address bar, and `note_typed_url` for a
+//!   URL opened for the user while the controller is held (links from other apps);
 //! - `take_download_offers` after the engine's events are applied (the engine pump);
 //! - `sync_tab` whenever the tabs change (`sync_ui`);
 //! - `confirm_quit` before the quit sequence starts shutting down;
@@ -149,26 +151,12 @@ pub(crate) fn start(
         options.automated,
         options.profile_root.as_deref(),
     );
-    let downloads = Rc::new(Downloads {
-        window: window.as_weak(),
-        controller: Rc::downgrade(&controller),
-        manager: RefCell::new(None),
-        inbox: Arc::new(Inbox::default()),
-        list: RefCell::new(DownloadList::default()),
-        policy: RefCell::new(OfferPolicy::default()),
-        navigations: RefCell::new(Navigations::default()),
-        bars: RefCell::new(HashMap::new()),
-        active_tab: Cell::new(None),
-        offer_answer: options.offer_answer,
-        popover_open: Cell::new(false),
-        panel_open: Cell::new(false),
-        attention: Cell::new(false),
-        records_asked: Cell::new(0),
-        more_records: Cell::new(false),
-        pending_quit: RefCell::new(None),
+    let downloads = Rc::new(Downloads::new(
+        window.as_weak(),
+        &controller,
         web_view_focused,
-        focus_returns_to: Cell::new(FocusReturn::Nowhere),
-    });
+        options.offer_answer,
+    ));
     DOWNLOADS.with(|current| *current.borrow_mut() = Some(Rc::clone(&downloads)));
     window.set_downloads_show_label(show_label().into());
     connect_callbacks(window);
@@ -283,6 +271,10 @@ pub(crate) fn show_list() {
 ///
 /// The address is resolved by the controller's own search builder, as `queue_navigation`
 /// resolves it, so the URL noted here is the one the tab then requests.
+///
+/// This borrows the controller to resolve the address, and does nothing (apart from a log line)
+/// while it is already borrowed. A caller that holds the controller, such as one that has a
+/// `&mut BrowserController` in hand, resolves the address itself and calls `note_typed_url`.
 pub(crate) fn note_typed_navigation(tab: TabId, address: &str) {
     let Some(downloads) = current() else {
         return;
@@ -292,6 +284,10 @@ pub(crate) fn note_typed_navigation(tab: TabId, address: &str) {
     };
     let url = {
         let Ok(controller) = controller.try_borrow() else {
+            log::warn!(
+                "tab {}: the controller is busy; a typed address was not noted",
+                tab.value()
+            );
             return;
         };
         let Ok(url) = controller.resolve_address(address) else {
@@ -299,10 +295,46 @@ pub(crate) fn note_typed_navigation(tab: TabId, address: &str) {
         };
         url
     };
-    downloads
-        .navigations
-        .borrow_mut()
-        .note_typed(tab, url.as_str(), Instant::now());
+    downloads.note_typed(tab, url.as_str());
+}
+
+/// The user started `url` in `tab` without typing it: a link or file another app handed to
+/// Mercury Browser, or an address from a second launch's command line. Like a typed address,
+/// a download it leads to was asked for.
+///
+/// `url` is the address as the tab requests it (`BrowserController::resolve_address`, which
+/// `open_tab_with` uses). Unlike `note_typed_navigation` this never touches the controller,
+/// so it works while the caller holds it, and it is called after the tab exists and before
+/// the engine pump starts its request.
+pub(crate) fn note_typed_url(tab: TabId, url: &str) {
+    if let Some(downloads) = current() {
+        downloads.note_typed(tab, url);
+    }
+}
+
+/// Test support: sets up the downloads state with no window, watching `controller` as `start`
+/// does. The state is dropped with the guard.
+#[cfg(test)]
+pub(crate) fn start_for_test(controller: &Rc<RefCell<BrowserController>>) -> TestDownloads {
+    let downloads = Rc::new(Downloads::new(
+        slint::Weak::default(),
+        controller,
+        Rc::new(Cell::new(false)),
+        None,
+    ));
+    DOWNLOADS.with(|current| *current.borrow_mut() = Some(downloads));
+    TestDownloads
+}
+
+/// The guard `start_for_test` returns.
+#[cfg(test)]
+pub(crate) struct TestDownloads;
+
+#[cfg(test)]
+impl Drop for TestDownloads {
+    fn drop(&mut self) {
+        DOWNLOADS.with(|current| current.borrow_mut().take());
+    }
 }
 
 /// The engine's top-level request hook (`ServoRuntime::set_document_request_listener`):
@@ -479,6 +511,46 @@ pub(crate) fn shut_down(deadline: Instant) {
 }
 
 impl Downloads {
+    fn new(
+        window: slint::Weak<MainWindow>,
+        controller: &Rc<RefCell<BrowserController>>,
+        web_view_focused: Rc<Cell<bool>>,
+        offer_answer: Option<OfferAnswer>,
+    ) -> Self {
+        Self {
+            window,
+            controller: Rc::downgrade(controller),
+            manager: RefCell::new(None),
+            inbox: Arc::new(Inbox::default()),
+            list: RefCell::new(DownloadList::default()),
+            policy: RefCell::new(OfferPolicy::default()),
+            navigations: RefCell::new(Navigations::default()),
+            bars: RefCell::new(HashMap::new()),
+            active_tab: Cell::new(None),
+            offer_answer,
+            popover_open: Cell::new(false),
+            panel_open: Cell::new(false),
+            attention: Cell::new(false),
+            records_asked: Cell::new(0),
+            more_records: Cell::new(false),
+            pending_quit: RefCell::new(None),
+            web_view_focused,
+            focus_returns_to: Cell::new(FocusReturn::Nowhere),
+        }
+    }
+
+    /// The user started `url` (already resolved) in `tab`. Touches only the navigation notes, so
+    /// it is safe while the caller holds the controller.
+    fn note_typed(&self, tab: TabId, url: &str) {
+        match self.navigations.try_borrow_mut() {
+            Ok(mut navigations) => navigations.note_typed(tab, url, Instant::now()),
+            Err(_) => log::warn!(
+                "tab {}: the navigation notes are busy; a typed address was not noted",
+                tab.value()
+            ),
+        }
+    }
+
     fn manager(&self) -> Option<std::cell::Ref<'_, DownloadManager>> {
         if self.manager.borrow().is_none() {
             let inbox = Arc::clone(&self.inbox);
@@ -1337,6 +1409,46 @@ mod tests {
         // A redirect hop never takes a gesture.
         note_user_activation(tab, now);
         assert!(!listener(tab, &url, true));
+    }
+
+    #[test]
+    fn a_typed_address_makes_its_request_the_users() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        use talaria_core::{BrowserController, TabId};
+
+        let controller = Rc::new(RefCell::new(BrowserController::default()));
+        let _downloads = super::start_for_test(&controller);
+        let tab = TabId::new(51);
+        let address = "https://files.example.net/a.zip";
+        let url = url::Url::parse(address).unwrap();
+        let listener = super::document_request_listener();
+        assert!(!listener(tab, &url, false), "nothing was typed yet");
+
+        // The address bar's path (`callbacks.rs`): the address is resolved by the controller.
+        super::note_typed_navigation(tab, address);
+        let other = url::Url::parse("https://files.example.net/b.zip").unwrap();
+        assert!(!listener(tab, &other, false), "another address is not it");
+        assert!(listener(tab, &url, false));
+        assert!(!listener(tab, &url, false), "a typed address is used once");
+
+        // A caller that holds the controller has resolved the address itself: noted as well.
+        let held = controller.borrow_mut();
+        super::note_typed_url(tab, url.as_str());
+        drop(held);
+        assert!(listener(tab, &url, false));
+        assert!(!listener(tab, &url, false));
+
+        // `note_typed_navigation` cannot resolve the address while the controller is held, and
+        // notes nothing; that is why the caller above uses `note_typed_url`.
+        let held = controller.borrow_mut();
+        super::note_typed_navigation(tab, address);
+        drop(held);
+        assert!(
+            !listener(tab, &url, false),
+            "a busy controller leaves the address unnoted"
+        );
     }
 
     #[test]

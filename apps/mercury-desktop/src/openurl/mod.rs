@@ -116,6 +116,11 @@ pub(crate) fn accept_url_from_other_app(text: &str) -> Result<String, String> {
 }
 
 /// Opens each URL in a new tab, in order; the last one is selected. Returns how many opened.
+///
+/// These URLs come from other apps or a second launch, and count as typed by the user: each
+/// tab's address is noted with the downloads work (`note_typed_url`), so a download it leads to
+/// starts at once, without the "wants to download" question. The caller holds the controller,
+/// so the address is resolved here and `note_typed_navigation`, which borrows it, is not used.
 pub(crate) fn open_in_tabs(controller: &mut BrowserController, urls: &[String]) -> usize {
     let mut opened = 0;
     for (index, url) in urls.iter().enumerate() {
@@ -124,10 +129,14 @@ pub(crate) fn open_in_tabs(controller: &mut BrowserController, urls: &[String]) 
         } else {
             TabActivation::Background
         };
-        // downloads: these URLs come from other apps or a second launch and count as typed by
-        // the user; call `note_typed_navigation` for each tab opened here when downloads-ui lands.
         match controller.open_tab_with(Some(url), activation) {
-            Ok(_) => opened += 1,
+            Ok(tab) => {
+                opened += 1;
+                // The same resolution `open_tab_with` made: the address the tab then requests.
+                if let Ok(resolved) = controller.resolve_address(url) {
+                    crate::downloads::note_typed_url(tab, resolved.as_str());
+                }
+            }
             Err(error) => log::warn!("openurl: could not open {url}: {error}"),
         }
     }
@@ -605,6 +614,49 @@ mod tests {
         );
         assert_ne!(controller.active_tab_id(), first);
         assert_eq!(controller.active_state().url(), "file:///tmp/b.html");
+    }
+
+    /// For each tab but the first: whether the engine's request hook takes its URL as started by
+    /// the user (the answer it gives as the tab's request starts).
+    fn requests_started_by_the_user(controller: &RefCell<BrowserController>) -> Vec<bool> {
+        let listener = crate::downloads::document_request_listener();
+        let tabs = controller
+            .borrow()
+            .tabs()
+            .skip(1)
+            .map(|tab| (tab.id(), tab.state().url().to_owned()))
+            .collect::<Vec<_>>();
+        tabs.into_iter()
+            .map(|(tab, address)| listener(tab, &Url::parse(&address).unwrap(), false))
+            .collect()
+    }
+
+    #[test]
+    fn urls_from_other_apps_count_as_typed_by_the_user() {
+        let controller = Rc::new(RefCell::new(BrowserController::default()));
+        let _downloads = crate::downloads::start_for_test(&controller);
+        let urls = [
+            "https://files.example.net/a.zip".to_owned(),
+            "https://files.example.net/b.zip".to_owned(),
+        ];
+
+        // The controller is held for the whole call, as `open_pending` holds it.
+        let opened = open_in_tabs(&mut controller.borrow_mut(), &urls);
+
+        assert_eq!(opened, 2);
+        assert_eq!(requests_started_by_the_user(&controller), vec![true, true]);
+    }
+
+    #[test]
+    fn a_second_launchs_addresses_count_as_typed_by_the_user() {
+        let controller = Rc::new(RefCell::new(BrowserController::default()));
+        let _downloads = crate::downloads::start_for_test(&controller);
+        let urls = ["https://files.example.net/a.zip".to_owned()];
+
+        let opened = open_handed_over(&mut controller.borrow_mut(), &urls);
+
+        assert_eq!(opened, Ok(1));
+        assert_eq!(requests_started_by_the_user(&controller), vec![true]);
     }
 
     #[test]
