@@ -116,6 +116,17 @@ path = [
   "tests/pages/blocklists/__utm.gif",
   "tests/pages/blocklists/allowed.gif",
   "tests/pages/blocklists/update-probe.gif",
+  "spikes/mse/fixtures/README.md",
+  "spikes/mse/fixtures/SHA256SUMS",
+  "spikes/mse/fixtures/fmp4/audio-aac.mp4",
+  "spikes/mse/fixtures/fmp4/muxed-h264-aac.mp4",
+  "spikes/mse/fixtures/fmp4/video-h264-bframes.mp4",
+  "spikes/mse/fixtures/fmp4/video-h264-high.mp4",
+  "spikes/mse/fixtures/fmp4/video-h264-low.mp4",
+  "spikes/mse/fixtures/webm/audio-opus.webm",
+  "spikes/mse/fixtures/webm/video-av1-low.webm",
+  "spikes/mse/fixtures/webm/video-vp9-high.webm",
+  "spikes/mse/fixtures/webm/video-vp9-low.webm",
 ]
 SPDX-FileCopyrightText = "2026 Mrinal Joshi and the Mercury Browser contributors"
 SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
