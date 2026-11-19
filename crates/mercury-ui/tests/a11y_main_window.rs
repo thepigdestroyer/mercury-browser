@@ -19,6 +19,7 @@ use common::a11y::{
 };
 use i_slint_backend_testing::AccessibleRole as Role;
 use mercury_ui::MainWindow;
+use slint::platform::PointerEventButton;
 use slint::{ModelRc, SharedString, VecModel};
 
 const WIDTH: f32 = 1180.0;
@@ -324,6 +325,48 @@ fn every_default_action_does_what_a_click_does() {
         dump(&reading_order(&window))
     );
     assert_eq!(take(&log), Vec::<String>::new());
+}
+
+#[test]
+fn a_click_in_the_reported_rectangle_does_what_the_default_action_does() {
+    // VoiceOver draws its cursor in the rectangle the window reports for a control and clicks at
+    // its centre. A click there, which the testing platform dispatches as a pointer press and
+    // release, must do exactly what the default action does: so the rectangle is where the
+    // control really is (no doubled or shifted offset from the layers Slint adds for `opacity`).
+    let (window, log) = window();
+    page_loaded_and_loading(&window);
+    window.set_can_go_forward(true);
+    window.set_show_home_button(true);
+    let click = |label: &str| {
+        control_in(&reading_order(&window), Role::Button, label)
+            .mock_single_click(PointerEventButton::Left);
+    };
+    for (label, event) in [
+        ("New tab", "new-tab"),
+        ("Back", "go-back"),
+        ("Forward", "go-forward"),
+        ("Reload page", "reload"),
+        ("Home page", "go-home"),
+    ] {
+        click(label);
+        assert_eq!(take(&log), [event], "a click on {label}");
+    }
+    // A disabled button ignores the click, as it ignores the default action.
+    window.set_can_go_back(false);
+    click("Back");
+    assert_eq!(take(&log), Vec::<String>::new());
+
+    // The page is gone again: the new-tab page's Search button, with a typed text.
+    window.set_is_new_tab(true);
+    window.set_web_view_visible(false);
+    control_in(
+        &reading_order(&window),
+        Role::TextInput,
+        "Search or enter address",
+    )
+    .set_accessible_value("clicked");
+    click("Search");
+    assert_eq!(take(&log), ["navigate clicked"]);
 }
 
 #[test]
