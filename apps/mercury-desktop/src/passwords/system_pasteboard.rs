@@ -4,7 +4,11 @@
 //! normal interactive runs use it; tests and automated runs use an in-memory fake.
 
 use mercury_password_manager::Pasteboard;
-use objc2_app_kit::{NSPasteboard, NSPasteboardContentsOptions, NSPasteboardTypeString};
+use objc2::runtime::ProtocolObject;
+use objc2_app_kit::{
+    NSPasteboard, NSPasteboardContentsOptions, NSPasteboardItem, NSPasteboardTypeString,
+    NSPasteboardWriting,
+};
 use objc2_foundation::{NSArray, NSString};
 
 /// Markers that clipboard managers following nspasteboard.org honour: a concealed item is kept
@@ -16,33 +20,7 @@ pub(crate) struct SystemPasteboard;
 
 impl Pasteboard for SystemPasteboard {
     fn write_text(&self, text: &str, concealed: bool) -> Option<i64> {
-        let pasteboard = NSPasteboard::generalPasteboard();
-        // SAFETY: an AppKit constant, valid for the life of the process.
-        let string_type = unsafe { NSPasteboardTypeString };
-        if concealed {
-            // This Mac only: never handed to Universal Clipboard.
-            pasteboard
-                .prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
-            // Every type is declared, markers included, before any data is set, so a clipboard
-            // manager that looks in between already sees the markers.
-            let types = NSArray::from_retained_slice(&[
-                NSString::from_str(&string_type.to_string()),
-                NSString::from_str(CONCEALED_TYPE),
-                NSString::from_str(TRANSIENT_TYPE),
-            ]);
-            // SAFETY: no owner object.
-            unsafe { pasteboard.declareTypes_owner(&types, None) };
-            let _concealed = pasteboard
-                .setString_forType(&NSString::from_str(""), &NSString::from_str(CONCEALED_TYPE));
-            let _transient = pasteboard
-                .setString_forType(&NSString::from_str(""), &NSString::from_str(TRANSIENT_TYPE));
-        } else {
-            pasteboard.clearContents();
-        }
-        if !pasteboard.setString_forType(&NSString::from_str(text), string_type) {
-            return None;
-        }
-        Some(i64::try_from(pasteboard.changeCount()).unwrap_or_default())
+        write_to(&NSPasteboard::generalPasteboard(), text, concealed)
     }
 
     fn change_count(&self) -> i64 {
@@ -52,4 +30,40 @@ impl Pasteboard for SystemPasteboard {
     fn clear(&self) {
         NSPasteboard::generalPasteboard().clearContents();
     }
+}
+
+/// Replaces the contents of `pasteboard` with `text` and returns its change count, or `None` if
+/// AppKit refused the write. Split out of `write_text` so that a check can aim it at a private
+/// pasteboard instead of the user's general one.
+fn write_to(pasteboard: &NSPasteboard, text: &str, concealed: bool) -> Option<i64> {
+    // SAFETY: an AppKit constant, valid for the life of the process.
+    let string_type = unsafe { NSPasteboardTypeString };
+    if concealed {
+        // This Mac only: never handed to Universal Clipboard. This also empties the
+        // pasteboard, and nothing after it resets the option: the data goes in with one
+        // `writeObjects:`, not `declareTypes:owner:`.
+        pasteboard.prepareForNewContentsWithOptions(NSPasteboardContentsOptions::CurrentHostOnly);
+        // One item carries the string and both markers, written at once: a clipboard
+        // manager never sees the string without them.
+        let item = NSPasteboardItem::new();
+        let empty = NSString::from_str("");
+        if !item.setString_forType(&NSString::from_str(text), string_type)
+            || !item.setString_forType(&empty, &NSString::from_str(CONCEALED_TYPE))
+            || !item.setString_forType(&empty, &NSString::from_str(TRANSIENT_TYPE))
+        {
+            return None;
+        }
+        let items = NSArray::from_retained_slice(&[
+            ProtocolObject::<dyn NSPasteboardWriting>::from_retained(item),
+        ]);
+        if !pasteboard.writeObjects(&items) {
+            return None;
+        }
+    } else {
+        pasteboard.clearContents();
+        if !pasteboard.setString_forType(&NSString::from_str(text), string_type) {
+            return None;
+        }
+    }
+    Some(i64::try_from(pasteboard.changeCount()).unwrap_or_default())
 }

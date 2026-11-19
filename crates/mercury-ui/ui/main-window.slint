@@ -7,6 +7,7 @@ import { SettingsNotice } from "settings/settings-notice.slint";
 export { SearchEngineRow, SettingsWindow } from "settings/settings-window.slint";
 // passwords-ui
 export { LoginListRow, PasswordManagerUi } from "passwords/passwords-section.slint";
+import { PasswordSaveNotice } from "passwords/password-save-notice.slint";
 import { PageRequestSheet, PageRequestStyle, PageRequestView, PermissionPrompt } from "dialogs/page-requests.slint";
 // controls
 import { ColorPicker, ContextMenuPopup, ContextMenuRow, PopupBackdrop, SelectPopup, SelectPopupRow } from "controls/controls.slint";
@@ -308,6 +309,13 @@ export component MainWindow inherits Window {
     callback go-home();
     callback dismiss-settings-notice();
     // --- end settings-ui ---
+    // --- passwords-ui ---
+    // A login the user asked to save that could not be saved ("Couldn't save the login for …");
+    // empty for none. Shown under the toolbar with Retry and Dismiss.
+    in property <string> password-save-problem: "";
+    callback retry-password-save();
+    callback dismiss-password-save-problem();
+    // --- end passwords-ui ---
 
     // --- controls ---
     // Where the page area is in the window, for placing popups over page elements.
@@ -789,6 +797,17 @@ export component MainWindow inherits Window {
             text: root.settings-notice;
             dismissed => {
                 root.dismiss-settings-notice();
+            }
+        }
+
+        // passwords-ui: a login the user asked to save could not be saved.
+        if root.password-save-problem != "" && !root.chrome-hidden: PasswordSaveNotice {
+            text: root.password-save-problem;
+            retry => {
+                root.retry-password-save();
+            }
+            dismissed => {
+                root.dismiss-password-save-problem();
             }
         }
 

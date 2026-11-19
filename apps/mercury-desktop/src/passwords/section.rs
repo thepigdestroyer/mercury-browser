@@ -26,6 +26,11 @@ use super::{Passwords, current};
 
 /// Shown while a store job runs (macOS may be asking the user about the keychain).
 pub(crate) const WAITING_FOR_KEYCHAIN: &str = "Waiting for your keychain…";
+/// Shown when a store job failed (its result never came).
+pub(crate) const STORE_FAILED: &str = "Something went wrong with the saved logins.";
+/// Shown when the store thread is gone.
+pub(crate) const STORE_STOPPED: &str =
+    "Saved logins are unavailable until Mercury Browser restarts.";
 
 /// What the section shows, kept between the window's callbacks.
 #[derive(Default)]

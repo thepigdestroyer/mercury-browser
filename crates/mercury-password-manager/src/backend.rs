@@ -148,4 +148,28 @@ mod tests {
         .expect("joined");
         assert!(!elsewhere.on_owner_thread());
     }
+
+    /// The assertion fires before any Keychain call is made, so this needs no keychain, shows
+    /// no dialog and cannot touch the process-wide interaction setting. `debug_assert!` is
+    /// compiled out of release builds (the repository's tests run with `--release`), so the test
+    /// exists only where the assertion does.
+    #[cfg(all(target_os = "macos", debug_assertions))]
+    #[test]
+    #[should_panic(expected = "every Keychain call runs on the store worker's thread")]
+    fn a_keychain_call_off_the_owner_thread_is_refused() {
+        let backend = AnyBackend::keychain(KeychainBackend::login());
+        // Owned by another thread, as the store worker's thread owns the real one.
+        let backend = std::thread::spawn(move || {
+            backend.bind_to_current_thread();
+            backend
+        })
+        .join()
+        .expect("joined");
+        let key = LoginKey::form(
+            mercury_passwords::Origin::parse("https://a.test").expect("valid"),
+            "alice",
+        );
+
+        let _ = backend.get(&key);
+    }
 }

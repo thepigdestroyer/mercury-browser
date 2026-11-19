@@ -15,8 +15,10 @@
 //! job's reply comes back through `slint::invoke_from_event_loop`, and every reply checks again
 //! that what it was for (the opened login, the focused field, the sign-in request) is still
 //! there. Jobs that follow a gesture in Mercury's own interface may make macOS ask the user
-//! (`Interaction::Allowed`); everything else (start-up, a page's sign-in that worked) runs with
-//! Keychain user interaction off (`Interaction::Never`) and fails instead of asking. The list of
+//! (`Interaction::Allowed`), and so does saving a sign-in the user ticked "Save" for; everything
+//! else (start-up, list reloads) runs with Keychain user interaction off (`Interaction::Never`)
+//! and fails instead of asking. Debug builds assert that every Keychain call runs on the
+//! worker's thread: nothing else in the process may call the Keychain. The list of
 //! saved logins (no passwords) is kept here, so searching, the fill menu and the sign-in sheet
 //! never call the Keychain; a password is read only after the user asked for it.
 
@@ -38,7 +40,7 @@ use std::time::SystemTime;
 use mercury_password_manager::testing::FakePasteboard;
 use mercury_password_manager::{
     AnyBackend, AuthGate, AuthOutcome, Authenticator, CLIPBOARD_CLEAR_DELAY, CopiedSecret,
-    Interaction, Pasteboard, RefusingAuthenticator, SignInSaves, StoreWorker,
+    Interaction, Pasteboard, RefusingAuthenticator, SignInSaves, StoreWorker, WorkerFailure,
 };
 use mercury_passwords::LoginSummary;
 
@@ -47,14 +49,19 @@ pub(crate) use section::{connect_settings_window, settings_window_closed};
 #[cfg(test)]
 pub(crate) use sign_in::REMEMBER_SIGN_IN_CHOICE;
 pub(crate) use sign_in::{
-    read_saved_sign_in, save_sign_in_choice, saved_sign_in_username, sign_in_sent,
+    connect_main_window, read_saved_sign_in, save_sign_in_choice, saved_sign_in_username,
+    saved_sign_ins_unknown, sign_in_sent, with_saved_sign_ins_listed,
 };
 
 /// Everything the password manager keeps for the run, on the UI thread.
 pub(crate) struct Passwords {
-    worker: StoreWorker,
+    // Crate-visible for the sign-in sheet's tests in `page_requests`.
+    pub(crate) worker: StoreWorker,
     /// Every saved login, without passwords, as last listed.
-    logins: RefCell<Vec<LoginSummary>>,
+    pub(crate) logins: RefCell<Vec<LoginSummary>>,
+    /// The last attempt to list the logins failed (a locked keychain at launch, say): the next
+    /// gesture that needs the list reads it again, allowed to ask.
+    pub(crate) list_unavailable: Cell<bool>,
     /// An automated run: the diagnostics fill may run.
     #[cfg_attr(not(feature = "passwords-diagnostics"), allow(dead_code))]
     automated: bool,
@@ -66,6 +73,10 @@ pub(crate) struct Passwords {
     clear_timer: slint::Timer,
     section: RefCell<section::SectionState>,
     fill: RefCell<Option<fill::FillOffer>>,
+    /// A sign-in the user asked to save that could not be saved, until retried or dismissed.
+    failed_save: RefCell<Option<sign_in::FailedSave>>,
+    /// The browser window, which shows a failed save under its toolbar.
+    main_window: RefCell<slint::Weak<mercury_ui::MainWindow>>,
 }
 
 thread_local! {
@@ -82,6 +93,7 @@ impl Passwords {
         Rc::new(Self {
             worker,
             logins: RefCell::default(),
+            list_unavailable: Cell::new(false),
             automated,
             authenticator,
             pasteboard,
@@ -91,6 +103,8 @@ impl Passwords {
             clear_timer: slint::Timer::default(),
             section: RefCell::default(),
             fill: RefCell::default(),
+            failed_save: RefCell::default(),
+            main_window: RefCell::default(),
         })
     }
 
@@ -109,14 +123,37 @@ impl Passwords {
                     return;
                 };
                 match result {
-                    Ok(logins) => *this.logins.borrow_mut() = logins,
+                    Ok(logins) => {
+                        *this.logins.borrow_mut() = logins;
+                        this.list_unavailable.set(false);
+                    }
                     Err(error) => {
-                        log::warn!("passwords: the saved logins could not be listed: {error}")
+                        log::warn!("passwords: the saved logins could not be listed: {error}");
+                        this.list_unavailable.set(true);
                     }
                 }
                 then(&this);
             },
         );
+    }
+
+    /// For a gesture in Mercury's own interface that needs the list of saved logins: if the
+    /// last listing failed, lists them again (macOS may ask) before `then`; otherwise runs
+    /// `then` at once.
+    fn with_list_read(self: &Rc<Self>, then: impl FnOnce(&Rc<Self>) + 'static) {
+        if self.list_unavailable.get() {
+            self.reload_logins(Interaction::Allowed, then);
+        } else {
+            then(self);
+        }
+    }
+
+    /// A store job panicked or the store thread is gone: whatever waited for it is told.
+    fn store_failed(&self, failure: WorkerFailure) {
+        section::set_status(match failure {
+            WorkerFailure::JobFailed => section::STORE_FAILED,
+            WorkerFailure::Stopped => section::STORE_STOPPED,
+        });
     }
 
     /// Runs `then` with `true` once the user has authenticated (now, or within the grace
@@ -222,8 +259,14 @@ pub(crate) fn start(automated: bool, default_profile: bool) {
 
 fn install(passwords: Rc<Passwords>) {
     PASSWORDS.with(|current| *current.borrow_mut() = Some(Rc::clone(&passwords)));
-    // Page-independent, but not a gesture: never asks (a locked keychain lists nothing until
-    // the settings window opens).
+    let weak = Rc::downgrade(&passwords);
+    passwords.worker.set_on_failure(Box::new(move |failure| {
+        if let Some(passwords) = weak.upgrade() {
+            passwords.store_failed(failure);
+        }
+    }));
+    // Page-independent, but not a gesture: never asks. A locked keychain lists nothing until
+    // the settings window opens or a gesture needs the list (`Passwords::with_list_read`).
     passwords.reload_logins(Interaction::Never, |_| {});
 }
 

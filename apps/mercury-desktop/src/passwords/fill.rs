@@ -45,6 +45,11 @@ pub(crate) fn fill_menu(tab_id: TabId, field: ControlId, page_url: &str) -> Opti
     *passwords.fill.borrow_mut() = None;
     let (origin, logins) = fill_candidates(&passwords.logins.borrow(), page_url);
     let origin = origin?;
+    // The list could not be read (a locked keychain at launch): the user's right-click is a
+    // gesture, so it is read again (macOS may ask); the next menu offers what it finds.
+    if passwords.list_unavailable.get() {
+        passwords.reload_logins(Interaction::Allowed, |_| {});
+    }
     if logins.is_empty() {
         return None;
     }
@@ -540,7 +545,10 @@ mod locked_list_tests {
         assert!(fill_menu(TabId::new(1), ControlId::new(1), "https://example.com/").is_none());
 
         assert_eq!(passwords.worker.pending(), 1);
-        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Allowed));
+        assert_eq!(
+            passwords.worker.last_interaction(),
+            Some(Interaction::Allowed)
+        );
         passwords.worker.run_queued();
         assert!(!passwords.list_unavailable.get());
     }

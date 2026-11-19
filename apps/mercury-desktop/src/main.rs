@@ -189,6 +189,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         Rc::clone(&web_view_focused),
     );
     history_ui::connect(&window, Rc::clone(&controller), options.is_automated()); // history lane
+    passwords::connect_main_window(&window); // passwords-ui: a sign-in that could not be saved
     // tabs: the "Pop-up blocked" indicator
     page_tabs::connect_pop_up_indicator(&window, &controller);
     // tabs: MERCURY_ALLOW_POP_UPS only counts in automated runs

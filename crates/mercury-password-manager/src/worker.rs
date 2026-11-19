@@ -34,6 +34,7 @@ pub type Deliver = Arc<dyn Fn(u64, JobResult) + Send + Sync>;
 
 type Job = Box<dyn FnOnce(&PasswordStore<AnyBackend>) -> JobResult + Send>;
 type Reply = Box<dyn FnOnce(JobResult)>;
+type FailureHandler = Rc<dyn Fn(WorkerFailure)>;
 
 enum Mode {
     /// Jobs run at once, on the caller's thread: the memory store, which never waits.
@@ -53,7 +54,7 @@ pub struct StoreWorker {
     persistent: bool,
     next_id: Cell<u64>,
     last_interaction: Cell<Option<Interaction>>,
-    on_failure: RefCell<Option<Rc<dyn Fn()>>>,
+    on_failure: RefCell<Option<FailureHandler>>,
     waiting: RefCell<HashMap<u64, Reply>>,
 }
 
@@ -106,14 +107,14 @@ impl StoreWorker {
     }
 
     /// Called on this thread when a job panicked (its reply never runs) or the worker is gone.
-    pub fn set_on_failure(&self, on_failure: Box<dyn Fn()>) {
+    pub fn set_on_failure(&self, on_failure: Box<dyn Fn(WorkerFailure)>) {
         *self.on_failure.borrow_mut() = Some(on_failure.into());
     }
 
-    fn failed(&self) {
+    fn failed(&self, failure: WorkerFailure) {
         let on_failure = self.on_failure.borrow().clone();
         if let Some(on_failure) = on_failure {
-            on_failure();
+            on_failure(failure);
         }
     }
 
@@ -154,7 +155,7 @@ impl StoreWorker {
                 if sender.send((id, interaction, job)).is_err() {
                     // The thread is gone: the reply never comes.
                     self.waiting.borrow_mut().remove(&id);
-                    self.failed();
+                    self.failed(WorkerFailure::Stopped);
                 }
             }
         }
@@ -168,7 +169,7 @@ impl StoreWorker {
             return;
         };
         if result.is::<JobPanicked>() {
-            self.failed();
+            self.failed(WorkerFailure::JobFailed);
         } else {
             reply(result);
         }
@@ -200,6 +201,15 @@ impl StoreWorker {
     pub fn pending(&self) -> usize {
         self.waiting.borrow().len()
     }
+}
+
+/// Why a job's reply will never run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WorkerFailure {
+    /// The job panicked; the worker goes on with the next job.
+    JobFailed,
+    /// The worker thread is gone: no job will run again in this run.
+    Stopped,
 }
 
 /// What a job that panicked delivers instead of its result.
@@ -342,11 +352,16 @@ mod panic_tests {
     fn check(worker: &StoreWorker, settle: impl Fn(&StoreWorker)) {
         let failures = Rc::new(Cell::new(0));
         let counted = Rc::clone(&failures);
-        worker.set_on_failure(Box::new(move || counted.set(counted.get() + 1)));
+        worker.set_on_failure(Box::new(move |failure| {
+            assert_eq!(failure, WorkerFailure::JobFailed);
+            counted.set(counted.get() + 1);
+        }));
         let replied = Rc::new(Cell::new(false));
         let seen = Rc::clone(&replied);
 
-        worker.run(Interaction::Never, quiet_panicking_job, move |_| seen.set(true));
+        worker.run(Interaction::Never, quiet_panicking_job, move |_| {
+            seen.set(true)
+        });
         settle(worker);
         assert!(!replied.get(), "no reply for a job that panicked");
         assert_eq!(failures.get(), 1);
@@ -360,7 +375,11 @@ mod panic_tests {
             move |was_quiet| after.set(Some(was_quiet)),
         );
         settle(worker);
-        assert_eq!(quiet.get(), Some(false), "the worker still runs jobs, not quietly");
+        assert_eq!(
+            quiet.get(),
+            Some(false),
+            "the worker still runs jobs, not quietly"
+        );
     }
 
     #[test]

@@ -14,7 +14,7 @@
 //! - Permission requests, see `talaria_core::PagePermission` and the lane report for which
 //!   features can reach the browser with Mercury's preferences.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -63,6 +63,8 @@ impl InputProtector {
 thread_local! {
     /// The window's protector; the window lives on this thread.
     static PROTECTOR: RefCell<InputProtector> = RefCell::default();
+    /// passwords-ui: the sign-in request whose saved password could not be read on Sign in.
+    static UNREADABLE: Cell<Option<PageRequestId>> = const { Cell::new(None) };
 }
 
 /// The view of a page request. For a sign-in, the password manager's seam: the user name saved for a site's sign-in, used to fill the sheet
@@ -82,7 +84,15 @@ pub(crate) fn sign_in_view(pending: &PendingPageRequest) -> PageRequestView {
         .map(|username| HttpCredentials::new(username.clone(), String::new()));
     let view = page_request_view(pending, saved.as_ref());
     let choice = crate::passwords::save_sign_in_choice(origin, *for_proxy);
+    let unreadable = UNREADABLE.with(|unreadable| unreadable.get() == Some(pending.id()));
     PageRequestView {
+        warning: if unreadable && view.warning.is_empty() {
+            SAVED_PASSWORD_UNREADABLE.into()
+        } else if unreadable {
+            format!("{}\n{SAVED_PASSWORD_UNREADABLE}", view.warning).into()
+        } else {
+            view.warning.clone()
+        },
         detail: if saved.is_some() {
             SAVED_PASSWORD_DETAIL.into()
         } else {
@@ -96,6 +106,11 @@ pub(crate) fn sign_in_view(pending: &PendingPageRequest) -> PageRequestView {
 /// Under a sign-in sheet that starts with a saved user name.
 const SAVED_PASSWORD_DETAIL: &str =
     "Leave the password empty to sign in with the saved password for this user name.";
+
+/// On a sign-in sheet whose saved password could not be read when the user signed in (the
+/// keychain was locked, access was denied, or the login is gone).
+pub(crate) const SAVED_PASSWORD_UNREADABLE: &str =
+    "The saved password could not be read; type it to sign in.";
 
 /// Shows the active tab's oldest unanswered request, or nothing.
 pub(crate) fn sync_page_request(window: &MainWindow, controller: &BrowserController) {
@@ -140,32 +155,17 @@ pub(crate) fn connect_page_request_callbacks(
         }
         // passwords-ui: Sign in with the saved user name and an empty password uses the saved
         // password, read now (the user's gesture) on the store worker; the request is answered
-        // when it arrives, if it is still waiting.
+        // when it arrives, if it is still waiting. If the saved logins could not be listed (a
+        // locked keychain at launch), they are listed again first.
         if accepted
             && password.is_empty()
             && let PageRequestKind::Authentication { for_proxy: false } = pending.kind()
             && let Some(origin) = pending.origin().key()
-            && crate::passwords::saved_sign_in_username(origin, false).as_deref()
-                == Some(text.as_str())
+            && (crate::passwords::saved_sign_ins_unknown()
+                || crate::passwords::saved_sign_in_username(origin, false).as_deref()
+                    == Some(text.as_str()))
         {
-            let controller = Rc::clone(&controller);
-            let weak_window = weak_window.clone();
-            let username = text.to_string();
-            crate::passwords::read_saved_sign_in(origin, &text, move |password| {
-                let Some(password) = password else {
-                    return;
-                };
-                let waiting = controller
-                    .borrow()
-                    .pending_page_request(tab_id)
-                    .is_some_and(|pending| pending.id() == id);
-                if waiting {
-                    let reply = PageRequestReply::new(PageRequestAnswer::Credentials(
-                        HttpCredentials::new(username, password),
-                    ));
-                    answer_and_show(&controller, &weak_window, tab_id, id, reply);
-                }
-            });
+            sign_in_with_saved_password(&controller, &weak_window, tab_id, id, origin, &text);
             return;
         }
         let reply = reply_for(pending.kind(), accepted, &text, &password, checked);
@@ -182,6 +182,81 @@ pub(crate) fn connect_page_request_callbacks(
         }
         answer_and_show(&controller, &weak_window, tab_id, id, reply);
     });
+}
+
+/// passwords-ui: the user pressed Sign in on the sheet of request `id` with `username` and an
+/// empty password. Once the saved logins are known, signs in with the saved password for that
+/// user name (read on the store worker: macOS may ask). If none is saved, signs in with the
+/// empty password typed. If the saved password cannot be read, the sheet stays and says so.
+pub(crate) fn sign_in_with_saved_password(
+    controller: &Rc<RefCell<BrowserController>>,
+    window: &slint::Weak<MainWindow>,
+    tab_id: talaria_core::TabId,
+    id: PageRequestId,
+    origin: &str,
+    username: &str,
+) {
+    let controller = Rc::clone(controller);
+    let window = window.clone();
+    let origin = origin.to_owned();
+    let username = username.to_owned();
+    crate::passwords::with_saved_sign_ins_listed(move || {
+        if !still_waiting(&controller, tab_id, id) {
+            return;
+        }
+        if crate::passwords::saved_sign_ins_unknown() {
+            show_unreadable(&controller, &window, id);
+            return;
+        }
+        if crate::passwords::saved_sign_in_username(&origin, false).as_deref()
+            != Some(username.as_str())
+        {
+            let reply = PageRequestReply::new(PageRequestAnswer::Credentials(
+                HttpCredentials::new(username, String::new()),
+            ));
+            answer_and_show(&controller, &window, tab_id, id, reply);
+            return;
+        }
+        let reading = username.clone();
+        crate::passwords::read_saved_sign_in(&origin, &reading, move |password| {
+            if !still_waiting(&controller, tab_id, id) {
+                return;
+            }
+            let Some(password) = password else {
+                show_unreadable(&controller, &window, id);
+                return;
+            };
+            let reply = PageRequestReply::new(PageRequestAnswer::Credentials(
+                HttpCredentials::new(username, password),
+            ));
+            answer_and_show(&controller, &window, tab_id, id, reply);
+        });
+    });
+}
+
+/// passwords-ui: whether request `id` is still the one waiting in its tab.
+fn still_waiting(
+    controller: &RefCell<BrowserController>,
+    tab_id: talaria_core::TabId,
+    id: PageRequestId,
+) -> bool {
+    controller
+        .borrow()
+        .pending_page_request(tab_id)
+        .is_some_and(|pending| pending.id() == id)
+}
+
+/// passwords-ui: the sheet of request `id` says that the saved password could not be read.
+fn show_unreadable(
+    controller: &RefCell<BrowserController>,
+    window: &slint::Weak<MainWindow>,
+    id: PageRequestId,
+) {
+    UNREADABLE.with(|unreadable| unreadable.set(Some(id)));
+    if let Some(window) = window.upgrade() {
+        sync_ui(&window, &controller.borrow());
+        window.window().request_redraw();
+    }
 }
 
 fn answer_and_show(
@@ -886,7 +961,9 @@ mod saved_password_tests {
         let (passwords, _, _) = install_fakes();
         save_login(&passwords, alice(), Password::new("fake".to_owned()));
         // Removed by another program since it was listed.
-        passwords.worker.run(Interaction::Allowed, |store| store.remove(&alice()), |_| {});
+        passwords
+            .worker
+            .run(Interaction::Allowed, |store| store.remove(&alice()), |_| {});
         let (controller, tab_id) = controller();
 
         sign_in_with_saved_password(
@@ -902,7 +979,11 @@ mod saved_password_tests {
             .borrow()
             .pending_page_request(tab_id)
             .expect("still waiting");
-        assert!(sign_in_view(&pending).warning.contains(SAVED_PASSWORD_UNREADABLE));
+        assert!(
+            sign_in_view(&pending)
+                .warning
+                .contains(SAVED_PASSWORD_UNREADABLE)
+        );
     }
 
     #[test]
@@ -921,7 +1002,10 @@ mod saved_password_tests {
             ORIGIN,
             "alice",
         );
-        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Allowed));
+        assert_eq!(
+            passwords.worker.last_interaction(),
+            Some(Interaction::Allowed)
+        );
         passwords.worker.run_queued();
 
         assert!(

@@ -9,16 +9,20 @@
 //! - Never for a proxy: a proxy's challenge carries the destination's URL, and the destination's
 //!   login must not go to the proxy. Nothing is filled or offered for saving there.
 //! - With the save choice ticked, the credentials are saved once the sign-in has worked (see
-//!   `SignInSaves`), by a job that may not ask the user (`Interaction::Never`): it happens when a
-//!   page loads, not on a gesture.
+//!   `SignInSaves`). The user asked for that save (ticked the choice and pressed Sign in), so the
+//!   job may ask (`Interaction::Allowed`): the keychain may need unlocking, or an item saved by
+//!   another build of Mercury may need the user's permission. If the save still fails, the
+//!   browser window says so under its toolbar, with Retry and Dismiss.
 //!
 //! Servo 0.8 reports no realm, so these logins are saved and looked up with an empty one.
 
 use std::rc::Rc;
 use std::time::Instant;
 
-use mercury_password_manager::Interaction;
-use mercury_passwords::{LoginKind, Origin, Password, PasswordError};
+use mercury_password_manager::{Interaction, PendingHttpSave, site_label};
+use mercury_passwords::{LoginKey, LoginKind, Origin, Password, PasswordError};
+use mercury_ui::MainWindow;
+use slint::ComponentHandle;
 use talaria_core::{BrowserEvent, LoadState, PageRequestKind, TabId};
 
 use super::{Passwords, current};
@@ -139,9 +143,26 @@ pub(super) fn observe_event(passwords: &Rc<Passwords>, tab_id: TabId, event: &Br
     if !crate::settings::password_saving_allowed(saved.key.origin.as_str()) {
         return;
     }
+    save(passwords, saved);
+}
+
+/// A sign-in the user asked to save that could not be saved: kept until Retry or Dismiss.
+pub(crate) struct FailedSave {
+    key: LoginKey,
+    password: Password,
+}
+
+/// Saves a sign-in the user asked to save. That request was the user's gesture, so macOS may ask
+/// (unlock the keychain, allow access to an item another build saved). On failure the browser
+/// window says so, with Retry and Dismiss.
+fn save(passwords: &Rc<Passwords>, saved: PendingHttpSave) {
+    let kept = FailedSave {
+        key: saved.key.clone(),
+        password: saved.password.clone(),
+    };
     let weak = Rc::downgrade(passwords);
     passwords.worker.run(
-        Interaction::Never,
+        Interaction::Allowed,
         move |store| {
             store.save(&saved.key, &saved.password).map(|outcome| {
                 format!(
@@ -151,15 +172,93 @@ pub(super) fn observe_event(passwords: &Rc<Passwords>, tab_id: TabId, event: &Br
             })
         },
         move |result: Result<String, PasswordError>| {
+            let Some(passwords) = weak.upgrade() else {
+                return;
+            };
             match result {
-                Ok(done) => log::info!("passwords: {done}"),
-                Err(error) => log::warn!("passwords: an HTTP sign-in could not be saved: {error}"),
-            }
-            if let Some(passwords) = weak.upgrade() {
-                passwords.reload_logins(Interaction::Never, |_| {});
+                Ok(done) => {
+                    log::info!("passwords: {done}");
+                    passwords.reload_logins(Interaction::Never, |_| {});
+                }
+                Err(error) => {
+                    log::warn!("passwords: an HTTP sign-in could not be saved: {error}");
+                    *passwords.failed_save.borrow_mut() = Some(kept);
+                    show_save_problem(&passwords);
+                }
             }
         },
     );
+}
+
+/// What the browser window says about a sign-in that could not be saved, if any.
+pub(crate) fn save_problem() -> Option<String> {
+    let passwords = current()?;
+    let failed = passwords.failed_save.borrow();
+    failed.as_ref().map(|failed| {
+        format!(
+            "Couldn't save the login for {}.",
+            site_label(&failed.key.origin)
+        )
+    })
+}
+
+/// Retry: saves the failed sign-in again (the user's gesture: macOS may ask).
+pub(crate) fn retry_failed_save() {
+    let Some(passwords) = current() else {
+        return;
+    };
+    let failed = passwords.failed_save.borrow_mut().take();
+    show_save_problem(&passwords);
+    if let Some(FailedSave { key, password }) = failed {
+        save(&passwords, PendingHttpSave { key, password });
+    }
+}
+
+/// Dismiss: the failed sign-in is forgotten, unsaved.
+pub(crate) fn dismiss_save_problem() {
+    if let Some(passwords) = current() {
+        passwords.failed_save.borrow_mut().take();
+        show_save_problem(&passwords);
+    }
+}
+
+fn show_save_problem(passwords: &Passwords) {
+    if let Some(window) = passwords.main_window.borrow().upgrade() {
+        window.set_password_save_problem(save_problem().unwrap_or_default().into());
+    }
+}
+
+/// Connects the browser window's notice about a sign-in that could not be saved.
+pub(crate) fn connect_main_window(window: &MainWindow) {
+    let Some(passwords) = current() else {
+        return;
+    };
+    *passwords.main_window.borrow_mut() = window.as_weak();
+    window.on_retry_password_save(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
+        retry_failed_save();
+    });
+    window.on_dismiss_password_save_problem(|| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
+        dismiss_save_problem();
+    });
+    show_save_problem(&passwords);
+}
+
+/// For the sheet's Sign in with an empty password: runs `then` once the list of saved logins
+/// can be trusted. If listing failed earlier (a locked keychain at launch), it is listed again
+/// first; Sign in is the user's gesture, so macOS may ask.
+pub(crate) fn with_saved_sign_ins_listed(then: impl FnOnce() + 'static) {
+    match current() {
+        Some(passwords) => passwords.with_list_read(|_| then()),
+        None => then(),
+    }
+}
+
+/// Whether listing the saved logins failed (a locked keychain at launch): a sign-in sheet may
+/// then have a saved login that it cannot name.
+pub(crate) fn saved_sign_ins_unknown() -> bool {
+    current().is_some_and(|passwords| passwords.list_unavailable.get())
 }
 
 #[cfg(test)]
@@ -391,7 +490,10 @@ mod save_problem_tests {
         );
 
         retry_failed_save();
-        assert_eq!(passwords.worker.last_interaction(), Some(Interaction::Allowed));
+        assert_eq!(
+            passwords.worker.last_interaction(),
+            Some(Interaction::Allowed)
+        );
         assert!(save_problem().is_some(), "it failed again");
 
         dismiss_save_problem();

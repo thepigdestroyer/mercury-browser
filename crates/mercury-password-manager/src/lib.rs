@@ -36,4 +36,4 @@ pub use http_sign_in::{HTTP_SAVE_TIMEOUT, PendingHttpSave, SignInSaves};
 pub use import::{ImportReport, MAX_IMPORT_BYTES, import_csv, read_import_file};
 pub use list::{LoginRow, filter_rows, login_rows};
 pub use pasteboard::{CLIPBOARD_CLEAR_DELAY, CopiedSecret, Pasteboard};
-pub use worker::{Deliver, Interaction, JobResult, StoreWorker};
+pub use worker::{Deliver, Interaction, JobResult, StoreWorker, WorkerFailure};
