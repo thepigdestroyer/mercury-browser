@@ -4,11 +4,11 @@
 // The clipboard pages use (clipboard lane).
 //
 // A normal run gives pages the system clipboard, behind the engine's gate (`talaria_core::
-// ClipboardGate`: writes after a user gesture, reads after a gesture and the user's permission,
-// and the Cut, Copy and Paste the user chooses). Automated runs (`--screenshot`, `--background`)
-// and tests get a clipboard in memory, so that they never read or overwrite the user's: in such a
-// run `MERCURY_TEST_CLIPBOARD_TEXT` sets its starting text, for test pages that check a read is
-// refused.
+// ClipboardGate`: writes after a user gesture, a script's reads only once the engine names the
+// frame that asks, and the Cut, Copy and Paste the user chooses). Automated runs
+// (`--screenshot`, `--background`, `--import-from`) and tests get a clipboard in memory, so that
+// they never read or overwrite the user's: in such a run `MERCURY_TEST_CLIPBOARD_TEXT` sets its
+// starting text, for test pages that check a read is refused.
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
@@ -69,6 +69,10 @@ fn pasteboard(choice: PasteboardChoice) -> Rc<dyn Pasteboard> {
 #[derive(Default)]
 struct SystemPasteboard {
     clipboard: RefCell<Option<arboard::Clipboard>>,
+    /// Set once the "not available" warning has been logged: a machine without a clipboard
+    /// (headless Linux, Wayland without data-control) fails at every access, and one warning per
+    /// run is enough; later failures are logged at debug level.
+    warned: Cell<bool>,
 }
 
 impl SystemPasteboard {
@@ -81,7 +85,11 @@ impl SystemPasteboard {
             match arboard::Clipboard::new() {
                 Ok(opened) => *clipboard = Some(opened),
                 Err(error) => {
-                    log::warn!("the system clipboard is not available: {error}");
+                    if self.warned.replace(true) {
+                        log::debug!("the system clipboard is not available: {error}");
+                    } else {
+                        log::warn!("the system clipboard is not available: {error}");
+                    }
                     return None;
                 }
             }
