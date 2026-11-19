@@ -571,10 +571,6 @@ pub(crate) fn restore_planned_groups(
 }
 
 /// Raises the controller's next group id to `floor` (a saved counter; `0` changes nothing).
-///
-/// groups-core: this needs `BrowserController::raise_next_group_id`, which the frozen contract
-/// lacks: `pub fn raise_next_group_id(&mut self, floor: u64) { self.groups.raise_next_id(floor); }`
-/// in `controller/group_ops.rs` (the integrator adds it; this is its only caller).
 fn raise_group_counter(controller: &mut BrowserController, floor: u64) {
     controller.raise_next_group_id(floor);
 }
