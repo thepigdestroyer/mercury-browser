@@ -22,8 +22,8 @@ use serde_json::{Map, Value};
 
 use crate::search::{MAX_CUSTOM_ENGINES, SearchEngine};
 use crate::session::{
-    ClosedTab, MAX_CLOSED_TABS, MAX_RECOVERY_SESSIONS, MAX_RESTORED_TABS, MAX_TITLE_BYTES,
-    SessionSnapshot, TabSnapshot, WindowSnapshot,
+    ClosedTab, GroupSnapshot, MAX_CLOSED_TABS, MAX_GROUPS_PER_WINDOW, MAX_RECOVERY_SESSIONS,
+    MAX_RESTORED_TABS, MAX_TITLE_BYTES, SessionSnapshot, TabSnapshot, WindowSnapshot,
 };
 use crate::settings::{MAX_NEVER_SAVE_ORIGINS, MAX_URL_BYTES, truncated};
 
@@ -36,6 +36,7 @@ pub(crate) const CUSTOM_ENGINES: &str = "search.custom_engines";
 pub(crate) const NEVER_SAVE_ORIGINS: &str = "passwords.never_save_origins";
 pub(crate) const WINDOWS: &str = "windows";
 pub(crate) const TABS: &str = "windows.tabs";
+pub(crate) const GROUPS: &str = "windows.groups";
 pub(crate) const CLOSED_TABS: &str = "closed_tabs";
 pub(crate) const RECOVERY_SESSIONS: &str = "sessions";
 
@@ -221,6 +222,13 @@ pub(crate) fn recovery_sessions<'de, D: Deserializer<'de>>(
     )
 }
 
+/// The groups of a window: at most [`MAX_GROUPS_PER_WINDOW`], the rest skipped unread and counted.
+pub(crate) fn groups<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<GroupSnapshot>, D::Error> {
+    bounded_vec(deserializer, MAX_GROUPS_PER_WINDOW, GROUPS)
+}
+
 pub(crate) fn closed_tabs<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<ClosedTab>, D::Error> {
@@ -389,5 +397,31 @@ mod tests {
         assert_eq!(kept.len(), 50);
         assert_eq!(unread.get(CUSTOM_ENGINES), 20);
         assert_eq!(unread.total(), 20);
+    }
+
+    #[test]
+    fn groups_beyond_the_limit_are_skipped_and_counted_like_the_other_lists() {
+        let groups = vec![r#"{"id": 1, "name": "g"}"#; MAX_GROUPS_PER_WINDOW + 6].join(",");
+        let json =
+            format!(r#"{{"tabs": [{{"url": "https://a.example/"}}], "groups": [{groups}]}}"#);
+
+        let (window, unread) = scoped(|| serde_json::from_str::<WindowSnapshot>(&json).unwrap());
+
+        assert_eq!(window.groups.len(), MAX_GROUPS_PER_WINDOW);
+        assert_eq!(window.tabs.len(), 1);
+        assert_eq!(unread.get(GROUPS), 6);
+        assert_eq!(unread.get(TABS), 0);
+        assert_eq!(unread.total(), 6, "so the store's warning counts them");
+    }
+
+    #[test]
+    fn groups_within_the_limit_are_not_counted() {
+        let groups = vec![r#"{"id": 1}"#; MAX_GROUPS_PER_WINDOW].join(",");
+        let json = format!(r#"{{"groups": [{groups}]}}"#);
+
+        let (window, unread) = scoped(|| serde_json::from_str::<WindowSnapshot>(&json).unwrap());
+
+        assert_eq!(window.groups.len(), MAX_GROUPS_PER_WINDOW);
+        assert_eq!(unread.total(), 0);
     }
 }
