@@ -1,6 +1,6 @@
 ---
 title: Vendored Patches
-description: Maintain and eventually remove Mercury's focused gaol, Surfman, servo-canvas and servo-default-resources compatibility patches and its Servo engine patches, and re-vendor them on a Servo upgrade.
+description: Maintain and eventually remove Mercury's focused gaol, Surfman, servo-canvas and servo-default-resources compatibility patches and its Servo engine patches (including the servo-net certificate-exception patch), and re-vendor them on a Servo upgrade.
 ---
 
 # Vendored patches
@@ -94,6 +94,7 @@ The removal commit should say which upstream release absorbed the patch.
 | `third_party/servo-script-bindings` | 0.8.0 | WebIDL for the above (`stop()`, `readyState`, `[SecureContext]` `mediaDevices`); WebRTC moved behind `dom_webrtc_transceiver_enabled` so capture can be on without it |
 | `third_party/servo-media-streams` | 0.8.0 | `MediaStream::stop()`, so a device can be released |
 | `third_party/servo-media-gstreamer` | 0.8.0 | Its GStreamer implementation, and a caps-field fix for fractional constraints |
+| `third_party/servo-net` | 0.8.0 | Accept a certificate exception only for the host and the certificate that failed there (Servo accepts a bare certificate for every host), refuse it for HSTS hosts, and refuse Servo's own `chrome:allowcert` entry point; new code in `certificate_exceptions.rs`, see [The servo-net certificate-exception patch](#the-servo-net-certificate-exception-patch) |
 
 The gaol and Surfman patches date from before the fork and Mercury continues to carry them ([Origins and credits](origins.md)). Mercury added the servo-canvas and servo-default-resources patches and the Servo engine patches (`servo-script` and the three crates vendored with it, see [The Servo engine patches](#the-servo-engine-patches-servo-script-and-friends)). The `gaol` and Surfman patches concern Linux. The `gaol` patch adjusts the Linux sandbox profile (its seccomp allow-list and file-size limit), which takes effect only when Servo's `sandbox` option is on; Mercury keeps it off on every platform (see [Process isolation](servo-integration.md#process-isolation)). The Surfman patch changes how Mesa's GPU is chosen.
 
@@ -161,6 +162,17 @@ Rules on top of [Changing a vendored crate](#changing-a-vendored-crate):
 - **List every change** in that crate's `MERCURY.md` with the upstream file and line it changes. Mark each hunk with a `// Mercury:` comment where a comment fits (also in WebIDL); `make servo-patches-check` requires one in every changed file.
 - **No formatting churn.** The vendored files follow Servo's rustfmt settings, which differ from Mercury's; `cargo fmt --all` does not touch `third_party/`. Format new code with `rustfmt --edition 2024 --config match_block_trailing_comma=true,binop_separator=Back,imports_granularity=Module,group_imports=StdExternalCrate,style_edition=2024 <file>` (these leave the upstream files unchanged).
 - **Zero warnings.** Cargo does not cap lints for path dependencies, so warnings from the vendored crates appear in `cargo build`. Silence one only at its own site and record it in `MERCURY.md`; never with a crate-wide `[lints]` entry, which would hide warnings in Mercury's own changes.
+
+### The servo-net certificate-exception patch
+
+`third_party/servo-net` binds a certificate exception to a host and a certificate. Servo 0.8 keeps a list of bare certificates, and its verifier accepts a certificate in that list for any server name, so one exception made for one site covered every site. [`third_party/servo-net/MERCURY.md`](https://github.com/thepigdestroyer/mercury-browser/blob/mercury/third_party/servo-net/MERCURY.md) lists each change with the upstream file and line, how it is tested and when it can be dropped; this is the short version.
+
+- **The new file is `third_party/servo-net/certificate_exceptions.rs`** (module `net::certificate_exceptions`). It holds the store of accepted pairs and the bounded record of the certificate each host last failed with (`CertificateExceptionStore`), the host-to-name function (`server_name_for_host`), the refusals (`CertificateExceptionRefusal`, each with a stable `code()`), `CertificateErrorOverrideManager::add_override(host, certificate)`, and `HttpState::accept_failed_certificate`, `revoke_certificate_exception` and `certificate_exceptions`. Following the new-file rule, upstream files get hook lines only.
+- **The hooks** are in `connector.rs`: the override manager keeps a `CertificateExceptionStore` instead of a list of bare certificates; the one-argument `add_override` is removed, so a stale caller does not compile; `verify_server_cert` asks the store whether the pair of server name and certificate is accepted; `remove_certificate_failing_verification` still removes the failure when the error page is built (a failure left behind would turn a later, unrelated network error into a certificate error) but also copies it into the bounded record, and now handles IPv6 literals; and `create_tls_config` takes its TLS session cache from the override manager, because rustls does not verify a certificate again when it resumes a session, so a revoke has to drop the host's session tickets too. In `fetch/methods.rs`, `handle_allowcert_request` is deleted and Servo's `chrome:allowcert` entry point is refused with a warning, because it pushed a bare certificate. In `lib.rs` there is one `pub mod` line. A revoke does not close connections that are already open (HTTP keep-alive and HTTP/2), which is why Mercury has no Remove button yet.
+- **Mercury is the only caller.** The protocol handler in `crates/talaria-servo/src/certificate_exceptions.rs` forwards the user's decision to `accept_failed_certificate` and holds no policy of its own. The engine accepts only the certificate that the host actually failed with, never one the page supplies, and refuses HSTS hosts.
+- **Drop it when** Servo binds overrides to a host and refuses HSTS hosts itself.
+
+The patch file is generated. After any merge or rebase that touches `third_party/servo-net`, run `cargo run --release -p mercury-servo-patches -- export` again and then `make servo-patches-check`; never merge `third_party/patches/servo-net.patch` by hand. How to run its tests is in [Testing](testing.md#certificate-exceptions).
 
 ### Re-vendor on a Servo upgrade
 

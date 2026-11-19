@@ -82,6 +82,28 @@ The macOS menu bar cannot be opened without input. To read it back, use the diag
 
 Each Mercury-specific upstream regression needs a focused test close to the patch. The `gaol` shared-memory test protects the `memfd` and `ftruncate` behavior that originally killed isolated Servo children with `SIGXFSZ`.
 
+### Certificate exceptions
+
+A certificate exception is accepted only for the pair of host and certificate that failed there ([the patch](vendored-patches.md#the-servo-net-certificate-exception-patch)). The rule is tested in three places, and all of the tests are Rust. None touches a real trust store, the keychain, another host on the network or your profile.
+
+**The engine patch** is tested in `third_party/servo-net/tests/certificate_exceptions.rs`, part of the crate's `main` test target (the crate's library has no tests of its own; they all live under `tests/`). Most of them need no network: which pairs of name and certificate are accepted (the same certificate under another name, another certificate under the same name, a subdomain and a parent name are refused), how host names are normalised (case, a trailing dot, IPv6 literals, garbage), each refusal of `accept_failed_certificate`, HSTS hosts (learned and preloaded), the bound of the record of failures, revoke, and the refusal of `chrome:allowcert`. The others use a loopback TLS server with a self-signed certificate: a fetch fails with the server's certificate, succeeds under the accepted name after the user's decision, still fails under the server's other name, fails again on a new connection after a revoke, and an IPv6 literal gets a certificate error and can be accepted. The revoke test covers new connections only: a revoke does not close connections that are already open.
+
+`servo-net` is a vendored dependency, not a workspace member, so `cargo test -p servo-net` from the workspace root does not work, and neither does `--manifest-path third_party/servo-net/Cargo.toml` from inside the repository (cargo says the package believes it is in a workspace). Run the tests through a path outside the workspace: cargo then builds the crate with its own `Cargo.lock` against the published sibling crates, which is the same code, because only `servo-net` changes. The tests need the `devtools` feature as well as `test-util`. This is the command that `third_party/servo-net/MERCURY.md` records as working (the scratch folder's name is up to you), from the repository root:
+
+```bash
+mkdir -p "$TMPDIR/opencode/lanes/servo-net-tests"
+ln -sfn "$PWD/third_party/servo-net" "$TMPDIR/opencode/lanes/servo-net-tests/servo-net"
+RUST_TEST_THREADS=2 cargo test --release --target-dir target \
+  --manifest-path "$TMPDIR/opencode/lanes/servo-net-tests/servo-net/Cargo.toml" \
+  --features test-util,devtools --test main certificate_exceptions
+```
+
+The first run builds the published dependencies (about 11 minutes on a 12-thread Intel Mac, a few hundred MB under `target/`). The symlink lives in the scratch folder; delete the folder when you are done. Format only the files you changed with the command under "No formatting churn" in [Vendored patches](vendored-patches.md#the-servo-engine-patches-servo-script-and-friends), then run `export` and `make servo-patches-check`.
+
+**Mercury's rules** need no engine and run in minutes: `cargo test --release -p talaria-core -p mercury-site-security`. They cover the one form of a host name that the exception set, the address-bar mark and the request parser share, the rule that offers an exception only for local names, the request parser and its refusals, and the certificate page.
+
+**End to end,** `scripts/macos/test-certificate-exceptions.sh` runs the release browser against the loopback TLS test server (`crates/mercury-site-security/examples/tls_test_server.rs`). It needs the release build, so run `make build-release` first; it builds the test server itself (a small build without the engine). It uses only `127.0.0.1`, and each run is an automated `--screenshot` run with its own temporary profile, so it touches no trust store, keychain or profile of yours and synthesises no input. The server's one certificate has two names, `127.0.0.1` and `localhost`, and both reach the server. With `MERCURY_TEST_PROCEED_ON_CERTIFICATE_ERROR=1`, which makes the certificate page continue by itself in an automated run, the script opens `https://127.0.0.1:<port>/host-binding`. That page loads an image from its own name and one from the other name, and puts `CERTEXC same=<loaded|failed>; other=<loaded|failed>` in its title. The check passes only when the title reads `same=loaded; other=failed`, which means the exception holds for the name it was made for and not for the same certificate under the other name; an engine that accepts the certificate for every host loads both. A second run opens the page as `localhost` and must read the same, with the log showing an exception for `localhost` and none for `127.0.0.1`. A control run without the variable must show the certificate page ("Certificate not valid") and accept nothing. The script prints one line per check, ends with `all checks passed` and exits non-zero if any check fails. `MERCURY_TEST_CERTEXC_KEEP=<directory>` copies the screenshots and logs there before the temporary directory is removed, and `MERCURY_TEST_CERTEXC_DELAY=<milliseconds>` changes how long each run waits before its screenshot (10000 by default). Run it again after any Servo upgrade and after any change to `third_party/servo-net`.
+
 ## Manual browser checks
 
 Automated runs on the shared development Mac never synthesise keyboard or mouse input and never take focus. They use `--screenshot`, which captures the window once the page has loaded and exits, or `--background`:
