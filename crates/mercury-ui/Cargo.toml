@@ -26,7 +26,10 @@ slint.workspace = true
 # `tests/find_bar_render.rs` (the find bar), `tests/downloads_render.rs` (the downloads
 # components) and `examples/render_passwords.rs` (the Passwords section and the fill menu).
 # Dev-only, so the application's Slint features are unchanged.
+# a11y-base: `i-slint-backend-testing` is for the `tests/a11y_*.rs` tests, which find elements by
+# their accessible label and read their roles; they need the `test-support` feature.
 [dev-dependencies]
+i-slint-backend-testing.workspace = true
 image.workspace = true
 slint = { workspace = true, features = ["renderer-software", "software-renderer-systemfonts"] }
 talaria-core = { path = "../talaria-core" }
