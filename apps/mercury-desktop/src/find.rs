@@ -182,6 +182,7 @@ pub(crate) fn sync_find_bar(window: &MainWindow, state: &BrowserState) {
     window.set_find_status(status.into());
     window.set_find_no_matches(has_no_matches(find.status()));
     window.set_find_match_case(find.match_case());
+    crate::pdf::sync_find_status(window); // pdf-viewer lane: a PDF in front shows the viewer's count
 }
 
 /// Cmd+F: the user's own action, so the field takes focus, with its text selected.
@@ -211,6 +212,12 @@ pub(crate) fn step_find(
 ) {
     if step_opens_the_bar(controller.borrow().active_state().find()) {
         open_find_bar(window, controller, web_view_focused);
+        return;
+    }
+    // pdf-viewer lane: a PDF in front is searched by the viewer
+    let tab_id = controller.borrow().active_tab_id();
+    if crate::pdf::step(controller, tab_id, forward) {
+        sync_find_bar(window, controller.borrow().active_state());
         return;
     }
     if forward {
@@ -281,6 +288,9 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
         let _slint = crate::callback_scope::InSlintCallback::enter();
         case_debounce.stop();
         case_controller.borrow_mut().toggle_find_match_case();
+        // pdf-viewer lane: a PDF in front is searched again with the new option
+        let tab_id = case_controller.borrow().active_tab_id();
+        crate::pdf::search(&case_controller, tab_id);
         refresh(&case_controller, &case_window);
     });
 
@@ -288,7 +298,9 @@ pub(crate) fn connect_find_bar(window: &MainWindow, controller: Rc<RefCell<Brows
     window.on_find_close(move || {
         let _slint = crate::callback_scope::InSlintCallback::enter();
         debounce.stop();
+        let tab_id = controller.borrow().active_tab_id(); // pdf-viewer lane
         controller.borrow_mut().close_find();
+        crate::pdf::find_closed(tab_id); // pdf-viewer lane: the highlights go
         refresh(&controller, &close_window);
     });
 }
@@ -298,6 +310,12 @@ fn step_from_bar(
     window: &slint::Weak<MainWindow>,
     forward: bool,
 ) {
+    // pdf-viewer lane: a PDF in front is searched by the viewer
+    let tab_id = controller.borrow().active_tab_id();
+    if crate::pdf::step(controller, tab_id, forward) {
+        refresh(controller, window);
+        return;
+    }
     if forward {
         controller.borrow_mut().find_next();
     } else {
@@ -314,6 +332,11 @@ fn run_due_search(
     window: &slint::Weak<MainWindow>,
 ) {
     if controller.borrow().active_tab_id() != tab_id {
+        return;
+    }
+    // pdf-viewer lane: a PDF in front is searched by the viewer
+    if crate::pdf::search(controller, tab_id) {
+        refresh(controller, window);
         return;
     }
     controller.borrow_mut().run_due_find();

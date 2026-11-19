@@ -1,0 +1,130 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// What the PDF viewer shows and asks for. The viewer is one component in the browser window's page
+// area, for the active tab only, so its data is one global that Rust fills
+// (apps/mercury-desktop/src/pdf/view.rs) and its callbacks are the viewer's requests. Pointer and
+// wheel positions are in the page area's own coordinates; Rust owns the scroll position and adds it.
+
+export enum PdfViewState {
+    // Waiting for the helper to open the file.
+    loading,
+    // The file is encrypted: the viewer asks for the password.
+    password,
+    // The file could not be shown: the message says why.
+    error,
+    // Pages are shown.
+    ready,
+}
+
+// Which of the two "fit" buttons is on: width and page only while the zoom is the one that fits.
+export enum PdfFitMode {
+    none,
+    width,
+    page,
+}
+
+export enum PdfPointer {
+    down,
+    up,
+    moved,
+    cancel,
+}
+
+// A key that scrolls; Rust knows the page area's size and the scroll limits.
+export enum PdfScrollKey {
+    line-down,
+    line-up,
+    line-left,
+    line-right,
+    page-down,
+    page-up,
+    top,
+    bottom,
+}
+
+// A rendered piece of a page, in the page area's content space (logical pixels).
+export struct PdfTileRow {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    image: image,
+}
+
+// The paper of one page.
+export struct PdfPageRow {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+}
+
+// A selection or find highlight; `current` marks the find match the bar is on.
+export struct PdfRectRow {
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    current: bool,
+}
+
+export global PdfViewerModel {
+    in property <PdfViewState> state: PdfViewState.loading;
+    // The document's title, or the file's name; shown in the toolbar and in the password prompt.
+    in property <string> title;
+    // The error state's sentence, or the password prompt's error line (empty: none).
+    in property <string> message;
+    // The page the top of the window is on (counted from 1), and how many there are.
+    in property <int> page: 1;
+    in property <int> page-count: 0;
+    // The tab's zoom.
+    in property <int> zoom-percent: 100;
+    in property <PdfFitMode> fit: PdfFitMode.width;
+    in property <bool> can-zoom-in: true;
+    in property <bool> can-zoom-out: true;
+    in property <bool> can-save-copy: true;
+    in property <bool> can-open-externally: true;
+    // The find bar is open.
+    in property <bool> find-open: false;
+    // The pointer is over a link.
+    in property <bool> over-link: false;
+    // The keyboard. `take-focus` says whether a viewer that starts, or a password prompt that
+    // appears, takes it (not while the user types in the address bar); Rust adds one to
+    // `focus-serial` when the viewer is asked for the keyboard again.
+    in property <bool> take-focus: false;
+    in property <int> focus-serial: 0;
+    // One of the viewer's own text fields (the page number, the password) has the keyboard. The
+    // fields set it; Rust clears it when the state changes, because a field that goes away with
+    // its panel cannot say that it lost the focus.
+    in-out property <bool> text-focused: false;
+    // The size of everything and where the page area looks at it.
+    in property <length> content-width: 0px;
+    in property <length> content-height: 0px;
+    in property <length> scroll-x: 0px;
+    in property <length> scroll-y: 0px;
+    in property <[PdfPageRow]> pages;
+    in property <[PdfTileRow]> tiles;
+    in property <[PdfRectRow]> selection;
+    in property <[PdfRectRow]> hits;
+
+    callback viewport-changed(/* width */ length, /* height */ length);
+    callback scrolled(/* delta x */ length, /* delta y */ length);
+    callback pointer(PdfPointer, /* x */ length, /* y */ length);
+    callback scroll-key(PdfScrollKey);
+    // The zoom the fingers ask for, in percent; Rust picks the nearest zoom step.
+    callback pinch(float);
+    // What the user typed in the page field.
+    callback go-to-page(string);
+    callback zoom-in();
+    callback zoom-out();
+    callback fit-width();
+    callback fit-page();
+    callback rotate();
+    callback find();
+    callback save-copy();
+    callback open-externally();
+    callback submit-password(string);
+    callback retry();
+    callback copy-selection();
+    callback escape();
+}

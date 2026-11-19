@@ -1,0 +1,137 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The buttons of the PDF viewer: small ones for the toolbar, larger ones for its panels. Each has
+// an accessible role, name and default action, and is reached with Tab (Return or Space presses it).
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export component PdfToolButton inherits Rectangle {
+    // What is drawn, and what assistive technology says (the drawn text may be a glyph).
+    in property <string> label;
+    in property <string> tooltip;
+    in property <bool> enabled: true;
+    in property <bool> checkable: false;
+    in property <bool> checked: false;
+    in property <length> font-size: 12px;
+    in property <length> least-width: 30px;
+    callback clicked;
+
+    height: 28px;
+    min-width: root.least-width;
+    preferred-width: Math.max(root.least-width, label-text.preferred-width + 20px);
+    border-radius: 6px;
+    border-width: keys.has-focus ? 2px : 0px;
+    border-color: ChromePalette.focus-ring;
+    background: root.checked
+        ? ChromePalette.item-selected
+        : touch.pressed && root.enabled
+            ? ChromePalette.button-pressed
+            : touch.has-hover && root.enabled ? ChromePalette.button-hover : transparent;
+    opacity: root.enabled ? 1 : 0.35;
+    accessible-role: button;
+    accessible-label: root.tooltip;
+    accessible-enabled: root.enabled;
+    accessible-checkable: root.checkable;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+
+    label-text := Text {
+        text: root.label;
+        // A checked button is filled with the selection colour, so its label takes the
+        // selection's text colour.
+        color: root.checked
+            ? ChromePalette.item-selected-text
+            : touch.has-hover && root.enabled
+                ? ChromePalette.button-label-hover
+                : ChromePalette.button-label;
+        font-size: root.font-size;
+        font-weight: 500;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    // Reached with Tab only: a click does not move the keyboard here.
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+}
+
+export component PdfPanelButton inherits Rectangle {
+    in property <string> label;
+    in property <bool> primary: false;
+    in property <bool> enabled: true;
+    callback clicked;
+
+    height: 30px;
+    min-width: 84px;
+    preferred-width: label-text.preferred-width + 32px;
+    border-radius: 7px;
+    border-width: keys.has-focus ? 2px : root.primary ? 0px : 1px;
+    border-color: keys.has-focus ? ChromePalette.focus-ring : ChromePalette.field-border;
+    opacity: root.enabled ? 1 : 0.45;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        if root.enabled {
+            root.clicked();
+        }
+    }
+    background: root.primary
+        ? (touch.pressed && root.enabled
+            ? ChromePalette.primary-button-pressed
+            : touch.has-hover && root.enabled
+                ? ChromePalette.primary-button-hover
+                : ChromePalette.primary-button-background)
+        : (touch.pressed && root.enabled
+            ? ChromePalette.button-pressed
+            : touch.has-hover && root.enabled ? ChromePalette.button-hover : ChromePalette.field-background);
+
+    label-text := Text {
+        text: root.label;
+        color: root.primary ? ChromePalette.primary-button-text : ChromePalette.text;
+        font-size: 13px;
+        font-weight: 600;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.clicked();
+        }
+    }
+
+    keys := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.clicked();
+                return accept;
+            }
+            reject
+        }
+    }
+}

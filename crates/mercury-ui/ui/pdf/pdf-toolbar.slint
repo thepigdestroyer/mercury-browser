@@ -1,0 +1,228 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The strip above the pages: the document's title, the page number with a field to jump to a page,
+// zoom, the two fits, rotate, find, and the two ways to get the file out. It reads and asks
+// through `PdfViewerModel`.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { PdfFitMode, PdfViewerModel } from "pdf-model.slint";
+import { PdfToolButton } from "pdf-controls.slint";
+
+// A hairline between groups of buttons, centred in the strip.
+component PdfToolbarSeparator inherits Rectangle {
+    width: 9px;
+    accessible-role: none;
+
+    Rectangle {
+        x: 4px;
+        y: (parent.height - self.height) / 2;
+        width: 1px;
+        height: 18px;
+        background: ChromePalette.separator;
+        accessible-role: none;
+    }
+}
+
+export component PdfToolbar inherits Rectangle {
+    // The keyboard goes back to the pages.
+    callback return-focus();
+
+    // Narrow windows get shorter words; the accessible names stay whole.
+    property <bool> compact: root.width < 900px;
+    property <string> shown-page: PdfViewerModel.page + "";
+
+    height: 40px;
+    background: ChromePalette.toolbar-background;
+    accessible-role: AccessibleRole.navigation;
+    accessible-label: "PDF toolbar";
+
+    changed shown-page => {
+        if !page-field.has-focus {
+            page-field.text = root.shown-page;
+        }
+    }
+
+    init => {
+        page-field.text = root.shown-page;
+    }
+
+    HorizontalLayout {
+        padding-left: 12px;
+        padding-right: 12px;
+        padding-top: 6px;
+        padding-bottom: 6px;
+        spacing: 4px;
+
+        // The title may be as long as a page makes it: it gives way to the buttons.
+        Text {
+            text: PdfViewerModel.title;
+            color: ChromePalette.text;
+            font-size: 13px;
+            font-weight: 600;
+            vertical-alignment: center;
+            overflow: elide;
+            min-width: 0px;
+            horizontal-stretch: 1;
+            accessible-label: "Document title: " + PdfViewerModel.title;
+        }
+
+        Rectangle {
+            width: 52px;
+
+            Rectangle {
+                width: 44px;
+                height: 26px;
+                border-radius: 6px;
+                border-width: 1px;
+                border-color: page-field.has-focus ? ChromePalette.accent : ChromePalette.field-border;
+                background: ChromePalette.field-background;
+
+                page-field := TextInput {
+                    x: 4px;
+                    width: parent.width - 8px;
+                    height: parent.height;
+                    color: ChromePalette.text;
+                    font-size: 12px;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    single-line: true;
+                    input-type: InputType.number;
+                    accessible-label: "Page number";
+
+                    accepted => {
+                        PdfViewerModel.go-to-page(self.text);
+                        self.text = root.shown-page;
+                        root.return-focus();
+                    }
+                    changed has-focus => {
+                        if self.has-focus {
+                            self.select-all();
+                        } else {
+                            self.text = root.shown-page;
+                        }
+                        PdfViewerModel.text-focused = self.has-focus;
+                    }
+                    key-pressed(event) => {
+                        if event.text == Key.Escape {
+                            self.text = root.shown-page;
+                            root.return-focus();
+                            return accept;
+                        }
+                        reject
+                    }
+                }
+            }
+        }
+
+        Text {
+            text: "/ " + PdfViewerModel.page-count;
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            vertical-alignment: center;
+            min-width: 34px;
+            accessible-label: "of " + PdfViewerModel.page-count + " pages";
+        }
+
+        PdfToolbarSeparator { }
+
+        PdfToolButton {
+            label: "−";
+            font-size: 16px;
+            tooltip: "Zoom out";
+            enabled: PdfViewerModel.can-zoom-out;
+            clicked => {
+                PdfViewerModel.zoom-out();
+            }
+        }
+
+        Text {
+            text: PdfViewerModel.zoom-percent + "%";
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            min-width: 42px;
+            accessible-label: "Zoom " + PdfViewerModel.zoom-percent + " percent";
+        }
+
+        PdfToolButton {
+            label: "+";
+            font-size: 16px;
+            tooltip: "Zoom in";
+            enabled: PdfViewerModel.can-zoom-in;
+            clicked => {
+                PdfViewerModel.zoom-in();
+            }
+        }
+
+        PdfToolbarSeparator { }
+
+        PdfToolButton {
+            label: root.compact ? "Width" : "Fit width";
+            tooltip: "Fit width";
+            checkable: true;
+            checked: PdfViewerModel.fit == PdfFitMode.width;
+            clicked => {
+                PdfViewerModel.fit-width();
+            }
+        }
+
+        PdfToolButton {
+            label: root.compact ? "Page" : "Fit page";
+            tooltip: "Fit page";
+            checkable: true;
+            checked: PdfViewerModel.fit == PdfFitMode.page;
+            clicked => {
+                PdfViewerModel.fit-page();
+            }
+        }
+
+        PdfToolbarSeparator { }
+
+        PdfToolButton {
+            label: "Rotate";
+            tooltip: "Rotate clockwise";
+            clicked => {
+                PdfViewerModel.rotate();
+            }
+        }
+
+        PdfToolButton {
+            label: "Find";
+            tooltip: "Find in document";
+            checkable: true;
+            checked: PdfViewerModel.find-open;
+            clicked => {
+                PdfViewerModel.find();
+            }
+        }
+
+        PdfToolbarSeparator { }
+
+        PdfToolButton {
+            label: root.compact ? "Save" : "Save a copy";
+            tooltip: "Save a copy";
+            enabled: PdfViewerModel.can-save-copy;
+            clicked => {
+                PdfViewerModel.save-copy();
+            }
+        }
+
+        PdfToolButton {
+            label: root.compact ? "Preview" : "Open in Preview";
+            tooltip: "Open in Preview";
+            enabled: PdfViewerModel.can-open-externally;
+            clicked => {
+                PdfViewerModel.open-externally();
+            }
+        }
+    }
+
+    Rectangle {
+        x: 0px;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: ChromePalette.toolbar-divider;
+        accessible-role: none;
+    }
+}
