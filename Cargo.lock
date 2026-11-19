@@ -5776,6 +5776,7 @@ dependencies = [
  "mercury-settings",
  "mercury-site-security",
  "mercury-store",
+ "mercury-tab-snapshots",
  "mercury-ui",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -5947,6 +5948,13 @@ dependencies = [
  "rusqlite",
  "thiserror 2.0.21",
  "url",
+]
+
+[[package]]
+name = "mercury-tab-snapshots"
+version = "0.2.0"
+dependencies = [
+ "image",
 ]
 
 [[package]]

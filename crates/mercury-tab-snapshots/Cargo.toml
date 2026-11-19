@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-tab-snapshots"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Small pictures of tabs for the Orbit view (design/ui-final/SPEC.md section 6.1), with no engine
+# inside: the picture type, the downscale, the memory-capped least-recently-used store and the
+# policy that decides when a picture is taken. `apps/mercury-desktop/src/tab_snapshots.rs` takes
+# the pixels from the web view's rendering context and hands them to this crate.
+[dependencies]
+# `imageops::thumbnail`, the box filter for the downscale (the crate is already in the build
+# through Servo and the desktop app; no format feature is needed here).
+image.workspace = true

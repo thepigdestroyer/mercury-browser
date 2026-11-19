@@ -77,6 +77,7 @@ mod signals;
 mod site_security;
 #[cfg(target_os = "macos")]
 mod system_proxy;
+mod tab_snapshots; // tab-snapshots lane
 mod tab_strip; // tabs-plus
 mod tab_switch_frame;
 mod ui_sync;

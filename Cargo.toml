@@ -15,6 +15,7 @@ members = [
     "crates/mercury-settings",
     "crates/mercury-site-security",
     "crates/mercury-store",
+    "crates/mercury-tab-snapshots",
     "crates/mercury-ui",
     "crates/talaria-core",
     "crates/talaria-servo",
