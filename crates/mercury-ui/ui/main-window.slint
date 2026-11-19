@@ -80,6 +80,7 @@ export enum WebViewCursor {
 component ChromeButton inherits Rectangle {
     in property <string> label;
     in property <bool> enabled: true;
+    in property <string> accessible-name; // a11y-base: what a screen reader says instead of the glyph in `label`
     callback clicked;
 
     width: 36px;
@@ -89,6 +90,10 @@ component ChromeButton inherits Rectangle {
         ? ChromePalette.button-pressed
         : button-area.has-hover && root.enabled ? ChromePalette.button-hover : transparent;
     opacity: root.enabled ? 1 : 0.32;
+    accessible-role: button; // a11y-base
+    accessible-label: root.accessible-name; // a11y-base
+    accessible-enabled: root.enabled; // a11y-base
+    accessible-action-default => { if root.enabled { root.clicked(); } } // a11y-base
 
     Text {
         text: root.label;
@@ -97,6 +102,7 @@ component ChromeButton inherits Rectangle {
         font-weight: 500;
         horizontal-alignment: center;
         vertical-alignment: center;
+        accessible-role: none; // a11y-base
     }
 
     button-area := TouchArea {
@@ -660,6 +666,7 @@ export component MainWindow inherits Window {
                     width: 34px;
                     height: 34px;
                     label: "+";
+                    accessible-name: "New tab"; // a11y-base
                     clicked => {
                         root.new-tab();
                     }
@@ -671,6 +678,8 @@ export component MainWindow inherits Window {
             height: root.chrome-hidden ? 0px : 60px;
             visible: !root.chrome-hidden;
             background: ChromePalette.toolbar-background;
+            accessible-role: navigation; // a11y-base
+            accessible-label: "Toolbar"; // a11y-base
 
             HorizontalLayout {
                 padding-left: 14px;
@@ -681,6 +690,7 @@ export component MainWindow inherits Window {
 
                 ChromeButton {
                     label: "‹";
+                    accessible-name: "Back"; // a11y-base
                     enabled: root.can-go-back;
                     clicked => {
                         root.go-back();
@@ -689,6 +699,7 @@ export component MainWindow inherits Window {
 
                 ChromeButton {
                     label: "›";
+                    accessible-name: "Forward"; // a11y-base
                     enabled: root.can-go-forward;
                     clicked => {
                         root.go-forward();
@@ -697,6 +708,8 @@ export component MainWindow inherits Window {
 
                 ChromeButton {
                     label: "↻";
+                    accessible-name: "Reload page"; // a11y-base
+                    accessible-description: root.is-loading ? "The page is loading" : ""; // a11y-base
                     clicked => {
                         root.reload();
                     }
@@ -705,6 +718,7 @@ export component MainWindow inherits Window {
                 // settings-ui: the home button, when the appearance setting asks for it.
                 if root.show-home-button: ChromeButton {
                     label: "⌂";
+                    accessible-name: "Home page"; // a11y-base
                     clicked => {
                         root.go-home();
                     }
@@ -717,6 +731,8 @@ export component MainWindow inherits Window {
                     border-width: 1px;
                     border-color: address-input.has-focus ? ChromePalette.accent : ChromePalette.field-border;
                     background: ChromePalette.field-background;
+                    accessible-role: search; // a11y-base
+                    accessible-label: "Address bar"; // a11y-base
 
                     // site-security: the indicator, and the popover it opens
                     site-security-button := SecurityIndicatorButton {
@@ -756,6 +772,7 @@ export component MainWindow inherits Window {
                         font-size: 14px;
                         vertical-alignment: center;
                         single-line: true;
+                        accessible-label: "Address and search"; // a11y-base
                         accepted => {
                             // tabs: the page takes focus, so the field shows the committed URL
                             web-view-focus.focus();
@@ -843,6 +860,7 @@ export component MainWindow inherits Window {
                     color: ChromePalette.button-label;
                     font-size: 12px;
                     vertical-alignment: center;
+                    accessible-label: "Page zoom " + root.zoom-percent + " percent"; // a11y-base
                 }
 
                 // downloads-ui lane
@@ -862,6 +880,7 @@ export component MainWindow inherits Window {
 
                 browser-menu-button := ChromeButton {
                     label: "⋮";
+                    accessible-name: "Browser menu"; // a11y-base
                     clicked => { root.show-browser-menu(); }
 
                     // menus: the browser menu, below the button, right edges aligned. A child of the
@@ -988,6 +1007,7 @@ export component MainWindow inherits Window {
                 height: parent.height;
                 source: root.web-view-texture;
                 image-fit: fill;
+                accessible-role: none; // a11y-base
             }
 
             if root.is-loading: Rectangle {
@@ -1007,6 +1027,8 @@ export component MainWindow inherits Window {
                     x: (parent.width - self.width) / 2;
                     y: Math.max(24px, (parent.height - self.height) / 2 - 24px);
                     background: transparent;
+                    accessible-role: region; // a11y-base
+                    accessible-label: "New tab page"; // a11y-base
 
                     VerticalLayout {
                         spacing: 11px;
@@ -1020,6 +1042,7 @@ export component MainWindow inherits Window {
                                 height: 80px;
                                 source: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
                                 image-fit: contain;
+                                accessible-role: none; // a11y-base
                             }
                         }
 
@@ -1054,6 +1077,7 @@ export component MainWindow inherits Window {
                                 font-size: 14px;
                                 vertical-alignment: center;
                                 overflow: elide;
+                                accessible-role: none; // a11y-base: the field's placeholder says it
                             }
 
                             new-tab-search := TextInput {
@@ -1064,6 +1088,8 @@ export component MainWindow inherits Window {
                                 font-size: 14px;
                                 vertical-alignment: center;
                                 single-line: true;
+                                accessible-label: "Search or enter address"; // a11y-base
+                                accessible-placeholder-text: "Search with " + root.search-engine-name + " or enter an address"; // a11y-base: the words of the Text drawn over the empty field
 
                                 changed has-focus => {
                                     root.new-tab-search-focused = self.has-focus;
@@ -1083,6 +1109,9 @@ export component MainWindow inherits Window {
                                 background: search-touch.pressed
                                     ? ChromePalette.primary-button-pressed
                                     : search-touch.has-hover ? ChromePalette.primary-button-hover : ChromePalette.primary-button-background;
+                                accessible-role: button; // a11y-base
+                                accessible-label: "Search"; // a11y-base
+                                accessible-action-default => { root.navigate(new-tab-search.text); } // a11y-base: what search-touch does
 
                                 Text {
                                     text: "→";
@@ -1090,6 +1119,7 @@ export component MainWindow inherits Window {
                                     font-size: 20px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
+                                    accessible-role: none; // a11y-base
                                 }
 
                                 search-touch := TouchArea {
@@ -1130,6 +1160,9 @@ export component MainWindow inherits Window {
                 enabled: root.web-view-visible;
                 focus-on-click: false;
                 focus-on-tab-navigation: false;
+                accessible-role: main; // a11y-base
+                accessible-label: "Page content"; // a11y-base
+                accessible-description: "Mercury doesn't pass web page content to assistive technology yet."; // a11y-base: the page-accessibility lane deletes this line when it grafts the page's tree here
 
                 focus-gained => {
                     root.web-view-focus-changed(true);
@@ -1240,6 +1273,7 @@ export component MainWindow inherits Window {
                     vertical-alignment: center;
                     overflow: elide;
                     wrap: no-wrap;
+                    accessible-role: none; // a11y-base: shown only while the pointer is over a link
                 }
             }
 
