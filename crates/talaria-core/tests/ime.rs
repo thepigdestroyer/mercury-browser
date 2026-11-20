@@ -130,7 +130,7 @@ fn the_text_state_goes_with_its_tab() {
         Some(&state(1, "second"))
     );
 
-    controller.close_tab(second_tab);
+    let _outcome = controller.close_tab(second_tab);
 
     assert!(controller.tabs().all(|tab| tab.id() != second_tab));
     assert_eq!(controller.active_tab_id(), first_tab);

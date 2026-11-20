@@ -310,6 +310,18 @@ impl TalariaWebView for ServoWebView {
                 })
             }
             ImeInput::Dismissed => ServoImeEvent::Dismissed,
+            // txt-1: marked text with its selection and clauses, final text, and text without a
+            // composition (the emoji picker, dictation), each with an optional replacement range.
+            ImeInput::SetMarkedText {
+                text,
+                selected,
+                clauses,
+                replacement,
+            } => crate::text_messages::marked_text_event(text, selected, clauses, replacement),
+            ImeInput::Commit(text) => ServoImeEvent::Commit(text),
+            ImeInput::InsertText { text, replacement } => {
+                crate::text_messages::insert_text_event(text, replacement)
+            }
         };
         let _event_id = self.inner.notify_input_event(InputEvent::Ime(event));
         Ok(())
