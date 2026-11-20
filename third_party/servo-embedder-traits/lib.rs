@@ -11,6 +11,8 @@
 pub mod embedder_controls;
 pub mod geolocation;
 pub mod input_events;
+// Mercury: the Mercury message scaffold (K0 engine base); see mercury/mod.rs.
+pub mod mercury;
 pub mod resources;
 pub mod user_contents;
 pub mod webdriver;
@@ -53,6 +55,8 @@ use webrender_api::units::{
 pub use crate::embedder_controls::*;
 pub use crate::geolocation::*;
 pub use crate::input_events::*;
+// Mercury: the Mercury message types are part of the crate root, like the other modules' types.
+pub use crate::mercury::*;
 use crate::user_contents::UserContentManagerId;
 pub use crate::webdriver::*;
 
@@ -563,6 +567,11 @@ pub enum EmbedderMsg {
     InputEventsHandled(WebViewId, Vec<InputEventOutcome>),
     /// Send the embedder an accessibility tree update.
     AccessibilityTreeUpdate(WebViewId, TreeUpdate, Epoch),
+    // Mercury: one variant for every Mercury lane message, so a lane adds its own messages in
+    // `mercury/<lane>.rs` and never in this enum (K0 engine base, R14 section 3.4).
+    /// A message from the engine to Mercury, grouped by lane. The first field is the web view
+    /// it concerns, if any. See [`MercuryEmbedderMsg`].
+    Mercury(Option<WebViewId>, MercuryEmbedderMsg),
 }
 
 impl Debug for EmbedderMsg {

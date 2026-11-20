@@ -9,6 +9,8 @@
 //! on other parts of Servo.
 
 mod from_script_message;
+// Mercury: the Mercury message scaffold (K0 engine base); see mercury/mod.rs.
+pub mod mercury;
 mod structured_data;
 
 use std::collections::VecDeque;
@@ -25,6 +27,8 @@ use embedder_traits::{
 };
 pub use from_script_message::*;
 use malloc_size_of_derive::MallocSizeOf;
+// Mercury: the Mercury message types are part of the crate root, like the other modules' types.
+pub use mercury::*;
 use paint_api::PinchZoomInfos;
 use paint_api::display_list::PaintTimingInfo;
 use profile_traits::mem::MemoryReportResult;
@@ -126,6 +130,11 @@ pub enum EmbedderToConstellationMessage {
     /// Inform the `Constellation` that the embedder has changed the network
     /// online state.
     SetNetworkOnlineState(bool),
+    // Mercury: one variant for every Mercury lane message, so a lane adds its own messages in
+    // `mercury/<lane>.rs` and never in this enum (K0 engine base, R14 section 3.4).
+    /// A message from Mercury to the constellation, grouped by lane. See
+    /// [`MercuryEmbedderToConstellation`].
+    Mercury(MercuryEmbedderToConstellation),
 }
 
 pub enum UserContentManagerAction {

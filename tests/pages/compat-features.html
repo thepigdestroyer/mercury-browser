@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Web compatibility features</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 18px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 16px 20px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #summary { font: bold 20px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 15px/1.5 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+  #swatches { display: flex; gap: 12px; align-items: center; margin: 12px 0 0; font: 13px/1.3 Menlo, monospace; }
+  /* The nth-child-of check: the second .a item is the third item; it must be green. */
+  #nth { list-style: none; margin: 0; padding: 0; display: flex; gap: 6px; }
+  #nth li { width: 56px; height: 44px; box-sizing: border-box; border: 2px solid #777777; padding: 4px;
+            background: #ffffff; color: #000000; font: 13px/1.2 Menlo, monospace; }
+  #nth li:nth-child(2 of .a) { background: #00a000; color: #ffffff; border-color: #006400; }
+  #shadow-host { display: block; width: 120px; }
+</style>
+</head>
+<body>
+<!--
+  Mercury test page for the engine preferences of K0 (ED1): which web features are on and which stay
+  off. Every check prints one line that starts with PASS or FAIL; a few lines start with INFO and only
+  print a value. Open it from a test server or file://, for example
+    mercury-browser --screenshot out.png --window-size 1000x800 file:///path/to/tests/pages/compat-features.html
+  The page must show no FAIL and two coloured samples at the bottom: a green box from a constructable
+  style sheet inside a shadow root, and a row of small boxes in which only the third is green
+  (:nth-child(2 of .a)). In the screenshot nothing may be a crash page.
+  container-type is "not supported" on purpose (layout_css_container_queries_enabled stays off, so that
+  @supports does not report a feature Servo drops). visualViewport is on (decision D2, kept because a window
+  run showed sane numbers): its width and height must match the window's own inner size and its scale
+  must be 1. If a run shows otherwise or crashes, turn it off in talaria-servo/src/engine_prefs.rs
+  (move dom_visual_viewport_enabled back to PINNED_OFF).
+  cookieStore, RTCPeerConnection, service workers and WebGPU stay hidden until their lanes land.
+  navigator.globalPrivacyControl and navigator.locks are information only: the network lane and the
+  storage lane add them.
+-->
+<h1>Web compatibility features</h1>
+<p class="note">PASS means the feature is in the state Mercury ships it in.</p>
+<div id="summary">running</div>
+<div id="results"></div>
+<div id="swatches">
+  <div id="shadow-host"></div>
+  <ul id="nth"><li class="a">1 a</li><li>2</li><li class="a">3 a</li><li class="a">4 a</li></ul>
+  <span>left: adopted style sheet (green), right: :nth-child(2 of .a) matches item 3 only</span>
+</div>
+<script>
+  "use strict";
+  const results = document.getElementById("results");
+  let passes = 0;
+  let failures = 0;
+
+  function line(kind, text) {
+    const item = document.createElement("div");
+    item.className = "line " + kind;
+    item.textContent = kind.toUpperCase() + "  " + text;
+    results.appendChild(item);
+    if (kind === "pass") passes++;
+    if (kind === "fail") failures++;
+  }
+
+  // check(label, compute, expected): compute() returns the observed value; a thrown error is a FAIL.
+  function check(label, compute, expected) {
+    let value;
+    try {
+      value = compute();
+    } catch (error) {
+      line("fail", label + ": threw " + error);
+      return;
+    }
+    const shown = typeof value === "string" ? JSON.stringify(value) : String(value);
+    line(value === expected ? "pass" : "fail",
+         label + " = " + shown + (value === expected ? "" : " (expected " + String(expected) + ")"));
+  }
+
+  function inform(label, compute) {
+    let value;
+    try {
+      const raw = compute();
+      value = raw === undefined ? "undefined" : String(raw);
+    } catch (error) {
+      value = "threw " + error;
+    }
+    line("info", label + " = " + value);
+  }
+
+  // Container queries stay off: Servo drops @container blocks, so @supports must not claim them.
+  check("CSS.supports('container-type', 'inline-size')",
+        () => CSS.supports("container-type", "inline-size"), false);
+
+  // Composition events: React's input-method path tests for the interface.
+  check("'CompositionEvent' in window", () => "CompositionEvent" in window, true);
+
+  // Adopted style sheets: the property, then a constructable sheet that is visibly applied.
+  check("'adoptedStyleSheets' in document", () => "adoptedStyleSheets" in document, true);
+  check("a constructable style sheet applies inside a shadow root", () => {
+    const host = document.getElementById("shadow-host");
+    const root = host.attachShadow({ mode: "open" });
+    const sheet = new CSSStyleSheet();
+    sheet.replaceSync(".box { background: rgb(0, 160, 0); width: 120px; height: 44px; }");
+    root.adoptedStyleSheets = [sheet];
+    const box = document.createElement("div");
+    box.className = "box";
+    root.appendChild(box);
+    return getComputedStyle(box).backgroundColor;
+  }, "rgb(0, 160, 0)");
+
+  // :nth-child(An+B of S): the selector must parse and the second .a item (the third) must match.
+  check("CSS.supports('selector(:nth-child(1 of .a))')",
+        () => CSS.supports("selector(:nth-child(1 of .a))"), true);
+  check("li:nth-child(2 of .a) matches the third item only", () => {
+    const items = Array.from(document.querySelectorAll("#nth li"));
+    return items.map((item) => item.matches(":nth-child(2 of .a)") ? "1" : "0").join("");
+  }, "0010");
+  check("the matching item is coloured green", () => {
+    const items = document.querySelectorAll("#nth li");
+    return getComputedStyle(items[2]).backgroundColor + " / " + getComputedStyle(items[0]).backgroundColor;
+  }, "rgb(0, 160, 0) / rgb(255, 255, 255)");
+
+  // The visual viewport (decision D2): an object whose size is the window's inner size (the visual viewport
+  // leaves out scrollbars, so a few pixels less is fine) and whose scale is 1 when nobody pinch-zoomed.
+  check("window.visualViewport matches the window (width, height, scale)", () => {
+    const viewport = window.visualViewport;
+    if (typeof viewport !== "object" || viewport === null) return "no visualViewport (" + typeof viewport + ")";
+    const numbers = [viewport.width, viewport.height, viewport.scale, viewport.offsetLeft, viewport.offsetTop];
+    const shown = viewport.width + " x " + viewport.height + " @ " + viewport.scale + " (window " +
+      window.innerWidth + " x " + window.innerHeight + ")";
+    if (!numbers.every(Number.isFinite) || viewport.width <= 0 || viewport.height <= 0) return shown;
+    const near = (a, b) => a <= b && b - a <= 20;
+    return near(viewport.width, window.innerWidth) && near(viewport.height, window.innerHeight) &&
+      viewport.scale === 1 && viewport.offsetLeft === 0 && viewport.offsetTop === 0 ? "ok" : shown;
+  }, "ok");
+  inform("window.visualViewport (width x height @ scale, window inner size)", () => {
+    const viewport = window.visualViewport;
+    return viewport.width + " x " + viewport.height + " @ " + viewport.scale + ", window " +
+      window.innerWidth + " x " + window.innerHeight;
+  });
+
+  // Hidden until the lane that makes each one work turns it on.
+  check("'cookieStore' in window", () => "cookieStore" in window, false);
+  check("typeof RTCPeerConnection", () => typeof RTCPeerConnection, "undefined");
+  check("'serviceWorker' in navigator", () => "serviceWorker" in navigator, false);
+  check("typeof navigator.gpu", () => typeof navigator.gpu, "undefined");
+
+  // Information only: the network lane adds globalPrivacyControl, the storage lane adds locks.
+  inform("navigator.globalPrivacyControl", () => navigator.globalPrivacyControl);
+  inform("navigator.locks", () => navigator.locks);
+
+  const summary = document.getElementById("summary");
+  summary.textContent = passes + " PASS, " + failures + " FAIL";
+  summary.className = failures === 0 ? "pass" : "fail";
+  document.title = "compat-features: " + passes + " PASS, " + failures + " FAIL";
+</script>
+</body>
+</html>

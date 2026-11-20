@@ -12,8 +12,22 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane K0 (engine base, 19 Nov 2026).
+
+### Zero-initialise `texStorage2D` and `texStorage3D` storage — `webgl_thread.rs`
+
+- **What:** backport of servo/servo#49436 (merge commit `c2c5117bf`), hand-ported. `WebGLCommand::TexStorage2D` and
+  `TexStorage3D` (0.8.0 lines about 1866 and 1885) call the new `zero_initialize_texture`, which uploads zeros with
+  `tex_sub_image_2d` and `_3d` for every level, cube face or layer, in bands of at most 1 MiB with the pixel unpack buffer
+  unbound meanwhile (compressed formats are skipped, an upstream TODO). New `tex_bytes_per_pixel` and a
+  `#[cfg(test)] mod tests` with two unit tests, appended after `FramebufferRebindingInfo` (the upstream hunk had context
+  from servo/servo#49404, which is not vendored). The script half is in `servo-script` (`dom/webgl/webgltexture.rs`).
+- **Why:** texture storage from `texStorage2D` and `texStorage3D` is uninitialised GPU memory that a page can read back.
+- **Tested by:** `cargo test --release -p servo-webgl --lib` (needs no GL context; heavy, not in Mercury's CI) and the page
+  `tests/pages/webgl2-textures.html`. Both ported tests were run in a scratch crate against the real `TexFormat` and
+  `TexDataType` code of `servo-canvas-traits` 0.8.0 and pass; `zero_initialize_texture` is identical to current upstream.
+- **Drop when:** the Servo bump that contains PR #49436. Not taken: #49404 and #49902 (they change `servo-canvas-traits`,
+  which is not vendored; they arrive with B1).
 
 ## Removing this directory
 

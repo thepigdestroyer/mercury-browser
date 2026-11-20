@@ -109,12 +109,16 @@ impl CharacterData {
     pub(crate) fn set_text_run_selection(
         &self,
         new_range: Option<RangeAny<Utf32CodeUnits>>,
+        // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
+        new_paints_caret: bool,
     ) -> bool {
         self.upcast::<Node>()
             .layout_data()
             .borrow()
             .as_ref()
-            .is_some_and(|layout_data| layout_data.set_text_run_selection(new_range))
+            .is_some_and(|layout_data| {
+                layout_data.set_text_run_selection(new_range, new_paints_caret)
+            })
     }
 
     /// Returns the rendered text for this [`CharacterData`].

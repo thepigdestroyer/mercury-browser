@@ -12,6 +12,8 @@ use serde::{Deserialize, Serialize};
 use servo_config_macro::ServoPreferences;
 
 pub use crate::pref_util::PrefValue;
+// Mercury: Stylo preferences by name (K0, ED2), reached from the embedder as `servo::prefs::...`.
+pub use crate::mercury_stylo::{apply_stylo_prefs, stylo_bool_pref};
 
 static PREFERENCES: RwLock<Preferences> = RwLock::new(Preferences::const_default());
 
@@ -72,6 +74,9 @@ pub fn set(preferences: Preferences) {
         "layout.css.writing-mode.enabled",
         preferences.layout_css_writing_mode_enabled
     );
+    // Mercury: any other Stylo preference, by its Gecko name (K0, ED2). After the lines above, so
+    // a name in the list wins over them.
+    crate::mercury_stylo::apply_stylo_prefs(&preferences.stylo_prefs);
 
     *PREFERENCES.write().unwrap() = preferences;
 
@@ -425,6 +430,52 @@ pub struct Preferences {
     /// Exposes internal JS API functions that are usually restricted to `about:...` pages
     /// Useful if you want to get memory report or force GC in a test page
     pub expose_servointernals_globally: bool,
+
+    // Mercury (K0): preferences the media, privacy, storage and compatibility lanes read.
+    // Each defaults to Servo 0.8's behaviour (false, or "" for "allow" or "default"); the
+    // values Mercury ships are set in `crates/talaria-servo/src/engine_prefs.rs`.
+    /// Media Source Extensions (`MediaSource`, `SourceBuffer`); EA1.
+    pub dom_media_source_enabled: bool,
+    /// `navigator.mediaCapabilities` and codec-string support answers; EA2.
+    pub dom_media_capabilities_enabled: bool,
+    /// Encrypted Media Extensions (`navigator.requestMediaKeySystemAccess`); EA15.
+    pub dom_eme_enabled: bool,
+    /// Picture-in-picture for video elements; EA12.
+    pub dom_picture_in_picture_enabled: bool,
+    /// `HTMLVideoElement.requestVideoFrameCallback`; EA13.
+    pub dom_video_frame_callback_enabled: bool,
+    /// WebCodecs (`VideoDecoder`, `VideoFrame`, ...); EA14.
+    pub dom_webcodecs_enabled: bool,
+    /// Screen capture (`getDisplayMedia`); EA8.
+    pub dom_display_capture_enabled: bool,
+    /// Audio output selection (`setSinkId`, `selectAudioOutput`); EA11.
+    pub dom_audio_output_enabled: bool,
+    /// `AudioWorklet`; EA9.
+    pub dom_audioworklet_enabled: bool,
+    /// `MediaRecorder`; EA19.
+    pub dom_media_recorder_enabled: bool,
+    /// The WebRTC peer connection interfaces (`RTCPeerConnection` and friends); EA7.
+    pub dom_webrtc_peerconnection_enabled: bool,
+    /// The ClearKey key system for EME; EA15.
+    pub media_eme_clearkey_enabled: bool,
+    /// Global Privacy Control: send `Sec-GPC: 1` and expose `navigator.globalPrivacyControl`; EC25.
+    pub privacy_gpc_enabled: bool,
+    /// Treat a cookie without a `SameSite` attribute as `SameSite=Lax`; EC6.
+    pub network_cookie_samesite_lax_default: bool,
+    /// Web Locks (`navigator.locks`); ED4.
+    pub dom_web_locks_enabled: bool,
+    /// Autoplay policy: "" or `allow` lets media play, `block-audible` blocks media with sound
+    /// until the user has interacted with the page, `block-all` blocks all media; EA3.
+    pub media_autoplay_policy: String,
+    /// Comma-separated origins whose media may always autoplay; EA3.
+    pub media_autoplay_allow_origins: String,
+    /// Comma-separated origins whose media may never autoplay; EA3.
+    pub media_autoplay_block_origins: String,
+    /// WebRTC address policy: "" or `default`, `public-only` or `relay-only`; EA7.
+    pub media_webrtc_ip_policy: String,
+    /// Comma-separated `name=true` or `name=false` pairs that set Stylo (the style system)
+    /// preferences by their Gecko names, such as `layout.css.nth-child-of.enabled=true`; ED2.
+    pub stylo_prefs: String,
 }
 
 impl Preferences {
@@ -615,6 +666,27 @@ impl Preferences {
             user_agent: String::new(),
             viewport_meta_enabled: false,
             expose_servointernals_globally: false,
+            // Mercury (K0): Servo 0.8's behaviour for every one of them.
+            dom_media_source_enabled: false,
+            dom_media_capabilities_enabled: false,
+            dom_eme_enabled: false,
+            dom_picture_in_picture_enabled: false,
+            dom_video_frame_callback_enabled: false,
+            dom_webcodecs_enabled: false,
+            dom_display_capture_enabled: false,
+            dom_audio_output_enabled: false,
+            dom_audioworklet_enabled: false,
+            dom_media_recorder_enabled: false,
+            dom_webrtc_peerconnection_enabled: false,
+            media_eme_clearkey_enabled: false,
+            privacy_gpc_enabled: false,
+            network_cookie_samesite_lax_default: false,
+            dom_web_locks_enabled: false,
+            media_autoplay_policy: String::new(),
+            media_autoplay_allow_origins: String::new(),
+            media_autoplay_block_origins: String::new(),
+            media_webrtc_ip_policy: String::new(),
+            stylo_prefs: String::new(),
         }
     }
 

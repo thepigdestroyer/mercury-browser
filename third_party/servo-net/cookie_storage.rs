@@ -238,9 +238,16 @@ impl CookieStorage {
         };
 
         // Serialize the cookie-list into a cookie-string by processing each cookie in the cookie-list in order
-        let result = cookie_list.fold(String::new(), reducer);
+        // Mercury: count the cookies while folding, so the log below can say how many were sent.
+        let mut sent_count = 0usize;
+        let result = cookie_list
+            .inspect(|_| sent_count += 1)
+            .fold(String::new(), reducer);
 
-        info!(" === COOKIES SENT: {}", result);
+        // Mercury: log only the number of cookies, never the cookie string (it holds the values of session
+        // cookies). Servo logs the string at info level (EC13).
+        info!(" === COOKIES SENT: {} cookie(s)", sent_count);
+
         match result.len() {
             0 => None,
             _ => Some(result),

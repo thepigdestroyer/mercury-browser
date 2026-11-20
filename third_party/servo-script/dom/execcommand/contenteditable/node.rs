@@ -24,7 +24,8 @@ use crate::dom::bindings::inheritance::NodeTypeId;
 use crate::dom::bindings::root::{DomRoot, DomSlice, UnrootedDom};
 use crate::dom::bindings::str::DOMString;
 use crate::dom::characterdata::CharacterData;
-use crate::dom::element::Element;
+// Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
+use crate::dom::element::{AdjacentPosition, Element};
 use crate::dom::execcommand::basecommand::{CommandName, CssPropertyName};
 use crate::dom::execcommand::commands::forecolor::serialize_to_simple_color;
 use crate::dom::html::htmlanchorelement::HTMLAnchorElement;
@@ -32,6 +33,8 @@ use crate::dom::html::htmlbrelement::HTMLBRElement;
 use crate::dom::html::htmlelement::HTMLElement;
 use crate::dom::html::htmlimageelement::HTMLImageElement;
 use crate::dom::html::htmllielement::HTMLLIElement;
+use crate::dom::html::htmlolistelement::HTMLOListElement;
+use crate::dom::html::htmlulistelement::HTMLUListElement;
 use crate::dom::iterators::ShadowIncluding;
 use crate::dom::node::{Node, NodeTraits};
 use crate::dom::text::Text;
@@ -150,9 +153,10 @@ fn is_element_with_inline_contents(element: &Node) -> bool {
 }
 
 /// <https://w3c.github.io/editing/docs/execCommand/#preserving-ranges>
-pub(crate) fn move_preserving_ranges<Move>(cx: &mut JSContext, node: &Node, mut move_: Move)
+// Mercury: hand-port of servo/servo#49920 (d9656e7a2). Drop at the bump that has it.
+pub(crate) fn move_preserving_ranges<Move, Return>(cx: &mut JSContext, node: &Node, mut move_: Move)
 where
-    Move: FnMut(&mut JSContext) -> Fallible<DomRoot<Node>>,
+    Move: FnMut(&mut JSContext) -> Fallible<Return>,
 {
     // Step 1. Let node be the moved node, old parent and old index be the old parent
     // (which may be null) and index, and new parent and new index be the new parent and index.
@@ -1741,14 +1745,84 @@ impl Node {
         restore_the_values(cx, values);
     }
 
+    /// <https://w3c.github.io/editing/docs/execCommand/#normalize-sublists>
+    pub(crate) fn normalize_sublists(&self, cx: &mut JSContext) {
+        let item_element = self
+            .downcast::<Element>()
+            .expect("item should be an element.");
+
+        // Step 1. If item is not an li or it is not editable or its parent is not editable, abort these steps.
+        if !self.is::<HTMLLIElement>() ||
+            !self.is_editable() ||
+            !self
+                .GetParentElement()
+                .is_some_and(|parent| parent.upcast::<Node>().is_editable())
+        {
+            return;
+        }
+
+        // Step 2. Let new item be null.
+        let mut new_item: Option<DomRoot<Element>> = None;
+
+        // Step 3. While item has an ol or ul child:
+        while self
+            .child_elements()
+            .any(|child| child.is::<HTMLOListElement>() || child.is::<HTMLUListElement>())
+        {
+            // Step 3.1. Let child be the last child of item.
+            let child = self.GetLastChild().expect("Must have a last child here.");
+
+            // Step 3.2. If child is an ol or ul, or new item is null and child is a Text node whose data consists of zero of more space characters:
+            if child.is::<HTMLOListElement>() ||
+                child.is::<HTMLUListElement>() ||
+                (new_item.is_none() &&
+                    child
+                        .downcast::<Text>()
+                        .is_some_and(|text| text.data().bytes().all(|byte| byte == b' ')))
+            {
+                // Step 3.2.1. Set new item to null.
+                new_item = None;
+
+                // Step 3.2.2. Insert child into the parent of item immediately following item, preserving ranges.
+                move_preserving_ranges(cx, &child, |cx| {
+                    item_element
+                        .insert_adjacent(cx, AdjacentPosition::AfterEnd, &child)
+                        .map(|elem| elem.expect("Should have inserted"))
+                });
+
+                continue;
+            }
+            // Step 3.3. Otherwise:
+            // Step 3.3.1. If new item is null,
+            //             let new item be the result of calling createElement("li") on the ownerDocument of item,
+            //             then insert new item into the parent of item immediately after item.
+            if new_item.is_none() {
+                new_item = Some(self.owner_document().create_element(cx, "li"));
+                item_element
+                    .insert_adjacent(cx, AdjacentPosition::AfterEnd, &child)
+                    .expect("Insertion should always work here.");
+            }
+
+            // Step 3.3.2. Insert child into new item as its first child, preserving ranges.
+            move_preserving_ranges(cx, &child, |cx| {
+                new_item
+                    .as_ref()
+                    .expect("Must have new item here")
+                    .downcast::<Element>()
+                    .expect("New item must be able to support children")
+                    .insert_adjacent(cx, AdjacentPosition::AfterBegin, &child)
+                    .map(|elem| elem.expect("Should have inserted"))
+            });
+        }
+    }
+
     /// <https://w3c.github.io/editing/docs/execCommand/#collapsed-block-prop>
     pub(crate) fn is_collapsed_block_prop(&self, no_gc: &NoGC) -> bool {
         // > A collapsed block prop is either a collapsed line break that is not an extraneous line break,
-
-        // TODO: Check for collapsed line break
-        if self
-            .downcast::<HTMLBRElement>()
-            .is_some_and(|br| !br.is_extraneous_line_break())
+        // Mercury: backport of servo/servo#49797 (8d0f0d77f). Drop at the bump that has it.
+        if self.is_collapsed_line_break(no_gc) &&
+            self.downcast::<HTMLBRElement>()
+                .is_some_and(|br| !br.is_extraneous_line_break())
         {
             return true;
         }
@@ -2234,7 +2308,8 @@ impl Node {
             self.remove_self(cx);
         } else {
             rooted_vec!(let children <- self.children().map(|child| DomRoot::as_traced(&child)));
-            split_the_parent(cx, children.r());
+            // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
+            split_the_parent(cx, children.as_ref_slice());
         }
     }
 
@@ -2349,5 +2424,70 @@ impl Node {
             // Step 8. Return the resolved value for node of the relevant CSS property for command.
             _ => command.resolved_value_for_node(element),
         }
+    }
+
+    /// <https://w3c.github.io/editing/docs/execCommand/#collapsed-line-break>
+    pub(crate) fn is_collapsed_line_break(&self, no_gc: &NoGC) -> bool {
+        // > A collapsed line break is a br that begins a line box which has nothing else in it,
+        // > and therefore has zero height.
+        //
+        // This also takes into account a newly created text node with the only value "\n", since
+        // that's what browsers insert when the white-space CSS property indicates it has pre-formatted
+        // content.
+        // Mercury: hand-port of servo/servo#49884 (ba4852dce). Drop at the bump that has it.
+        if !self.is::<HTMLBRElement>() &&
+            !self
+                .downcast::<Text>()
+                .is_some_and(|text| text.data().as_str() == "\n")
+        {
+            return false;
+        }
+
+        // Inspired by the reverse-engineered implementation from Ladybird, we look at DOM nodes to
+        // figure out what "nothing else in it" means. However, we don't follow the logic from Ladybird
+        // completely, as the end-condition for block nodes is different.
+        //
+        // If the next node contains some text, then it is not collapsed. This would be the case where
+        // there is a `<br>some text`.
+        //
+        // In any other case, we either have inline or block nodes. For inline nodes, it means that these
+        // nodes would be rendered on the same line. In that case, we also aren't collapsed. For example
+        // when there is a `<br><span></span>`
+        //
+        // Only in the case that a `<br>` is followed by nothing (whitespace or no nodes) leading immediately
+        // to a block node, it is considered collapsed.
+        // Mercury: hand-port of servo/servo#49920 (d9656e7a2). Drop at the bump that has it.
+        let editing_host = self.editing_host_of().expect("Must always be editable");
+        let root = self
+            .block_node_of()
+            // It could be that all ancestors up to and including the editing host are all inline. In that case
+            // we should only consider up to the editing host, as it acts as the bounding box for considering
+            // whether something is collapsed.
+            .filter(|block_node| editing_host.is_ancestor_of(block_node))
+            .unwrap_or(editing_host);
+
+        for following in self.following_nodes_unrooted(no_gc, &root, ShadowIncluding::No) {
+            if let Some(text) = UnrootedDom::downcast::<Text>(following.clone()) {
+                if text.is_whitespace_node() {
+                    continue;
+                }
+                return false;
+            }
+
+            // This is checking if we have nodes like comments, which we should not consider for this algorithm
+            let Some(element) = UnrootedDom::downcast::<Element>(following.clone()) else {
+                continue;
+            };
+
+            if following.is_block_node() {
+                return true;
+            }
+
+            if element.is_void() {
+                return false;
+            }
+        }
+
+        true
     }
 }

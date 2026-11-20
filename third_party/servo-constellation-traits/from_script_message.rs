@@ -47,8 +47,8 @@ use webgpu_traits::{WebGPU, WebGPUAdapterResponse};
 
 use crate::structured_data::{BroadcastChannelMsg, StructuredSerializedData};
 use crate::{
-    LogEntry, MessagePortMsg, PortMessageTask, PortTransferInfo, SessionHistoryTraversalRequest,
-    WindowSizeType,
+    LogEntry, MercuryScriptToConstellation, MessagePortMsg, PortMessageTask, PortTransferInfo,
+    SessionHistoryTraversalRequest, WindowSizeType,
 };
 
 pub type ScriptToConstellationSender =
@@ -873,6 +873,11 @@ pub enum ScriptToConstellationMessage {
     /// aggregate lock count and notify the provider only when the count transitions from N to 0.
     /// <https://w3c.github.io/screen-wake-lock/#dfn-release-wake-lock>
     ReleaseWakeLock(WakeLockType),
+    // Mercury: one variant for every Mercury lane message, so a lane adds its own messages in
+    // `mercury/<lane>.rs` and never in this enum (K0 engine base, R14 section 3.4).
+    /// A message from script to the constellation for one of Mercury's lanes. See
+    /// [`MercuryScriptToConstellation`].
+    Mercury(MercuryScriptToConstellation),
 }
 
 impl fmt::Debug for ScriptToConstellationMessage {

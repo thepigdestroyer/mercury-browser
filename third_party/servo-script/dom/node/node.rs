@@ -2748,7 +2748,8 @@ impl Node {
                 node.children_unrooted(cx.no_gc())
                     .map(|node| Dom::from_ref(&**node)),
             );
-            new_nodes.r()
+            // Mercury: backport of servo/servo#49649 (10c279faeb3a): DomSlice::r() is now as_ref_slice(). Drop at the bump that has it.
+            new_nodes.as_ref_slice()
         } else {
             from_ref(&node)
         };
@@ -3010,7 +3011,7 @@ impl Node {
         let added_nodes = if let Some(node) = node.as_ref() {
             if let NodeTypeId::DocumentFragment(_) = node.type_id() {
                 added_nodes.extend(node.children().map(|child| Dom::from_ref(&*child)));
-                added_nodes.r()
+                added_nodes.as_ref_slice()
             } else {
                 from_ref(node)
             }
@@ -3035,7 +3036,7 @@ impl Node {
         if !removed_nodes.is_empty() || !added_nodes.is_empty() {
             let mutation = LazyCell::new(|| Mutation::ChildList {
                 added: Some(added_nodes),
-                removed: Some(removed_nodes.r()),
+                removed: Some(removed_nodes.as_ref_slice()),
                 prev: None,
                 next: None,
             });
@@ -4111,7 +4112,7 @@ impl NodeMethods<crate::DomTypeHolder> for Node {
             node.type_id() == NodeTypeId::DocumentFragment(DocumentFragmentTypeId::ShadowRoot)
         {
             nodes.extend(node.children().map(|node| Dom::from_ref(&*node)));
-            nodes.r()
+            nodes.as_ref_slice()
         } else {
             from_ref(&node)
         };

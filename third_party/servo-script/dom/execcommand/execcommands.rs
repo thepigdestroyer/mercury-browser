@@ -169,6 +169,8 @@ impl Document {
             "insertparagraph" => CommandName::InsertParagraph,
             "inserttext" => CommandName::InsertText,
             "italic" => CommandName::Italic,
+            // Mercury: backport of servo/servo#47459 (189034510). Drop at the bump that has it.
+            "outdent" => CommandName::Outdent,
             "removeformat" => CommandName::RemoveFormat,
             "strikethrough" => CommandName::Strikethrough,
             "stylewithcss" => CommandName::StyleWithCss,

@@ -104,6 +104,8 @@ use crate::clipboard_delegate::StringRequest;
 use crate::gamepad_delegate::{GamepadHapticEffectRequest, GamepadHapticEffectRequestType};
 use crate::geolocation_delegate::{PositionRequest, PositionWatch};
 use crate::javascript_evaluator::JavaScriptEvaluator;
+// Mercury: delivery of Mercury's lane messages (K0 engine base).
+use crate::mercury_delivery as mercury;
 use crate::network_manager::NetworkManager;
 use crate::proxies::ConstellationProxy;
 use crate::responders::ServoErrorChannel;
@@ -853,6 +855,12 @@ impl ServoInner {
                     webview.process_accessibility_tree_update(tree_update, epoch);
                 }
             },
+            // Mercury: every lane message goes through one arm (mercury/mod.rs).
+            EmbedderMsg::Mercury(webview_id, message) => {
+                let webview =
+                    webview_id.and_then(|webview_id| self.get_webview_handle(webview_id));
+                mercury::deliver(webview_id, webview, &self.delegate.borrow(), message);
+            },
         }
     }
 
@@ -950,6 +958,12 @@ impl ServoInner {
                         .delegate()
                         .notify_media_session_event(webview, media_session_event);
                 }
+            },
+            // Mercury: every lane message goes through one arm (mercury/mod.rs).
+            ConstellationToEmbedderMsg::Mercury(webview_id, message) => {
+                let webview =
+                    webview_id.and_then(|webview_id| self.get_webview_handle(webview_id));
+                mercury::deliver(webview_id, webview, &self.delegate.borrow(), message);
             },
         }
     }

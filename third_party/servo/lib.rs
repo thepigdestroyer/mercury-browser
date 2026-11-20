@@ -51,6 +51,11 @@ mod geolocation_delegate;
 ))]
 mod gstreamer_plugins;
 mod javascript_evaluator;
+// Mercury: delivery of Mercury's lane messages (K0 engine base); the file is mercury/mod.rs. It is not
+// named `mercury`: `pub use embedder_traits::*` below re-exports that crate's `mercury` module, which a
+// private module of the same name would hide (rustc: hidden_glob_reexports).
+#[path = "mercury/mod.rs"]
+mod mercury_delivery;
 mod network_manager;
 mod proxies;
 mod responders;
@@ -112,6 +117,9 @@ pub use crate::gamepad_delegate::{
     GamepadDelegate, GamepadHapticEffectRequest, GamepadHapticEffectRequestType,
 };
 pub use crate::geolocation_delegate::{GeolocationDelegate, PositionRequest, PositionWatch};
+// Mercury: the Mercury message types of the constellation's lanes, next to those of
+// `embedder_traits` that `pub use embedder_traits::*` above already exports.
+pub use crate::mercury_delivery::*;
 pub use crate::network_manager::{CacheEntry, NetworkManager};
 #[cfg(feature = "multiprocess")]
 pub use crate::servo::run_content_process;

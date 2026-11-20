@@ -1,3 +1,331 @@
 # Mercury's changes to servo-config 0.8.0, against the crate as published on crates.io
 # (SHA-256 cdc1c3fa6136a6d3337ba6297118e3ce5194a9e5a17d41ef91a4973fde68d74e). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-config.
+diff --git a/lib.rs b/lib.rs
+--- a/lib.rs
++++ b/lib.rs
+@@ -10,6 +10,8 @@
+
+ #![deny(unsafe_code)]
+
++// Mercury: Stylo preferences by name (K0, ED2); reached as `prefs::apply_stylo_prefs`.
++mod mercury_stylo;
+ pub mod opts;
+ pub mod pref_util;
+ pub mod prefs;
+diff --git a/mercury_stylo.rs b/mercury_stylo.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_stylo.rs
+@@ -0,0 +1,208 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file is new (K0, ED2). Servo forwards seven Stylo preferences, each by a line in
++// `prefs::set`, so turning on another Stylo feature meant editing that function and a new field.
++// `Preferences::stylo_prefs` is a list of Stylo preference names instead, applied by
++// `prefs::set` through `apply_stylo_prefs`. It has no dependency on a logging crate: the entries
++// that could not be applied are returned, and Mercury's tests assert that there are none.
++
++/// Sets Stylo preferences from `list`, comma-separated `name=true` or `name=false` pairs with
++/// Stylo's own (Gecko) names, such as `layout.css.nth-child-of.enabled=true`. Spaces around names,
++/// values and commas are ignored and empty entries are skipped. When a name appears twice, the
++/// last value is the one kept.
++///
++/// Returns what could not be applied, in the order of the list: the name of a preference that
++/// Stylo does not have as a boolean preference, or the whole entry when it is not `name=true` or
++/// `name=false`. Every entry that can be applied is applied, whatever the others are.
++pub fn apply_stylo_prefs(list: &str) -> Vec<String> {
++    let mut rejected = Vec::new();
++    for entry in list
++        .split(',')
++        .map(str::trim)
++        .filter(|entry| !entry.is_empty())
++    {
++        let parsed = entry.split_once('=').and_then(|(name, value)| {
++            let value = match value.trim() {
++                "true" => true,
++                "false" => false,
++                _ => return None,
++            };
++            Some((name.trim(), value)).filter(|(name, _)| !name.is_empty())
++        });
++        match parsed {
++            Some((name, value)) => {
++                if !stylo_static_prefs::set_bool(name, value) {
++                    rejected.push(name.to_owned());
++                }
++            },
++            None => rejected.push(entry.to_owned()),
++        }
++    }
++    rejected
++}
++
++/// The current value of the Stylo boolean preference called `name` (a Gecko name), or `None` when
++/// Stylo has no boolean preference of that name.
++pub fn stylo_bool_pref(name: &str) -> Option<bool> {
++    stylo_static_prefs::get_bool(name)
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    // The Stylo preferences are process-wide and the tests run in parallel: each test uses
++    // preferences of its own.
++
++    #[test]
++    fn applies_each_name_and_value() {
++        let rejected = apply_stylo_prefs(
++            "layout.css.anchor-positioning.enabled=true,layout.css.appearance.enabled=true",
++        );
++
++        assert!(rejected.is_empty(), "{rejected:?}");
++        assert_eq!(
++            stylo_bool_pref("layout.css.anchor-positioning.enabled"),
++            Some(true)
++        );
++        assert_eq!(stylo_bool_pref("layout.css.appearance.enabled"), Some(true));
++    }
++
++    #[test]
++    fn ignores_spaces_and_empty_entries() {
++        let rejected = apply_stylo_prefs(
++            " , layout.css.at-scope.enabled = true ,, \t layout.css.counters.enabled=true , ",
++        );
++
++        assert!(rejected.is_empty(), "{rejected:?}");
++        assert_eq!(stylo_bool_pref("layout.css.at-scope.enabled"), Some(true));
++        assert_eq!(stylo_bool_pref("layout.css.counters.enabled"), Some(true));
++    }
++
++    #[test]
++    fn false_turns_a_preference_off() {
++        // On in Stylo by default.
++        assert_eq!(
++            stylo_bool_pref("layout.css.alpha-color-function.enabled"),
++            Some(true)
++        );
++
++        let rejected = apply_stylo_prefs("layout.css.alpha-color-function.enabled=false");
++
++        assert!(rejected.is_empty(), "{rejected:?}");
++        assert_eq!(
++            stylo_bool_pref("layout.css.alpha-color-function.enabled"),
++            Some(false)
++        );
++        apply_stylo_prefs("layout.css.alpha-color-function.enabled=true");
++    }
++
++    #[test]
++    fn the_last_value_of_a_name_wins() {
++        assert!(
++            apply_stylo_prefs("layout.css.contain.enabled=true,layout.css.contain.enabled=false")
++                .is_empty()
++        );
++        assert_eq!(stylo_bool_pref("layout.css.contain.enabled"), Some(false));
++
++        assert!(
++            apply_stylo_prefs(
++                "layout.css.corner-shape.enabled=false,layout.css.corner-shape.enabled=true"
++            )
++            .is_empty()
++        );
++        assert_eq!(
++            stylo_bool_pref("layout.css.corner-shape.enabled"),
++            Some(true)
++        );
++
++        // Setting the same list twice leaves the same values.
++        for _ in 0..2 {
++            apply_stylo_prefs("layout.css.cross-fade.enabled=true");
++            assert_eq!(stylo_bool_pref("layout.css.cross-fade.enabled"), Some(true));
++        }
++    }
++
++    #[test]
++    fn returns_unknown_names_and_applies_the_rest() {
++        let rejected = apply_stylo_prefs(
++            "layout.css.no-such-preference.enabled=true,layout.css.custom-media.enabled=true,\
++             layout.threads=true,Layout.css.custom-media.enabled=true",
++        );
++
++        // `layout.threads` is an integer preference; names match exactly.
++        assert_eq!(
++            rejected,
++            [
++                "layout.css.no-such-preference.enabled",
++                "layout.threads",
++                "Layout.css.custom-media.enabled",
++            ]
++        );
++        assert_eq!(
++            stylo_bool_pref("layout.css.custom-media.enabled"),
++            Some(true)
++        );
++    }
++
++    #[test]
++    fn returns_entries_that_are_not_a_name_and_a_boolean() {
++        let rejected = apply_stylo_prefs(
++            "layout.css.display-animations.enabled,layout.css.display-animations.enabled=1,\
++             =true,layout.css.display-animations.enabled=True,layout.css.display-animations.enabled=",
++        );
++
++        assert_eq!(
++            rejected,
++            [
++                "layout.css.display-animations.enabled",
++                "layout.css.display-animations.enabled=1",
++                "=true",
++                "layout.css.display-animations.enabled=True",
++                "layout.css.display-animations.enabled=",
++            ]
++        );
++        // Nothing was applied.
++        assert_eq!(
++            stylo_bool_pref("layout.css.display-animations.enabled"),
++            Some(false)
++        );
++    }
++
++    #[test]
++    fn an_empty_list_changes_nothing() {
++        assert!(apply_stylo_prefs("").is_empty());
++        assert!(apply_stylo_prefs("  ,  , ").is_empty());
++    }
++
++    #[test]
++    fn stylo_bool_pref_is_none_for_other_names() {
++        assert_eq!(
++            stylo_bool_pref("layout.css.no-such-preference.enabled"),
++            None
++        );
++        assert_eq!(stylo_bool_pref("layout.threads"), None);
++        assert_eq!(stylo_bool_pref(""), None);
++    }
++
++    #[test]
++    fn prefs_set_applies_the_stylo_prefs_list() {
++        assert_eq!(
++            stylo_bool_pref("layout.css.dominant-baseline.enabled"),
++            Some(false)
++        );
++        let mut preferences = crate::prefs::Preferences::default();
++        preferences.stylo_prefs = "layout.css.dominant-baseline.enabled=true".to_owned();
++
++        crate::prefs::set(preferences);
++
++        assert_eq!(
++            stylo_bool_pref("layout.css.dominant-baseline.enabled"),
++            Some(true)
++        );
++        // Servo's own seven mappings still work beside it.
++        assert_eq!(stylo_bool_pref("layout.css.columns.enabled"), Some(false));
++    }
++}
+diff --git a/prefs.rs b/prefs.rs
+--- a/prefs.rs
++++ b/prefs.rs
+@@ -12,6 +12,8 @@
+ use servo_config_macro::ServoPreferences;
+
+ pub use crate::pref_util::PrefValue;
++// Mercury: Stylo preferences by name (K0, ED2), reached from the embedder as `servo::prefs::...`.
++pub use crate::mercury_stylo::{apply_stylo_prefs, stylo_bool_pref};
+
+ static PREFERENCES: RwLock<Preferences> = RwLock::new(Preferences::const_default());
+
+@@ -72,6 +74,9 @@
+         "layout.css.writing-mode.enabled",
+         preferences.layout_css_writing_mode_enabled
+     );
++    // Mercury: any other Stylo preference, by its Gecko name (K0, ED2). After the lines above, so
++    // a name in the list wins over them.
++    crate::mercury_stylo::apply_stylo_prefs(&preferences.stylo_prefs);
+
+     *PREFERENCES.write().unwrap() = preferences;
+
+@@ -425,6 +430,52 @@
+     /// Exposes internal JS API functions that are usually restricted to `about:...` pages
+     /// Useful if you want to get memory report or force GC in a test page
+     pub expose_servointernals_globally: bool,
++
++    // Mercury (K0): preferences the media, privacy, storage and compatibility lanes read.
++    // Each defaults to Servo 0.8's behaviour (false, or "" for "allow" or "default"); the
++    // values Mercury ships are set in `crates/talaria-servo/src/engine_prefs.rs`.
++    /// Media Source Extensions (`MediaSource`, `SourceBuffer`); EA1.
++    pub dom_media_source_enabled: bool,
++    /// `navigator.mediaCapabilities` and codec-string support answers; EA2.
++    pub dom_media_capabilities_enabled: bool,
++    /// Encrypted Media Extensions (`navigator.requestMediaKeySystemAccess`); EA15.
++    pub dom_eme_enabled: bool,
++    /// Picture-in-picture for video elements; EA12.
++    pub dom_picture_in_picture_enabled: bool,
++    /// `HTMLVideoElement.requestVideoFrameCallback`; EA13.
++    pub dom_video_frame_callback_enabled: bool,
++    /// WebCodecs (`VideoDecoder`, `VideoFrame`, ...); EA14.
++    pub dom_webcodecs_enabled: bool,
++    /// Screen capture (`getDisplayMedia`); EA8.
++    pub dom_display_capture_enabled: bool,
++    /// Audio output selection (`setSinkId`, `selectAudioOutput`); EA11.
++    pub dom_audio_output_enabled: bool,
++    /// `AudioWorklet`; EA9.
++    pub dom_audioworklet_enabled: bool,
++    /// `MediaRecorder`; EA19.
++    pub dom_media_recorder_enabled: bool,
++    /// The WebRTC peer connection interfaces (`RTCPeerConnection` and friends); EA7.
++    pub dom_webrtc_peerconnection_enabled: bool,
++    /// The ClearKey key system for EME; EA15.
++    pub media_eme_clearkey_enabled: bool,
++    /// Global Privacy Control: send `Sec-GPC: 1` and expose `navigator.globalPrivacyControl`; EC25.
++    pub privacy_gpc_enabled: bool,
++    /// Treat a cookie without a `SameSite` attribute as `SameSite=Lax`; EC6.
++    pub network_cookie_samesite_lax_default: bool,
++    /// Web Locks (`navigator.locks`); ED4.
++    pub dom_web_locks_enabled: bool,
++    /// Autoplay policy: "" or `allow` lets media play, `block-audible` blocks media with sound
++    /// until the user has interacted with the page, `block-all` blocks all media; EA3.
++    pub media_autoplay_policy: String,
++    /// Comma-separated origins whose media may always autoplay; EA3.
++    pub media_autoplay_allow_origins: String,
++    /// Comma-separated origins whose media may never autoplay; EA3.
++    pub media_autoplay_block_origins: String,
++    /// WebRTC address policy: "" or `default`, `public-only` or `relay-only`; EA7.
++    pub media_webrtc_ip_policy: String,
++    /// Comma-separated `name=true` or `name=false` pairs that set Stylo (the style system)
++    /// preferences by their Gecko names, such as `layout.css.nth-child-of.enabled=true`; ED2.
++    pub stylo_prefs: String,
+ }
+
+ impl Preferences {
+@@ -615,6 +666,27 @@
+             user_agent: String::new(),
+             viewport_meta_enabled: false,
+             expose_servointernals_globally: false,
++            // Mercury (K0): Servo 0.8's behaviour for every one of them.
++            dom_media_source_enabled: false,
++            dom_media_capabilities_enabled: false,
++            dom_eme_enabled: false,
++            dom_picture_in_picture_enabled: false,
++            dom_video_frame_callback_enabled: false,
++            dom_webcodecs_enabled: false,
++            dom_display_capture_enabled: false,
++            dom_audio_output_enabled: false,
++            dom_audioworklet_enabled: false,
++            dom_media_recorder_enabled: false,
++            dom_webrtc_peerconnection_enabled: false,
++            media_eme_clearkey_enabled: false,
++            privacy_gpc_enabled: false,
++            network_cookie_samesite_lax_default: false,
++            dom_web_locks_enabled: false,
++            media_autoplay_policy: String::new(),
++            media_autoplay_allow_origins: String::new(),
++            media_autoplay_block_origins: String::new(),
++            media_webrtc_ip_policy: String::new(),
++            stylo_prefs: String::new(),
+         }
+     }
+

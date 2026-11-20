@@ -6,6 +6,9 @@ use std::{env, fs, path::Path};
 
 use toml::{Table, Value};
 
+// Mercury: `set_bool` and `get_bool` by name (K0, ED2); see `mercury_bridge.rs`.
+mod mercury_bridge;
+
 struct BooleanPreference {
     name: String,
     default: bool,
@@ -122,6 +125,14 @@ fn generate_code(
         output.push(format!("    }};"));
     }
     output.push(format!("}}"));
+
+    // Mercury: the same preferences by name at run time (K0, ED2).
+    mercury_bridge::append_bridge(
+        &mut output,
+        boolean_preferences
+            .iter()
+            .map(|preference| preference.name.as_str()),
+    );
 
     let output = output.join("\n");
     println!("{output}");

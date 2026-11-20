@@ -99,6 +99,8 @@ use crate::http_cache::{
     CacheKey, CachedResourcesOrGuard, HttpCache, ValidationStatus, construct_response,
     invalidate_cached_resources, refresh,
 };
+// Mercury: redacts cookie and credential header values in the debug logs (EC13).
+use crate::mercury_log::{header_for_log, headers_for_log};
 use crate::resource_thread::{AuthCache, AuthCacheEntry};
 use crate::websocket_loader::start_websocket;
 
@@ -2184,8 +2186,9 @@ async fn http_network_fetch(
     let request_id = request.id.0;
     if log_enabled!(log::Level::Info) {
         info!("{:?} request for {}", request.method, url);
-        for header in request.headers.iter() {
-            debug!(" - {:?}", header);
+        // Mercury: the values of Cookie and Authorization are not logged (EC13).
+        for (name, value) in request.headers.iter() {
+            debug!(" - {}", header_for_log(name, value));
         }
     }
 
@@ -2280,8 +2283,9 @@ async fn http_network_fetch(
 
     if log_enabled!(log::Level::Info) {
         debug!("{:?} response for {}", response_stream.version(), url);
-        for header in response_stream.headers().iter() {
-            debug!(" - {:?}", header);
+        // Mercury: the values of Set-Cookie are not logged (EC13).
+        for (name, value) in response_stream.headers().iter() {
+            debug!(" - {}", header_for_log(name, value));
         }
     }
 
@@ -2634,9 +2638,11 @@ async fn cors_preflight_fetch(request: &Request, context: &FetchContext) -> Resp
             return Response::network_error(NetworkError::CorsMethod);
         }
 
+        // Mercury: the request's header map holds Cookie and Authorization values; log it redacted (EC13).
         debug!(
-            "CORS check: Allowed headers: {:?}, current headers: {:?}",
-            header_names, request.headers
+            "CORS check: Allowed headers: {:?}, current headers: {}",
+            header_names,
+            headers_for_log(&request.headers)
         );
 
         // Step 7.6 If one of request’s header list’s names is a CORS non-wildcard request-header name

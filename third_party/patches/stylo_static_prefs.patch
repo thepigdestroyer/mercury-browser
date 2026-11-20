@@ -1,3 +1,159 @@
 # Mercury's changes to stylo_static_prefs 0.23.0, against the crate as published on crates.io
 # (SHA-256 8e06c605a1d428d159798ebfed3f81f3a145f1838872360ebb24ec6d85993fe1). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of stylo_static_prefs.
+diff --git a/build.rs b/build.rs
+--- a/build.rs
++++ b/build.rs
+@@ -6,6 +6,9 @@
+
+ use toml::{Table, Value};
+
++// Mercury: `set_bool` and `get_bool` by name (K0, ED2); see `mercury_bridge.rs`.
++mod mercury_bridge;
++
+ struct BooleanPreference {
+     name: String,
+     default: bool,
+@@ -123,6 +126,14 @@
+     }
+     output.push(format!("}}"));
+
++    // Mercury: the same preferences by name at run time (K0, ED2).
++    mercury_bridge::append_bridge(
++        &mut output,
++        boolean_preferences
++            .iter()
++            .map(|preference| preference.name.as_str()),
++    );
++
+     let output = output.join("\n");
+     println!("{output}");
+
+diff --git a/mercury_bridge.rs b/mercury_bridge.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_bridge.rs
+@@ -0,0 +1,54 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file is new (K0, ED2). It is part of the build script (`build.rs`: `mod
++// mercury_bridge;`) and writes `set_bool` and `get_bool` into the generated code. Upstream's
++// `set_pref!` takes a literal name written in the source, so an embedder cannot forward a list of
++// names it reads at run time; these two functions take the name as a string.
++
++/// The start of the generated lookup, up to the first match arm.
++const INDEX_START: &str = r#"/// Mercury: the position in `BOOLS` of the boolean preference called `name`.
++fn mercury_bool_index(name: &str) -> Option<usize> {
++    match name {"#;
++
++/// The generated lookup after its last match arm, and the two accessors built on it.
++const INDEX_END_AND_ACCESSORS: &str = r#"        _ => None,
++    }
++}
++
++/// Mercury: sets the boolean preference called `name` (a Gecko name such as
++/// `layout.css.nth-child-of.enabled`). Returns `false`, and sets nothing, when there is no
++/// boolean preference of that name.
++pub fn set_bool(name: &str, value: bool) -> bool {
++    match mercury_bool_index(name) {
++        Some(index) => {
++            BOOLS[index].store(value, std::sync::atomic::Ordering::Relaxed);
++            true
++        },
++        None => false,
++    }
++}
++
++/// Mercury: the current value of the boolean preference called `name`, or `None` when there is
++/// no boolean preference of that name.
++pub fn get_bool(name: &str) -> Option<bool> {
++    mercury_bool_index(name).map(|index| BOOLS[index].load(std::sync::atomic::Ordering::Relaxed))
++}"#;
++
++/// Appends `set_bool` and `get_bool` to the generated code in `output`.
++///
++/// `boolean_names` must be the boolean preferences in the order of the generated `BOOLS` array.
++/// The generated functions find a preference by matching its name, so a name that is not a
++/// boolean preference (an integer one, or none at all) is refused.
++pub fn append_bridge<'a>(
++    output: &mut Vec<String>,
++    boolean_names: impl IntoIterator<Item = &'a str>,
++) {
++    println!("cargo::rerun-if-changed=mercury_bridge.rs");
++    output.push(INDEX_START.to_owned());
++    for (index, name) in boolean_names.into_iter().enumerate() {
++        output.push(format!("        {name:?} => Some({index}),"));
++    }
++    output.push(INDEX_END_AND_ACCESSORS.to_owned());
++}
+diff --git a/src/lib.rs b/src/lib.rs
+--- a/src/lib.rs
++++ b/src/lib.rs
+@@ -16,3 +16,65 @@
+     set_pref!("layout.threads", 42);
+     assert_eq!(pref!("layout.threads"), 42);
+ }
++
++// Mercury: tests of `set_bool` and `get_bool` (K0, ED2). The preferences are process-wide and the
++// tests run in parallel, so each test has preferences of its own, and none touches the two that
++// `test_basic_preferences` changes.
++
++#[test]
++fn mercury_set_bool_changes_what_pref_reads() {
++    assert_eq!(get_bool("layout.css.at-scope.enabled"), Some(false));
++    assert!(!pref!("layout.css.at-scope.enabled"));
++
++    assert!(set_bool("layout.css.at-scope.enabled", true));
++    assert_eq!(get_bool("layout.css.at-scope.enabled"), Some(true));
++    assert!(pref!("layout.css.at-scope.enabled"));
++    // The preferences next to it keep their values.
++    assert!(!pref!("layout.css.anchor-positioning.enabled"));
++
++    assert!(set_bool("layout.css.at-scope.enabled", false));
++    assert_eq!(get_bool("layout.css.at-scope.enabled"), Some(false));
++    assert!(!pref!("layout.css.at-scope.enabled"));
++}
++
++#[test]
++fn mercury_get_bool_reads_the_defaults() {
++    assert_eq!(
++        get_bool("layout.css.alpha-color-function.enabled"),
++        Some(true)
++    );
++    assert_eq!(get_bool("layout.css.has-selector.enabled"), Some(false));
++}
++
++#[test]
++fn mercury_set_bool_refuses_unknown_names_and_integer_preferences() {
++    assert!(!set_bool("layout.css.no-such-preference.enabled", true));
++    assert_eq!(get_bool("layout.css.no-such-preference.enabled"), None);
++    assert!(!set_bool("", true));
++    assert_eq!(get_bool(""), None);
++    // `layout.threads` is an integer preference.
++    assert!(!set_bool("layout.threads", true));
++    assert_eq!(get_bool("layout.threads"), None);
++    // Names match exactly.
++    assert_eq!(get_bool("Layout.css.at-scope.enabled"), None);
++    assert_eq!(get_bool("layout.css.at-scope.enabled "), None);
++}
++
++#[test]
++fn mercury_every_boolean_in_preferences_toml_has_an_accessor() {
++    let mut booleans = 0;
++    for line in include_str!("../preferences.toml").lines() {
++        let Some((name, value)) = line.split_once(" = ") else {
++            continue;
++        };
++        let name = name.trim().trim_matches('"');
++        match value.trim() {
++            "true" | "false" => {
++                assert!(get_bool(name).is_some(), "{name}");
++                booleans += 1;
++            },
++            _ => assert!(get_bool(name).is_none(), "{name} is not a boolean"),
++        }
++    }
++    assert!(booleans > 50, "read only {booleans} boolean preferences");
++}

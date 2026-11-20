@@ -783,8 +783,29 @@ impl WebGLValidator for TexStorageValidator<'_> {
             context.webgl_error(InvalidEnum);
             return Err(TexImageValidationError::InvalidTextureFormat);
         }
+        // Mercury: backport of servo/servo#49912 (merge commit 43753d9b4). texStorage rejects a compressed
+        // format whose extension is not enabled (INVALID_ENUM) and a depth format for TEXTURE_3D
+        // (INVALID_OPERATION).
+        if internal_format.is_compressed() &&
+            context
+                .extension_manager()
+                .get_tex_compression_format(internal_format.as_gl_constant())
+                .is_none()
+        {
+            context.webgl_error(InvalidEnum);
+            return Err(TexImageValidationError::InvalidCompressionFormat);
+        }
         // Compressed formats have no 3D layout, only 2D arrays of compressed images.
         if target == TexImageTarget::Texture3D && internal_format.is_compressed() {
+            context.webgl_error(InvalidOperation);
+            return Err(TexImageValidationError::InvalidTextureFormat);
+        }
+        if target == TexImageTarget::Texture3D &&
+            matches!(
+                internal_format.to_unsized(),
+                TexFormat::DepthComponent | TexFormat::DepthStencil
+            )
+        {
             context.webgl_error(InvalidOperation);
             return Err(TexImageValidationError::InvalidTextureFormat);
         }

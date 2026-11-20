@@ -336,10 +336,11 @@ impl ServoCookie {
     /// <http://tools.ietf.org/html/rfc6265#section-5.4> step 1
     pub fn appropriate_for_url(&self, url: &ServoUrl, source: CookieSource) -> bool {
         if log_enabled!(Level::Debug) {
+            // Mercury: name, domain and path only. Servo also prints the cookie's value, which for a
+            // session cookie is a credential (EC13).
             debug!(
-                " === SENT COOKIE : {} {} {:?} {:?}",
+                " === SENT COOKIE : {} {:?} {:?}",
                 self.cookie.name(),
-                self.cookie.value(),
                 self.cookie.domain(),
                 self.cookie.path()
             );

@@ -101,8 +101,9 @@ pub struct RuntimeOptions {
     /// Where Servo keeps cookies, HSTS, HTTP authentication and site storage. `None` keeps
     /// nothing across runs.
     pub config_dir: Option<PathBuf>,
-    /// Turn on servoshell's experimental web-platform features, except the async clipboard and
-    /// WebGPU (see `EXCLUDED_EXPERIMENTAL_PREFS`).
+    /// Turn on servoshell's experimental web-platform features, except the async clipboard,
+    /// WebGPU and container queries (see `EXCLUDED_EXPERIMENTAL_PREFS`). The web-compatibility
+    /// preferences of `engine_prefs.rs` do not depend on it.
     pub experimental_web_features: bool,
     // settings
     /// Block ads and trackers from the start; changed later through `ServoRuntime::switches`.
@@ -449,6 +450,11 @@ impl servo::ServoDelegate for BrowserServoDelegate {
         };
         self.content_blocker.handle_web_resource_load(None, load);
     }
+
+    // engine messages: Mercury's lane messages that name no web view, or whose web view has gone.
+    fn notify_mercury_message(&self, message: servo::MercuryEmbedderMsg) {
+        crate::mercury_messages::handle(None, message);
+    }
 }
 
 fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
@@ -496,6 +502,9 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
     // Servo accept the paths it names without any file panel (`htmlinputelement.rs`); it exists
     // for Servo's own tests.
     preferences.dom_testing_html_input_element_select_files_enabled = false;
+    // engine prefs: the product values and pins of the web-platform preferences, set for every
+    // launch (not behind the experimental-features switch); see `engine_prefs.rs`.
+    crate::engine_prefs::apply(&mut preferences);
     preferences.user_agent = firefox_compatible_user_agent(&preferences.user_agent);
     apply_system_proxy(&mut preferences, runtime_options.system_proxy.as_ref());
     // Servo's size limit (`network_http_disk_cache_size`, 100 MB) is kept.
@@ -585,8 +594,15 @@ const EXPERIMENTAL_PREFS: &[&str] = &[
 ];
 
 /// Entries of `EXPERIMENTAL_PREFS` that Mercury leaves off; the reasons are given where they
-/// are pinned in `mercury_preferences`.
-const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &["dom_async_clipboard_enabled", "dom_webgpu_enabled"];
+/// are pinned in `mercury_preferences`, except for container queries: Servo parses `@container`
+/// blocks and drops them (`@container` is Gecko-only in Stylo), and
+/// `CSS.supports('container-type', 'inline-size')` and `@supports` would report support that is
+/// not there, so pages would take the container query branch and get none of its layout.
+const EXCLUDED_EXPERIMENTAL_PREFS: &[&str] = &[
+    "dom_async_clipboard_enabled",
+    "dom_webgpu_enabled",
+    "layout_css_container_queries_enabled",
+];
 
 /// Servo's user agent already names the Firefox release it matches, but carries a `Servo/x.y`
 /// token where Firefox has `Gecko/20100101`; some sites refuse to serve unrecognised browsers.
@@ -1103,6 +1119,21 @@ impl servo::WebViewDelegate for BrowserDelegate {
         }
         self.send_browser_event(event);
     }
+
+    // engine messages: Mercury's lane messages for this tab, routed by `mercury_messages.rs`.
+    fn notify_mercury_message(
+        &self,
+        _web_view: servo::WebView,
+        message: servo::MercuryEmbedderMsg,
+    ) {
+        crate::mercury_messages::handle(Some(self.tab_id), message);
+    }
+
+    // notifications: the notification UI is a later lane's; until then the title is logged, at
+    // debug level, and nothing of the page's other text (body, tag, icons) is.
+    fn show_notification(&self, _web_view: servo::WebView, notification: servo::Notification) {
+        log::debug!("page notification: {}", notification.title);
+    }
 }
 
 // dialogs
@@ -1417,15 +1448,44 @@ mod tests {
         assert_eq!(EXPERIMENTAL_PREFS.len(), 18);
         assert_eq!(
             EXCLUDED_EXPERIMENTAL_PREFS,
-            &["dom_async_clipboard_enabled", "dom_webgpu_enabled"]
+            &[
+                "dom_async_clipboard_enabled",
+                "dom_webgpu_enabled",
+                "layout_css_container_queries_enabled",
+            ]
         );
         let enabled = EXPERIMENTAL_PREFS
             .iter()
             .filter(|name| !EXCLUDED_EXPERIMENTAL_PREFS.contains(name))
             .collect::<Vec<_>>();
-        assert_eq!(enabled.len(), 16);
+        assert_eq!(enabled.len(), 15);
         for name in enabled {
             assert_eq!(preferences.get_value(name), PrefValue::Bool(true), "{name}");
+        }
+    }
+
+    // engine prefs
+    #[test]
+    fn container_queries_stay_off_so_that_pages_do_not_detect_them() {
+        // `@supports` and `CSS.supports` follow this preference, but Servo drops `@container`.
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert!(
+                !preferences.layout_css_container_queries_enabled,
+                "experimental features: {enabled}"
+            );
+        }
+    }
+
+    #[test]
+    fn web_compatibility_preferences_do_not_need_the_experimental_switch() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert!(preferences.dom_composition_event_enabled, "{enabled}");
+            assert!(preferences.dom_adoptedstylesheet_enabled, "{enabled}");
+            assert!(preferences.dom_visual_viewport_enabled, "{enabled}");
         }
     }
 
@@ -1496,6 +1556,91 @@ mod tests {
         for enabled in [true, false] {
             assert!(
                 !preferences_with_experimental_web_features(enabled).dom_webrtc_transceiver_enabled
+            );
+        }
+    }
+
+    // engine prefs
+    #[test]
+    fn the_first_two_waves_preferences_exist_and_stay_off() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+            for name in [
+                "dom_media_source_enabled",
+                "dom_media_capabilities_enabled",
+                "dom_eme_enabled",
+                "dom_picture_in_picture_enabled",
+                "dom_video_frame_callback_enabled",
+                "dom_webcodecs_enabled",
+                "dom_display_capture_enabled",
+                "dom_audio_output_enabled",
+                "dom_audioworklet_enabled",
+                "dom_media_recorder_enabled",
+                "dom_webrtc_peerconnection_enabled",
+                "media_eme_clearkey_enabled",
+                "network_cookie_samesite_lax_default",
+                "dom_web_locks_enabled",
+                // Pinned although Servo's default is already off: `cookieStore` would bypass the
+                // third-party cookie rule and Global Privacy Control.
+                "dom_cookiestore_enabled",
+                "dom_web_animations_enabled",
+                "dom_serviceworker_enabled",
+                "dom_webgpu_enabled",
+                "layout_css_container_queries_enabled",
+                "accessibility_enabled",
+                "expensive_accessibility_test_assertions_enabled",
+                // The media-capture pin stays: the new switch above replaces it later.
+                "dom_webrtc_transceiver_enabled",
+            ] {
+                assert!(
+                    Preferences::exists(name),
+                    "{name} is not a Servo preference"
+                );
+                assert_eq!(
+                    preferences.get_value(name),
+                    PrefValue::Bool(false),
+                    "{name} (experimental features: {enabled})"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mercury_sets_global_privacy_control_and_blocks_audible_autoplay() {
+        // Not behind the experimental switch: both values are the product's.
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert!(preferences.privacy_gpc_enabled, "{enabled}");
+            assert_eq!(preferences.media_autoplay_policy, "block-audible");
+            for name in [
+                "media_autoplay_allow_origins",
+                "media_autoplay_block_origins",
+                "media_webrtc_ip_policy",
+            ] {
+                assert_eq!(
+                    preferences.get_value(name),
+                    PrefValue::Str(String::new()),
+                    "{name}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn mercury_hands_its_stylo_preferences_to_the_engine() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+
+            assert_eq!(
+                preferences.stylo_prefs,
+                "layout.css.nth-child-of.enabled=true"
+            );
+            // Every name is one Stylo has (the engine ignores names it does not know).
+            assert!(servo::prefs::apply_stylo_prefs(&preferences.stylo_prefs).is_empty());
+            assert_eq!(
+                servo::prefs::stylo_bool_pref("layout.css.nth-child-of.enabled"),
+                Some(true)
             );
         }
     }

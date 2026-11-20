@@ -6,6 +6,8 @@ mod document_starts;
 mod download_offers;
 mod downloads;
 mod embedder_controls;
+// engine prefs: the preferences Mercury sets for the engine, in one file.
+mod engine_prefs;
 mod error;
 mod error_pages;
 mod exit_clearing;
@@ -19,6 +21,8 @@ mod history_events;
 mod http_disk_cache;
 mod load_metrics;
 mod media_session;
+// engine messages: routes the engine's Mercury message variants to the lanes that own them.
+mod mercury_messages;
 mod opengl_context;
 // openurl
 mod openurl;
