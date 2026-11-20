@@ -474,6 +474,7 @@ impl EngineState {
             .filter(|tab_id| !tab_ids.contains(tab_id))
         {
             crate::activation::forget_tab(*closed);
+            crate::tab_snapshots::forget_tab(*closed); // tab-snapshots
             crate::page_tabs::forget_tab(*closed);
         }
         self.web_views.retain(|tab_id, _| tab_ids.contains(tab_id));
@@ -537,6 +538,7 @@ impl EngineState {
             queue_leaving_tab(&mut self.controller.borrow_mut(), previous_tab_id);
         }
         if active_tab_changed {
+            crate::tab_snapshots::before_tab_switch(&rendering_context, self.visible_tab_id); // tab-snapshots
             if let Some(previous_tab_id) = self.visible_tab_id
                 && let Some(previous_web_view) = self.web_views.get_mut(&previous_tab_id)
             {
@@ -636,6 +638,7 @@ impl EngineState {
                 window.set_web_view_texture(image);
                 // tabs: the new tab's frame is up
                 self.tab_switch_frame.frame_shown();
+                crate::tab_snapshots::frame_presented(rendering_context, visible_tab_id); // tab-snapshots
             }
             Err(error) => {
                 if self.frame_import_errors.first(&error) {

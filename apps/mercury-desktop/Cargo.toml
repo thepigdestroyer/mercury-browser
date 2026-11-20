@@ -37,6 +37,8 @@ mercury-password-manager = { path = "../../crates/mercury-password-manager" }
 mercury-passwords = { path = "../../crates/mercury-passwords" }
 mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-store = { path = "../../crates/mercury-store" }
+# tab-snapshots lane: small pictures of tabs for the Orbit view (`src/tab_snapshots.rs`).
+mercury-tab-snapshots = { path = "../../crates/mercury-tab-snapshots" }
 mercury-ui = { path = "../../crates/mercury-ui" }
 rusqlite.workspace = true
 serde_json.workspace = true
