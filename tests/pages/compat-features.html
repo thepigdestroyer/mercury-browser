@@ -26,15 +26,16 @@
 <body>
 <!--
   Mercury test page for the engine preferences of K0 (ED1): which web features are on and which stay
-  off. Every check prints one line that starts with PASS or FAIL; two lines start with INFO and only
+  off. Every check prints one line that starts with PASS or FAIL; a few lines start with INFO and only
   print a value. Open it from a test server or file://, for example
     mercury-browser --screenshot out.png --window-size 1000x800 file:///path/to/tests/pages/compat-features.html
   The page must show no FAIL and two coloured samples at the bottom: a green box from a constructable
   style sheet inside a shadow root, and a row of small boxes in which only the third is green
   (:nth-child(2 of .a)). In the screenshot nothing may be a crash page.
   container-type is "not supported" on purpose (layout_css_container_queries_enabled stays off, so that
-  @supports does not report a feature Servo drops). visualViewport is a trial (dom_visual_viewport_enabled):
-  if its numbers are not sane or a run crashes, turn it off in talaria-servo/src/engine_prefs.rs.
+  @supports does not report a feature Servo drops). visualViewport is a trial that is OFF for now
+  (dom_visual_viewport_enabled, in talaria-servo/src/engine_prefs.rs PINNED_OFF): its line only prints
+  the numbers. To try it, move that preference from PINNED_OFF to apply() and look at the numbers.
   cookieStore, RTCPeerConnection, service workers and WebGPU stay hidden until their lanes land.
   navigator.globalPrivacyControl and navigator.locks are information only: the network lane and the
   storage lane add them.
@@ -121,16 +122,11 @@
     return getComputedStyle(items[2]).backgroundColor + " / " + getComputedStyle(items[0]).backgroundColor;
   }, "rgb(0, 160, 0) / rgb(255, 255, 255)");
 
-  // The visual viewport (a trial): an object with finite numbers.
-  check("window.visualViewport has a finite width, height and scale", () => {
+  // The visual viewport (a trial, off for now): information only. With the preference on, the width, height
+  // and scale must be finite and positive and match the window; then turn this line into a check.
+  inform("window.visualViewport (width x height @ scale)", () => {
     const viewport = window.visualViewport;
-    if (typeof viewport !== "object" || viewport === null) return "no visualViewport (" + typeof viewport + ")";
-    const numbers = [viewport.width, viewport.height, viewport.scale];
-    return numbers.every(Number.isFinite) && viewport.width > 0 && viewport.height > 0 && viewport.scale > 0
-      ? "ok" : "width " + viewport.width + ", height " + viewport.height + ", scale " + viewport.scale;
-  }, "ok");
-  inform("visualViewport width x height @ scale", () => {
-    const viewport = window.visualViewport;
+    if (viewport === undefined) return "undefined (the trial is off)";
     return viewport.width + " x " + viewport.height + " @ " + viewport.scale;
   });
 
