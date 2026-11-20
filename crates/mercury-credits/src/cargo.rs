@@ -181,10 +181,14 @@ fn run(options: &Options, subcommand: &str, arguments: &[&str]) -> Result<Vec<u8
         )));
     }
     let mut command = Command::new(&options.cargo);
+    // Plain text whatever the environment says: CARGO_TERM_COLOR=always (both workflows set it)
+    // makes `cargo tree` write its `(*)` marker in colour, and the parser reads lines of names and
+    // versions. The flag wins over the variable and over `.cargo/config.toml`.
     command
         .current_dir(&root)
         .arg(subcommand)
         .arg("--locked")
+        .args(["--color", "never"])
         .arg("--manifest-path")
         .arg(&options.manifest_path)
         .args(arguments);

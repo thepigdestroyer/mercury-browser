@@ -178,7 +178,26 @@ mod with_a_stand_in_cargo {
         let script = scripts.join("cargo");
         std::fs::write(
             &script,
-            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$(dirname \"$0\")/arguments.log\"\ncase \"$1\" in\n  tree) cat \"$(dirname \"$0\")/tree.txt\" ;;\n  metadata) cat \"$(dirname \"$0\")/metadata.json\" ;;\n  *) echo \"unexpected: $*\" >&2; exit 9 ;;\nesac\n",
+            // Like the real cargo, it writes the `(*)` marker of `cargo tree` in colour when
+            // CARGO_TERM_COLOR=always, unless it is given `--color never`. That was the first CI
+            // run's failure: the colour codes made the lines of the tree unreadable to the parser.
+            r#"#!/bin/sh
+printf '%s\n' "$*" >> "$(dirname "$0")/arguments.log"
+colour="${CARGO_TERM_COLOR:-auto}"
+case " $* " in *" --color never "*) colour=never ;; esac
+case "$1" in
+  tree)
+    if [ "$colour" = always ]; then
+      while IFS= read -r line; do
+        printf '%s \033[33m\033[2m(*)\033[39m\033[22m\n' "$line"
+      done < "$(dirname "$0")/tree.txt"
+    else
+      cat "$(dirname "$0")/tree.txt"
+    fi ;;
+  metadata) cat "$(dirname "$0")/metadata.json" ;;
+  *) echo "unexpected: $*" >&2; exit 9 ;;
+esac
+"#,
         )
         .unwrap();
         std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
@@ -230,19 +249,84 @@ mod with_a_stand_in_cargo {
         let manifest = fake.root().join("Cargo.toml");
         assert!(
             log.contains(&format!(
-                "tree --locked --manifest-path {} -p mercury-desktop -e normal,build --target aarch64-apple-darwin --prefix none --format {{p}}",
+                "tree --locked --color never --manifest-path {} -p mercury-desktop -e normal,build --target aarch64-apple-darwin --prefix none --format {{p}}",
                 manifest.display()
             )),
             "{log}"
         );
         assert!(
             log.contains(&format!(
-                "metadata --locked --manifest-path {} --format-version 1",
+                "metadata --locked --color never --manifest-path {} --format-version 1",
                 manifest.display()
             )),
             "{log}"
         );
         std::fs::remove_dir_all(out.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn cargo_is_asked_for_plain_text_even_when_the_environment_asks_for_colour() {
+        // CI sets CARGO_TERM_COLOR=always; cargo then colours the `(*)` of `cargo tree`.
+        let fake = fake_with_crates();
+        let scripts = tempfile::tempdir().unwrap();
+        let cargo = stand_in(&fake, scripts.path());
+        let run = |colour: &str, extra: &[&str]| {
+            binary()
+                .env("CARGO", &cargo)
+                .env("CARGO_TERM_COLOR", colour)
+                .args([
+                    "check",
+                    "--package",
+                    "app",
+                    "--target",
+                    "x86_64-unknown-linux-gnu",
+                ])
+                .args(extra)
+                .arg("--manifest-path")
+                .arg(fake.root().join("Cargo.toml"))
+                .output()
+                .unwrap()
+        };
+        for colour in ["always", "auto", "never"] {
+            let output = run(colour, &[]);
+            assert_eq!(
+                output.status.code(),
+                Some(0),
+                "CARGO_TERM_COLOR={colour}: {}",
+                stderr(&output)
+            );
+        }
+        let output = run("always", &["--runtime-only"]);
+        assert_eq!(output.status.code(), Some(0), "{}", stderr(&output));
+        let log = std::fs::read_to_string(scripts.path().join("arguments.log")).unwrap();
+        assert!(
+            log.contains(" --locked --color never --manifest-path "),
+            "{log}"
+        );
+    }
+
+    #[test]
+    fn the_stand_in_really_colours_the_tree_without_the_flag() {
+        // The test above proves nothing if the stand-in never colours: ask it as the tool used to.
+        let fake = fake_with_crates();
+        let scripts = tempfile::tempdir().unwrap();
+        let cargo = stand_in(&fake, scripts.path());
+        let coloured = std::process::Command::new(&cargo)
+            .env("CARGO_TERM_COLOR", "always")
+            .args(["tree", "--locked", "--prefix", "none"])
+            .output()
+            .unwrap();
+        let text = String::from_utf8_lossy(&coloured.stdout).into_owned();
+        assert!(
+            text.contains("\u{1b}[33m\u{1b}[2m(*)\u{1b}[39m\u{1b}[22m"),
+            "{text:?}"
+        );
+        let plain = std::process::Command::new(&cargo)
+            .env("CARGO_TERM_COLOR", "always")
+            .args(["tree", "--locked", "--color", "never"])
+            .output()
+            .unwrap();
+        assert!(!String::from_utf8_lossy(&plain.stdout).contains('\u{1b}'));
     }
 
     #[test]
