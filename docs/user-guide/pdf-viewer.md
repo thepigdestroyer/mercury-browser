@@ -82,8 +82,10 @@ files, which Mercury clears after a day. A PDF in a window that is run for a scr
 background never opens another app.
 
 If a site marks a PDF as a file to save (not to show), Mercury saves it and does not open it. A PDF
-opened from your own disk (a `file:` address you typed or opened) is read where it is and never
-copied or deleted.
+opened from your own disk (a `file:` address you typed in the address bar, or opened from another
+app while Mercury is running) is read where it is and never copied or deleted. A `file:` address
+given on the command line when Mercury starts is not counted as typed yet, so its PDF is not shown;
+type the address in the address bar instead.
 
 ## The setting
 
