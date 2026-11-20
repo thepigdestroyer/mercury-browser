@@ -33,6 +33,7 @@ mod filter_lists; // blocklists
 mod find;
 mod geolocation;
 mod history_ui;
+mod ime; // txt-1: the IME composition state machine
 mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;

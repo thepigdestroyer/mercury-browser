@@ -8,8 +8,8 @@ use slint::ComponentHandle;
 use slint::language::ColorScheme as SlintColorScheme;
 use slint::winit_030::{EventResult, WinitWindowAccessor, winit};
 use talaria_core::{
-    BrowserCommand, BrowserController, ColorScheme, CompositionState, ImeInput, KeyLocation,
-    KeyState, KeyboardInput, KeyboardModifiers, TabId,
+    BrowserCommand, BrowserController, ColorScheme, KeyLocation, KeyState, KeyboardInput,
+    KeyboardModifiers,
 };
 use winit::event::{ElementState, Ime, WindowEvent};
 use winit::keyboard::{Key, KeyLocation as WinitKeyLocation, ModifiersState, PhysicalKey};
@@ -25,8 +25,10 @@ pub(crate) fn connect_native_keyboard_input(
 ) {
     let weak_window = window.as_weak();
     let mut modifiers = ModifiersState::empty();
-    let mut composition_tab_id: Option<TabId> = None;
     let mut shortcut_keys = ShortcutKeys::default();
+    // txt-1: `ime.rs` holds the composition state and queues commands itself (text from the
+    // system's emoji picker and dictation arrives outside this handler).
+    attach_ime(window, &controller, &web_view_focused);
 
     window
         .window()
@@ -88,7 +90,7 @@ pub(crate) fn connect_native_keyboard_input(
                         let keyboard_input = keyboard_input_from_winit(
                             event,
                             modifiers,
-                            composition_tab_id == Some(active_tab_id),
+                            crate::ime::composing_in(active_tab_id),
                         );
                         controller
                             .borrow_mut()
@@ -98,10 +100,12 @@ pub(crate) fn connect_native_keyboard_input(
                 }
                 // dialogs: a page under a sheet gets no IME input; its composition ends.
                 WindowEvent::Ime(_) if crate::page_requests::sheet_shown(&controller.borrow()) => {
-                    dismiss_composition(&controller, &mut composition_tab_id);
+                    dismiss_composition(&controller);
                 }
-                WindowEvent::Ime(ime) if web_view_focused.get() || composition_tab_id.is_some() => {
-                    queue_ime_input(&controller, &mut composition_tab_id, ime);
+                WindowEvent::Ime(ime)
+                    if web_view_focused.get() || crate::ime::composition_active() =>
+                {
+                    queue_ime_input(&controller, ime);
                     window.window().request_redraw();
                 }
                 WindowEvent::PinchGesture { delta, .. }
@@ -153,7 +157,7 @@ pub(crate) fn connect_native_keyboard_input(
                 WindowEvent::Focused(false) => {
                     // Key-ups that happen while another window has focus never arrive.
                     shortcut_keys.clear();
-                    dismiss_composition(&controller, &mut composition_tab_id);
+                    dismiss_composition(&controller);
                 }
                 _ => {}
             }
@@ -243,75 +247,66 @@ fn key_location(location: WinitKeyLocation) -> KeyLocation {
     }
 }
 
-pub(crate) fn queue_ime_input(
-    controller: &RefCell<BrowserController>,
-    composition_tab_id: &mut Option<TabId>,
-    ime: &Ime,
-) {
-    match ime {
-        Ime::Enabled => {}
-        Ime::Preedit(data, _) => {
-            let tab_id = *composition_tab_id.get_or_insert_with(|| {
-                let tab_id = controller.borrow().active_tab_id();
-                controller.borrow_mut().queue_command_for(
-                    tab_id,
-                    BrowserCommand::ImeInput(ImeInput::Composition {
-                        state: CompositionState::Start,
-                        data: String::new(),
-                    }),
-                );
-                tab_id
-            });
-            controller.borrow_mut().queue_command_for(
-                tab_id,
-                BrowserCommand::ImeInput(ImeInput::Composition {
-                    state: CompositionState::Update,
-                    data: data.clone(),
-                }),
-            );
-        }
-        Ime::Commit(data) => {
-            let (tab_id, needs_start) = match composition_tab_id.take() {
-                Some(tab_id) => (tab_id, false),
-                None => (controller.borrow().active_tab_id(), true),
-            };
-            if needs_start {
-                controller.borrow_mut().queue_command_for(
-                    tab_id,
-                    BrowserCommand::ImeInput(ImeInput::Composition {
-                        state: CompositionState::Start,
-                        data: String::new(),
-                    }),
-                );
-            }
-            controller.borrow_mut().queue_command_for(
-                tab_id,
-                BrowserCommand::ImeInput(ImeInput::Composition {
-                    state: CompositionState::End,
-                    data: data.clone(),
-                }),
-            );
-        }
-        Ime::Disabled => {
-            dismiss_composition(controller, composition_tab_id);
-        }
-    }
+/// winit's input-method events for the page: the state machine in `ime.rs` turns them into
+/// commands for the tab that started the composition. (Kept here as the entry point the key and
+/// window handlers have always used.)
+pub(crate) fn queue_ime_input(controller: &RefCell<BrowserController>, ime: &Ime) {
+    crate::ime::handle(
+        controller,
+        match ime {
+            Ime::Enabled => crate::ime::Input::Enabled,
+            Ime::Preedit(text, cursor) => crate::ime::Input::Preedit {
+                text: text.clone(),
+                cursor: *cursor,
+            },
+            Ime::Commit(text) => crate::ime::Input::Commit(text.clone()),
+            Ime::Disabled => crate::ime::Input::Disabled,
+        },
+    );
 }
 
-pub(crate) fn dismiss_composition(
-    controller: &RefCell<BrowserController>,
-    composition_tab_id: &mut Option<TabId>,
+/// Ends the composition without a result (a sheet is shown, the focus left): the page's
+/// composition is dismissed.
+pub(crate) fn dismiss_composition(controller: &RefCell<BrowserController>) {
+    crate::ime::dismiss_composition(controller);
+}
+
+/// Tells `ime.rs` what it needs besides a controller per call: a redraw, and whether the page
+/// may take text from the system now (it has the keyboard, no sheet covers it, and no field of
+/// the window itself has the text focus: the address bar takes an emoji for itself).
+fn attach_ime(
+    window: &MainWindow,
+    controller: &Rc<RefCell<BrowserController>>,
+    web_view_focused: &Rc<Cell<bool>>,
 ) {
-    if let Some(tab_id) = composition_tab_id.take() {
-        controller
-            .borrow_mut()
-            .queue_command_for(tab_id, BrowserCommand::ImeInput(ImeInput::Dismissed));
-    }
+    let redraw_window = window.as_weak();
+    let accepts_window = window.as_weak();
+    let accepts_controller = Rc::downgrade(controller);
+    let web_view_focused = Rc::clone(web_view_focused);
+    crate::ime::attach(
+        controller,
+        move || {
+            if let Some(window) = redraw_window.upgrade() {
+                window.window().request_redraw();
+            }
+        },
+        move || {
+            web_view_focused.get()
+                && accepts_window
+                    .upgrade()
+                    .is_some_and(|window| !window.get_text_input_focused())
+                && accepts_controller.upgrade().is_some_and(|controller| {
+                    controller
+                        .try_borrow()
+                        .is_ok_and(|controller| !crate::page_requests::sheet_shown(&controller))
+                })
+        },
+    );
 }
 
 #[cfg(test)]
 mod tests {
-    use talaria_core::BrowserEvent;
+    use talaria_core::{BrowserEvent, ImeClause, ImeClauseKind, ImeInput, TabId, Utf16Range};
 
     use super::*;
 
@@ -426,66 +421,55 @@ mod tests {
         assert_eq!(key_location(WinitKeyLocation::Numpad), KeyLocation::Numpad);
     }
 
+    // txt-1: the entry points hand winit's events to `ime.rs`; the rules are tested there.
     #[test]
     fn ime_preedit_and_commit_form_one_composition_sequence() {
+        let _guard = crate::ime::test_guard();
         let controller = RefCell::new(BrowserController::default());
         let tab_id = controller.borrow().active_tab_id();
         mark_engine_ready(&controller, tab_id);
-        let mut composition_tab_id = None;
 
-        queue_ime_input(
-            &controller,
-            &mut composition_tab_id,
-            &Ime::Preedit("aç".to_owned(), Some((2, 2))),
-        );
-        queue_ime_input(
-            &controller,
-            &mut composition_tab_id,
-            &Ime::Commit("ação".to_owned()),
-        );
+        // "aç" is 3 bytes in UTF-8 and 2 units in UTF-16: the cursor at its end.
+        queue_ime_input(&controller, &Ime::Preedit("aç".to_owned(), Some((3, 3))));
+        assert!(crate::ime::composition_active());
+        assert!(crate::ime::composing_in(tab_id));
+        // winit sends an empty preedit right before the commit.
+        queue_ime_input(&controller, &Ime::Preedit(String::new(), None));
+        queue_ime_input(&controller, &Ime::Commit("ação".to_owned()));
 
         let commands =
             std::iter::from_fn(|| controller.borrow_mut().next_command()).collect::<Vec<_>>();
-        assert_eq!(commands.len(), 3);
+        assert_eq!(commands.len(), 2);
         assert!(commands.iter().all(|command| command.tab_id() == tab_id));
         assert_eq!(
             commands[0].command(),
-            &BrowserCommand::ImeInput(ImeInput::Composition {
-                state: CompositionState::Start,
-                data: String::new(),
+            &BrowserCommand::ImeInput(ImeInput::SetMarkedText {
+                text: "aç".to_owned(),
+                selected: Some(Utf16Range::collapsed(2)),
+                clauses: vec![ImeClause {
+                    range: Utf16Range::new(0, 2),
+                    kind: ImeClauseKind::Raw,
+                }],
+                replacement: None,
             })
         );
         assert_eq!(
             commands[1].command(),
-            &BrowserCommand::ImeInput(ImeInput::Composition {
-                state: CompositionState::Update,
-                data: "aç".to_owned(),
-            })
+            &BrowserCommand::ImeInput(ImeInput::Commit("ação".to_owned()))
         );
-        assert_eq!(
-            commands[2].command(),
-            &BrowserCommand::ImeInput(ImeInput::Composition {
-                state: CompositionState::End,
-                data: "ação".to_owned(),
-            })
-        );
-        assert_eq!(composition_tab_id, None);
+        assert!(!crate::ime::composition_active());
     }
 
     #[test]
     fn ime_dismissal_stays_with_the_tab_that_started_composition() {
+        let _guard = crate::ime::test_guard();
         let controller = RefCell::new(BrowserController::default());
         let composing_tab_id = controller.borrow().active_tab_id();
         mark_engine_ready(&controller, composing_tab_id);
-        let mut composition_tab_id = None;
-        queue_ime_input(
-            &controller,
-            &mut composition_tab_id,
-            &Ime::Preedit("her".to_owned(), None),
-        );
+        queue_ime_input(&controller, &Ime::Preedit("her".to_owned(), None));
         controller.borrow_mut().open_tab();
 
-        queue_ime_input(&controller, &mut composition_tab_id, &Ime::Disabled);
+        queue_ime_input(&controller, &Ime::Disabled);
 
         let commands =
             std::iter::from_fn(|| controller.borrow_mut().next_command()).collect::<Vec<_>>();
@@ -498,7 +482,47 @@ mod tests {
             commands.last().map(|command| command.command()),
             Some(&BrowserCommand::ImeInput(ImeInput::Dismissed))
         );
-        assert_eq!(composition_tab_id, None);
+        assert!(!crate::ime::composition_active());
+    }
+
+    #[test]
+    fn an_empty_preedit_that_nothing_follows_is_a_cancel_at_the_end_of_the_turn() {
+        let _guard = crate::ime::test_guard();
+        let controller = RefCell::new(BrowserController::default());
+        let tab_id = controller.borrow().active_tab_id();
+        mark_engine_ready(&controller, tab_id);
+        queue_ime_input(&controller, &Ime::Preedit("ni".to_owned(), Some((2, 2))));
+        queue_ime_input(&controller, &Ime::Preedit(String::new(), None));
+
+        // What the zero-delay timer runs.
+        crate::ime::flush(&controller);
+
+        let commands =
+            std::iter::from_fn(|| controller.borrow_mut().next_command()).collect::<Vec<_>>();
+        assert_eq!(
+            commands.last().map(|command| command.command()),
+            Some(&BrowserCommand::ImeInput(ImeInput::Commit(String::new())))
+        );
+        assert!(!crate::ime::composition_active());
+    }
+
+    #[test]
+    fn a_sheet_over_the_page_dismisses_the_composition() {
+        let _guard = crate::ime::test_guard();
+        let controller = RefCell::new(BrowserController::default());
+        let tab_id = controller.borrow().active_tab_id();
+        mark_engine_ready(&controller, tab_id);
+        queue_ime_input(&controller, &Ime::Preedit("ni".to_owned(), Some((2, 2))));
+
+        dismiss_composition(&controller);
+
+        let commands =
+            std::iter::from_fn(|| controller.borrow_mut().next_command()).collect::<Vec<_>>();
+        assert_eq!(
+            commands.last().map(|command| command.command()),
+            Some(&BrowserCommand::ImeInput(ImeInput::Dismissed))
+        );
+        assert!(!crate::ime::composition_active());
     }
 
     // downloads-ui lane

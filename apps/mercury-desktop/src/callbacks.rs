@@ -208,6 +208,10 @@ pub(crate) fn connect_ui_callbacks(
     window.on_web_view_focus_changed(move |focused| {
         let _slint = crate::callback_scope::InSlintCallback::enter();
         web_view_focused.set(focused);
+        if !focused {
+            // txt-1: the page no longer has the keyboard; its composition ends before it is told.
+            crate::ime::dismiss_composition(&focus_controller);
+        }
         focus_controller
             .borrow_mut()
             .queue_command(BrowserCommand::FocusChanged { focused });
