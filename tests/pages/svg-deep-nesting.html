@@ -31,8 +31,9 @@
     - 800 nested <svg>: error (more than usvg's stack can take; the guard refuses it before usvg runs)
     - an entity that expands to 600 levels, in a file that is 2 deep: error; one that expands to 400: load
     - the <use> document above: load (it needs the guard's large stack; a browser without it crashes here)
-    - an image with no size of its own that holds a 600-level SVG as a data: URL: error (the inner image is left
-      out and there is nothing to size the outer one by); with a 20-level inner image: load, 40 pixels wide
+    - an image with no size of its own that holds a 600-level SVG as a data: URL: load, but not 40 pixels wide (the
+      inner image is left out and draws nothing, so it does not size the outer one); with a 20-level inner image:
+      load, 40 pixels wide
   At the end "still alive". A crash page, or no "still alive" line, is a failure.
   Open it with ?only=<name> or ?skip=<name> (names are the first entry of each case in CASES below) to run
   less of it, for example ?only=use-chain to see whether a build survives the <use> document alone.
@@ -94,8 +95,9 @@
 
   // An outer image, 2 levels deep, that draws the SVG `inner` through a data: URL. The outer <svg> has no width,
   // height or viewBox, so usvg takes its size from what it draws: when the inner image is read, the outer one is
-  // 40 x 40 and loads; when the inner image is left out nothing is left to measure and the outer one is refused.
-  // (A canvas cannot tell the two apart: Servo 0.8 reads every SVG image as transparent through drawImage.)
+  // 40 x 40 (naturalWidth 40); when the inner image is left out the outer one is still a valid, empty image, but
+  // of another size. (A canvas cannot tell the two apart: Servo 0.8 reads every SVG image as transparent through
+  // drawImage.)
   function withDataImage(inner) {
     return "<svg " + NS + '><image x="0" y="0" width="40" height="40" xlink:href="data:image/svg+xml;base64,' +
            btoa(inner) + '"/></svg>';
@@ -116,8 +118,9 @@
     ["entity-400", "entity that expands to 400 levels", () => entityOfDepth(400), "load", "an entity under the limit still draws"],
     ["use-chain", "4 groups of 200 nested <svg> joined by <use>", () => useChain(4, 200), "load",
      "202 levels in the file, about 800 for usvg: needs the large stack; a crash here is the bug"],
-    ["data-600", "data: image of 600 levels inside an image with no size", () => withDataImage(nestedGroups(600)), "error",
-     "the inner image is left out, so the outer one has nothing to take its size from; if it were read, this would load"],
+    ["data-600", "data: image of 600 levels inside an image with no size", () => withDataImage(nestedGroups(600)), "load",
+     "the outer image loads empty: the inner one is left out, so it does not give the outer one its 40 pixels",
+     (img) => img.naturalWidth !== 40 || "naturalWidth 40: the inner image was read"],
     ["data-20", "data: image of 20 levels inside an image with no size", () => withDataImage(nestedGroups(20)), "load",
      "a shallow nested image is read, and gives the outer one its size", (img) => img.naturalWidth === 40 ||
        "naturalWidth " + img.naturalWidth + ", expected 40"],
