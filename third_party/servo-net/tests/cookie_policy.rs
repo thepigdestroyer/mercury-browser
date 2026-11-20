@@ -911,6 +911,81 @@ fn a_none_cookie_needs_secure_and_gets_it_over_https() {
 }
 
 // ---------------------------------------------------------------------------------------------------
+// Global Privacy Control (EC25).
+// ---------------------------------------------------------------------------------------------------
+
+#[test]
+fn a_request_carries_sec_gpc_when_the_policy_says_so_and_not_otherwise() {
+    let probe = Probe::new();
+    let mut on = context_with(|policy| policy.set_global_privacy_control(true));
+    run(&mut on, in_page(&probe.localhost("/on"), PAGE_LOCALHOST));
+    assert_eq!(probe.only("/on").sec_gpc.as_deref(), Some("1"));
+
+    let mut off = new_fetch_context(None, None);
+    run(&mut off, in_page(&probe.localhost("/off"), PAGE_LOCALHOST));
+    assert_eq!(probe.only("/off").sec_gpc, None);
+
+    // Switched off after it was on: the same context stops sending it.
+    on.state.net_policy.set_global_privacy_control(false);
+    run(
+        &mut on,
+        in_page(&probe.localhost("/stopped"), PAGE_LOCALHOST),
+    );
+    assert_eq!(probe.only("/stopped").sec_gpc, None);
+}
+
+#[test]
+fn every_hop_of_a_redirect_carries_sec_gpc() {
+    let probe = Probe::new();
+    let mut context = context_with(|policy| policy.set_global_privacy_control(true));
+    let second = probe.loopback("/second");
+    run(
+        &mut context,
+        in_page(
+            &probe.localhost(&redirect("/first", &second, &[])),
+            PAGE_LOCALHOST,
+        ),
+    );
+    assert_eq!(probe.only("/first").sec_gpc.as_deref(), Some("1"));
+    assert_eq!(probe.only("/second").sec_gpc.as_deref(), Some("1"));
+}
+
+#[test]
+fn a_cors_preflight_and_the_request_it_precedes_carry_sec_gpc() {
+    let probe = Probe::new();
+    let mut context = context_with(|policy| policy.set_global_privacy_control(true));
+
+    // A page on localhost writes to 127.0.0.1 with PUT: a cross-origin request that needs a preflight.
+    let origin = origin_of(PAGE_LOCALHOST);
+    let put = RequestBuilder::new(
+        Some(TEST_WEBVIEW_ID),
+        claim(&probe.loopback("/put")),
+        Referrer::NoReferrer,
+    )
+    .method(Method::PUT)
+    .mode(RequestMode::CorsMode)
+    .use_cors_preflight(true)
+    .unsafe_request(true)
+    .origin(origin.clone())
+    .client(client(origin, false, Some(site_of(PAGE_LOCALHOST))))
+    .pipeline_id(Some(TEST_PIPELINE_ID))
+    .policy_container(Default::default());
+    run(&mut context, put);
+
+    let seen = probe.requests("/put");
+    let preflight = seen
+        .iter()
+        .find(|seen| seen.method == Method::OPTIONS)
+        .unwrap_or_else(|| panic!("a preflight was sent, saw {seen:?}"));
+    assert_eq!(preflight.sec_gpc.as_deref(), Some("1"));
+    let put = seen
+        .iter()
+        .find(|seen| seen.method == Method::PUT)
+        .unwrap_or_else(|| panic!("the PUT was sent, saw {seen:?}"));
+    assert_eq!(put.sec_gpc.as_deref(), Some("1"));
+}
+
+// ---------------------------------------------------------------------------------------------------
 // The messages of the resource thread: `document.cookie` and `cookieStore`.
 //
 // These go through a real resource thread, which takes the process-wide policy (`NetPolicy::process()`), so

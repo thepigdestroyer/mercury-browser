@@ -1563,6 +1563,14 @@ async fn http_network_or_cache_fetch(
             .typed_insert::<UserAgent>(context.user_agent.parse().unwrap());
     }
 
+    // Mercury: Global Privacy Control <https://privacycg.github.io/gpc-spec/> (EC25). Every request that gets here
+    // carries it, including a preflight and every redirect hop, when the policy says so.
+    if context.state.net_policy.global_privacy_control() {
+        http_request
+            .headers
+            .insert("Sec-GPC", HeaderValue::from_static("1"));
+    }
+
     // Steps 8.16 to 8.18
     append_cache_data_to_headers(http_request);
 
