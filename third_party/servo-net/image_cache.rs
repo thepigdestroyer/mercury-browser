@@ -86,17 +86,10 @@ fn parse_svg_document_in_memory(
     bytes: &[u8],
     usvg_options: Arc<usvg::Options>,
 ) -> Result<usvg::Tree, &'static str> {
-    // Mercury: refuse a document nested deeper than 500 elements before usvg walks it, one stack frame per
-    // level (servo#49835 does this with `usvg::Options::max_depth`, which needs usvg 0.50; decision D8).
-    // For an SVGZ file this also unpacks it, and usvg reads the unpacked bytes.
-    let bytes = crate::mercury_svg::guard(bytes).inspect_err(|error| {
-        warn!("Refusing an SVG image: {error}");
-    })?;
-    usvg::Tree::from_data(&bytes, &usvg_options)
-        .inspect_err(|error| {
-            warn!("Error when parsing SVG data: {error}");
-        })
-        .map_err(|_| "Not a valid SVG document")
+    // Mercury: parse the document as `usvg::Tree::from_data` does, but refuse one nested deeper than 500
+    // elements (servo#49835 does this with `usvg::Options::max_depth`, which needs usvg 0.50; decision D8),
+    // on a thread with a large stack. It logs why it refuses a document.
+    crate::mercury_svg::parse_tree(bytes, &usvg_options)
 }
 
 fn decode_bytes_sync(
@@ -851,7 +844,8 @@ impl ImageCacheFactory for ImageCacheFactoryImpl {
 
         let opt = usvg::Options {
             image_href_resolver: usvg::ImageHrefResolver {
-                resolve_data: usvg::ImageHrefResolver::default_data_resolver(),
+                // Mercury: usvg's resolver, with the nesting limits for an SVG inside an SVG (decision D8).
+                resolve_data: crate::mercury_svg::data_resolver(),
                 resolve_string: image_string_href_resolver,
             },
             font_resolver: usvg_font_resolver,

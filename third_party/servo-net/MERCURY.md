@@ -44,24 +44,46 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
 
 ### 3. SVG nesting guard (decision D8) — `image_cache.rs`, `lib.rs`, new `mercury_svg.rs`
 
-- **What:** Mercury's replacement for servo/servo#49835, which sets `usvg::Options::max_depth` (it exists from usvg 0.50;
-  the tree has 0.48.1, and moving resvg also touches the non-vendored `servo-malloc-size-of`).
-  `parse_svg_document_in_memory` (0.8.0 line about 85) calls `mercury_svg::guard(bytes)` before `usvg::Tree::from_data`.
-  `guard` unpacks gzip (SVGZ) with `usvg::decompress_svgz` so compression is no way round it, scans the XML in one pass
-  without recursion, and returns `Err("SVG is nested too deeply")` for a document nested deeper than `MAX_SVG_DEPTH` = 500
-  elements (upstream's constant). Comments, CDATA, processing instructions and DOCTYPE (with its internal subset) are
-  skipped, `<` and `>` in quoted attribute values are text, and a self-closing element counts as a level that does not
-  deepen what follows. Non-XML and cut-off input returns "not too deep" and is left to usvg. Known limit: entities declared
-  in a DOCTYPE can expand to elements, which the scan does not follow; roxmltree limits entity expansion to 10 levels, so
-  that adds at most 10.
-- **Why:** usvg walks the tree with one stack frame per level, so a tiny image nested 100,000 deep (an `<img>` from a Blob
-  URL) can overflow the decoder thread's stack and crash the browser.
-- **Tested by:** the same scratch crate (19 tests in `mercury_svg.rs`: 499 and 500 deep ok, 501
-  and 502 refused, 100,000 deep refused with and without close tags, wide documents, self-closing edge cases, comments,
-  CDATA, PIs, DOCTYPE with subset, quoted brackets, namespaces, non-XML and cut-off input, svgz) and the page
-  `tests/pages/svg-deep-nesting.html`.
+- **What:** Mercury's replacement for servo/servo#49835, which sets `usvg::Options::max_depth` to 500 (an option that exists from
+  usvg 0.50; the tree has 0.48.1, and moving resvg also touches the non-vendored `servo-malloc-size-of`). Three parts:
+  1. `parse_svg_document_in_memory` (0.8.0 line about 85) calls `mercury_svg::parse_tree(bytes, &usvg_options)` instead of
+     `usvg::Tree::from_data`. `parse_tree` does what `from_data` does (gunzip SVGZ, UTF-8, roxmltree with `allow_dtd`), counts
+     the nesting of the elements **on the parsed document** (so entities declared in a `<!DOCTYPE>` that expand to elements are
+     counted; one pass over the nodes with a stack of the open elements, no recursion, stops at the first depth over the limit),
+     refuses more than `MAX_SVG_DEPTH` = 500 (upstream's constant) with `Err("SVG is nested too deeply")`, and hands the parsed
+     document to `usvg::Tree::from_xmltree`. Not XML, not UTF-8 and bad gzip come back as `Err("Not a valid SVG document")`.
+  2. `ImageCacheFactoryImpl::create` sets `resolve_data: mercury_svg::data_resolver()`, usvg's own resolver with the same count
+     applied to an SVG inside an SVG (`<image href="data:image/svg+xml;...">`, which usvg parses by itself, with the same
+     functions and on the same stack). The documents being converted at once on a thread (a thread-local chain) may add up to
+     500 levels and be at most `MAX_NESTED_DOCUMENTS` = 4; a nested image over budget is left out and the outer one loads.
+  3. `parse_tree` runs on a scoped thread of its own with a 32 MiB stack (`PARSE_STACK_BYTES`; if the thread cannot be started it
+     parses on the calling thread and logs it). This is what makes the limit hold against `<use>`: usvg's recursion depth is the
+     depth of the tree **after** `<use>` expansion (up to its own limit of 1024), not the depth in the file.
+- **What was measured (usvg 0.48.1, a 2 MiB thread, as a rayon worker's, release build; probe and numbers in
+  `.superpowers/sdd/k0-engine-base-logs/svg-probe-*.txt`):** usvg refuses more than 1024 levels by itself (`NodesLimitReached`,
+  initial depth 0), so the first version's 100,000-level test documents never reached the converter; the crash is in the range
+  501 to 1024. Nested `<svg>` elements overflow the stack from about 700 levels (650 passes, 700 aborts; 2 to 3 MiB at 1024);
+  `g`, `a`, `switch`, opacity, transform, clip path, mask and filter chains pass 1024 levels in 2 MiB. Four groups of 200 nested
+  `<svg>` elements, each ending in a `<use>` of the previous group, are 202 levels in the file and abort a 2 MiB thread
+  (about 800 for usvg), which is why a byte or XML depth count alone cannot be the whole fix. `resvg::render` needs 512 KiB at
+  1024 levels.
+- **The first version's flaws, fixed here:** it lexed the bytes and skipped the whole DOCTYPE, claiming an entity "adds at most
+  10 levels" (roxmltree's 10 limits how deep entity *references* nest, not the markup inside one entity value, which it parses
+  as elements); it looked only at the top-level bytes, so a nested `data:` SVG was unguarded; and its tests and page used
+  100,000 levels, which usvg rejects without the guard.
+- **Tested by:** 20 tests in `mercury_svg.rs` (boundary 499/500/501 for `g` and for nested `svg`, the 600 to 1024 range that usvg
+  alone accepts and the guard refuses, 100,000 levels on a 2 MiB stack, entities (600 deep, 400 twice, five nested of 120),
+  SVGZ, nested data images by `image/svg+xml`, `text/plain` and gzip, the shared budget (299 + 300 refused, 100 + 100 and 249 + 250
+  allowed), the document limit, the chain cleaned after every parse, raster data untouched, and the `<use>` document
+  above, which aborts the test process on a 2 MiB stack unless the large stack is used). They run in a scratch crate that
+  includes the file by `#[path]` (cargo cannot test `servo-net` itself, see `docs/developer-guide/vendored-patches.md`); the
+  three mutants (small stack, plain default resolver, no depth count) were run and fail. And the page
+  `tests/pages/svg-deep-nesting.html` (600 `g`, 800 nested `svg`, an entity, a nested `data:` image and the `<use>` document,
+  none of which usvg alone refuses).
 - **Drop when:** the Servo bump that takes resvg 0.50: set `max_depth: 500` where `usvg::Options` is built in
-  `impl ImageCacheFactory for ImageCacheFactoryImpl`, as upstream does, and delete `mercury_svg.rs` and the call.
+  `impl ImageCacheFactory for ImageCacheFactoryImpl`, as upstream does, and delete `mercury_svg.rs` and the two calls
+  (keep the large-stack thread only if usvg 0.50's `max_depth` of 500 still overflows 2 MiB on nested `<svg>`, which it
+  should not: 500 levels pass in 2 MiB).
 
 ## Removing this directory
 
