@@ -10,6 +10,8 @@
 
 mod accessibility;
 mod container_timing_record;
+// Mercury: new module (lane txt-1, EB7), typed highlight ranges for text runs.
+mod highlights;
 mod largest_contentful_paint_candidate;
 mod layout_damage;
 mod layout_dom;
@@ -36,6 +38,11 @@ pub use container_timing_record::ContainerTimingRecord;
 use embedder_traits::{Cursor, ScriptToEmbedderChan, Theme, UntrustedNodeAddress, ViewportDetails};
 use euclid::{Point2D, Rect};
 use fonts::{FontContext, WebFontDocumentContext, WebFontSetDifference};
+// Mercury: new module (lane txt-1, EB7), typed highlight ranges for text runs.
+pub use highlights::{
+    Decoration, DecorationSet, HighlightKind, Segment, TextHighlight, TextHighlights,
+    resolve_segments,
+};
 pub use largest_contentful_paint_candidate::LCPCandidate;
 pub use layout_damage::LayoutDamage;
 pub use layout_dom::{
@@ -660,6 +667,8 @@ bitflags! {
 }
 
 malloc_size_of_is_0!(RestyleReason);
+// Mercury: lane txt-1 (EB7). Plain data without heap memory of its own.
+malloc_size_of_is_0!(HighlightKind, TextHighlight);
 
 impl RestyleReason {
     pub fn needs_restyle(&self) -> bool {
