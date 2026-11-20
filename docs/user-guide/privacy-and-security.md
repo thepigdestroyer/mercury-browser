@@ -70,6 +70,8 @@ With **Settings → Privacy and security → Load pages over HTTPS only** on, Me
 - If you choose **Continue** after Mercury blocked a form that was being sent, the page is opened again with a plain request: the form's data is not sent a second time.
 - A page that a link opened in a new tab may lose its connection to the page that opened it when it is upgraded.
 
+Apart from that setting, and whether or not it is on, Mercury opens over HTTPS the sites that asked browsers in advance to be opened only that way. The list of them (the HSTS preload list) comes from the Chromium project and is updated before each Mercury release. It applies to an `http://` address you type or follow, to a redirect to one, and to the images, scripts and frames a page loads from such a site. If the certificate of such a site is not valid, Mercury does not let you continue past the error (see [Certificate errors](#certificate-errors)).
+
 ### Certificate errors
 
 When a site's certificate is not valid, Mercury shows an error page instead of the site. Under **Details**, a **Continue anyway** button is offered only for your own computer and the local network (`localhost`, private addresses, and names such as `printer.local`), and only for a page of its own, not a frame inside another page. For every other site there is no way past the error. Mercury also refuses it for a site that has told browsers to use only secure connections (HSTS), whatever its name.

@@ -4,7 +4,10 @@
 //! Mercury's resource reader: Servo reads its error pages through it, and Mercury serves its
 //! own (`mercury_site_security::error_pages`). Every other resource comes from Servo's files
 //! (`servo-default-resources`, patched not to register a reader of its own; see
-//! `third_party/servo-default-resources/MERCURY.md`).
+//! `third_party/servo-default-resources/MERCURY.md`), except the HSTS preload list, which is
+//! Mercury's own (`resources/hsts_preload.fstmap`, compiled in, refreshed with
+//! `make hsts-preload-refresh`; the vendored crate's copy stays as published because the patch
+//! tool refuses binary files).
 //!
 //! The error pages carry a per-run secret, made by the browser process at start-up and handed
 //! to the content processes through the environment (`record_error_page_secret`): pages are
@@ -25,6 +28,11 @@ const SECRET_VARIABLE: &str = "MERCURY_ERROR_PAGE_SECRET";
 /// as if the user had pressed "Continue". Read by the browser process, in automated runs only.
 const PROCEED_VARIABLE: &str = "MERCURY_TEST_PROCEED_ON_CERTIFICATE_ERROR";
 
+/// The HSTS preload list (an `fst` map from host name to `2 * rank + include_subdomains`), with
+/// the manifest beside it (`hsts_preload.manifest.json`) saying where it came from and when.
+/// The `hsts-preload` tool in `crates/mercury-devtools` writes both.
+const HSTS_PRELOAD_LIST: &[u8] = include_bytes!("../resources/hsts_preload.fstmap");
+
 struct MercuryResources;
 
 static MERCURY_RESOURCES: MercuryResources = MercuryResources;
@@ -33,6 +41,9 @@ servo::submit_resource_reader!(&MERCURY_RESOURCES);
 
 impl ResourceReaderMethods for MercuryResources {
     fn read(&self, resource: Resource) -> Vec<u8> {
+        if matches!(resource, Resource::HstsPreloadList) {
+            return HSTS_PRELOAD_LIST.to_vec();
+        }
         mercury_resource(&resource)
             .map(String::into_bytes)
             .unwrap_or_else(|| DefaultResourceReader.read(resource))
@@ -142,6 +153,23 @@ mod tests {
         );
         assert!(!MercuryResources.read(Resource::HstsPreloadList).is_empty());
         assert!(!MercuryResources.read(Resource::BrokenImageIcon).is_empty());
+    }
+
+    #[test]
+    fn mercury_serves_its_own_hsts_preload_list() {
+        let list = MercuryResources.read(Resource::HstsPreloadList);
+        // `assert!` rather than `assert_eq!`: a failure must not print 1.9 MB of bytes.
+        assert!(list == HSTS_PRELOAD_LIST, "not the compiled-in list");
+        // The header of an `fst` file: format version 3, as a little-endian u64.
+        assert_eq!(list[..8], [3, 0, 0, 0, 0, 0, 0, 0]);
+        assert!(list.len() > 1_000_000, "{} bytes", list.len());
+    }
+
+    #[test]
+    fn servos_reader_serves_the_hsts_preload_list() {
+        // The registered reader is Mercury's, so this is what the network stack loads.
+        let list = servo::resources::read_bytes(Resource::HstsPreloadList);
+        assert!(list == HSTS_PRELOAD_LIST, "not the compiled-in list");
     }
 
     #[test]

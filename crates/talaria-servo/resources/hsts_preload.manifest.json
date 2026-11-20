@@ -1,0 +1,16 @@
+{
+  "entries": 166958,
+  "format": "fst-map-v3; key = host name (lower-case ASCII); value = 2 * rank + include_subdomains",
+  "include_subdomains": 166708,
+  "output_sha256": "b94818a7e0c3515f9fd6a50af51e32019cbb50ee1015e1e56471fb3b06d72c42",
+  "source": {
+    "force_https": null,
+    "input_sha256": null,
+    "name": "servo-default-resources 0.8.0 (Servo commit 4e136d8ef31b7c4748fbfac606ca463f3efd7537, components/default-resources/resources/hsts_preload.fstmap, generated from Chromium's transport_security_state_static.json; Chromium revision and date not recorded)",
+    "objects": null,
+    "ref": null,
+    "retrieved": null,
+    "url": null
+  },
+  "tool": "none: copied from servo-default-resources 0.8.0"
+}

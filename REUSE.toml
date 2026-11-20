@@ -180,3 +180,14 @@ path = [
 ]
 SPDX-FileCopyrightText = "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)"
 SPDX-License-Identifier = "MPL-2.0"
+
+# The HSTS preload list: the host names of Chromium's net/http/transport_security_state_static.json
+# (BSD-3-Clause), compiled into the executable, and the manifest that records where the data came
+# from (see THIRD-PARTY-NOTICES.md, "Bundled data").
+[[annotations]]
+path = [
+  "crates/talaria-servo/resources/hsts_preload.fstmap",
+  "crates/talaria-servo/resources/hsts_preload.manifest.json",
+]
+SPDX-FileCopyrightText = "The Chromium Authors"
+SPDX-License-Identifier = "BSD-3-Clause"
