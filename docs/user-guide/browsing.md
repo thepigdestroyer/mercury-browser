@@ -62,7 +62,7 @@ Some items are greyed out:
 - **Reopen Closed Tab** until you have closed a tab, and **Restore Previous Session** unless the last run's tabs are still waiting to be restored.
 - **Undo**, **Redo** and **Select All** while the page has the keyboard: Servo offers only cut, copy and paste to Mercury.
 
-**About Mercury Browser** shows the version, the engine and media versions, the copyright and licence, and three links: **Licence**, **Third-party notices** (the page packaged with the app, which lists the licence text and copyright of every library built into it and works offline; a build run straight from the source tree has none and opens the notices on GitHub instead) and **Source code** (the repository, where the source of the MPL-2.0 parts is).
+**About Mercury Browser** shows the version, the engine and media versions, the copyright and licence, and three links: **Licence**, **Third-party notices** (the page packaged with the app, which lists the licence text and copyright of every library built into it and works offline; a build run straight from the source tree has none and opens the notices on GitHub instead) and **Source code** (the repository at the tag of your version, where the source of the MPL-2.0 parts is; a build of a version that is not released yet has no tag, and GitHub says the page is not found).
 
 ## The browser menu
 
