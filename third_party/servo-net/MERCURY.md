@@ -149,7 +149,10 @@ workspace root does not work (cargo refuses a package that is not a workspace me
 lists `third_party/servo-net` under `exclude`, as it does `third_party/gaol`, so cargo accepts the crate's own
 manifest, and `make test-servo-net` runs the crate's whole `main` target on its own `Cargo.lock`, against the
 published sibling crates (the same code as Mercury's copies, because only `servo-net` changes; not
-Mercury's vendored copies and not Mercury's `Cargo.lock`). `make test` runs it, so do the full gates, and the
+Mercury's vendored copies and not Mercury's `Cargo.lock`: of the crates it links against, `servo-net` is the only one
+Mercury changes in a way that matters to it; the others are byte-identical to the published ones, except
+`servo-default-resources`, which Mercury patches only to stop it registering the default resource reader, and
+the tests need that reader registered). `make test` runs it, so do the full gates, and the
 CI job "Vendored servo-net tests" does. Two tests fail on the unpatched crate as well and are skipped by
 name: `fetch::test_file` (it reads `../../components/net/tests/test.css`, which exists only in Servo's
 repository) and `filemanager_thread::test_filemanager` (it panics on the process-wide async runtime when it
