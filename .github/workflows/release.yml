@@ -755,29 +755,20 @@ jobs:
           path: ${{ runner.temp }}/credits
 
       - name: Verify the credits page against the build's digest
-        # Nothing here opens the page: it is only checked and copied. bundle.sh
-        # checks it again (credits_problem) and refuses to build without it.
+        # Nothing here opens the page: it is only checked and copied. The rule is
+        # credits_artefact_problem in scripts/macos/lib.sh (one regular file,
+        # nothing else in the artefact, the recorded digest), which
+        # scripts/macos/test-bundle.sh tests; bundle.sh checks the page itself
+        # again (credits_problem) and refuses to build without it.
         shell: bash
         run: |
           set -euo pipefail
 
           directory="${RUNNER_TEMP}/credits"
-          page="${directory}/credits.html"
-          case "${CREDITS_SHA256}" in
-            "" | *[!0-9a-f]*) echo "the build job recorded no usable digest for the credits page" >&2; exit 1 ;;
-          esac
-          if [ -L "${page}" ] || [ ! -f "${page}" ]; then
-            echo "${page} is not a regular file" >&2
-            exit 1
-          fi
-          listing="$(find "${directory}" -mindepth 1)"
-          if [ "${listing}" != "${page}" ]; then
-            echo "the artefact holds more than the credits page: ${listing}" >&2
-            exit 1
-          fi
-          actual="$(shasum -a 256 "${page}" | cut -d ' ' -f 1)"
-          if [ "${actual}" != "${CREDITS_SHA256}" ]; then
-            echo "digest ${actual} is not the build's ${CREDITS_SHA256}" >&2
+          . scripts/macos/lib.sh
+          problem="$(credits_artefact_problem "${directory}" "${CREDITS_SHA256}")"
+          if [[ -n "${problem}" ]]; then
+            echo "::error::${problem}"
             exit 1
           fi
           echo "MERCURY_CREDITS_DIR=${directory}" >> "${GITHUB_ENV}"
@@ -1044,10 +1035,12 @@ jobs:
           test -f "${mountpoint}/NOTICE"
           scripts/ci/check-macos-bundle.sh --signature "${signature}" --require-media \
             "${mountpoint}/Mercury Browser.app"
-          # The credits page in the shipped app is the one the build job recorded.
-          shipped_credits="$(shasum -a 256 "${mountpoint}/Mercury Browser.app/Contents/Resources/credits/credits.html" | cut -d ' ' -f 1)"
-          if [ "${shipped_credits}" != "${CREDITS_SHA256}" ]; then
-            echo "the credits page in the disk image is ${shipped_credits}, not the build's ${CREDITS_SHA256}" >&2
+          # The credits page in the shipped app is the one the build job recorded
+          # (credits_digest_problem in scripts/macos/lib.sh, tested by test-bundle.sh).
+          . scripts/macos/lib.sh
+          problem="$(credits_digest_problem "${mountpoint}/Mercury Browser.app/Contents/Resources/credits/credits.html" "${CREDITS_SHA256}")"
+          if [[ -n "${problem}" ]]; then
+            echo "::error::in the disk image: ${problem}"
             exit 1
           fi
 

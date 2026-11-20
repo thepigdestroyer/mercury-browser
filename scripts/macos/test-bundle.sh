@@ -347,5 +347,71 @@ check "bundle.sh checks the page it is given before it builds anything" yes \
 check "bundle.sh runs neither cargo nor make" no \
     "$(grep -Eq '^[[:space:]]*(cargo|make|rustc|rustup|"\$\{?(CARGO|MAKE)\}?")[[:space:]]' scripts/macos/bundle.sh && echo yes || echo no)"
 
+
+# ── The credits page between the release workflow's jobs ──────────────────
+# The build job records the page's digest; the signing job (no cargo) downloads the one-file
+# artefact and checks it against the digest with credits_artefact_problem before anything uses
+# it, and the disk image's page is compared with credits_digest_problem. The workflow calls these
+# functions, so what they accept and refuse is tested here, without a runner.
+ARTEFACT="$CREDITS_TMP/artefact"
+mkdir -p "$ARTEFACT"
+cp "$CREDITS_TMP/good.html" "$ARTEFACT/credits.html"
+GOOD_DIGEST="$(shasum -a 256 "$ARTEFACT/credits.html" | cut -d ' ' -f 1)"
+OTHER_DIGEST="$(printf '%s' "$GOOD_DIGEST" | tr '0-9a-f' '1-9a-f0')"
+check "the test digest is 64 lowercase hex digits" yes \
+    "$(printf '%s' "$GOOD_DIGEST" | grep -Eq '^[0-9a-f]{64}$' && echo yes || echo no)"
+check "the other digest differs from it" yes "$([ "$OTHER_DIGEST" != "$GOOD_DIGEST" ] && echo yes || echo no)"
+check "an artefact of the one page, with the recorded digest, is accepted" "" \
+    "$(credits_artefact_problem "$ARTEFACT" "$GOOD_DIGEST")"
+check "a digest that is not the page's is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$ARTEFACT" "$OTHER_DIGEST")" "has digest $GOOD_DIGEST, not the build's $OTHER_DIGEST")"
+check "an empty digest (a job output that never arrived) is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$ARTEFACT" "")" 'no usable digest')"
+check "an upper-case digest is refused, not compared" yes \
+    "$(contains_text "$(credits_artefact_problem "$ARTEFACT" "$(printf '%s' "$GOOD_DIGEST" | tr 'a-f' 'A-F')")" 'no usable digest')"
+check "a digest with a character that is not hex is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$ARTEFACT" "g${GOOD_DIGEST#?}")" 'no usable digest')"
+check "a digest with a space is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$ARTEFACT" "$GOOD_DIGEST  credits.html")" 'no usable digest')"
+check "a digest of 63 digits is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$ARTEFACT" "${GOOD_DIGEST#?}")" '63 characters, not 64')"
+check "a digest of 65 digits is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$ARTEFACT" "${GOOD_DIGEST}0")" '65 characters, not 64')"
+check "a directory without credits.html is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$CREDITS_TMP/gstreamer" "$GOOD_DIGEST")" 'credits.html is not a regular file')"
+check "a directory that does not exist is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$CREDITS_TMP/none" "$GOOD_DIGEST")" 'credits.html is not a regular file')"
+mkdir -p "$CREDITS_TMP/linked"
+ln -s "$ARTEFACT/credits.html" "$CREDITS_TMP/linked/credits.html"
+check "a link in place of the page is refused, whatever it points at" yes \
+    "$(contains_text "$(credits_artefact_problem "$CREDITS_TMP/linked" "$GOOD_DIGEST")" 'credits.html is not a regular file')"
+mkdir -p "$CREDITS_TMP/directory/credits.html"
+check "a directory in place of the page is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$CREDITS_TMP/directory" "$GOOD_DIGEST")" 'credits.html is not a regular file')"
+mkdir -p "$CREDITS_TMP/extra"
+cp "$ARTEFACT/credits.html" "$CREDITS_TMP/extra/credits.html"
+printf 'x\n' >"$CREDITS_TMP/extra/other.txt"
+check "an artefact with a second file is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$CREDITS_TMP/extra" "$GOOD_DIGEST")" 'holds more than the credits page')"
+mkdir -p "$CREDITS_TMP/nested/sub"
+cp "$ARTEFACT/credits.html" "$CREDITS_TMP/nested/credits.html"
+check "an artefact with a subdirectory is refused" yes \
+    "$(contains_text "$(credits_artefact_problem "$CREDITS_TMP/nested" "$GOOD_DIGEST")" 'holds more than the credits page')"
+check "the same page is accepted when the digest is compared as a file (the disk image check)" "" \
+    "$(credits_digest_problem "$CREDITS_TMP/good.html" "$GOOD_DIGEST")"
+check "a page with another digest in the disk image is refused" yes \
+    "$(contains_text "$(credits_digest_problem "$CREDITS_TMP/good.html" "$OTHER_DIGEST")" "not the build's $OTHER_DIGEST")"
+check "an unreadable page in the disk image is refused" yes \
+    "$(contains_text "$(credits_digest_problem "$CREDITS_TMP/none.html" "$GOOD_DIGEST" 2>/dev/null)" 'none.html cannot be read')"
+check "no digest at all is refused for the disk image too" yes \
+    "$(contains_text "$(credits_digest_problem "$CREDITS_TMP/good.html" "")" 'no usable digest')"
+# The workflow's steps are these calls; the patterns are its literal text, nothing in them expands.
+# shellcheck disable=SC2016
+check "the signing job verifies the artefact with credits_artefact_problem" yes \
+    "$(grep -q -F 'problem="$(credits_artefact_problem "${directory}" "${CREDITS_SHA256}")"' .github/workflows/release.yml && echo yes || echo no)"
+# shellcheck disable=SC2016
+check "the disk image check uses credits_digest_problem" yes \
+    "$(grep -q -F 'credits_digest_problem "${mountpoint}/Mercury Browser.app/Contents/Resources/credits/credits.html" "${CREDITS_SHA256}"' .github/workflows/release.yml && echo yes || echo no)"
+
 [ "$failures" -eq 0 ] || { printf '%d check(s) failed\n' "$failures"; exit 1; }
 printf 'all checks passed\n'

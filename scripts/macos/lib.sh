@@ -82,6 +82,52 @@ credits_problem() {
     fi
 }
 
+# Prints why the file $1 does not have the SHA-256 $2, or nothing. The build job of
+# .github/workflows/release.yml records the digest of the credits page it generated; the signing
+# job (no cargo, so it cannot generate the page) and its check of the disk image compare against
+# it. The digest is 64 lowercase hex digits, as `shasum -a 256` prints it; anything else (empty,
+# a job output that did not arrive, upper case) is refused rather than compared.
+credits_digest_problem() {
+    local file="$1" expected="$2" actual
+    case "$expected" in
+        "" | *[!0-9a-f]*)
+            printf '%s\n' "the build job recorded no usable digest for the credits page"
+            return 0
+            ;;
+    esac
+    if [ "${#expected}" -ne 64 ]; then
+        printf '%s\n' "the build job recorded no usable digest for the credits page (${#expected} characters, not 64)"
+        return 0
+    fi
+    actual="$(shasum -a 256 "$file")" || { printf '%s\n' "$file cannot be read"; return 0; }
+    actual="${actual%% *}"
+    if [ "$actual" != "$expected" ]; then
+        printf '%s\n' "the credits page $file has digest $actual, not the build's $expected"
+        return 0
+    fi
+}
+
+# Prints why directory $1 is not the credits artefact that the build job recorded the SHA-256 $2
+# for, or nothing: exactly one regular file `credits.html` (no link, nothing else in the
+# directory) with that digest (credits_digest_problem). The signing job downloads the artefact
+# `credits-macos-arm64` and calls this before anything uses the file; it is only copied, never
+# opened. The rule for the page's own content is credits_problem, which bundle.sh applies after.
+credits_artefact_problem() {
+    local directory="$1" expected="$2" page listing problem
+    page="$directory/credits.html"
+    if [ -L "$page" ] || [ ! -f "$page" ]; then
+        printf '%s\n' "$page is not a regular file"
+        return 0
+    fi
+    listing="$(find "$directory" -mindepth 1)" || { printf '%s\n' "$directory cannot be listed"; return 0; }
+    if [ "$listing" != "$page" ]; then
+        printf '%s\n' "the artefact holds more than the credits page: $listing"
+        return 0
+    fi
+    problem="$(credits_digest_problem "$page" "$expected")"
+    [ -z "$problem" ] || printf '%s\n' "$problem"
+}
+
 # Prints why an identity is unusable, or nothing if it is "-" or plausibly a
 # certificate name or SHA-1 hash. Odd values are refused rather than passed to
 # codesign: " - " and "-x" are almost certainly typos for "-", and they would
