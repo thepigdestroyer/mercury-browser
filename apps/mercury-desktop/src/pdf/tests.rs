@@ -815,6 +815,9 @@ fn the_find_bar_searches_the_document_and_closing_it_clears_the_highlights() {
                 .is_some_and(|progress| progress.finished)
         })
     });
+    // The answers write the count themselves: the find bar's own sync is not what makes the bar
+    // say "1 of 3" instead of "Searching…" (the first screenshot run of the lane showed that).
+    assert_eq!(rig.window.get_find_status().as_str(), "1 of 3");
     sync_find_status(&rig.window);
     assert_eq!(rig.window.get_find_status().as_str(), "1 of 3");
     assert!(!rig.window.get_find_no_matches());

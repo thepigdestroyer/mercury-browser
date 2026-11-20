@@ -373,6 +373,22 @@ impl Pdf {
         // The viewer may be about to ask for the keyboard (the password field).
         self.set_take_focus(window);
         update.write(&window.global::<PdfViewerModel>());
+        // A search answer moves the count in the find bar, and only the find bar's own sync
+        // writes it: without this the bar keeps saying "Searching…" once the hits are in.
+        self.write_find_status(window);
+    }
+
+    /// The find bar's count and colour, from the shown document's search (nothing when no search
+    /// of a document is on).
+    fn write_find_status(&self, window: &MainWindow) {
+        let Some(progress) = self
+            .shown_document(session::Session::find_progress)
+            .flatten()
+        else {
+            return;
+        };
+        window.set_find_status(find::status_text(&progress).as_str().into());
+        window.set_find_no_matches(find::has_no_matches(&progress));
     }
 
     fn facts(&self, session: &Session) -> Facts {
@@ -862,17 +878,9 @@ pub(crate) fn tab_title(tab: TabId, page_title: &str) -> String {
 
 /// The end of `find::sync_find_bar`: while a PDF is in front the bar shows the viewer's search.
 pub(crate) fn sync_find_status(window: &MainWindow) {
-    let Some(pdf) = current() else {
-        return;
-    };
-    let Some(progress) = pdf
-        .shown_document(session::Session::find_progress)
-        .flatten()
-    else {
-        return;
-    };
-    window.set_find_status(find::status_text(&progress).as_str().into());
-    window.set_find_no_matches(find::has_no_matches(&progress));
+    if let Some(pdf) = current() {
+        pdf.write_find_status(window);
+    }
 }
 
 /// `find`: the typing pause ended (or Return, or match case changed). Searches the tab's
