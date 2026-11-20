@@ -497,7 +497,16 @@ fn av1_reading(defaults: &[Av1Default], plain: &[(&'static str, bool)]) -> Vec<S
     };
     let plain_of = |name: &str| plain.iter().find(|(f, _)| *f == name).map(|(_, ok)| *ok);
     let mut lines = Vec::new();
+    // No decoder at all (the registry has none that takes AV1): the av1C question does not arise, whatever
+    // the record says.
+    let no_decoder = !defaults.is_empty()
+        && defaults
+            .iter()
+            .all(|d| !d.complete && d.errors.iter().any(|e| e.contains("missing a plug-in")));
     match (mse("av1-low"), mse("av1-low-av1c")) {
+        _ if no_decoder => lines.push(
+            "no AV1 decoder is available in this registry (decodebin3 reports a missing plug-in for every fixture): neither file can play here, so the av1C is not the question; the control needs a registry with dav1d or a VideoToolbox decoder that takes AV1".to_owned(),
+        ),
         (Some(false), Some(false)) => lines.push(
             "the default route through MSE fails for both fixtures, the one with the four-byte av1C and the one with the full record: the incomplete av1C is NOT what breaks the default route on this machine".to_owned(),
         ),
@@ -743,6 +752,23 @@ mod tests {
         let lines = av1_reading(&defaults, &[("av1-low", true), ("av1-low-av1c", false)]);
         assert!(lines[1].contains("DIFFERENT outcomes"), "{lines:?}");
         assert!(lines[2].contains("not MSE-specific"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_av1_reading_does_not_blame_the_record_when_there_is_no_decoder() {
+        let missing = |fixture| Av1Default {
+            fixture,
+            complete: false,
+            decoders: vec![],
+            errors: vec!["Your GStreamer installation is missing a plug-in.".into()],
+        };
+        let defaults = [missing("av1-low"), missing("av1-low-av1c")];
+        let lines = av1_reading(&defaults, &[("av1-low", false), ("av1-low-av1c", false)]);
+        assert!(lines[0].contains("no AV1 decoder"), "{lines:?}");
+        assert!(
+            !lines.iter().any(|l| l.contains("NOT what breaks")),
+            "{lines:?}"
+        );
     }
 
     #[test]
