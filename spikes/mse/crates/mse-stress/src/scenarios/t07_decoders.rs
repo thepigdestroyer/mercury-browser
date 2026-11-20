@@ -1,0 +1,530 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+//! T07: decoder choice and speed. For H.264, VP9, AAC, Opus (and AV1 when the fixture exists): which
+//! decoder `decodebin3` picks with the default ranks and with `prefer_decoder` set to each
+//! alternative, frames per second and CPU time, whether VideoToolbox hardware decode produced frames
+//! on this Mac, and which decoders are FFmpeg's (R16 P2: the commercial route must use only
+//! `vtdec*` and `atdec` for H.264, HEVC and AAC).
+
+use std::time::{Duration, Instant};
+
+use gstreamer as gst;
+use gstreamer::prelude::PluginFeatureExtManual;
+use mse_rig::backend::EosError;
+use mse_rig::events::{MseEvent, PlayEvent};
+use mse_rig::harness::Ctx;
+use mse_rig::report::ScenarioResult;
+use mse_rig::rig::RigConfig;
+use mse_segments::{SegmentedStream, tile};
+use serde_json::{Value, json};
+
+use crate::common::{
+    APPEND_TIMEOUT, Findings, Verdict, audio_buffers, fast_config, new_rig, video_frames,
+};
+use crate::proc;
+use crate::stats::ms;
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Kind {
+    Video,
+    Audio,
+}
+
+pub struct Case {
+    pub codec: &'static str,
+    pub fixture: &'static str,
+    pub kind: Kind,
+    /// Decoder factories to try as `prefer_decoder` after the default run.
+    pub alternatives: &'static [&'static str],
+    /// A missing fixture skips the case (only AV1 may be missing).
+    pub optional: bool,
+    /// Whether the commercial route (R16 P2) may use only Apple decoders for this codec.
+    pub apple_only_required: bool,
+}
+
+pub const CASES: &[Case] = &[
+    Case {
+        codec: "H.264",
+        fixture: "h264-high",
+        kind: Kind::Video,
+        alternatives: &["vtdec_hw", "vtdec", "avdec_h264"],
+        optional: false,
+        apple_only_required: true,
+    },
+    Case {
+        codec: "VP9",
+        fixture: "vp9-high",
+        kind: Kind::Video,
+        alternatives: &["vp9dec", "avdec_vp9"],
+        optional: false,
+        apple_only_required: false,
+    },
+    Case {
+        codec: "AAC",
+        fixture: "aac",
+        kind: Kind::Audio,
+        alternatives: &["avdec_aac", "atdec"],
+        optional: false,
+        apple_only_required: true,
+    },
+    Case {
+        codec: "Opus",
+        fixture: "opus",
+        kind: Kind::Audio,
+        alternatives: &["opusdec"],
+        optional: false,
+        apple_only_required: false,
+    },
+    Case {
+        codec: "AV1",
+        fixture: "av1-low",
+        kind: Kind::Video,
+        alternatives: &["dav1ddec"],
+        optional: true,
+        apple_only_required: false,
+    },
+];
+
+/// Every decoder factory named above, for the table of default ranks.
+pub fn candidate_decoders() -> Vec<&'static str> {
+    let mut names: Vec<&'static str> = CASES
+        .iter()
+        .flat_map(|c| c.alternatives.iter().copied())
+        .collect();
+    names.sort_unstable();
+    names.dedup();
+    names
+}
+
+/// Who wrote the decoder behind a factory name (for the R16 P2 question).
+pub fn decoder_family(factory: &str) -> &'static str {
+    if factory.starts_with("avdec_") {
+        "FFmpeg (gst-libav)"
+    } else if factory.starts_with("vtdec") {
+        "Apple VideoToolbox"
+    } else if factory == "atdec" {
+        "Apple AudioToolbox"
+    } else if factory == "vp8dec" || factory == "vp9dec" {
+        "libvpx"
+    } else if factory == "dav1ddec" {
+        "dav1d"
+    } else if factory == "opusdec" {
+        "libopus"
+    } else if factory == "vorbisdec" {
+        "libvorbis"
+    } else if factory == "flacdec" {
+        "libFLAC"
+    } else {
+        "other"
+    }
+}
+
+/// `vtdec_hw0:vtdec_hw` -> `vtdec_hw`.
+pub fn factory_of(description: &str) -> &str {
+    description.rsplit(':').next().unwrap_or(description)
+}
+
+pub fn run(ctx: &Ctx) -> ScenarioResult {
+    crate::common::run_isolated(
+        "T07",
+        "Decoder choice and speed",
+        ctx,
+        "MSE_STRESS_T07_NESTED",
+        std::time::Duration::from_secs(230),
+        body,
+    )
+}
+
+#[derive(Debug, Clone)]
+struct RunStats {
+    decoders: Vec<String>,
+    /// Video frames or audio buffers that reached the sink.
+    delivered: u64,
+    /// For video: the frames the stream holds. For audio: 0 (the count differs per codec).
+    expected: u64,
+    /// Video: `delivered + 2 >= expected`. Audio: the stream reached its end and the sink saw its whole span.
+    complete: bool,
+    wall_ms: f64,
+    cpu_ms: u64,
+    per_second: Option<f64>,
+    errors: Vec<String>,
+}
+
+impl RunStats {
+    fn complete(&self) -> bool {
+        self.complete
+    }
+
+    fn to_json(&self, kind: Kind) -> Value {
+        let mut object = serde_json::Map::new();
+        object.insert("decoders".to_owned(), json!(self.decoders));
+        object.insert(
+            "families".to_owned(),
+            json!(
+                self.decoders
+                    .iter()
+                    .map(|d| decoder_family(factory_of(d)))
+                    .collect::<Vec<_>>()
+            ),
+        );
+        object.insert("delivered".to_owned(), json!(self.delivered));
+        object.insert("expected".to_owned(), json!(self.expected));
+        object.insert("complete".to_owned(), json!(self.complete));
+        object.insert("wall_ms".to_owned(), json!(self.wall_ms));
+        object.insert("cpu_ms".to_owned(), json!(self.cpu_ms));
+        let rate_name = match kind {
+            Kind::Video => "fps",
+            Kind::Audio => "buffers_per_s",
+        };
+        object.insert(
+            rate_name.to_owned(),
+            json!(self.per_second.map(|v| (v * 10.0).round() / 10.0)),
+        );
+        object.insert("errors".to_owned(), json!(self.errors));
+        Value::Object(object)
+    }
+}
+
+fn rank_of(name: &str) -> Option<gst::Rank> {
+    gst::Registry::get()
+        .lookup_feature(name)
+        .map(|feature| feature.rank())
+}
+
+fn body(ctx: &Ctx, result: &mut ScenarioResult) -> Result<Verdict, String> {
+    let mut findings = Findings::new();
+    // The default ranks of every candidate.
+    let mut ranks = serde_json::Map::new();
+    for name in candidate_decoders() {
+        ranks.insert(
+            name.to_owned(),
+            match rank_of(name) {
+                Some(rank) => json!(i32::from(rank)),
+                None => json!("not in the registry"),
+            },
+        );
+    }
+    result.metric("default_ranks", Value::Object(ranks.clone()));
+    result.note(format!("default ranks: {}", Value::Object(ranks)));
+
+    let mut table = serde_json::Map::new();
+    let mut vt_hw_produced_frames: Option<bool> = None;
+    let mut ffmpeg_in_default_route = Vec::new();
+    for case in CASES {
+        let stream = match mse_segments::load(case.fixture) {
+            Ok(stream) => stream,
+            Err(error) if case.optional => {
+                result.note(format!(
+                    "{}: fixture {} is not available ({error}): skipped",
+                    case.codec, case.fixture
+                ));
+                table.insert(
+                    case.codec.to_owned(),
+                    json!({ "skipped": error.to_string() }),
+                );
+                continue;
+            }
+            Err(error) => return Err(format!("fixture {}: {error}", case.fixture)),
+        };
+        let copies = match case.kind {
+            Kind::Video => 8,
+            Kind::Audio => 20,
+        };
+        let tiled = tile(&stream, copies).map_err(|e| format!("tile {}: {e}", case.fixture))?;
+        let mut entry = serde_json::Map::new();
+
+        // Default ranks.
+        let default = measure(ctx, &tiled, case.kind, None)?;
+        result.note(format!(
+            "{} default route: {:?}, {}, {}",
+            case.codec,
+            default.decoders,
+            delivered_text(&default, case.kind),
+            speed_text(&default, case.kind)
+        ));
+        if !default.complete() {
+            findings.fail(format!(
+                "{}: the default route delivered {} of {} {} (decoders {:?}, errors {:?})",
+                case.codec,
+                default.delivered,
+                default.expected,
+                if case.kind == Kind::Video {
+                    "frames"
+                } else {
+                    "audio buffers"
+                },
+                default.decoders,
+                default.errors
+            ));
+        }
+        let uses_ffmpeg = default
+            .decoders
+            .iter()
+            .any(|d| decoder_family(factory_of(d)) == "FFmpeg (gst-libav)");
+        if uses_ffmpeg {
+            ffmpeg_in_default_route.push(case.codec);
+        }
+        if case.apple_only_required {
+            result.note(format!(
+                "R16 P2 on the MSE path for {}: the default route {} (decoders {:?})",
+                case.codec,
+                if uses_ffmpeg { "USES FFmpeg, so the commercial route needs a rank change (decodebin3 inside playbin3 picks it exactly as for <video>)" } else { "uses only Apple decoders" },
+                default.decoders
+            ));
+        }
+        entry.insert("default".to_owned(), default.to_json(case.kind));
+        entry.insert("default_uses_ffmpeg".to_owned(), json!(uses_ffmpeg));
+        entry.insert(
+            "apple_only_required_by_r16".to_owned(),
+            json!(case.apple_only_required),
+        );
+
+        // Each alternative.
+        let mut alternatives = serde_json::Map::new();
+        for name in case.alternatives {
+            let Some(original) = rank_of(name) else {
+                alternatives.insert(
+                    (*name).to_owned(),
+                    json!({ "skipped": "not in the registry" }),
+                );
+                result.note(format!(
+                    "{}: {name} is not in the registry: skipped",
+                    case.codec
+                ));
+                continue;
+            };
+            let outcome = measure(ctx, &tiled, case.kind, Some(name));
+            if let Some(feature) = gst::Registry::get().lookup_feature(name) {
+                feature.set_rank(original);
+            }
+            match outcome {
+                Ok(run) => {
+                    result.note(format!(
+                        "{} with prefer_decoder={name}: {:?}, {}, {}",
+                        case.codec,
+                        run.decoders,
+                        delivered_text(&run, case.kind),
+                        speed_text(&run, case.kind)
+                    ));
+                    if *name == "vtdec_hw" {
+                        vt_hw_produced_frames = Some(
+                            run.complete()
+                                && run.decoders.iter().any(|d| factory_of(d) == "vtdec_hw"),
+                        );
+                    }
+                    alternatives.insert((*name).to_owned(), run.to_json(case.kind));
+                }
+                Err(why) => {
+                    result.note(format!("{} with prefer_decoder={name}: {why}", case.codec));
+                    alternatives.insert((*name).to_owned(), json!({ "error": why }));
+                }
+            }
+        }
+        entry.insert("alternatives".to_owned(), Value::Object(alternatives));
+        table.insert(case.codec.to_owned(), Value::Object(entry));
+    }
+    result.metric("codecs", Value::Object(table));
+    result.metric("vtdec_hw_produced_frames", vt_hw_produced_frames);
+    result.metric(
+        "codecs_whose_default_route_uses_ffmpeg",
+        json!(ffmpeg_in_default_route),
+    );
+    result.note(match vt_hw_produced_frames {
+        Some(true) => {
+            "VideoToolbox hardware decode (vtdec_hw) produced every frame on this Mac".to_owned()
+        }
+        Some(false) => {
+            "vtdec_hw did NOT produce the frames on this Mac (see the H.264 alternatives)"
+                .to_owned()
+        }
+        None => "vtdec_hw was not tried (not in the registry or H.264 skipped)".to_owned(),
+    });
+    Ok(findings.verdict())
+}
+
+fn delivered_text(run: &RunStats, kind: Kind) -> String {
+    match kind {
+        Kind::Video => format!("{} of {} frames delivered", run.delivered, run.expected),
+        Kind::Audio => format!(
+            "{} buffers delivered, stream {}",
+            run.delivered,
+            if run.complete {
+                "played to its end"
+            } else {
+                "did NOT play to its end"
+            }
+        ),
+    }
+}
+
+fn speed_text(run: &RunStats, kind: Kind) -> String {
+    let unit = match kind {
+        Kind::Video => "fps",
+        Kind::Audio => "buffers/s",
+    };
+    format!(
+        "{} {unit}, {} ms CPU in {:.0} ms wall",
+        run.per_second
+            .map_or("n/a".to_owned(), |v| format!("{v:.0}")),
+        run.cpu_ms,
+        run.wall_ms
+    )
+}
+
+/// One run: play `tiled` through a fresh rig (decode as fast as possible) with `prefer` raised in rank.
+fn measure(
+    ctx: &Ctx,
+    tiled: &SegmentedStream,
+    kind: Kind,
+    prefer: Option<&str>,
+) -> Result<RunStats, String> {
+    crate::common::trace(&format!("T07: {:?} prefer_decoder={prefer:?}", kind));
+    let config = RigConfig {
+        prefer_decoder: prefer.map(str::to_owned),
+        video: kind == Kind::Video,
+        audio: kind == Kind::Audio,
+        ..fast_config(ctx)
+    };
+    let rig = new_rig(config)?;
+    let id = rig
+        .backend
+        .add_source_buffer(&tiled.mime)
+        .map_err(|e| format!("add_source_buffer({}): {e:?}", tiled.mime))?;
+    rig.append_and_wait(id, &tiled.init.bytes, APPEND_TIMEOUT)
+        .map_err(|e| format!("init append: {e}"))?;
+    rig.play().map_err(|e| format!("play: {e}"))?;
+    let seconds = tiled.duration_ms().unwrap_or(0) as f64 / 1000.0;
+    let expected_video = (seconds * 25.0).round() as u64;
+    let cpu_before = proc::cpu_time_ms()?;
+    let started = Instant::now();
+    for segment in &tiled.media {
+        rig.append_and_wait(id, &segment.bytes, APPEND_TIMEOUT)
+            .map_err(|e| format!("append: {e}"))?;
+    }
+    rig.backend
+        .end_of_stream(EosError::None)
+        .map_err(|e| format!("end_of_stream: {e:?}"))?;
+    let finished = match kind {
+        Kind::Video => rig.wait_until(Duration::from_secs(90), |rig| {
+            video_frames(rig) + 2 >= expected_video
+        }),
+        Kind::Audio => rig.wait_for_eos(Duration::from_secs(60)),
+    };
+    let wall = started.elapsed();
+    let cpu_ms = proc::cpu_time_ms()?.saturating_sub(cpu_before);
+    std::thread::sleep(Duration::from_millis(200));
+    // AAC frames are 1024 samples at 48 kHz and Opus frames 20 ms, so the number of audio buffers differs
+    // per codec: audio is complete when the stream reached its end and the sink saw the whole span.
+    let (delivered, expected, complete) = match kind {
+        Kind::Video => {
+            let frames = video_frames(&rig);
+            (frames, expected_video, frames + 2 >= expected_video)
+        }
+        Kind::Audio => {
+            let span = crate::common::Snapshot::read(&rig.audio)
+                .span_ms()
+                .unwrap_or(0.0)
+                / 1000.0;
+            (audio_buffers(&rig), 0, finished && span + 1.0 >= seconds)
+        }
+    };
+    let per_second = (wall.as_secs_f64() > 0.0).then(|| delivered as f64 / wall.as_secs_f64());
+    let errors: Vec<String> = rig
+        .log
+        .snapshot()
+        .into_iter()
+        .filter_map(|t| match t.event {
+            MseEvent::Play(PlayEvent::Error(text)) => Some(text),
+            MseEvent::Error(id) => Some(format!("source buffer {id} error event")),
+            _ => None,
+        })
+        .take(3)
+        .collect();
+    let decoders = rig.chosen_decoders();
+    let _ = rig.shutdown();
+    Ok(RunStats {
+        decoders,
+        delivered,
+        expected,
+        complete,
+        wall_ms: ms(wall),
+        cpu_ms,
+        per_second,
+        errors,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn decoder_families_follow_the_factory_names() {
+        assert_eq!(decoder_family("avdec_h264"), "FFmpeg (gst-libav)");
+        assert_eq!(decoder_family("avdec_aac"), "FFmpeg (gst-libav)");
+        assert_eq!(decoder_family("vtdec_hw"), "Apple VideoToolbox");
+        assert_eq!(decoder_family("vtdec"), "Apple VideoToolbox");
+        assert_eq!(decoder_family("atdec"), "Apple AudioToolbox");
+        assert_eq!(decoder_family("vp9dec"), "libvpx");
+        assert_eq!(decoder_family("dav1ddec"), "dav1d");
+        assert_eq!(decoder_family("opusdec"), "libopus");
+        assert_eq!(decoder_family("mystery"), "other");
+    }
+
+    #[test]
+    fn factory_names_are_read_from_element_descriptions() {
+        assert_eq!(factory_of("vtdec_hw0:vtdec_hw"), "vtdec_hw");
+        assert_eq!(factory_of("avdec_aac0:avdec_aac"), "avdec_aac");
+        assert_eq!(factory_of("plain"), "plain");
+    }
+
+    #[test]
+    fn the_cases_cover_the_brief() {
+        let codecs: Vec<&str> = CASES.iter().map(|c| c.codec).collect();
+        assert_eq!(codecs, ["H.264", "VP9", "AAC", "Opus", "AV1"]);
+        let h264 = &CASES[0];
+        assert_eq!(h264.alternatives, ["vtdec_hw", "vtdec", "avdec_h264"]);
+        assert!(h264.apple_only_required && CASES[2].apple_only_required);
+        assert!(!CASES[1].apple_only_required);
+        let names = candidate_decoders();
+        for expected in [
+            "vtdec_hw",
+            "vtdec",
+            "avdec_h264",
+            "vp9dec",
+            "avdec_vp9",
+            "avdec_aac",
+            "atdec",
+            "opusdec",
+            "dav1ddec",
+        ] {
+            assert!(names.contains(&expected), "{expected}");
+        }
+    }
+
+    #[test]
+    fn a_run_is_complete_within_two_items() {
+        let run = RunStats {
+            decoders: vec!["vtdec_hw0:vtdec_hw".into()],
+            delivered: 198,
+            expected: 200,
+            complete: true,
+            wall_ms: 10.0,
+            cpu_ms: 5,
+            per_second: Some(100.0),
+            errors: vec![],
+        };
+        assert!(run.complete());
+        let short = RunStats {
+            delivered: 150,
+            complete: false,
+            ..run
+        };
+        assert!(!short.complete());
+        assert_eq!(
+            short.to_json(Kind::Video)["families"][0],
+            "Apple VideoToolbox"
+        );
+        assert!(short.to_json(Kind::Audio).get("buffers_per_s").is_some());
+    }
+}
