@@ -12,7 +12,8 @@ pub(crate) use clip::ClipId;
 use euclid::{Box2D, Point2D, Rect, Scale, SideOffsets2D, Size2D, UnknownUnit, Vector2D};
 use fonts::{FontMetrics, ShapedTextSlice};
 use gradient::WebRenderGradient;
-use layout_api::ReflowStatistics;
+// Mercury: lane txt-1 (EB7), `Decoration` for the typed highlights.
+use layout_api::{Decoration, ReflowStatistics};
 use paint_api::display_list::{PaintDisplayListInfo, SpatialTreeNodeInfo};
 use servo_arc::Arc as ServoArc;
 use servo_base::cross_process_instant::CrossProcessInstant;
@@ -66,6 +67,11 @@ use crate::fragment_tree::{
 };
 use crate::geom::{
     LengthPercentageOrAuto, PhysicalPoint, PhysicalRect, PhysicalSides, PhysicalSize,
+};
+// Mercury: lane txt-1 (EB7), the arithmetic of the typed highlights.
+use crate::highlights::{
+    GlyphSpan, PlacedSegment, background_color, decoration_color, decoration_rects, place_segments,
+    segments_for_fragment,
 };
 use crate::replaced::NaturalSizes;
 use crate::style_ext::{BorderStyleColor, ComputedValuesExt};
@@ -1162,6 +1168,17 @@ impl InspectorHighlight {
     }
 }
 
+// Mercury: lane txt-1 (EB7).
+/// The two moments at which a text fragment paints its typed highlights
+/// (see [`Fragment::build_display_list_for_text_highlights`]).
+#[derive(Clone, Copy, Eq, PartialEq)]
+enum TextHighlightPhase {
+    /// Under the glyphs and before the selection rectangle: find matches and text fragments.
+    Backgrounds,
+    /// Over the glyphs: IME composition underlines, spelling and grammar waves.
+    Decorations,
+}
+
 impl Fragment {
     fn build_display_list_for_text_fragment(
         fragment: &TextFragment,
@@ -1216,6 +1233,19 @@ impl Fragment {
                 true, /* should_inflate */
             );
         }
+
+        // Mercury: lane txt-1 (EB7). The typed highlights are placed on the glyphs once (nothing
+        // to do and nothing allocated when the text run has none) and painted in two phases: the
+        // backgrounds here, before the selection, and the decorations after the glyphs.
+        let highlights = Self::placed_text_highlights(fragment);
+        Self::build_display_list_for_text_highlights(
+            &highlights,
+            fragment,
+            builder,
+            state,
+            line_box_rect,
+            TextHighlightPhase::Backgrounds,
+        );
 
         Self::build_display_list_for_text_selection(fragment, builder, state, line_box_rect);
 
@@ -1294,6 +1324,151 @@ impl Fragment {
 
         if !shadows.0.is_empty() {
             builder.wr().pop_all_shadows();
+        }
+
+        // Mercury: lane txt-1 (EB7). After the glyphs, and outside the text shadows.
+        Self::build_display_list_for_text_highlights(
+            &highlights,
+            fragment,
+            builder,
+            state,
+            line_box_rect,
+            TextHighlightPhase::Decorations,
+        );
+    }
+
+    // Mercury: lane txt-1 (EB7). The typed highlights of the text run that fall in this text
+    // fragment, placed on its glyphs (see `crate::highlights`). Empty, and free, when the text run
+    // has no highlight, which is nearly always. As for the selection, RTL and vertical text are not
+    // handled properly yet: the glyphs are walked in painting order as if the text were left to
+    // right.
+    fn placed_text_highlights(fragment: &TextFragment) -> Vec<PlacedSegment> {
+        let run_data = &fragment.run_data;
+        let highlights = run_data.highlights.borrow();
+        if highlights.is_empty() {
+            return Vec::new();
+        }
+
+        // The highlights are in offsets of the DOM text node: map them to the laid-out text, as
+        // the selection is, so that they follow white space collapsing and `text-transform`.
+        let segments = segments_for_fragment(
+            &highlights,
+            |range| run_data.map_dom_range_to_transformed_range(range),
+            fragment.character_range_in_dom_node.clone(),
+        );
+        if segments.is_empty() {
+            return Vec::new();
+        }
+
+        let glyphs: Vec<GlyphSpan> = fragment
+            .glyphs
+            .iter()
+            .flat_map(|slice| slice.glyphs())
+            .map(|glyph| {
+                let justification = if glyph.char_is_word_separator() {
+                    fragment.justification_adjustment
+                } else {
+                    Au::zero()
+                };
+                GlyphSpan {
+                    characters: glyph.character_count(),
+                    advance: glyph.advance() + justification,
+                }
+            })
+            .collect();
+        place_segments(
+            glyphs,
+            fragment.character_range_in_dom_node.clone(),
+            &segments,
+        )
+    }
+
+    // Mercury: lane txt-1 (EB7). Paints the typed highlights of a text fragment that
+    // `placed_text_highlights` computed: the backgrounds of find matches and text fragments
+    // (`Backgrounds`, under the glyphs and under the selection rectangle) or the underlines of an
+    // IME composition and the waves of spelling and grammar errors (`Decorations`, over the glyphs).
+    // This is beside `build_display_list_for_text_selection`, whose output does not change.
+    fn build_display_list_for_text_highlights(
+        placed: &[PlacedSegment],
+        fragment: &TextFragment,
+        builder: &mut DisplayListBuilder<'_>,
+        state: &TraversalState,
+        line_box_rect: &PhysicalRect<Au>,
+        phase: TextHighlightPhase,
+    ) {
+        if placed.is_empty() {
+            return;
+        }
+
+        let rect = fragment.base.rect().translate(state.origin.to_vector());
+        let parent_style = fragment.style();
+
+        if phase == TextHighlightPhase::Backgrounds {
+            for segment in placed {
+                let Some(color) = segment.background.and_then(background_color) else {
+                    continue;
+                };
+                // The same vertical extent as the selection rectangle.
+                let background_rect = Rect::new(
+                    Point2D::new(rect.origin.x + segment.x, line_box_rect.min_y()),
+                    Size2D::new(segment.width, line_box_rect.height()),
+                )
+                .to_webrender();
+                let common = builder.common_properties(state, background_rect, &parent_style);
+                let color = AbsoluteColor::srgb_legacy(color.red, color.green, color.blue, 1.0);
+                builder
+                    .wr()
+                    .push_rect(&common, background_rect, rgba(color));
+            }
+            return;
+        }
+
+        let text_color = parent_style.slow_clone_color();
+        let font_metrics = &fragment.font_metrics;
+        // Where an underline goes, as for `text-decoration-line: underline`.
+        let underline_y = font_metrics.ascent - font_metrics.underline_offset;
+        let wave_thickness = font_metrics.underline_size.to_f32_px();
+        let device_pixel_ratio = builder.device_pixel_ratio.get();
+        for segment in placed {
+            for decoration in
+                decoration_rects(segment, underline_y, wave_thickness, device_pixel_ratio)
+            {
+                let color = decoration_color(decoration.decoration)
+                    .map(|color| {
+                        AbsoluteColor::srgb_legacy(color.red, color.green, color.blue, 1.0)
+                    })
+                    .unwrap_or(text_color);
+                let mut decoration_box = Rect::new(
+                    Point2D::new(rect.origin.x + decoration.x, rect.origin.y + decoration.y),
+                    Size2D::new(decoration.width, decoration.height),
+                )
+                .to_webrender();
+
+                match decoration.decoration {
+                    Decoration::Composition | Decoration::CompositionSelected => {
+                        let common =
+                            builder.common_properties(state, decoration_box, &parent_style);
+                        builder.wr().push_rect(&common, decoration_box, rgba(color));
+                    },
+                    Decoration::Spelling | Decoration::Grammar => {
+                        // Waves are drawn the way `text-decoration-line: spelling-error` and
+                        // `grammar-error` are, in phase from one fragment to the next.
+                        let wavy_line_thickness = decoration_box.height().ceil();
+                        decoration_box = decoration_box.inflate(0.0, wavy_line_thickness);
+                        let common =
+                            builder.common_properties(state, decoration_box, &parent_style);
+                        decoration_box.min.x = decoration_box.min.x.min(0.0);
+                        builder.wr().push_line(
+                            &common,
+                            &decoration_box,
+                            wavy_line_thickness,
+                            wr::LineOrientation::Horizontal,
+                            &rgba(color),
+                            ComputedTextDecorationStyle::Wavy.to_webrender(),
+                        );
+                    },
+                }
+            }
         }
     }
 
