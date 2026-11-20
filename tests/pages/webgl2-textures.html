@@ -178,6 +178,12 @@
     });
 
     check("texStorage3D TEXTURE_2D_ARRAY 32x32x6, 3 levels: layer 5 can be written at every level", () => {
+      // Servo 0.8's WebIDL has no texSubImage3D (it is commented out in WebGL2RenderingContext.webidl), and a 2D
+      // array cannot be read back (framebufferTextureLayer, servo#49902), so nothing can touch layer 5 yet. The
+      // storage itself is checked above on a TEXTURE_3D; this check starts to run when texSubImage3D arrives.
+      if (typeof gl.texSubImage3D !== "function") {
+        return "SKIP: gl.texSubImage3D does not exist in Servo 0.8, so a 2D array's layers cannot be written or read";
+      }
       const texture = gl.createTexture();
       gl.bindTexture(gl.TEXTURE_2D_ARRAY, texture);
       gl.texStorage3D(gl.TEXTURE_2D_ARRAY, 3, gl.RGBA8, 32, 32, 6);

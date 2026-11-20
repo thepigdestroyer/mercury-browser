@@ -6,31 +6,44 @@
 <style>
   /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
   html { background: #ffffff; color: #000000; }
-  body { font: 24px/1.4 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 24px; }
-  .line { margin-bottom: 10px; word-break: break-all; }
+  body { font: 20px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 20px; }
+  .line { margin-bottom: 6px; word-break: break-all; }
   .tag { font-family: Menlo, monospace; font-weight: bold; margin-right: 8px; }
   .PASS { color: #0a7a0a; }
   .FAIL { color: #b00020; }
   .INFO { color: #555555; }
-  img { width: 40px; height: 40px; vertical-align: middle; margin-left: 8px; border: 1px solid #999999; }
+  img { width: 28px; height: 28px; vertical-align: middle; margin-left: 8px; border: 1px solid #999999; }
 </style>
 </head>
 <body>
 <!--
-  Mercury K0 item 4 (decision D8): servo-net refuses an SVG image nested deeper than 500 elements
-  (third_party/servo-net/mercury_svg.rs). Without the guard, a tiny file nested 100,000 deep exhausts the stack
-  of the image decoder thread and the whole browser crashes.
+  Mercury K0 item 4 (decision D8): servo-net limits how deeply an SVG image may nest
+  (third_party/servo-net/mercury_svg.rs). usvg 0.48.1 refuses a document deeper than 1024 levels by itself, so
+  the cases that tell the guard from usvg are the ones between 501 and 1024 levels, and the ones where the file
+  is shallow but the tree usvg walks is not. Measured with this usvg on the 2 MiB stack of a decoder thread:
+  nested <svg> elements overflow it from about 700 levels, and four groups of 200 nested <svg> that each end in a
+  <use> of the one before (202 levels in the file, about 800 for usvg) overflow it too.
 
-  What a run shows: a green square for an image that loaded, "error" for the refused ones, and at the end
-  "still alive". A crash page (or no "still alive" line) is a failure. The 500-level case is the deepest
-  image Mercury accepts: if it crashed the process, the limit would be too high for the decoder thread's stack.
-  Screenshot: all cases finish in about a second; use --screenshot-delay 4000 (4 s) to be safe.
+  Every case loads one SVG into an <img> from a Blob URL and says which event came. A green square is an image
+  that loaded. The cases:
+    - 10, 500: load (an ordinary image, and the deepest one Mercury accepts)
+    - 501, 600, 1024, 100,000 levels of <g>: error (usvg alone accepts 501 to 1024, so only the guard refuses them)
+    - 800 nested <svg>: error (more than usvg's stack can take; the guard refuses it before usvg runs)
+    - an entity that expands to 600 levels, in a file that is 2 deep: error; one that expands to 400: load
+    - the <use> document above: load (it needs the guard's large stack; a browser without it crashes here)
+    - an image with no size of its own that holds a 600-level SVG as a data: URL: error (the inner image is left
+      out and there is nothing to size the outer one by); with a 20-level inner image: load, 40 pixels wide
+  At the end "still alive". A crash page, or no "still alive" line, is a failure.
+  Open it with ?only=<name> or ?skip=<name> (names are the first entry of each case in CASES below) to run
+  less of it, for example ?only=use-chain to see whether a build survives the <use> document alone.
+  Screenshot: all cases finish in a few seconds; use --screenshot-delay 6000.
 -->
 <div id="results"></div>
 <script>
   "use strict";
   const results = document.getElementById("results");
   let failures = 0;
+  let passes = 0;
 
   function line(tag, text, image) {
     const item = document.createElement("div");
@@ -43,23 +56,82 @@
     if (image) item.appendChild(image);
     results.appendChild(item);
     if (tag === "FAIL") failures++;
+    if (tag === "PASS") passes++;
   }
+
+  const NS = 'xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink"';
+  const RECT = '<rect width="40" height="40" fill="#0a7a0a"/>';
 
   // An SVG whose longest chain of nested elements is `levels` long: <svg>, levels - 2 <g> and one <rect>.
-  function svgOfDepth(levels) {
+  function nestedGroups(levels) {
     const groups = levels - 2;
-    return '<svg xmlns="http://www.w3.org/2000/svg" width="40" height="40">' +
-           "<g>".repeat(groups) +
-           '<rect width="40" height="40" fill="#0a7a0a"/>' +
-           "</g>".repeat(groups) +
-           "</svg>";
+    return "<svg " + NS + ' width="40" height="40">' + "<g>".repeat(groups) + RECT + "</g>".repeat(groups) + "</svg>";
   }
 
-  // Loads the SVG into an <img> from a Blob URL and reports which event came, and whether it was expected.
-  function load(levels, expected, note) {
+  // The same with <svg> elements, the most expensive ones for usvg's stack.
+  function nestedSvgs(levels) {
+    const inner = levels - 2;
+    return "<svg " + NS + ' width="40" height="40">' + '<svg width="40" height="40">'.repeat(inner) + RECT +
+           "</svg>".repeat(inner) + "</svg>";
+  }
+
+  // A file that is 2 levels deep and holds an entity that expands to `levels` nested groups.
+  function entityOfDepth(levels) {
+    // The value is in single quotes: RECT has double quotes in it.
+    const value = "<g>".repeat(levels) + RECT + "</g>".repeat(levels);
+    return "<!DOCTYPE svg [<!ENTITY deep '" + value + "'>]>" + "<svg " + NS + ' width="40" height="40">&deep;</svg>';
+  }
+
+  // `groups` groups of `levels` nested <svg>, each ending in a <use> of the group before.
+  function useChain(groups, levels) {
+    let svg = "<svg " + NS + ' width="40" height="40"><defs><g id="g0">' + RECT + "</g>";
+    for (let group = 1; group <= groups; group++) {
+      svg += '<g id="g' + group + '">' + '<svg width="40" height="40">'.repeat(levels) +
+             '<use xlink:href="#g' + (group - 1) + '"/>' + "</svg>".repeat(levels) + "</g>";
+    }
+    return svg + '</defs><use xlink:href="#g' + groups + '"/></svg>';
+  }
+
+  // An outer image, 2 levels deep, that draws the SVG `inner` through a data: URL. The outer <svg> has no width,
+  // height or viewBox, so usvg takes its size from what it draws: when the inner image is read, the outer one is
+  // 40 x 40 and loads; when the inner image is left out nothing is left to measure and the outer one is refused.
+  // (A canvas cannot tell the two apart: Servo 0.8 reads every SVG image as transparent through drawImage.)
+  function withDataImage(inner) {
+    return "<svg " + NS + '><image x="0" y="0" width="40" height="40" xlink:href="data:image/svg+xml;base64,' +
+           btoa(inner) + '"/></svg>';
+  }
+
+  // name, label, the SVG text, the event that must come, why, and for the loaded ones an optional check.
+  const CASES = [
+    ["g-10", "10 levels", () => nestedGroups(10), "load", "an ordinary image still draws"],
+    ["g-500", "500 levels", () => nestedGroups(500), "load", "the deepest image Mercury accepts"],
+    ["g-501", "501 levels", () => nestedGroups(501), "error", "one level over the limit is refused"],
+    ["g-600", "600 levels", () => nestedGroups(600), "error", "usvg alone accepts this; only the guard refuses it"],
+    ["g-1024", "1,024 levels", () => nestedGroups(1024), "error", "the edge of usvg's own limit"],
+    ["g-100000", "100,000 levels", () => nestedGroups(100000), "error", "refused; usvg would refuse it too"],
+    ["svg-800", "800 nested <svg>", () => nestedSvgs(800), "error",
+     "usvg alone overflows a 2 MiB stack on this; a crash here is the bug"],
+    ["entity-600", "entity that expands to 600 levels", () => entityOfDepth(600), "error",
+     "the file is 2 deep, the tree is 601: the first guard did not see it"],
+    ["entity-400", "entity that expands to 400 levels", () => entityOfDepth(400), "load", "an entity under the limit still draws"],
+    ["use-chain", "4 groups of 200 nested <svg> joined by <use>", () => useChain(4, 200), "load",
+     "202 levels in the file, about 800 for usvg: needs the large stack; a crash here is the bug"],
+    ["data-600", "data: image of 600 levels inside an image with no size", () => withDataImage(nestedGroups(600)), "error",
+     "the inner image is left out, so the outer one has nothing to take its size from; if it were read, this would load"],
+    ["data-20", "data: image of 20 levels inside an image with no size", () => withDataImage(nestedGroups(20)), "load",
+     "a shallow nested image is read, and gives the outer one its size", (img) => img.naturalWidth === 40 ||
+       "naturalWidth " + img.naturalWidth + ", expected 40"],
+  ];
+
+  const params = new URLSearchParams(location.search);
+  const only = params.get("only");
+  const skip = params.get("skip");
+  const chosen = CASES.filter(([name]) => (only === null || only === name) && skip !== name);
+
+  // Loads one SVG into an <img> from a Blob URL and reports which event came, and whether it was expected.
+  function load([name, label, makeSvg, expected, note, check]) {
     return new Promise((resolve) => {
-      const label = levels.toLocaleString("en-US") + " levels";
-      const blob = new Blob([svgOfDepth(levels)], { type: "image/svg+xml" });
+      const blob = new Blob([makeSvg()], { type: "image/svg+xml" });
       const url = URL.createObjectURL(blob);
       const img = new Image();
       img.alt = label;
@@ -68,10 +140,14 @@
         if (settled) return;
         settled = true;
         clearTimeout(timer);
+        let problem = event === expected ? null : event + " event, expected " + expected;
+        if (problem === null && check) {
+          const verdict = check(img);
+          if (verdict !== true) problem = verdict;
+        }
         URL.revokeObjectURL(url);
-        const ok = event === expected;
-        line(ok ? "PASS" : "FAIL",
-             label + ": " + event + " event" + (ok ? "" : ", expected " + expected) + " (" + note + ")",
+        line(problem === null ? "PASS" : "FAIL",
+             label + ": " + (problem === null ? event + " event" : problem) + " (" + note + ")",
              event === "load" ? img : null);
         resolve();
       };
@@ -83,16 +159,19 @@
   }
 
   (async () => {
-    // One after the other, so the page never holds more than one big document.
-    await load(10, "load", "an ordinary image still draws");
-    await load(501, "error", "one level over the limit is refused");
-    await load(100000, "error", "refused before the decoder recurses; a crash here is the bug");
-    await load(500, "load", "the deepest image Mercury accepts");
-    line("INFO", "guard: servo-net mercury_svg.rs, limit 500 elements");
+    // One after the other, so the page never holds more than one big document, and the first line that is
+    // missing after a crash is the case that crashed.
+    for (const testCase of chosen) {
+      await load(testCase);
+    }
+    line("INFO", "guard: servo-net mercury_svg.rs, limit 500 levels, 4 documents, parse on a 32 MiB stack; " +
+         chosen.length + " of " + CASES.length + " cases");
     // A timer after everything has settled: a browser that crashed while decoding never prints this.
     setTimeout(() => {
       line("INFO", "still alive");
-      line(failures === 0 ? "PASS" : "FAIL", failures === 0 ? "all checks passed" : failures + " check(s) failed");
+      line(failures === 0 ? "PASS" : "FAIL",
+           failures === 0 ? "all " + passes + " checks passed" : failures + " check(s) failed, " + passes + " passed");
+      document.title = "SVG nesting guard " + (failures === 0 ? "PASS" : "FAIL");
     }, 1000);
   })();
 </script>

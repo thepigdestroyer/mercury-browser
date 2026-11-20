@@ -23,7 +23,11 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   follows selection changes without rebuilding the text run. Needs the matching `servo-layout-api` and `servo-script`
   hunks.
 - **Why:** before this only `<input>` and `<textarea>` drew a caret; Mercury turns on contenteditable editing.
-- **Tested by:** `tests/pages/compat-editing.html` (screenshot with `--screenshot-delay 1600`: the caret blinks).
+- **Tested by:** `tests/pages/compat-editing.html` in a normal, focused window (the caret box at the top shows a red blinking
+  caret). **Not by a `--screenshot` run:** that is a background window, the WebView has no system focus and
+  `display_list/mod.rs` (line about 1583) never paints a caret then; the page prints `document.hasFocus()` (false in a screenshot
+  run, checked on 20 Nov: no caret at delays 400, 1600 and 2800 ms) so the missing caret is not mistaken for a failure. The
+  blink itself has not been seen in K0: no screen capture was possible in the integration session.
 - **Drop when:** the Servo bump that contains PR #48253 (B1).
 
 ## Removing this directory

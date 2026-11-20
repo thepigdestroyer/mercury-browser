@@ -133,7 +133,13 @@ Editing is on in Mercury (`dom_exec_command_enabled`).
 - **servo/servo#47459** (`189034510`, "Implement `outdent` editing command"): `dom/execcommand/commands/outdent.rs` (new,
   upstream MPL header), `commands/{mod,delete,indent}.rs`, `basecommand.rs`, `execcommands.rs`, `contenteditable/node.rs`.
   Adds `outdent`, moves `normalize_sublists` from `indent.rs` to `Node::normalize_sublists` and uses it in the delete
-  command (steps 7.1 and 7.2 were TODOs). Test: "indent then outdent" and "outdent a blockquote".
+  command (steps 7.1 and 7.2 were TODOs). Test: "outdent a nested list" and "outdent a list item out of its list". **Known gap,
+  the same in servo/servo main** (compared on 20 Nov 2026): the node list in `execute_outdent_command` keeps a node only if it has
+  no editable descendant, and `traverse_preorder` includes the node itself, so an editable text node or paragraph is never kept;
+  only `ol`, `ul` and `li` are. `outdent` therefore returns true and changes nothing for `<blockquote>text</blockquote>` or
+  `<blockquote><p>text</p></blockquote>` (upstream's `tests/wpt/meta/editing/run/outdent.html.ini` lists those cases as FAIL).
+  The page reports it as an INFO line ("known gap"). Also not mapped upstream: `italic` to the input type `formatItalic`
+  (`mapped_value_of_command` in `execcommands.rs` has no `Italic` arm), so `beforeinput.inputType` is empty for it.
 - **servo/servo#49649** (`10c279fae`, "Rename `DomSlice` `r()` to `as_ref_slice()`"): the 6 call sites in this crate
   (`dom/document/document_event_handler.rs`, `dom/gamepad/gamepad.rs`, `dom/node/node.rs`, `dom/execcommand/{commands/outdent.rs,
   contenteditable/node.rs, contenteditable/selection.rs}`); the trait is in `servo-script-bindings` (`root.rs`). A rename,
@@ -144,7 +150,8 @@ Editing is on in Mercury (`dom_exec_command_enabled`).
   `dom/characterdata/characterdata.rs` and `dom/html/form_controls/input_type/text_input_widget.rs` (`set_text_run_selection`
   takes the new flag), `dom/html/htmlelement.rs` (adding or removing `contenteditable` marks the selection dirty). Needs the
   `servo-layout` and `servo-layout-api` hunks. Only the active page's focused host draws the caret (upstream rule: no caret in
-  a window without system focus). Test: the caret box at the top of `compat-editing.html`.
+  a window without system focus, so a `--screenshot` run shows none: look in a normal window). Test: the caret box at
+  the top of `compat-editing.html`, whose `document.hasFocus()` line says which kind of window ran it.
 - **servo/servo#49797** (`8d0f0d77f`, "Implement logic for collapsed line break"): `dom/execcommand/contenteditable/node.rs`
   (`Node::is_collapsed_line_break`), `commands/insertlinebreak.rs` (step 10: an extra `br` after a collapsed one),
   `commands/inserttext.rs` (step 14.1) and `is_collapsed_block_prop`. Test: "insertLineBreak at line end".
