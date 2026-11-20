@@ -35,7 +35,7 @@ A typed `http://` address is tried over HTTPS first, on the default port. Mercur
 
 The mark in the address bar shows what Mercury knows about the page: a padlock for HTTPS, a warning for plain HTTP, for a page with an invalid certificate and for a certificate exception you accepted, and an information mark for `localhost`, files and Mercury's own error pages (a new tab shows no mark). Click it for the site information: the permissions you gave the site (with **Reset**), its cookies and site data (with **Clear**), and any HTTPS-only exception (with **Remove**). Servo does not give Mercury a certificate's details yet, so the mark comes from the address and Mercury's own records, and the details are not shown. A name that mixes look-alike scripts is shown in its `xn--` form.
 
-A certificate that isn't valid, a site that can't be reached and a crashed page get Mercury's own pages instead of Servo's. For a public site the certificate page offers only **Go back**. For a local name, such as a test server on your own network, **Details** lets you continue until you quit; Servo records that choice for the certificate, not the site, so continue only for a certificate you know.
+A certificate that isn't valid, a site that can't be reached and a crashed page get Mercury's own pages instead of Servo's. For a public site the certificate page offers only **Go back**. For a local name, such as a test server on your own network, **Details** lets you continue until you quit. The choice is for that name and the one certificate you were shown: a different certificate, or another name for the same device, shows the error again. Continue only for a device you know ([Privacy and security](privacy-and-security.md#certificate-errors) has the details).
 
 ## Search the web
 

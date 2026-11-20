@@ -2482,11 +2482,10 @@ async fn http_network_fetch(
     if credentials_flag {
         set_cookies_from_headers(&url, &response.headers, &context.state.cookie_jar);
     }
+    // Mercury: not from a host that has had a certificate exception (certificate_exceptions.rs).
     context
         .state
-        .hsts_list
-        .write()
-        .update_hsts_list_from_response(&url, &response.headers);
+        .learn_hsts_from_response(&url, &response.headers);
 
     // TODO these steps
     // Step 16

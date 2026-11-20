@@ -72,9 +72,17 @@ With **Settings → Privacy and security → Load pages over HTTPS only** on, Me
 
 ### Certificate errors
 
-When a site's certificate is not valid, Mercury shows an error page instead of the site. Under **Details**, a **Continue anyway** button is offered only for your own computer and the local network (`localhost`, private addresses, and names such as `printer.local`), and only for a page of its own, not a frame inside another page. For every other site there is no way past the error.
+When a site's certificate is not valid, Mercury shows an error page instead of the site. Under **Details**, a **Continue anyway** button is offered only for your own computer and the local network (`localhost`, private addresses, and names such as `printer.local`), and only for a page of its own, not a frame inside another page. For every other site there is no way past the error. Mercury also refuses it for a site that has told browsers to use only secure connections (HSTS), whatever its name.
 
-The exception lasts until Mercury quits. **Know the limit:** Mercury cannot yet tie an exception to the one site it was made for. Until it can, a certificate you accept is accepted for every site until you quit, so someone on the same local network who presents that certificate could pass as another site. Continue only for devices you control, and quit Mercury afterwards if you are on a shared network.
+What **Continue anyway** accepts is narrow:
+
+- **One site and one certificate.** Mercury accepts the certificate the error was about, for the name in the address (`printer.local`), and for nothing else. If the site later presents a different certificate under that name, Mercury shows the error page again and asks again. The same certificate under another name is not accepted: the same device reached by its address instead of its name (`192.168.1.20` for `printer.local`), another site on the same network, or a name above or below the one you accepted (`www.printer.local` for `printer.local`). Capital letters and a final dot do not make a different name.
+- **The name, not the port.** An exception is for a site's name. Another port on the same name is accepted too, if it presents the same certificate.
+- **Until Mercury quits.** Mercury does not save an exception. There is no **Remove** button yet: to forget an exception, quit Mercury. A button would not be reliable until Mercury can also close the connections that are already open, because they stay trusted after an exception is removed.
+- **The warning stays.** While an exception lasts, the address bar keeps its warning mark for that name, and the site information says that you allowed an invalid certificate.
+- **No HSTS from that name.** Many devices with their own certificate (routers, network storage) ask browsers to use only secure connections for their name. Mercury does not remember such a request from a name you continued on, for as long as Mercury runs, because that connection was trusted only on your say-so (RFC 6797, section 8.1). It also ignores the name's request on a later connection with a valid certificate in the same session, and learns it in the next one. So the name is not locked, and after a restart you can continue again. Other sites are not affected.
+
+Continue only for devices you control. An exception means Mercury trusts whoever holds that certificate's key when you visit that name.
 
 ## What Mercury stores
 

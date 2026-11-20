@@ -19,7 +19,9 @@ members = [
     "crates/talaria-core",
     "crates/talaria-servo",
 ]
-exclude = ["third_party/gaol"]
+# Mercury: servo-net is vendored and its tests need dev-dependencies, so they run on the crate's own
+# manifest (`make test-servo-net`), as gaol's do.
+exclude = ["third_party/gaol", "third_party/servo-net"]
 
 [workspace.package]
 version = "0.2.0"

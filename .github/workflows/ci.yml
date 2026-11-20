@@ -566,3 +566,58 @@ jobs:
 
       - name: Check the vendored crates
         run: make servo-patches-check
+
+  # servo-net is vendored, has dev-dependencies and is excluded from the
+  # workspace, so `cargo test --workspace` never runs its own tests. Those
+  # include the ones that bind a certificate exception to its host and its
+  # certificate (R14 EC27, a release blocker). `make test-servo-net` runs them
+  # on the crate's own manifest and lock, against loopback servers only. It
+  # builds the crate's own dependency graph (no GStreamer, no window), which is
+  # most of the time; the 400 tests take seconds.
+  servo-net:
+    name: Vendored servo-net tests
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+    env:
+      CLANG_PATH: /usr/bin/clang-14
+      LIBCLANG_PATH: /usr/lib/llvm-14/lib
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Reads rust-toolchain.toml: channel, profile and components.
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Install the build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The native libraries that servo-net's own graph builds (FreeType,
+          # HarfBuzz, fontconfig, aws-lc), as in the Linux quality job, without
+          # GStreamer.
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            clang-14 \
+            cmake \
+            libclang-14-dev \
+            libfontconfig1-dev \
+            ninja-build \
+            pkg-config
+
+          test -x "${CLANG_PATH}"
+          test -e "${LIBCLANG_PATH}/libclang.so"
+
+      - name: Test servo-net
+        run: make test-servo-net

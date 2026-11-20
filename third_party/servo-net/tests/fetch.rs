@@ -795,7 +795,12 @@ fn test_fetch_with_hsts() {
     // The server certificate is self-signed, so we need to add an override
     // so that the connection works properly.
     for certificate in server.certificates.as_ref().unwrap().iter() {
-        context.state.override_manager.add_override(certificate);
+        // Mercury: exceptions are bound to the host name; the test server is reached as `localhost`.
+        context
+            .state
+            .override_manager
+            .add_override("localhost", certificate)
+            .expect("localhost is a valid host name");
     }
 
     {
@@ -837,7 +842,10 @@ fn test_load_adds_host_to_hsts_list_when_url_is_https() {
     let embedder_proxy = create_generic_embedder_proxy();
 
     let mut context = FetchContext {
-        state: Arc::new(create_http_state(None)),
+        // Mercury: the state's client ignores certificate errors, instead of a certificate exception: a
+        // host that has an exception does not teach the HSTS list (certificate_exceptions.rs), and this
+        // test is about a response over a connection that needed none.
+        state: Arc::new(crate::certificate_exceptions::state_that_ignores_certificate_errors()),
         user_agent: DEFAULT_USER_AGENT.into(),
         devtools_chan: None,
         filemanager: FileManager::new(
@@ -855,11 +863,7 @@ fn test_load_adds_host_to_hsts_list_when_url_is_https() {
         in_flight_keep_alive_records: Default::default(),
     };
 
-    // The server certificate is self-signed, so we need to add an override
-    // so that the connection works properly.
-    for certificate in server.certificates.as_ref().unwrap().iter() {
-        context.state.override_manager.add_override(certificate);
-    }
+    // The server certificate is self-signed: the state above does not verify it.
 
     let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)
         .method(Method::GET)
@@ -942,7 +946,12 @@ fn test_fetch_self_signed() {
     // The server certificate is self-signed, so we need to add an override
     // so that the connection works properly.
     for certificate in server.certificates.as_ref().unwrap().iter() {
-        context.state.override_manager.add_override(certificate);
+        // Mercury: exceptions are bound to the host name; the test server is reached as `localhost`.
+        context
+            .state
+            .override_manager
+            .add_override("localhost", certificate)
+            .expect("localhost is a valid host name");
     }
 
     let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: MPL-2.0
 mod address;
 mod browser;
+// certificate exceptions
+mod certificate_exception;
 // media-capture
 mod capture;
 mod clipboard;
@@ -67,6 +69,8 @@ pub use page_request::{
     PermissionDecision, PermissionDecisions, SIGN_IN_RETRY_INTERVAL, SUCCESSIVE_DIALOG_INTERVAL,
     SessionPermissionDecisions, sanitize_page_text, strip_user_info,
 };
+// certificate exceptions
+pub use certificate_exception::{certificate_exception_allowed, certificate_exception_host};
 // site security
 pub use site_security::{
     ErrorPageKind, HttpsOnlyInterstitial, HttpsPolicy, HttpsUpgradeChain, MainFrameLoad,

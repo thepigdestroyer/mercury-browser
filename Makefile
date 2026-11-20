@@ -73,6 +73,8 @@ INSTALL_FILTER_LISTS_RELEASE = $(INSTALL_FILTER_LISTS) --release
 	package-macos \
 	test-bundle-macos \
 	test-capture-macos \
+	test-certificate-exceptions-macos \
+	test-servo-net \
 	run \
 	run-debug \
 	run-release \
@@ -97,7 +99,8 @@ help:
 		'fmt' 'Format all Rust source files.' \
 		'fmt-check' 'Check Rust formatting without changing files.' \
 		'lint' 'Run Clippy and reject every warning.' \
-		'test' 'Run all workspace tests.' \
+		'test' 'Run all workspace tests, the gaol shared-memory test and the vendored servo-net tests.' \
+		'test-servo-net' 'Run the vendored servo-net tests (certificate exceptions among them; no engine build, no window).' \
 		'qa' 'Run formatting, linting, and tests.' \
 		'qa-fast' 'Check formatting, lint and test the crates that need no engine.' \
 		'ci-tools' 'Download the pinned shellcheck, actionlint and cargo-deny.' \
@@ -112,6 +115,7 @@ help:
 		'package-macos' 'Build Mercury Browser.app and its .dmg for macOS arm64.' \
 		'test-bundle-macos' 'Check the macOS bundle script helpers (no build needed).' \
 		'test-capture-macos' 'Check camera and microphone capture with fake devices (needs build-release).' \
+		'test-certificate-exceptions-macos' 'Check that a certificate exception is bound to its host (needs build-release).' \
 		'run' 'Run the optimized Mercury Desktop build.' \
 		'run-debug' 'Run Mercury Desktop with development debug information.' \
 		'run-release' 'Alias for the optimized run target.' \
@@ -225,6 +229,21 @@ test:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) $(COLLECT_GSTREAMER) target/$(PROFILE_DIR)/lib)
 	$(GSTREAMER_ENV) $(TEST_LIBRARY_PATH) "$(CARGO)" test $(CARGO_FLAGS) --workspace --all-features
 	"$(CARGO)" test --target-dir target --manifest-path third_party/gaol/Cargo.toml --test shared-memory
+	"$(MAKE)" test-servo-net
+
+# servo-net's own tests (third_party/servo-net/tests/main.rs, 414 tests, the certificate-exception ones among
+# them), part of `make test` and run by their own CI job. The crate is vendored, has dev-dependencies and is
+# excluded from the workspace (Cargo.toml), so cargo runs it on its own manifest and its own Cargo.lock,
+# like gaol: against the published sibling crates (only servo-net is patched), not Mercury's vendored
+# copies. Two tests fail without any Mercury change and are skipped by name: `fetch::test_file` reads a path
+# that exists only in Servo's repository, and `filemanager_thread::test_filemanager` panics on the
+# process-wide async runtime when it runs with the others. No GStreamer and no window; the first build takes
+# about 11 minutes on 12 threads, the tests a few seconds. Set RUST_TEST_THREADS=2 on a shared machine.
+test-servo-net:
+	"$(CARGO)" test --locked $(CARGO_FLAGS) --target-dir target \
+		--manifest-path third_party/servo-net/Cargo.toml \
+		--features test-util,devtools --test main -- \
+		--exact --skip fetch::test_file --skip filemanager_thread::test_filemanager
 
 qa:
 	"$(MAKE)" fmt-check
@@ -355,6 +374,11 @@ test-bundle-macos:
 test-capture-macos:
 	$(REQUIRE_MACOS)
 	scripts/macos/test-capture.sh
+
+# cert-exceptions: loopback only; the page must load from the accepted name and fail from the other.
+test-certificate-exceptions-macos:
+	$(REQUIRE_MACOS)
+	scripts/macos/test-certificate-exceptions.sh
 
 run:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) "$(CARGO)" build --package "$(APP_PACKAGE)" --release)

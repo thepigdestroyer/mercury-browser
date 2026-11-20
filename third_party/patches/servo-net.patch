@@ -1,10 +1,464 @@
 # Mercury's changes to servo-net 0.8.0, against the crate as published on crates.io
 # (SHA-256 e274e25650db0dacd2a290d13f51effd12735c17d5448403c2c77fea530e034d). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-net.
+diff --git a/certificate_exceptions.rs b/certificate_exceptions.rs
+new file mode 100644
+--- /dev/null
++++ b/certificate_exceptions.rs
+@@ -0,0 +1,432 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++// Mercury: certificate exceptions bound to the pair (host, certificate), failing closed. This is a new
++// Mercury file; nothing in it is copied from Servo or another project. The hooks are in `connector.rs`,
++// `lib.rs`, `fetch/methods.rs`, `http_loader.rs` and `websocket_loader.rs`; `MERCURY.md` lists them.
++
++//! Certificate exceptions bound to a host name and a certificate.
++//!
++//! Servo 0.8 keeps one list of certificates that the user chose to trust anyway, and accepts any
++//! certificate on that list for **every** host name: whoever holds the key of a certificate the user once
++//! accepted for `nas.local` could present it as `bank.example` and the connection would verify. Mercury
++//! replaces the list with a set of pairs `(host name, certificate)`:
++//!
++//! * the verifier accepts a certificate that fails normal verification only if the exact pair is in the set;
++//!   the signature checks stay with the main verifier, so the server must still hold the certificate's key;
++//! * the only way to add a pair from a user decision is [`HttpState::accept_failed_certificate`], which
++//!   accepts only the certificate the host **actually failed with** (a bounded record of the last failure of
++//!   each host), never one that the caller supplies on its own, and never for a host the HSTS list covers;
++//! * everything fails closed: an unparsable host, an evicted record, a changed certificate and an HSTS host
++//!   are refusals with a stable [code](CertificateExceptionRefusal::code), and no refusal changes the set.
++//!
++//! The key has no port and no error kind: rustls hands the verifier a name, not a port, and the error kind
++//! adds nothing against someone who holds the accepted certificate's key.
++//!
++//! Host forms. [`server_name_for_host`] is the one place that turns a host string into the name both the
++//! failure record and the exceptions use. It mirrors `talaria_core::certificate_exception_host` in the
++//! Mercury application (which keeps the brackets of an IPv6 literal, as `url::Url::host_str()` does); the
++//! tests of both carry the same table of cases.
++//!
++//! Revoking ([`HttpState::revoke_certificate_exception`]) affects new connections only. Connections that are
++//! already open (HTTP/1 keep-alive, HTTP/2) stay authenticated until they close, because `hyper` offers no
++//! per-host eviction of its pool. That is why Mercury offers no "remove exception" button yet.
++//!
++//! HSTS. A response that came over a connection that only an exception made valid must not teach the HSTS list
++//! (RFC 6797, section 8.1, which processes the header of a response only when the secure transport had no
++//! errors, and here the user chose to ignore one). Two things would go wrong otherwise. A device with a self-signed
++//! certificate that sends `Strict-Transport-Security`, as many routers and NAS pages do, would become an HSTS
++//! host after one accepted visit, and because Mercury keeps the HSTS list between sessions, [`accept_failed_certificate`]
++//! would refuse it from then on and the user could never continue again; and whoever holds the accepted
++//! certificate's key could plant a persistent HSTS entry for the name. [`HttpState::learn_hsts_from_response`] is the
++//! only place that updates the list from a response, and it does nothing for a host that has had an exception in
++//! this process. The rule is by host name and not by connection, so that it also covers a keep-alive or HTTP/2
++//! connection that outlives a revoke, and a WebSocket handshake (which has no connection record to ask);
++//! it fails closed, at the price that the name's own policy is learned in the next session and not in this one.
++//!
++//! [`accept_failed_certificate`]: HttpState::accept_failed_certificate
++//!
++//! A new connection must also make a full handshake. rustls skips `verify_server_cert` when it resumes a
++//! TLS session, so a ticket stored while the exception was in force would let the host in again after a
++//! revoke. Each client's session cache is therefore created through the override manager
++//! (`session_resumption`), which keeps a handle so that a revoke can empty the host's tickets.
++
++use std::collections::{HashSet, VecDeque};
++use std::fmt;
++use std::net::Ipv6Addr;
++use std::sync::{Arc, Weak};
++
++use aws_lc_rs::digest;
++use http::{HeaderMap, header};
++use log::info;
++use rustls::client::{ClientSessionMemoryCache, ClientSessionStore, Resumption};
++use rustls_pki_types::{CertificateDer, ServerName};
++use servo_url::ServoUrl;
++
++use crate::connector::CertificateErrorOverrideManager;
++use crate::http_loader::HttpState;
++
++/// How many hosts keep their last certificate failure for [`HttpState::accept_failed_certificate`]. When
++/// more hosts fail, the oldest record is dropped, and accepting for that host is refused with
++/// [`CertificateExceptionRefusal::NoFailureRecorded`] until the page is loaded again (fail closed).
++pub const MAX_RECORDED_FAILURES: usize = 64;
++
++/// The number of hosts whose TLS sessions one client remembers: what `Resumption::default()` uses.
++const SESSION_CACHE_SIZE: usize = 256;
++
++/// Why a certificate exception was not added. Nothing is added when one of these is returned.
++#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
++pub enum CertificateExceptionRefusal {
++    /// The host is not a DNS name or an IP address.
++    InvalidHost,
++    /// The host is covered by the HSTS list (learned or preloaded): browsers never let a user click
++    /// through a certificate error there.
++    HstsHost,
++    /// The host has no recorded certificate failure (never failed, already accepted, or evicted).
++    NoFailureRecorded,
++    /// The certificate offered is not the one the host last failed with.
++    CertificateChanged,
++}
++
++impl CertificateExceptionRefusal {
++    /// A stable text for the refusal: `invalid-host`, `hsts-host`, `no-failure-recorded` or
++    /// `certificate-changed`. Mercury's protocol handler sends it to its certificate page.
++    pub const fn code(self) -> &'static str {
++        match self {
++            Self::InvalidHost => "invalid-host",
++            Self::HstsHost => "hsts-host",
++            Self::NoFailureRecorded => "no-failure-recorded",
++            Self::CertificateChanged => "certificate-changed",
++        }
++    }
++}
++
++impl fmt::Display for CertificateExceptionRefusal {
++    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
++        write!(formatter, "certificate exception refused: {}", self.code())
++    }
++}
++
++impl std::error::Error for CertificateExceptionRefusal {}
++
++/// One accepted exception, as [`HttpState::certificate_exceptions`] lists it.
++#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
++pub struct CertificateExceptionEntry {
++    /// The host name: lower case, no trailing dot, an IPv6 literal in brackets (the form
++    /// `url::Url::host_str()` gives, and the form `revoke_certificate_exception` takes back).
++    pub host: String,
++    /// The SHA-256 of the DER of the accepted certificate.
++    pub sha256: [u8; 32],
++}
++
++/// The one name both the failure record and the exceptions use. Trims the brackets around an IPv6 literal,
++/// lower-cases, drops one trailing dot, then `ServerName::try_from`. `None` for anything that does not
++/// parse as a DNS name or an IP address; for brackets around anything that is not an IPv6 address; for
++/// an IPv6 address without brackets (a host is never written that way in a URL, and `Uri::host()` keeps
++/// the brackets); and for a name that still ends in a dot after the first one is dropped.
++///
++/// Mirrors `talaria_core::certificate_exception_host` in the Mercury application, which keeps the brackets.
++pub fn server_name_for_host(host: &str) -> Option<ServerName<'static>> {
++    let host = host.to_ascii_lowercase();
++    let bare = match host.strip_prefix('[') {
++        Some(rest) => {
++            let inner = rest.strip_suffix(']')?;
++            inner.parse::<Ipv6Addr>().ok()?;
++            inner
++        },
++        None => {
++            let name = host.strip_suffix('.').unwrap_or(&host);
++            if name.ends_with('.') || name.contains(':') {
++                return None;
++            }
++            name
++        },
++    };
++    ServerName::try_from(bare.to_owned()).ok()
++}
++
++/// The text form of a name for [`CertificateExceptionEntry::host`].
++fn host_text(server_name: &ServerName<'_>) -> String {
++    let text = server_name.to_str().to_ascii_lowercase();
++    if text.contains(':') {
++        format!("[{text}]")
++    } else {
++        text
++    }
++}
++
++/// The pairs the user accepted and the last certificate failure of each recent host. It lives inside the
++/// [`CertificateErrorOverrideManager`]'s lock, next to Servo's own map of pending failures.
++#[derive(Clone, Debug, Default)]
++pub(crate) struct CertificateExceptionStore {
++    /// The accepted pairs. The only thing the verifier consults.
++    exceptions: HashSet<(ServerName<'static>, CertificateDer<'static>)>,
++    /// The names that ever had an exception in this process. A revoke does not remove a name from it:
++    /// a connection that was opened under the exception can still be open (see the module documentation),
++    /// and the HSTS list must not learn from it. Consulted only by `HttpState::learn_hsts_from_response`.
++    overridden: HashSet<ServerName<'static>>,
++    /// The certificate each host last failed with, oldest first, at most [`MAX_RECORDED_FAILURES`] hosts.
++    recorded_failures: VecDeque<(ServerName<'static>, CertificateDer<'static>)>,
++    /// The TLS session cache of every client built with this manager that is still alive (see
++    /// `session_resumption`). Weak: `create_tls_config` is also called for every WebSocket connection,
++    /// and the cache must go away with its `ClientConfig`.
++    session_caches: Vec<Weak<ClientSessionMemoryCache>>,
++}
++
++impl CertificateExceptionStore {
++    /// Whether the exact pair was accepted. Another host name, another certificate, a subdomain or a
++    /// parent domain of an accepted host do not match.
++    pub(crate) fn contains(&self, name: &ServerName<'_>, certificate: &CertificateDer<'_>) -> bool {
++        !self.exceptions.is_empty() &&
++            self.exceptions
++                .contains(&(name.to_owned(), certificate.clone().into_owned()))
++    }
++
++    /// Adds the pair without any check of a recorded failure, and remembers that the name was overridden.
++    pub(crate) fn insert(
++        &mut self,
++        name: ServerName<'static>,
++        certificate: CertificateDer<'static>,
++    ) {
++        self.overridden.insert(name.clone());
++        self.exceptions.insert((name, certificate));
++    }
++
++    /// Whether `name` ever had an exception in this process, revoked or not.
++    pub(crate) fn was_overridden(&self, name: &ServerName<'_>) -> bool {
++        self.overridden.contains(&name.to_owned())
++    }
++
++    /// Remembers that `name` failed with `certificate`, replacing the older record of the same host and
++    /// dropping the oldest host when there are more than [`MAX_RECORDED_FAILURES`].
++    pub(crate) fn record_failure(
++        &mut self,
++        name: ServerName<'static>,
++        certificate: CertificateDer<'static>,
++    ) {
++        self.recorded_failures
++            .retain(|(recorded, _)| *recorded != name);
++        self.recorded_failures.push_back((name, certificate));
++        while self.recorded_failures.len() > MAX_RECORDED_FAILURES {
++            self.recorded_failures.pop_front();
++        }
++    }
++
++    /// Turns the recorded failure of `name` into an exception, if it is for `certificate`. A successful
++    /// call consumes the record; a refused one leaves everything as it was.
++    pub(crate) fn accept_recorded_failure(
++        &mut self,
++        name: &ServerName<'static>,
++        certificate: &[u8],
++    ) -> Result<(), CertificateExceptionRefusal> {
++        let position = self
++            .recorded_failures
++            .iter()
++            .position(|(recorded, _)| recorded == name)
++            .ok_or(CertificateExceptionRefusal::NoFailureRecorded)?;
++        if self.recorded_failures[position].1.as_ref() != certificate {
++            return Err(CertificateExceptionRefusal::CertificateChanged);
++        }
++        if let Some((name, certificate)) = self.recorded_failures.remove(position) {
++            self.insert(name, certificate);
++        }
++        Ok(())
++    }
++
++    /// Forgets every exception of `name`; returns how many. When there was one, the TLS sessions of the
++    /// host are forgotten too, so that the next connection makes a full handshake and is verified again.
++    pub(crate) fn revoke(&mut self, name: &ServerName<'static>) -> usize {
++        let before = self.exceptions.len();
++        self.exceptions.retain(|(accepted, _)| accepted != name);
++        let revoked = before - self.exceptions.len();
++        if revoked > 0 {
++            for cache in self.session_caches.iter().filter_map(Weak::upgrade) {
++                cache.remove_tls12_session(name);
++                while cache.take_tls13_ticket(name).is_some() {}
++            }
++        }
++        revoked
++    }
++
++    /// Creates the session cache of one client and remembers it for `revoke`. The size is rustls' own
++    /// default (`Resumption::default()`), and each client keeps a cache of its own, as before.
++    pub(crate) fn new_session_cache(&mut self) -> Resumption {
++        let cache = Arc::new(ClientSessionMemoryCache::new(SESSION_CACHE_SIZE));
++        self.session_caches.retain(|cache| cache.strong_count() > 0);
++        self.session_caches.push(Arc::downgrade(&cache));
++        Resumption::store(cache)
++    }
++
++    /// Every accepted pair, sorted by host and then certificate hash.
++    pub(crate) fn entries(&self) -> Vec<CertificateExceptionEntry> {
++        let mut entries: Vec<_> = self
++            .exceptions
++            .iter()
++            .map(|(name, certificate)| CertificateExceptionEntry {
++                host: host_text(name),
++                sha256: sha256(certificate.as_ref()),
++            })
++            .collect();
++        entries.sort();
++        entries
++    }
++}
++
++fn sha256(bytes: &[u8]) -> [u8; 32] {
++    let hash = digest::digest(&digest::SHA256, bytes);
++    let mut out = [0u8; 32];
++    out.copy_from_slice(hash.as_ref());
++    out
++}
++
++impl CertificateErrorOverrideManager {
++    /// For tests and trusted embedders: accepts `certificate` for `host` and nothing else, with no check
++    /// of a recorded failure. A user decision must go through [`HttpState::accept_failed_certificate`].
++    /// The old one-argument form, which accepted the certificate for every host, no longer exists.
++    ///
++    /// Only [`CertificateExceptionRefusal::InvalidHost`] is returned.
++    pub fn add_override(
++        &self,
++        host: &str,
++        certificate: &CertificateDer<'static>,
++    ) -> Result<(), CertificateExceptionRefusal> {
++        let name = server_name_for_host(host).ok_or(CertificateExceptionRefusal::InvalidHost)?;
++        self.lock().exceptions.insert(name, certificate.clone());
++        Ok(())
++    }
++
++    /// The TLS resumption setting for one client's `ClientConfig`, a session cache that a revoke can
++    /// empty (see the module documentation).
++    pub(crate) fn session_resumption(&self) -> Resumption {
++        self.lock().exceptions.new_session_cache()
++    }
++
++    /// Whether the verifier should accept `certificate` for `name` although it failed verification.
++    pub(crate) fn is_accepted(
++        &self,
++        name: &ServerName<'_>,
++        certificate: &CertificateDer<'_>,
++    ) -> bool {
++        self.lock().exceptions.contains(name, certificate)
++    }
++
++    /// Test helper: how many session caches the manager keeps a handle to (live clients, and at most
++    /// one dead one that the next registration drops).
++    #[cfg(feature = "test-util")]
++    pub fn session_cache_handles_for_test(&self) -> usize {
++        self.lock().exceptions.session_caches.len()
++    }
++
++    /// Test helper: whether the exact pair is accepted.
++    #[cfg(feature = "test-util")]
++    pub fn has_exception(&self, host: &str, certificate: &CertificateDer<'static>) -> bool {
++        server_name_for_host(host).is_some_and(|name| self.is_accepted(&name, certificate))
++    }
++
++    /// Test helper: does what the verifier does when a certificate fails verification, without a
++    /// network: notes `certificate` as the pending failure of `host`.
++    #[cfg(feature = "test-util")]
++    pub fn note_certificate_failure_for_test(
++        &self,
++        host: &str,
++        certificate: &CertificateDer<'static>,
++    ) {
++        if let Some(name) = server_name_for_host(host) {
++            self.lock()
++                .certificates_failing_to_verify
++                .insert(name, certificate.clone());
++        }
++    }
++
++    /// Test helper: does what `http_loader.rs` does when it builds the error page of a failed
++    /// request: reports (and so removes) the pending failure of `host`, which also moves a copy to
++    /// the bounded record. Returns the certificate that was pending, if any.
++    #[cfg(feature = "test-util")]
++    pub fn report_certificate_failure_for_test(
++        &self,
++        host: &str,
++    ) -> Option<CertificateDer<'static>> {
++        self.remove_certificate_failing_verification(host)
++    }
++}
++
++impl HttpState {
++    /// The only way a user decision becomes a certificate exception. `certificate` is the DER the user was
++    /// shown. The exception is added only if the host failed verification with exactly that certificate
++    /// (so a caller that was tricked into sending another certificate cannot add it), and not for a host
++    /// the HSTS list covers.
++    ///
++    /// Refusals, in this order: unparsable `host` -> [`InvalidHost`](CertificateExceptionRefusal::InvalidHost);
++    /// HSTS (learned or preloaded) -> [`HstsHost`](CertificateExceptionRefusal::HstsHost); no recorded
++    /// failure -> [`NoFailureRecorded`](CertificateExceptionRefusal::NoFailureRecorded); a different
++    /// certificate -> [`CertificateChanged`](CertificateExceptionRefusal::CertificateChanged). On success
++    /// the pair is added and the host's failure is cleared from both maps. There is no time limit: the
++    /// exception is for the certificate the user saw, not for the server's current one.
++    pub fn accept_failed_certificate(
++        &self,
++        host: &str,
++        certificate: &[u8],
++    ) -> Result<(), CertificateExceptionRefusal> {
++        let name = server_name_for_host(host).ok_or(CertificateExceptionRefusal::InvalidHost)?;
++        // HSTS never applies to an IP address (`HstsEntry::new` refuses one).
++        if let ServerName::DnsName(dns_name) = &name {
++            if self.hsts_list.read().is_host_secure(dns_name.as_ref()) {
++                return Err(CertificateExceptionRefusal::HstsHost);
++            }
++        }
++        let mut manager = self.override_manager.lock();
++        manager
++            .exceptions
++            .accept_recorded_failure(&name, certificate)?;
++        manager.certificates_failing_to_verify.remove(&name);
++        Ok(())
++    }
++
++    /// Whether the HSTS list may learn from a response to a request for `url`. Not when an exception was
++    /// ever accepted for the host of `url` in this process (revoked or not): the response may have come
++    /// over a connection that only the user's decision made valid (see the module documentation). The
++    /// host is turned into a name as `accept_failed_certificate` does, so `NAS.LOCAL.` and `nas.local` are
++    /// one. A host that cannot be named cannot have an exception.
++    pub fn may_learn_hsts_from(&self, url: &ServoUrl) -> bool {
++        let Some(name) = url.host_str().and_then(server_name_for_host) else {
++            return true;
++        };
++        !self
++            .override_manager
++            .lock()
++            .exceptions
++            .was_overridden(&name)
++    }
++
++    /// The one place that updates the HSTS list from a response: the list learns from `headers` unless
++    /// [`may_learn_hsts_from`](Self::may_learn_hsts_from) says no, and then nothing changes. Replaces the direct
++    /// calls of `HstsList::update_hsts_list_from_response` in the HTTP fetch and the WebSocket handshake
++    /// (a test fails if one comes back).
++    pub fn learn_hsts_from_response(&self, url: &ServoUrl, headers: &HeaderMap) {
++        if self.may_learn_hsts_from(url) {
++            self.hsts_list
++                .write()
++                .update_hsts_list_from_response(url, headers);
++        } else if headers.contains_key(header::STRICT_TRANSPORT_SECURITY) {
++            info!(
++                "not learning HSTS from {:?}: a certificate exception was accepted for it",
++                url.host_str()
++            );
++        }
++    }
++
++    /// Forgets every exception of `host`, and the TLS sessions of the host, so that a new connection is
++    /// verified again; returns how many exceptions it forgot. This affects new connections only:
++    /// connections that are already open (HTTP keep-alive, HTTP/2) stay authenticated until they close.
++    /// An unparsable host revokes nothing.
++    pub fn revoke_certificate_exception(&self, host: &str) -> usize {
++        match server_name_for_host(host) {
++            Some(name) => self.override_manager.lock().exceptions.revoke(&name),
++            None => 0,
++        }
++    }
++
++    /// Every certificate exception, sorted by host and then certificate hash.
++    pub fn certificate_exceptions(&self) -> Vec<CertificateExceptionEntry> {
++        self.override_manager.lock().exceptions.entries()
++    }
++}
 diff --git a/connector.rs b/connector.rs
 --- a/connector.rs
 +++ b/connector.rs
-@@ -42,6 +42,10 @@
+@@ -4,7 +4,6 @@
+
+ use std::cell::RefCell;
+ use std::collections::hash_map::HashMap;
+-use std::convert::TryFrom;
+ use std::error::Error;
+ use std::sync::{Arc, LazyLock};
+ use std::time::Duration;
+@@ -35,6 +34,8 @@
+ use tower::Service;
+
+ use crate::async_runtime::spawn_task;
++// Mercury: the exception store and the host-name form live in certificate_exceptions.rs.
++use crate::certificate_exceptions::{CertificateExceptionStore, server_name_for_host};
+ use crate::hosts::replace_host;
+
+ pub const BUF_SIZE: usize = 32768;
+@@ -42,6 +43,10 @@
  /// ALPN identifier for HTTP/2 (RFC 7540 §3.1).
  pub const ALPN_H2: &str = "h2";
 
@@ -15,7 +469,124 @@ diff --git a/connector.rs b/connector.rs
  #[derive(Clone)]
  pub struct ServoHttpConnector {
      inner: HyperHttpConnector,
-@@ -668,6 +672,8 @@
+@@ -299,14 +304,18 @@
+ pub type Connector = InstrumentedConnector<ServoHttpConnector>;
+ pub type TlsConfig = ClientConfig;
+
++// Mercury: `pub(crate)`, with the two fields below, so that certificate_exceptions.rs can reach them
++// through `lock`.
+ #[derive(Clone, Debug, Default)]
+-struct CertificateErrorOverrideManagerInternal {
++pub(crate) struct CertificateErrorOverrideManagerInternal {
+     /// A mapping of certificates and their hosts, which have seen certificate errors.
+     /// This is used to later create an override in this [CertificateErrorOverrideManager].
+-    certificates_failing_to_verify: HashMap<ServerName<'static>, CertificateDer<'static>>,
+-    /// A list of certificates that should be accepted despite encountering verification
+-    /// errors.
+-    overrides: Vec<CertificateDer<'static>>,
++    pub(crate) certificates_failing_to_verify:
++        HashMap<ServerName<'static>, CertificateDer<'static>>,
++    // Mercury: replaces `overrides: Vec<CertificateDer<'static>>`, a list of bare certificates that
++    // was accepted for every host. The store holds (host, certificate) pairs and a bounded record of
++    // the last failure of each host; see certificate_exceptions.rs.
++    pub(crate) exceptions: CertificateExceptionStore,
+ }
+
+ /// This data structure is used to track certificate verification errors and overrides.
+@@ -321,10 +330,13 @@
+         Self(Default::default())
+     }
+
+-    /// Add a certificate to this manager's list of certificates for which to ignore
+-    /// validation errors.
+-    pub fn add_override(&self, certificate: &CertificateDer<'static>) {
+-        self.0.lock().overrides.push(certificate.clone());
++    // Mercury: the old `add_override(&self, certificate)` is removed (it accepted the certificate for
++    // every host). Its replacement, which takes the host, is in certificate_exceptions.rs and uses
++    // this accessor.
++    pub(crate) fn lock(
++        &self,
++    ) -> parking_lot::MutexGuard<'_, CertificateErrorOverrideManagerInternal> {
++        self.0.lock()
+     }
+
+     /// Given the a string representation of a sever host name, remove information about
+@@ -334,17 +346,21 @@
+         &self,
+         host: &str,
+     ) -> Option<CertificateDer<'static>> {
+-        let server_name = match ServerName::try_from(host) {
+-            Ok(name) => name.to_owned(),
+-            Err(error) => {
+-                warn!("Could not convert host string into RustTLS ServerName: {error:?}");
+-                return None;
+-            },
++        // Mercury: `server_name_for_host` also accepts an IPv6 literal in brackets (`Uri::host()`
++        // keeps them, `ServerName::try_from` refuses them), lower-cases and drops a trailing dot.
++        let Some(server_name) = server_name_for_host(host) else {
++            warn!("Could not convert host string into RustTLS ServerName: {host:?}");
++            return None;
+         };
+-        self.0
+-            .lock()
+-            .certificates_failing_to_verify
+-            .remove(&server_name)
++        let mut internal = self.0.lock();
++        let certificate = internal.certificates_failing_to_verify.remove(&server_name);
++        // Mercury: this call is the report of a failure, which removes it. Keep a bounded copy, so
++        // that `HttpState::accept_failed_certificate` accepts exactly the certificate the user saw.
++        if let Some(certificate) = &certificate {
++            let copy = certificate.clone();
++            internal.exceptions.record_failure(server_name, copy);
++        }
++        certificate
+     }
+ }
+
+@@ -367,6 +383,10 @@
+     ignore_certificate_errors: bool,
+     override_manager: CertificateErrorOverrideManager,
+ ) -> TlsConfig {
++    // Mercury: the TLS session cache of this client is made by the manager, which can empty a host's
++    // sessions when its exception is revoked (rustls does not verify the certificate of a resumed
++    // session). See certificate_exceptions.rs.
++    let resumption = override_manager.session_resumption();
+     let verifier = CertificateVerificationOverrideVerifier::new(
+         ca_certificates,
+         ignore_certificate_errors,
+@@ -374,10 +394,12 @@
+     );
+     // TODO: After <https://github.com/rustls/rustls-platform-verifier/pull/204> is merged,
+     // `dangerous` can be removed.
+-    rustls::ClientConfig::builder()
++    let mut config = rustls::ClientConfig::builder()
+         .dangerous()
+         .with_custom_certificate_verifier(Arc::new(verifier))
+-        .with_no_client_auth()
++        .with_no_client_auth();
++    config.resumption = resumption;
++    config
+ }
+
+ #[derive(Clone)]
+@@ -558,11 +580,11 @@
+             return Ok(rustls::client::danger::ServerCertVerified::assertion());
+         }
+
+-        // If there's an override for this certificate, just accept it.
+-        for cert_with_exception in &*self.override_manager.0.lock().overrides {
+-            if *end_entity == *cert_with_exception {
+-                return Ok(rustls::client::danger::ServerCertVerified::assertion());
+-            }
++        // Mercury: accept only the exact (server name, certificate) pair the user accepted. Servo
++        // accepted the certificate for every server name. The signature checks
++        // (`verify_tls12_signature`, `verify_tls13_signature`) stay with the main verifier.
++        if self.override_manager.is_accepted(server_name, end_entity) {
++            return Ok(rustls::client::danger::ServerCertVerified::assertion());
+         }
+         self.override_manager
+             .0
+@@ -668,6 +690,8 @@
 
      Client::builder(TokioExecutor {})
          .http1_title_case_headers(true)
@@ -63,6 +634,137 @@ diff --git a/cookie_storage.rs b/cookie_storage.rs
          match result.len() {
              0 => None,
              _ => Some(result),
+diff --git a/fetch/methods.rs b/fetch/methods.rs
+--- a/fetch/methods.rs
++++ b/fetch/methods.rs
+@@ -2,12 +2,10 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
++use std::mem;
+ use std::sync::Arc;
+ use std::sync::atomic::{AtomicBool, Ordering};
+-use std::{io, mem, str};
+
+-use base64::Engine as _;
+-use base64::engine::general_purpose;
+ use bytes::Bytes;
+ use content_security_policy as csp;
+ use embedder_traits::resources::{self, Resource};
+@@ -14,7 +12,6 @@
+ use headers::{AccessControlExposeHeaders, ContentType, HeaderMapExt};
+ use http::header::{self, HeaderMap, HeaderName, RANGE};
+ use http::{HeaderValue, Method, StatusCode};
+-use ipc_channel::ipc;
+ use log::{debug, trace, warn};
+ use malloc_size_of_derive::MallocSizeOf;
+ use mime::{self, Mime};
+@@ -23,10 +20,9 @@
+ use net_traits::http_status::HttpStatus;
+ use net_traits::policy_container::PolicyContainer;
+ use net_traits::request::{
+-    BodyChunkRequest, BodyChunkResponse, CredentialsMode, Destination, Initiator,
+-    InsecureRequestsPolicy, InternalRequest, Origin, ParserMetadata, RedirectMode, Referrer,
+-    Request, RequestBody, RequestId, RequestMode, ResponseTainting, is_cors_safelisted_method,
+-    is_cors_safelisted_request_header,
++    CredentialsMode, Destination, Initiator, InsecureRequestsPolicy, InternalRequest, Origin,
++    ParserMetadata, RedirectMode, Referrer, Request, RequestBody, RequestId, RequestMode,
++    ResponseTainting, is_cors_safelisted_method, is_cors_safelisted_request_header,
+ };
+ use net_traits::response::{Response, ResponseBody, ResponseType, TerminationReason};
+ use net_traits::{
+@@ -37,7 +33,6 @@
+ use parking_lot::Mutex;
+ use profile_traits::generic_callback::GenericCallback as ProfileGenericCallback;
+ use rustc_hash::FxHashMap;
+-use rustls_pki_types::CertificateDer;
+ use serde::{Deserialize, Serialize};
+ use servo_base::generic_channel::CallbackSetter;
+ use servo_base::id::PipelineId;
+@@ -1014,67 +1009,10 @@
+     response
+ }
+
+-/// Handle a request from the user interface to ignore validation errors for a certificate.
+-fn handle_allowcert_request(request: &mut Request, context: &FetchContext) -> io::Result<()> {
+-    let error = |string| Err(io::Error::other(string));
+-
+-    let body = match request.body.as_mut() {
+-        Some(body) => body,
+-        None => return error("No body found"),
+-    };
+-
+-    let stream = body.clone_stream();
+-    let mut stream = stream.lock();
+-    let (body_chan, body_port) = ipc::channel().unwrap();
+-    let Some(chunk_requester) = stream.as_mut() else {
+-        log::error!(
+-            "Could not connect to the request body stream because it has already been closed."
+-        );
+-        return Err(std::io::Error::other("Could not send BodyChunkRequest"));
+-    };
+-    chunk_requester
+-        .send(BodyChunkRequest::Connect(body_chan))
+-        .map_err(|error| {
+-            log::error!(
+-                "Could not connect to the request body stream because it has already been closed: {error}"
+-            );
+-            std::io::Error::other("Could not connect to request body stream")
+-        })?;
+-    chunk_requester
+-        .send(BodyChunkRequest::Chunk)
+-        .map_err(|error| {
+-            log::error!(
+-                "Could not request the first request body chunk because the body stream has already been closed: {error}"
+-            );
+-            std::io::Error::other("Could not request request body chunk")
+-        })?;
+-    let body_bytes = match body_port.recv().ok() {
+-        Some(BodyChunkResponse::Chunk(bytes)) => bytes,
+-        _ => return error("Certificate not sent in a single chunk"),
+-    };
+-
+-    let split_idx = match body_bytes.iter().position(|b| *b == b'&') {
+-        Some(split_idx) => split_idx,
+-        None => return error("Could not find ampersand in data"),
+-    };
+-    let (secret, cert_base64) = body_bytes.split_at(split_idx);
+-
+-    let secret = str::from_utf8(secret).ok().and_then(|s| s.parse().ok());
+-    if secret != Some(*net_traits::PRIVILEGED_SECRET) {
+-        return error("Invalid secret sent. Ignoring request");
+-    }
+-
+-    let cert_bytes = match general_purpose::STANDARD_NO_PAD.decode(&cert_base64[1..]) {
+-        Ok(bytes) => bytes,
+-        Err(_) => return error("Could not decode certificate base64"),
+-    };
+-
+-    context
+-        .state
+-        .override_manager
+-        .add_override(&CertificateDer::from_slice(&cert_bytes).into_owned());
+-    Ok(())
+-}
++// Mercury: `handle_allowcert_request` is removed. `chrome:allowcert` added a bare certificate that
++// was then accepted for every host, and its per-process secret cannot work with content processes
++// anyway. A user decision now becomes an exception only through
++// `HttpState::accept_failed_certificate(host, certificate)` (certificate_exceptions.rs).
+
+ /// [Scheme fetch](https://fetch.spec.whatwg.org#scheme-fetch)
+ async fn scheme_fetch(
+@@ -1099,9 +1037,8 @@
+         },
+
+         "chrome" if url_and_blob_lock.path() == "allowcert" => {
+-            if let Err(error) = handle_allowcert_request(request, context) {
+-                warn!("Could not handle allowcert request: {error}");
+-            }
++            // Mercury: refused; nothing is added. See `handle_allowcert_request` above.
++            warn!("Refusing chrome:allowcert: certificate exceptions are bound to a host");
+             create_blank_reply(url_and_blob_lock.url(), request.timing_type())
+         },
+
 diff --git a/http_loader.rs b/http_loader.rs
 --- a/http_loader.rs
 +++ b/http_loader.rs
@@ -99,7 +801,21 @@ diff --git a/http_loader.rs b/http_loader.rs
          }
      }
 
-@@ -2634,9 +2638,11 @@
+@@ -2478,11 +2482,10 @@
+     if credentials_flag {
+         set_cookies_from_headers(&url, &response.headers, &context.state.cookie_jar);
+     }
++    // Mercury: not from a host that has had a certificate exception (certificate_exceptions.rs).
+     context
+         .state
+-        .hsts_list
+-        .write()
+-        .update_hsts_list_from_response(&url, &response.headers);
++        .learn_hsts_from_response(&url, &response.headers);
+
+     // TODO these steps
+     // Step 16
+@@ -2634,9 +2637,11 @@
              return Response::network_error(NetworkError::CorsMethod);
          }
 
@@ -145,7 +861,16 @@ diff --git a/image_cache.rs b/image_cache.rs
 diff --git a/lib.rs b/lib.rs
 --- a/lib.rs
 +++ b/lib.rs
-@@ -19,6 +19,10 @@
+@@ -5,6 +5,8 @@
+ #![deny(unsafe_code)]
+
+ pub mod async_runtime;
++// Mercury: certificate exceptions bound to (host, certificate); see certificate_exceptions.rs.
++pub mod certificate_exceptions;
+ pub mod connector;
+ pub mod cookie;
+ pub mod cookie_storage;
+@@ -19,6 +21,10 @@
  pub mod http_loader;
  pub mod image_cache;
  pub mod local_directory_listing;
@@ -1310,3 +2035,1208 @@ new file mode 100644
 +        assert!(parsed);
 +    }
 +}
+diff --git a/tests/certificate_exceptions.rs b/tests/certificate_exceptions.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/certificate_exceptions.rs
+@@ -0,0 +1,1099 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++// Mercury: tests for certificate exceptions bound to (host, certificate); see certificate_exceptions.rs.
++
++//! Certificate exceptions are bound to the pair (host name, certificate) and fail closed.
++//!
++//! Most tests need no network: they use the exception store and the failure record through the public
++//! API (`add_override`, the `*_for_test` helpers behind the `test-util` feature, and the three methods of
++//! `HttpState`). The last group uses the loopback TLS server of `test_util` (self-signed certificate) that
++//! is reachable under several host names: `localhost`, `127.0.0.1` and `[::1]`.
++
++use std::sync::Arc;
++
++use base64::Engine as _;
++use fst::Streamer;
++use http::{HeaderMap, HeaderValue, Method, header};
++use http_body_util::combinators::BoxBody;
++use hyper::body::{Bytes, Incoming};
++use hyper::{Request as HyperRequest, Response as HyperResponse};
++use net::certificate_exceptions::{
++    CertificateExceptionRefusal, MAX_RECORDED_FAILURES, server_name_for_host,
++};
++use net::connector::{
++    CACertificates, CertificateErrorOverrideManager, create_http_client, create_tls_config,
++};
++use net::fetch::methods::FetchContext;
++use net::hsts::{HstsEntry, HstsList, HstsPreloadList};
++use net::test_util::Server;
++use net_traits::blob_url_store::UrlWithBlobClaim;
++use net_traits::request::{
++    Destination, Referrer, RequestBuilder, create_request_body_with_content,
++};
++use net_traits::response::Response;
++use net_traits::{IncludeSubdomains, NetworkError};
++use rustls_pki_types::{CertificateDer, ServerName};
++use servo_base::id::{TEST_PIPELINE_ID, TEST_WEBVIEW_ID};
++use servo_url::ServoUrl;
++
++use crate::{create_http_state, fetch_with_context, make_body, make_ssl_server, new_fetch_context};
++
++/// Host as given, and the spelling the exceptions list it under (`None`: no exception can name it).
++///
++/// These are the rows of `HOST_FORMS` in `crates/talaria-core/tests/certificate_exceptions.rs`, the
++/// table of `talaria_core::certificate_exception_host`. The two functions differ only where the
++/// engine's name has no brackets: `server_name_for_host` takes `[::1]` and gives the IPv6 name `::1`,
++/// and the entries list it back as `[::1]`.
++const HOST_FORMS: &[(&str, Option<&str>)] = &[
++    // Case and one trailing dot (the form of a fully qualified name).
++    ("nas.local", Some("nas.local")),
++    ("Nas.Local", Some("nas.local")),
++    ("NAS.LOCAL.", Some("nas.local")),
++    ("nas", Some("nas")),
++    ("localhost.", Some("localhost")),
++    // More than one trailing dot is an empty label: no name.
++    ("nas..", None),
++    ("nas.local..", None),
++    ("a..b", None),
++    (".", None),
++    ("..", None),
++    // IPv4.
++    ("127.0.0.1", Some("127.0.0.1")),
++    ("192.168.1.20.", Some("192.168.1.20")),
++    // IPv6 literals keep their brackets, in the canonical form.
++    ("[::1]", Some("[::1]")),
++    ("[0:0:0:0:0:0:0:1]", Some("[::1]")),
++    ("[FD00:0:0:0:0:0:0:ABC]", Some("[fd00::abc]")),
++    ("[fe80::1]", Some("[fe80::1]")),
++    // Anything that is not a host, or is half of one.
++    ("", None),
++    (" ", None),
++    ("a b", None),
++    ("a/b", None),
++    ("a?b", None),
++    ("a#b", None),
++    ("user@host", None),
++    ("host:8443", None),
++    ("nas.local:8443", None),
++    ("::1", None),
++    ("::1]", None),
++    ("[::1", None),
++    ("[::1].", None),
++    ("[::1]:8443", None),
++    ("[not-an-address]", None),
++    ("a%2fb", None),
++    // The core normaliser turns a name with letters outside ASCII into this ASCII form before the
++    // engine sees it; the engine never accepts the raw form.
++    ("xn--ns-qla.local", Some("xn--ns-qla.local")),
++    ("N\u{e5}s.local", None),
++];
++
++fn der(bytes: &[u8]) -> CertificateDer<'static> {
++    CertificateDer::from(bytes.to_vec())
++}
++
++fn hex(bytes: &[u8]) -> String {
++    bytes.iter().map(|byte| format!("{byte:02x}")).collect()
++}
++
++// ---------------------------------------------------------------------------------------------------
++// No network.
++// ---------------------------------------------------------------------------------------------------
++
++#[test]
++fn the_host_form_table() {
++    for (host, expected) in HOST_FORMS {
++        // The engine's name has no brackets around an IPv6 literal.
++        let expected_name = expected.map(|text| {
++            ServerName::try_from(text.trim_matches(['[', ']']))
++                .expect("a name")
++                .to_owned()
++        });
++        assert_eq!(server_name_for_host(host), expected_name, "{host:?}");
++    }
++}
++
++#[test]
++fn the_host_form_table_through_add_override_and_the_listing() {
++    for (host, expected) in HOST_FORMS {
++        let state = create_http_state(None);
++        let certificate = der(b"a certificate");
++        let added = state.override_manager.add_override(host, &certificate);
++        match expected {
++            Some(text) => {
++                assert_eq!(added, Ok(()), "{host:?}");
++                let entries = state.certificate_exceptions();
++                assert_eq!(entries.len(), 1, "{host:?}");
++                assert_eq!(entries[0].host, *text, "{host:?}");
++            },
++            None => {
++                assert_eq!(
++                    added,
++                    Err(CertificateExceptionRefusal::InvalidHost),
++                    "{host:?}"
++                );
++                assert!(state.certificate_exceptions().is_empty(), "{host:?}");
++            },
++        }
++    }
++}
++
++#[test]
++fn the_refusal_codes_are_stable() {
++    assert_eq!(
++        CertificateExceptionRefusal::InvalidHost.code(),
++        "invalid-host"
++    );
++    assert_eq!(CertificateExceptionRefusal::HstsHost.code(), "hsts-host");
++    assert_eq!(
++        CertificateExceptionRefusal::NoFailureRecorded.code(),
++        "no-failure-recorded"
++    );
++    assert_eq!(
++        CertificateExceptionRefusal::CertificateChanged.code(),
++        "certificate-changed"
++    );
++    assert_eq!(
++        CertificateExceptionRefusal::HstsHost.to_string(),
++        "certificate exception refused: hsts-host"
++    );
++}
++
++#[test]
++fn an_exception_is_the_pair_of_host_and_certificate() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    let accepted = der(b"the certificate the user accepted");
++    let another = der(b"another certificate");
++
++    assert_eq!(manager.add_override("nas.local", &accepted), Ok(()));
++
++    // The same host and certificate, in every spelling of the host.
++    for host in ["nas.local", "NAS.Local", "nas.local."] {
++        assert!(manager.has_exception(host, &accepted), "{host}");
++    }
++    // The same certificate on another host name.
++    for host in ["other.local", "nas.example", "127.0.0.1", "[::1]", "nas"] {
++        assert!(!manager.has_exception(host, &accepted), "{host}");
++    }
++    // Another certificate on the same host.
++    assert!(!manager.has_exception("nas.local", &another));
++    // A subdomain and the parent domain of the accepted host.
++    assert!(!manager.has_exception("www.nas.local", &accepted));
++    assert!(!manager.has_exception("local", &accepted));
++    // A host that cannot be named has no exception, whatever the certificate.
++    for host in ["", "a b", "::1]", "nas.local.."] {
++        assert!(!manager.has_exception(host, &accepted), "{host:?}");
++    }
++
++    // An exception for a subdomain is not one for its parent, and the other way round.
++    assert_eq!(manager.add_override("a.example.test", &accepted), Ok(()));
++    assert!(manager.has_exception("a.example.test", &accepted));
++    assert!(!manager.has_exception("example.test", &accepted));
++    assert!(!manager.has_exception("b.example.test", &accepted));
++    assert!(!manager.has_exception("x.a.example.test", &accepted));
++
++    // IP addresses and IPv6 literals are names of their own.
++    assert_eq!(manager.add_override("[::1]", &accepted), Ok(()));
++    assert_eq!(manager.add_override("127.0.0.1", &accepted), Ok(()));
++    assert!(manager.has_exception("[0:0:0:0:0:0:0:1]", &accepted));
++    assert!(manager.has_exception("127.0.0.1", &accepted));
++    assert!(!manager.has_exception("127.0.0.2", &accepted));
++    assert!(!manager.has_exception("localhost", &accepted));
++}
++
++#[test]
++fn add_override_refuses_a_host_that_cannot_be_named() {
++    let state = create_http_state(None);
++    for host in ["", "a b", "::1]", "[::1", "a..b"] {
++        assert_eq!(
++            state.override_manager.add_override(host, &der(b"x")),
++            Err(CertificateExceptionRefusal::InvalidHost),
++            "{host:?}"
++        );
++    }
++    assert!(state.certificate_exceptions().is_empty());
++}
++
++#[test]
++fn accepting_needs_a_valid_host() {
++    let state = create_http_state(None);
++    for host in ["", "a b", "::1]", "[::1", "nas..", "a/b"] {
++        assert_eq!(
++            state.accept_failed_certificate(host, b"x"),
++            Err(CertificateExceptionRefusal::InvalidHost),
++            "{host:?}"
++        );
++    }
++    assert!(state.certificate_exceptions().is_empty());
++}
++
++#[test]
++fn accepting_needs_a_recorded_failure() {
++    let state = create_http_state(None);
++    // Never failed.
++    assert_eq!(
++        state.accept_failed_certificate("nas.local", b"x"),
++        Err(CertificateExceptionRefusal::NoFailureRecorded)
++    );
++    // A failure that was noted but not yet reported (no error page was built) is not a record.
++    let manager = &state.override_manager;
++    manager.note_certificate_failure_for_test("nas.local", &der(b"x"));
++    assert_eq!(
++        state.accept_failed_certificate("nas.local", b"x"),
++        Err(CertificateExceptionRefusal::NoFailureRecorded)
++    );
++    // The record of one host name does not serve another.
++    assert_eq!(
++        manager.report_certificate_failure_for_test("nas.local"),
++        Some(der(b"x"))
++    );
++    for other in [
++        "other.local",
++        "www.nas.local",
++        "local",
++        "127.0.0.1",
++        "[::1]",
++    ] {
++        assert_eq!(
++            state.accept_failed_certificate(other, b"x"),
++            Err(CertificateExceptionRefusal::NoFailureRecorded),
++            "{other}"
++        );
++    }
++    assert!(state.certificate_exceptions().is_empty());
++    // And the host itself can be accepted, once.
++    assert_eq!(state.accept_failed_certificate("nas.local", b"x"), Ok(()));
++    assert_eq!(
++        state.accept_failed_certificate("nas.local", b"x"),
++        Err(CertificateExceptionRefusal::NoFailureRecorded)
++    );
++}
++
++#[test]
++fn accepting_only_takes_the_certificate_the_host_failed_with() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    let shown = der(b"the certificate the user was shown");
++
++    manager.note_certificate_failure_for_test("bank.example", &shown);
++    assert_eq!(
++        manager.report_certificate_failure_for_test("bank.example"),
++        Some(shown.clone())
++    );
++
++    // A page that sends another certificate cannot get it accepted, and nothing changes.
++    let wrong_certificates: [&[u8]; 3] = [b"an attacker's certificate", b"", &shown.as_ref()[1..]];
++    for wrong in wrong_certificates {
++        assert_eq!(
++            state.accept_failed_certificate("bank.example", wrong),
++            Err(CertificateExceptionRefusal::CertificateChanged)
++        );
++    }
++    assert!(state.certificate_exceptions().is_empty());
++    assert!(!manager.has_exception("bank.example", &der(b"an attacker's certificate")));
++
++    // The record survived the refusals, so the right certificate is still accepted.
++    assert_eq!(
++        state.accept_failed_certificate("bank.example", shown.as_ref()),
++        Ok(())
++    );
++    assert!(manager.has_exception("bank.example", &shown));
++    assert_eq!(state.certificate_exceptions().len(), 1);
++}
++
++#[test]
++fn the_newest_failure_of_a_host_replaces_the_older_one() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    for certificate in [b"first", b"newer"] {
++        manager.note_certificate_failure_for_test("nas.local", &der(certificate));
++        assert_eq!(
++            manager.report_certificate_failure_for_test("nas.local"),
++            Some(der(certificate))
++        );
++    }
++    assert_eq!(
++        state.accept_failed_certificate("nas.local", b"first"),
++        Err(CertificateExceptionRefusal::CertificateChanged)
++    );
++    assert_eq!(
++        state.accept_failed_certificate("nas.local", b"newer"),
++        Ok(())
++    );
++    assert!(manager.has_exception("nas.local", &der(b"newer")));
++    assert!(!manager.has_exception("nas.local", &der(b"first")));
++}
++
++#[test]
++fn accepting_clears_the_pending_failure_of_the_host() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    manager.note_certificate_failure_for_test("nas.local", &der(b"c1"));
++    assert!(
++        manager
++            .report_certificate_failure_for_test("nas.local")
++            .is_some()
++    );
++    // A later failure is pending again, and a refusal leaves it alone.
++    manager.note_certificate_failure_for_test("nas.local", &der(b"c2"));
++    assert_eq!(
++        state.accept_failed_certificate("nas.local", b"c3"),
++        Err(CertificateExceptionRefusal::CertificateChanged)
++    );
++    assert_eq!(
++        manager.report_certificate_failure_for_test("nas.local"),
++        Some(der(b"c2"))
++    );
++
++    // Pending again; accepting the recorded certificate (c2) clears it.
++    manager.note_certificate_failure_for_test("nas.local", &der(b"c4"));
++    assert_eq!(state.accept_failed_certificate("nas.local", b"c2"), Ok(()));
++    // A stale pending entry would turn an unrelated later network error of this host into a
++    // certificate error.
++    assert_eq!(
++        manager.report_certificate_failure_for_test("nas.local"),
++        None
++    );
++}
++
++#[test]
++fn the_failure_record_is_bounded_and_drops_the_oldest_host() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    let extra = 6;
++    let host = |index: usize| format!("h{index}.nas.local");
++    let certificate = |index: usize| der(format!("certificate {index}").as_bytes());
++
++    for index in 0..MAX_RECORDED_FAILURES + extra {
++        manager.note_certificate_failure_for_test(&host(index), &certificate(index));
++        assert!(
++            manager
++                .report_certificate_failure_for_test(&host(index))
++                .is_some()
++        );
++    }
++    // The oldest `extra` hosts were dropped: fail closed, the user reloads the page.
++    for index in 0..extra {
++        assert_eq!(
++            state.accept_failed_certificate(&host(index), certificate(index).as_ref()),
++            Err(CertificateExceptionRefusal::NoFailureRecorded),
++            "{index}"
++        );
++    }
++    // The newest MAX_RECORDED_FAILURES hosts are kept.
++    for index in extra..MAX_RECORDED_FAILURES + extra {
++        assert_eq!(
++            state.accept_failed_certificate(&host(index), certificate(index).as_ref()),
++            Ok(()),
++            "{index}"
++        );
++    }
++    assert_eq!(state.certificate_exceptions().len(), MAX_RECORDED_FAILURES);
++}
++
++#[test]
++fn a_host_that_fails_again_counts_as_newest() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    let host = |index: usize| format!("h{index}.nas.local");
++    let report = |index: usize| {
++        manager.note_certificate_failure_for_test(&host(index), &der(b"c"));
++        assert!(
++            manager
++                .report_certificate_failure_for_test(&host(index))
++                .is_some()
++        );
++    };
++    for index in 0..MAX_RECORDED_FAILURES {
++        report(index);
++    }
++    // h0 is the oldest; failing again makes it the newest, so the next new host drops h1 instead.
++    report(0);
++    report(MAX_RECORDED_FAILURES);
++    assert_eq!(state.accept_failed_certificate(&host(0), b"c"), Ok(()));
++    assert_eq!(
++        state.accept_failed_certificate(&host(1), b"c"),
++        Err(CertificateExceptionRefusal::NoFailureRecorded)
++    );
++    assert_eq!(state.accept_failed_certificate(&host(2), b"c"), Ok(()));
++}
++
++#[test]
++fn a_host_on_the_learned_hsts_list_is_refused() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    state.hsts_list.write().push(
++        HstsEntry::new(
++            "hsts-learned.example.org".to_owned(),
++            IncludeSubdomains::Included,
++            None,
++        )
++        .expect("a host"),
++    );
++    for host in ["hsts-learned.example.org", "www.hsts-learned.example.org"] {
++        manager.note_certificate_failure_for_test(host, &der(b"c"));
++        assert!(manager.report_certificate_failure_for_test(host).is_some());
++        assert_eq!(
++            state.accept_failed_certificate(host, b"c"),
++            Err(CertificateExceptionRefusal::HstsHost),
++            "{host}"
++        );
++    }
++    // The refusal comes before the question whether a failure was recorded.
++    assert_eq!(
++        state.accept_failed_certificate("deeper.www.hsts-learned.example.org", b"c"),
++        Err(CertificateExceptionRefusal::HstsHost)
++    );
++    assert!(state.certificate_exceptions().is_empty());
++
++    // A host the list does not cover is not affected.
++    manager.note_certificate_failure_for_test("example.org", &der(b"c"));
++    assert!(
++        manager
++            .report_certificate_failure_for_test("example.org")
++            .is_some()
++    );
++    assert_eq!(state.accept_failed_certificate("example.org", b"c"), Ok(()));
++}
++
++#[test]
++fn a_host_on_the_preloaded_hsts_list_is_refused() {
++    let host = a_preloaded_host();
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    // Nothing was learned for it: the refusal comes from the preload list.
++    assert!(state.hsts_list.read().entries_map.is_empty());
++    manager.note_certificate_failure_for_test(&host, &der(b"c"));
++    assert!(manager.report_certificate_failure_for_test(&host).is_some());
++    assert_eq!(
++        state.accept_failed_certificate(&host, b"c"),
++        Err(CertificateExceptionRefusal::HstsHost),
++        "{host}"
++    );
++    // Upper case and the trailing dot of a fully qualified name do not get around it.
++    assert_eq!(
++        state.accept_failed_certificate(&format!("{}.", host.to_uppercase()), b"c"),
++        Err(CertificateExceptionRefusal::HstsHost)
++    );
++    assert!(state.certificate_exceptions().is_empty());
++}
++
++/// The first host of the preload list that the engine can name (the list is data, not a contract).
++fn a_preloaded_host() -> String {
++    let preload = HstsPreloadList::from_servo_preload();
++    let mut keys = preload.0.stream();
++    while let Some((key, _)) = keys.next() {
++        if let Ok(host) = std::str::from_utf8(key) {
++            if server_name_for_host(host).is_some() && HstsList::default().is_host_secure(host) {
++                return host.to_owned();
++            }
++        }
++    }
++    panic!("the HSTS preload list has no host the engine can name");
++}
++
++#[test]
++fn revoking_and_listing() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    // The SHA-256 of "abc" (FIPS 180-2 test vector), to pin what the listing hashes.
++    let abc = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
++
++    assert_eq!(manager.add_override("nas.local", &der(b"abc")), Ok(()));
++    assert_eq!(manager.add_override("nas.local", &der(b"second")), Ok(()));
++    assert_eq!(manager.add_override("other.local", &der(b"abc")), Ok(()));
++    assert_eq!(manager.add_override("[::1]", &der(b"abc")), Ok(()));
++    // The same pair twice is one exception.
++    assert_eq!(manager.add_override("NAS.local.", &der(b"abc")), Ok(()));
++
++    let entries = state.certificate_exceptions();
++    let listed: Vec<(&str, String)> = entries
++        .iter()
++        .map(|entry| (entry.host.as_str(), hex(&entry.sha256)))
++        .collect();
++    assert_eq!(listed.len(), 4, "{listed:?}");
++    assert_eq!(listed[0], ("[::1]", abc.to_owned()));
++    assert_eq!(listed[3], ("other.local", abc.to_owned()));
++    // The two of nas.local, sorted by hash.
++    assert_eq!(listed[1].0, "nas.local");
++    assert_eq!(listed[2].0, "nas.local");
++    assert!(listed[1].1 < listed[2].1, "{listed:?}");
++    assert!(listed[1].1 == abc || listed[2].1 == abc, "{listed:?}");
++    // The listing is sorted by host and then by hash.
++    let mut sorted = entries.clone();
++    sorted.sort();
++    assert_eq!(sorted, entries);
++
++    // Revoking forgets every exception of the host, in any spelling, and says how many.
++    assert_eq!(state.revoke_certificate_exception("NAS.Local."), 2);
++    assert_eq!(state.revoke_certificate_exception("nas.local"), 0);
++    assert_eq!(state.revoke_certificate_exception("never.local"), 0);
++    assert_eq!(state.revoke_certificate_exception("a b"), 0);
++    assert!(!manager.has_exception("nas.local", &der(b"abc")));
++    assert!(!manager.has_exception("nas.local", &der(b"second")));
++    // The other hosts keep theirs.
++    let hosts: Vec<_> = state
++        .certificate_exceptions()
++        .into_iter()
++        .map(|entry| entry.host)
++        .collect();
++    assert_eq!(hosts, ["[::1]", "other.local"]);
++    assert_eq!(state.revoke_certificate_exception("[0:0:0:0:0:0:0:1]"), 1);
++    assert_eq!(state.revoke_certificate_exception("other.local"), 1);
++    assert!(state.certificate_exceptions().is_empty());
++}
++
++#[test]
++fn the_session_caches_of_dropped_clients_are_not_kept() {
++    // `create_tls_config` is also called for every WebSocket connection.
++    let state = create_http_state(None);
++    let manager = state.override_manager.clone();
++    let make = || create_tls_config(CACertificates::Default, false, manager.clone());
++    // The state's own client, and the three below.
++    let alive: Vec<_> = (0..3).map(|_| make()).collect();
++    assert_eq!(manager.session_cache_handles_for_test(), 4);
++    drop(alive);
++    for _ in 0..50 {
++        drop(make());
++    }
++    // The state's client, and at most the one dropped client that the next registration would drop.
++    assert!(manager.session_cache_handles_for_test() <= 2);
++}
++
++#[test]
++fn chrome_allowcert_answers_and_adds_nothing() {
++    let mut context = new_fetch_context(None, None);
++    let certificate = der(b"a certificate sent to Servo's own chrome:allowcert page");
++    let hosts = ["localhost", "127.0.0.1", "bank.example", "nas.local"];
++    // The old entry point took the per-process secret and the base64 of a certificate, and then
++    // accepted that certificate for every host. Send exactly that.
++    let body = format!(
++        "{}&{}",
++        *net_traits::PRIVILEGED_SECRET,
++        base64::engine::general_purpose::STANDARD_NO_PAD.encode(certificate.as_ref())
++    );
++    let url = ServoUrl::parse("chrome:allowcert").expect("a url");
++    let mut request = RequestBuilder::new(
++        Some(TEST_WEBVIEW_ID),
++        UrlWithBlobClaim::for_url(url.clone()).expect("not a blob url"),
++        Referrer::NoReferrer,
++    )
++    .method(Method::POST)
++    .body(Some(create_request_body_with_content(body)))
++    .destination(Destination::Document)
++    .origin(url.origin())
++    .pipeline_id(Some(TEST_PIPELINE_ID))
++    .policy_container(Default::default())
++    .build();
++    request.local_urls_only = false;
++
++    let response = fetch_with_context(request, &mut context);
++
++    assert!(
++        response.get_network_error().is_none(),
++        "the request is answered: {:?}",
++        response.get_network_error()
++    );
++    assert!(context.state.certificate_exceptions().is_empty());
++    for host in hosts {
++        assert!(
++            !context
++                .state
++                .override_manager
++                .has_exception(host, &certificate),
++            "{host}"
++        );
++    }
++}
++
++// ---------------------------------------------------------------------------------------------------
++// The loopback TLS server (self-signed certificate), reached under several host names.
++// ---------------------------------------------------------------------------------------------------
++
++/// The test server, closing every connection after one response. (It serves one connection at a
++/// time, so a kept-alive connection under one host name would block the next host name; and a closed
++/// connection guarantees that the next request makes a new TLS handshake.)
++fn tls_server() -> (Server, u16) {
++    tls_server_with_hsts(None)
++}
++
++/// The same server, and with `Some(policy)` every answer carries `Strict-Transport-Security: <policy>`.
++fn tls_server_with_hsts(hsts: Option<&'static str>) -> (Server, u16) {
++    let handler =
++        move |_: HyperRequest<Incoming>,
++              response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
++            response
++                .headers_mut()
++                .insert(header::CONNECTION, HeaderValue::from_static("close"));
++            if let Some(policy) = hsts {
++                response.headers_mut().insert(
++                    header::STRICT_TRANSPORT_SECURITY,
++                    HeaderValue::from_static(policy),
++                );
++            }
++            // Nothing may be answered from Servo's HTTP cache: these tests are about connections.
++            response
++                .headers_mut()
++                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
++            *response.body_mut() = make_body(b"Yay!".to_vec());
++        };
++    let (server, url) = make_ssl_server(handler);
++    let port = url.port().expect("the server has a port");
++    (server, port)
++}
++
++fn server_certificate(server: &Server) -> CertificateDer<'static> {
++    server.certificates.as_ref().expect("a TLS server")[0].clone()
++}
++
++/// A GET of `https://<host>:<port>/`, `host` as it is written in a URL.
++fn get(context: &mut FetchContext, host: &str, port: u16) -> Response {
++    let url = ServoUrl::parse(&format!("https://{host}:{port}/")).expect("a url");
++    let url = UrlWithBlobClaim::for_url(url).expect("not a blob url");
++    let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)
++        .method(Method::GET)
++        .body(None)
++        .destination(Destination::Document)
++        .origin(url.origin())
++        .pipeline_id(Some(TEST_PIPELINE_ID))
++        .policy_container(Default::default())
++        .build();
++    fetch_with_context(request, context)
++}
++
++/// The certificate of a certificate error (what Mercury's certificate page shows), if the response is
++/// one.
++fn certificate_error(response: &Response) -> Option<Vec<u8>> {
++    match response.get_network_error() {
++        Some(NetworkError::SslValidation(_, certificate)) => Some(certificate.clone()),
++        _ => None,
++    }
++}
++
++fn loaded(response: &Response) -> bool {
++    response.get_network_error().is_none() && response.status.code().is_success()
++}
++
++#[test]
++fn a_failed_load_carries_the_certificate_the_server_presented() {
++    let (server, port) = tls_server();
++    let certificate = server_certificate(&server);
++    let mut context = new_fetch_context(None, None);
++
++    for host in ["localhost", "127.0.0.1", "[::1]"] {
++        let response = get(&mut context, host, port);
++        assert_eq!(
++            certificate_error(&response),
++            Some(certificate.to_vec()),
++            "{host}: {:?}",
++            response.get_network_error()
++        );
++    }
++    server.close();
++}
++
++#[test]
++fn an_exception_is_for_one_host_name_and_revoking_it_fails_closed() {
++    let (server, port) = tls_server();
++    let certificate = server_certificate(&server);
++    let mut context = new_fetch_context(None, None);
++    let state = context.state.clone();
++
++    // Both names of the one server fail, with the same certificate.
++    assert_eq!(
++        certificate_error(&get(&mut context, "localhost", port)),
++        Some(certificate.to_vec())
++    );
++    assert_eq!(
++        certificate_error(&get(&mut context, "127.0.0.1", port)),
++        Some(certificate.to_vec())
++    );
++
++    // The user accepts the certificate that `localhost` failed with.
++    assert_eq!(
++        state.accept_failed_certificate("localhost", certificate.as_ref()),
++        Ok(())
++    );
++    assert!(loaded(&get(&mut context, "localhost", port)));
++    let entries = state.certificate_exceptions();
++    assert_eq!(entries.len(), 1);
++    assert_eq!(entries[0].host, "localhost");
++
++    // The same certificate under the other name of the same server still fails: Servo's old override
++    // accepted it for every host name.
++    let other = get(&mut context, "127.0.0.1", port);
++    assert!(!loaded(&other));
++    assert_eq!(certificate_error(&other), Some(certificate.to_vec()));
++    assert!(
++        !state
++            .override_manager
++            .has_exception("127.0.0.1", &certificate)
++    );
++
++    // Revoking forgets it; a new connection fails again. (This server closes every connection, and
++    // the TLS session ticket that the accepted handshake left is forgotten by the revoke: rustls does
++    // not verify a resumed session.)
++    assert_eq!(state.revoke_certificate_exception("localhost"), 1);
++    assert!(state.certificate_exceptions().is_empty());
++    let again = get(&mut context, "localhost", port);
++    assert_eq!(
++        certificate_error(&again),
++        Some(certificate.to_vec()),
++        "status {:?}, error {:?}",
++        again.status,
++        again.get_network_error()
++    );
++    server.close();
++}
++
++#[test]
++fn the_record_of_one_host_name_does_not_accept_another_name_of_the_server() {
++    let (server, port) = tls_server();
++    let certificate = server_certificate(&server);
++    let mut context = new_fetch_context(None, None);
++    let state = context.state.clone();
++
++    assert!(certificate_error(&get(&mut context, "localhost", port)).is_some());
++    // Only `localhost` failed: there is no failure to accept for the other name.
++    assert_eq!(
++        state.accept_failed_certificate("127.0.0.1", certificate.as_ref()),
++        Err(CertificateExceptionRefusal::NoFailureRecorded)
++    );
++    assert!(!loaded(&get(&mut context, "127.0.0.1", port)));
++    server.close();
++}
++
++#[test]
++fn another_certificate_for_the_same_host_name_does_not_help() {
++    let (server, port) = tls_server();
++    let certificate = server_certificate(&server);
++    let mut context = new_fetch_context(None, None);
++    let state = context.state.clone();
++    let another = der(b"not the certificate of this server");
++
++    // An exception for another certificate on the same host name: the server's still fails.
++    assert_eq!(
++        state.override_manager.add_override("localhost", &another),
++        Ok(())
++    );
++    assert_eq!(
++        certificate_error(&get(&mut context, "localhost", port)),
++        Some(certificate.to_vec())
++    );
++    // A user decision for another certificate than the one the host failed with is refused.
++    assert_eq!(
++        state.accept_failed_certificate("localhost", another.as_ref()),
++        Err(CertificateExceptionRefusal::CertificateChanged)
++    );
++    assert!(!loaded(&get(&mut context, "localhost", port)));
++    server.close();
++}
++
++#[test]
++fn an_ipv6_literal_gets_a_certificate_error_and_can_be_accepted() {
++    let (server, port) = tls_server();
++    let certificate = server_certificate(&server);
++    let mut context = new_fetch_context(None, None);
++    let state = context.state.clone();
++
++    // `Uri::host()` keeps the brackets, which `ServerName::try_from` refuses: before the fix no
++    // certificate was reported for an IPv6 literal, so there was nothing to accept.
++    assert_eq!(
++        certificate_error(&get(&mut context, "[::1]", port)),
++        Some(certificate.to_vec())
++    );
++    assert_eq!(
++        state.accept_failed_certificate("[::1]", certificate.as_ref()),
++        Ok(())
++    );
++    assert!(loaded(&get(&mut context, "[::1]", port)));
++    // IPv4 loopback and `localhost` are other names of the same server.
++    assert!(!loaded(&get(&mut context, "127.0.0.1", port)));
++    assert!(!loaded(&get(&mut context, "localhost", port)));
++    server.close();
++}
++
++// ---------------------------------------------------------------------------------------------------
++// HSTS is not learned over a connection that a certificate exception made valid (RFC 6797, section 8.1).
++// ---------------------------------------------------------------------------------------------------
++
++/// What a NAS or a router sends from its self-signed HTTPS page: a year, with subdomains.
++const STRICT_TRANSPORT_SECURITY: &str = "max-age=31536000; includeSubDomains";
++
++/// An HTTP state whose client does not verify certificates at all (Servo's own switch for testing,
++/// `ignore_certificate_errors`). No exception is involved in its connections, so it stands for a
++/// connection that needed none: the HSTS list may learn from it. Also used by the upstream test
++/// `fetch::test_load_adds_host_to_hsts_list_when_url_is_https`, which used an exception to reach its
++/// self-signed server.
++pub fn state_that_ignores_certificate_errors() -> net::test::HttpState {
++    let mut state = create_http_state(None);
++    state.override_manager = CertificateErrorOverrideManager::new();
++    state.client = create_http_client(create_tls_config(
++        CACertificates::Default,
++        true, /* ignore_certificate_errors */
++        state.override_manager.clone(),
++    ));
++    state
++}
++
++fn context_that_ignores_certificate_errors() -> FetchContext {
++    let mut context = new_fetch_context(None, None);
++    context.state = Arc::new(state_that_ignores_certificate_errors());
++    context
++}
++
++#[test]
++fn the_fetch_path_learns_hsts_from_a_connection_that_needed_no_exception() {
++    // The control of the next test: the same server, the same header, the same fetch path, and no
++    // exception. The list learns the host, so the next test's empty list is the guard's doing and not
++    // a header that never reached the list.
++    let (server, port) = tls_server_with_hsts(Some(STRICT_TRANSPORT_SECURITY));
++    let mut context = context_that_ignores_certificate_errors();
++    let state = context.state.clone();
++
++    assert!(loaded(&get(&mut context, "localhost", port)));
++    assert!(state.certificate_exceptions().is_empty());
++    assert!(
++        state.hsts_list.read().is_host_secure("localhost"),
++        "the list learns from a connection that needed no exception"
++    );
++    server.close();
++}
++
++#[test]
++fn hsts_is_not_learned_over_a_connection_that_an_exception_made_valid() {
++    let (server, port) = tls_server_with_hsts(Some(STRICT_TRANSPORT_SECURITY));
++    let certificate = server_certificate(&server);
++    let mut context = new_fetch_context(None, None);
++    let state = context.state.clone();
++
++    assert_eq!(
++        certificate_error(&get(&mut context, "localhost", port)),
++        Some(certificate.to_vec())
++    );
++    assert_eq!(
++        state.accept_failed_certificate("localhost", certificate.as_ref()),
++        Ok(())
++    );
++    // The page loads over the exception, and its answer asks for HSTS.
++    assert!(loaded(&get(&mut context, "localhost", port)));
++    assert!(
++        state.hsts_list.read().entries_map.is_empty() &&
++            !state.hsts_list.read().is_host_secure("localhost"),
++        "the list learned a host from a connection that only the user's exception made valid"
++    );
++
++    // So the user is not shut out later: the list is what Mercury keeps between sessions, and it still
++    // does not cover the host, so a new certificate error on it can be accepted again.
++    assert_eq!(state.revoke_certificate_exception("localhost"), 1);
++    assert_eq!(
++        certificate_error(&get(&mut context, "localhost", port)),
++        Some(certificate.to_vec())
++    );
++    assert_eq!(
++        state.accept_failed_certificate("localhost", certificate.as_ref()),
++        Ok(())
++    );
++    server.close();
++}
++
++// ---------------------------------------------------------------------------------------------------
++// The HSTS guard without a network: which hosts may teach the list.
++// ---------------------------------------------------------------------------------------------------
++
++fn strict_transport_security() -> HeaderMap {
++    let mut headers = HeaderMap::new();
++    headers.insert(
++        header::STRICT_TRANSPORT_SECURITY,
++        HeaderValue::from_static(STRICT_TRANSPORT_SECURITY),
++    );
++    headers
++}
++
++fn https(host: &str) -> ServoUrl {
++    ServoUrl::parse(&format!("https://{host}/")).expect("a url")
++}
++
++/// The number of hosts the learned list holds.
++fn learned_hosts(state: &net::test::HttpState) -> usize {
++    state
++        .hsts_list
++        .read()
++        .entries_map
++        .values()
++        .map(Vec::len)
++        .sum()
++}
++
++#[test]
++fn a_host_without_an_exception_teaches_the_hsts_list() {
++    let state = create_http_state(None);
++    let headers = strict_transport_security();
++    assert!(state.may_learn_hsts_from(&https("bank.example")));
++    state.learn_hsts_from_response(&https("bank.example"), &headers);
++    assert!(state.hsts_list.read().is_host_secure("bank.example"));
++    // Only an answer over https counts, as before.
++    state.learn_hsts_from_response(
++        &ServoUrl::parse("http://plain.example/").expect("a url"),
++        &headers,
++    );
++    assert!(!state.hsts_list.read().is_host_secure("plain.example"));
++}
++
++#[test]
++fn a_host_with_an_exception_does_not_teach_the_hsts_list_in_any_spelling() {
++    let state = create_http_state(None);
++    let headers = strict_transport_security();
++    assert_eq!(
++        state
++            .override_manager
++            .add_override("nas.local", &der(b"the certificate of the NAS")),
++        Ok(())
++    );
++    for host in ["nas.local", "NAS.LOCAL", "nas.local.", "Nas.Local."] {
++        assert!(!state.may_learn_hsts_from(&https(host)), "{host}");
++        state.learn_hsts_from_response(&https(host), &headers);
++    }
++    assert_eq!(learned_hosts(&state), 0);
++    assert!(!state.hsts_list.read().is_host_secure("nas.local"));
++
++    // Other names do: a connection to them needed no exception. (`includeSubDomains` of the NAS's own
++    // answer is what the exception blocks; a neighbour's answer is the neighbour's.)
++    for host in ["www.nas.local", "nas.example", "bank.example", "local"] {
++        assert!(state.may_learn_hsts_from(&https(host)), "{host}");
++    }
++    state.learn_hsts_from_response(&https("bank.example"), &headers);
++    assert!(state.hsts_list.read().is_host_secure("bank.example"));
++    assert_eq!(learned_hosts(&state), 1);
++}
++
++#[test]
++fn a_revoked_exception_still_blocks_hsts_because_its_connection_may_be_open() {
++    // A revoke does not close a connection that was opened under the exception, and an answer on it
++    // would still be one that only the exception made valid.
++    let state = create_http_state(None);
++    state
++        .override_manager
++        .add_override("nas.local", &der(b"c"))
++        .expect("a host");
++    assert_eq!(state.revoke_certificate_exception("nas.local"), 1);
++    assert!(state.certificate_exceptions().is_empty());
++    assert!(!state.may_learn_hsts_from(&https("nas.local")));
++    state.learn_hsts_from_response(&https("nas.local"), &strict_transport_security());
++    assert_eq!(learned_hosts(&state), 0);
++}
++
++#[test]
++fn a_users_decision_blocks_hsts_for_the_host_and_a_refusal_does_not() {
++    let state = create_http_state(None);
++    let manager = &state.override_manager;
++    // Refusals change nothing: no failure recorded, an unparsable host, another certificate.
++    assert_eq!(
++        state.accept_failed_certificate("device.local", b"c"),
++        Err(CertificateExceptionRefusal::NoFailureRecorded)
++    );
++    assert_eq!(
++        state.accept_failed_certificate("a b", b"c"),
++        Err(CertificateExceptionRefusal::InvalidHost)
++    );
++    manager.note_certificate_failure_for_test("device.local", &der(b"c"));
++    assert!(
++        manager
++            .report_certificate_failure_for_test("device.local")
++            .is_some()
++    );
++    assert_eq!(
++        state.accept_failed_certificate("device.local", b"another"),
++        Err(CertificateExceptionRefusal::CertificateChanged)
++    );
++    assert!(state.may_learn_hsts_from(&https("device.local")));
++
++    // The accepted decision does.
++    assert_eq!(
++        state.accept_failed_certificate("device.local", b"c"),
++        Ok(())
++    );
++    assert!(!state.may_learn_hsts_from(&https("device.local")));
++    state.learn_hsts_from_response(&https("device.local"), &strict_transport_security());
++    assert_eq!(learned_hosts(&state), 0);
++}
++
++#[test]
++fn an_ipv6_literal_with_an_exception_is_named_like_the_exception() {
++    // HSTS never applies to an address, so nothing is learned either way; the answer of the guard
++    // is still the one the exception's name gives.
++    let state = create_http_state(None);
++    state
++        .override_manager
++        .add_override("[::1]", &der(b"c"))
++        .expect("a host");
++    assert!(!state.may_learn_hsts_from(&https("[::1]")));
++    assert!(!state.may_learn_hsts_from(&https("[0:0:0:0:0:0:0:1]")));
++    assert!(state.may_learn_hsts_from(&https("[::2]")));
++}
++
++/// Every `.rs` file of the crate except the tests.
++fn crate_sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
++    for entry in std::fs::read_dir(dir).expect("the crate directory") {
++        let path = entry.expect("a directory entry").path();
++        let name = path
++            .file_name()
++            .and_then(|name| name.to_str())
++            .unwrap_or_default()
++            .to_owned();
++        if path.is_dir() {
++            if name != "tests" && name != "target" {
++                crate_sources(&path, found);
++            }
++        } else if path.extension().is_some_and(|extension| extension == "rs") {
++            found.push(path);
++        }
++    }
++}
++
++#[test]
++fn only_the_guard_updates_the_hsts_list_from_a_response() {
++    // The two places that learn HSTS from an answer (the HTTP fetch and the WebSocket handshake) call
++    // `HttpState::learn_hsts_from_response`; a call of `HstsList::update_hsts_list_from_response`
++    // anywhere else, for example one that a Servo upgrade or a merge brings back, would learn from
++    // a connection that only an exception made valid.
++    let mut files = Vec::new();
++    crate_sources(std::path::Path::new(env!("CARGO_MANIFEST_DIR")), &mut files);
++    assert!(
++        files.len() > 20,
++        "the scan found only {} files: {files:?}",
++        files.len()
++    );
++    let calls = |text: &str, pattern: &str| {
++        text.lines()
++            .filter(|line| !line.trim_start().starts_with("//"))
++            .filter(|line| line.contains(pattern))
++            .count()
++    };
++    let mut guard_callers = Vec::new();
++    for file in &files {
++        let name = file
++            .file_name()
++            .and_then(|name| name.to_str())
++            .unwrap_or_default()
++            .to_owned();
++        let text = std::fs::read_to_string(file).expect("a source file");
++        let direct = calls(&text, ".update_hsts_list_from_response(") +
++            calls(&text, "::update_hsts_list_from_response(");
++        if name == "certificate_exceptions.rs" {
++            assert_eq!(direct, 1, "the guard has one call of the list's update");
++        } else {
++            assert_eq!(direct, 0, "{}", file.display());
++        }
++        if calls(&text, ".learn_hsts_from_response(") > 0 {
++            guard_callers.push(name);
++        }
++    }
++    guard_callers.sort();
++    assert_eq!(
++        guard_callers,
++        vec!["http_loader.rs", "websocket_loader.rs"],
++        "the guard is called from the HTTP fetch and from the WebSocket handshake, and nowhere else"
++    );
++}
+diff --git a/tests/fetch.rs b/tests/fetch.rs
+--- a/tests/fetch.rs
++++ b/tests/fetch.rs
+@@ -795,7 +795,12 @@
+     // The server certificate is self-signed, so we need to add an override
+     // so that the connection works properly.
+     for certificate in server.certificates.as_ref().unwrap().iter() {
+-        context.state.override_manager.add_override(certificate);
++        // Mercury: exceptions are bound to the host name; the test server is reached as `localhost`.
++        context
++            .state
++            .override_manager
++            .add_override("localhost", certificate)
++            .expect("localhost is a valid host name");
+     }
+
+     {
+@@ -837,7 +842,10 @@
+     let embedder_proxy = create_generic_embedder_proxy();
+
+     let mut context = FetchContext {
+-        state: Arc::new(create_http_state(None)),
++        // Mercury: the state's client ignores certificate errors, instead of a certificate exception: a
++        // host that has an exception does not teach the HSTS list (certificate_exceptions.rs), and this
++        // test is about a response over a connection that needed none.
++        state: Arc::new(crate::certificate_exceptions::state_that_ignores_certificate_errors()),
+         user_agent: DEFAULT_USER_AGENT.into(),
+         devtools_chan: None,
+         filemanager: FileManager::new(
+@@ -855,11 +863,7 @@
+         in_flight_keep_alive_records: Default::default(),
+     };
+
+-    // The server certificate is self-signed, so we need to add an override
+-    // so that the connection works properly.
+-    for certificate in server.certificates.as_ref().unwrap().iter() {
+-        context.state.override_manager.add_override(certificate);
+-    }
++    // The server certificate is self-signed: the state above does not verify it.
+
+     let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)
+         .method(Method::GET)
+@@ -942,7 +946,12 @@
+     // The server certificate is self-signed, so we need to add an override
+     // so that the connection works properly.
+     for certificate in server.certificates.as_ref().unwrap().iter() {
+-        context.state.override_manager.add_override(certificate);
++        // Mercury: exceptions are bound to the host name; the test server is reached as `localhost`.
++        context
++            .state
++            .override_manager
++            .add_override("localhost", certificate)
++            .expect("localhost is a valid host name");
+     }
+
+     let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)
+diff --git a/tests/http_loader.rs b/tests/http_loader.rs
+--- a/tests/http_loader.rs
++++ b/tests/http_loader.rs
+@@ -2009,7 +2009,12 @@
+     // The server certificate is self-signed, so we need to add an override
+     // so that the connection works properly.
+     for certificate in server.certificates.as_ref().unwrap().iter() {
+-        context.state.override_manager.add_override(certificate);
++        // Mercury: exceptions are bound to the host name; the test server is reached as `localhost`.
++        context
++            .state
++            .override_manager
++            .add_override("localhost", certificate)
++            .expect("localhost is a valid host name");
+     }
+
+     let request = RequestBuilder::new(Some(TEST_WEBVIEW_ID), url.clone(), Referrer::NoReferrer)
+diff --git a/tests/main.rs b/tests/main.rs
+--- a/tests/main.rs
++++ b/tests/main.rs
+@@ -5,6 +5,8 @@
+ #![cfg(test)]
+ #![expect(dead_code)]
+
++// Mercury: certificate exceptions bound to (host, certificate); see certificate_exceptions.rs.
++mod certificate_exceptions;
+ mod cookie;
+ mod cookie_http_state;
+ mod data_loader;
+diff --git a/websocket_loader.rs b/websocket_loader.rs
+--- a/websocket_loader.rs
++++ b/websocket_loader.rs
+@@ -153,10 +153,8 @@
+         }
+     }
+
+-    http_state
+-        .hsts_list
+-        .write()
+-        .update_hsts_list_from_response(resource_url, response.headers());
++    // Mercury: not from a host that has had a certificate exception (certificate_exceptions.rs).
++    http_state.learn_hsts_from_response(resource_url, response.headers());
+
+     Ok(protocol_in_use)
+ }

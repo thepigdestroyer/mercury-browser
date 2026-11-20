@@ -4,7 +4,6 @@
 
 use std::cell::RefCell;
 use std::collections::hash_map::HashMap;
-use std::convert::TryFrom;
 use std::error::Error;
 use std::sync::{Arc, LazyLock};
 use std::time::Duration;
@@ -35,6 +34,8 @@ use tokio::net::TcpStream;
 use tower::Service;
 
 use crate::async_runtime::spawn_task;
+// Mercury: the exception store and the host-name form live in certificate_exceptions.rs.
+use crate::certificate_exceptions::{CertificateExceptionStore, server_name_for_host};
 use crate::hosts::replace_host;
 
 pub const BUF_SIZE: usize = 32768;
@@ -303,14 +304,18 @@ where
 pub type Connector = InstrumentedConnector<ServoHttpConnector>;
 pub type TlsConfig = ClientConfig;
 
+// Mercury: `pub(crate)`, with the two fields below, so that certificate_exceptions.rs can reach them
+// through `lock`.
 #[derive(Clone, Debug, Default)]
-struct CertificateErrorOverrideManagerInternal {
+pub(crate) struct CertificateErrorOverrideManagerInternal {
     /// A mapping of certificates and their hosts, which have seen certificate errors.
     /// This is used to later create an override in this [CertificateErrorOverrideManager].
-    certificates_failing_to_verify: HashMap<ServerName<'static>, CertificateDer<'static>>,
-    /// A list of certificates that should be accepted despite encountering verification
-    /// errors.
-    overrides: Vec<CertificateDer<'static>>,
+    pub(crate) certificates_failing_to_verify:
+        HashMap<ServerName<'static>, CertificateDer<'static>>,
+    // Mercury: replaces `overrides: Vec<CertificateDer<'static>>`, a list of bare certificates that
+    // was accepted for every host. The store holds (host, certificate) pairs and a bounded record of
+    // the last failure of each host; see certificate_exceptions.rs.
+    pub(crate) exceptions: CertificateExceptionStore,
 }
 
 /// This data structure is used to track certificate verification errors and overrides.
@@ -325,10 +330,13 @@ impl CertificateErrorOverrideManager {
         Self(Default::default())
     }
 
-    /// Add a certificate to this manager's list of certificates for which to ignore
-    /// validation errors.
-    pub fn add_override(&self, certificate: &CertificateDer<'static>) {
-        self.0.lock().overrides.push(certificate.clone());
+    // Mercury: the old `add_override(&self, certificate)` is removed (it accepted the certificate for
+    // every host). Its replacement, which takes the host, is in certificate_exceptions.rs and uses
+    // this accessor.
+    pub(crate) fn lock(
+        &self,
+    ) -> parking_lot::MutexGuard<'_, CertificateErrorOverrideManagerInternal> {
+        self.0.lock()
     }
 
     /// Given the a string representation of a sever host name, remove information about
@@ -338,17 +346,21 @@ impl CertificateErrorOverrideManager {
         &self,
         host: &str,
     ) -> Option<CertificateDer<'static>> {
-        let server_name = match ServerName::try_from(host) {
-            Ok(name) => name.to_owned(),
-            Err(error) => {
-                warn!("Could not convert host string into RustTLS ServerName: {error:?}");
-                return None;
-            },
+        // Mercury: `server_name_for_host` also accepts an IPv6 literal in brackets (`Uri::host()`
+        // keeps them, `ServerName::try_from` refuses them), lower-cases and drops a trailing dot.
+        let Some(server_name) = server_name_for_host(host) else {
+            warn!("Could not convert host string into RustTLS ServerName: {host:?}");
+            return None;
         };
-        self.0
-            .lock()
-            .certificates_failing_to_verify
-            .remove(&server_name)
+        let mut internal = self.0.lock();
+        let certificate = internal.certificates_failing_to_verify.remove(&server_name);
+        // Mercury: this call is the report of a failure, which removes it. Keep a bounded copy, so
+        // that `HttpState::accept_failed_certificate` accepts exactly the certificate the user saw.
+        if let Some(certificate) = &certificate {
+            let copy = certificate.clone();
+            internal.exceptions.record_failure(server_name, copy);
+        }
+        certificate
     }
 }
 
@@ -371,6 +383,10 @@ pub fn create_tls_config(
     ignore_certificate_errors: bool,
     override_manager: CertificateErrorOverrideManager,
 ) -> TlsConfig {
+    // Mercury: the TLS session cache of this client is made by the manager, which can empty a host's
+    // sessions when its exception is revoked (rustls does not verify the certificate of a resumed
+    // session). See certificate_exceptions.rs.
+    let resumption = override_manager.session_resumption();
     let verifier = CertificateVerificationOverrideVerifier::new(
         ca_certificates,
         ignore_certificate_errors,
@@ -378,10 +394,12 @@ pub fn create_tls_config(
     );
     // TODO: After <https://github.com/rustls/rustls-platform-verifier/pull/204> is merged,
     // `dangerous` can be removed.
-    rustls::ClientConfig::builder()
+    let mut config = rustls::ClientConfig::builder()
         .dangerous()
         .with_custom_certificate_verifier(Arc::new(verifier))
-        .with_no_client_auth()
+        .with_no_client_auth();
+    config.resumption = resumption;
+    config
 }
 
 #[derive(Clone)]
@@ -562,11 +580,11 @@ impl rustls::client::danger::ServerCertVerifier for CertificateVerificationOverr
             return Ok(rustls::client::danger::ServerCertVerified::assertion());
         }
 
-        // If there's an override for this certificate, just accept it.
-        for cert_with_exception in &*self.override_manager.0.lock().overrides {
-            if *end_entity == *cert_with_exception {
-                return Ok(rustls::client::danger::ServerCertVerified::assertion());
-            }
+        // Mercury: accept only the exact (server name, certificate) pair the user accepted. Servo
+        // accepted the certificate for every server name. The signature checks
+        // (`verify_tls12_signature`, `verify_tls13_signature`) stay with the main verifier.
+        if self.override_manager.is_accepted(server_name, end_entity) {
+            return Ok(rustls::client::danger::ServerCertVerified::assertion());
         }
         self.override_manager
             .0

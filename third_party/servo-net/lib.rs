@@ -5,6 +5,8 @@
 #![deny(unsafe_code)]
 
 pub mod async_runtime;
+// Mercury: certificate exceptions bound to (host, certificate); see certificate_exceptions.rs.
+pub mod certificate_exceptions;
 pub mod connector;
 pub mod cookie;
 pub mod cookie_storage;
