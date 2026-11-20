@@ -367,7 +367,7 @@ mod highlights {
 
         // An IME composition over the DOM text "cd", DOM [7, 9), is [3, 5) in "ab cd".
         let composition = highlight(HighlightKind::Composition, 7, 9);
-        let segments = segments_for_fragment(&[composition], &map, run(0, 5));
+        let segments = segments_for_fragment(&[composition], map, run(0, 5));
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].range, run(3, 5));
         let placed = place_segments(simple_glyphs(5), run(0, 5), &segments);
@@ -382,14 +382,14 @@ mod highlights {
 
         // A highlight over the collapsed spaces only is empty after mapping and paints nothing.
         let leading_spaces = highlight(HighlightKind::FindMatch, 0, 2);
-        assert!(segments_for_fragment(&[leading_spaces], &map, run(0, 5)).is_empty());
-        let dropped = map_highlights(&[leading_spaces, composition], &map);
+        assert!(segments_for_fragment(&[leading_spaces], map, run(0, 5)).is_empty());
+        let dropped = map_highlights(&[leading_spaces, composition], map);
         assert_eq!(dropped.len(), 1);
         assert_eq!(dropped[0].kind, HighlightKind::Composition);
 
         // A find match over "ab" with its leading spaces, DOM [0, 4), is the glyphs "ab".
         let with_spaces = highlight(HighlightKind::FindMatch, 0, 4);
-        let segments = segments_for_fragment(&[with_spaces], &map, run(0, 5));
+        let segments = segments_for_fragment(&[with_spaces], map, run(0, 5));
         let placed = place_segments(simple_glyphs(5), run(0, 5), &segments);
         assert_eq!((placed[0].x, placed[0].width), (px(0), px(20)));
     }
@@ -408,7 +408,7 @@ mod highlights {
         };
         // The DOM "ß", [1, 2), is "SS", [1, 3).
         let segments =
-            segments_for_fragment(&[highlight(HighlightKind::Spelling, 1, 2)], &map, run(0, 4));
+            segments_for_fragment(&[highlight(HighlightKind::Spelling, 1, 2)], map, run(0, 4));
         assert_eq!(segments[0].range, run(1, 3));
         let placed = place_segments(simple_glyphs(4), run(0, 4), &segments);
         assert_eq!((placed[0].x, placed[0].width), (px(10), px(20)));
