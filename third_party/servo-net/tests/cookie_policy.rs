@@ -1044,7 +1044,7 @@ impl Harness {
     fn new() -> Harness {
         let (tx, rx) = generic_channel::channel().unwrap();
         let (mtx, mrx) = generic_channel::channel().unwrap();
-        let (thread, _private) = new_core_resource_thread(
+        let (thread, private_thread) = new_core_resource_thread(
             None,
             ProfilerChan(Some(tx)),
             MemProfilerChan(mtx),
@@ -1056,7 +1056,7 @@ impl Harness {
         );
         Harness {
             thread,
-            _channels: Box::new((rx, mrx)),
+            _channels: Box::new((rx, mrx, private_thread)),
             next_store: 1,
         }
     }
