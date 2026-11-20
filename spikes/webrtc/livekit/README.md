@@ -43,6 +43,10 @@ The findings are in `research/R18-webrtc-spike.md` (notes outside the repository
 
 Built, linked and run: from an Intel Mac for `aarch64-apple-darwin` (library, tests, two size probes; clippy with `-D warnings` and `cargo fmt` clean; a cold
 offline build from an empty `target/` took 8 minutes on a loaded 12-thread Mac), and **run on an Apple Silicon runner (`macos-26`): t01 to t13 all pass**
-(run 44646282269 and its re-run). Findings the tests produced, all in `research/R18-webrtc-spike.md`: the test binary needs `-ObjC` (`build.rs` passes it), `RtpSender::set_track(None)`
+(run 44646282269 and its re-run), under the conditions the test file states, which for t05, t07 and t11 are looser than the brief's (below). Findings the tests produced, all in `research/R18-webrtc-spike.md`: the test binary needs `-ObjC` (`build.rs` passes it), `RtpSender::set_track(None)`
 crashes `webrtc-sys` 0.3.54 (t07 detaches with `remove_track`), libwebrtc does not answer simulcast (t06 rewrites the answer like a server's), and libwebrtc adapts the resolution
-and drops frames while its bandwidth estimate ramps up (t05 counts after a cold window and requires 45 frames in 3 s).
+and drops frames while its bandwidth estimate ramps up (t05 counts after a cold window and requires 45 frames in 3 s, not the brief's 60, and accepts the adapted size; in the final run its 641x361
+count was exactly 45). Also from the same run: t07 finds the remote track still `Live` and the answerer `Connected` when the remote data channel has closed, and t11's thread count settles at 8 (start 4)
+instead of returning to the start; **t09 shows that `PeerConnectionFactory::default()` offers H.264 and H.265 through VideoToolbox** (the archive has no codec of its own, the OS supplies it): a
+product build must filter both out until the owner's lawyer answers OD-17. This spike did not build that filter. The verdict (conditional GO) and the deviations from the brief's gates are in
+`research/R18-webrtc-spike.md` section 1.
