@@ -319,6 +319,8 @@ jobs:
           set -euo pipefail
 
           mkdir -p "${LOG_DIR}/crash"
+          # macOS writes the report a few seconds after the crash.
+          sleep 20
           find "${HOME}/Library/Logs/DiagnosticReports" /Library/Logs/DiagnosticReports -maxdepth 1 -type f -mmin -180 \
             \( -name 'calls-*' -o -name 'capture-*' -o -name 'concurrent-*' -o -name 'slow_sink-*' -o -name 'threads-*' -o -name 'remote-*' \) \
             -exec cp {} "${LOG_DIR}/crash/" \; 2>/dev/null || true
