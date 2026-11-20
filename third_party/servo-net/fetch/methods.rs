@@ -540,16 +540,30 @@ pub async fn main_fetch(
     // Step 11. If recursive is false, then run the remaining steps in parallel.
     // Not applicable: see fetch_async.
 
-    let current_url = request.current_url();
-    let current_scheme = current_url.scheme();
-
     // Intercept the request and maybe override the response.
     context
         .request_interceptor
         .lock()
         .await
-        .intercept_request(request, &mut response, &fetch_params.timing_info)
+        .intercept_request(
+            request,
+            &mut response,
+            &fetch_params.timing_info,
+            // Mercury: the policy for the frame identity and the rewrite (EC38, EC37).
+            &context.state.net_policy,
+        )
         .await;
+
+    // Mercury: the interceptor may have rewritten the URL (EC37, `WebResourceResponseMsg::Rewrite`), so
+    // step 10 is applied again (the rewrite kept the scheme, and an HSTS host is upgraded now) and the URL
+    // and scheme that the steps below look at are read after it, not before.
+    context
+        .state
+        .hsts_list
+        .read()
+        .apply_hsts_rules(request.current_url_mut());
+    let current_url = request.current_url();
+    let current_scheme = current_url.scheme();
 
     let mut response = match response {
         Some(response) => response,
