@@ -60,10 +60,12 @@ use crate::display_list::background::BackgroundPainter;
 use crate::display_list::conversions::FilterToWebRender;
 pub(crate) use crate::display_list::conversions::ToWebRender;
 use crate::display_list::paint_traversal::{PaintTraversal, PaintTraversalHandler, TraversalState};
+// Mercury: lane txt-1 (ED7). `ElidedTextFragment` is new here.
 use crate::fragment_tree::{
     BackgroundMode, BaseFragment, BoxFragment, BoxFragmentWithStyle,
-    CumulativeContentRectCalculation, Fragment, FragmentFlags, FragmentStatus, FragmentTree,
-    IFrameFragment, ImageFragment, PositioningFragment, SpecificLayoutInfo, Tag, TextFragment,
+    CumulativeContentRectCalculation, ElidedTextFragment, Fragment, FragmentFlags, FragmentStatus,
+    FragmentTree, IFrameFragment, ImageFragment, PositioningFragment, SpecificLayoutInfo, Tag,
+    TextFragment,
 };
 use crate::geom::{
     LengthPercentageOrAuto, PhysicalPoint, PhysicalRect, PhysicalSides, PhysicalSize,
@@ -1027,7 +1029,43 @@ impl PaintTraversalHandler for DisplayListBuilder<'_> {
         if style.get_inherited_box().visibility != Visibility::Visible {
             return;
         }
-        Fragment::build_display_list_for_text_fragment(fragment, self, state, &line_box_rect);
+        Fragment::build_display_list_for_text_fragment(
+            fragment,
+            self,
+            state,
+            &line_box_rect,
+            None, // Mercury: lane txt-1 (ED7), the text is not elided
+        );
+    }
+
+    // Mercury: lane txt-1 (ED7), `text-overflow` (hand-port of servo/servo#42394). Text that the
+    // end of the line cuts short: it is painted like any text, but only its kept glyphs. The overflow
+    // marker is a text fragment of its own and goes through `visit_text`. Needs
+    // `PaintTraversalHandler::visit_elided_text`, which `paint_traversal.rs` declares.
+    fn visit_elided_text(
+        &mut self,
+        state: &TraversalState,
+        line_box_rect: PhysicalRect<Au>,
+        fragment: &Arc<ElidedTextFragment>,
+    ) {
+        let text_fragment = &fragment.text_fragment;
+        text_fragment.base.visit_fragment(self);
+
+        if text_fragment.style().get_inherited_box().visibility != Visibility::Visible {
+            return;
+        }
+        // Nothing of this text is kept, so there is nothing to paint (a caret placeholder is
+        // empty to begin with and is never elided).
+        if fragment.is_fully_elided() && !text_fragment.is_empty_for_text_cursor {
+            return;
+        }
+        Fragment::build_display_list_for_text_fragment(
+            text_fragment,
+            self,
+            state,
+            &line_box_rect,
+            Some(fragment),
+        );
     }
 
     fn visit_positioning(&mut self, _state: &TraversalState, fragment: &Arc<PositioningFragment>) {
@@ -1185,12 +1223,18 @@ impl Fragment {
         builder: &mut DisplayListBuilder,
         state: &TraversalState,
         line_box_rect: &PhysicalRect<Au>,
+        // Mercury: lane txt-1 (ED7). `Some` for text that `text-overflow` cuts short.
+        elided: Option<&ElidedTextFragment>,
     ) {
         // NB: The order of painting text components (CSS Text Decoration Module Level 3) is:
         // shadows, underline, overline, text, text-emphasis, and then line-through.
         let rect = fragment.base.rect().translate(state.origin.to_vector());
         let mut baseline_origin = rect.origin;
         baseline_origin.y += fragment.font_metrics.ascent;
+        // Mercury: lane txt-1 (ED7). The glyphs are placed from the whole text (above), but from
+        // here on `rect` is only the part that is kept, which is where the glyph bounds and the
+        // text decorations (underline, line-through) go.
+        let rect = elided.map_or(rect, |elided| elided.kept_rect(rect));
 
         let (largest_advance, entirely_white_space) = collect_glyphs(
             &mut builder.glyph_buffer,
@@ -1198,6 +1242,19 @@ impl Fragment {
             baseline_origin,
             fragment.justification_adjustment,
         );
+
+        // Mercury: lane txt-1 (ED7). Keep the glyphs that are kept: the first ones when the end of
+        // the line is the right side, the last ones when it is the left (a right-to-left block).
+        if let Some(elided) = elided {
+            let glyph_count = builder.glyph_buffer.len();
+            if elided.end_is_left {
+                let _ = builder
+                    .glyph_buffer
+                    .drain(..glyph_count.saturating_sub(elided.kept_glyphs));
+            } else {
+                builder.glyph_buffer.truncate(elided.kept_glyphs);
+            }
+        }
 
         if builder.glyph_buffer.is_empty() && !fragment.is_empty_for_text_cursor {
             return;

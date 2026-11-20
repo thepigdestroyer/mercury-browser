@@ -8,7 +8,10 @@ use std::sync::Arc;
 
 use app_units::Au;
 use bitflags::bitflags;
-use fonts::{ShapedTextSlice, TrailingWhiteSpace};
+// Mercury: text-overflow (hand-port of servo/servo#42394): `FontMetrics`, `ShapedTextSlicer`,
+// `ShapingOptions`, `Language`, `Script`, the `ellipsis` module and `ElidedTextFragment` are new here.
+use fonts::{FontMetrics, ShapedTextSlice, ShapedTextSlicer, ShapingOptions, TrailingWhiteSpace};
+use icu_locale_core::subtags::Language;
 use itertools::Either;
 use servo_base::text::Utf32CodeUnits;
 use style::Zero;
@@ -18,13 +21,16 @@ use style::values::generics::box_::BaselineShiftKeyword;
 use style::values::specified::align::AlignFlags;
 use style::values::specified::box_::DisplayOutside;
 use unicode_bidi::{BidiInfo, Level};
+use unicode_script::Script;
 
 use super::inline_box::{InlineBoxContainerState, InlineBoxIdentifier, InlineBoxTreePathToken};
 use super::{InlineFormattingContextLayout, LineBlockSizes, line_height};
 use crate::cell::ArcRefCell;
+use crate::ellipsis::{self, Direction as EllipsisDirection, GlyphMetrics};
 use crate::flow::inline::text_run::{FontAndScriptInfo, SharedTextRunData};
 use crate::fragment_tree::{
-    BaseFragment, BaseFragmentInfo, BoxFragment, Fragment, FragmentFlags, TextFragment,
+    BaseFragment, BaseFragmentInfo, BoxFragment, ElidedTextFragment, Fragment, FragmentFlags,
+    TextFragment,
 };
 use crate::geom::{
     LogicalRect, LogicalSides, LogicalVec2, PhysicalRect, PhysicalSize, ToLogical,
@@ -263,9 +269,15 @@ pub(super) struct LineItemLayout<'layout_data, 'layout> {
 
     /// Whether this line contains only a block-level box.
     for_block_level: bool,
+
+    /// Mercury: set when `text-overflow` elides the end of this line (hand-port of
+    /// servo/servo#42394). See [`LineElisionState`].
+    elision: Option<LineElisionState>,
 }
 
 impl LineItemLayout<'_, '_> {
+    // Mercury: text-overflow adds the eighth argument.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn layout_line_items(
         layout: &mut InlineFormattingContextLayout,
         line_items: Vec<LineItem>,
@@ -274,8 +286,12 @@ impl LineItemLayout<'_, '_> {
         justification_adjustment: Au,
         is_phantom_line: bool,
         for_block_level: bool,
+        // Mercury: text-overflow. `Some` for a line that overflows a block that elides its end.
+        elision: Option<LineElision>,
     ) -> Vec<Fragment> {
         let baseline_offset = effective_block_advance.find_baseline_offset();
+        // Mercury: text-overflow. Shaping the marker may fail, and then the line is left as it is.
+        let elision = elision.and_then(|elision| LineElisionState::new(layout, elision));
         LineItemLayout {
             layout,
             state_stack: Vec::new(),
@@ -291,6 +307,7 @@ impl LineItemLayout<'_, '_> {
             justification_adjustment,
             is_phantom_line,
             for_block_level,
+            elision,
         }
         .layout(line_items)
     }
@@ -415,6 +432,16 @@ impl LineItemLayout<'_, '_> {
 
         // Move back to the root of the inline box tree, so that all boxes are ended.
         self.prepare_layout_for_inline_box(None);
+
+        // Mercury: text-overflow. The overflow marker is the last child of the line, so that it
+        // is painted over everything else, such as the background of an inline box.
+        if let Some(marker) = self
+            .elision
+            .as_mut()
+            .and_then(|elision| elision.marker_fragment.take())
+        {
+            self.current_state.fragments_and_data.push(marker);
+        }
 
         FragmentAndData::resolve_physical_rects_and_adjust_floats(
             std::mem::take(&mut self.current_state.fragments_and_data),
@@ -702,21 +729,26 @@ impl LineItemLayout<'_, '_> {
         );
 
         self.current_state.inline_advance += inline_advance;
+        // Mercury: text-overflow. The fragment is built first so that a line that overflows can
+        // wrap it in an `ElidedText` (hand-port of servo/servo#42394).
+        let text_fragment = Arc::new(TextFragment {
+            base: BaseFragment::new(text_item.base_fragment_info, PhysicalRect::zero()),
+            run_data: text_item.text_fragment_run_data,
+            font_metrics: font_metrics.clone(),
+            font_key,
+            glyphs: text_item.text,
+            justification_adjustment: self.justification_adjustment,
+            character_range_in_dom_node: text_item.character_range_in_dom_node,
+            is_empty_for_text_cursor: text_item.is_empty_for_text_cursor,
+        });
+        let fragment = self.elide_text_run(
+            text_fragment,
+            text_item.info.font_info.bidi_level,
+            inline_advance,
+        );
         self.current_state
             .fragments_and_data
-            .push(FragmentAndData::new(
-                Fragment::Text(Arc::new(TextFragment {
-                    base: BaseFragment::new(text_item.base_fragment_info, PhysicalRect::zero()),
-                    run_data: text_item.text_fragment_run_data,
-                    font_metrics: font_metrics.clone(),
-                    font_key,
-                    glyphs: text_item.text,
-                    justification_adjustment: self.justification_adjustment,
-                    character_range_in_dom_node: text_item.character_range_in_dom_node,
-                    is_empty_for_text_cursor: text_item.is_empty_for_text_cursor,
-                })),
-                content_rect,
-            ));
+            .push(FragmentAndData::new(fragment, content_rect));
     }
 
     fn layout_atomic(&mut self, atomic: AtomicLineItem) {
@@ -1104,5 +1136,275 @@ fn sort_by_indices_in_place<T>(data: &mut [T], mut indices: Vec<usize>) {
             data.swap(current_idx, target_idx);
             current_idx = target_idx;
         }
+    }
+}
+
+// Mercury: text-overflow (hand-port of servo/servo#42394 by RichardTjokroutomo onto Servo 0.8).
+// Everything from here to the end of the file is new. The arithmetic that does not need the
+// engine (which clusters of a run survive, which side of the line is its end) is in
+// `ellipsis.rs`, where it is tested without an engine.
+
+/// What `text-overflow` asks of one line that overflows the room it has.
+///
+/// `InlineFormattingContextLayout::line_elision` makes this only for lines that overflow a block
+/// that clips its inline axis and has a marker for its end.
+pub(super) struct LineElision {
+    /// The end edge of the room the line has, in the coordinates of the inline formatting
+    /// context: where the line starts (past any float at its start) plus the room.
+    pub limit: Au,
+    /// What replaces the elided end of the line.
+    pub marker: LineElisionMarker,
+    /// Whether the block is right to left, which makes the end of the line its left side.
+    pub block_is_rtl: bool,
+}
+
+/// What is drawn where the end of a line was elided.
+pub(super) enum LineElisionMarker {
+    /// An ellipsis: U+2026, or three full stops in a font that has no ellipsis.
+    Ellipsis,
+    /// The string of `text-overflow: <string>`. It is never empty: an empty string elides
+    /// nothing, like `clip`.
+    String(String),
+}
+
+/// The overflow marker, shaped with the font of the block, and ready to be placed.
+struct ShapedMarker {
+    /// A text fragment of its own: anonymous (so that a pointer never hits it and queries never
+    /// find it) and styled by the block, as the specification asks.
+    fragment: Arc<TextFragment>,
+    /// The inline advance of the marker.
+    advance: Au,
+    /// The metrics of the font of the marker, for the baseline.
+    font_metrics: Arc<FontMetrics>,
+}
+
+impl ShapedMarker {
+    /// Shape `marker` with the font of the block that lays out `layout`. This is `None` when there
+    /// is no font, or when nothing came out of shaping, and then the line is not elided.
+    fn new(layout: &InlineFormattingContextLayout, marker: &LineElisionMarker) -> Option<Self> {
+        let font_style = layout.containing_block().style.clone_font();
+        let language = font_style._x_lang.0.parse().unwrap_or(Language::UNKNOWN);
+        let font_context = &layout.layout_context.font_context;
+        let font_group = font_context.font_group(font_style);
+
+        let (text, font) = match marker {
+            LineElisionMarker::Ellipsis => {
+                let font = font_group.find_by_codepoint(font_context, '\u{2026}', None, language)?;
+                if font.has_glyph_for('\u{2026}') {
+                    ("\u{2026}".to_owned(), font)
+                } else {
+                    // Gecko does the same: three full stops when no font has the ellipsis.
+                    let font = font_group.find_by_codepoint(font_context, '.', None, language)?;
+                    ("...".to_owned(), font)
+                }
+            },
+            LineElisionMarker::String(string) => {
+                // A string is shaped with the one font that suits its first character. Gecko
+                // measures it as a whole in the font of the block in the same way.
+                let mut characters = string.chars();
+                let first_character = characters.next()?;
+                let font = font_group.find_by_codepoint(
+                    font_context,
+                    first_character,
+                    characters.next(),
+                    language,
+                )?;
+                (string.clone(), font)
+            },
+        };
+
+        // The ellipsis is shaped on its own and not with the text it replaces: there is no letter
+        // or word spacing (Gecko does the same, also for strings), and the script is the one of
+        // its first character.
+        let info = FontAndScriptInfo::simple_for_font(font.clone());
+        let mut options = ShapingOptions::from(&info);
+        options.script = Script::from(text.chars().next()?);
+        let shaped_text = font.shape_text(&text, &options);
+        let slice = ShapedTextSlicer::new(shaped_text).slice_until_character_offset(
+            Utf32CodeUnits(text.chars().count() as u32),
+            TrailingWhiteSpace {
+                hangable: Utf32CodeUnits(0),
+                removable: Utf32CodeUnits(0),
+            },
+            false,
+        )?;
+        let advance = slice.total_advance();
+        if advance <= Au::zero() {
+            return None;
+        }
+
+        let font_metrics = font.metrics().clone();
+        let font_key = font.key(layout.layout_context.painter_id, font_context);
+        let run_data = SharedTextRunData::for_overflow_marker(
+            layout.ifc.text_content.clone(),
+            layout.ifc.shared_inline_styles.clone(),
+        );
+        let fragment = Arc::new(TextFragment {
+            base: BaseFragment::new(BaseFragmentInfo::anonymous(), PhysicalRect::zero()),
+            run_data,
+            font_metrics: font_metrics.clone(),
+            font_key,
+            glyphs: vec![slice],
+            justification_adjustment: Au::zero(),
+            character_range_in_dom_node: Utf32CodeUnits(0)..Utf32CodeUnits(0),
+            is_empty_for_text_cursor: false,
+        });
+        Some(Self {
+            fragment,
+            advance,
+            font_metrics,
+        })
+    }
+}
+
+/// The state of the elision of one line while its items are laid out.
+struct LineElisionState {
+    /// Where the content of the line has to end for the marker to fit behind it, in the
+    /// coordinates of the inline formatting context.
+    budget_end: Au,
+    /// The physical side of a run that is the end of the line.
+    direction: EllipsisDirection,
+    marker: ShapedMarker,
+    /// Whether a text run has been cut: from then on every text run is elided entirely.
+    cut_done: bool,
+    /// The marker, placed where the first cut run ends, to be added as the last fragment of the
+    /// line.
+    marker_fragment: Option<FragmentAndData>,
+}
+
+impl LineElisionState {
+    fn new(layout: &InlineFormattingContextLayout, elision: LineElision) -> Option<Self> {
+        let marker = ShapedMarker::new(layout, &elision.marker)?;
+        Some(Self {
+            budget_end: elision.limit - marker.advance,
+            direction: if elision.block_is_rtl {
+                EllipsisDirection::Rtl
+            } else {
+                EllipsisDirection::Ltr
+            },
+            marker,
+            cut_done: false,
+            marker_fragment: None,
+        })
+    }
+}
+
+impl LineItemLayout<'_, '_> {
+    /// Mercury: text-overflow. Decide what is left of a text run, given that this line overflows
+    /// the block and the block elides its end. This returns the plain [`Fragment::Text`] for a
+    /// run that is kept whole, and an [`Fragment::ElidedText`] for a run that is cut or comes after
+    /// the cut. The first run to be cut also places the overflow marker.
+    ///
+    /// `inline_advance` is the advance of the run, which the caller has already added to the
+    /// advance of the current inline box.
+    fn elide_text_run(
+        &mut self,
+        text_fragment: Arc<TextFragment>,
+        bidi_level: Level,
+        inline_advance: Au,
+    ) -> Fragment {
+        // The common case: no `text-overflow`, or nothing to draw.
+        if self.elision.is_none() || text_fragment.glyphs.is_empty() {
+            return Fragment::Text(text_fragment);
+        }
+
+        let start_of_run = self.inline_position_of_next_item() - inline_advance;
+
+        // The glyphs in painting order, which is the order `collect_glyphs` paints them in.
+        let justification_adjustment = text_fragment.justification_adjustment;
+        let glyphs: Vec<GlyphMetrics> = text_fragment
+            .glyphs
+            .iter()
+            .flat_map(|slice| slice.glyphs())
+            .map(|glyph| GlyphMetrics {
+                advance: if glyph.char_is_word_separator() {
+                    glyph.advance() + justification_adjustment
+                } else {
+                    glyph.advance()
+                },
+                character_count: glyph.character_count().0,
+            })
+            .collect();
+        let clusters = ellipsis::group_clusters(&glyphs, bidi_level.is_rtl());
+        let advances: Vec<Au> = clusters.iter().map(|cluster| cluster.advance).collect();
+
+        let baseline_block_offset = self.line_metrics.baseline_block_offset;
+        let Some(elision) = self.elision.as_mut() else {
+            return Fragment::Text(text_fragment);
+        };
+        let direction = elision.direction;
+        let cut = if elision.cut_done {
+            // The marker is already placed: nothing of what follows is kept.
+            match direction {
+                EllipsisDirection::Ltr => 0,
+                EllipsisDirection::Rtl => advances.len(),
+            }
+        } else {
+            ellipsis::keep_within(&advances, elision.budget_end - start_of_run, direction)
+        };
+        let (kept_advance, kept_glyphs) = ellipsis::kept_totals(&clusters, cut, direction);
+        if kept_glyphs == glyphs.len() {
+            return Fragment::Text(text_fragment);
+        }
+
+        if !elision.cut_done {
+            elision.cut_done = true;
+            // The marker goes against the end of what is kept, on the baseline of the line.
+            // Its rectangle is logical and relative to the line, like the rectangles of the
+            // fragments that are children of the line, so a right to left block needs nothing
+            // special: converting it to a physical rectangle puts it on the left.
+            let marker = &elision.marker;
+            let content_rect = LogicalRect {
+                start_corner: LogicalVec2 {
+                    inline: start_of_run + kept_advance,
+                    block: baseline_block_offset - marker.font_metrics.ascent,
+                },
+                size: LogicalVec2 {
+                    block: marker.font_metrics.line_gap,
+                    inline: marker.advance,
+                },
+            };
+            elision.marker_fragment = Some(FragmentAndData::new(
+                Fragment::Text(marker.fragment.clone()),
+                content_rect,
+            ));
+        }
+
+        Fragment::ElidedText(Arc::new(ElidedTextFragment {
+            text_fragment,
+            kept_glyphs,
+            kept_advance,
+            end_is_left: direction == EllipsisDirection::Rtl,
+        }))
+    }
+
+    /// Mercury: text-overflow. The inline position of the end of everything laid out so far on
+    /// this line, in the coordinates of the inline formatting context.
+    ///
+    /// An inline box starts counting at zero, and learns the padding, border and margin that it
+    /// adds before its content only when it ends (`end_inline_box`), so the start side of those
+    /// of every box that is open is added here the way `end_inline_box` adds it.
+    fn inline_position_of_next_item(&self) -> Au {
+        let mut position =
+            self.current_state.parent_offset.inline + self.current_state.inline_advance;
+        for state in self
+            .state_stack
+            .iter()
+            .chain(std::iter::once(&self.current_state))
+        {
+            let Some(identifier) = state.identifier else {
+                continue;
+            };
+            let inline_box_state =
+                &*self.layout.inline_box_states[identifier.index_in_inline_boxes as usize];
+            if inline_box_state.should_clone_pbm() ||
+                state
+                    .flags
+                    .contains(LineLayoutInlineContainerFlags::HAD_INLINE_START_PBM)
+            {
+                position += inline_box_state.pbm_inline_start();
+            }
+        }
+        position
     }
 }
