@@ -503,19 +503,6 @@ jobs:
         shell: bash
         run: scripts/ci/check-license-headers.sh
 
-      - name: Byte-compile the Python scripts
-        # The only Python of ours is scripts/serve-tests.py, replaced by
-        # scripts/serve-tests.sh (Rust) and kept only until the lanes in
-        # progress have merged. This step goes away together with that file.
-        shell: bash
-        env:
-          PYTHONPYCACHEPREFIX: ${{ runner.temp }}/pycache
-        run: |
-          set -euo pipefail
-
-          python3 --version
-          find scripts -type f -name '*.py' -print0 | xargs -0 python3 -m py_compile
-
   workflows:
     name: Workflows
     runs-on: ubuntu-24.04

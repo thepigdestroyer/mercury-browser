@@ -17,7 +17,12 @@ use crate::import_ui::read::Choice;
 use crate::import_ui::summary::{KindEnd, KindResult, ProfileResult};
 use crate::profile_data::{ProfileData, Timing};
 
-const PATIENCE: Duration = Duration::from_secs(60);
+/// The service has to keep answering, not to finish by a fixed time: a wait fails when no
+/// wake-up comes for `QUIET` (a stuck service) or when `LIMIT` has passed in all (a service
+/// that wakes for ever and never finishes). Under load a long import is slow but keeps
+/// waking, and every delivery wakes the UI, so each chunk restarts the quiet period.
+const QUIET: Duration = Duration::from_secs(60);
+const LIMIT: Duration = Duration::from_secs(600);
 const BOTH: Choice = Choice {
     bookmarks: true,
     history: true,
@@ -85,14 +90,7 @@ impl Service {
         );
         *run_slot.borrow_mut() = Some(run.clone());
         run.prepared(prepared);
-        let deadline = Instant::now() + PATIENCE;
-        while result.borrow().is_none() {
-            let left = deadline.saturating_duration_since(Instant::now());
-            self.wakes.recv_timeout(left).expect("the service answers");
-            if let Some(data) = self.data.borrow().clone() {
-                data.deliver_replies();
-            }
-        }
+        self.settle(|| result.borrow().is_some());
         run_slot.borrow_mut().take();
         let result = result.borrow_mut().take().unwrap();
         (result, stages.take())
@@ -106,11 +104,30 @@ impl Service {
         data.bookmark_root(mercury_store::BookmarkRoot::Other, move |_| {
             *flag.borrow_mut() = true;
         });
-        let deadline = Instant::now() + PATIENCE;
-        while !*done.borrow() {
-            let left = deadline.saturating_duration_since(Instant::now());
-            self.wakes.recv_timeout(left).expect("the service answers");
-            data.deliver_replies();
+        self.settle(|| *done.borrow());
+    }
+
+    /// Delivers the service's replies, on the test thread, until `done` holds. Fails when the
+    /// service stays silent for `QUIET` or has not finished within `LIMIT` in all.
+    fn settle(&self, done: impl Fn() -> bool) {
+        let limit = Instant::now() + LIMIT;
+        while !done() {
+            let left = limit.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero(),
+                "the service did not finish within {LIMIT:?}"
+            );
+            if let Err(error) = self.wakes.recv_timeout(left.min(QUIET)) {
+                // The wait ran out because the limit did, or because the service went quiet.
+                assert!(
+                    Instant::now() < limit,
+                    "the service did not finish within {LIMIT:?}"
+                );
+                panic!("the service answers: no wake-up within the quiet period ({error:?})");
+            }
+            if let Some(data) = self.data.borrow().clone() {
+                data.deliver_replies();
+            }
         }
     }
 

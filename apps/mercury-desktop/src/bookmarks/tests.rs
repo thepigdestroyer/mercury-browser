@@ -50,12 +50,31 @@ impl Service {
         }
     }
 
+    /// The service has to keep answering, not to finish by a fixed time: a wait fails when no
+    /// wake-up comes for `QUIET` (a stuck service) or when `LIMIT` has passed in all (a service
+    /// that wakes for ever and never finishes). Under load a long import is slow but keeps
+    /// waking, and every delivery wakes the UI, so each chunk restarts the quiet period.
+    const QUIET: Duration = Duration::from_secs(30);
+    const LIMIT: Duration = Duration::from_secs(600);
+
     fn settle(&self, done: impl Fn() -> bool) {
-        let deadline = Instant::now() + Duration::from_secs(30);
+        let limit = Instant::now() + Self::LIMIT;
         while !done() {
-            self.wakes
-                .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-                .expect("the service should answer");
+            let left = limit.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero(),
+                "the service did not finish within {:?}",
+                Self::LIMIT
+            );
+            if let Err(error) = self.wakes.recv_timeout(left.min(Self::QUIET)) {
+                // The wait ran out because the limit did, or because the service went quiet.
+                assert!(
+                    Instant::now() < limit,
+                    "the service did not finish within {:?}",
+                    Self::LIMIT
+                );
+                panic!("the service should answer: no wake-up within the quiet period ({error:?})");
+            }
             self.data.deliver_replies();
         }
     }

@@ -19,6 +19,11 @@ use super::{
 
 const NOW: i64 = 1_800_000_000_000;
 const PATIENCE: Duration = Duration::from_secs(30);
+/// The service has to keep answering, not to finish by a fixed time: a wait fails when no
+/// wake-up comes for `QUIET` (a stuck service) or when `LIMIT` has passed in all (a service
+/// that wakes for ever and never finishes). Under load a long import is slow but keeps waking.
+const QUIET: Duration = Duration::from_secs(30);
+const LIMIT: Duration = Duration::from_secs(600);
 
 /// A service on a database in a fresh directory; the test thread plays the UI thread.
 struct Harness {
@@ -52,13 +57,19 @@ impl Harness {
         self.directory.path().join("places.sqlite")
     }
 
+    /// Delivers replies until `done` holds. Every delivery, progress included, wakes the UI
+    /// and so restarts the quiet period; `LIMIT` bounds the wait in all.
     fn settle(&self, done: impl Fn() -> bool) {
-        let deadline = Instant::now() + PATIENCE;
+        let limit = Instant::now() + LIMIT;
         while !done() {
-            let left = deadline.saturating_duration_since(Instant::now());
+            let left = limit.saturating_duration_since(Instant::now());
+            assert!(
+                !left.is_zero(),
+                "the service did not finish within {LIMIT:?}"
+            );
             self.wakes
-                .recv_timeout(left)
-                .expect("the service should answer");
+                .recv_timeout(left.min(QUIET))
+                .expect("the service should answer: no wake-up within the quiet period");
             self.data.deliver_replies();
         }
     }

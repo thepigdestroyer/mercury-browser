@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 
-//! The loopback server for the repository's `tests/` directory, which replaces
-//! `scripts/serve-tests.py` with the same behaviour.
+//! The loopback server for the repository's `tests/` directory. It replaced the Python server
+//! that did this job before, with the same behaviour.
 //!
 //! It answers as Python's `http.server.SimpleHTTPRequestHandler`, which the Python script was
 //! built on, did (HTTP/1.0, one request per connection, a thread per connection, files with

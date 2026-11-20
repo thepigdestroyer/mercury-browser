@@ -12,7 +12,7 @@ Mercury is a fast, lightweight browser. Its own code is **Rust**, its interface 
 - **Not allowed:** Swift or Objective-C source (call Apple frameworks from Rust through `objc2`), and new Python, Node, Ruby or other scripting-language code anywhere in the repository, including build, test and CI tooling. Write tools in Rust (a binary in a workspace crate) or, when it is a few lines of glue, POSIX shell.
 - JavaScript is allowed only where it must run inside a web page through Servo, such as the find-in-page and media helper scripts. Keep these scripts small and test them from Rust where possible.
 - Code vendored unchanged from upstream (for example Servo's own Python bindings generator in `third_party/servo-script-bindings`) stays as upstream wrote it.
-- The development and CI tools are Rust, in `crates/mercury-devtools`: the test page server (`scripts/serve-tests.sh`), the screenshot checker, and the helpers behind `scripts/ci/light-crates.sh`, `scripts/ci/github-env.sh` and `scripts/macos/gstreamer-plugins.sh`. Add new tools there, with tests (`cargo test --release -p mercury-devtools`; the crate needs no engine). The only Python of Mercury's own left is `scripts/serve-tests.py`, kept until the lanes in progress have moved to `scripts/serve-tests.sh`, then deleted; do not extend it.
+- The development and CI tools are Rust, in `crates/mercury-devtools`: the test page server (`scripts/serve-tests.sh`), the screenshot checker, and the helpers behind `scripts/ci/light-crates.sh`, `scripts/ci/github-env.sh` and `scripts/macos/gstreamer-plugins.sh`. Add new tools there, with tests (`cargo test --release -p mercury-devtools`; the crate needs no engine). Mercury has no Python of its own left; do not add any.
 
 ## Licences
 
