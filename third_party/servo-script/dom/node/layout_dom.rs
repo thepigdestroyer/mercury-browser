@@ -300,8 +300,21 @@ impl<'dom> LayoutDom<'dom, Node> {
 
     pub(crate) fn replaced_is_selected(&self) -> bool {
         let unsafe_self = self.unsafe_get();
-        unsafe_self.get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION) &&
-            !unsafe_self.get_flag(NodeFlags::SELECTION_INHIBITED)
+        // Mercury: backport of servo/servo#49613 (af5f54ba7). Drop at the bump that has it.
+        if !unsafe_self.get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION) ||
+            unsafe_self.get_flag(NodeFlags::SELECTION_INHIBITED)
+        {
+            return false;
+        }
+
+        let Some(selection) = self.owner_doc_for_layout().visible_selection_for_layout() else {
+            return false;
+        };
+        let Some(range) = selection.range_for_layout() else {
+            return false;
+        };
+
+        !range.is_collapsed()
     }
 
     pub(crate) fn image_url(self) -> Option<ServoUrl> {

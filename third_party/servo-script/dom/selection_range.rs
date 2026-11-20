@@ -128,6 +128,11 @@ impl SelectionRange {
         Self { start, end }
     }
 
+    // Mercury: backport of servo/servo#49613 (af5f54ba7). Drop at the bump that has it.
+    pub(crate) fn is_collapsed(&self) -> bool {
+        self.start == self.end
+    }
+
     pub(crate) fn new_from_rooted(
         start: RootedSelectionBoundary,
         end: RootedSelectionBoundary,
