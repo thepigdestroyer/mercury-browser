@@ -417,9 +417,9 @@ fn uneven_use_decides_by_count_then_by_order() {
     // Now all fourteen are used; Blue twice, the rest once: the earliest of the rest.
     let second = make(&mut book);
     assert_eq!(preset(&book, second), GroupPreset::Amber);
-    // Amber and Blue twice each: Rose is the earliest with one.
+    // Amber and Blue twice each: Orchid is the earliest with one.
     let third = make(&mut book);
-    assert_eq!(preset(&book, third), GroupPreset::Rose);
+    assert_eq!(preset(&book, third), GroupPreset::Orchid);
 }
 
 #[test]
@@ -511,8 +511,8 @@ fn the_names_and_their_order_are_the_contract() {
     assert_eq!(
         listed,
         [
-            "blue", "amber", "rose", "mint", "orchid", "brown", "green", "lime", "sky", "plum",
-            "salmon", "violet", "teal", "slate"
+            "blue", "amber", "orchid", "mint", "rose", "lime", "plum", "teal", "salmon", "sky",
+            "brown", "violet", "green", "slate"
         ]
     );
 }
