@@ -33,6 +33,12 @@ export component PermissionPrompt inherits Rectangle {
         y: -4px;
         width: Math.min(root.width - 16px, 380px);
         height: layout.preferred-height + 8px;
+        // a11y-base: a group named by the heading, which names the site; no dialog role in Slint.
+        // The bubble never takes the keyboard, so a screen reader reaches it with its own cursor
+        // and presses Block or Allow through their default actions.
+        accessible-role: groupbox;
+        accessible-label: root.request.heading;
+        accessible-description: root.request.message;
 
         // The arrow pointing at the address bar.
         Path {
@@ -69,6 +75,7 @@ export component PermissionPrompt inherits Rectangle {
                     font-size: 14px;
                     font-weight: 600;
                     wrap: word-wrap;
+                    accessible-role: none; // a11y-base: the bubble's label
                 }
 
                 // media-capture: why the browser cannot allow it (the system refuses).
@@ -77,6 +84,7 @@ export component PermissionPrompt inherits Rectangle {
                     color: ChromePalette.text-secondary;
                     font-size: 12px;
                     wrap: word-wrap;
+                    accessible-role: none; // a11y-base: the bubble's description
                 }
 
                 // media-capture: "Remember for this site until you quit".

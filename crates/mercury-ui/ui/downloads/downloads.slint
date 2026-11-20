@@ -54,6 +54,9 @@ export enum DownloadAction {
 component TextButton inherits Rectangle {
     in property <string> label;
     in property <bool> primary: false;
+    // a11y-base: what a screen reader says when it is not the drawn label: a button of a row
+    // names the download ("Open: report.pdf"), so that the buttons of two rows differ.
+    in property <string> accessible-name;
     callback clicked;
 
     out property <bool> focused: focus.has-focus;
@@ -71,7 +74,7 @@ component TextButton inherits Rectangle {
         ? (touch.pressed ? DownloadsPalette.accent.darker(20%) : DownloadsPalette.accent)
         : (touch.has-hover ? DownloadsPalette.hover : transparent);
     accessible-role: button;
-    accessible-label: root.label;
+    accessible-label: root.accessible-name != "" ? root.accessible-name : root.label;
     accessible-action-default => {
         root.clicked();
     }
@@ -163,6 +166,13 @@ export component DownloadsButton inherits Rectangle {
 
     accessible-role: button;
     accessible-label: root.active ? "Downloads, in progress" : "Downloads";
+    // a11y-base: the state a sighted user sees: the ring's progress, the dot that says something
+    // started or finished, and whether the list below the button is open.
+    accessible-description: (root.active && root.progress >= 0 && root.progress <= 1 ? Math.round(root.progress * 100) + " percent done" : "")
+        + (root.active && root.progress >= 0 && root.progress <= 1 && root.attention && !root.open ? ". " : "")
+        + (root.attention && !root.open ? "Something changed since you last looked" : "");
+    accessible-expandable: true;
+    accessible-expanded: root.open;
     accessible-action-default => {
         root.clicked();
     }
@@ -189,6 +199,7 @@ export component DownloadsButton inherits Rectangle {
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
+        accessible-role: none;
     }
 
     if root.attention && !root.open: Rectangle {
@@ -210,6 +221,9 @@ export component DownloadsButton inherits Rectangle {
 component DownloadItem inherits Rectangle {
     in property <DownloadRow> entry;
     in property <string> show-label;
+    // a11y-base: the row's place in the list, read as "n of m".
+    in property <int> index;
+    in property <int> count;
     callback action(string, DownloadAction);
 
     height: 64px;
@@ -217,6 +231,8 @@ component DownloadItem inherits Rectangle {
     border-radius: 8px;
     accessible-role: list-item;
     accessible-label: root.entry.name + ", " + root.entry.status;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
 
     hover-area := TouchArea { }
 
@@ -230,12 +246,14 @@ component DownloadItem inherits Rectangle {
             alignment: center;
             spacing: 3px;
 
+            // a11y-base: the row's label already says the name and the status.
             Text {
                 text: root.entry.name;
                 color: DownloadsPalette.text;
                 font-size: 13px;
                 font-weight: 600;
                 overflow: elide;
+                accessible-role: none;
             }
 
             Text {
@@ -243,6 +261,7 @@ component DownloadItem inherits Rectangle {
                 color: root.entry.failed ? DownloadsPalette.danger : DownloadsPalette.muted;
                 font-size: 11px;
                 overflow: elide;
+                accessible-role: none;
             }
 
             if root.entry.progress >= 0: Rectangle {
@@ -268,36 +287,42 @@ component DownloadItem inherits Rectangle {
 
             if root.entry.can-open: TextButton {
                 label: "Open";
+                accessible-name: "Open: " + root.entry.name;
                 clicked => {
                     root.action(root.entry.guid, DownloadAction.open);
                 }
             }
             if root.entry.can-resume: TextButton {
                 label: "Resume";
+                accessible-name: "Resume: " + root.entry.name;
                 clicked => {
                     root.action(root.entry.guid, DownloadAction.resume);
                 }
             }
             if root.entry.can-retry: TextButton {
                 label: "Retry";
+                accessible-name: "Retry: " + root.entry.name;
                 clicked => {
                     root.action(root.entry.guid, DownloadAction.retry);
                 }
             }
             if root.entry.can-show: TextButton {
                 label: root.show-label;
+                accessible-name: root.show-label + ": " + root.entry.name;
                 clicked => {
                     root.action(root.entry.guid, DownloadAction.show);
                 }
             }
             if root.entry.can-cancel: TextButton {
                 label: "Cancel";
+                accessible-name: "Cancel: " + root.entry.name;
                 clicked => {
                     root.action(root.entry.guid, DownloadAction.cancel);
                 }
             }
             if root.entry.can-remove: TextButton {
                 label: "Remove";
+                accessible-name: "Remove: " + root.entry.name;
                 clicked => {
                     root.action(root.entry.guid, DownloadAction.remove);
                 }
@@ -356,6 +381,7 @@ export component DownloadsPopover inherits Rectangle {
                 font-size: 14px;
                 font-weight: 650;
                 vertical-alignment: center;
+                accessible-role: none;
             }
 
             VerticalLayout {
@@ -378,8 +404,10 @@ export component DownloadsPopover inherits Rectangle {
             vertical-alignment: center;
         }
 
-        for row in root.rows: DownloadItem {
+        for row[index] in root.rows: DownloadItem {
             entry: row;
+            index: index;
+            count: root.rows.length;
             show-label: root.show-label;
             action(guid, action) => {
                 root.action(guid, action);
@@ -448,6 +476,7 @@ export component DownloadsPanel inherits Rectangle {
                 font-size: 20px;
                 font-weight: 650;
                 vertical-alignment: center;
+                accessible-role: none;
             }
 
             VerticalLayout {
@@ -494,8 +523,10 @@ export component DownloadsPanel inherits Rectangle {
                 spacing: 2px;
                 alignment: start;
 
-                for row in root.rows: DownloadItem {
+                for row[index] in root.rows: DownloadItem {
                     entry: row;
+                    index: index;
+                    count: root.rows.length;
                     show-label: root.show-label;
                     action(guid, action) => {
                         root.action(guid, action);
@@ -533,6 +564,7 @@ export component QuitDownloadsPrompt inherits Rectangle {
     background: DownloadsPalette.scrim;
     accessible-role: groupbox;
     accessible-label: root.title;
+    accessible-description: root.body;
 
     // A click outside the card is not an answer.
     TouchArea { }
@@ -579,12 +611,14 @@ export component QuitDownloadsPrompt inherits Rectangle {
                 padding: 22px;
                 spacing: 12px;
 
+                // a11y-base: the group's label and description say these two.
                 Text {
                     text: root.title;
                     color: DownloadsPalette.text;
                     font-size: 16px;
                     font-weight: 650;
                     wrap: word-wrap;
+                    accessible-role: none;
                 }
 
                 Text {
@@ -592,6 +626,7 @@ export component QuitDownloadsPrompt inherits Rectangle {
                     color: DownloadsPalette.muted;
                     font-size: 13px;
                     wrap: word-wrap;
+                    accessible-role: none;
                 }
 
                 HorizontalLayout {
@@ -632,7 +667,10 @@ export component DownloadOfferBar inherits Rectangle {
     height: 48px;
     background: DownloadsPalette.surface;
     accessible-role: groupbox;
-    accessible-label: root.text + ". " + root.detail;
+    // a11y-base: the question is the label and where the file comes from is the description (the
+    // label was "text. detail", with a dangling full stop when there is no detail).
+    accessible-label: root.text;
+    accessible-description: root.detail;
 
     // Clicks on the bar never reach the page under it.
     TouchArea { }
@@ -666,6 +704,7 @@ export component DownloadOfferBar inherits Rectangle {
                 color: DownloadsPalette.text;
                 font-size: 13px;
                 overflow: elide;
+                accessible-role: none;
             }
 
             Text {
@@ -673,6 +712,7 @@ export component DownloadOfferBar inherits Rectangle {
                 color: DownloadsPalette.muted;
                 font-size: 11px;
                 overflow: elide;
+                accessible-role: none;
             }
         }
 

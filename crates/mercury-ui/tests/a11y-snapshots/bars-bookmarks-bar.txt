@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+groupbox | Bookmarks bar | |
+button | Mercury | | item 0 of 3
+button | News | Folder | item 1 of 3
+button | (untitled) | | item 2 of 3
+button | More bookmarks | |

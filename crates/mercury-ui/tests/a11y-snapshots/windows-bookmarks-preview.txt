@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+groupbox | Bookmarks bar | |
+button | Mercury Browser | | item 0 of 3
+button | News | Folder | item 1 of 3
+button | Rust documentation | | item 2 of 3
+list | Bookmarks menu | |
+list-item | Back to News | | item 0 of 3
+list-item | Local | Folder | item 1 of 3
+list-item | BBC News | https://www.bbc.co.uk/news | item 2 of 3
+groupbox | Bookmark added | |
+text-input | Bookmark name | | value "The Guardian"
+combobox | Bookmark folder | | collapsed, value "News"
+button | Remove | |
+button | Done | |

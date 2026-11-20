@@ -171,6 +171,58 @@ first real run. The test PDFs are at `http://127.0.0.1:8765/pages/pdf/three-page
 7. In Terminal run `pkill -KILL -f pdf-worker` while a PDF is open: the viewer says it stopped
    working on this file and offers Try again; the browser itself keeps working.
 
+## VoiceOver
+
+A person's check: Mercury's own windows are labelled in code and covered by automated tests (see
+[Accessibility of the interface](testing.md#accessibility-of-the-interface)), but nobody has yet tried
+them with VoiceOver on a real Mac, and no automated run may turn VoiceOver on. This section is the
+first try. Web pages are **not** expected to read yet: only Mercury's own interface.
+
+1. Turn VoiceOver on with ⌘F5 (Fn ⌘F5 on a keyboard with Touch ID), then start Mercury. It must start
+   and keep running with VoiceOver on, and also when VoiceOver is turned on while it runs. Open and
+   close the About and Settings windows too: none of this may crash or hang.
+2. **The toolbar.** In a new tab, move the VoiceOver cursor through the window with Control-Option-Right
+   Arrow. You should hear, in this order: the tab strip, "New tab" (button), "Toolbar" (navigation),
+   "Back" and "Forward" (buttons, dimmed), "Reload page", "Address bar" (search), "Address and search"
+   (edit text), "Bookmark this page" (dimmed), "Browser menu", the bookmarks bar, "New tab page" with its
+   captions, "Search or enter address" (edit text) and "Search" (button), and "Page content". Nothing
+   should be read as a symbol ("left single quotation mark", "vertical ellipsis"), and nothing twice.
+3. **Pressing.** With the VoiceOver cursor on a toolbar button, press it with Control-Option-Space. New
+   tab opens a tab; Back, Forward and Reload do what they say once a page makes them available (a
+   dimmed button does nothing); Home page (turn it on in Settings) opens the home page; "Search" in
+   the new tab page opens a search for what you typed in "Search or enter address". Tab does not reach
+   these buttons yet, by design: only the VoiceOver cursor does. Report a button the cursor cannot reach.
+4. **While a page loads,** the VoiceOver cursor on "Reload page" may add "The page is loading" (VoiceOver
+   usually says this help text after a pause).
+5. **Tabs.** Open three tabs. The VoiceOver cursor on a tab should say its title, "tab", and whether it
+   is selected; macOS may also say "n of m" (it is only passed on if VoiceOver asks for it, so say
+   whether you hear it). Pressing a tab switches to it; a tab's close button says "Close tab".
+6. **The address field.** The cursor on "Address and search" says "edit text". Interact with it
+   (Control-Option-Shift-Down Arrow), type, and VoiceOver reads back what you type; Return opens it.
+7. **The browser menu.** Press "Browser menu": its rows are read with their names (and their shortcuts
+   as help text), the arrow keys move, Return chooses and Escape closes it.
+8. **A page dialog.** Open `dialog-alert.html` (server above): VoiceOver reads the sheet with its
+   heading naming the page ("127.0.0.1:8765 says") and its message, and can press OK. A permission
+   bubble (`permission.html`) names the page as well.
+9. **The Settings window** (⌘,): the sections read as tabs, each control by its name, and each can be
+   pressed or changed; the same for the About window.
+10. **A page.** With a page loaded, the VoiceOver cursor reaches "Page content" (main), whose help text
+    says that Mercury doesn't pass web page content to assistive technology yet. Nothing inside the
+    page is expected to read. Don't report that; do report a page area that cannot be reached at all.
+11. **A long list** (the known limit). Open History with more than a screenful of visits. The VoiceOver
+    cursor should reach the visits on screen; it cannot reach the ones below, because the list builds
+    only the rows on screen and VoiceOver has no way to scroll it (keyboard scrolling is a follow-up).
+    Scroll with the trackpad and check that the rows that come into view can be reached, and that
+    typing in "Search history" narrows the list to rows the cursor reaches. Do report any other
+    list that stops short, and whether "item n of m" is spoken for a visit.
+12. **A password being typed.** In Settings > Passwords, open a login, choose Edit and type into "New
+    password". VoiceOver must say "secure edit text" and must not read what was typed, as it does
+    not for the sign-in sheet's password field. "Show the new password" shows the characters on
+    screen only. Report it if VoiceOver reads the password aloud in either field.
+
+Report what reads badly: for each, the element, what VoiceOver said, what it should have said, the macOS
+version and the commit. Wording that can be better is a finding as much as a crash.
+
 ## Reporting
 
 For each step that differs, note the step number, what you saw, and the commit. Crash reports, if any,

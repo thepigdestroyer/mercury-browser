@@ -24,10 +24,11 @@ export component TabAudioButton inherits Rectangle {
     in property <brush> resting-background: transparent;
     callback clicked;
 
-    // Muting is done inside the page, which can undo it; the label says so.
+    // Muting is done inside the page, which can undo it; the description says so (a11y-base: it
+    // was part of the label, which named the tab and then a parenthesis).
     property <string> action-text: root.state == TabAudioState.muted
         ? "Unmute tab: " + root.tab-title
-        : "Mute tab: " + root.tab-title + " (the page can override this)";
+        : "Mute tab: " + root.tab-title;
 
     // Colours: the chrome's palette, so the icon follows the theme.
     property <color> icon-color: root.active-tab ? ChromePalette.text : ChromePalette.tab-title-inactive;
@@ -42,6 +43,7 @@ export component TabAudioButton inherits Rectangle {
     background: touch.pressed ? root.pressed-background : touch.has-hover ? root.hover-background : root.resting-background;
     accessible-role: button;
     accessible-label: root.action-text;
+    accessible-description: root.state == TabAudioState.muted ? "" : "The page can override this";
     accessible-enabled: root.interactive;
     accessible-action-default => {
         if root.interactive {

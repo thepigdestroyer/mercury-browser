@@ -22,6 +22,10 @@ export component BookmarkPopoverContent inherits Rectangle {
     background: ChromePalette.popup-background;
     drop-shadow-blur: 12px;
     drop-shadow-color: ChromePalette.shadow;
+    // a11y-base: a group named by its heading, which is then hidden, like the captions "Name"
+    // and "Folder" (the two fields carry their own labels).
+    accessible-role: groupbox;
+    accessible-label: root.is-new ? "Bookmark added" : "Edit bookmark";
 
     public function focus-name() {
         name-field.focus();
@@ -37,6 +41,7 @@ export component BookmarkPopoverContent inherits Rectangle {
             color: ChromePalette.text;
             font-size: 14px;
             font-weight: 600;
+            accessible-role: none;
         }
 
         HorizontalLayout {
@@ -48,6 +53,7 @@ export component BookmarkPopoverContent inherits Rectangle {
                 color: ChromePalette.text-secondary;
                 font-size: 13px;
                 vertical-alignment: center;
+                accessible-role: none;
             }
 
             name-field := LineEdit {
@@ -68,6 +74,7 @@ export component BookmarkPopoverContent inherits Rectangle {
                 color: ChromePalette.text-secondary;
                 font-size: 13px;
                 vertical-alignment: center;
+                accessible-role: none;
             }
 
             ComboBox {
@@ -145,7 +152,10 @@ export component BookmarkStar inherits Rectangle {
     accessible-label: root.filled ? "Edit bookmark for this page" : "Bookmark this page";
     accessible-enabled: root.enabled;
     accessible-action-default => {
-        root.clicked();
+        // a11y-base: nothing while the star is disabled (no page to bookmark).
+        if root.enabled {
+            root.clicked();
+        }
     }
 
     Text {

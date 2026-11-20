@@ -77,6 +77,12 @@ export component PopupButton inherits Rectangle {
     border-radius: 6px;
     background: root.primary ? root.colors.primary-button : root.colors.button;
     opacity: touch.pressed ? 0.8 : 1;
+    // a11y-base: a button for assistive technology; the caption below is its label, so it is hidden.
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.clicked();
+    }
 
     Text {
         text: root.label;
@@ -84,6 +90,7 @@ export component PopupButton inherits Rectangle {
         font-size: 13px;
         horizontal-alignment: center;
         vertical-alignment: center;
+        accessible-role: none;
     }
 
     touch := TouchArea {

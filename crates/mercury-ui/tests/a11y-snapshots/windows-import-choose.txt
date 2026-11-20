@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+text | Import bookmarks and history from another browser | |
+text | Import from: | |
+list | Browser profiles | |
+list-item | Firefox, default-release, Bookmarks and history | | unselected, item 0 of 4
+list-item | Chrome, Work, Bookmarks and history | | selected, item 1 of 4
+list-item | Chrome, Reading, Bookmarks | | unselected, item 2 of 4
+list-item | Arc, Default, History | | unselected, item 3 of 4
+checkbox | Bookmarks | | checked
+text | Bookmarks | |
+checkbox | History | | checked
+text | History | |
+text | Bookmarks go into a folder named after the browser in Other Bookmarks. Importing the same profile again adds only what is new. | |
+text | Passwords, cookies and settings are not imported. Safari is not supported: its files can only be read with Full Disk Access. | |
+button | Cancel | |
+button | Import | |

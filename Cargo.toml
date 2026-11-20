@@ -85,6 +85,9 @@ servo = { version = "=0.8.0", features = [
 # Slint is held at 1.17: i-slint-compiler 1.18 needs icu_properties ^2.2, while Servo 0.8.0's
 # mozjs_sys pins icu_capi =2.1.2 (icu_properties ~2.1). Move to 1.18 when one of them relaxes its pin.
 slint = { version = "~1.17.1", default-features = false, features = [
+    # a11y-base: hands the chrome's accessibility tree to the system (AccessKit; VoiceOver on
+    # macOS). It adds accesskit_winit and the platform adapters to Cargo.lock, and no other feature.
+    "accessibility",
     "backend-winit",
     "compat-1-2",
     "renderer-femtovg-wgpu",

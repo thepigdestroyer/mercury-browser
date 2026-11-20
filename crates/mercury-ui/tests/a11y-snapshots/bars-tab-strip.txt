@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+tab-list | Tabs | |
+tab | Mail | Pinned tab, Playing sound | unselected, item 0 of 5
+button | Mute tab: Mail | The page can override this |
+tab | Calendar | Pinned tab, Muted | unselected, item 1 of 5
+button | Unmute tab: Calendar | |
+tab | Servo, the embeddable engine | | unselected, item 2 of 5
+button | Close tab | Servo, the embeddable engine |
+tab | Slint documentation | Loading, Playing sound | selected, item 3 of 5
+button | Mute tab: Slint documentation | The page can override this |
+button | Close tab | Slint documentation |
+tab | Rust Weekly | Muted | unselected, item 4 of 5
+button | Unmute tab: Rust Weekly | |
+button | Close tab | Rust Weekly |

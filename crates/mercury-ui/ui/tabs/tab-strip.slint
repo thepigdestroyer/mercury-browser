@@ -115,9 +115,17 @@ component TabButton inherits Rectangle {
     drop-shadow-blur: root.ghost ? 8px : 0px;
     drop-shadow-color: ChromePalette.shadow;
 
+    // a11y-base: the title is the label (a tab without one is still named); what the tab shows
+    // without words goes in the description: "Pinned tab", "Loading", "Playing sound", "Muted".
+    pure function join(first: string, second: string) -> string {
+        first == "" ? second : second == "" ? first : first + ", " + second
+    }
+
     accessible-role: AccessibleRole.tab;
-    accessible-label: root.tab.title;
-    accessible-description: root.tab.pinned ? "Pinned tab" : "";
+    accessible-label: root.tab.title == "" ? "Untitled tab" : root.tab.title;
+    accessible-description: root.join(
+        root.join(root.tab.pinned ? "Pinned tab" : "", root.tab.loading ? "Loading" : ""),
+        root.tab.audio == TabAudioState.playing ? "Playing sound" : root.tab.audio == TabAudioState.muted ? "Muted" : "");
     accessible-item-selectable: true;
     accessible-item-selected: root.tab.active;
     accessible-item-index: root.index;
@@ -335,14 +343,23 @@ export struct TabMenuEntry {
 component TabMenuRow inherits Rectangle {
     in property <TabMenuEntry> entry;
     in property <bool> highlighted;
+    // a11y-base: the row's place in the menu, read as "n of m".
+    in property <int> index;
+    in property <int> count;
     callback activated(TabMenuCommand);
 
     height: 30px;
     border-radius: 6px;
     background: !root.entry.enabled ? transparent : root.highlighted ? ChromePalette.item-selected : touch.has-hover ? ChromePalette.item-hover : transparent;
-    accessible-role: button;
+    // a11y-base: a list item, not a button: the menu's "Close tab" would otherwise share role and
+    // label with the "Close tab" button inside each tab.
+    accessible-role: list-item;
     accessible-label: root.entry.title;
     accessible-enabled: root.entry.enabled;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.highlighted;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
     accessible-action-default => {
         if root.entry.enabled {
             root.activated(root.entry.command);
@@ -443,10 +460,18 @@ export component TabMenu inherits PopupWindow {
                     }
                     TabMenuRow {
                         entry: entry;
+                        index: index;
+                        count: root.entries.length;
                         highlighted: root.highlighted == index;
                         activated(command) => {
-                            root.close();
+                            // a11y-base: the command first, then close. This handler runs for a repeated
+                            // row, which reaches `root` (the popup) through a weak reference, and closing
+                            // drops the popup. A press that arrives through an assistive technology holds
+                            // the row and not the popup, so with `close()` first the command was lost (seen in
+                            // the test backend; the Return key below is the popup's own handler and is not
+                            // affected).
                             root.activated(command);
+                            root.close();
                         }
                     }
                 }
@@ -823,6 +848,8 @@ export component TabPreview inherits Rectangle {
     drop-shadow-blur: 12px;
     drop-shadow-color: ChromePalette.shadow;
     drop-shadow-offset-y: 3px;
+    // a11y-base: mouse-only. It repeats the tab's title, which the tab already says, so its
+    // texts are hidden too.
     accessible-role: none;
 
     layout := VerticalLayout {
@@ -837,6 +864,7 @@ export component TabPreview inherits Rectangle {
             wrap: word-wrap;
             overflow: elide;
             max-height: 36px;
+            accessible-role: none;
         }
 
         if root.url != "": Text {
@@ -845,6 +873,7 @@ export component TabPreview inherits Rectangle {
             font-size: 12px;
             overflow: elide;
             wrap: no-wrap;
+            accessible-role: none;
         }
     }
 }

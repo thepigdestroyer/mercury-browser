@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+groupbox | HTTPS-only mode | |
+text | This page cannot be opened securely | |
+text | HTTPS-only mode is on, and this request to plain.example can only be sent without HTTPS. If you continue, others on the network can read or change it. | |
+button | Go back | |
+button | Continue to plain.example (not secure) | |

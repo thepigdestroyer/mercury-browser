@@ -1,0 +1,9 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+text | Importing bookmarks from Chrome — Work… | |
+progress-indicator | Import progress | |
+text | Stopping after the current step… | |
+text | You can keep browsing while the import runs. Closing this window cancels the import; what was imported so far stays. | |
+button | Cancel | | disabled

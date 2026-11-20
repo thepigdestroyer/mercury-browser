@@ -70,6 +70,8 @@ export component RequestButton inherits Rectangle {
         font-weight: 600;
         horizontal-alignment: center;
         vertical-alignment: center;
+        // a11y-base: the button's own label says this; reading the caption too would say it twice.
+        accessible-role: none;
     }
 
     touch := TouchArea {
@@ -97,6 +99,15 @@ export component RequestCheckBox inherits Rectangle {
     in-out property <bool> checked;
 
     min-height: 22px;
+    // a11y-base: a check box with its state; pressing it from assistive technology toggles it
+    // like a click. The mark and the caption inside are hidden: the label and state say them.
+    accessible-role: checkbox;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.checked = !root.checked;
+    }
 
     HorizontalLayout {
         spacing: 8px;
@@ -119,6 +130,7 @@ export component RequestCheckBox inherits Rectangle {
                     font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
+                    accessible-role: none;
                 }
             }
         }
@@ -129,6 +141,7 @@ export component RequestCheckBox inherits Rectangle {
             font-size: 12px;
             vertical-alignment: center;
             wrap: word-wrap;
+            accessible-role: none;
         }
     }
 
@@ -142,6 +155,9 @@ export component RequestCheckBox inherits Rectangle {
 export component RequestField inherits Rectangle {
     in-out property <string> text;
     in property <string> placeholder;
+    // a11y-base: what the field is for, read by assistive technology (the placeholder when this
+    // is empty).
+    in property <string> accessible-name;
     in property <bool> password;
     // Select the whole text whenever the field gains focus (Slint does not on Tab on macOS).
     in property <bool> select-on-focus;
@@ -167,6 +183,8 @@ export component RequestField inherits Rectangle {
         color: ChromePalette.placeholder;
         font-size: 13px;
         vertical-alignment: center;
+        // a11y-base: the field's `accessible-placeholder-text` carries these words.
+        accessible-role: none;
     }
 
     input := TextInput {
@@ -179,6 +197,10 @@ export component RequestField inherits Rectangle {
         vertical-alignment: center;
         single-line: true;
         input-type: root.password ? InputType.password : InputType.text;
+        // a11y-base: never hand a password (a saved one is filled in) to assistive technology.
+        accessible-value: root.password ? "" : root.text;
+        accessible-label: root.accessible-name != "" ? root.accessible-name : root.placeholder;
+        accessible-placeholder-text: root.placeholder;
         accepted => {
             root.accepted();
         }

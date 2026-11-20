@@ -26,6 +26,10 @@ export component ContextMenuPopup inherits Rectangle {
     drop-shadow-offset-y: 4px;
     drop-shadow-color: root.colors.shadow;
     clip: true;
+    // a11y-base: Slint has no menu role, so the menu is a list of items. The rows are the
+    // browser's own words (Back, Copy, ...), so it is named for where it opens, not for an origin.
+    accessible-role: list;
+    accessible-label: "Page context menu";
 
     VerticalLayout {
         padding-top: 4px;
@@ -48,6 +52,20 @@ export component ContextMenuPopup inherits Rectangle {
                 width: parent.width - 8px;
                 border-radius: 5px;
                 background: row.enabled && index == root.highlighted ? root.colors.highlight : transparent;
+                // a11y-base: one item of the list. The position counts separators too (they
+                // are drawn but hidden from assistive technology), since a loop cannot skip them.
+                accessible-role: list-item;
+                accessible-label: row.label;
+                accessible-enabled: row.enabled;
+                accessible-item-selectable: true;
+                accessible-item-selected: row.enabled && index == root.highlighted;
+                accessible-item-index: index;
+                accessible-item-count: root.rows.length;
+                accessible-action-default => {
+                    if row.enabled {
+                        root.row-clicked(index);
+                    }
+                }
 
                 Text {
                     x: 10px;
@@ -60,6 +78,7 @@ export component ContextMenuPopup inherits Rectangle {
                     font-size: 13px;
                     vertical-alignment: center;
                     overflow: elide;
+                    accessible-role: none; // a11y-base: the item's label
                 }
             }
 

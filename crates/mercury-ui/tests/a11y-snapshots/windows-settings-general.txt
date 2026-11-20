@@ -1,0 +1,30 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+tab-list | Settings sections | |
+tab | General | | selected, item 0 of 6
+tab | Appearance | | unselected, item 1 of 6
+tab | Privacy and security | | unselected, item 2 of 6
+tab | Downloads | | unselected, item 3 of 6
+tab | Passwords | | unselected, item 4 of 6
+tab | Advanced | | unselected, item 5 of 6
+text | General | |
+combobox | On start-up, open | | collapsed, value "A new tab"
+text-input | Home page | | placeholder "https://example.com/ (empty for none)", value "https://example.org/"
+combobox | Default page zoom | | collapsed, value "100%"
+text | Search | |
+combobox | Search engine | | collapsed, value "DuckDuckGo"
+text | Type a keyword before your search in the address bar to use another engine, for example "@wikipedia rust". | |
+text | DuckDuckGo, keyword @duckduckgo | |
+text | Bing, keyword @bing | |
+text | Docs, no keyword | |
+button | Edit Docs | |
+button | Remove Docs | |
+text | Rust docs, keyword @rs | |
+button | Edit Rust docs | |
+button | Remove Rust docs | |
+button | Add search engine… | |
+checkbox | Show search suggestions while typing | | disabled, unchecked
+text | Show search suggestions while typing | |
+text | Off: suggestions would send everything you type in the address bar to the search engine. | |

@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+groupbox | Site information | |
+text | self-signed.test | |
+text | Not secure: you allowed an invalid certificate | |
+text | You chose to continue although the certificate is not valid. Mercury Browser accepts it until it quits. | |
+text | Permissions | |
+text | This site has not asked for any permission. | |
+text | Cookies and site data | |
+text | None | |
+button | Clear cookies and site data | | disabled
+text | Site settings | |
+text | HTTPS-only mode lets this site load without HTTPS. | |
+button | Remove the HTTPS-only exception | |

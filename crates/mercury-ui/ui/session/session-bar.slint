@@ -8,11 +8,15 @@ import { ChromePalette } from "../theme/chrome-palette.slint";
 
 component SessionBarButton inherits Rectangle {
     in property <string> label;
+    // a11y-base: what a screen reader says when it is not the drawn label. The bar's "Dismiss"
+    // must not be called exactly "Dismiss": that label belongs to the settings and password
+    // notices, which tests find by it.
+    in property <string> accessible-name;
     in property <bool> primary: false;
     callback clicked;
 
     accessible-role: button;
-    accessible-label: root.label;
+    accessible-label: root.accessible-name != "" ? root.accessible-name : root.label;
     accessible-action-default => {
         root.clicked();
     }
@@ -39,6 +43,7 @@ component SessionBarButton inherits Rectangle {
         font-weight: root.primary ? 600 : 500;
         horizontal-alignment: center;
         vertical-alignment: center;
+        accessible-role: none;
     }
 
     // Reached with Tab (never focused by a click, so typing elsewhere is not interrupted);
@@ -63,10 +68,15 @@ component SessionBarButton inherits Rectangle {
 
 component SessionChoice inherits Rectangle {
     in property <string> label;
+    // a11y-base: the session's place in the list, read as "n of m".
+    in property <int> index;
+    in property <int> count;
     callback clicked;
 
-    accessible-role: button;
+    accessible-role: list-item;
     accessible-label: root.label;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
     accessible-action-default => {
         root.clicked();
     }
@@ -85,6 +95,7 @@ component SessionChoice inherits Rectangle {
         font-size: 13px;
         vertical-alignment: center;
         overflow: elide;
+        accessible-role: none;
     }
 
     touch := TouchArea {
@@ -115,8 +126,17 @@ export component SessionBar inherits Rectangle {
         root.restore(index);
     }
 
+    // a11y-base: what the bar says, once for the drawn text and the group's label.
+    property <string> message: root.sessions.length > 0
+        ? "Mercury Browser didn't close properly. Restore your tabs?"
+        : root.notice;
+
     height: 44px;
     background: ChromePalette.info-background;
+    // a11y-base: a group named by its message (Slint has no alert role), so the drawn text is
+    // hidden.
+    accessible-role: groupbox;
+    accessible-label: root.message;
 
     Rectangle {
         x: 0px;
@@ -135,17 +155,17 @@ export component SessionBar inherits Rectangle {
 
         Text {
             horizontal-stretch: 1;
-            text: root.sessions.length > 0
-                ? "Mercury Browser didn't close properly. Restore your tabs?"
-                : root.notice;
+            text: root.message;
             color: ChromePalette.info-text;
             font-size: 13px;
             vertical-alignment: center;
             overflow: elide;
+            accessible-role: none;
         }
 
         if root.sessions.length > 1: SessionBarButton {
             label: "Choose a session…";
+            accessible-name: "Choose a session";
             clicked => {
                 root.open-chooser();
             }
@@ -161,6 +181,7 @@ export component SessionBar inherits Rectangle {
 
         if root.sessions.length > 0: SessionBarButton {
             label: "Dismiss";
+            accessible-name: "Dismiss restore offer";
             clicked => {
                 root.dismiss();
             }
@@ -186,6 +207,9 @@ export component SessionBar inherits Rectangle {
             background: ChromePalette.popup-background;
             drop-shadow-blur: 12px;
             drop-shadow-color: ChromePalette.shadow;
+            // a11y-base: the list is named by its heading, which is then hidden.
+            accessible-role: list;
+            accessible-label: "Restore which session?";
 
             VerticalLayout {
                 padding: 6px;
@@ -200,11 +224,14 @@ export component SessionBar inherits Rectangle {
                         color: ChromePalette.text-secondary;
                         font-size: 12px;
                         vertical-alignment: center;
+                        accessible-role: none;
                     }
                 }
 
                 for label[index] in root.sessions: SessionChoice {
                     label: label;
+                    index: index;
+                    count: root.sessions.length;
                     clicked => {
                         root.choose(index);
                     }

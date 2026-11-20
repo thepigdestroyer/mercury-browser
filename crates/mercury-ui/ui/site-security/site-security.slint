@@ -173,6 +173,9 @@ component TextButton inherits Rectangle {
         font-size: 12px;
         horizontal-alignment: center;
         vertical-alignment: center;
+        // a11y-base: the button's label says this (or a longer form of it); reading the caption
+        // too would say it twice.
+        accessible-role: none;
     }
 
     touch := TouchArea {
@@ -207,6 +210,10 @@ export component SiteInfoPanel inherits Rectangle {
     border-color: ChromePalette.popup-border;
     drop-shadow-blur: 12px;
     drop-shadow-color: ChromePalette.shadow;
+    // a11y-base: the popover is a group; its first text is the host (as the address bar shows
+    // it), then what is known about the connection, permissions and site data.
+    accessible-role: groupbox;
+    accessible-label: "Site information";
 
     VerticalLayout {
         padding: 14px;

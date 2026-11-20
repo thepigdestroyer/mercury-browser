@@ -15,6 +15,9 @@ export component PopUpBlockedIndicator inherits Rectangle {
     border-width: 1px;
     border-color: ChromePalette.info-border;
     background: ChromePalette.info-background;
+    // a11y-base: a group named by what happened; the button inside names the origin.
+    accessible-role: groupbox;
+    accessible-label: "Pop-up blocked";
 
     HorizontalLayout {
         padding-left: 10px;
@@ -27,6 +30,7 @@ export component PopUpBlockedIndicator inherits Rectangle {
             font-size: 12px;
             font-weight: 600;
             vertical-alignment: center;
+            accessible-role: none; // a11y-base: the group's label
         }
 
         allow-button := Rectangle {
@@ -38,6 +42,12 @@ export component PopUpBlockedIndicator inherits Rectangle {
             background: allow-touch.pressed
                 ? ChromePalette.button-pressed
                 : allow-touch.has-hover ? ChromePalette.button-hover : transparent;
+            // a11y-base: names the origin, as the button does on screen.
+            accessible-role: button;
+            accessible-label: "Allow pop-ups from " + root.origin;
+            accessible-action-default => {
+                root.allow();
+            }
 
             Text {
                 x: 8px;
@@ -48,6 +58,7 @@ export component PopUpBlockedIndicator inherits Rectangle {
                 font-size: 12px;
                 vertical-alignment: center;
                 overflow: elide;
+                accessible-role: none; // a11y-base: the button's label
             }
 
             allow-touch := TouchArea {
@@ -63,6 +74,12 @@ export component PopUpBlockedIndicator inherits Rectangle {
             y: (parent.height - self.height) / 2;
             border-radius: 6px;
             background: dismiss-touch.has-hover ? ChromePalette.button-hover : transparent;
+            // a11y-base: the cross is a glyph; the button says what it does.
+            accessible-role: button;
+            accessible-label: "Dismiss the pop-up notice";
+            accessible-action-default => {
+                root.dismiss();
+            }
 
             Text {
                 text: "×";
@@ -70,6 +87,7 @@ export component PopUpBlockedIndicator inherits Rectangle {
                 font-size: 15px;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                accessible-role: none; // a11y-base: the button's label says it
             }
 
             dismiss-touch := TouchArea {

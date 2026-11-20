@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
+groupbox | Site information | |
+text | münchen.example | |
+text | Connection is secure | |
+text | Information you send to this site cannot be read by others on the network. | |
+text | Permissions | |
+text | Store data permanently on this device | |
+text | Allowed | |
+button | Reset permission: Store data permanently on this device | |
+text | Cookies and site data | |
+text | 3 cookies, local storage | |
+button | Clear cookies and site data | |
+text | Site settings | |
+text | HTTPS-only mode lets this site load without HTTPS. | |
+button | Remove the HTTPS-only exception | |

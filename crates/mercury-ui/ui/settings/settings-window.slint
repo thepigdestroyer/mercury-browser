@@ -17,6 +17,9 @@ export struct SearchEngineRow {
 component SectionButton inherits Rectangle {
     in property <string> label;
     in property <bool> selected;
+    // Its place among the sections, for "n of m".
+    in property <int> index;
+    in property <int> count;
     callback clicked;
 
     height: 32px;
@@ -28,7 +31,10 @@ component SectionButton inherits Rectangle {
         : touch.has-hover ? Palette.alternate-background : transparent;
     accessible-role: tab;
     accessible-label: root.label;
+    accessible-item-selectable: true;
     accessible-item-selected: root.selected;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
     accessible-action-default => {
         root.clicked();
     }
@@ -38,6 +44,7 @@ component SectionButton inherits Rectangle {
         width: parent.width - 24px;
         height: parent.height;
         text: root.label;
+        accessible-role: none;
         color: root.selected ? ChromePalette.item-selected-text : Palette.foreground;
         font-size: 13px;
         vertical-alignment: center;
@@ -97,6 +104,7 @@ component LabelledRow inherits HorizontalLayout {
     Text {
         width: 170px;
         text: root.label;
+        accessible-role: none;
         color: Palette.foreground;
         font-size: 13px;
         vertical-alignment: center;
@@ -256,6 +264,8 @@ export component SettingsWindow inherits Window {
             Rectangle {
                 width: 200px;
                 background: Palette.alternate-background;
+                accessible-role: tab-list;
+                accessible-label: "Settings sections";
 
                 VerticalLayout {
                     padding: 12px;
@@ -264,6 +274,7 @@ export component SettingsWindow inherits Window {
 
                     Text {
                         text: "Settings";
+                        accessible-role: none;
                         font-size: 15px;
                         font-weight: 650;
                         color: Palette.foreground;
@@ -273,6 +284,8 @@ export component SettingsWindow inherits Window {
 
                     for name[index] in root.sections: SectionButton {
                         label: name;
+                        index: index;
+                        count: root.sections.length;
                         selected: root.section == index;
                         clicked => {
                             root.commit-texts();
@@ -395,6 +408,7 @@ export component SettingsWindow inherits Window {
                             Text {
                                 horizontal-stretch: 1;
                                 text: engine.name;
+                                accessible-label: engine.name + (engine.keyword == "" ? ", no keyword" : ", keyword " + engine.keyword);
                                 color: Palette.foreground;
                                 font-size: 13px;
                                 vertical-alignment: center;
@@ -404,6 +418,7 @@ export component SettingsWindow inherits Window {
                             Text {
                                 width: 140px;
                                 text: engine.keyword == "" ? "no keyword" : engine.keyword;
+                                accessible-role: none;
                                 color: Palette.foreground.with-alpha(0.7);
                                 font-size: 13px;
                                 vertical-alignment: center;
@@ -439,13 +454,19 @@ export component SettingsWindow inherits Window {
                             Button {
                                 text: "Add search engine…";
                                 enabled: root.can-add-engine;
+                                accessible-description: root.can-add-engine ? "" : "The limit of custom search engines is reached.";
                                 clicked => {
-                                    root.add-engine();
+                                    // Disabled: nothing happens, even if assistive technology presses it.
+                                    if root.can-add-engine {
+                                        root.add-engine();
+                                    }
                                 }
                             }
                         }
 
                         if root.editor-open: Rectangle {
+                            accessible-role: groupbox;
+                            accessible-label: root.editor-id == "" ? "Add a search engine" : "Edit search engine";
                             border-radius: 8px;
                             border-width: 1px;
                             border-color: Palette.border;
@@ -457,6 +478,7 @@ export component SettingsWindow inherits Window {
                                 spacing: 10px;
 
                                 GroupTitle {
+                                    accessible-role: none;
                                     text: root.editor-id == "" ? "Add a search engine" : "Edit search engine";
                                 }
 
@@ -482,6 +504,7 @@ export component SettingsWindow inherits Window {
                                     label: "URL with {searchTerms}";
                                     LineEdit {
                                         accessible-label: "Engine URL";
+                                        accessible-description: "Write {searchTerms} where the search text goes.";
                                         text <=> root.editor-url;
                                         placeholder-text: "https://example.com/search?q={searchTerms}";
                                         edited(text) => {
@@ -660,7 +683,10 @@ export component SettingsWindow inherits Window {
                                 text: "Clear browsing data…";
                                 enabled: root.clear-browsing-data-available;
                                 clicked => {
-                                    root.clear-browsing-data();
+                                    // Disabled: nothing happens, even if assistive technology presses it.
+                                    if root.clear-browsing-data-available {
+                                        root.clear-browsing-data();
+                                    }
                                 }
                             }
                         }

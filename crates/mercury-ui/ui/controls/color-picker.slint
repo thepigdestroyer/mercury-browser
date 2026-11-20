@@ -22,6 +22,17 @@ export component ColorPicker inherits Rectangle {
     callback cancelled();
 
     property <PopupColors> colors: PopupStyle.colors;
+    // a11y-base: a swatch's name for assistive technology is its value, in the same form as
+    // the hex field (`#1e88e5`), because a colour carries no name.
+    property <[string]> hex-digits: ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"];
+
+    pure function hex-byte(value: int) -> string {
+        root.hex-digits[Math.floor(value / 16)] + root.hex-digits[Math.floor(Math.mod(value, 16))]
+    }
+
+    pure function hex-of(colour: color) -> string {
+        "#" + root.hex-byte(colour.red) + root.hex-byte(colour.green) + root.hex-byte(colour.blue)
+    }
 
     preferred-width: 232px;
     preferred-height: 282px;
@@ -33,6 +44,10 @@ export component ColorPicker inherits Rectangle {
     drop-shadow-blur: 14px;
     drop-shadow-offset-y: 4px;
     drop-shadow-color: root.colors.shadow;
+    // a11y-base: a group named by what it is and the page that opened it (the caption below
+    // shows the same origin); Slint has no dialog role. The page keeps the keyboard focus.
+    accessible-role: groupbox;
+    accessible-label: root.origin == "" ? "Colour picker" : "Colour picker from " + root.origin;
 
     VerticalLayout {
         x: 0px;
@@ -50,6 +65,7 @@ export component ColorPicker inherits Rectangle {
             font-size: 11px;
             vertical-alignment: center;
             overflow: elide;
+            accessible-role: none; // a11y-base: the group's label
         }
 
         swatch-grid := Rectangle {
@@ -64,6 +80,14 @@ export component ColorPicker inherits Rectangle {
                 border-width: 1px;
                 border-color: root.colors.border;
                 background: swatch;
+                // a11y-base: one of the sixteen colours, named by its value.
+                accessible-role: button;
+                accessible-label: root.hex-of(swatch);
+                accessible-item-index: index;
+                accessible-item-count: root.swatches.length;
+                accessible-action-default => {
+                    root.swatch-picked(index);
+                }
 
                 TouchArea {
                     clicked => {
@@ -100,6 +124,41 @@ export component ColorPicker inherits Rectangle {
                 border-width: 2px;
                 border-color: root.lightness > 0.6 ? root.colors.marker-on-light : root.colors.marker-on-dark;
                 background: transparent;
+            }
+
+            // a11y-base: the area is two sliders for assistive technology, since a drag cannot be
+            // made without a pointer: hue left to right and lightness top (white) to bottom, each
+            // moved with increment and decrement. They pick through `area-picked` like the area.
+            Rectangle {
+                accessible-role: slider;
+                accessible-label: "Hue";
+                accessible-description: "Degrees round the colour wheel, from red at 0";
+                accessible-value: "" + Math.round(root.hue * 360);
+                accessible-value-minimum: 0;
+                accessible-value-maximum: 360;
+                accessible-value-step: 15;
+                accessible-action-increment => {
+                    root.area-picked(Math.min(1, root.hue + 15 / 360), 1 - root.lightness);
+                }
+                accessible-action-decrement => {
+                    root.area-picked(Math.max(0, root.hue - 15 / 360), 1 - root.lightness);
+                }
+            }
+
+            Rectangle {
+                accessible-role: slider;
+                accessible-label: "Lightness";
+                accessible-description: "Percent, from black at 0 to white at 100";
+                accessible-value: "" + Math.round(root.lightness * 100);
+                accessible-value-minimum: 0;
+                accessible-value-maximum: 100;
+                accessible-value-step: 5;
+                accessible-action-increment => {
+                    root.area-picked(root.hue, 1 - Math.min(1, root.lightness + 0.05));
+                }
+                accessible-action-decrement => {
+                    root.area-picked(root.hue, 1 - Math.max(0, root.lightness - 0.05));
+                }
             }
 
             area-touch := TouchArea {
@@ -141,6 +200,12 @@ export component ColorPicker inherits Rectangle {
                 border-width: 1px;
                 border-color: root.hex-valid ? root.colors.focus : root.colors.invalid;
                 background: root.colors.background;
+                // a11y-base: read-only text with its value. Typing reaches the field through the
+                // page's keys, so it is not a text field for assistive technology (that would
+                // ask for the keyboard focus, which the page keeps).
+                accessible-role: text;
+                accessible-label: "Colour value " + root.hex;
+                accessible-description: root.hex-valid ? "" : "Not a complete colour yet";
 
                 hex-text := Text {
                     x: 8px;
@@ -149,6 +214,7 @@ export component ColorPicker inherits Rectangle {
                     color: root.colors.text;
                     font-size: 13px;
                     vertical-alignment: center;
+                    accessible-role: none; // a11y-base: the field's label has it
                 }
 
                 // A fixed caret: typing goes to the field whenever the picker is open.
