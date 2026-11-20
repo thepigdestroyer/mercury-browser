@@ -58,8 +58,21 @@ pub(crate) enum Document {
     Help,
     Licence,
     ThirdPartyNotices,
-    /// The repository, where the source of the MPL-2.0 parts is (MPL-2.0 §3.2).
+    /// The source of the MPL-2.0 parts as of this version: the repository at the tag `v<version>`
+    /// (MPL-2.0 §3.2 asks for the source of the version that was distributed). The same address as
+    /// the "Source code" section of the credits page, `source_code_url`.
     SourceCode,
+}
+
+/// The Mercury repository (the same as `REPOSITORY` in `mercury-credits`, checked by a test).
+pub(crate) const REPOSITORY_URL: &str = "https://github.com/thepigdestroyer/mercury-browser";
+
+/// The repository at the tag of `version`, where `release.yml` tags every release as `v<version>`:
+/// the source of what the user has installed, not of the default branch, which moves on. A build
+/// between releases, whose tag does not exist yet, opens GitHub's "not found" page until the
+/// release is tagged; only released builds are distributed.
+pub(crate) fn source_code_url(version: &str) -> String {
+    format!("{REPOSITORY_URL}/tree/v{version}")
 }
 
 impl Document {
@@ -73,7 +86,7 @@ impl Document {
                 "https://github.com/thepigdestroyer/mercury-browser/blob/master/LICENSE",
             ),
             Self::ThirdPartyNotices => crate::about::third_party_notices_url(),
-            Self::SourceCode => Cow::Borrowed("https://github.com/thepigdestroyer/mercury-browser"),
+            Self::SourceCode => Cow::Owned(source_code_url(env!("CARGO_PKG_VERSION"))),
         }
     }
 }
@@ -1378,7 +1391,46 @@ mod tests {
         );
         assert_eq!(
             Document::SourceCode.url(),
-            "https://github.com/thepigdestroyer/mercury-browser"
+            format!(
+                "https://github.com/thepigdestroyer/mercury-browser/tree/v{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+    }
+
+    #[test]
+    fn the_source_code_link_is_the_tag_of_this_version() {
+        assert_eq!(
+            source_code_url("1.2.3"),
+            "https://github.com/thepigdestroyer/mercury-browser/tree/v1.2.3"
+        );
+        assert_eq!(
+            source_code_url("1.2.3-rc.1+build.5"),
+            "https://github.com/thepigdestroyer/mercury-browser/tree/v1.2.3-rc.1+build.5"
+        );
+        // `release.yml` refuses a tag other than `v<workspace version>`, and this crate takes the
+        // workspace's version (`version.workspace`).
+        let url = Document::SourceCode.url();
+        assert!(
+            url.ends_with(&format!("/tree/v{}", env!("CARGO_PKG_VERSION"))),
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn the_source_code_link_is_the_one_on_the_credits_page() {
+        // `mercury-credits` is a tool, not a dependency of the browser, so the two addresses are
+        // tied by their text: the same repository, and the page links `<repository>/tree/v<version>`.
+        let page = include_str!("../../../../crates/mercury-credits/src/page.rs");
+        assert!(
+            page.contains(&format!(
+                "pub const REPOSITORY: &str = \"{REPOSITORY_URL}\";"
+            )),
+            "the credits page names another repository"
+        );
+        assert!(
+            page.contains(r#"&format!("{REPOSITORY}/tree/v{}", url_segment(version))"#),
+            "the credits page no longer links the tag of the version"
         );
     }
 
