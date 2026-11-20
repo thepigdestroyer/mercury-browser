@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# The GStreamer half of the MSE backend (lane med-1, item 4): a source element with one appsrc per track
+# that pulls coded frames from a `mercury_mse::FrameFeed`. GStreamer but no Servo, so it builds and tests
+# in the light pool (`crates/mercury-mse-gst/test.sh` sets up the bundled GStreamer). The gstreamer-rs
+# versions and features are Servo's (third_party/servo-media-gstreamer): one gstreamer-rs, not two.
+[package]
+name = "mercury-mse-gst"
+description = "A GStreamer source element that feeds MSE coded frames to appsrc, and the decoder-registry type support."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Item 4 adds gstreamer-app, gstreamer-audio and gstreamer-video (same versions, already in the lock)
+# when it uses them; run `cargo metadata --offline` afterwards so that Cargo.lock follows.
+[dependencies]
+glib = "0.22"
+gstreamer = { version = "0.25", features = ["v1_18"] }
+gstreamer-base = "0.25"
+log.workspace = true
+mercury-mse = { path = "../mercury-mse" }
+
+[dev-dependencies]
+mercury-mse-testkit = { path = "../mercury-mse-testkit" }
