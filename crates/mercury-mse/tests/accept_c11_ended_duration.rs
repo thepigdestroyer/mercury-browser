@@ -208,7 +208,9 @@ fn c11_duration_is_nan_before_the_first_initialization_segment() {
         .backend
         .duration()
         .expect("a duration after the init segment");
-    assert!(d > 0.0, "duration {d}");
+    // What the init segment declares (8 s), or +Infinity when it declares none.
+    assert!(d == f64::INFINITY || (d - 8.0).abs() < 0.03, "duration {d}");
+    eprintln!("c11: the duration after the h264-low init segment is {d}");
     let events = lifecycle(&rig);
     assert_eq!(
         events.len(),
