@@ -433,6 +433,17 @@ jobs:
       # microphone plugin (it checks that before running anything), so it can
       # never reach a real device. Like the smoke test, it needs the runner to
       # render a window; whether hosted runners do is not verified yet.
+      #
+      # The script also checks that the normal build refuses --fake-media-devices,
+      # which needs target/release/lib: the executable finds GStreamer only
+      # through its @executable_path/lib/ rpath, so without that directory dyld
+      # aborts it before it can refuse anything (exit 134, not 2). `make
+      # build-release` collects it locally; this job built with cargo and
+      # bundled into dist/, so it collects the libraries the same way here.
+      - name: Collect the GStreamer libraries beside the release executable
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: scripts/macos/collect-gstreamer.sh "${MERCURY_GSTREAMER_PREFIX}" target/release/lib
+
       - name: Camera and microphone with fake devices
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: scripts/macos/test-capture.sh
