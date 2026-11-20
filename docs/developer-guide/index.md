@@ -48,6 +48,7 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `scripts/macos` | GStreamer set-up, the app bundle, signing and their tests |
 | `scripts/ci`, `.github/workflows` | Continuous integration, release builds and the documentation deploy |
 | `scripts/dev`, `.opencode` | The build slots (`build-slot.sh`) and the disk guard plugin and skill that the AI coding agents work under ([setup](setup.md#build-slots)) |
+| `spikes/mse` | A research spike, not part of the app and not built by `make`: a Cargo workspace of its own that plays MSE-style streams through GStreamer's `msesrc`, to decide whether it can back `MediaSource`; build and run it only through `spikes/mse/run.sh` |
 | `tests/pages` | Local test pages for rendering, media, dialogs, controls and canvas |
 | `docs` | This MkDocs site and its screenshots |
 
