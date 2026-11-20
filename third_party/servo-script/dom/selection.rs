@@ -43,7 +43,9 @@ use crate::dom::staticrange::StaticRange;
 use crate::dom::traversal::FlatTreeForSelectionNoGcTraversal;
 // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
 use crate::dom::types::{HTMLInputElement, HTMLTextAreaElement, ShadowRoot};
-use crate::dom::{CharacterData, FlatTreeParent, NodeDamage, NodeFlags, StartOrEnd};
+// Mercury: backport of servo/servo#49885 (afc9224b1). Drop at the bump that has it. (`Element` joins
+// this line; upstream also moved the `Node` and `NodeTraits` imports here.)
+use crate::dom::{CharacterData, Element, FlatTreeParent, NodeDamage, NodeFlags, StartOrEnd};
 
 /// Used value of [`user-select`](https://drafts.csswg.org/css-ui-4/#propdef-user-select):
 /// like the computed value but excludes `auto`.
@@ -1779,6 +1781,14 @@ impl<'no_gc> Iterator for VisibleSelectionTraversal<'no_gc> {
                     // on that nodes descendants.
                     if &**node == self.start.node() &&
                         matches!(self.start, FlatTreeNodePosition::After(_))
+                    {
+                        self.skip_subtree = true;
+                    }
+
+                    // Mercury: backport of servo/servo#49885 (afc9224b1). Drop at the bump that has it.
+                    if let Some(element) = node.downcast::<Element>() &&
+                        let Some(shadow_root) = element.shadow_root() &&
+                        shadow_root.is_user_agent_widget()
                     {
                         self.skip_subtree = true;
                     }
