@@ -4,3 +4,6 @@ slint::include_modules!();
 // tabs-plus
 mod tab_rows;
 pub use tab_rows::update_tab_rows;
+
+// ring-geometry
+pub mod ring_geometry;
