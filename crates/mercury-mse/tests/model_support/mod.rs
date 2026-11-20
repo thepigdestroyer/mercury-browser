@@ -43,7 +43,7 @@ pub struct Recorded {
 
 type Hook = Arc<dyn Fn(&MseEvent) + Send + Sync>;
 
-/// Collects every event; hooks run on the emitting thread after the event is recorded and with no lock
+/// Collects every event; hooks run on the emitting thread before the event is recorded and with no lock
 /// of the recorder held (so a hook may call the backend and the recorder).
 pub struct Recorder {
     inner: Mutex<Inner>,
@@ -75,8 +75,15 @@ impl Recorder {
         Arc::new(move |event| rec.record(event))
     }
 
+    /// The hooks run first, on the emitting thread, with no lock of the recorder held; the event becomes
+    /// visible to the test only after them. A hook therefore sees the backend as the DOM would when the
+    /// event is delivered: a test that reacts to the event cannot have started another operation yet.
     fn record(&self, event: MseEvent) {
         let thread = thread::current();
+        let hooks: Vec<Hook> = self.hooks.lock().unwrap().clone();
+        for hook in hooks {
+            hook(&event);
+        }
         {
             let mut inner = self.inner.lock().unwrap();
             let seq = inner.log.len();
@@ -102,14 +109,10 @@ impl Recorder {
                 at: self.start.elapsed(),
                 thread: thread.id(),
                 thread_name: thread.name().unwrap_or("").to_string(),
-                event: event.clone(),
+                event,
             });
         }
         self.cv.notify_all();
-        let hooks: Vec<Hook> = self.hooks.lock().unwrap().clone();
-        for hook in hooks {
-            hook(&event);
-        }
     }
 
     pub fn add_hook(&self, hook: impl Fn(&MseEvent) + Send + Sync + 'static) {

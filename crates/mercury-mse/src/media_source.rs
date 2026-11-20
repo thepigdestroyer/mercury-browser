@@ -384,6 +384,8 @@ impl MediaSource {
         if self.duration != new {
             self.duration = new;
             self.push_event(MseEvent::DurationChanged(Some(new)));
+            // The element re-reads the duration for the pipeline only when it is woken.
+            self.push_wake();
         }
         Ok(())
     }
@@ -925,9 +927,14 @@ impl MediaSource {
     }
 
     /// The next pull of every kind starts at the random access point at or before `position`.
+    ///
+    /// The consumer does not know which configuration its pipeline holds after a flush, so the next pull
+    /// of every kind starts with the `Config` of the group of pictures it starts at, and the first frame
+    /// is a discontinuity.
     pub fn feed_seek(&mut self, position: Ns) {
         self.feed.position = position;
         self.feed.cursors = [None, None, None];
+        self.feed.known_config = [None, None, None];
     }
 
     /// Up to `max` frames of `kind` and the `Config` items in front of them.
@@ -963,27 +970,12 @@ impl MediaSource {
         }
         let state = if more {
             FeedState::More
-        } else if ended && exhausted(&self.buffers[i], kind, cursor, position) {
+        } else if ended && processor.cursor_exhausted(kind, cursor) {
             FeedState::Ended
         } else {
             FeedState::WaitingForData
         };
         FeedBatch { items, state }
-    }
-}
-
-/// Everything of this kind that is buffered was served, or (a cursor that has not started because the
-/// data for the position never arrived) the position is at or past the end of the data.
-fn exhausted(buffer: &SourceBuffer, kind: TrackKind, cursor: &FeedCursor, position: Ns) -> bool {
-    let Some(track) = buffer.processor.track_buffer(kind) else {
-        return true;
-    };
-    let Some(last_dts) = track.iter().next_back().map(|(_, stored)| stored.frame.dts) else {
-        return true;
-    };
-    match cursor.last_dts() {
-        Some(served) => served >= last_dts,
-        None => track.highest_end().is_none_or(|end| position >= end),
     }
 }
 
