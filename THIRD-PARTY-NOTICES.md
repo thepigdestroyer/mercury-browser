@@ -228,10 +228,16 @@ What the library contains (all as built into PDFium 160.0.8165.0; the project of
 
 Rust crates that load and wrap the library are compiled into `mercury-browser` and keep their own licences:
 
-- `pdfium-render` 0.9.5 — https://github.com/ajrcarey/pdfium-render — MIT OR Apache-2.0 (used under MIT; Copyright Alastair
-  Carey, the crate's author; the crate's licence file, `LICENSES/MIT-pdfium-render.md`, only names the two licences) — the
-  safe wrapper over PDFium's C interface, with the features `pdfium_8125` and `thread_safe`; its `pdfium_enable_v8` and
-  `pdfium_enable_xfa` features are off.
+- `pdfium-render` 0.9.5 — https://github.com/ajrcarey/pdfium-render — MIT OR Apache-2.0 (used under MIT; Copyright (c)
+  Alastair Carey, the crate's author; `LICENSES/MIT-pdfium-render.txt`) — the safe wrapper over PDFium's C interface, with
+  the features `pdfium_8125` and `thread_safe`; its `pdfium_enable_v8` and `pdfium_enable_xfa` features are off. The
+  crate and its repository carry no `LICENSE-MIT` and no `LICENSE-APACHE` (their `LICENSE.md` says "either of Apache-2.0
+  or MIT, at your option" and points at two files that were never published; checked in the repository's whole history on
+  20 Nov 2026). The file in `LICENSES/` is therefore the standard MIT text (SPDX `MIT`) with the copyright lines the
+  crate does give: its `authors` field ("Alastair Carey") and the header of its `build.rs` ("Copyright 2022 - 2024,
+  pdfium-render Developers" and "Copyright 2021, pdfium-sys Developers"). The crate's `include/` folder holds PDFium's own
+  headers (BSD-3-Clause, "The PDFium Authors"), read only when its bindings are regenerated (its `bindings` feature,
+  off here); the bindings it ships were made from them, and PDFium's own licence is listed above.
 - `maybe-owned` 0.3.4 — https://github.com/rustonaut/maybe-owned — MIT OR Apache-2.0 (used under MIT; Copyright (c)
   2016 Philipp Korber; `LICENSES/MIT-maybe-owned.txt`) — a dependency of `pdfium-render`.
 - `piston-float` 1.0.1 — https://github.com/pistondevelopers/float — MIT (Copyright (c) 2015 PistonDevelopers;
