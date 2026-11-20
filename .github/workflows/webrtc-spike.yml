@@ -18,19 +18,13 @@
 # results: the RESULT lines (`RESULT tNN pass|fail|skip detail`) of the tests go to the job
 # summary, and the logs, sizes and timings are uploaded as an artifact.
 #
-# The push trigger below is for the lane branch while the spike is being written; it is removed
-# in the lane's last commit and the workflow stays workflow_dispatch only.
+# Started by hand (Actions, "Run workflow"). While the spike was written it also ran on every push
+# to lane/sp-rtc (seven rounds; the last, all green, is run 44646282269); that trigger was removed
+# in the lane's last commit.
 name: WebRTC spike
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - lane/sp-rtc
-    paths:
-      - "spikes/webrtc/**"
-      - "scripts/macos/webrtc.sh"
-      - ".github/workflows/webrtc-spike.yml"
 
 permissions:
   contents: read

@@ -50,3 +50,11 @@ cd spikes/webrtc/bridge && cargo test --release -- --test-threads=2
 Through the build guard: `MERCURY_SLOT_POOL=light .superpowers/tools/guarded.sh <worktree> '<command>'`.
 Delete every `spikes/webrtc/*/target` and `*/vendor` when you are done, and the archives in
 `~/Library/Caches/mercury-browser/webrtc` (about 2.4 GB unpacked).
+
+## Result (20 Nov 2026)
+
+On an Apple Silicon runner (`macos-26`, run 44646282269) both routes pass their whole test list (route L: t01 to t13, route S: t01 to t12) and the bridge passes its 32 tests; the audit of
+both archives repeats the Intel Mac's static results. Route L (LiveKit's bindings) is the recommended route, route S passes everything but lacks parts of the `RTCPeerConnection` surface in its
+prebuilt C wrapper, and neither runs on an Intel Mac (no acceptable x86_64 libwebrtc exists). The go/no-go, the trait-fit table, the sizes (about 13 to 14 MB linked) and the hand-offs for the real
+WebRTC lane are in `research/R18-webrtc-spike.md` in the project notes. Needed in the final binary: the `-ObjC` linker flag, a macOS 14 minimum, and the patches in `livekit/patches/` plus the
+overlay and the local `webrtc-sys-build` replacement. The workflow now runs only by hand.

@@ -34,13 +34,15 @@ Without the `webrtc.sh env` line the build stops: `.cargo/config.toml` points `L
 - `fetch-libcxx.sh`: the libc++ headers of the archive's revision (`std::__Cr`), pinned by content hash.
 - `src/`: `LiveKitVideoSink` and `LiveKitAudioSink` (`MediaFrameSink` into `NativeVideoSource` and `NativeAudioSource`),
   and `loopback` (two peers in one process).
-- `tests/calls.rs`: t01 to t13, each printing `RESULT tNN pass|fail|skip detail`.
+- `tests/calls.rs`: t01 to t13, each printing `RESULT tNN pass|fail|skip detail`; `run-tests.sh` runs each in its own process.
 - `examples/probe_route.rs`, `examples/probe_baseline.rs`: the size measurement.
 
 The findings are in `research/R18-webrtc-spike.md` (notes outside the repository).
 
-## Status (19 Nov 2026)
+## Status (20 Nov 2026)
 
-Compiled and linked for `aarch64-apple-darwin` from an Intel Mac (library, tests, two size probes; clippy with `-D warnings` and `cargo fmt` clean; a cold
-offline build from an empty `target/` took 8 minutes on a loaded 12-thread Mac). Nothing has been run: t01 to t13 await the arm64 CI job. Route L passes the gates
-that can be judged without running it; see `research/R18-parts/3-livekit.md` for the gate table and for what to look at in the CI output (t03, t05, t06, t10, t11).
+Built, linked and run: from an Intel Mac for `aarch64-apple-darwin` (library, tests, two size probes; clippy with `-D warnings` and `cargo fmt` clean; a cold
+offline build from an empty `target/` took 8 minutes on a loaded 12-thread Mac), and **run on an Apple Silicon runner (`macos-26`): t01 to t13 all pass**
+(run 44646282269 and its re-run). Findings the tests produced, all in `research/R18-webrtc-spike.md`: the test binary needs `-ObjC` (`build.rs` passes it), `RtpSender::set_track(None)`
+crashes `webrtc-sys` 0.3.54 (t07 detaches with `remove_track`), libwebrtc does not answer simulcast (t06 rewrites the answer like a server's), and libwebrtc adapts the resolution
+and drops frames while its bandwidth estimate ramps up (t05 counts after a cold window and requires 45 frames in 3 s).
