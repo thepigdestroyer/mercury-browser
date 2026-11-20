@@ -8,13 +8,17 @@
 //! A password is read only after the user asked for it and authenticated; a shown password is
 //! forgotten when the login is closed, another is opened, or the window closes.
 
+#[cfg(any(target_os = "macos", test))]
 use std::path::{Path, PathBuf};
 use std::rc::{Rc, Weak};
 
 use mercury_password_manager::{
-    Interaction, LoginRow, ManagerError, display_password, display_text, export_csv, filter_rows,
-    import_csv, login_rows, read_import_file, site_label, update_login, write_private_file,
+    Interaction, LoginRow, ManagerError, display_password, display_text, filter_rows, login_rows,
+    site_label, update_login,
 };
+// For `import_file` and `export_file`, which only macOS's file dialogs (and the tests) call.
+#[cfg(any(target_os = "macos", test))]
+use mercury_password_manager::{export_csv, import_csv, read_import_file, write_private_file};
 use mercury_passwords::{
     GENERATOR_MAX_LENGTH, GENERATOR_MIN_LENGTH, GeneratorOptions, LoginKey, OsRandom, Password,
     PasswordError, generate_password,
@@ -509,7 +513,9 @@ fn choose_import(passwords: &Rc<Passwords>) {
     }
 }
 
-/// Imports the logins of a CSV file on the worker and says what happened.
+/// Imports the logins of a CSV file on the worker and says what happened. Only the macOS file
+/// dialog chooses a file; the tests run everywhere.
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn import_file(passwords: &Rc<Passwords>, path: PathBuf) {
     set_status(WAITING_FOR_KEYCHAIN);
     let weak = Rc::downgrade(passwords);
@@ -568,7 +574,9 @@ fn choose_export(passwords: &Rc<Passwords>) {
     });
 }
 
-/// Writes every login to `path` (mode `0600`) on the worker and says what happened.
+/// Writes every login to `path` (mode `0600`) on the worker and says what happened. Only the
+/// macOS file dialog chooses a file; the tests run everywhere.
+#[cfg(any(target_os = "macos", test))]
 pub(super) fn export_file(passwords: &Rc<Passwords>, path: PathBuf) {
     set_status(WAITING_FOR_KEYCHAIN);
     passwords.worker.run(
@@ -588,6 +596,7 @@ pub(super) fn export_file(passwords: &Rc<Passwords>, path: PathBuf) {
     );
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn export_message(count: usize, path: &Path) -> String {
     let name = path
         .file_name()
