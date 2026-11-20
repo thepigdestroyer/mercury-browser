@@ -773,6 +773,7 @@ struct VideoRun {
     window_frames: usize,
     total: u64,
     kept: u64,
+    acceptable: u64,
     sizes: String,
     regressions: u64,
     counters: String,
@@ -830,8 +831,23 @@ fn video_run(width: u32, height: u32) -> Result<VideoRun, String> {
         .filter(|((w, h), _)| (*w - width as i32).abs() <= 1 && (*h - height as i32).abs() <= 1)
         .map(|(_, n)| *n)
         .sum();
+    // libwebrtc adapts the resolution to its bandwidth and CPU estimates (route L saw 480x264 for a
+    // 640x360 source; here half of the frames of one run came at 480x270): a frame is acceptable when
+    // it is no larger than the source and keeps its aspect ratio (alignment aside).
+    let aspect = f64::from(width) / f64::from(height);
+    let acceptable: u64 = meter
+        .sizes
+        .iter()
+        .filter(|((w, h), _)| {
+            *w <= width as i32 + 1
+                && *h <= height as i32 + 1
+                && (f64::from(*w) / f64::from(*h) / aspect - 1.0).abs() < 0.04
+        })
+        .map(|(_, n)| *n)
+        .sum();
     Ok(VideoRun {
         cold_frames,
+        acceptable,
         window_frames: meter.frames_since(window_start),
         total: meter.frames,
         kept,
@@ -845,13 +861,14 @@ fn video_run(width: u32, height: u32) -> Result<VideoRun, String> {
 
 fn judge_video(label: &str, run: &VideoRun, min_frames: usize) -> Result<String, String> {
     let line = format!(
-        "{label}: {} frames in 3 s after ramp-up (cold first window {}; total {}), sizes {} ({} of {} within 1 px of expected), timestamp regressions {}, sink [{}], appsrc fed {} pulled {}",
+        "{label}: {} frames in 3 s after ramp-up (cold first window {}; total {}), sizes {} ({} of {} at the source size within 1 px, {} acceptable after libwebrtc's adaptation), timestamp regressions {}, sink [{}], appsrc fed {} pulled {}",
         run.window_frames,
         run.cold_frames,
         run.total,
         run.sizes,
         run.kept,
         run.total,
+        run.acceptable,
         run.regressions,
         run.counters,
         run.fed,
@@ -862,8 +879,12 @@ fn judge_video(label: &str, run: &VideoRun, min_frames: usize) -> Result<String,
             "{line}; expected at least {min_frames} frames in 3 s"
         ));
     }
-    if run.kept * 10 < run.total * 8 {
-        return Err(format!("{line}; the resolution was not kept"));
+    if run.acceptable * 10 < run.total * 9 {
+        return Err(format!(
+            "{line}; {} of {} frames were larger than the source or had another aspect ratio",
+            run.total - run.acceptable,
+            run.total
+        ));
     }
     if run.regressions > 0 {
         return Err(format!("{line}; timestamps went backwards"));
