@@ -242,6 +242,7 @@ On other distributions, install the equivalent compiler, Fontconfig, X11, Waylan
 | `make fmt` | Format the code |
 | `make lint` | Clippy with warnings as errors |
 | `make test` | The full test suite |
+| `make test-servo-net` | The vendored servo-net tests (part of `make test`) |
 | `make qa` | Formatting, lint and tests together |
 | `make build-release` | Build the optimised workspace |
 | `make app-macos` | Build the macOS app bundle |

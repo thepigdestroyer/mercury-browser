@@ -80,6 +80,7 @@ What **Continue anyway** accepts is narrow:
 - **The name, not the port.** An exception is for a site's name. Another port on the same name is accepted too, if it presents the same certificate.
 - **Until Mercury quits.** Mercury does not save an exception. There is no **Remove** button yet: to forget an exception, quit Mercury. A button would not be reliable until Mercury can also close the connections that are already open, because they stay trusted after an exception is removed.
 - **The warning stays.** While an exception lasts, the address bar keeps its warning mark for that name, and the site information says that you allowed an invalid certificate.
+- **No HSTS from that name.** Many devices with their own certificate (routers, network storage) ask browsers to use only secure connections for their name. Mercury does not remember such a request from a name you continued on, for as long as Mercury runs, because that connection was trusted only on your say-so (RFC 6797, section 8.1). It also ignores the name's request on a later connection with a valid certificate in the same session, and learns it in the next one. So the name is not locked, and after a restart you can continue again. Other sites are not affected.
 
 Continue only for devices you control. An exception means Mercury trusts whoever holds that certificate's key when you visit that name.
 

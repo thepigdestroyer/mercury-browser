@@ -9,16 +9,20 @@
 //! `HttpState`). The last group uses the loopback TLS server of `test_util` (self-signed certificate) that
 //! is reachable under several host names: `localhost`, `127.0.0.1` and `[::1]`.
 
+use std::sync::Arc;
+
 use base64::Engine as _;
 use fst::Streamer;
-use http::{HeaderValue, Method, header};
+use http::{HeaderMap, HeaderValue, Method, header};
 use http_body_util::combinators::BoxBody;
 use hyper::body::{Bytes, Incoming};
 use hyper::{Request as HyperRequest, Response as HyperResponse};
 use net::certificate_exceptions::{
     CertificateExceptionRefusal, MAX_RECORDED_FAILURES, server_name_for_host,
 };
-use net::connector::{CACertificates, create_tls_config};
+use net::connector::{
+    CACertificates, CertificateErrorOverrideManager, create_http_client, create_tls_config,
+};
 use net::fetch::methods::FetchContext;
 use net::hsts::{HstsEntry, HstsList, HstsPreloadList};
 use net::test_util::Server;
@@ -611,12 +615,23 @@ fn chrome_allowcert_answers_and_adds_nothing() {
 /// time, so a kept-alive connection under one host name would block the next host name; and a closed
 /// connection guarantees that the next request makes a new TLS handshake.)
 fn tls_server() -> (Server, u16) {
+    tls_server_with_hsts(None)
+}
+
+/// The same server, and with `Some(policy)` every answer carries `Strict-Transport-Security: <policy>`.
+fn tls_server_with_hsts(hsts: Option<&'static str>) -> (Server, u16) {
     let handler =
         move |_: HyperRequest<Incoming>,
               response: &mut HyperResponse<BoxBody<Bytes, hyper::Error>>| {
             response
                 .headers_mut()
                 .insert(header::CONNECTION, HeaderValue::from_static("close"));
+            if let Some(policy) = hsts {
+                response.headers_mut().insert(
+                    header::STRICT_TRANSPORT_SECURITY,
+                    HeaderValue::from_static(policy),
+                );
+            }
             // Nothing may be answered from Servo's HTTP cache: these tests are about connections.
             response
                 .headers_mut()
@@ -797,4 +812,288 @@ fn an_ipv6_literal_gets_a_certificate_error_and_can_be_accepted() {
     assert!(!loaded(&get(&mut context, "127.0.0.1", port)));
     assert!(!loaded(&get(&mut context, "localhost", port)));
     server.close();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// HSTS is not learned over a connection that a certificate exception made valid (RFC 6797, section 8.1).
+// ---------------------------------------------------------------------------------------------------
+
+/// What a NAS or a router sends from its self-signed HTTPS page: a year, with subdomains.
+const STRICT_TRANSPORT_SECURITY: &str = "max-age=31536000; includeSubDomains";
+
+/// An HTTP state whose client does not verify certificates at all (Servo's own switch for testing,
+/// `ignore_certificate_errors`). No exception is involved in its connections, so it stands for a
+/// connection that needed none: the HSTS list may learn from it. Also used by the upstream test
+/// `fetch::test_load_adds_host_to_hsts_list_when_url_is_https`, which used an exception to reach its
+/// self-signed server.
+pub fn state_that_ignores_certificate_errors() -> net::test::HttpState {
+    let mut state = create_http_state(None);
+    state.override_manager = CertificateErrorOverrideManager::new();
+    state.client = create_http_client(create_tls_config(
+        CACertificates::Default,
+        true, /* ignore_certificate_errors */
+        state.override_manager.clone(),
+    ));
+    state
+}
+
+fn context_that_ignores_certificate_errors() -> FetchContext {
+    let mut context = new_fetch_context(None, None);
+    context.state = Arc::new(state_that_ignores_certificate_errors());
+    context
+}
+
+#[test]
+fn the_fetch_path_learns_hsts_from_a_connection_that_needed_no_exception() {
+    // The control of the next test: the same server, the same header, the same fetch path, and no
+    // exception. The list learns the host, so the next test's empty list is the guard's doing and not
+    // a header that never reached the list.
+    let (server, port) = tls_server_with_hsts(Some(STRICT_TRANSPORT_SECURITY));
+    let mut context = context_that_ignores_certificate_errors();
+    let state = context.state.clone();
+
+    assert!(loaded(&get(&mut context, "localhost", port)));
+    assert!(state.certificate_exceptions().is_empty());
+    assert!(
+        state.hsts_list.read().is_host_secure("localhost"),
+        "the list learns from a connection that needed no exception"
+    );
+    server.close();
+}
+
+#[test]
+fn hsts_is_not_learned_over_a_connection_that_an_exception_made_valid() {
+    let (server, port) = tls_server_with_hsts(Some(STRICT_TRANSPORT_SECURITY));
+    let certificate = server_certificate(&server);
+    let mut context = new_fetch_context(None, None);
+    let state = context.state.clone();
+
+    assert_eq!(
+        certificate_error(&get(&mut context, "localhost", port)),
+        Some(certificate.to_vec())
+    );
+    assert_eq!(
+        state.accept_failed_certificate("localhost", certificate.as_ref()),
+        Ok(())
+    );
+    // The page loads over the exception, and its answer asks for HSTS.
+    assert!(loaded(&get(&mut context, "localhost", port)));
+    assert!(
+        state.hsts_list.read().entries_map.is_empty() &&
+            !state.hsts_list.read().is_host_secure("localhost"),
+        "the list learned a host from a connection that only the user's exception made valid"
+    );
+
+    // So the user is not shut out later: the list is what Mercury keeps between sessions, and it still
+    // does not cover the host, so a new certificate error on it can be accepted again.
+    assert_eq!(state.revoke_certificate_exception("localhost"), 1);
+    assert_eq!(
+        certificate_error(&get(&mut context, "localhost", port)),
+        Some(certificate.to_vec())
+    );
+    assert_eq!(
+        state.accept_failed_certificate("localhost", certificate.as_ref()),
+        Ok(())
+    );
+    server.close();
+}
+
+// ---------------------------------------------------------------------------------------------------
+// The HSTS guard without a network: which hosts may teach the list.
+// ---------------------------------------------------------------------------------------------------
+
+fn strict_transport_security() -> HeaderMap {
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        header::STRICT_TRANSPORT_SECURITY,
+        HeaderValue::from_static(STRICT_TRANSPORT_SECURITY),
+    );
+    headers
+}
+
+fn https(host: &str) -> ServoUrl {
+    ServoUrl::parse(&format!("https://{host}/")).expect("a url")
+}
+
+/// The number of hosts the learned list holds.
+fn learned_hosts(state: &net::test::HttpState) -> usize {
+    state
+        .hsts_list
+        .read()
+        .entries_map
+        .values()
+        .map(Vec::len)
+        .sum()
+}
+
+#[test]
+fn a_host_without_an_exception_teaches_the_hsts_list() {
+    let state = create_http_state(None);
+    let headers = strict_transport_security();
+    assert!(state.may_learn_hsts_from(&https("bank.example")));
+    state.learn_hsts_from_response(&https("bank.example"), &headers);
+    assert!(state.hsts_list.read().is_host_secure("bank.example"));
+    // Only an answer over https counts, as before.
+    state.learn_hsts_from_response(
+        &ServoUrl::parse("http://plain.example/").expect("a url"),
+        &headers,
+    );
+    assert!(!state.hsts_list.read().is_host_secure("plain.example"));
+}
+
+#[test]
+fn a_host_with_an_exception_does_not_teach_the_hsts_list_in_any_spelling() {
+    let state = create_http_state(None);
+    let headers = strict_transport_security();
+    assert_eq!(
+        state
+            .override_manager
+            .add_override("nas.local", &der(b"the certificate of the NAS")),
+        Ok(())
+    );
+    for host in ["nas.local", "NAS.LOCAL", "nas.local.", "Nas.Local."] {
+        assert!(!state.may_learn_hsts_from(&https(host)), "{host}");
+        state.learn_hsts_from_response(&https(host), &headers);
+    }
+    assert_eq!(learned_hosts(&state), 0);
+    assert!(!state.hsts_list.read().is_host_secure("nas.local"));
+
+    // Other names do: a connection to them needed no exception. (`includeSubDomains` of the NAS's own
+    // answer is what the exception blocks; a neighbour's answer is the neighbour's.)
+    for host in ["www.nas.local", "nas.example", "bank.example", "local"] {
+        assert!(state.may_learn_hsts_from(&https(host)), "{host}");
+    }
+    state.learn_hsts_from_response(&https("bank.example"), &headers);
+    assert!(state.hsts_list.read().is_host_secure("bank.example"));
+    assert_eq!(learned_hosts(&state), 1);
+}
+
+#[test]
+fn a_revoked_exception_still_blocks_hsts_because_its_connection_may_be_open() {
+    // A revoke does not close a connection that was opened under the exception, and an answer on it
+    // would still be one that only the exception made valid.
+    let state = create_http_state(None);
+    state
+        .override_manager
+        .add_override("nas.local", &der(b"c"))
+        .expect("a host");
+    assert_eq!(state.revoke_certificate_exception("nas.local"), 1);
+    assert!(state.certificate_exceptions().is_empty());
+    assert!(!state.may_learn_hsts_from(&https("nas.local")));
+    state.learn_hsts_from_response(&https("nas.local"), &strict_transport_security());
+    assert_eq!(learned_hosts(&state), 0);
+}
+
+#[test]
+fn a_users_decision_blocks_hsts_for_the_host_and_a_refusal_does_not() {
+    let state = create_http_state(None);
+    let manager = &state.override_manager;
+    // Refusals change nothing: no failure recorded, an unparsable host, another certificate.
+    assert_eq!(
+        state.accept_failed_certificate("device.local", b"c"),
+        Err(CertificateExceptionRefusal::NoFailureRecorded)
+    );
+    assert_eq!(
+        state.accept_failed_certificate("a b", b"c"),
+        Err(CertificateExceptionRefusal::InvalidHost)
+    );
+    manager.note_certificate_failure_for_test("device.local", &der(b"c"));
+    assert!(
+        manager
+            .report_certificate_failure_for_test("device.local")
+            .is_some()
+    );
+    assert_eq!(
+        state.accept_failed_certificate("device.local", b"another"),
+        Err(CertificateExceptionRefusal::CertificateChanged)
+    );
+    assert!(state.may_learn_hsts_from(&https("device.local")));
+
+    // The accepted decision does.
+    assert_eq!(
+        state.accept_failed_certificate("device.local", b"c"),
+        Ok(())
+    );
+    assert!(!state.may_learn_hsts_from(&https("device.local")));
+    state.learn_hsts_from_response(&https("device.local"), &strict_transport_security());
+    assert_eq!(learned_hosts(&state), 0);
+}
+
+#[test]
+fn an_ipv6_literal_with_an_exception_is_named_like_the_exception() {
+    // HSTS never applies to an address, so nothing is learned either way; the answer of the guard
+    // is still the one the exception's name gives.
+    let state = create_http_state(None);
+    state
+        .override_manager
+        .add_override("[::1]", &der(b"c"))
+        .expect("a host");
+    assert!(!state.may_learn_hsts_from(&https("[::1]")));
+    assert!(!state.may_learn_hsts_from(&https("[0:0:0:0:0:0:0:1]")));
+    assert!(state.may_learn_hsts_from(&https("[::2]")));
+}
+
+/// Every `.rs` file of the crate except the tests.
+fn crate_sources(dir: &std::path::Path, found: &mut Vec<std::path::PathBuf>) {
+    for entry in std::fs::read_dir(dir).expect("the crate directory") {
+        let path = entry.expect("a directory entry").path();
+        let name = path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        if path.is_dir() {
+            if name != "tests" && name != "target" {
+                crate_sources(&path, found);
+            }
+        } else if path.extension().is_some_and(|extension| extension == "rs") {
+            found.push(path);
+        }
+    }
+}
+
+#[test]
+fn only_the_guard_updates_the_hsts_list_from_a_response() {
+    // The two places that learn HSTS from an answer (the HTTP fetch and the WebSocket handshake) call
+    // `HttpState::learn_hsts_from_response`; a call of `HstsList::update_hsts_list_from_response`
+    // anywhere else, for example one that a Servo upgrade or a merge brings back, would learn from
+    // a connection that only an exception made valid.
+    let mut files = Vec::new();
+    crate_sources(std::path::Path::new(env!("CARGO_MANIFEST_DIR")), &mut files);
+    assert!(
+        files.len() > 20,
+        "the scan found only {} files: {files:?}",
+        files.len()
+    );
+    let calls = |text: &str, pattern: &str| {
+        text.lines()
+            .filter(|line| !line.trim_start().starts_with("//"))
+            .filter(|line| line.contains(pattern))
+            .count()
+    };
+    let mut guard_callers = Vec::new();
+    for file in &files {
+        let name = file
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default()
+            .to_owned();
+        let text = std::fs::read_to_string(file).expect("a source file");
+        let direct = calls(&text, ".update_hsts_list_from_response(") +
+            calls(&text, "::update_hsts_list_from_response(");
+        if name == "certificate_exceptions.rs" {
+            assert_eq!(direct, 1, "the guard has one call of the list's update");
+        } else {
+            assert_eq!(direct, 0, "{}", file.display());
+        }
+        if calls(&text, ".learn_hsts_from_response(") > 0 {
+            guard_callers.push(name);
+        }
+    }
+    guard_callers.sort();
+    assert_eq!(
+        guard_callers,
+        vec!["http_loader.rs", "websocket_loader.rs"],
+        "the guard is called from the HTTP fetch and from the WebSocket handshake, and nowhere else"
+    );
 }

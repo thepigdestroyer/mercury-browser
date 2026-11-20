@@ -15,7 +15,8 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 One change: **certificate exceptions are bound to the pair (host name, certificate)**
 and fail closed (R14 `EC27`; the site-security review's follow-up to C1). Everything new is in
 `certificate_exceptions.rs` (new, PolyForm Noncommercial, copies nothing from Servo or another
-project); the upstream files get hook lines only, each marked `// Mercury:`.
+project); the upstream files get hook lines only, each marked `// Mercury:`. The same change also keeps
+the HSTS list from learning over a connection that only an exception made valid (below).
 
 **What it does.** In Servo 0.8 a user decision ("continue anyway") adds the bare certificate to a
 list that `verify_server_cert` accepts for **every** host name until the process ends, so whoever
@@ -55,6 +56,27 @@ holds the key of a certificate the user once accepted for `nas.local` can presen
   (`create_http_client`: up to 6 idle connections per host), so Mercury shows no "Remove exception"
   button yet (`EC27b`).
 
+- **no HSTS from a host that has had an exception.** Servo updates the HSTS list from every response over
+  `https` or `wss`, including one over a connection that verified only through the user's exception
+  (`http_loader.rs` and `websocket_loader.rs` each call `HstsList::update_hsts_list_from_response`). RFC 6797
+  section 8.1 does not process the header of a response whose secure transport had an error, and two things
+  went wrong when Mercury did: a self-signed device that sends `Strict-Transport-Security` (many routers and
+  NAS pages do) became an HSTS host after one accepted visit, and because Mercury keeps `hsts_list.json`
+  between sessions and clearing site data does not remove it, `accept_failed_certificate` then answered
+  `hsts-host` for it from the next session on, so "Continue" was refused for good (until `max-age` ended);
+  and whoever held the accepted certificate's key could plant a persistent HSTS entry for the name (with
+  `includeSubDomains`, for its subdomains too). `HttpState::learn_hsts_from_response(url, headers)` is now the
+  only place that updates the list from a response, and it does nothing for a host that has had an exception
+  in this process (`HttpState::may_learn_hsts_from`, one `overridden` set of names in the store, filled by
+  every way an exception is added and **not** emptied by a revoke, because a connection opened under the
+  exception can outlive it). The rule is by name and not by connection: the connection a response came over
+  is not known to the code that learns HSTS (and a WebSocket handshake has no record at all), and a rule by
+  name fails closed. Its price: a name that had an exception does not learn its own HSTS policy for the rest
+  of the process, even over a later connection that verified normally; the next process learns it. The name is
+  the one `accept_failed_certificate` uses (`server_name_for_host`), so `NAS.LOCAL.` and `nas.local` are one.
+  A neighbouring name is not affected. `tls_security_info.hsts` of a response (a flag in Servo's page-info
+  record, which Mercury does not read) still reports the header; nothing is stored from it.
+
 The key has no port and no error kind: rustls hands the verifier a name, not a port, and the error
 kind adds nothing against someone who holds the accepted certificate's key. Chrome keys by host and
 certificate too. The exception lasts until the process ends. A host that becomes HSTS **after** an
@@ -73,6 +95,8 @@ certificate, so it is not carried.
 | --- | --- | --- |
 | `certificate_exceptions.rs` | new file | The store (`CertificateExceptionStore`), `server_name_for_host`, `CertificateExceptionRefusal`, `CertificateExceptionEntry`, `CertificateErrorOverrideManager::add_override(host, certificate)`, `is_accepted` and `session_resumption`, and the three `HttpState` methods. Behind the `test-util` feature: `has_exception`, `note_certificate_failure_for_test`, `report_certificate_failure_for_test` (the tests cannot reach the verifier). |
 | `lib.rs` | 8 | One `pub mod certificate_exceptions;` line. |
+| `http_loader.rs` | 2483-2485 | The HSTS update after a response, `hsts_list.write().update_hsts_list_from_response(&url, &response.headers)`, becomes `state.learn_hsts_from_response(&url, &response.headers)` (one comment line and the call). |
+| `websocket_loader.rs` | 157-159 | The same in `process_ws_response`. |
 | `connector.rs` | 303-310 | `CertificateErrorOverrideManagerInternal` is `pub(crate)` with `pub(crate)` fields, and `overrides: Vec<CertificateDer>` becomes `exceptions: CertificateExceptionStore`. |
 | `connector.rs` | 324-328 | The one-argument `add_override(&cert)` is removed (a stale caller does not compile) and a `pub(crate) lock()` accessor is added for the new file. |
 | `connector.rs` | 365-381 | `create_tls_config` sets `config.resumption` to the manager's session cache (see the revoke note above). |
@@ -83,7 +107,8 @@ certificate, so it is not carried.
 | `fetch/methods.rs` | 1017-1078 | `handle_allowcert_request` is deleted. |
 | `fetch/methods.rs` | 1101-1106 | The `chrome:allowcert` arm refuses with a `warn!` and answers the blank page. |
 | `tests/main.rs` | 7 | `mod certificate_exceptions;`. |
-| `tests/fetch.rs` | 798, 861, 945 | `add_override(certificate)` becomes `add_override("localhost", certificate).expect(..)`. |
+| `tests/fetch.rs` | 798, 945 | `add_override(certificate)` becomes `add_override("localhost", certificate).expect(..)`. |
+| `tests/fetch.rs` | 840, 858-862 | `test_load_adds_host_to_hsts_list_when_url_is_https` reached its self-signed server with an exception and expected the HSTS list to learn the host, which is the behaviour this patch removes (found when the guard was added: the test failed). It now uses `state_that_ignores_certificate_errors()` (a state whose client does not verify, defined in `tests/certificate_exceptions.rs`), so the connection needs no exception and the test still checks what it is named for. |
 | `tests/http_loader.rs` | 2012 | The same. |
 | `tests/certificate_exceptions.rs` | new file | The tests below. |
 
@@ -97,10 +122,21 @@ loopback TLS server of `test_util` (self-signed, one certificate under `localhos
 `[::1]`): a failed load carries the server's certificate, after `accept_failed_certificate` the same host
 loads, **the other name for the same server still fails**, a revoke makes a new connection fail again (this needs the session-cache eviction above),
 another certificate for the same host does not help, and an IPv6 literal gets a certificate error and can
-be accepted. 22 tests; none touches a real trust store or the network beyond loopback. The test "the same
-certificate on another host name still fails" was written first and run against the unpatched crate with
+be accepted. The HSTS guard has eight tests: with the same loopback server answering
+`Strict-Transport-Security`, the list learns the host from a state whose client verifies nothing (the
+control: the header does reach the list through the fetch path) and does **not** learn it over a connection
+that only an exception made valid, and after a revoke and a new failure the user can accept again (the
+next session reads the same list, so "Continue" is not refused for good); without a network, that a host
+with an exception (in every spelling: case, a trailing dot, an IPv6 literal) and a revoked one teach nothing
+while a neighbouring name, a subdomain and a parent do, that a user's decision blocks the host and a
+refused one does not, and a scan of the crate's sources that fails if `update_hsts_list_from_response` is
+called anywhere but the guard, or if the HTTP fetch or the WebSocket handshake stops calling the guard
+(a Servo upgrade or a merge could bring the old call back). 30 tests in all; none touches a real trust store or the network beyond loopback. The test "the same certificate on another host name still fails" was written first and run against the unpatched crate with
 the old global `add_override(&cert)`: it failed (the second name loaded, `get_network_error()` was
-`None`), and its patched counterpart passes.
+`None`), and its patched counterpart passes. The HSTS e2e test was written first too and failed against
+the crate without the guard (`the list learned a host from a connection that only the user's exception made
+valid`, with its control passing); with the two hook lines of `http_loader.rs` and `websocket_loader.rs`
+put back to Servo's own call, the e2e test and the source scan fail again.
 
 **Drop when.** Servo binds certificate overrides to a host (and refuses HSTS hosts) itself. Then delete
 `certificate_exceptions.rs`, restore the `connector.rs` and `fetch/methods.rs` hunks, and keep only what
@@ -108,24 +144,27 @@ Servo's own API cannot express (the recorded failure).
 
 ## Running the tests
 
-`servo-net` is a vendored dependency, not a workspace member, so `cargo test -p servo-net` from the
-workspace root does not work ("cannot specify features for packages outside of workspace"), and
-`--manifest-path third_party/servo-net/Cargo.toml` from inside the repository fails too ("current
-package believes it's in a workspace when it's not"). Run it from a path outside the workspace, so that
-cargo resolves the crate's own `Cargo.lock` against the published sibling crates (the same code,
-because only `servo-net` changes). The tests need the `devtools` feature as well as `test-util`:
+`servo-net` is a vendored dependency with dev-dependencies, so `cargo test -p servo-net` from the
+workspace root does not work (cargo refuses a package that is not a workspace member). The root `Cargo.toml`
+lists `third_party/servo-net` under `exclude`, as it does `third_party/gaol`, so cargo accepts the crate's own
+manifest, and `make test-servo-net` runs the crate's whole `main` target on its own `Cargo.lock`, against the
+published sibling crates (the same code as Mercury's copies, because only `servo-net` changes; not
+Mercury's vendored copies and not Mercury's `Cargo.lock`). `make test` runs it, so do the full gates, and the
+CI job "Vendored servo-net tests" does. Two tests fail on the unpatched crate as well and are skipped by
+name: `fetch::test_file` (it reads `../../components/net/tests/test.css`, which exists only in Servo's
+repository) and `filemanager_thread::test_filemanager` (it panics on the process-wide async runtime when it
+runs with the others). To run only this change's tests, from the repository root (the tests need the
+`devtools` feature as well as `test-util`):
 
 ```bash
-mkdir -p "$TMPDIR/opencode/lanes/cert-exceptions"
-ln -sfn "$PWD/third_party/servo-net" "$TMPDIR/opencode/lanes/cert-exceptions/servo-net"
 MERCURY_SLOT_POOL=light ~/mercury-browser/.superpowers/tools/guarded.sh "$PWD" \
-  "RUST_TEST_THREADS=2 cargo test --release --target-dir target \
-   --manifest-path $TMPDIR/opencode/lanes/cert-exceptions/servo-net/Cargo.toml \
+  "RUST_TEST_THREADS=2 cargo test --locked --release --target-dir target \
+   --manifest-path third_party/servo-net/Cargo.toml \
    --features test-util,devtools --test main certificate_exceptions"
 ```
 
 The first run builds the published dependencies (about 11 minutes on a 12-thread Intel Mac, a few
-hundred MB under `target/`). The symlink lives in the scratch folder and is deleted with it. After an
+hundred MB under `target/`; `--target-dir` keeps the build out of the vendored crate). After an
 edit, format only the files you changed with the command in
 `docs/developer-guide/vendored-patches.md` ("No formatting churn"), run `export` and
 `make servo-patches-check`.

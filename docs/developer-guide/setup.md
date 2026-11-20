@@ -168,6 +168,7 @@ Notes:
 - `make test-media-macos` runs `scripts/macos/test-media.sh`, the tests for these scripts.
 - `make test-capture-macos` checks camera and microphone capture with fake devices only, from a copy of the release build without the real capture plugins; see [Camera and microphone](media-capture.md).
 - `make test-certificate-exceptions-macos` checks that a certificate exception holds for the name it was made for and not for the same certificate under another name (loopback only, needs `make build-release`); see [Testing](testing.md#certificate-exceptions).
+- `make test-servo-net` runs the tests of the vendored `servo-net` (the certificate-exception rules and the HSTS guard among them) on the crate's own manifest; `make test` includes it. See [Testing](testing.md#certificate-exceptions).
 - `tests/pages/media.html` checks playback without making a sound; serve it with
   `scripts/serve-tests.sh` (a loopback server that honours `Range`); see `tests/media/README.md`.
 

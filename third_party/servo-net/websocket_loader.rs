@@ -153,10 +153,8 @@ fn process_ws_response(
         }
     }
 
-    http_state
-        .hsts_list
-        .write()
-        .update_hsts_list_from_response(resource_url, response.headers());
+    // Mercury: not from a host that has had a certificate exception (certificate_exceptions.rs).
+    http_state.learn_hsts_from_response(resource_url, response.headers());
 
     Ok(protocol_in_use)
 }

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // Mercury: certificate exceptions bound to the pair (host, certificate), failing closed. This is a new
 // Mercury file; nothing in it is copied from Servo or another project. The hooks are in `connector.rs`,
-// `lib.rs` and `fetch/methods.rs`; `MERCURY.md` lists them.
+// `lib.rs`, `fetch/methods.rs`, `http_loader.rs` and `websocket_loader.rs`; `MERCURY.md` lists them.
 
 //! Certificate exceptions bound to a host name and a certificate.
 //!
@@ -31,6 +31,20 @@
 //! already open (HTTP/1 keep-alive, HTTP/2) stay authenticated until they close, because `hyper` offers no
 //! per-host eviction of its pool. That is why Mercury offers no "remove exception" button yet.
 //!
+//! HSTS. A response that came over a connection that only an exception made valid must not teach the HSTS list
+//! (RFC 6797, section 8.1, which processes the header of a response only when the secure transport had no
+//! errors, and here the user chose to ignore one). Two things would go wrong otherwise. A device with a self-signed
+//! certificate that sends `Strict-Transport-Security`, as many routers and NAS pages do, would become an HSTS
+//! host after one accepted visit, and because Mercury keeps the HSTS list between sessions, [`accept_failed_certificate`]
+//! would refuse it from then on and the user could never continue again; and whoever holds the accepted
+//! certificate's key could plant a persistent HSTS entry for the name. [`HttpState::learn_hsts_from_response`] is the
+//! only place that updates the list from a response, and it does nothing for a host that has had an exception in
+//! this process. The rule is by host name and not by connection, so that it also covers a keep-alive or HTTP/2
+//! connection that outlives a revoke, and a WebSocket handshake (which has no connection record to ask);
+//! it fails closed, at the price that the name's own policy is learned in the next session and not in this one.
+//!
+//! [`accept_failed_certificate`]: HttpState::accept_failed_certificate
+//!
 //! A new connection must also make a full handshake. rustls skips `verify_server_cert` when it resumes a
 //! TLS session, so a ticket stored while the exception was in force would let the host in again after a
 //! revoke. Each client's session cache is therefore created through the override manager
@@ -42,8 +56,11 @@ use std::net::Ipv6Addr;
 use std::sync::{Arc, Weak};
 
 use aws_lc_rs::digest;
+use http::{HeaderMap, header};
+use log::info;
 use rustls::client::{ClientSessionMemoryCache, ClientSessionStore, Resumption};
 use rustls_pki_types::{CertificateDer, ServerName};
+use servo_url::ServoUrl;
 
 use crate::connector::CertificateErrorOverrideManager;
 use crate::http_loader::HttpState;
@@ -143,6 +160,10 @@ fn host_text(server_name: &ServerName<'_>) -> String {
 pub(crate) struct CertificateExceptionStore {
     /// The accepted pairs. The only thing the verifier consults.
     exceptions: HashSet<(ServerName<'static>, CertificateDer<'static>)>,
+    /// The names that ever had an exception in this process. A revoke does not remove a name from it:
+    /// a connection that was opened under the exception can still be open (see the module documentation),
+    /// and the HSTS list must not learn from it. Consulted only by `HttpState::learn_hsts_from_response`.
+    overridden: HashSet<ServerName<'static>>,
     /// The certificate each host last failed with, oldest first, at most [`MAX_RECORDED_FAILURES`] hosts.
     recorded_failures: VecDeque<(ServerName<'static>, CertificateDer<'static>)>,
     /// The TLS session cache of every client built with this manager that is still alive (see
@@ -160,13 +181,19 @@ impl CertificateExceptionStore {
                 .contains(&(name.to_owned(), certificate.clone().into_owned()))
     }
 
-    /// Adds the pair without any check of a recorded failure.
+    /// Adds the pair without any check of a recorded failure, and remembers that the name was overridden.
     pub(crate) fn insert(
         &mut self,
         name: ServerName<'static>,
         certificate: CertificateDer<'static>,
     ) {
+        self.overridden.insert(name.clone());
         self.exceptions.insert((name, certificate));
+    }
+
+    /// Whether `name` ever had an exception in this process, revoked or not.
+    pub(crate) fn was_overridden(&self, name: &ServerName<'_>) -> bool {
+        self.overridden.contains(&name.to_owned())
     }
 
     /// Remembers that `name` failed with `certificate`, replacing the older record of the same host and
@@ -199,8 +226,8 @@ impl CertificateExceptionStore {
         if self.recorded_failures[position].1.as_ref() != certificate {
             return Err(CertificateExceptionRefusal::CertificateChanged);
         }
-        if let Some(pair) = self.recorded_failures.remove(position) {
-            self.exceptions.insert(pair);
+        if let Some((name, certificate)) = self.recorded_failures.remove(position) {
+            self.insert(name, certificate);
         }
         Ok(())
     }
@@ -352,6 +379,39 @@ impl HttpState {
             .accept_recorded_failure(&name, certificate)?;
         manager.certificates_failing_to_verify.remove(&name);
         Ok(())
+    }
+
+    /// Whether the HSTS list may learn from a response to a request for `url`. Not when an exception was
+    /// ever accepted for the host of `url` in this process (revoked or not): the response may have come
+    /// over a connection that only the user's decision made valid (see the module documentation). The
+    /// host is turned into a name as `accept_failed_certificate` does, so `NAS.LOCAL.` and `nas.local` are
+    /// one. A host that cannot be named cannot have an exception.
+    pub fn may_learn_hsts_from(&self, url: &ServoUrl) -> bool {
+        let Some(name) = url.host_str().and_then(server_name_for_host) else {
+            return true;
+        };
+        !self
+            .override_manager
+            .lock()
+            .exceptions
+            .was_overridden(&name)
+    }
+
+    /// The one place that updates the HSTS list from a response: the list learns from `headers` unless
+    /// [`may_learn_hsts_from`](Self::may_learn_hsts_from) says no, and then nothing changes. Replaces the direct
+    /// calls of `HstsList::update_hsts_list_from_response` in the HTTP fetch and the WebSocket handshake
+    /// (a test fails if one comes back).
+    pub fn learn_hsts_from_response(&self, url: &ServoUrl, headers: &HeaderMap) {
+        if self.may_learn_hsts_from(url) {
+            self.hsts_list
+                .write()
+                .update_hsts_list_from_response(url, headers);
+        } else if headers.contains_key(header::STRICT_TRANSPORT_SECURITY) {
+            info!(
+                "not learning HSTS from {:?}: a certificate exception was accepted for it",
+                url.host_str()
+            );
+        }
     }
 
     /// Forgets every exception of `host`, and the TLS sessions of the host, so that a new connection is
