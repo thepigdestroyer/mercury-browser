@@ -35,6 +35,14 @@
 #                                      them; the fake-device mode does. Refused for an
 #                                      application bundle.
 #
+# Mercury's own plugins (lane med-1, EA0): plugins that Mercury's media code needs and
+# Servo's lists do not name (today `gstdav1d`, the AV1 software decoder, which MSE
+# playback of AV1 relies on; libdav1d is BSD-2-Clause, the plugin is gst-plugins-bad,
+# LGPL, loaded dynamically). They are a fixed list in this script (MERCURY_PLUGINS),
+# validated like Servo's list (each must exist in the prefix) and recorded in the
+# marker. They are not an input: unlike MERCURY_GSTREAMER_EXTRA_PLUGINS they ship in an
+# application bundle. No decoder rank is changed anywhere (R17 section 9.1).
+#
 # Adapted from Servo's `package_gstreamer_dylibs` and
 # `load_plugin_libraries_from_text_file`:
 #   https://github.com/servo/servo, tag v0.8.0 (4e136d8ef31b7c4748fbfac606ca463f3efd7537),
@@ -113,7 +121,20 @@ for name in ${EXTRA_NAMES[@]+"${EXTRA_NAMES[@]}"}; do
     contains "gst$name" "${PLUGINS[@]}" || EXTRAS+=("gst$name")
 done
 
-for plugin in "${PLUGINS[@]}" ${EXTRAS[@]+"${EXTRAS[@]}"}; do
+# Mercury: Mercury's own plugins, shipped with Servo's (see the header). A name here that
+# Servo's list also has is a mistake in this script, not something to collect twice.
+MERCURY_PLUGINS=(gstdav1d)
+for plugin in "${MERCURY_PLUGINS[@]}"; do
+    case "$plugin" in
+        gst[a-z0-9_]*) ;;
+        *) die "MERCURY_PLUGINS names '$plugin'; a plugin name starts with gst" ;;
+    esac
+    ! contains "$plugin" "${PLUGINS[@]}" || die "MERCURY_PLUGINS names '$plugin', which Servo's list has already"
+    ! contains "lib$plugin.dylib" ${EXCLUDED_FILES[@]+"${EXCLUDED_FILES[@]}"} \
+        || die "MERCURY_PLUGINS names '$plugin', which is excluded"
+done
+
+for plugin in "${PLUGINS[@]}" "${MERCURY_PLUGINS[@]}" ${EXTRAS[@]+"${EXTRAS[@]}"}; do
     [ -f "$PREFIX_LIB/gstreamer-1.0/lib$plugin.dylib" ] \
         || die "plugin $plugin is missing from $PREFIX_LIB/gstreamer-1.0"
 done
@@ -206,6 +227,7 @@ marker_inputs() {
     printf 'gstreamer %s\n' "$GSTREAMER_VERSION"
     printf 'architecture %s\n' "$ARCH"
     printf 'plugin %s\n' "${PLUGINS[@]}"
+    printf 'mercury-plugin %s\n' "${MERCURY_PLUGINS[@]}"
     if [ "${#EXCLUDED_FILES[@]}" -gt 0 ]; then printf 'excluded %s\n' "${EXCLUDED_FILES[@]}"; fi
     if [ "${#EXTRAS[@]}" -gt 0 ]; then printf 'extra %s\n' "${EXTRAS[@]}"; fi
     if [ "${#EXECUTABLE_DEPS[@]}" -gt 0 ]; then printf 'dependency %s\n' "${EXECUTABLE_DEPS[@]}"; fi
@@ -293,7 +315,7 @@ trap 'rm -rf -- "$STAGING"' EXIT
 
 # ── Dependency walk ───────────────────────────────────────────────────────
 PENDING=(${EXECUTABLE_DEPS[@]+"${EXECUTABLE_DEPS[@]}"})
-for plugin in "${PLUGINS[@]}" ${EXTRAS[@]+"${EXTRAS[@]}"}; do
+for plugin in "${PLUGINS[@]}" "${MERCURY_PLUGINS[@]}" ${EXTRAS[@]+"${EXTRAS[@]}"}; do
     PENDING+=("$PREFIX_LIB/gstreamer-1.0/lib$plugin.dylib")
 done
 SEEN=()
