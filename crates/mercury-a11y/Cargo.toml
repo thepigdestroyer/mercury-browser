@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mercury-a11y"
+description = "Mercury Browser's page accessibility logic without the engine: roles, names, states, relations, actions, tree snapshots and the per-tab graft routing."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+a11y-dom.workspace = true
+accesskit.workspace = true
+accname.workspace = true
+
+[dev-dependencies]
+# The oracle of every tree test: it panics where AccessKit would.
+accesskit_consumer.workspace = true

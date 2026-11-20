@@ -7,6 +7,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# a11y-1: the page tree reaches the window (`src/accessibility.rs`).
+accesskit.workspace = true
 adblock.workspace = true
 content-security-policy.workspace = true
 dpi.workspace = true
@@ -20,6 +22,8 @@ rusqlite.workspace = true
 serde_json.workspace = true
 servo.workspace = true
 talaria-core = { path = "../talaria-core" }
+# a11y-1: which tab's page tree reaches the window (`src/accessibility.rs`).
+mercury-a11y = { path = "../mercury-a11y" }
 # site security: Mercury's error pages, and Servo's other resources (patched, see Cargo.toml).
 getrandom.workspace = true
 mercury-site-security = { path = "../mercury-site-security" }
@@ -64,6 +68,9 @@ objc2-foundation = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+# a11y-1: the headless-Servo accessibility tests (`tests/a11y_*.rs`, all `#[ignore]`d) read the tree with the
+# consumer AccessKit's own adapters use.
+accesskit_consumer.workspace = true
 # find: runs the find-in-page script's tests in a JavaScript engine written in Rust.
 boa_engine.workspace = true
 tempfile.workspace = true

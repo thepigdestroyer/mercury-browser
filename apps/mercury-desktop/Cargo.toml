@@ -11,6 +11,8 @@ name = "mercury-browser"
 path = "src/main.rs"
 
 [dependencies]
+# a11y-1: the page tree reaches the window (`src/accessibility.rs`).
+accesskit.workspace = true
 # clipboard lane: the system clipboard pages use in a normal run (text only, `src/clipboard.rs`).
 # Servo 0.8.0 already depends on arboard "3" through its `clipboard` feature, with the default
 # features plus `wayland-data-control`; ours turns the defaults off (the image-data default stays
@@ -37,6 +39,10 @@ mercury-password-manager = { path = "../../crates/mercury-password-manager" }
 mercury-passwords = { path = "../../crates/mercury-passwords" }
 mercury-settings = { path = "../../crates/mercury-settings" }
 mercury-store = { path = "../../crates/mercury-store" }
+# a11y-1: the page node of the window grafts the page's tree through the patched Slint backend's own API (`slint::winit_030`
+# re-exports only `WinitWindowAccessor`); `mercury-a11y` holds the per-tab routing.
+i-slint-backend-winit = { version = "=1.17.1", default-features = false, features = ["accessibility"] }
+mercury-a11y = { path = "../../crates/mercury-a11y" }
 # tab-snapshots lane: small pictures of tabs for the Orbit view (`src/tab_snapshots.rs`).
 mercury-tab-snapshots = { path = "../../crates/mercury-tab-snapshots" }
 mercury-ui = { path = "../../crates/mercury-ui" }

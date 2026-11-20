@@ -1,6 +1,27 @@
 # Mercury's changes to servo-layout 0.8.0, against the crate as published on crates.io
 # (SHA-256 02047fd51cca1b92cfd38bc4663c9f11f6ebf99cd2d5550bac507a0a2b77addc). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-layout.
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -53,6 +53,17 @@
+ version = "0.24.0"
+ features = ["serde"]
+
++# Mercury: a11y-1: roles, names, states and relations are computed by `mercury-a11y`, which needs no engine; this crate only
++# adapts its DOM to `a11y-dom`'s traits and copies the result onto its accessibility nodes. See MERCURY.md.
++[dependencies.a11y-dom]
++version = "=0.30.12"
++
++# Mercury: a11y-1: `version` keeps cargo-deny's wildcard ban quiet for a path dependency of a crate that looks published; `>=` so a
++# workspace version bump does not break resolution.
++[dependencies.mercury-a11y]
++path = "../../crates/mercury-a11y"
++version = ">=0.2.0"
++
+ [dependencies.app_units]
+ version = "0.7"
+
 diff --git a/display_list/mod.rs b/display_list/mod.rs
 --- a/display_list/mod.rs
 +++ b/display_list/mod.rs

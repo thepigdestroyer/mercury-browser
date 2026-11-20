@@ -1,3 +1,29 @@
 # Mercury's changes to i-slint-backend-winit 1.17.1, against the crate as published on crates.io
 # (SHA-256 a27c7e8f53418d3017362465367b6612b6e439a68097d627d1b91c94b885f0a6). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of i-slint-backend-winit.
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -39,6 +39,8 @@
+ accessibility = [
+     "dep:accesskit",
+     "dep:accesskit_winit",
++    # Mercury: a11y-1: the graft state machine lives in `mercury-a11y` (see MERCURY.md).
++    "dep:mercury-a11y",
+ ]
+ default = []
+ raw-window-handle-06 = ["i-slint-core/raw-window-handle-06"]
+@@ -256,6 +258,13 @@
+ version = "0.24"
+ optional = true
+
++# Mercury: a11y-1: `GraftState`, the order in which foreign subtrees may be pushed, lives in `mercury-a11y` so that it is tested
++# without winit; this crate only calls it (`mercury_graft.rs`).
++[target.'cfg(not(target_arch = "wasm32"))'.dependencies.mercury-a11y]
++path = "../../crates/mercury-a11y"
++version = ">=0.2.0"
++optional = true
++
+ [target.'cfg(not(target_arch = "wasm32"))'.dependencies.accesskit_winit]
+ version = "0.33"
+ features = [
