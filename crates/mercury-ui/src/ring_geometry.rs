@@ -25,7 +25,7 @@
 //! | `ring_geometry/paths.rs` | SVG path strings for segments and label bands |
 //! | `ring_geometry/hit.rs` | `hit_test` |
 //! | `ring_geometry/labels.rs` | curved label glyphs: measuring, shortening, flipping |
-//! | `ring_geometry/dock.rs` | `dock_scales`, `dock_layout` |
+//! | `ring_geometry/dock.rs` | `dock_scales_over`, `dock_scales`, `dock_layout`, `magnified_layout` |
 //! | `ring_geometry/orbit.rs` | `planet_layout`, `preview_layout` |
 //! | `ring_geometry/slint_models.rs` | conversions to the Slint structs of `ui/groups/models.slint` |
 //!
@@ -47,8 +47,13 @@
 //! 4. [`hit_test`] answers the pointer: pass the hovered tab as `lifted` so that its raised zone
 //!    does not flicker. [`hit::hit_test_polar`] takes a radius and angle for keyboard callers.
 //!
-//! The group dock uses [`magnified_layout`] (or [`dock_scales`] on [`unscaled_centres`] and then
-//! [`dock_layout`]); Orbit uses [`planet_layout`] and [`preview_layout`].
+//! The group dock uses [`magnified_layout`] with the pointer x measured from the resting layout's
+//! left edge ([`resting_left_edge`] of the container width, never the width of the dock as
+//! drawn). It magnifies the pill whose resting extent contains the pointer, so a wide pill keeps
+//! its whole width. Without it: [`dock_scales_over`] on the `xs` and `widths` of
+//! `dock_layout(widths, &[], gap)`, then [`dock_layout`]. [`dock_scales`] on [`unscaled_centres`]
+//! picks the nearest centre, which is the pill under the pointer only for equal widths. Orbit
+//! uses [`planet_layout`] and [`preview_layout`].
 
 pub mod dock;
 pub mod hit;
@@ -59,7 +64,10 @@ pub mod paths;
 pub mod slint_models;
 mod types;
 
-pub use dock::{DockLayout, dock_layout, dock_scales, magnified_layout, unscaled_centres};
+pub use dock::{
+    DockLayout, dock_layout, dock_scales, dock_scales_over, magnified_layout, resting_left_edge,
+    unscaled_centres,
+};
 pub use hit::hit_test;
 pub use labels::{
     ApproxMetrics, GlyphMetrics, LabelFit, LabelLayout, LabelRequest, LabelStyle, is_flipped,
