@@ -15,7 +15,7 @@ use servo_base::generic_channel::GenericSend;
 use servo_url::origin::ImmutableOrigin;
 use storage_traits::client_storage::{StorageIdentifier, StorageProxyMap, StorageType};
 use storage_traits::indexeddb::{
-    BackendResult, ConnectionMsg, DatabaseInfo, IndexedDBThreadMsg, SyncOperation,
+    BackendError, BackendResult, ConnectionMsg, DatabaseInfo, IndexedDBThreadMsg, SyncOperation,
 };
 use stylo_atoms::Atom;
 use uuid::Uuid;
@@ -202,9 +202,11 @@ impl IDBFactory {
     }
 
     /// Setup the callback to the backend service, if this hasn't been done already.
-    fn get_or_setup_callback(&self) -> GenericCallback<ConnectionMsg> {
+    ///
+    /// Mercury: `Err` when the callback cannot be created; it used to panic the content process.
+    fn get_or_setup_callback(&self) -> Result<GenericCallback<ConnectionMsg>, ()> {
         if let Some(cb) = self.callback.borrow().as_ref() {
-            return cb.clone();
+            return Ok(cb.clone());
         }
 
         let global = self.global();
@@ -226,11 +228,13 @@ impl IDBFactory {
                 factory.handle_connection_message(cx, response)
             }));
         })
-        .expect("Could not create open database callback");
+        .map_err(|error| {
+            error!("Could not create the open database callback: {error:?}");
+        })?;
 
         *self.callback.borrow_mut() = Some(callback.clone());
 
-        callback
+        Ok(callback)
     }
 
     fn get_request(&self, name: String, request_id: &Uuid) -> Option<DomRoot<IDBOpenDBRequest>> {
@@ -460,13 +464,15 @@ impl IDBFactory {
         let global = self.global();
         let request_id = request.get_id();
 
+        // Mercury: the callback is set up before the request is recorded as pending, so that a
+        // failure to set it up (it used to panic the content process) leaves no pending request.
+        let callback = self.get_or_setup_callback()?;
+
         {
             let mut pending = self.connections.borrow_mut();
             let outer = pending.entry(DBName(name.to_string())).or_default();
             outer.insert(request_id, Dom::from_ref(request));
         }
-
-        let callback = self.get_or_setup_callback();
 
         // Step 5: Run these steps in parallel:
         // Step 5.1: Let result be the result of opening a database connection,
@@ -664,7 +670,14 @@ impl IDBFactoryMethods<crate::DomTypeHolder> for IDBFactory {
             .database_access_task_source()
             .to_sendable();
         let callback = GenericCallback::new(move |message| {
-            let result: BackendResult<Vec<DatabaseInfo>> = message.unwrap();
+            // Mercury: a reply that cannot be received rejects the promise, it used to panic the
+            // content process.
+            let result: BackendResult<Vec<DatabaseInfo>> = message.unwrap_or_else(|error| {
+                error!("The reply to IDBFactory.databases() could not be received: {error:?}");
+                Err(BackendError::DbErr(
+                    "The reply of the storage thread could not be received".to_owned(),
+                ))
+            });
             let Some(trusted_promise) = trusted_promise.take() else {
                 return error!("Callback for `DataBases` called twice.");
             };
@@ -692,8 +705,13 @@ impl IDBFactoryMethods<crate::DomTypeHolder> for IDBFactory {
                 },
             }
             }));
-        })
-        .expect("Could not create databases callback");
+        });
+        // Mercury: no panic; the promise is rejected.
+        let Ok(callback) = callback else {
+            error!("Could not create the databases callback");
+            p.reject_error(cx, Error::Operation(None));
+            return p;
+        };
 
         let get_operation = SyncOperation::GetDatabases(callback, storage_key);
         if global
@@ -702,6 +720,8 @@ impl IDBFactoryMethods<crate::DomTypeHolder> for IDBFactory {
             .is_err()
         {
             error!("Failed to send SyncOperation::GetDatabases");
+            // Mercury: nothing will answer, so reject the promise instead of leaving it pending.
+            p.reject_error(cx, Error::Operation(None));
         }
 
         // Step 5: Return p.

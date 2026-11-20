@@ -35,7 +35,7 @@ use crate::dom::bindings::structuredclone;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::indexeddb::idbindex::{IDBIndex, IndexQueryKind, IndexQueryParam};
 use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
-use crate::dom::indexeddb::idbrequest::IDBRequest;
+use crate::dom::indexeddb::idbrequest::{IDBRequest, RequestSource};
 use crate::dom::indexeddb::idbtransaction::IDBTransaction;
 use crate::dom::indexeddb::key::{
     ExtractionResult, convert_value_to_key, extract_key, key_type_to_jsval,
@@ -692,6 +692,10 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             None,
             None,
         )
+        .inspect(|request| {
+            // Mercury: the source of the request is this cursor.
+            request.set_source(Some(RequestSource::Cursor(Dom::from_ref(self))));
+        })
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-delete>
@@ -745,6 +749,10 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             None,
             None,
         )
+        .inspect(|request| {
+            // Mercury: the source of the request is this cursor.
+            request.set_source(Some(RequestSource::Cursor(Dom::from_ref(self))));
+        })
     }
 }
 

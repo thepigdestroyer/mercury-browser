@@ -536,6 +536,40 @@ pub(crate) fn map_backend_error_to_dom_error(error: BackendError) -> Error {
     }
 }
 
+/// The error of a request, or of a transaction, that the backend failed.
+///
+/// <https://www.w3.org/TR/IndexedDB-3/#async-execute-request> step 5.4.2.1: "If result is an
+/// error, then ... set the error of request to result". The details of the backend's error are
+/// logged by the caller, not handed to the page.
+///
+/// Mercury: Servo 0.8 turned every backend error into a DataError. A backend failure that is
+/// unrelated to the database ("UnknownError" in the specification) has no DOMException of its own
+/// in this version (script_bindings has no `Error::Unknown`), so it is an OperationError.
+pub(crate) fn map_backend_error_to_request_error(error: BackendError) -> Error {
+    match error {
+        BackendError::QuotaExceeded => Error::QuotaExceeded {
+            quota: None,
+            requested: None,
+        },
+        BackendError::Abort => Error::Abort(Some("The transaction was aborted".to_owned())),
+        BackendError::DbNotFound | BackendError::StoreNotFound => Error::NotFound(Some(
+            "The database or the object store no longer exists".to_owned(),
+        )),
+        // sqlite.rs reports `format!("{:?}", rusqlite::Error)`; the extended result code names the
+        // class of the failure.
+        BackendError::DbErr(details) if details.contains("ConstraintViolation") => {
+            Error::Constraint(Some("The storage backend refused the record".to_owned()))
+        },
+        BackendError::DbErr(details) if details.contains("DiskFull") => Error::QuotaExceeded {
+            quota: None,
+            requested: None,
+        },
+        BackendError::DbErr(_) => {
+            Error::Operation(Some("The storage backend reported an error".to_owned()))
+        },
+    }
+}
+
 /// The result of steps in
 /// <https://www.w3.org/TR/IndexedDB-3/#evaluate-a-key-path-on-a-value>
 pub(crate) enum EvaluationResult {
@@ -925,15 +959,61 @@ pub(crate) fn extract_key(
     Ok(ExtractionResult::Key(key))
 }
 
-// Mercury: tests for the pure part of multiEntry handling (no JavaScript context needed).
+// Mercury: tests for the pure parts of multiEntry handling and of the error mapping (no JavaScript
+// context needed).
 #[cfg(test)]
 mod tests {
-    use storage_traits::indexeddb::IndexedDBKeyType;
+    use storage_traits::indexeddb::{BackendError, IndexedDBKeyType};
 
-    use super::index_keys_of;
+    use super::{Error, index_keys_of, map_backend_error_to_request_error};
 
     fn number(n: f64) -> IndexedDBKeyType {
         IndexedDBKeyType::Number(n)
+    }
+
+    #[test]
+    fn a_quota_error_of_the_backend_is_a_quota_exceeded_error() {
+        let error = map_backend_error_to_request_error(BackendError::QuotaExceeded);
+        assert!(matches!(error, Error::QuotaExceeded { .. }));
+    }
+
+    #[test]
+    fn an_abort_of_the_backend_is_an_abort_error() {
+        let error = map_backend_error_to_request_error(BackendError::Abort);
+        assert!(matches!(error, Error::Abort(_)));
+    }
+
+    #[test]
+    fn a_missing_store_or_database_is_a_not_found_error() {
+        let store = map_backend_error_to_request_error(BackendError::StoreNotFound);
+        let database = map_backend_error_to_request_error(BackendError::DbNotFound);
+        assert!(matches!(store, Error::NotFound(_)));
+        assert!(matches!(database, Error::NotFound(_)));
+    }
+
+    #[test]
+    fn a_sqlite_constraint_failure_is_a_constraint_error() {
+        let details = "SqliteFailure(Error { code: ConstraintViolation, extended_code: 1555 }, \
+                       Some(\"UNIQUE constraint failed: unique_index_data.index_id\"))";
+        let error = map_backend_error_to_request_error(BackendError::DbErr(details.to_owned()));
+        assert!(matches!(error, Error::Constraint(_)));
+    }
+
+    #[test]
+    fn a_full_disk_is_a_quota_exceeded_error() {
+        let details = "SqliteFailure(Error { code: DiskFull, extended_code: 13 }, None)";
+        let error = map_backend_error_to_request_error(BackendError::DbErr(details.to_owned()));
+        assert!(matches!(error, Error::QuotaExceeded { .. }));
+    }
+
+    #[test]
+    fn any_other_failure_is_an_operation_error_that_hides_the_details() {
+        let secret = "/Users/someone/profile/indexeddb.sqlite";
+        let error = map_backend_error_to_request_error(BackendError::DbErr(secret.to_owned()));
+        match error {
+            Error::Operation(Some(message)) => assert!(!message.contains(secret)),
+            other => panic!("expected an OperationError, got {other:?}"),
+        }
     }
 
     #[test]

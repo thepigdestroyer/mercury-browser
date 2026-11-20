@@ -39,7 +39,7 @@ use crate::dom::idbobjectstore::KeyPath;
 use crate::dom::indexeddb::idbcursor::{IDBCursor, IterationParam, ObjectStoreOrIndex};
 use crate::dom::indexeddb::idbcursorwithvalue::IDBCursorWithValue;
 use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
-use crate::dom::indexeddb::idbrequest::IDBRequest;
+use crate::dom::indexeddb::idbrequest::{IDBRequest, RequestSource};
 use crate::dom::indexeddb::key::{
     ExtractionResult, clear_pending_exception, convert_value_to_key_range, extract_key,
     index_keys_of, key_type_to_jsval,
@@ -196,7 +196,11 @@ impl IDBIndex {
             Some(iteration_param),
             Some(index_param),
         )
-        .inspect(|request| cursor.set_request(request))
+        .inspect(|request| {
+            // Mercury: the source of the request is this index.
+            request.set_source(Some(RequestSource::Index(Dom::from_ref(self))));
+            cursor.set_request(request)
+        })
     }
 
     /// The checks every index query makes before it creates a request.
@@ -260,6 +264,10 @@ impl IDBIndex {
             None,
             Some(index_param),
         )
+        .inspect(|request| {
+            // Mercury: the source of the request is this index.
+            request.set_source(Some(RequestSource::Index(Dom::from_ref(self))));
+        })
     }
 
     /// The records of this index, derived from the records of its object store: the key path is
@@ -524,7 +532,8 @@ impl IDBIndexMethods<crate::DomTypeHolder> for IDBIndex {
         }
 
         // Step 9: Set index’s name to name.
-        self.object_store.rename_index(&stored_name, &name);
+        // Mercury: `?`: the rename can fail now, with nothing changed, instead of going on locally.
+        self.object_store.rename_index(&stored_name, &name)?;
 
         // Step 10: Set this’s name to name.
         *stored_name = name.traced();

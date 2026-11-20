@@ -606,9 +606,13 @@ impl IDBObjectStore {
     }
 
     /// The caller must ensure that the original index exists.
-    pub(crate) fn rename_index(&self, name: &TracedDOMString, new_name: &DOMString) {
+    ///
+    /// Mercury: returns an error, and changes nothing, when the rename cannot be sent to the
+    /// storage thread (it used to log and rename locally anyway) or its callback cannot be made;
+    /// a missing index no longer panics the content process (the caller checked that it exists).
+    pub(crate) fn rename_index(&self, name: &TracedDOMString, new_name: &DOMString) -> ErrorResult {
         let operation = AsyncSchemaOperation::RenameIndex {
-            callback: self.transaction.create_abort_callback(),
+            callback: self.transaction.create_abort_callback()?,
             index_name: name.to_string(),
             new_name: new_name.to_string(),
         };
@@ -625,18 +629,20 @@ impl IDBObjectStore {
             .is_err()
         {
             warn!("Could not send AsyncSchemaOperation");
+            return Err(Error::Operation(Some(
+                "The storage thread cannot be reached".to_owned(),
+            )));
         }
 
         // We also need to update the key in the index set
-        let index = self
-            .index_set
-            .borrow_mut()
-            .remove(name)
-            .expect("Earlier steps of the algorithm checked that the index exists")
-            .as_rooted();
-        self.index_set
-            .borrow_mut()
-            .insert(new_name.clone().traced(), Dom::from_ref(&index));
+        let removed = self.index_set.borrow_mut().remove(name);
+        if let Some(index) = removed {
+            let index = index.as_rooted();
+            self.index_set
+                .borrow_mut()
+                .insert(new_name.clone().traced(), Dom::from_ref(&index));
+        }
+        Ok(())
     }
 }
 
@@ -1027,8 +1033,9 @@ impl IDBObjectStoreMethods<crate::DomTypeHolder> for IDBObjectStore {
         // Step 11. Let index be a new index in store.
         // Set index’s name to name and key path to keyPath. If unique is set, set index’s unique flag.
         // If multiEntry is set, set index’s multiEntry flag.
+        // Mercury: `create_abort_callback()?` throws instead of panicking the content process.
         let operation = AsyncSchemaOperation::CreateIndex {
-            callback: self.transaction.create_abort_callback(),
+            callback: self.transaction.create_abort_callback()?,
             index_name: name.to_string(),
             key_path: key_path.clone().into(),
             unique: options.unique,
@@ -1071,11 +1078,14 @@ impl IDBObjectStoreMethods<crate::DomTypeHolder> for IDBObjectStore {
         if !self.index_set.borrow().contains_key(&name) {
             return Err(Error::NotFound(None));
         }
+        // Mercury: the callback is made before the index set changes, and `?` throws instead of
+        // panicking the content process when it cannot be made.
+        let callback = self.transaction.create_abort_callback()?;
         // Step 7. Remove index from this object store handle's index set.
         self.index_set.borrow_mut().retain(|n, _| n != &*name);
         // Step 8. Destroy index.
         let operation = AsyncSchemaOperation::DeleteIndex {
-            callback: self.transaction.create_abort_callback(),
+            callback,
             index_name: name.to_string(),
         };
         if self
