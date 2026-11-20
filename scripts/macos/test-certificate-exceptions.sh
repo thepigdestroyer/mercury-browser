@@ -105,16 +105,25 @@ settled() {
 LOG=""
 # Runs the browser on $2 as an automated screenshot run; LOG is the run's log. $3 is yes or no:
 # whether the test switch is set (it is removed from the environment when no). Logs: the window
-# titles (winit::window) and the exception handler's info line.
+# titles (winit::window) and the exception handler's info line. A run whose page did not finish
+# loading in the browser's 30 seconds (exit status 3) is made once more: on a heavily loaded machine
+# the first page that loads images was once seen to stall that long; a second timeout fails.
 run_page() {
-    local name="$1" url="$2" proceed="$3" code=0
+    local name="$1" url="$2" proceed="$3" code=0 attempt
     local switch=(-u MERCURY_TEST_PROCEED_ON_CERTIFICATE_ERROR)
     if [ "$proceed" = yes ]; then switch=(MERCURY_TEST_PROCEED_ON_CERTIFICATE_ERROR=1); fi
     LOG="$TMP/$name.log"
-    env "${switch[@]}" \
-        RUST_LOG="warn,winit::window=debug,talaria_servo::certificate_exceptions=info" \
-        "$EXE" --screenshot "$TMP/$name.png" --window-size 900x700 \
-        --screenshot-delay "${MERCURY_TEST_CERTEXC_DELAY:-10000}" "$url" >"$LOG" 2>&1 || code=$?
+    for attempt in 1 2; do
+        code=0
+        env "${switch[@]}" \
+            RUST_LOG="warn,winit::window=debug,talaria_servo::certificate_exceptions=info" \
+            "$EXE" --screenshot "$TMP/$name.png" --window-size 900x700 \
+            --screenshot-delay "${MERCURY_TEST_CERTEXC_DELAY:-10000}" "$url" >"$LOG" 2>&1 || code=$?
+        [ "$code" = 3 ] || break
+        if [ "$attempt" = 1 ]; then
+            printf 'INFO %s: the page did not finish loading in 30 seconds; trying once more\n' "$name"
+        fi
+    done
     check "$name: the run exits 0" 0 "$code"
     check "$name: the screenshot was saved" yes "$(yes_no test -s "$TMP/$name.png")"
     check "$name: nothing keeps running" yes "$(settled)"
