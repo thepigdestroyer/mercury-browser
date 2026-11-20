@@ -529,6 +529,13 @@ impl ServoInner {
                 self.site_data_manager
                     .handle_cookie_response(operation_id, CookieOperationResponse::Done);
             },
+            // Mercury: the net lane's messages go through the same delivery as every other lane's
+            // (mercury/mod.rs).
+            NetToEmbedderMsg::Mercury(webview_id, message) => {
+                let webview =
+                    webview_id.and_then(|webview_id| self.get_webview_handle(webview_id));
+                mercury::deliver(webview_id, webview, &self.delegate.borrow(), message);
+            },
         }
     }
 

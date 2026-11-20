@@ -501,7 +501,13 @@ pub async fn main_fetch(
     if should_request_be_blocked_due_to_a_bad_port(&request.current_url()) {
         response = Some(Response::network_error(NetworkError::InvalidPort));
     }
-    if should_request_be_blocked_as_mixed_content(request, &context.protocols) {
+    // Mercury: step 1.3 of the mixed content algorithm (the user allowed mixed content on the page's
+    // site) and the report of a block to the embedder (EC17); see mercury_mixed_content.rs.
+    if crate::mercury_mixed_content::request_is_blocked(
+        context,
+        request,
+        should_request_be_blocked_as_mixed_content(request, &context.protocols),
+    ) {
         response = Some(Response::network_error(NetworkError::MixedContent));
     }
 
@@ -522,7 +528,12 @@ pub async fn main_fetch(
         Referrer::ReferrerUrl(referrer_source) | Referrer::Client(referrer_source) => {
             request.headers.remove(header::REFERER);
             determine_requests_referrer(
-                request.referrer_policy,
+                // Mercury: a page may tighten the referrer policy but not loosen it below
+                // `strict-origin-when-cross-origin` when the cap is on (EC14).
+                context
+                    .state
+                    .net_policy
+                    .cap_referrer_policy(request.referrer_policy),
                 referrer_source,
                 request.current_url(),
             )
@@ -716,8 +727,17 @@ pub async fn main_fetch(
             should_be_blocked_due_to_nosniff(request.destination, &response.headers);
         let should_replace_with_mime_type_error = !response_is_network_error &&
             should_be_blocked_due_to_mime_type(request.destination, &response.headers);
+        // Mercury: the per-site allow and the report to the embedder (EC17), as for the request above.
         let should_replace_with_mixed_content = !response_is_network_error &&
-            should_response_be_blocked_as_mixed_content(request, &response, &context.protocols);
+            crate::mercury_mixed_content::response_is_blocked(
+                context,
+                request,
+                should_response_be_blocked_as_mixed_content(
+                    request,
+                    &response,
+                    &context.protocols,
+                ),
+            );
         let should_replace_with_csp_error = csp_request.is_some_and(|csp_request| {
             let (check_result, violations) = should_response_be_blocked_by_csp(
                 &csp_request,
