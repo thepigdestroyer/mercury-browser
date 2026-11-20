@@ -1,0 +1,128 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# THROW-AWAY. The AV1 control run of the GstMSE spike (lane sp-mse, R17 sections 9 and 14) on GitHub's Apple
+# Silicon runner. It exists on the branch lane/sp-mse only and is deleted in the lane's next commit, before the
+# lane merges: it must never reach `mercury` or `master`. It builds the stress crate, runs its unit tests and
+# scenarios T07 (AV1 with a four-byte and with a complete av1C, through MSE and through a plain playbin3, with
+# VideoToolbox's own hardware-support answer) and T08 (protection-event controls), and prints their JSON
+# reports to the log. No secrets, read-only token, nothing is uploaded or published.
+name: MSE AV1 control arm64
+
+on:
+  push:
+    branches: [lane/sp-mse]
+    paths:
+      - '.github/workflows/mse-av1-control-arm64.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mse-av1-control-arm64-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  control:
+    name: AV1 control on Apple Silicon
+    runs-on: macos-26
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Show the machine
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          sw_vers
+          uname -m
+          sysctl -n machdep.cpu.brand_string hw.ncpu hw.memsize
+          system_profiler SPHardwareDataType | sed -n 1,20p
+          sysctl -a 2>/dev/null | grep -E "^hw\.optional\.arm|^kern\.hv_vmm_present|^machdep\.cpu\.features" | head -20 || true
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Restore the GStreamer packages
+        id: gstreamer-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: gstreamer-macos-arm64-${{ hashFiles('scripts/macos/gstreamer.sh') }}
+
+      - name: Fetch and verify the GStreamer packages
+        run: scripts/macos/gstreamer.sh fetch
+
+      - name: Save the GStreamer packages
+        if: steps.gstreamer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: ${{ steps.gstreamer-cache.outputs.cache-primary-key }}
+
+      - name: Unpack and check GStreamer
+        run: make gstreamer-macos
+
+      - name: Unit tests of the segment and stress crates
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          RUST_TEST_THREADS=2 spikes/mse/run.sh test --release --locked -p mse-segments -p mse-stress 2>&1 | grep -E "^test result|FAILED|panicked|failed" || echo "exit status $?"
+
+      - name: Build the stress scenarios
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          spikes/mse/run.sh build --release --locked -p mse-stress
+
+      # T07 twice, as on Intel: the AV1 rows are the point (four-byte av1C, complete av1C, plain playbin3,
+      # VideoToolbox's hardware-support answer for av01).
+      - name: T07 decoder choice, with the AV1 controls
+        shell: bash
+        env:
+          MSE_STRESS_TRACKS: video
+        run: |
+          set -uo pipefail
+
+          mkdir -p "${RUNNER_TEMP}/mse"
+          for run in 1 2; do
+            spikes/mse/run.sh run --release --locked -p mse-stress -- \
+              --only T07 --shape playbin --plugin-mode system --report "${RUNNER_TEMP}/mse/t07-${run}.json" || echo "exit status $?"
+          done
+
+      - name: T08 protection events, with the controls
+        shell: bash
+        env:
+          MSE_STRESS_TRACKS: video
+        run: |
+          set -uo pipefail
+
+          mkdir -p "${RUNNER_TEMP}/mse"
+          spikes/mse/run.sh run --release --locked -p mse-stress -- \
+            --only T08 --shape playbin --plugin-mode system --report "${RUNNER_TEMP}/mse/t08.json" || echo "exit status $?"
+
+      - name: Print the reports
+        if: always()
+        shell: bash
+        run: |
+          set -uo pipefail
+
+          for report in "${RUNNER_TEMP}"/mse/*.json; do
+            echo "=== ${report##*/}"
+            cat "${report}"
+            echo
+          done
