@@ -99,6 +99,30 @@ fn the_seven_added_colours_are_the_measured_seeds() {
     }
 }
 
+/// The ids, in hand-out order, exactly as `session.json` holds them. This is one half of a
+/// contract: `talaria-core/src/groups.rs` (`GroupPreset::ALL` and `GroupPreset::name`) must name
+/// the same fourteen ids in the same order, and the crate that links both asserts
+/// `GroupPreset::ALL.map(GroupPreset::name) == PRESETS.map(|preset| preset.id)`. Changing this
+/// list changes a file format that is never migrated, so it is a decision to take on purpose:
+/// change it here and in `GroupPreset` together, never one side only.
+const CONTRACT_IDS: [&str; 14] = [
+    "blue", "amber", "rose", "mint", "orchid", "brown", "green", "lime", "sky", "plum", "salmon",
+    "violet", "teal", "slate",
+];
+
+#[test]
+fn the_preset_ids_and_their_hand_out_order_are_the_persisted_contract() {
+    let ids: Vec<&str> = PRESETS.iter().map(|preset| preset.id).collect();
+    assert_eq!(ids, CONTRACT_IDS, "the stored ids or their order changed");
+    // The order is what `auto_colour` hands out when no group is in use yet.
+    let mut used: Vec<&str> = Vec::new();
+    for expected in CONTRACT_IDS {
+        let chosen = auto_colour(&used).id;
+        assert_eq!(chosen, expected, "after {used:?}");
+        used.push(chosen);
+    }
+}
+
 #[test]
 fn no_two_presets_are_closer_than_0_08_in_oklab() {
     let all = pairs();

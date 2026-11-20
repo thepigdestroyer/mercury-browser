@@ -403,6 +403,133 @@ fn every_pair_of_the_interface_contrast_test_is_covered_by_a_rule() {
     );
 }
 
+/// Pairs the interface draws that `palette_contrast.rs` does not check, found by reading the
+/// Slint files: (foreground, background, minimum, the file under `crates/mercury-ui/ui/` that
+/// draws it).
+fn drawn_pairs() -> Vec<(Role, Role, Minimum, &'static str)> {
+    let popup_bar = "tabs/pop-up-blocked.slint";
+    let downloads = "downloads/downloads.slint";
+    let star = "bookmarks/star.slint";
+    let tab_strip = "tabs/tab-strip.slint";
+    let page_popup = "controls/page-popup.slint";
+    vec![
+        // The "Allow pop-ups from ..." label, on the information bar and on the hover and
+        // pressed fills of its button.
+        (Role::Accent, Role::InfoBackground, Minimum::Text, popup_bar),
+        (Role::Accent, Role::ButtonHover, Minimum::Text, popup_bar),
+        (Role::Accent, Role::ButtonPressed, Minimum::Text, popup_bar),
+        // The dismiss cross of the same bar.
+        (
+            Role::ButtonLabel,
+            Role::InfoBackground,
+            Minimum::Text,
+            popup_bar,
+        ),
+        // A plain button's label and the toolbar's download arrow, on `DownloadsPalette.hover`
+        // (the button-hover fill).
+        (Role::Accent, Role::ButtonHover, Minimum::Text, downloads),
+        // The filled bookmark star, on the button's hover and pressed fills.
+        (Role::Accent, Role::ButtonHover, Minimum::Text, star),
+        (Role::Accent, Role::ButtonPressed, Minimum::Text, star),
+        // The loading dot of a tab under the pointer.
+        (Role::Accent, Role::TabHover, Minimum::Text, tab_strip),
+        // `PopupStyle`: text, an invalid hex field's border, the focus ring and a primary button
+        // on the page popups' own background.
+        (
+            Role::Text,
+            Role::PagePopupBackground,
+            Minimum::Text,
+            page_popup,
+        ),
+        (
+            Role::Danger,
+            Role::PagePopupBackground,
+            Minimum::Text,
+            page_popup,
+        ),
+        (
+            Role::FocusRing,
+            Role::PagePopupBackground,
+            Minimum::Ui,
+            page_popup,
+        ),
+        (
+            Role::PrimaryButtonBackground,
+            Role::PagePopupBackground,
+            Minimum::Ui,
+            page_popup,
+        ),
+    ]
+}
+
+#[test]
+fn every_pair_found_in_the_slint_files_is_covered_by_a_rule_and_passes_in_the_shipped_palette() {
+    let mut uncovered = Vec::new();
+    let mut failing = Vec::new();
+    for (foreground, background, minimum, file) in drawn_pairs() {
+        let covered = RULES.iter().any(|rule| {
+            rule.foreground == foreground
+                && rule.backgrounds.contains(&background)
+                && rule.minimum.ratio() >= minimum.ratio()
+        });
+        if !covered {
+            uncovered.push(format!(
+                "{file}: {} on {} ({minimum:?})",
+                foreground.slint_name(),
+                background.slint_name()
+            ));
+        }
+        for scheme in Scheme::ALL {
+            let measured = ratio(&mercury_b2::PALETTE, scheme, foreground, background);
+            if measured < minimum.ratio() {
+                failing.push(format!(
+                    "{file}: {} {} on {}: {measured:.2}",
+                    scheme.name(),
+                    foreground.slint_name(),
+                    background.slint_name()
+                ));
+            }
+        }
+    }
+    assert!(
+        uncovered.is_empty(),
+        "no rule covers:\n{}",
+        uncovered.join("\n")
+    );
+    assert!(failing.is_empty(), "\n{}", failing.join("\n"));
+}
+
+#[test]
+fn the_text_accent_reads_on_the_palest_fill_it_is_drawn_on_with_the_margin() {
+    // The deepest fill the accent is drawn on as text is the pressed button's; the margin is
+    // the one the whole palette keeps, so a re-tint of that fill shows up here by name.
+    let b2 = &mercury_b2::PALETTE;
+    let accent = b2.colour(Scheme::Light, Role::Accent);
+    for fill in [
+        Role::ButtonHover,
+        Role::ButtonPressed,
+        Role::TabHover,
+        Role::InfoBackground,
+        Role::ItemHover,
+    ] {
+        let measured = accent.contrast_ratio(b2.colour(Scheme::Light, fill));
+        assert!(
+            measured >= TEXT_MARGIN,
+            "accent {} on {} is {measured:.3}",
+            accent.to_hex(),
+            fill.slint_name()
+        );
+    }
+    // A hovered label is still told apart from a resting one: the hover is deeper by a step.
+    let hover = b2.colour(Scheme::Light, Role::ButtonLabelHover);
+    assert!(hover.luminance() < accent.luminance());
+    assert!(
+        accent.contrast_ratio(hover) >= 1.2,
+        "the hover step is {:.3}",
+        accent.contrast_ratio(hover)
+    );
+}
+
 #[test]
 fn the_legacy_pairs_hold_for_hermes_as_the_interface_test_says() {
     // The port is faithful if today's palette, which that test passes, passes these pairs here.

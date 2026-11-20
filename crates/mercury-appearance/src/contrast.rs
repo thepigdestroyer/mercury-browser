@@ -4,11 +4,14 @@
 //!
 //! The rules are WCAG 2.2 success criteria 1.4.3 (text: 4.5:1) and 1.4.11 (the parts of an
 //! interface and graphics: 3:1), written as data. A [`Rule`] says that one role is drawn on a
-//! list of other roles and what ratio it needs there; [`RULES`] is every such pair the browser's
-//! interface draws. [`check`] measures a palette against them and returns what fails. The
-//! tests run it for every [`selectable`](crate::palettes::selectable) palette, so a palette that
-//! cannot be read does not ship, and the completeness guard in `tests/contrast_rules.rs` fails
-//! when a new [`Role`] is neither in a rule nor in [`EXEMPT`], so a role cannot be forgotten.
+//! list of other roles and what ratio it needs there; [`RULES`] is every such pair found by
+//! reading the interface's Slint files. `tests/contrast_rules.rs` lists the pairs it was checked
+//! against, with the file that draws each, so a pair that is drawn but not ruled is a failing test
+//! rather than a gap nobody sees. [`check`] measures a palette against them and returns what
+//! fails. The tests run it for every [`selectable`](crate::palettes::selectable) palette, so a
+//! palette that cannot be read does not ship, and the completeness guard in
+//! `tests/contrast_rules.rs` fails when a new [`Role`] is neither in a rule nor in [`EXEMPT`], so a
+//! role cannot be forgotten.
 //!
 //! The pairs of `crates/mercury-ui/tests/palette_contrast.rs`, which draws the real windows, are
 //! all here; that test stays as the check that the windows really use those roles.
@@ -148,9 +151,10 @@ pub const RULES: &[Rule] = &[
             R::ButtonPressed,
             R::ItemHover,
             R::NoticeBackground,
-            R::InfoBackground
+            R::InfoBackground,
+            R::PagePopupBackground
         ],
-        "ordinary text on every surface, the hover fills and the warning and information bars",
+        "ordinary text on every surface, the hover fills, the warning and information bars and the page popups",
     ),
     text(
         R::TextSecondary,
@@ -169,13 +173,19 @@ pub const RULES: &[Rule] = &[
     ),
     text(
         R::Accent,
-        on_surfaces![R::ItemHover],
-        "links, checked boxes, the active-tab underline and the loading bar, on every surface",
+        on_surfaces![
+            R::ItemHover,
+            R::TabHover,
+            R::ButtonHover,
+            R::ButtonPressed,
+            R::InfoBackground
+        ],
+        "links, the pop-up bar's Allow label, the star and download glyphs, checked boxes and the loading bar, on the surfaces, a hovered row, tab or button, a pressed button and the information bar",
     ),
     text(
         R::ButtonLabel,
-        on_surfaces![R::ButtonHover, R::ButtonPressed],
-        "a button's label at rest, and on its hover and pressed fills",
+        on_surfaces![R::ButtonHover, R::ButtonPressed, R::InfoBackground],
+        "a button's label at rest, on its hover and pressed fills and on the information bar",
     ),
     text(
         R::ButtonLabelHover,
@@ -204,8 +214,8 @@ pub const RULES: &[Rule] = &[
     ),
     text(
         R::Danger,
-        on_surfaces![R::ItemHover],
-        "errors and destructive actions, on the surfaces and a hovered row",
+        on_surfaces![R::ItemHover, R::PagePopupBackground],
+        "errors and destructive actions, on the surfaces, a hovered row and the page popups (an invalid colour)",
     ),
     text(
         R::PrimaryButtonText,
@@ -246,13 +256,13 @@ pub const RULES: &[Rule] = &[
     ),
     ui(
         R::FocusRing,
-        on_surfaces![R::SearchFieldBackground],
-        "the outline of the control that has keyboard focus",
+        on_surfaces![R::SearchFieldBackground, R::PagePopupBackground],
+        "the outline of the control that has keyboard focus, in the page popups too",
     ),
     ui(
         R::PrimaryButtonBackground,
-        on_surfaces![],
-        "the shape of a primary button, which has no outline",
+        on_surfaces![R::PagePopupBackground],
+        "the shape of a primary button, which has no outline, also in the page popups",
     ),
     ui(
         R::PrimaryButtonHover,

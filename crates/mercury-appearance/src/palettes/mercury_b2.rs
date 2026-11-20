@@ -22,8 +22,12 @@
 //! `#EFE8DF`), just under the 4.5:1 that text needs, so the owner's colour is the *fill*
 //! accent: the primary button, the selected row (white text on it is 4.93:1) and every mark
 //! (marks need 3:1). The roles that are drawn as text on the chrome (`accent`,
-//! `button-label-hover`, `match-highlight`) are the same hue, deepened, and measure 4.66:1 or
-//! more on every surface. In dark, `#FFB547` is readable as text and as a fill.
+//! `button-label-hover`, `match-highlight`) are the same hue, deepened. The accent is also drawn
+//! as text on the hover and pressed fills of buttons and tabs (the pop-up bar's Allow label, the
+//! bookmark star, the download arrow), the palest of which, `#E0D7CA`, would leave `#B24318` at
+//! 3.97:1; so the light accent is `#A03C14`, 4.68:1 or more on every surface it is drawn on, and
+//! `button-label-hover` is a step deeper (`#8A320F`) so that a hovered link or button label still
+//! shows. In dark, `#FFB547` is readable as text and as a fill.
 //!
 //! Every pair is checked in both schemes by [`crate::contrast`]; the tables below hold literals,
 //! nothing is computed at run time.
@@ -61,9 +65,9 @@ const fn light(role: Role) -> Colour {
         Role::TextMuted => Colour::hex(0x6a6077),
         Role::Placeholder => Colour::hex(0x736982),
         // Accent text and buttons.
-        Role::Accent => Colour::hex(0xb24318),
+        Role::Accent => Colour::hex(0xa03c14),
         Role::ButtonLabel => Colour::hex(0x4b4160),
-        Role::ButtonLabelHover => Colour::hex(0x9c3a13),
+        Role::ButtonLabelHover => Colour::hex(0x8a320f),
         Role::ButtonHover => Colour::hex(0xe7dfd3),
         Role::ButtonPressed => Colour::hex(0xe0d7ca),
         // Tabs.

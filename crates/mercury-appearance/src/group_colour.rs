@@ -10,6 +10,11 @@
 //!
 //! Colour ids are strings kept in `session.json`. A preset's id (`"blue"`) is lower-case ASCII
 //! and part of the file format forever; a custom colour's id is its `#rrggbb` in lower case.
+//!
+//! The ids and their order are one contract with `GroupPreset` in `talaria-core/src/groups.rs`,
+//! which writes and reads the same strings: the two lists must be equal, in this order. This
+//! crate does not depend on `talaria-core`, so `tests/group_colours.rs` pins this side as a
+//! literal list, and whatever crate links both asserts that the two agree.
 
 use crate::colour::Colour;
 use crate::oklab::Oklab;
