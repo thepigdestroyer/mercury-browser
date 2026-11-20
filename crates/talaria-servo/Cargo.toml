@@ -23,6 +23,10 @@ talaria-core = { path = "../talaria-core" }
 # site security: Mercury's error pages, and Servo's other resources (patched, see Cargo.toml).
 getrandom.workspace = true
 mercury-site-security = { path = "../mercury-site-security" }
+# sh-pages: the view-source handler (`view_source.rs`) fetches, highlights and renders with this crate.
+futures-util.workspace = true
+mercury-view-source = { path = "../mercury-view-source" }
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 servo-default-resources = "=0.8.0"
 url.workspace = true
 

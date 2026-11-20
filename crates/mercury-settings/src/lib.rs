@@ -57,6 +57,8 @@ mod read;
 mod search;
 mod session;
 mod settings;
+// sh-pages
+mod site_images;
 mod store;
 
 pub use appearance::{

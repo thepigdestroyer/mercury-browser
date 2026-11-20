@@ -42,6 +42,9 @@ mod certificate_exceptions;
 mod resources;
 mod site_information;
 mod site_security;
+// sh-pages
+mod site_images;
+mod view_source;
 
 pub use resources::record_error_page_secret;
 pub use site_information::SiteDataSummary;

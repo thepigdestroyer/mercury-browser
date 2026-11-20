@@ -20,8 +20,12 @@ mod navigation_policy;
 mod login_fill;
 mod page_icon;
 mod page_request;
+// sh-pages
+mod site_images;
 mod site_security;
 mod tab;
+// sh-pages
+mod view_source;
 mod visits;
 mod web_view;
 mod zoom;
@@ -92,4 +96,9 @@ pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};
 pub use navigation_policy::{
     ExternalLinkRequest, NavigationVerdict, navigation_verdict, refuses_local_file_load,
     remembered_origin,
+};
+// sh-pages
+pub use site_images::{MAX_IMAGE_BLOCKED_SITES, SiteImages, SiteImagesError, image_site_key};
+pub use view_source::{
+    VIEW_SOURCE_SCHEME, is_view_source, view_source_address, view_source_target,
 };
