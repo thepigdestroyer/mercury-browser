@@ -31,6 +31,14 @@ fn valid_settings_need_no_repairs() {
     settings.search.default_engine = "mine".to_owned();
     settings.downloads.directory = Some(PathBuf::from("/Users/someone/Desktop"));
     settings.appearance.default_zoom_percent = 30;
+    // The new appearance fields at their edges: a later layout is not valid, but Classic, a
+    // palette this version has never heard of, the smallest hold and the largest cap are.
+    settings.appearance.layout = "classic".to_owned();
+    settings.appearance.palette_light = "a-palette-from-the-future-2".to_owned();
+    settings.appearance.palette_dark = "0".to_owned();
+    settings.appearance.tab_groups.snapshot_cap_mb = 1024;
+    settings.appearance.tab_groups.keys.hold_ms = 250;
+    settings.appearance.tab_groups.keys.default_sequence = "QWERTYUIOPASDFGHJKLZXCVBNM".to_owned();
     settings.passwords.never_save_origins = vec![
         "https://bank.example".to_owned(),
         "http://localhost:8080".to_owned(),
@@ -333,6 +341,12 @@ fn every_repair_is_reported_in_field_order() {
     settings.search.default_engine = "gone".to_owned();
     settings.downloads.directory = Some(PathBuf::from("relative"));
     settings.appearance.default_zoom_percent = 1000;
+    settings.appearance.layout = "sidebar".to_owned();
+    settings.appearance.palette_light = "Not Well Formed".to_owned();
+    settings.appearance.palette_dark = String::new();
+    settings.appearance.tab_groups.snapshot_cap_mb = 31;
+    settings.appearance.tab_groups.keys.hold_ms = 1001;
+    settings.appearance.tab_groups.keys.default_sequence = "123".to_owned();
     settings.passwords.never_save_origins = vec!["nonsense".to_owned()];
     settings.language = Some("??".to_owned());
 
@@ -345,6 +359,12 @@ fn every_repair_is_reported_in_field_order() {
             "search.default_engine",
             "downloads.directory",
             "appearance.default_zoom_percent",
+            "appearance.layout",
+            "appearance.palette_light",
+            "appearance.palette_dark",
+            "appearance.tab_groups.snapshot_cap_mb",
+            "appearance.tab_groups.keys.hold_ms",
+            "appearance.tab_groups.keys.default_sequence",
             "passwords.never_save_origins",
             "language",
         ]

@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+use crate::appearance::{DEFAULT_LAYOUT, DEFAULT_PALETTE, TabGroupSettings};
 use crate::bounded::{self, Unread};
 use crate::search::{DEFAULT_ENGINE_ID, SearchEngine};
 
@@ -133,6 +134,15 @@ pub struct AppearanceSettings {
     pub show_bookmarks_bar: bool,
     /// Whether the toolbar has a home button.
     pub show_home_button: bool,
+    /// The layout id: one of [`LAYOUT_IDS`](crate::LAYOUT_IDS). A validated string, not an enum,
+    /// so a layout from a later version loads here as the default with a repair.
+    pub layout: String,
+    /// The id of the palette used in the light scheme (see `mercury-appearance`).
+    pub palette_light: String,
+    /// The id of the palette used in the dark scheme.
+    pub palette_dark: String,
+    /// The tab-group controls.
+    pub tab_groups: TabGroupSettings,
 }
 
 impl Default for AppearanceSettings {
@@ -142,6 +152,10 @@ impl Default for AppearanceSettings {
             default_zoom_percent: 100,
             show_bookmarks_bar: true,
             show_home_button: false,
+            layout: DEFAULT_LAYOUT.to_owned(),
+            palette_light: DEFAULT_PALETTE.to_owned(),
+            palette_dark: DEFAULT_PALETTE.to_owned(),
+            tab_groups: TabGroupSettings::default(),
         }
     }
 }
@@ -260,11 +274,18 @@ impl Settings {
     /// [`SearchSettings::engines`]) and a default engine that does not exist becomes
     /// [`DEFAULT_ENGINE_ID`]; a download directory that is not absolute, not UTF-8 or longer
     /// than [`MAX_PATH_BYTES`] becomes `None`; a zoom outside
-    /// [`MIN_ZOOM_PERCENT`]..=[`MAX_ZOOM_PERCENT`] becomes 100; "never save" entries are put
+    /// [`MIN_ZOOM_PERCENT`]..=[`MAX_ZOOM_PERCENT`] becomes 100; a layout that is not one of
+    /// [`LAYOUT_IDS`](crate::LAYOUT_IDS) becomes [`DEFAULT_LAYOUT`]; a light or dark palette id
+    /// that is not well formed (1 to [`MAX_PALETTE_ID_BYTES`](crate::MAX_PALETTE_ID_BYTES)
+    /// bytes of `a-z`, `0-9` and `-`, not starting with `-`) becomes [`DEFAULT_PALETTE`], while
+    /// whether a well formed id names a real palette is not checked here; a tab-group preview
+    /// cap (`snapshot_cap_mb`) or key hold (`hold_ms`) outside its range becomes its default;
+    /// the default key sequence is cut to its ASCII letters in capitals, the first of each (the
+    /// default sequence if none is left; an empty one stays empty); "never save" entries are put
     /// through [`canonical_origin`], those it refuses and duplicates are dropped, and the list
     /// is cut at [`MAX_NEVER_SAVE_ORIGINS`]; a language that [`is_plausible_language_tag`]
-    /// refuses becomes `None`. Each list gives at most one repair, with counts. Validating the
-    /// result again repairs nothing.
+    /// refuses becomes `None`. Each list gives at most one repair, with counts, and so does each
+    /// appearance field. Validating the result again repairs nothing.
     pub fn validated(self) -> (Self, Vec<Repair>) {
         self.validated_with(&Unread::default())
     }
@@ -342,6 +363,7 @@ impl Settings {
             });
             self.appearance.default_zoom_percent = 100;
         }
+        self.appearance.validate(&mut repairs);
 
         let (origins, origin_repair) = canonical_origins(
             std::mem::take(&mut self.passwords.never_save_origins),
