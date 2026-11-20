@@ -30,8 +30,8 @@
 //!
 //! * `AppendDone`, `AppendError`, `RemoveDone`: `updating` is false and the data is in `buffered`.
 //!   `AppendError` is followed by `SourceEnded { Some(Decode) }` for the append error algorithm.
-//! * `SourceEnded` is posted for **every** transition of the MediaSource into `ended` (an explicit
-//!   `end_of_stream` too), `DurationChanged` for **every** change of the duration (an explicit
+//! * `SourceEnded` is posted every time the end of stream algorithm runs (an explicit `end_of_stream`
+//!   too, and once per append error), `DurationChanged` for **every** change of the duration (an explicit
 //!   `set_duration` too): the DOM fires `sourceended` and `durationchange` from the events and must not
 //!   fire them itself.
 //! * There is no `SourceOpen` event: an `append`, `remove`, `change_type` or attribute setter that finds
@@ -146,10 +146,10 @@ impl Shared {
             return;
         }
         let _gate = lock(&self.gate);
-        if let Some((id, generation)) = guard {
-            if !self.lock_state().is_current(id, generation) {
-                return;
-            }
+        if let Some((id, generation)) = guard
+            && !self.lock_state().is_current(id, generation)
+        {
+            return;
         }
         *lock(&self.emitter) = Some(thread::current().id());
         let sink = Arc::clone(&self.events);
@@ -164,10 +164,10 @@ impl Shared {
             return;
         }
         let wake = lock(&self.wake).clone();
-        if let Some(wake) = wake {
-            if catch_unwind(AssertUnwindSafe(|| wake())).is_err() {
-                log::error!("mercury-mse: the feed's wake closure panicked");
-            }
+        if let Some(wake) = wake
+            && catch_unwind(AssertUnwindSafe(|| wake())).is_err()
+        {
+            log::error!("mercury-mse: the feed's wake closure panicked");
         }
     }
 
@@ -351,10 +351,10 @@ impl Drop for MseBackend {
         self.shared.shutdown.store(true, Ordering::SeqCst);
         self.shared.work.notify_all();
         let handle = lock(&self.worker).take();
-        if let Some(handle) = handle {
-            if handle.thread().id() != thread::current().id() {
-                let _ = handle.join();
-            }
+        if let Some(handle) = handle
+            && handle.thread().id() != thread::current().id()
+        {
+            let _ = handle.join();
         }
         // Free the buffers now: a feed handle may keep the shared state alive for a while.
         let mut state = self.shared.lock_state();

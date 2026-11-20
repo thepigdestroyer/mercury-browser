@@ -366,20 +366,20 @@ impl MediaSource {
             return Ok(());
         }
         let new_ns = dur_ns(new);
-        if let Some(pts) = self.highest_pts() {
-            if new_ns < pts {
-                return Err(MseError::InvalidState(format!(
-                    "the duration {new} is less than the highest presentation timestamp {} of the buffered \
-                     frames; remove() the media first",
-                    ns_to_secs(pts)
-                )));
-            }
+        if let Some(pts) = self.highest_pts()
+            && new_ns < pts
+        {
+            return Err(MseError::InvalidState(format!(
+                "the duration {new} is less than the highest presentation timestamp {} of the buffered \
+                 frames; remove() the media first",
+                ns_to_secs(pts)
+            )));
         }
         let mut new = new;
-        if let Some(end) = self.highest_end() {
-            if new_ns < end {
-                new = ns_to_secs(end);
-            }
+        if let Some(end) = self.highest_end()
+            && new_ns < end
+        {
+            new = ns_to_secs(end);
         }
         if self.duration != new {
             self.duration = new;
@@ -568,10 +568,10 @@ impl MediaSource {
 
     /// Undoes `begin_append` when the worker could not be started.
     pub fn cancel_append(&mut self, id: SourceBufferId) {
-        if let Some(i) = self.index(id) {
-            if self.buffers[i].busy == Some(Busy::Append) {
-                self.buffers[i].busy = None;
-            }
+        if let Some(i) = self.index(id)
+            && self.buffers[i].busy == Some(Busy::Append)
+        {
+            self.buffers[i].busy = None;
         }
     }
 
@@ -607,10 +607,10 @@ impl MediaSource {
     }
 
     pub fn cancel_remove(&mut self, id: SourceBufferId) {
-        if let Some(i) = self.index(id) {
-            if self.buffers[i].busy == Some(Busy::Remove) {
-                self.buffers[i].busy = None;
-            }
+        if let Some(i) = self.index(id)
+            && self.buffers[i].busy == Some(Busy::Remove)
+        {
+            self.buffers[i].busy = None;
         }
     }
 
@@ -705,11 +705,12 @@ impl MediaSource {
     /// algorithm with the new duration set to the maximum of the current duration and the group end
     /// timestamp."
     fn media_beyond_duration(&mut self, group_end: Ns) {
-        if let Some(current) = self.duration_ns() {
-            if current != Ns::MAX && group_end > current {
-                // Raising the duration cannot hit the InvalidState check.
-                let _ = self.duration_change(ns_to_secs(group_end));
-            }
+        if let Some(current) = self.duration_ns()
+            && current != Ns::MAX
+            && group_end > current
+        {
+            // Raising the duration cannot hit the InvalidState check.
+            let _ = self.duration_change(ns_to_secs(group_end));
         }
     }
 
@@ -749,13 +750,13 @@ impl MediaSource {
                     id,
                     generation,
                 );
+                // The end of stream algorithm with the "decode" error runs once per append error, as the
+                // spec has it (two buffers can fail one after the other: `sourceended` fires twice).
                 self.errored = true;
-                if self.ready_state == MediaSourceReadyState::Open {
-                    self.ready_state = MediaSourceReadyState::Ended;
-                    self.push_event(MseEvent::SourceEnded {
-                        error: Some(EosError::Decode),
-                    });
-                }
+                self.ready_state = MediaSourceReadyState::Ended;
+                self.push_event(MseEvent::SourceEnded {
+                    error: Some(EosError::Decode),
+                });
                 self.push_wake();
             }
         }
@@ -806,10 +807,8 @@ impl MediaSource {
         };
         let mut acc = vec![TimeRange::new(0, highest)];
         for mut ranges in per_buffer {
-            if ended {
-                if let Some(last) = ranges.last_mut() {
-                    last.end = highest;
-                }
+            if ended && let Some(last) = ranges.last_mut() {
+                last.end = highest;
             }
             acc = intersect(&acc, &ranges);
         }

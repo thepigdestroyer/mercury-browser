@@ -10,7 +10,7 @@
 #![allow(dead_code)]
 
 use std::collections::HashMap;
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread::{self, ThreadId};
 use std::time::{Duration, Instant};
 
@@ -457,7 +457,7 @@ pub fn watchdog<T: Send + 'static>(
     limit: Duration,
     f: impl FnOnce() -> T + Send + 'static,
 ) -> T {
-    let (tx, rx) = std::sync::mpsc::channel();
+    let (tx, rx) = mpsc::channel();
     let handle = thread::Builder::new()
         .name(format!("watched-{label}"))
         .spawn(move || {
@@ -469,14 +469,12 @@ pub fn watchdog<T: Send + 'static>(
             let _ = handle.join();
             value
         }
-        Err(_) => {
-            // The helper thread is stuck (or panicked: then join tells).
-            if handle.is_finished() {
-                match handle.join() {
-                    Ok(()) => panic!("{label}: the watched closure returned no value"),
-                    Err(payload) => std::panic::resume_unwind(payload),
-                }
-            }
+        // The closure ended without a value: it panicked. Say why.
+        Err(mpsc::RecvTimeoutError::Disconnected) => match handle.join() {
+            Ok(()) => panic!("{label}: the watched closure returned no value"),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+        Err(mpsc::RecvTimeoutError::Timeout) => {
             panic!("{label}: no answer within {limit:?} (a deadlock or a hang)");
         }
     }
