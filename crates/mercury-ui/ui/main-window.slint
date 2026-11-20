@@ -3,7 +3,9 @@ import { Palette } from "std-widgets.slint";
 import { DownloadsButton, DownloadsPopover, DownloadsPanel, QuitDownloadsPrompt, DownloadOfferBar, DownloadsPalette, DownloadRow, DownloadAction } from "downloads/downloads.slint"; // downloads-ui lane
 export { DownloadsPalette, DownloadRow, DownloadAction }
 import { ChromePalette } from "theme/chrome-palette.slint";
-export { ChromePalette, ChromeTheme } from "theme/chrome-palette.slint";
+export { ChromeColors, ChromePalette, ChromeTheme } from "theme/chrome-palette.slint";
+// theme-plumbing: the chrome's sizes (Rust pushes them: src/theme)
+export { ChromeMetrics } from "theme/chrome-metrics.slint";
 // ring-geometry: the tab-group rows and arc shapes (Rust fills them: src/ring_geometry)
 export { ArcGlyph, ArcSeg, GroupRow, TabRow } from "groups/models.slint";
 // settings-ui

@@ -1,0 +1,65 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The browser chrome's sizes. Every length of the browser's own chrome rows takes its value from
+// here, so that one preset (today only "Roomy", the sizes the chrome has always had) decides them.
+// Rust pushes the preset once per window (`mercury_ui::apply_look`, called from
+// `settings::apply_chrome_theme`); the defaults below are Roomy, so a window nobody pushes to
+// looks as it always did. The list is mirrored by `mercury_appearance::Metrics` (the same names
+// in snake_case): `tests/theme_metrics.rs` fails when the two differ. Use `ChromeMetrics.*` for
+// any new size; a size that is not here is a decision for the lane lead, not a literal.
+export global ChromeMetrics {
+    // The height of the row that holds the tabs.
+    in property <length> tab-row-height: 48px;
+    // Space left of the tab strip in the tab row.
+    in property <length> tab-row-padding-left: 10px;
+    // Space right of the "new tab" button in the tab row.
+    in property <length> tab-row-padding-right: 14px;
+    // Space above the tabs.
+    in property <length> tab-row-padding-top: 7px;
+    // Space below the tabs.
+    in property <length> tab-row-padding-bottom: 3px;
+    // Space between the tab strip and the "new tab" button.
+    in property <length> tab-row-spacing: 8px;
+    // Width and height of the "new tab" button.
+    in property <length> new-tab-button-size: 34px;
+    // The height of the toolbar row.
+    in property <length> toolbar-height: 60px;
+    // Space left and right of the toolbar's items.
+    in property <length> toolbar-padding-x: 14px;
+    // Space above and below the toolbar's items.
+    in property <length> toolbar-padding-y: 11px;
+    // Space between the toolbar's items.
+    in property <length> toolbar-spacing: 8px;
+    // Width of a toolbar button.
+    in property <length> button-width: 36px;
+    // Height of a toolbar button.
+    in property <length> button-height: 34px;
+    // Corner radius of a toolbar button.
+    in property <length> button-radius: 7px;
+    // Size of the glyph on a toolbar button.
+    in property <length> button-font-size: 17px;
+    // Height of the address field.
+    in property <length> address-height: 38px;
+    // Corner radius of the address field.
+    in property <length> address-radius: 9px;
+    // Size of the text typed in the address field.
+    in property <length> address-font-size: 14px;
+    // Height of the bookmarks bar when it is shown.
+    in property <length> bookmarks-bar-height: 34px;
+    // Height of the find bar when it is shown.
+    in property <length> find-bar-height: 42px;
+    // Width of a pinned tab.
+    in property <length> tab-pinned-width: 40px;
+    // Narrowest an ordinary tab gets before the strip scrolls.
+    in property <length> tab-min-width: 112px;
+    // Widest an ordinary tab gets.
+    in property <length> tab-max-width: 184px;
+    // Space between tabs.
+    in property <length> tab-spacing: 6px;
+    // Width of the "all tabs" button at the end of an overflowing strip.
+    in property <length> tab-list-button-width: 34px;
+    // Corner radius of a tab.
+    in property <length> tab-radius: 8px;
+    // Size of a tab's title.
+    in property <length> tab-title-font-size: 13px;
+}

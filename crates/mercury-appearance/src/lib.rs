@@ -15,6 +15,7 @@
 //! - [`contrast`]: the rules that every palette that can be chosen must pass.
 //! - [`group_colour`]: the 14 tab-group colours, custom colours, and tab shades.
 //! - [`keymap`]: the one-letter ⌥ group keys and their validation.
+//! - [`metrics`]: the sizes of the chrome's rows, buttons and tabs, as a preset.
 //! - [`resolve`](mod@resolve): turns the stored [`mercury_settings::AppearanceSettings`] into what the
 //!   interface needs, with notes for anything it had to fall back from.
 
@@ -25,6 +26,7 @@ pub mod colour;
 pub mod contrast;
 pub mod group_colour;
 pub mod keymap;
+pub mod metrics;
 pub mod oklab;
 pub mod palette;
 pub mod palettes;
@@ -37,6 +39,7 @@ pub use keymap::{
     Assign, DeadKey, DeadKeyTable, KeyIssue, KeyMap, LetterKey, OptionChar, dead_key_note,
     parse_sequence,
 };
+pub use metrics::Metrics;
 pub use oklab::{Oklab, delta_e};
 pub use palette::{Palette, Role, SUN_INK, SUN_STOPS, Scheme};
 pub use palettes::default_palette;
