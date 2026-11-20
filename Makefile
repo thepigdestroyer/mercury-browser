@@ -321,8 +321,9 @@ servo-patches-check:
 # runs on the Linux CI runner: Servo's preferences, the Stylo preference bridge and the message
 # types the browser and the engine exchange. They are not part of `make test` (a vendored crate is
 # not a workspace member). The tests of servo-script and servo-webgl (`cargo test -p servo-script --lib`,
-# `-p servo-webgl --lib`) build the engine and are run on a Servo upgrade, not here; servo-net and
-# servo have dev-dependencies, which cargo refuses outside their own workspace. `--lib`: the
+# `-p servo-webgl --lib`) build the engine and are run on a Servo upgrade, not here; servo has
+# dev-dependencies, which cargo refuses outside its own workspace (servo-net's own tests are
+# `make test-servo-net`, since it is excluded from the workspace like gaol). `--lib`: the
 # doc comments of servo-embedder-traits are examples written for the whole of Servo and do not
 # compile as doc tests on their own (as published), so only the unit tests run.
 vendored-tests:
