@@ -2,6 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: this file carries upstream code, hand-ported onto Servo 0.8, from LunarWerxs/servo, branch
+// pr/indexeddb (author L0garithmic, MPL-2.0; the branch is AI-written): commit 4b07849e2 (the reply
+// handler derives index records: `execute_async_indexed`) and c609fcd06 (failed requests are logged
+// where they fail). Mercury's other changes to this file are marked `Mercury:` where they are.
+
 #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
 
 use std::cell::Cell;
@@ -38,6 +43,7 @@ use crate::dom::eventtarget::EventTarget;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::indexeddb::idbcursor::{IterationParam, iterate_cursor};
 use crate::dom::indexeddb::idbcursorwithvalue::IDBCursorWithValue;
+use crate::dom::indexeddb::idbindex::{IndexQueryKind, IndexQueryParam};
 use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
 use crate::dom::indexeddb::idbtransaction::IDBTransaction;
 use crate::dom::indexeddb::key::key_type_to_jsval;
@@ -47,6 +53,9 @@ use crate::realms::enter_auto_realm;
 struct RequestListener {
     request: Trusted<IDBRequest>,
     iteration_param: Option<IterationParam>,
+    // Mercury: set when this request is an index query or a step of an index cursor, which the
+    // backend cannot answer itself, see `IDBIndex::records_for`.
+    index_param: Option<IndexQueryParam>,
     request_id: u64,
 }
 
@@ -214,38 +223,72 @@ impl RequestListener {
                     answer.handle_mut().set(DoubleValue(count as f64));
                 },
                 IdbResult::Iterate(records) => {
-                    let param = self.iteration_param.as_ref().expect(
-                        "iteration_param must be provided by IDBRequest::execute_async for Iterate",
-                    );
-                    let cursor = match iterate_cursor(&global, cx, param, records) {
-                        Ok(cursor) => cursor,
-                        Err(e) => {
-                            warn!("Error reading structuredclone data");
-                            Self::handle_async_request_error(
-                                &global,
-                                cx,
-                                request,
-                                e,
-                                self.request_id,
-                            );
-                            return;
+                    // Mercury: LunarWerxs pr/indexeddb 4b07849e2. An index query arrives here as
+                    // the scan of the whole object store that owns the index, because the backend
+                    // keeps no index entries: derive the records of the index first (see
+                    // `IDBIndex::records_for`). A query that is not a cursor is answered from them
+                    // directly; the records of a cursor step go to `iterate_cursor` below.
+                    let mut answered_directly = false;
+                    let records = match self.index_param.as_ref() {
+                        Some(index_param) => {
+                            let index = index_param.index.root();
+                            let mut records =
+                                index.records_for(cx, &global, records, index_param.needs_values);
+                            records.retain(|record| index_param.range.contains(&record.key));
+                            if index_param.kind != IndexQueryKind::Cursor {
+                                if let Err(e) =
+                                    index_param.answer(cx, &global, &records, answer.handle_mut())
+                                {
+                                    Self::handle_async_request_error(
+                                        &global,
+                                        cx,
+                                        request,
+                                        e,
+                                        self.request_id,
+                                    );
+                                    return;
+                                }
+                                answered_directly = true;
+                            }
+                            records
                         },
+                        None => records,
                     };
-                    if let Some(cursor) = cursor {
-                        match cursor.downcast::<IDBCursorWithValue>() {
-                            Some(cursor_with_value) => {
-                                answer.handle_mut().set(ObjectValue(
-                                    *cursor_with_value.reflector().get_jsobject(),
-                                ));
+
+                    if !answered_directly {
+                        let param = self.iteration_param.as_ref().expect(
+                            "iteration_param must be provided by IDBRequest::execute_async for Iterate",
+                        );
+                        let cursor = match iterate_cursor(&global, cx, param, records) {
+                            Ok(cursor) => cursor,
+                            Err(e) => {
+                                warn!("Error reading structuredclone data");
+                                Self::handle_async_request_error(
+                                    &global,
+                                    cx,
+                                    request,
+                                    e,
+                                    self.request_id,
+                                );
+                                return;
                             },
-                            None => {
-                                answer
-                                    .handle_mut()
-                                    .set(ObjectValue(*cursor.reflector().get_jsobject()));
-                            },
+                        };
+                        if let Some(cursor) = cursor {
+                            match cursor.downcast::<IDBCursorWithValue>() {
+                                Some(cursor_with_value) => {
+                                    answer.handle_mut().set(ObjectValue(
+                                        *cursor_with_value.reflector().get_jsobject(),
+                                    ));
+                                },
+                                None => {
+                                    answer
+                                        .handle_mut()
+                                        .set(ObjectValue(*cursor.reflector().get_jsobject()));
+                                },
+                            }
+                        } else {
+                            answer.handle_mut().set(NullValue());
                         }
-                    } else {
-                        answer.handle_mut().set(NullValue());
                     }
                 },
                 IdbResult::None => {
@@ -326,6 +369,10 @@ impl RequestListener {
         error: Error,
         request_id: u64,
     ) {
+        // Mercury: LunarWerxs pr/indexeddb c609fcd06. Log every failed request where it fails: a
+        // DOMException carries no JavaScript stack, so a page that swallows the rejection leaves
+        // nothing behind to find the cause by.
+        warn!("indexeddb: request {request_id} failed: {error:?}");
         let transaction = request
             .transaction
             .get()
@@ -476,6 +523,25 @@ impl IDBRequest {
         T: Into<IdbResult> + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
         F: FnOnce(GenericCallback<BackendResult<T>>) -> AsyncOperation,
     {
+        Self::execute_async_indexed(cx, source, operation_fn, request, iteration_param, None)
+    }
+
+    /// As [`execute_async`](Self::execute_async), for a request whose reply has to be reinterpreted
+    /// through an index before script sees it: `index_param` says how (see `IDBIndex::records_for`).
+    ///
+    /// Mercury: LunarWerxs pr/indexeddb 4b07849e2.
+    pub fn execute_async_indexed<T, F>(
+        cx: &mut JSContext,
+        source: &IDBObjectStore,
+        operation_fn: F,
+        request: Option<DomRoot<IDBRequest>>,
+        iteration_param: Option<IterationParam>,
+        index_param: Option<IndexQueryParam>,
+    ) -> Fallible<DomRoot<IDBRequest>>
+    where
+        T: Into<IdbResult> + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
+        F: FnOnce(GenericCallback<BackendResult<T>>) -> AsyncOperation,
+    {
         // Step 1: Let transaction be the transaction associated with source.
         let transaction = source.transaction();
         let global = transaction.global();
@@ -508,6 +574,7 @@ impl IDBRequest {
         let response_listener = RequestListener {
             request: Trusted::new(&request),
             iteration_param: iteration_param.clone(),
+            index_param: index_param.clone(),
             request_id,
         };
 
@@ -536,9 +603,11 @@ impl IDBRequest {
             operation,
             AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate { .. })
         ) {
+            // Mercury: an Iterate is a cursor step, which needs an iteration_param, or an index
+            // query, which scans the object store and derives the answer itself (index_param).
             assert!(
-                iteration_param.is_some(),
-                "iteration_param must be provided for Iterate"
+                iteration_param.is_some() || index_param.is_some(),
+                "iteration_param or index_param must be provided for Iterate"
             );
         } else {
             assert!(

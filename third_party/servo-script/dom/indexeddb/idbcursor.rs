@@ -2,6 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: `execute_iteration` is hand-ported onto Servo 0.8 from LunarWerxs/servo, branch
+// pr/indexeddb, commit 4b07849e2 (author L0garithmic, MPL-2.0; the branch is AI-written): an index
+// cursor keeps asking through its index on every step. Mercury's other changes to this file are
+// marked `Mercury:` where they are.
+
 #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
 
 use std::cell::Cell;
@@ -28,7 +33,7 @@ use crate::dom::bindings::refcounted::Trusted;
 use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
 use crate::dom::bindings::structuredclone;
 use crate::dom::globalscope::GlobalScope;
-use crate::dom::indexeddb::idbindex::IDBIndex;
+use crate::dom::indexeddb::idbindex::{IDBIndex, IndexQueryKind, IndexQueryParam};
 use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
 use crate::dom::indexeddb::idbrequest::IDBRequest;
 use crate::dom::indexeddb::idbtransaction::IDBTransaction;
@@ -211,6 +216,56 @@ impl IDBCursor {
         }
         Ok(())
     }
+
+    /// Asynchronously executes the steps to iterate this cursor, for `request`, the request created
+    /// with the cursor (the common last step of `advance`, `continue` and `continuePrimaryKey`).
+    ///
+    /// NOTE: According to the spec, execute_async should take the cursor's source (which may be an
+    /// index). Using effective_object_store here is a temporary workaround until execute_async
+    /// supports ObjectStoreOrIndex as source.
+    ///
+    /// Mercury: LunarWerxs pr/indexeddb 4b07849e2, "an index cursor losing its position". The
+    /// backend has no records for an index (see `IDBIndex::records_for`), so a cursor over an index
+    /// asks for the whole object store on every step and the reply handler derives the index's
+    /// records again; the cursor's range then applies to the index's keys. Without this a step
+    /// of an index cursor walked the records of the object store instead, or stopped after the
+    /// first one.
+    fn execute_iteration(
+        &self,
+        cx: &mut JSContext,
+        request: DomRoot<IDBRequest>,
+        iteration_param: IterationParam,
+    ) -> ErrorResult {
+        let (key_range, index_param) = match &self.source {
+            ObjectStoreOrIndex::Index(index) => (
+                IndexedDBKeyRange::default(),
+                Some(IndexQueryParam {
+                    index: Trusted::new(&**index),
+                    range: self.range.clone(),
+                    count: None,
+                    kind: IndexQueryKind::Cursor,
+                    needs_values: !self.key_only,
+                }),
+            ),
+            ObjectStoreOrIndex::ObjectStore(_) => (self.range.clone(), None),
+        };
+
+        IDBRequest::execute_async_indexed(
+            cx,
+            &self.effective_object_store(),
+            |callback| {
+                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
+                    callback,
+                    key_range,
+                })
+            },
+            Some(request),
+            Some(iteration_param),
+            index_param,
+        )?;
+
+        Ok(())
+    }
 }
 
 impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
@@ -328,24 +383,8 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             count: Some(count),
         };
 
-        let range = self.range.clone();
-        // NOTE: According to the spec, execute_async should take the cursor's source
-        // (which may be an index). Using effective_object_store here is a temporary
-        // workaround until execute_async supports ObjectStoreOrIndex as source.
-        IDBRequest::execute_async(
-            cx,
-            &self.effective_object_store(),
-            |callback| {
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
-                    callback,
-                    key_range: range,
-                })
-            },
-            Some(request),
-            Some(iteration_param),
-        )?;
-
-        Ok(())
+        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
+        self.execute_iteration(cx, request, iteration_param)
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-continue>
@@ -422,24 +461,8 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             count: None,
         };
 
-        let range = self.range.clone();
-        // NOTE: According to the spec, execute_async should take the cursor's source
-        // (which may be an index). Using effective_object_store here is a temporary
-        // workaround until execute_async supports ObjectStoreOrIndex as source.
-        IDBRequest::execute_async(
-            cx,
-            &self.effective_object_store(),
-            |callback| {
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
-                    callback,
-                    key_range: range,
-                })
-            },
-            Some(request),
-            Some(iteration_param),
-        )?;
-
-        Ok(())
+        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
+        self.execute_iteration(cx, request, iteration_param)
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-continueprimarykey>
@@ -568,24 +591,8 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             count: None,
         };
 
-        let range = self.range.clone();
-        // NOTE: According to the spec, execute_async should take the cursor's source
-        // (which may be an index). Using effective_object_store here is a temporary
-        // workaround until execute_async supports ObjectStoreOrIndex as source.
-        IDBRequest::execute_async(
-            cx,
-            &self.effective_object_store(),
-            |callback| {
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
-                    callback,
-                    key_range: range,
-                })
-            },
-            Some(request),
-            Some(iteration_param),
-        )?;
-
-        Ok(())
+        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
+        self.execute_iteration(cx, request, iteration_param)
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-update>

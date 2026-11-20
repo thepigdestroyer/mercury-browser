@@ -461,6 +461,15 @@ pub(crate) fn convert_value_to_multientry_key(
     convert_value_to_key(cx, input, None)
 }
 
+/// Drops the JavaScript exception that a failed conversion or extraction left pending.
+///
+/// Mercury: a record whose key cannot be extracted is skipped, not propagated (the specification
+/// says the exception is swallowed), so the context must not be left with it pending.
+#[expect(unsafe_code)]
+pub(crate) fn clear_pending_exception(cx: &mut JSContext) {
+    unsafe { JS_ClearPendingException(cx) };
+}
+
 /// The keys one record contributes to an index, from the key that
 /// [`extract_key`] returned for it.
 ///
