@@ -34,6 +34,7 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `crates/talaria-core` | Browser logic with no engine inside: tabs (pinned, restored), navigation, address resolution, page requests, find, the HTTPS policy, the clipboard rules, commands and events, tested with fake web views |
 | `crates/talaria-servo` | The bridge to Servo: web views, content blocking, permission and dialog requests, media and the media session, downloads, find in page, error pages, the HTTP cache, proxies, clearing data at exit |
 | `crates/mercury-settings` | Settings, search engines and their keywords, stored as `settings.json` in the profile, and the saved session (`session.json`) |
+| `crates/mercury-appearance` | How Mercury looks, as data: the palettes and the contrast rules each one must pass, the tab-group colours, the one-letter group-key map, and the resolving of the stored layout, palette and tab-group settings into values for the interface. No engine and no Slint |
 | `crates/mercury-store` | History, bookmarks and the downloads list in SQLite, with search and address-bar suggestions |
 | `crates/mercury-passwords` | Saved logins in the macOS Keychain, a password generator, CSV import and export ([details](passwords.md)) |
 | `crates/mercury-password-manager` | The logic between `mercury-passwords` and the interface: the list in Settings, editing, the authentication gate before a password is shown or copied, manual fill, saving HTTP sign-ins ([details](passwords.md#the-password-manager-in-the-browser)) |

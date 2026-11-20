@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-appearance"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# How Mercury looks, as data: the palettes (B2 and the legacy baseline), WCAG contrast checks,
+# tab-group colours, and the validation of the group-key map. No engine and no Slint: the
+# interface receives only resolved values (colours, lengths, flags). Builds in the light pool.
+[dependencies]
+mercury-settings = { path = "../mercury-settings" }
+

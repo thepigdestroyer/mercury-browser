@@ -49,6 +49,7 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+mod appearance;
 mod atomic;
 mod bounded;
 mod error;
@@ -58,6 +59,12 @@ mod session;
 mod settings;
 mod store;
 
+pub use appearance::{
+    DEFAULT_KEY_HOLD_MS, DEFAULT_KEY_SEQUENCE, DEFAULT_LAYOUT, DEFAULT_PALETTE,
+    DEFAULT_SNAPSHOT_CAP_MB, DialCorner, DockStart, GroupKeySettings, KeyCapture, LAYOUT_CLASSIC,
+    LAYOUT_IDS, LAYOUT_MERCURY, MAX_KEY_HOLD_MS, MAX_KEY_SEQUENCE_LEN, MAX_PALETTE_ID_BYTES,
+    MAX_SNAPSHOT_CAP_MB, MIN_KEY_HOLD_MS, MIN_SNAPSHOT_CAP_MB, TabGroupSettings,
+};
 pub use atomic::write_private_atomic;
 pub use error::SettingsError;
 pub use search::{

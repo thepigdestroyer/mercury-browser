@@ -5776,6 +5776,13 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-appearance"
+version = "0.2.0"
+dependencies = [
+ "mercury-settings",
+]
+
+[[package]]
 name = "mercury-credits"
 version = "0.2.0"
 dependencies = [
