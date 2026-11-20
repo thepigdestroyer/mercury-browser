@@ -28,7 +28,7 @@ Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message 
 - **Why:** one path from the engine to Mercury's delegates and back for every lane; `ServoInner` is private to `servo.rs`,
   so `deliver` takes what it needs as arguments.
 - **Tested by:** two unit tests of `deliver` in `mercury/mod.rs` (no web view; web view gone):
-  `cargo test --release -p servo --lib mercury` (heavy); the live path by `talaria-servo`.
+  they need a compiled `servo` crate and cargo refuses `-p servo` from the Mercury workspace (dev-dependencies), so they have not been run; `talaria-servo`'s `mercury_messages` tests cover the router behind the delegate hooks, not `deliver` itself; the first message sent by a lane is its end-to-end test.
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
 ## Removing this directory

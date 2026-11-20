@@ -34,7 +34,7 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   `"<redacted>"` and print other headers as before.
 - **Why:** session cookies and credentials reached the log at `info` and `debug`. Not changed: URL logging at `info`
   (`http_network_fetch` still prints every URL, query strings included; a follow-up).
-- **Tested by:** `cargo test --release -p servo-net --lib mercury` (heavy pool). `mercury_log.rs` tests: redaction of each
+- **Tested by:** the unit tests in `mercury_log.rs` (29 with the SVG ones below), run in a scratch crate that includes the two files with `#[path]` (see "Testing a vendored crate" in `docs/developer-guide/vendored-patches.md`: cargo refuses `-p servo-net` outside the crate's own workspace, because it has dev-dependencies). They are: redaction of each
   name and of mixed case, other headers unchanged, an empty value, a full map with two `Set-Cookie` entries; and
   `include_str!` guards: `the_cookie_files_do_not_log_a_cookie_value` fails if a logging call in `cookie_storage.rs` or
   `cookie.rs` logs anything but the cookie's name, domain, path or the sent count;
@@ -56,7 +56,7 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   that adds at most 10.
 - **Why:** usvg walks the tree with one stack frame per level, so a tiny image nested 100,000 deep (an `<img>` from a Blob
   URL) can overflow the decoder thread's stack and crash the browser.
-- **Tested by:** `cargo test --release -p servo-net --lib mercury` (19 tests in `mercury_svg.rs`: 499 and 500 deep ok, 501
+- **Tested by:** the same scratch crate (19 tests in `mercury_svg.rs`: 499 and 500 deep ok, 501
   and 502 refused, 100,000 deep refused with and without close tags, wide documents, self-closing edge cases, comments,
   CDATA, PIs, DOCTYPE with subset, quoted brackets, namespaces, non-XML and cut-off input, svgz) and the page
   `tests/pages/svg-deep-nesting.html`.
