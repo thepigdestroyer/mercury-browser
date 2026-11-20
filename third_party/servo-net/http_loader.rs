@@ -99,8 +99,12 @@ use crate::http_cache::{
     CacheKey, CachedResourcesOrGuard, HttpCache, ValidationStatus, construct_response,
     invalidate_cached_resources, refresh,
 };
+// Mercury: the cookie rules of the network policy (EC5, EC6).
+use crate::mercury_cookies::{self, RequestContext};
 // Mercury: redacts cookie and credential header values in the debug logs (EC13).
 use crate::mercury_log::{header_for_log, headers_for_log};
+// Mercury: the network policy handle (net_policy.rs).
+use crate::net_policy::NetPolicy;
 use crate::resource_thread::{AuthCache, AuthCacheEntry};
 use crate::websocket_loader::start_websocket;
 
@@ -131,6 +135,8 @@ pub struct HttpState {
     pub client: ServoClient,
     pub override_manager: CertificateErrorOverrideManager,
     pub embedder_proxy: GenericEmbedderProxy<NetToEmbedderMsg>,
+    // Mercury: what the network layer allows (third-party cookies, SameSite, GPC, ...); see net_policy.rs.
+    pub net_policy: NetPolicy,
 }
 
 impl HttpState {
@@ -169,7 +175,12 @@ impl HttpState {
         let for_proxy = response.status == StatusCode::PROXY_AUTHENTICATION_REQUIRED;
 
         // If this is not actually a navigation request return None.
-        if request.mode != RequestMode::Navigate {
+        // Mercury: except a `fetch` or XHR 401 from the page's own origin, which prompts too, under the limits of
+        // `mercury_auth.rs` (EC29, decision D12). A navigation is asked as before, a 407 never.
+        let subresource_prompt = request.mode != RequestMode::Navigate;
+        if subresource_prompt &&
+            (for_proxy || !crate::mercury_auth::subresource_prompt_allowed(self, request))
+        {
             return None;
         }
 
@@ -181,7 +192,12 @@ impl HttpState {
                 for_proxy,
                 sender,
             ));
-        receiver.await.ok()?
+        // Mercury: the answer is looked at before it is returned, so that the limits know the prompt is over.
+        let answer = receiver.await.ok().flatten();
+        if subresource_prompt {
+            crate::mercury_auth::prompt_finished(self, request, answer.is_some());
+        }
+        answer
     }
 }
 
@@ -357,33 +373,48 @@ pub fn determine_requests_referrer(
     }
 }
 
+// Mercury: only called where the network policy has allowed cookies for the request (`cookies_allowed`), and
+// `may_send` is the SameSite rule, asked for each cookie (mercury_cookies.rs).
 fn set_request_cookies(
     url: &ServoUrl,
     headers: &mut HeaderMap,
     cookie_jar: &RwLock<CookieStorage>,
+    may_send: &dyn Fn(&cookie::Cookie<'static>) -> bool,
 ) {
     let mut cookie_jar = cookie_jar.write();
     cookie_jar.remove_expired_cookies_for_url(url);
-    if let Some(cookie_list) = cookie_jar.cookies_for_url(url, CookieSource::HTTP) &&
+    // Mercury: `cookies_for_request`, the same as `cookies_for_url` with the rule applied.
+    if let Some(cookie_list) = cookie_jar.cookies_for_request(url, CookieSource::HTTP, may_send) &&
         let Ok(cookie_list_header_value) = HeaderValue::from_bytes(cookie_list.as_bytes())
     {
         headers.insert(header::COOKIE, cookie_list_header_value);
     }
 }
 
-fn set_cookie_for_url(cookie_jar: &RwLock<CookieStorage>, request: &ServoUrl, cookie_val: &str) {
+// Mercury: `accept` is the SameSite rule for a cookie that arrives (mercury_cookies.rs).
+fn set_cookie_for_url(
+    cookie_jar: &RwLock<CookieStorage>,
+    request: &ServoUrl,
+    cookie_val: &str,
+    accept: &dyn Fn(&cookie::Cookie<'static>) -> bool,
+) {
     let mut cookie_jar = cookie_jar.write();
     let source = CookieSource::HTTP;
 
-    if let Some(cookie) = ServoCookie::from_cookie_string(cookie_val, request, source) {
+    if let Some(cookie) = ServoCookie::from_cookie_string(cookie_val, request, source) &&
+        accept(&cookie.cookie)
+    {
         cookie_jar.push(cookie, request, source);
     }
 }
 
+// Mercury: only called where the network policy has allowed cookies for the request (`cookies_allowed`), and
+// `accept` is the SameSite rule for each cookie (mercury_cookies.rs).
 fn set_cookies_from_headers(
     url: &ServoUrl,
     headers: &HeaderMap,
     cookie_jar: &RwLock<CookieStorage>,
+    accept: &dyn Fn(&cookie::Cookie<'static>) -> bool,
 ) {
     for cookie in headers.get_all(header::SET_COOKIE) {
         let cookie_bytes = cookie.as_bytes();
@@ -391,7 +422,7 @@ fn set_cookies_from_headers(
             continue;
         }
         if let Ok(cookie_str) = std::str::from_utf8(cookie_bytes) {
-            set_cookie_for_url(cookie_jar, url, cookie_str);
+            set_cookie_for_url(cookie_jar, url, cookie_str, accept);
         }
     }
 }
@@ -1552,17 +1583,30 @@ async fn http_network_or_cache_fetch(
 
     let current_url = http_request.current_url();
 
+    // Mercury: a top-level navigation tells the policy which site its web view is on, once per hop, before the
+    // cookies below are judged (net_policy.rs, decision D3).
+    context.state.net_policy.note_main_frame(http_request);
+
     // Step 8.21: If includeCredentials is true, then:
     // TODO some of this step can't be implemented yet
     if include_credentials {
         // Substep 1
         // TODO http://mxr.mozilla.org/servo/source/components/net/http_loader.rs#504
-        // XXXManishearth http_loader has block_cookies: support content blocking here too
-        set_request_cookies(
-            &current_url,
-            &mut http_request.headers,
-            &context.state.cookie_jar,
-        );
+        // Mercury: the network policy decides first. A third-party request (or one whose top-level site is
+        // unknown) gets no Cookie header, not even one that the caller put in the header map; the SameSite rule
+        // is asked for each cookie of the others (EC5, EC6; mercury_cookies.rs).
+        let net_policy = &context.state.net_policy;
+        let cookie_context = RequestContext::of_request(net_policy, http_request);
+        if net_policy.cookies_allowed(&cookie_context.sites) {
+            set_request_cookies(
+                &current_url,
+                &mut http_request.headers,
+                &context.state.cookie_jar,
+                &|cookie| mercury_cookies::cookie_may_be_sent(net_policy, &cookie_context, cookie),
+            );
+        } else {
+            http_request.headers.remove(header::COOKIE);
+        }
         // Substep 2
         if !http_request.headers.contains_key(header::AUTHORIZATION) {
             // Substep 3
@@ -2479,8 +2523,20 @@ async fn http_network_fetch(
 
     // TODO this step isn't possible yet
     // Step 15
-    if credentials_flag {
-        set_cookies_from_headers(&url, &response.headers, &context.state.cookie_jar);
+    // Mercury: the network policy decides first: the `Set-Cookie` of a third-party response (or one whose top-level
+    // site is unknown) is ignored, and the SameSite rule is asked for each cookie of the others (EC5, EC6;
+    // mercury_cookies.rs). This runs once per redirect hop, with the request as it is at that hop.
+    if credentials_flag && response.headers.contains_key(header::SET_COOKIE) {
+        let net_policy = &context.state.net_policy;
+        let cookie_context = RequestContext::of_request(net_policy, request);
+        if net_policy.cookies_allowed(&cookie_context.sites) {
+            set_cookies_from_headers(
+                &url,
+                &response.headers,
+                &context.state.cookie_jar,
+                &|cookie| mercury_cookies::accept_set_cookie(net_policy, &cookie_context, cookie),
+            );
+        }
     }
     // Mercury: not from a host that has had a certificate exception (certificate_exceptions.rs).
     context
