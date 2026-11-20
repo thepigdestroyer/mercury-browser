@@ -10,11 +10,15 @@ use servo_url::ImmutableOrigin;
 use crate::cache_storage::CacheStorageThreadMessage;
 use crate::client_storage::{ClientStorageThreadHandle, ClientStorageThreadMessage};
 use crate::indexeddb::IndexedDBThreadMsg;
+// Mercury: Web Locks (servo/servo#47981).
+use crate::weblocks::WebLocksThreadMsg;
 use crate::webstorage_thread::{OriginDescriptor, WebStorageThreadMsg, WebStorageType};
 
 pub mod cache_storage;
 pub mod client_storage;
 pub mod indexeddb;
+// Mercury: Web Locks (servo/servo#47981).
+pub mod weblocks;
 pub mod webstorage_thread;
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -23,6 +27,8 @@ pub struct StorageThreads {
     idb_thread: GenericSender<IndexedDBThreadMsg>,
     web_storage_thread: GenericSender<WebStorageThreadMsg>,
     cache_storage_thread: GenericSender<CacheStorageThreadMessage>,
+    // Mercury: Web Locks (servo/servo#47981).
+    web_locks_thread: GenericSender<WebLocksThreadMsg>,
 }
 
 impl StorageThreads {
@@ -31,12 +37,16 @@ impl StorageThreads {
         idb_thread: GenericSender<IndexedDBThreadMsg>,
         web_storage_thread: GenericSender<WebStorageThreadMsg>,
         cache_storage_thread: GenericSender<CacheStorageThreadMessage>,
+        // Mercury: Web Locks (servo/servo#47981).
+        web_locks_thread: GenericSender<WebLocksThreadMsg>,
     ) -> StorageThreads {
         StorageThreads {
             client_storage_thread,
             idb_thread,
             web_storage_thread,
             cache_storage_thread,
+            // Mercury: Web Locks (servo/servo#47981).
+            web_locks_thread,
         }
     }
 
@@ -136,6 +146,17 @@ impl GenericSend<CacheStorageThreadMessage> for StorageThreads {
 
     fn sender(&self) -> GenericSender<CacheStorageThreadMessage> {
         self.cache_storage_thread.clone()
+    }
+}
+
+// Mercury: Web Locks (servo/servo#47981).
+impl GenericSend<WebLocksThreadMsg> for StorageThreads {
+    fn send(&self, msg: WebLocksThreadMsg) -> SendResult {
+        self.web_locks_thread.send(msg)
+    }
+
+    fn sender(&self) -> GenericSender<WebLocksThreadMsg> {
+        self.web_locks_thread.clone()
     }
 }
 

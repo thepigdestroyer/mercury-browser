@@ -167,4 +167,6 @@ impl TaskManager {
     task_source_functions!(self, storage_task_source, Storage);
     #[cfg(feature = "webgpu")]
     task_source_functions!(self, webgpu_task_source, WebGPU);
+    // Mercury: Web Locks (servo/servo#47981).
+    task_source_functions!(self, weblocks_task_source, WebLocks);
 }

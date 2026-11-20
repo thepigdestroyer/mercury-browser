@@ -358,6 +358,9 @@ pub(crate) use self::webgpu::*;
 pub(crate) mod gpucanvascontext;
 pub(crate) mod webcrypto;
 pub(crate) use self::webcrypto::*;
+// Mercury: Web Locks (servo/servo#47981).
+pub(crate) mod weblock;
+pub(crate) use self::weblock::*;
 pub(crate) mod webrtc;
 pub(crate) use self::webrtc::*;
 pub(crate) mod webvtt;
