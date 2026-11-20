@@ -52,6 +52,7 @@ const DEFAULT_FILE: &str = r#"{
     "https_only": false,
     "block_popups": true,
     "global_privacy_control": true,
+    "block_third_party_cookies": true,
     "clear_on_exit": {
       "history": false,
       "cookies": false,
@@ -104,6 +105,8 @@ fn the_defaults_are_the_documented_ones() {
     assert!(!settings.privacy.https_only);
     assert!(settings.privacy.block_popups);
     assert!(settings.privacy.global_privacy_control);
+    // Owner decision O-18: "Standard + GPC on + third-party cookies blocked".
+    assert!(settings.privacy.block_third_party_cookies);
     assert_eq!(
         settings.privacy.clear_on_exit,
         ClearOnExit {
@@ -216,6 +219,93 @@ fn unknown_fields_are_ignored() {
         ..Settings::default()
     };
     expected.appearance.theme = Theme::Light;
+    assert_eq!(
+        loaded,
+        Loaded::Ok {
+            value: expected,
+            repairs: Vec::new()
+        }
+    );
+}
+
+/// `DEFAULT_FILE` as this crate wrote it before `block_third_party_cookies` existed: a real file that is
+/// still on disks. It must load with the new setting at its default (on) and need no repair.
+fn file_before_the_third_party_cookie_setting() -> String {
+    let old = DEFAULT_FILE.replace("    \"block_third_party_cookies\": true,\n", "");
+    assert_ne!(
+        old, DEFAULT_FILE,
+        "the line to remove is in the golden file"
+    );
+    assert!(!old.contains("block_third_party_cookies"));
+    old
+}
+
+#[test]
+fn a_file_from_before_the_third_party_cookie_setting_loads_with_it_on() {
+    let loaded = load_text(&file_before_the_third_party_cookie_setting());
+
+    assert_eq!(
+        loaded,
+        Loaded::Ok {
+            value: Settings::default(),
+            repairs: Vec::new()
+        }
+    );
+    let Loaded::Ok { value, .. } = loaded else {
+        panic!("loaded with repairs or reset: {loaded:?}");
+    };
+    assert!(value.privacy.block_third_party_cookies);
+}
+
+#[test]
+fn a_privacy_section_without_the_setting_gets_the_default_and_keeps_its_other_values() {
+    let loaded = load_text(r#"{"format_version": 1, "privacy": {"https_only": true}}"#);
+
+    let mut expected = Settings::default();
+    expected.privacy.https_only = true;
+    assert_eq!(
+        loaded,
+        Loaded::Ok {
+            value: expected,
+            repairs: Vec::new()
+        }
+    );
+}
+
+#[test]
+fn the_third_party_cookie_setting_round_trips_in_both_positions() {
+    for blocked in [true, false] {
+        let dir = tempfile::tempdir().expect("a temporary directory");
+        let store = SettingsStore::new(dir.path());
+        let mut settings = Settings::default();
+        settings.privacy.block_third_party_cookies = blocked;
+        // The other privacy switches stay independent of it.
+        settings.privacy.global_privacy_control = !blocked;
+
+        store.save(&settings).expect("save");
+        let text = fs::read_to_string(dir.path().join("settings.json")).expect("read");
+        assert!(
+            text.contains(&format!("\"block_third_party_cookies\": {blocked}")),
+            "{text}"
+        );
+
+        assert_eq!(
+            store.load().expect("load"),
+            Loaded::Ok {
+                value: settings,
+                repairs: Vec::new()
+            }
+        );
+    }
+}
+
+#[test]
+fn turning_the_third_party_cookie_setting_off_in_a_file_is_kept() {
+    let loaded =
+        load_text(r#"{"format_version": 1, "privacy": {"block_third_party_cookies": false}}"#);
+
+    let mut expected = Settings::default();
+    expected.privacy.block_third_party_cookies = false;
     assert_eq!(
         loaded,
         Loaded::Ok {

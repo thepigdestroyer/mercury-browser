@@ -119,6 +119,10 @@ pub struct RuntimeOptions {
     pub http_disk_cache_dir: Option<PathBuf>,
     /// Whether pages get `navigator.geolocation`, and where positions come from.
     pub geolocation: GeolocationSetup,
+    // net: third-party cookies and Global Privacy Control (`net_policy.rs`).
+    /// The network policy at start: Global Privacy Control is read now (a change applies at the next
+    /// start), third-party cookie blocking also live through `ServoRuntime::switches`.
+    pub net_policy: crate::net_policy::NetPolicySetup,
 }
 
 impl Default for RuntimeOptions {
@@ -132,6 +136,8 @@ impl Default for RuntimeOptions {
             system_proxy: None,
             http_disk_cache_dir: None,
             geolocation: GeolocationSetup::Off,
+            // net: the owner's defaults, third-party cookies blocked and GPC on.
+            net_policy: crate::net_policy::NetPolicySetup::default(),
         }
     }
 }
@@ -186,7 +192,9 @@ impl ServoRuntime {
         let options = mercury_options(runtime_options.config_dir.clone());
         let multiprocess_enabled = options.multiprocess;
         let sandbox_enabled = options.sandbox;
-        let preferences = mercury_preferences(&runtime_options);
+        let mut preferences = mercury_preferences(&runtime_options);
+        // net: the process's network policy and `privacy_gpc_enabled`, from the one setting (net_policy.rs).
+        crate::net_policy::install(&runtime_options.net_policy, &mut preferences);
         let user_agent = preferences.user_agent.clone(); // downloads
         // site security: certificate exceptions from Mercury's certificate page
         let accepted_certificates = AcceptedHosts::default();
@@ -290,6 +298,12 @@ impl ServoRuntime {
     /// the engine, so keep the clone and set it directly.
     pub fn switches(&self) -> EngineSwitches {
         self.switches.clone()
+    }
+
+    // net
+    /// The network policy as the browser controls it: the state the network thread reads.
+    pub fn net_policy_control(&self) -> crate::net_policy::NetPolicyControl {
+        crate::net_policy::NetPolicyControl::process()
     }
 
     // blocklists
