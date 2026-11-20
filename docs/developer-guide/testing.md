@@ -27,6 +27,8 @@ make lint CARGO_FLAGS=--release
 make test CARGO_FLAGS=--release
 ```
 
+`make test TEST_ARGS="--skip rendering::metal"` passes what follows `--` to the workspace `cargo test` (a filter, `--skip <name>`, `--test-threads=2`); the vendored `gaol` and `servo-net` runs of `make test` do not get it.
+
 `make qa-fast` checks formatting and runs Clippy and the tests for the crates that need no engine; they take minutes rather than a Servo build. Name the crates yourself for a narrower run, for example `cargo test --release -p talaria-core -p mercury-ui`.
 
 Before a change is merged, all of these must pass with no warnings: `cargo fmt --all -- --check`, `cargo clippy --release --workspace --all-targets -- -D warnings`, `cargo test --release --workspace` and `cargo build --release -p mercury-desktop`. Logic is written test first: the failing test, then the code that makes it pass.
