@@ -1,0 +1,563 @@
+# Accessible name and description cases for `names::apply` (through `compute`).
+#
+# One case per block, blocks separated by blank lines. Keys: `case` (identifier), `html` (one line,
+# parsed by `TestDom::from_html`), `target` (id of the element under test, default `t`), `name`
+# (expected label, `<none>` for no label), `desc` (expected description, `<none>` for none; left out
+# when the case does not care), `note` (free text). Written from the Accessible Name and Description
+# Computation 1.2 (steps 2A-2I), HTML-AAM section 4.2 and the Mercury decisions in the header of
+# `src/names.rs`; a `note:` says where Chromium differs.
+
+# ------------------------------------------------------------------ aria-labelledby (2B)
+
+case: labelledby-single
+html: <span id=l>Label</span><input id=t aria-labelledby=l>
+name: Label
+desc: <none>
+
+case: labelledby-two-targets-in-idref-order
+html: <span id=a>First</span> <span id=b>Second</span><button id=t aria-labelledby="a b"></button>
+name: First Second
+
+case: labelledby-reversed-order-follows-the-attribute
+html: <span id=a>First</span> <span id=b>Second</span><button id=t aria-labelledby="b a"></button>
+name: Second First
+
+case: labelledby-beats-aria-label-and-content
+html: <span id=l>Ref</span><button id=t aria-labelledby=l aria-label=Own>Content</button>
+name: Ref
+
+case: labelledby-with-missing-id-falls-back-to-aria-label
+html: <button id=t aria-labelledby=nothing aria-label=Own>Content</button>
+name: Own
+
+case: labelledby-with-empty-target-falls-back
+html: <span id=l></span><button id=t aria-labelledby=l aria-label=Own>Content</button>
+name: Own
+
+case: labelledby-with-extra-whitespace
+html: <span id=a>A</span><span id=b>B</span><button id=t aria-labelledby="  a   b  "></button>
+name: A B
+
+case: labelledby-same-id-twice-counts-once
+html: <span id=a>A</span><button id=t aria-labelledby="a a"></button>
+name: A
+
+case: labelledby-hidden-attribute-target-still-counts
+html: <span id=l hidden>Hidden</span><button id=t aria-labelledby=l></button>
+name: Hidden
+
+case: labelledby-display-none-target-still-counts
+html: <span id=l style="display:none">Hidden by style</span><button id=t aria-labelledby=l></button>
+name: Hidden by style
+
+case: labelledby-aria-hidden-target-still-counts
+html: <span id=l aria-hidden=true>Secret</span><input id=t aria-labelledby=l>
+name: Secret
+
+case: labelledby-descendants-of-a-hidden-target-count
+html: <span id=l hidden><b>Nested</b></span><input id=t aria-labelledby=l>
+name: Nested
+
+case: labelledby-visible-target-drops-its-hidden-child
+html: <span id=l>Shown <i hidden>X</i></span><button id=t aria-labelledby=l></button>
+name: Shown
+
+case: labelledby-a-cycle-ends
+html: <button id=t aria-labelledby=b>x</button><button id=b aria-labelledby=t>y</button>
+name: y
+note: the labelledby of a referenced node is not followed (2B applies to the node being named)
+
+case: labelledby-self-reference-uses-the-content
+html: <button id=t aria-labelledby=t>Self</button>
+name: Self
+
+case: labelledby-to-an-ancestor
+html: <div id=a><button id=t aria-labelledby=a>X</button></div>
+name: X
+
+case: labelledby-with-an-embedded-textbox-uses-its-value
+html: <span id=l>I want <input type=text value=three> items</span><button id=t aria-labelledby=l></button>
+name: I want three items
+
+case: labelledby-on-a-role-that-takes-no-name-is-ignored
+html: <span id=l>Ref</span><div id=t aria-labelledby=l>content</div>
+name: <none>
+
+case: labelledby-radiogroup
+html: <span id=l>Colour</span><div id=t role=radiogroup aria-labelledby=l></div>
+name: Colour
+
+case: labelledby-region-from-a-heading
+html: <section id=t aria-labelledby=h><h2 id=h>Title</h2></section>
+name: Title
+
+# ------------------------------------------------------------------ aria-label (2C)
+
+case: aria-label-on-a-button
+html: <button id=t aria-label="Close dialog">x</button>
+name: Close dialog
+
+case: aria-label-blank-falls-to-the-content
+html: <button id=t aria-label="  ">Send</button>
+name: Send
+
+case: aria-label-is-flattened
+html: <button id=t aria-label="  Spaced   out  ">x</button>
+name: Spaced out
+
+case: aria-label-on-a-link
+html: <a id=t href=x aria-label=Go>Text</a>
+name: Go
+
+case: aria-label-on-a-nav
+html: <nav id=t aria-label=Main></nav>
+name: Main
+
+case: aria-label-on-a-dialog
+html: <dialog id=t aria-label=Edit></dialog>
+name: Edit
+
+case: aria-label-on-an-img-role
+html: <span id=t role=img aria-label=Smile>x</span>
+name: Smile
+
+case: aria-label-on-a-checkbox
+html: <input id=t type=checkbox aria-label=Subscribe>
+name: Subscribe
+
+case: aria-label-on-a-select
+html: <select id=t aria-label=Size><option>S</option></select>
+name: Size
+
+case: aria-label-on-a-div-is-prohibited
+html: <div id=t aria-label=Nope>x</div>
+name: <none>
+
+case: aria-label-on-a-paragraph-is-prohibited
+html: <p id=t aria-label=Nope>x</p>
+name: <none>
+
+case: aria-label-on-a-span-is-prohibited
+html: <span id=t aria-label=Nope>x</span>
+name: <none>
+
+case: aria-label-on-a-role-presentation-span-is-prohibited
+html: <span id=t role=presentation aria-label=Nope>x</span>
+name: <none>
+
+case: aria-label-on-a-hidden-element-gives-no-name
+html: <button id=t aria-label=X hidden>y</button>
+name: <none>
+
+case: aria-label-below-an-aria-hidden-ancestor-gives-no-name
+html: <div aria-hidden=true><button id=t aria-label=X>y</button></div>
+name: <none>
+
+case: aria-label-on-an-element-with-display-none-gives-no-name
+html: <button id=t style="display:none" aria-label=X>y</button>
+name: <none>
+
+case: aria-label-on-an-element-with-visibility-hidden-gives-no-name
+html: <button id=t style="visibility:hidden" aria-label=X>y</button>
+name: <none>
+
+# ------------------------------------------------------------------ native labels (2D)
+
+case: label-for
+html: <label for=t>Name</label><input id=t>
+name: Name
+
+case: label-wrapping-the-control
+html: <label>Name <input id=t></label>
+name: Name
+
+case: label-wrapping-with-text-after-the-control
+html: <label><input id=t type=checkbox> Accept terms</label>
+name: Accept terms
+
+case: label-wrapping-a-radio
+html: <label><input id=t type=radio name=r> Red</label>
+name: Red
+
+case: two-labels-for-one-control
+html: <label for=t>First</label><label for=t>Second</label><input id=t>
+name: First Second
+
+case: label-for-and-a-wrapping-label
+html: <label for=t>Outer</label><label><input id=t>Inner</label>
+name: Outer
+note: Chromium joins both labels ("Outer Inner"); the crate uses the wrapping label only when no label[for] exists
+
+case: hidden-label-gives-no-name
+html: <label for=t hidden>Hidden</label><input id=t>
+name: <none>
+
+case: label-with-nested-inline-elements
+html: <label for=t>Your <b>full</b> name</label><input id=t>
+name: Your full name
+
+case: label-with-block-children-keeps-them-apart
+html: <label for=t><div>Street</div><div>Number</div></label><input id=t>
+name: Street Number
+
+case: label-leaves-out-the-value-of-its-own-control
+html: <label>Search <input id=t value=cats></label>
+name: Search
+
+case: label-for-a-select
+html: <label for=t>Size</label><select id=t><option>S</option></select>
+name: Size
+
+case: label-for-a-textarea
+html: <label for=t>Message</label><textarea id=t></textarea>
+name: Message
+
+case: label-for-a-progress
+html: <label for=t>Loading</label><progress id=t></progress>
+name: Loading
+
+case: label-for-an-output
+html: <label for=t>Total</label><output id=t>5</output>
+name: Total
+
+case: label-for-a-meter
+html: <label for=t>Disk</label><meter id=t value=0.4></meter>
+name: Disk
+
+case: label-for-points-at-nothing
+html: <label for=nothing>Name</label><input id=t>
+name: <none>
+
+case: placeholder-names-a-text-field-last
+html: <input id=t placeholder="Search the web">
+name: Search the web
+desc: <none>
+
+case: label-beats-placeholder
+html: <label for=t>Query</label><input id=t placeholder=Hint>
+name: Query
+desc: <none>
+
+case: title-names-a-text-field
+html: <input id=t title=Phone>
+name: Phone
+desc: <none>
+
+case: title-beats-placeholder-and-placeholder-describes
+html: <input id=t title=Phone placeholder="555-1234">
+name: Phone
+desc: 555-1234
+note: HTML-AAM puts title before placeholder; the crate answers the placeholder first and names.rs corrects it
+
+case: textarea-takes-its-placeholder-as-the-last-resort
+html: <textarea id=t placeholder="Your message"></textarea>
+name: Your message
+
+case: textarea-title-beats-its-placeholder
+html: <textarea id=t title=Notes placeholder="Your message"></textarea>
+name: Notes
+desc: Your message
+
+case: input-value-is-not-a-name
+html: <input id=t value=abc>
+name: <none>
+
+case: input-type-hidden-has-no-name
+html: <input id=t type=hidden value=abc>
+name: <none>
+
+case: img-alt
+html: <img id=t src=a.png alt="A dog">
+name: A dog
+
+case: img-empty-alt-is-decorative
+html: <img id=t src=a.png alt="">
+name: <none>
+
+case: img-title-when-there-is-no-alt
+html: <img id=t src=a.png title=Logo>
+name: Logo
+desc: <none>
+
+case: img-alt-and-title
+html: <img id=t src=a.png alt=Dog title=Rex>
+name: Dog
+desc: Rex
+
+case: input-image-alt
+html: <input id=t type=image alt=Search src=x.png>
+name: Search
+
+case: input-image-without-alt-is-submit-query
+html: <input id=t type=image src=x.png>
+name: Submit Query
+
+case: input-submit-default
+html: <input id=t type=submit>
+name: Submit
+
+case: input-submit-value
+html: <input id=t type=submit value=Go>
+name: Go
+
+case: input-reset-default
+html: <input id=t type=reset>
+name: Reset
+
+case: input-button-value
+html: <input id=t type=button value=Press>
+name: Press
+
+case: input-button-without-value
+html: <input id=t type=button>
+name: <none>
+
+case: button-value-attribute-is-not-a-name
+html: <button id=t value=x></button>
+name: <none>
+
+case: fieldset-legend
+html: <fieldset id=t><legend>Shipping address</legend><input></fieldset>
+name: Shipping address
+
+case: table-caption
+html: <table id=t><caption>Sales</caption><tr><td>1</td></tr></table>
+name: Sales
+
+case: figure-figcaption
+html: <figure id=t><img alt=x><figcaption>Caption text</figcaption></figure>
+name: Caption text
+
+case: svg-title
+html: <svg id=t><title>Chart</title></svg>
+name: Chart
+
+case: iframe-title
+html: <iframe id=t title=Ads></iframe>
+name: Ads
+desc: <none>
+
+case: details-summary-content
+html: <details><summary id=t>More info</summary></details>
+name: More info
+
+# ------------------------------------------------------------------ name from content (2F)
+
+case: button-content
+html: <button id=t>Save <b>draft</b></button>
+name: Save draft
+
+case: button-with-an-image
+html: <button id=t><img alt="Close" src=x.png></button>
+name: Close
+
+case: button-with-an-svg-title
+html: <button id=t><svg><title>Menu</title></svg></button>
+name: Menu
+
+case: button-with-a-hidden-aria-child
+html: <button id=t><span aria-hidden=true>x</span>Close</button>
+name: Close
+
+case: link-content-with-inline-elements
+html: <a id=t href=x>Read the <em>full</em> report</a>
+name: Read the full report
+
+case: link-with-only-an-image
+html: <a id=t href=x><img alt=Home src=h.png></a>
+name: Home
+
+case: link-with-only-whitespace
+html: <a id=t href=x>   </a>
+name: <none>
+
+case: heading-content
+html: <h2 id=t>Chapter <span>1</span></h2>
+name: Chapter 1
+
+case: heading-drops-a-hidden-child
+html: <h2 id=t>Title<span hidden> secret</span></h2>
+name: Title
+
+case: heading-drops-an-aria-hidden-child
+html: <h2 id=t>Title<span aria-hidden=true> secret</span></h2>
+name: Title
+
+case: heading-drops-a-display-none-child
+html: <h2 id=t>Title<span style="display:none"> secret</span></h2>
+name: Title
+
+case: heading-drops-a-visibility-hidden-child-and-joins-the-rest
+html: <h2 id=t>A<span style="visibility:hidden">B</span>C</h2>
+name: AC
+
+case: block-children-are-kept-apart
+html: <a id=t href=x><div>one</div><p>two</p>three</a>
+name: one two three
+
+case: adjacent-inline-spans-join
+html: <a id=t href=x><span>Cloud</span><span>Hosting</span></a>
+name: CloudHosting
+
+case: br-separates
+html: <a id=t href=x>one<br>two</a>
+name: one two
+
+case: non-breaking-spaces-are-flattened
+html: <button id=t>a&nbsp;&nbsp;b</button>
+name: a b
+
+case: role-heading-on-a-div
+html: <div id=t role=heading aria-level=2>Hello</div>
+name: Hello
+
+case: role-button-on-a-div
+html: <div id=t role=button>Click me</div>
+name: Click me
+
+case: role-tab
+html: <div id=t role=tab>Overview</div>
+name: Overview
+
+case: table-cell-content
+html: <table><tr><td id=t>Cell text</td></tr></table>
+name: Cell text
+
+case: table-header-content
+html: <table><tr><th id=t>Header</th></tr></table>
+name: Header
+
+case: option-content
+html: <select><option id=t>Choice</option></select>
+name: Choice
+
+case: list-item-has-no-name-from-content
+html: <ul><li id=t>Item</li></ul>
+name: <none>
+
+case: main-has-no-name-from-content
+html: <main id=t>Content</main>
+name: <none>
+
+case: article-has-no-name-from-content
+html: <article id=t>Content</article>
+name: <none>
+
+case: term-has-no-name
+html: <dl><dt id=t>Term</dt></dl>
+name: <none>
+note: Chromium names a dt from its content; ARIA 1.2 does not allow it
+
+# ------------------------------------------------------------------ title (2I) and description
+
+case: title-names-a-button-with-no-other-source
+html: <button id=t title=Tip></button>
+name: Tip
+desc: <none>
+
+case: title-is-the-description-when-the-content-names
+html: <button id=t title="Closes the dialog">Close</button>
+name: Close
+desc: Closes the dialog
+note: the accname crate leaves the title out here; names.rs adds it (Chromium does too)
+
+case: title-names-a-link
+html: <a id=t href=x title="Learn more"></a>
+name: Learn more
+desc: <none>
+
+case: title-is-the-description-when-aria-label-names
+html: <a id=t href=x aria-label=Report title=Extra></a>
+name: Report
+desc: Extra
+
+case: title-equal-to-the-name-is-not-repeated
+html: <button id=t title=Close>Close</button>
+name: Close
+desc: <none>
+
+case: title-on-a-generic-element-is-its-description
+html: <div id=t title=Hint>x</div>
+name: <none>
+desc: Hint
+
+case: title-on-a-role-none-element-is-its-description
+html: <div id=t role=none title=Hint>x</div>
+name: <none>
+desc: Hint
+
+case: abbr-title-is-its-description
+html: <abbr id=t title="World Health Organization">WHO</abbr>
+name: <none>
+desc: World Health Organization
+
+case: describedby
+html: <p id=h>Use 8 or more characters</p><input id=t aria-label=Password aria-describedby=h>
+name: Password
+desc: Use 8 or more characters
+
+case: describedby-two-targets
+html: <p id=a>One</p><p id=b>Two</p><input id=t aria-label=X aria-describedby="a b">
+name: X
+desc: One Two
+
+case: describedby-hidden-target-still-counts
+html: <p id=h hidden>Hidden hint</p><input id=t aria-label=X aria-describedby=h>
+name: X
+desc: Hidden hint
+
+case: describedby-missing-id-falls-back-to-the-title
+html: <input id=t aria-label=X aria-describedby=nope title=Tip>
+name: X
+desc: Tip
+
+case: describedby-beats-the-title
+html: <p id=h>Hint</p><input id=t aria-label=X aria-describedby=h title=Tip>
+name: X
+desc: Hint
+
+case: describedby-cycle-ends
+html: <p id=h aria-describedby=t>Hint</p><input id=t aria-label=X aria-describedby=h>
+name: X
+desc: Hint
+
+case: describedby-on-a-generic-element
+html: <p id=h>Hint</p><div id=t aria-describedby=h>x</div>
+name: <none>
+desc: Hint
+
+case: description-is-not-the-name
+html: <p id=h>Hint</p><button id=t aria-describedby=h>Go</button>
+name: Go
+desc: Hint
+
+# ------------------------------------------------------------------ hidden nodes and odd markup
+
+case: hidden-element-has-no-name
+html: <button id=t hidden>x</button>
+name: <none>
+
+case: name-from-the-title-attribute-of-a-role-button-div
+html: <div id=t role=button title=Hi></div>
+name: Hi
+
+case: svg-without-a-title-has-no-name
+html: <svg id=t></svg>
+name: <none>
+
+case: iframe-without-a-title-has-no-name
+html: <iframe id=t></iframe>
+name: <none>
+
+case: role-image-takes-its-aria-label
+html: <div id=t role=image aria-label="A chart">x</div>
+name: A chart
+note: accname takes role=image for a generic div and prohibits the name; names.rs uses the aria-label
+
+case: doc-role-takes-its-aria-label
+html: <section id=t role=doc-chapter aria-label="Chapter 1"></section>
+name: Chapter 1
+
+case: doc-noteref-link-name-from-content
+html: <a id=t href=x role=doc-noteref>3</a>
+name: 3
