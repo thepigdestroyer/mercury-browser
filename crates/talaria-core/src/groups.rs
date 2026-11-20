@@ -50,22 +50,30 @@ impl GroupId {
 
 /// The colours a group can have out of the box. Only the name is stored: what each one looks like
 /// is palette data (`mercury-appearance`).
+///
+/// **The names and their order are one contract with `mercury_appearance::PRESETS`**, which draws
+/// them and hands them out the same way (`auto_colour`): the two lists must be equal, in this
+/// order, and the names are part of `session.json` for good. `mercury-appearance` does not depend
+/// on this crate, so `tests/appearance_contract.rs` (which links both) pins them against each
+/// other. The variants are listed in the hand-out order, a farthest-point order from blue
+/// (`mercury-appearance` measured it): a window's first groups get the colours furthest apart,
+/// and slate, the colour of the loose-tabs pseudo-group, comes last.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GroupPreset {
     Blue,
     Amber,
-    Violet,
     Rose,
+    Mint,
+    Orchid,
+    Brown,
     Green,
+    Lime,
+    Sky,
+    Plum,
+    Salmon,
+    Violet,
     Teal,
     Slate,
-    Red,
-    Orange,
-    Lime,
-    Cyan,
-    Indigo,
-    Magenta,
-    Brown,
 }
 
 impl GroupPreset {
@@ -73,18 +81,18 @@ impl GroupPreset {
     pub const ALL: [Self; 14] = [
         Self::Blue,
         Self::Amber,
-        Self::Violet,
         Self::Rose,
+        Self::Mint,
+        Self::Orchid,
+        Self::Brown,
         Self::Green,
+        Self::Lime,
+        Self::Sky,
+        Self::Plum,
+        Self::Salmon,
+        Self::Violet,
         Self::Teal,
         Self::Slate,
-        Self::Red,
-        Self::Orange,
-        Self::Lime,
-        Self::Cyan,
-        Self::Indigo,
-        Self::Magenta,
-        Self::Brown,
     ];
 
     /// The stored name: lower case, for example `"blue"`.
@@ -92,26 +100,26 @@ impl GroupPreset {
         match self {
             Self::Blue => "blue",
             Self::Amber => "amber",
-            Self::Violet => "violet",
             Self::Rose => "rose",
+            Self::Mint => "mint",
+            Self::Orchid => "orchid",
+            Self::Brown => "brown",
             Self::Green => "green",
+            Self::Lime => "lime",
+            Self::Sky => "sky",
+            Self::Plum => "plum",
+            Self::Salmon => "salmon",
+            Self::Violet => "violet",
             Self::Teal => "teal",
             Self::Slate => "slate",
-            Self::Red => "red",
-            Self::Orange => "orange",
-            Self::Lime => "lime",
-            Self::Cyan => "cyan",
-            Self::Indigo => "indigo",
-            Self::Magenta => "magenta",
-            Self::Brown => "brown",
         }
     }
 
-    /// The preset called `name`, ignoring case.
+    /// The preset stored as `name`: exactly the lower-case name, as `mercury-appearance` reads it
+    /// (`"Blue"` and `"BLUE"` are no preset). A session file never brings capitals here:
+    /// `mercury-settings` lowers a colour when it loads the file.
     pub fn from_name(name: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|preset| preset.name().eq_ignore_ascii_case(name))
+        Self::ALL.into_iter().find(|preset| preset.name() == name)
     }
 }
 
@@ -131,9 +139,10 @@ impl GroupColour {
         }
     }
 
-    /// Reads the stored form; either case. `None` for anything else: a name that is not one of the
-    /// presets (so a name of any length is refused), `#` with other than six hex digits, or text
-    /// with spaces around it.
+    /// Reads the stored form: a preset's lower-case name, or `#` and six hex digits in either case
+    /// (the rule of `mercury_appearance::GroupColour::parse`). `None` for anything else: a name
+    /// that is not exactly one of the presets (so a name of any length, or with capitals, is
+    /// refused), `#` with other than six hex digits, or text with spaces around it.
     pub fn parse(text: &str) -> Option<Self> {
         match text.strip_prefix('#') {
             Some(digits) => parse_hex_colour(digits).map(Self::Custom),
@@ -804,11 +813,22 @@ mod tests {
         assert_eq!(default_colour(&[]), GroupColour::Preset(GroupPreset::Blue));
         let used = [
             preset_group("a", GroupPreset::Blue),
-            preset_group("b", GroupPreset::Violet),
+            preset_group("b", GroupPreset::Mint),
         ];
+        // Amber is the first unused one; a later one (Mint) being taken changes nothing.
         assert_eq!(
             default_colour(&used),
             GroupColour::Preset(GroupPreset::Amber)
+        );
+        // Blue and Amber taken, and Mint after Rose too: Rose is the first free one.
+        let skipping = [
+            preset_group("a", GroupPreset::Blue),
+            preset_group("b", GroupPreset::Amber),
+            preset_group("c", GroupPreset::Mint),
+        ];
+        assert_eq!(
+            default_colour(&skipping),
+            GroupColour::Preset(GroupPreset::Rose)
         );
         let custom = [group(
             "c",
@@ -834,20 +854,20 @@ mod tests {
             default_colour(&groups),
             GroupColour::Preset(GroupPreset::Blue)
         );
-        // Blue and Amber twice: Violet is the earliest of the once-used ones.
+        // Blue and Amber twice: Rose is the earliest of the once-used ones.
         groups.push(preset_group("g", GroupPreset::Blue));
         groups.push(preset_group("g", GroupPreset::Amber));
         assert_eq!(
             default_colour(&groups),
-            GroupColour::Preset(GroupPreset::Violet)
+            GroupColour::Preset(GroupPreset::Rose)
         );
-        // Everything twice except Brown: the least used wins over the earliest.
+        // Everything twice except the last (Slate): the least used wins over the earliest.
         for preset in &GroupPreset::ALL[2..13] {
             groups.push(preset_group("g", *preset));
         }
         assert_eq!(
             default_colour(&groups),
-            GroupColour::Preset(GroupPreset::Brown)
+            GroupColour::Preset(GroupPreset::Slate)
         );
     }
 

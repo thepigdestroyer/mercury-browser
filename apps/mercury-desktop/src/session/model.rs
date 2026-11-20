@@ -1840,7 +1840,7 @@ mod tests {
         assert!(!tracker.observe_tabs(&controller, NOW));
 
         controller
-            .recolour_group(first, GroupColour::Preset(GroupPreset::Red))
+            .recolour_group(first, GroupColour::Preset(GroupPreset::Slate))
             .unwrap();
         assert!(tracker.observe_tabs(&controller, NOW), "recoloured");
         assert!(!tracker.observe_tabs(&controller, NOW));

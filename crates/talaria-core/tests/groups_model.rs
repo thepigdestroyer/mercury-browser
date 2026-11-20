@@ -369,7 +369,7 @@ fn the_first_fourteen_groups_take_the_presets_in_order() {
         assert_eq!(preset(&book, *id), GroupPreset::ALL[index]);
     }
     assert_eq!(GroupPreset::ALL[0], GroupPreset::Blue);
-    assert_eq!(GroupPreset::ALL[13], GroupPreset::Brown);
+    assert_eq!(GroupPreset::ALL[13], GroupPreset::Slate);
 }
 
 #[test]
@@ -390,14 +390,14 @@ fn once_all_fourteen_are_used_the_least_used_goes_first() {
 #[test]
 fn a_preset_that_was_freed_is_taken_before_any_is_reused() {
     let (mut book, group_ids) = book_of(14);
-    // Rose is the fourth preset.
-    assert_eq!(preset(&book, group_ids[3]), GroupPreset::Rose);
+    // Mint is the fourth preset.
+    assert_eq!(preset(&book, group_ids[3]), GroupPreset::Mint);
     book.remove(group_ids[3]).expect("removed");
     let fresh = make(&mut book);
-    assert_eq!(preset(&book, fresh), GroupPreset::Rose);
+    assert_eq!(preset(&book, fresh), GroupPreset::Mint);
     // Recolouring frees the old colour as well.
     let (mut book, group_ids) = book_of(3);
-    book.recolour(group_ids[1], GroupColour::Preset(GroupPreset::Red))
+    book.recolour(group_ids[1], GroupColour::Preset(GroupPreset::Violet))
         .expect("recoloured");
     let fresh = make(&mut book);
     assert_eq!(preset(&book, fresh), GroupPreset::Amber);
@@ -417,9 +417,9 @@ fn uneven_use_decides_by_count_then_by_order() {
     // Now all fourteen are used; Blue twice, the rest once: the earliest of the rest.
     let second = make(&mut book);
     assert_eq!(preset(&book, second), GroupPreset::Amber);
-    // Amber and Blue twice each: Violet is the earliest with one.
+    // Amber and Blue twice each: Rose is the earliest with one.
     let third = make(&mut book);
-    assert_eq!(preset(&book, third), GroupPreset::Violet);
+    assert_eq!(preset(&book, third), GroupPreset::Rose);
 }
 
 #[test]
@@ -511,8 +511,8 @@ fn the_names_and_their_order_are_the_contract() {
     assert_eq!(
         listed,
         [
-            "blue", "amber", "violet", "rose", "green", "teal", "slate", "red", "orange", "lime",
-            "cyan", "indigo", "magenta", "brown"
+            "blue", "amber", "rose", "mint", "orchid", "brown", "green", "lime", "sky", "plum",
+            "salmon", "violet", "teal", "slate"
         ]
     );
 }
@@ -524,11 +524,14 @@ fn every_preset_survives_its_stored_name() {
         assert_eq!(colour.to_name(), preset.name());
         assert_eq!(GroupColour::parse(&colour.to_name()), Some(colour));
         assert_eq!(GroupPreset::from_name(preset.name()), Some(preset));
+        // A name is read exactly as stored (lower case), as `mercury-appearance` reads it.
         let upper = preset.name().to_ascii_uppercase();
-        assert_eq!(GroupColour::parse(&upper), Some(colour), "{upper}");
+        assert_eq!(GroupColour::parse(&upper), None, "{upper}");
+        assert_eq!(GroupPreset::from_name(&upper), None, "{upper}");
         let mut title = preset.name().to_owned();
         title[..1].make_ascii_uppercase();
-        assert_eq!(GroupColour::parse(&title), Some(colour), "{title}");
+        assert_eq!(GroupColour::parse(&title), None, "{title}");
+        assert_eq!(GroupPreset::from_name(&title), None, "{title}");
     }
 }
 
@@ -645,6 +648,12 @@ fn unknown_names_and_long_names_are_refused() {
         "BLUEISH",
         "slate-grey",
         "é",
+        // Names of an earlier draft of the list: never stored by a release, so they are unknown.
+        "red",
+        "orange",
+        "cyan",
+        "indigo",
+        "magenta",
     ] {
         assert_eq!(GroupColour::parse(text), None, "{text:?}");
     }

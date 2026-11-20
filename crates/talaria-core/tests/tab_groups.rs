@@ -741,7 +741,7 @@ fn renaming_to_nothing_or_an_unknown_group_is_refused() {
         Err(GroupError::NotFound)
     );
     assert_eq!(
-        controller.recolour_group(g(9), GroupColour::Preset(GroupPreset::Red)),
+        controller.recolour_group(g(9), GroupColour::Preset(GroupPreset::Slate)),
         Err(GroupError::NotFound)
     );
 

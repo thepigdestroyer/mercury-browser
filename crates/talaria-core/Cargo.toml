@@ -8,3 +8,9 @@ license.workspace = true
 
 [dependencies]
 url.workspace = true
+
+# The group-colour contract test (tests/appearance_contract.rs) links the crate that draws the
+# colours. Neither crate depends on the other otherwise.
+[dev-dependencies]
+mercury-appearance = { path = "../mercury-appearance" }
+mercury-settings = { path = "../mercury-settings" }
