@@ -467,7 +467,7 @@ impl MediaSource {
     }
 
     pub fn timestamp_offset(&self, id: SourceBufferId) -> Result<f64, MseError> {
-        Ok(self.buffers[self.known(id)?].timestamp_offset)
+        Ok(self.buffers[self.known(id)?].timestamp_offset_secs())
     }
 
     pub fn append_window_start(&self, id: SourceBufferId) -> Result<f64, MseError> {

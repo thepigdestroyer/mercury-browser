@@ -325,6 +325,18 @@ impl SourceBuffer {
         self.processor.set_mode(mode);
     }
 
+    /// `timestampOffset`: what the page set, or in `Sequence` mode what the coded frame processing
+    /// algorithm moved it to (the processor owns the live value; the `f64` the page set is returned
+    /// as it was while the processor still agrees with it, so a getter round-trips exactly).
+    pub fn timestamp_offset_secs(&self) -> f64 {
+        let live = self.processor.timestamp_offset();
+        if live == secs_to_ns(self.timestamp_offset) {
+            self.timestamp_offset
+        } else {
+            ns_to_secs(live)
+        }
+    }
+
     pub fn set_timestamp_offset(&mut self, secs: f64) -> Result<(), MseError> {
         if !secs.is_finite() {
             return Err(MseError::Type(format!(
