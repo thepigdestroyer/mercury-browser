@@ -24,6 +24,7 @@ mod media_session;
 // engine messages: routes the engine's Mercury message variants to the lanes that own them.
 mod mercury_messages;
 // net: the engine's network policy from the privacy settings, and the net lane's engine messages.
+mod net_messages;
 mod net_policy;
 mod opengl_context;
 // openurl

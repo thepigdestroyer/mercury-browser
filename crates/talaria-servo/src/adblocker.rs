@@ -7,7 +7,10 @@ use adblock::Engine;
 use adblock::request::Request;
 use content_security_policy::Destination;
 use log::{debug, info};
-use servo::{WebResourceLoad, WebResourceRequest, WebResourceResponse, WebView};
+// net: `WebResourceRewrite`, the answer that changes a request's URL and lets it go on (EC37).
+use servo::{
+    WebResourceLoad, WebResourceRequest, WebResourceResponse, WebResourceRewrite, WebView,
+};
 use url::Url;
 
 use crate::exit_clearing::EngineSwitches;
@@ -112,8 +115,19 @@ impl ContentBlocker {
             .map(|url| url.as_url().clone())
             .or_else(|| web_view.and_then(WebView::url));
 
-        if !self.should_block(load.request(), source_url.as_ref()) {
-            return;
+        match self.verdict(load.request(), source_url.as_ref()) {
+            Verdict::Allow => return,
+            // net: a `$removeparam` filter matched. The network thread applies the new URL (it keeps the
+            // scheme and the origin, and refuses anything else) and goes on; nobody is asked again.
+            Verdict::Rewrite(rewritten) => {
+                debug!(
+                    "removed query parameters from a web resource URL for {}",
+                    rewritten.host_str().unwrap_or("(no host)")
+                );
+                load.rewrite(rewrite_to(rewritten));
+                return;
+            }
+            Verdict::Block => {}
         }
 
         let blocked_url = load.request().url.as_url().clone();
@@ -138,16 +152,22 @@ impl ContentBlocker {
         }
     }
 
-    fn should_block(&self, request: &WebResourceRequest, source_url: Option<&Url>) -> bool {
-        self.should_block_url(
+    /// What to do with one request. `source_url` is the page the request is for, as the `$domain` option
+    /// sees it (the referrer, else the web view's URL).
+    fn verdict(&self, request: &WebResourceRequest, source_url: Option<&Url>) -> Verdict {
+        self.verdict_for(
             request.url.as_str(),
             source_url.map_or(request.url.as_str(), Url::as_str),
             resource_type(request.destination),
             request.method.as_str(),
             request.is_for_main_frame,
+            // net: the network thread's own answer to "is this request third party"; it knows the
+            // top-level site of every request, which a referrer does not tell (EC38).
+            request.is_third_party,
         )
     }
 
+    #[cfg(test)]
     fn should_block_url(
         &self,
         url: &str,
@@ -156,24 +176,110 @@ impl ContentBlocker {
         method: &str,
         is_for_main_frame: bool,
     ) -> bool {
+        self.verdict_for(
+            url,
+            source_url,
+            resource_type,
+            method,
+            is_for_main_frame,
+            None,
+        ) == Verdict::Block
+    }
+
+    /// `third_party` is the network thread's verdict when it has one (`Some`), and then decides what the
+    /// filters' `third-party` option means; with `None` the engine works it out from `url` and
+    /// `source_url`, as it did before the network thread said.
+    fn verdict_for(
+        &self,
+        url: &str,
+        source_url: &str,
+        resource_type: &str,
+        method: &str,
+        is_for_main_frame: bool,
+        third_party: Option<bool>,
+    ) -> Verdict {
         // Brave can show a dedicated interstitial for blocked top-level navigations. Mercury does
         // not have that UI yet, so allowing the main document avoids turning a matched navigation
-        // into an unexplained blank tab while still blocking its ads and trackers.
+        // into an unexplained blank tab while still blocking its ads and trackers. A main frame is not
+        // rewritten either: changing the address of the page being opened is not decided yet.
         if is_for_main_frame || !self.switches.content_blocking() {
-            return false;
+            return Verdict::Allow;
         }
 
         let Some(engine) = self.current_engine() else {
             self.unchecked_requests
                 .set(self.unchecked_requests.get() + 1);
-            return false;
+            return Verdict::Allow;
         };
-        let Ok(request) = Request::new(url, source_url, resource_type, method) else {
+        let Some(request) = adblock_request(url, source_url, resource_type, method, third_party)
+        else {
             debug!("could not classify web resource for ad blocking: {url}");
-            return false;
+            return Verdict::Allow;
         };
 
-        engine.check_network_request(&request).should_block()
+        let result = engine.check_network_request(&request);
+        if result.should_block() {
+            return Verdict::Block;
+        }
+        // net: `$removeparam` (only for a request that is not blocked, the engine says so): the same
+        // request without the parameters the lists name. Only a URL that parses and really differs counts.
+        match result
+            .rewritten_url
+            .as_deref()
+            .and_then(|rewritten| Url::parse(rewritten).ok())
+        {
+            Some(rewritten) if rewritten.as_str() != url => Verdict::Rewrite(rewritten),
+            _ => Verdict::Allow,
+        }
+    }
+}
+
+/// What the content blocker decides about one request.
+#[derive(Debug, PartialEq, Eq)]
+enum Verdict {
+    /// Let it go on as it is.
+    Allow,
+    /// Answer it with nothing.
+    Block,
+    /// Let it go on, with this URL in place of its own (a `$removeparam` filter matched).
+    Rewrite(Url),
+}
+
+/// The engine's view of a request. With the network thread's third-party flag (`Some`) the request is built
+/// with `Request::preparsed`, so the flag, not the engine's own comparison of two host names, decides what
+/// `third-party` means; without it, or for a URL with no host, the engine parses and decides as it always did.
+fn adblock_request(
+    url: &str,
+    source_url: &str,
+    resource_type: &str,
+    method: &str,
+    third_party: Option<bool>,
+) -> Option<Request> {
+    if let Some(third_party) = third_party
+        && let Ok(parsed) = Url::parse(url)
+        && let Some(hostname) = parsed.host_str()
+    {
+        let source_hostname = Url::parse(source_url)
+            .ok()
+            .and_then(|source| source.host_str().map(str::to_owned))
+            .unwrap_or_default();
+        return Some(Request::preparsed(
+            url,
+            hostname,
+            &source_hostname,
+            resource_type,
+            third_party,
+            method,
+        ));
+    }
+    Request::new(url, source_url, resource_type, method).ok()
+}
+
+/// A rewrite of the request's URL and nothing else.
+fn rewrite_to(url: Url) -> WebResourceRewrite {
+    WebResourceRewrite {
+        url: Some(url.into()),
+        ..WebResourceRewrite::default()
     }
 }
 
@@ -394,5 +500,263 @@ mod tests {
         assert_eq!(resource_type(Destination::IFrame), "subdocument");
         assert_eq!(resource_type(Destination::Video), "media");
         assert_eq!(resource_type(Destination::None), "xmlhttprequest");
+    }
+
+    // net: the third-party flag of the network thread and `$removeparam` (EC38, EC37).
+
+    fn verdict(
+        blocker: &ContentBlocker,
+        url: &str,
+        source_url: &str,
+        third_party: Option<bool>,
+    ) -> Verdict {
+        blocker.verdict_for(url, source_url, "script", "GET", false, third_party)
+    }
+
+    fn removeparam_blocker() -> ContentBlocker {
+        blocker_with(
+            compiled(&["||example.com^$removeparam=utm_source"]),
+            EngineSwitches::default(),
+        )
+    }
+
+    #[test]
+    fn a_removeparam_filter_rewrites_the_url_without_the_parameter() {
+        let blocker = removeparam_blocker();
+
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://example.com/page?utm_source=news&id=7",
+                "https://news.example/",
+                None,
+            ),
+            Verdict::Rewrite(Url::parse("https://example.com/page?id=7").unwrap())
+        );
+        // The same with the network thread's flag: the rewrite does not depend on it.
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://example.com/page?id=7&utm_source=news",
+                "https://news.example/",
+                Some(true),
+            ),
+            Verdict::Rewrite(Url::parse("https://example.com/page?id=7").unwrap())
+        );
+    }
+
+    #[test]
+    fn a_url_without_the_parameter_is_left_alone() {
+        let blocker = removeparam_blocker();
+
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://example.com/page?id=7",
+                "https://news.example/",
+                None,
+            ),
+            Verdict::Allow
+        );
+        // Another site is not named by the rule.
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://other.example/page?utm_source=news",
+                "https://news.example/",
+                None,
+            ),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn a_request_that_is_blocked_is_blocked_not_rewritten() {
+        let blocker = blocker_with(
+            compiled(&[
+                "||example.com^$removeparam=utm_source",
+                "||example.com/ads/",
+            ]),
+            EngineSwitches::default(),
+        );
+
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://example.com/ads/a.js?utm_source=news",
+                "https://news.example/",
+                None,
+            ),
+            Verdict::Block
+        );
+    }
+
+    #[test]
+    fn a_main_frame_and_a_switched_off_blocker_are_never_rewritten() {
+        let blocker = removeparam_blocker();
+        let url = "https://example.com/page?utm_source=news&id=7";
+
+        assert_eq!(
+            blocker.verdict_for(
+                url,
+                "https://news.example/",
+                "document",
+                "GET",
+                true,
+                Some(true)
+            ),
+            Verdict::Allow,
+            "a main frame goes as it is"
+        );
+
+        blocker.switches.set_content_blocking(false);
+        assert_eq!(
+            verdict(&blocker, url, "https://news.example/", None),
+            Verdict::Allow,
+            "with blocking off nothing is rewritten"
+        );
+    }
+
+    #[test]
+    fn nothing_is_rewritten_until_an_engine_arrives() {
+        let blocker = ContentBlocker::new(EngineSwitches::default());
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://example.com/page?utm_source=news",
+                "https://news.example/",
+                None,
+            ),
+            Verdict::Allow
+        );
+        assert_eq!(blocker.unchecked_requests.get(), 1);
+    }
+
+    fn third_party_only_blocker() -> ContentBlocker {
+        blocker_with(
+            compiled(&["||tracker.example^$third-party"]),
+            EngineSwitches::default(),
+        )
+    }
+
+    #[test]
+    fn without_the_flag_the_engine_compares_the_two_hosts_as_before() {
+        let blocker = third_party_only_blocker();
+
+        // The page is another site: third party, blocked.
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://tracker.example/t.js",
+                "https://news.example/",
+                None,
+            ),
+            Verdict::Block
+        );
+        // The page is the tracker's own site: first party, not blocked.
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://tracker.example/t.js",
+                "https://tracker.example/",
+                None,
+            ),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn the_network_threads_flag_decides_what_third_party_means() {
+        let blocker = third_party_only_blocker();
+
+        // The referrer is another site (so the engine alone would say third party), but the network thread
+        // knows the top-level page is the tracker's own site: first party, not blocked.
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://tracker.example/t.js",
+                "https://news.example/",
+                Some(false),
+            ),
+            Verdict::Allow
+        );
+        // The referrer is the tracker's own site (the engine alone would say first party), but the network
+        // thread knows the top-level page is another site: third party, blocked.
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://tracker.example/t.js",
+                "https://tracker.example/",
+                Some(true),
+            ),
+            Verdict::Block
+        );
+    }
+
+    #[test]
+    fn the_domain_option_still_sees_the_page_the_request_is_for() {
+        let blocker = blocker_with(
+            compiled(&["||tracker.example^$domain=news.example"]),
+            EngineSwitches::default(),
+        );
+
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://tracker.example/t.js",
+                "https://news.example/article",
+                Some(true),
+            ),
+            Verdict::Block
+        );
+        assert_eq!(
+            verdict(
+                &blocker,
+                "https://tracker.example/t.js",
+                "https://other.example/article",
+                Some(true),
+            ),
+            Verdict::Allow
+        );
+    }
+
+    #[test]
+    fn a_url_with_no_host_goes_the_old_way_with_or_without_the_flag() {
+        let blocker = third_party_only_blocker();
+
+        for flag in [None, Some(true), Some(false)] {
+            assert_eq!(
+                verdict(
+                    &blocker,
+                    "data:text/plain,hello",
+                    "https://news.example/",
+                    flag,
+                ),
+                Verdict::Allow,
+                "{flag:?}"
+            );
+        }
+        // And an empty source has no host: the request is third party for the engine.
+        assert_eq!(
+            verdict(&blocker, "https://tracker.example/t.js", "", None),
+            Verdict::Block
+        );
+        assert_eq!(
+            verdict(&blocker, "https://tracker.example/t.js", "", Some(true)),
+            Verdict::Block
+        );
+    }
+
+    #[test]
+    fn a_rewrite_carries_the_new_url_and_nothing_else() {
+        let url = Url::parse("https://example.com/page?id=7").unwrap();
+        let rewrite = rewrite_to(url.clone());
+
+        assert_eq!(
+            rewrite.url.as_ref().map(|rewritten| rewritten.as_str()),
+            Some(url.as_str())
+        );
+        assert!(rewrite.set_headers.is_empty());
+        assert!(rewrite.remove_headers.is_empty());
     }
 }

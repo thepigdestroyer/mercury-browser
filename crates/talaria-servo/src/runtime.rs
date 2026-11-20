@@ -306,6 +306,12 @@ impl ServoRuntime {
         crate::net_policy::NetPolicyControl::process()
     }
 
+    /// How many requests of the page `tab` shows were blocked as mixed content; 0 after the tab's
+    /// next main-frame load starts (EC17). No interface shows it yet.
+    pub fn mixed_content_blocked(&self, tab: TabId) -> u32 {
+        crate::net_messages::mixed_content_blocked(tab)
+    }
+
     // blocklists
     /// Where compiled filter-list engines are handed to the content blocker.
     pub fn filter_engine_slot(&self) -> crate::FilterEngineSlot {
@@ -911,6 +917,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
         }
         match status {
             LoadStatus::Started => {
+                // net: the mixed content counted for the page being left ends with it.
+                crate::net_messages::main_frame_load_started(self.tab_id);
                 // controls: requests of the page being left are dropped.
                 self.drop_controls();
                 self.load_metrics.borrow_mut().start(Instant::now());
