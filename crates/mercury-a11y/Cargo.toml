@@ -11,8 +11,7 @@ license.workspace = true
 [dependencies]
 a11y-dom.workspace = true
 accesskit.workspace = true
-accname.workspace = true
-
-[dev-dependencies]
-# The oracle of every tree test: it panics where AccessKit would.
+# The tree consumer AccessKit's own adapters use: `snapshot::dump` reads one, and every tree test uses it as the oracle (it
+# panics where AccessKit would). Already in the lock through Slint's accesskit_winit.
 accesskit_consumer.workspace = true
+accname.workspace = true
