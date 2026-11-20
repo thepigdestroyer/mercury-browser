@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 gstreamer = { workspace = true }
+gstreamer-app = { workspace = true }
 mse-rig = { path = "../mse-rig" }
 mse-segments = { path = "../mse-segments" }
 serde_json = { workspace = true }

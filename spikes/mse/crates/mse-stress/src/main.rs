@@ -9,12 +9,14 @@
 //! of what they test (T02, T04, T12) start nested runs of this same executable (`sub`).
 
 mod common;
+mod plain;
 mod proc;
 mod rng;
 mod scenarios;
 mod stats;
 mod sub;
 mod synth;
+mod vt;
 mod watchdog;
 
 use std::time::Duration;

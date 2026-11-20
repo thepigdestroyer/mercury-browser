@@ -75,15 +75,30 @@ pub const CASES: &[Case] = &[
         optional: false,
         apple_only_required: false,
     },
+    // The two AV1 fixtures differ only in their av1C record: `av1-low` has the hand-written four bytes with no
+    // sequence header OBU, `av1-low-av1c` the full record (a skeptic asked for the control: VideoToolbox is
+    // said to start an AV1 session only when the record carries the sequence header). The alternatives name
+    // the three decoders that could take the stream: dav1d (software), VideoToolbox hardware-only and
+    // VideoToolbox in general.
     Case {
         codec: "AV1",
         fixture: "av1-low",
         kind: Kind::Video,
-        alternatives: &["dav1ddec"],
+        alternatives: AV1_ALTERNATIVES,
+        optional: true,
+        apple_only_required: false,
+    },
+    Case {
+        codec: "AV1 (full av1C)",
+        fixture: "av1-low-av1c",
+        kind: Kind::Video,
+        alternatives: AV1_ALTERNATIVES,
         optional: true,
         apple_only_required: false,
     },
 ];
+
+const AV1_ALTERNATIVES: &[&str] = &["dav1ddec", "vtdec_hw", "vtdec"];
 
 /// Every decoder factory named above, for the table of default ranks.
 pub fn candidate_decoders() -> Vec<&'static str> {
@@ -185,6 +200,16 @@ impl RunStats {
     }
 }
 
+/// A pipeline error (or a source buffer error) is in the log.
+fn has_play_error(rig: &mse_rig::rig::Rig) -> bool {
+    rig.log.count(|event| {
+        matches!(
+            event,
+            MseEvent::Play(PlayEvent::Error(_)) | MseEvent::Error(_)
+        )
+    }) > 0
+}
+
 fn rank_of(name: &str) -> Option<gst::Rank> {
     gst::Registry::get()
         .lookup_feature(name)
@@ -210,6 +235,7 @@ fn body(ctx: &Ctx, result: &mut ScenarioResult) -> Result<Verdict, String> {
     let mut table = serde_json::Map::new();
     let mut vt_hw_produced_frames: Option<bool> = None;
     let mut ffmpeg_in_default_route = Vec::new();
+    let mut av1_defaults: Vec<Av1Default> = Vec::new();
     for case in CASES {
         let stream = match mse_segments::load(case.fixture) {
             Ok(stream) => stream,
@@ -272,6 +298,14 @@ fn body(ctx: &Ctx, result: &mut ScenarioResult) -> Result<Verdict, String> {
                 default.decoders
             ));
         }
+        if case.fixture.starts_with("av1") {
+            av1_defaults.push(Av1Default {
+                fixture: case.fixture,
+                complete: default.complete(),
+                decoders: default.decoders.clone(),
+                errors: default.errors.clone(),
+            });
+        }
         entry.insert("default".to_owned(), default.to_json(case.kind));
         entry.insert("default_uses_ffmpeg".to_owned(), json!(uses_ffmpeg));
         entry.insert(
@@ -323,6 +357,7 @@ fn body(ctx: &Ctx, result: &mut ScenarioResult) -> Result<Verdict, String> {
         entry.insert("alternatives".to_owned(), Value::Object(alternatives));
         table.insert(case.codec.to_owned(), Value::Object(entry));
     }
+    av1_controls(result, &av1_defaults);
     result.metric("codecs", Value::Object(table));
     result.metric("vtdec_hw_produced_frames", vt_hw_produced_frames);
     result.metric(
@@ -340,6 +375,158 @@ fn body(ctx: &Ctx, result: &mut ScenarioResult) -> Result<Verdict, String> {
         None => "vtdec_hw was not tried (not in the registry or H.264 skipped)".to_owned(),
     });
     Ok(findings.verdict())
+}
+
+/// What the default route did with one AV1 fixture through MSE.
+struct Av1Default {
+    fixture: &'static str,
+    complete: bool,
+    decoders: Vec<String>,
+    errors: Vec<String>,
+}
+
+/// Frames in every fixture file: 8 s at 25 fps.
+const FIXTURE_FRAMES: u64 = 200;
+
+/// The AV1 controls (added after a skeptic found that "AV1 fails because the chip lacks AV1 hardware" had
+/// no control): what VideoToolbox itself reports for this machine, and the same two files through a plain
+/// `playbin3` with no MSE, with the default ranks, with dav1d preferred and with `vtdec_hw` preferred.
+/// The notes end with a reading computed from these numbers, never written by hand.
+fn av1_controls(result: &mut ScenarioResult, defaults: &[Av1Default]) {
+    if defaults.is_empty() {
+        return;
+    }
+    let mut controls = serde_json::Map::new();
+    controls.insert(
+        "videotoolbox_hardware_decode".to_owned(),
+        crate::vt::support_table(),
+    );
+    result.note(format!(
+        "VideoToolbox hardware decode on this machine (VTIsHardwareDecodeSupported): {}",
+        crate::vt::support_line()
+    ));
+
+    let mut through_mse = serde_json::Map::new();
+    for default in defaults {
+        through_mse.insert(
+            default.fixture.to_owned(),
+            json!({
+                "default_route_complete": default.complete,
+                "decoders": default.decoders,
+                "errors": default.errors,
+            }),
+        );
+    }
+    controls.insert("mse_default_route".to_owned(), Value::Object(through_mse));
+
+    let mut plain = serde_json::Map::new();
+    let mut plain_default_complete: Vec<(&'static str, bool)> = Vec::new();
+    for default in defaults {
+        let Some(fixture) = mse_segments::fixture(default.fixture) else {
+            continue;
+        };
+        let path = mse_segments::fixtures_dir().join(fixture.path);
+        let mut per_route = serde_json::Map::new();
+        for (label, prefer) in [
+            ("default", None),
+            ("dav1ddec", Some("dav1ddec")),
+            ("vtdec_hw", Some("vtdec_hw")),
+        ] {
+            crate::common::trace(&format!(
+                "T07 plain playbin3 {} prefer={prefer:?}",
+                default.fixture
+            ));
+            // On a helper thread with a limit: a pipeline that hangs in a state change must cost this one
+            // route, not the scenario (T07 was once killed at its 230 s budget although a rerun took 45 s).
+            let (watch_path, watch_prefer) = (path.clone(), prefer);
+            let outcome = crate::watchdog::call_with_timeout(
+                "plain playbin3",
+                Duration::from_secs(45),
+                move || {
+                    crate::plain::play_video_file(
+                        &watch_path,
+                        watch_prefer,
+                        Duration::from_secs(30),
+                    )
+                },
+            )
+            .map_err(|watch| watch.to_string())
+            .and_then(|run| run);
+            match outcome {
+                Ok(run) => {
+                    result.note(format!(
+                        "{} through a plain playbin3 (no MSE), {label}: {}",
+                        default.fixture,
+                        run.describe(FIXTURE_FRAMES)
+                    ));
+                    if prefer.is_none() {
+                        plain_default_complete
+                            .push((default.fixture, run.complete(FIXTURE_FRAMES)));
+                    }
+                    per_route.insert(label.to_owned(), run.to_json(FIXTURE_FRAMES));
+                }
+                Err(why) => {
+                    result.note(format!(
+                        "{} through a plain playbin3, {label}: {why}",
+                        default.fixture
+                    ));
+                    per_route.insert(label.to_owned(), json!({ "error": why }));
+                }
+            }
+        }
+        plain.insert(default.fixture.to_owned(), Value::Object(per_route));
+    }
+    controls.insert("plain_playbin3".to_owned(), Value::Object(plain));
+
+    let reading = av1_reading(defaults, &plain_default_complete);
+    for line in &reading {
+        result.note(format!("AV1 reading: {line}"));
+    }
+    controls.insert("reading".to_owned(), json!(reading));
+    result.metric("av1_controls", Value::Object(controls));
+}
+
+/// What the AV1 numbers say, in sentences that follow from them. `plain` is, per fixture, whether the plain
+/// `playbin3` default route played the whole file.
+fn av1_reading(defaults: &[Av1Default], plain: &[(&'static str, bool)]) -> Vec<String> {
+    let mse = |name: &str| {
+        defaults
+            .iter()
+            .find(|d| d.fixture == name)
+            .map(|d| d.complete)
+    };
+    let plain_of = |name: &str| plain.iter().find(|(f, _)| *f == name).map(|(_, ok)| *ok);
+    let mut lines = Vec::new();
+    match (mse("av1-low"), mse("av1-low-av1c")) {
+        (Some(false), Some(false)) => lines.push(
+            "the default route through MSE fails for both fixtures, the one with the four-byte av1C and the one with the full record: the incomplete av1C is NOT what breaks the default route on this machine".to_owned(),
+        ),
+        (Some(false), Some(true)) => lines.push(
+            "the default route through MSE fails for the fixture with the four-byte av1C and works with the full record: the hand-written av1C WAS the cause".to_owned(),
+        ),
+        (Some(true), Some(true)) => lines.push(
+            "the default route through MSE plays both fixtures: AV1 works by default on this machine".to_owned(),
+        ),
+        (Some(true), Some(false)) => lines.push(
+            "the default route plays the four-byte fixture but fails with the full record: unexpected, look at the errors".to_owned(),
+        ),
+        _ => lines.push("one of the two AV1 fixtures was not available: no comparison".to_owned()),
+    }
+    for fixture in ["av1-low", "av1-low-av1c"] {
+        if let (Some(through_mse), Some(through_plain)) = (mse(fixture), plain_of(fixture)) {
+            lines.push(format!(
+                "{fixture}: MSE default route {}, plain playbin3 default route {}: {}",
+                if through_mse { "plays" } else { "fails" },
+                if through_plain { "plays" } else { "fails" },
+                if through_mse == through_plain {
+                    "the same outcome with and without MSE (not MSE-specific)"
+                } else {
+                    "DIFFERENT outcomes with and without MSE"
+                }
+            ));
+        }
+    }
+    lines
 }
 
 fn delivered_text(run: &RunStats, kind: Kind) -> String {
@@ -405,8 +592,11 @@ fn measure(
         .end_of_stream(EosError::None)
         .map_err(|e| format!("end_of_stream: {e:?}"))?;
     let finished = match kind {
+        // Also stops at the first error: a decoder that cannot start (AV1 on VideoToolbox without a hardware
+        // decoder) reports it within a second, and waiting 90 s for frames that cannot come would let four such
+        // runs eat the scenario's time.
         Kind::Video => rig.wait_until(Duration::from_secs(90), |rig| {
-            video_frames(rig) + 2 >= expected_video
+            video_frames(rig) + 2 >= expected_video || has_play_error(rig)
         }),
         Kind::Audio => rig.wait_for_eos(Duration::from_secs(60)),
     };
@@ -481,7 +671,17 @@ mod tests {
     #[test]
     fn the_cases_cover_the_brief() {
         let codecs: Vec<&str> = CASES.iter().map(|c| c.codec).collect();
-        assert_eq!(codecs, ["H.264", "VP9", "AAC", "Opus", "AV1"]);
+        assert_eq!(
+            codecs,
+            ["H.264", "VP9", "AAC", "Opus", "AV1", "AV1 (full av1C)"]
+        );
+        let av1: Vec<&str> = CASES
+            .iter()
+            .filter(|c| c.codec.starts_with("AV1"))
+            .map(|c| c.fixture)
+            .collect();
+        assert_eq!(av1, ["av1-low", "av1-low-av1c"]);
+        assert_eq!(CASES[4].alternatives, ["dav1ddec", "vtdec_hw", "vtdec"]);
         let h264 = &CASES[0];
         assert_eq!(h264.alternatives, ["vtdec_hw", "vtdec", "avdec_h264"]);
         assert!(h264.apple_only_required && CASES[2].apple_only_required);
@@ -497,9 +697,58 @@ mod tests {
             "atdec",
             "opusdec",
             "dav1ddec",
+            "vtdec",
         ] {
             assert!(names.contains(&expected), "{expected}");
         }
+    }
+
+    fn av1_default(fixture: &'static str, complete: bool) -> Av1Default {
+        Av1Default {
+            fixture,
+            complete,
+            decoders: vec![],
+            errors: vec![],
+        }
+    }
+
+    #[test]
+    fn the_av1_reading_says_the_record_is_not_the_cause_when_both_fail() {
+        let defaults = [
+            av1_default("av1-low", false),
+            av1_default("av1-low-av1c", false),
+        ];
+        let lines = av1_reading(&defaults, &[("av1-low", false), ("av1-low-av1c", false)]);
+        assert!(lines[0].contains("NOT what breaks"), "{lines:?}");
+        assert!(lines[1].contains("not MSE-specific"), "{lines:?}");
+        assert!(lines[2].contains("not MSE-specific"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_av1_reading_blames_the_record_when_only_the_short_one_fails() {
+        let defaults = [
+            av1_default("av1-low", false),
+            av1_default("av1-low-av1c", true),
+        ];
+        let lines = av1_reading(&defaults, &[("av1-low", false), ("av1-low-av1c", true)]);
+        assert!(lines[0].contains("WAS the cause"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_av1_reading_flags_a_difference_between_mse_and_plain_playback() {
+        let defaults = [
+            av1_default("av1-low", false),
+            av1_default("av1-low-av1c", false),
+        ];
+        let lines = av1_reading(&defaults, &[("av1-low", true), ("av1-low-av1c", false)]);
+        assert!(lines[1].contains("DIFFERENT outcomes"), "{lines:?}");
+        assert!(lines[2].contains("not MSE-specific"), "{lines:?}");
+    }
+
+    #[test]
+    fn the_av1_reading_needs_both_fixtures() {
+        let lines = av1_reading(&[av1_default("av1-low", true)], &[]);
+        assert!(lines[0].contains("not available"), "{lines:?}");
     }
 
     #[test]

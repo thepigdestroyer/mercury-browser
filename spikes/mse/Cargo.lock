@@ -447,6 +447,7 @@ name = "mse-stress"
 version = "0.0.0"
 dependencies = [
  "gstreamer",
+ "gstreamer-app",
  "mse-rig",
  "mse-segments",
  "serde_json",
