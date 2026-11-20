@@ -36,6 +36,7 @@ mod history_ui;
 mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
+mod option_keys; // key-switcher
 #[cfg(target_os = "macos")]
 mod macos_app_delegate;
 #[cfg(target_os = "macos")]

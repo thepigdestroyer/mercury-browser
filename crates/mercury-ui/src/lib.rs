@@ -7,3 +7,6 @@ pub use tab_rows::update_tab_rows;
 
 // ring-geometry
 pub mod ring_geometry;
+
+// key-switcher
+pub mod key_switcher;

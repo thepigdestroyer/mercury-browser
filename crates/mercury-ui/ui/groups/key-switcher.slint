@@ -1,0 +1,92 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The "Switch group" card (SPEC design/ui-final/SPEC.md §4.7, lane brief
+// `lane-key-switcher-brief.md` §3 and §6 item 4).
+//
+// GROUNDWORK STUB. The properties, callbacks and the preview window below are the frozen
+// contract of the lane; item 4 `slint-card` draws the body. Remove this paragraph when you do.
+import { Palette } from "std-widgets.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { KeyChip, KeyMetrics, KeyRingSeg, KeyTile } from "key-switcher-models.slint";
+export { KeyChip, KeyMetrics, KeyRingSeg, KeyTile }
+
+// The overlay: a scrim over the page area and the card, centred. It fills its parent. While
+// `shown` is false it is invisible and every event goes through. The card never takes keyboard
+// focus: ⌥ is held and the page keeps its focus, so the keys come from the state machine
+// (`mercury-option-keys`), not from this component.
+export component KeySwitcher inherits Rectangle {
+    // Fades in over 100 ms when it becomes true (0 ms with `reduce-motion`).
+    in property <bool> shown;
+    in property <bool> reduce-motion;
+    in property <[KeyTile]> tiles;
+    // The numbered tabs of the chosen group; they replace the second hint while a group is chosen.
+    in property <[KeyChip]> chips;
+    in property <KeyMetrics> metrics;
+    // A `GroupRow.id`, or -1.
+    in property <int> selected-group: -1;
+    // The chosen digit 1 to 9, or -1.
+    in property <int> selected-tab: -1;
+    in property <string> chosen-name;
+    in property <string> hint-primary;
+    in property <string> hint-secondary;
+    in property <string> empty-text;
+    in property <length> card-width: 760px;
+    in property <length> card-height: 330px;
+    in property <length> tiles-left: 30px;
+    in property <length> tiles-top: 66px;
+    // A tile was clicked or pressed through VoiceOver: the group's id.
+    callback tile-clicked(int);
+    // A tab chip was clicked or pressed: its digit, 1-based.
+    callback chip-clicked(int);
+    // "Change keys…".
+    callback change-keys();
+    // The backdrop was clicked.
+    callback dismissed();
+
+    visible: root.shown;
+}
+
+// The card over a mock page at the mockup's size, for the renderings and tests: the properties
+// and callbacks of `KeySwitcher`, forwarded.
+export component KeySwitcherPreview inherits Window {
+    in property <ColorScheme> forced-color-scheme: ColorScheme.unknown;
+    in property <bool> shown <=> switcher.shown;
+    in property <bool> reduce-motion <=> switcher.reduce-motion;
+    in property <[KeyTile]> tiles <=> switcher.tiles;
+    in property <[KeyChip]> chips <=> switcher.chips;
+    in property <KeyMetrics> metrics <=> switcher.metrics;
+    in property <int> selected-group <=> switcher.selected-group;
+    in property <int> selected-tab <=> switcher.selected-tab;
+    in property <string> chosen-name <=> switcher.chosen-name;
+    in property <string> hint-primary <=> switcher.hint-primary;
+    in property <string> hint-secondary <=> switcher.hint-secondary;
+    in property <string> empty-text <=> switcher.empty-text;
+    in property <length> card-width <=> switcher.card-width;
+    in property <length> card-height <=> switcher.card-height;
+    in property <length> tiles-left <=> switcher.tiles-left;
+    in property <length> tiles-top <=> switcher.tiles-top;
+    callback tile-clicked <=> switcher.tile-clicked;
+    callback chip-clicked <=> switcher.chip-clicked;
+    callback change-keys <=> switcher.change-keys;
+    callback dismissed <=> switcher.dismissed;
+
+    // For renderings: the scheme of the std widgets (Rust sets `ChromePalette`'s theme).
+    init => {
+        Palette.color-scheme = root.forced-color-scheme;
+    }
+
+    changed forced-color-scheme => {
+        Palette.color-scheme = root.forced-color-scheme;
+    }
+
+    // Named for assistive technology; the window is only shown by the tests and renderings.
+    title: "Key switcher preview";
+    width: 1440px;
+    height: 900px;
+    background: ChromePalette.content-background;
+
+    switcher := KeySwitcher {
+        width: 100%;
+        height: 100%;
+    }
+}
