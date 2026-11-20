@@ -24,6 +24,7 @@ use mercury_ui::{
     BookmarksPreview, ImportPage, ImportProfileRow, ImportSummaryLine, ImportWindow, LoginListRow,
     PasswordManagerUi, SearchEngineRow, SettingsWindow,
 };
+use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 use AccessibleRole as Role;
@@ -1156,6 +1157,137 @@ fn editing_a_login_labels_the_new_fields_and_the_buttons_that_save_or_leave() {
         entries(&log),
         ["generate-for-edit", "save-edit", "cancel-edit"]
     );
+}
+
+/// Types `text` into whatever has the keyboard focus, one key at a time.
+fn type_text(window: &SettingsWindow, text: &str) {
+    for character in text.chars() {
+        let key = SharedString::from(character.to_string());
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: key.clone() });
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text: key });
+    }
+}
+
+/// Everything an assistive technology is given about the window, as one text: the reading order
+/// with each node's label, description and flags, and each node's value and placeholder.
+fn everything_read(window: &SettingsWindow) -> String {
+    let nodes = a11y::reading_order(window);
+    let mut all = a11y::dump(&nodes);
+    for node in &nodes {
+        all.push_str(&format!(
+            "\n{}|{}|{}|{}",
+            node.label,
+            node.description,
+            node.value,
+            node.placeholder()
+        ));
+    }
+    all
+}
+
+#[test]
+fn a_password_typed_into_the_edit_form_never_reaches_assistive_technology() {
+    // The std `LineEdit` bound its accessible value to its text, which the AccessKit adapter hands
+    // on for a password field too: macOS gave the typed password to every assistive technology
+    // as the field's AXValue. The field of this form must give nothing of it, whichever way the
+    // text got there and whether the dots or the characters are drawn.
+    let window = passwords_window();
+    open_first_login(&window);
+    let ui = window.global::<PasswordManagerUi>();
+    ui.set_editing(true);
+    let field = || a11y::control(&window, Role::TextInput, "New password");
+    let value_read = || {
+        find(
+            &a11y::reading_order(&window),
+            Role::TextInput,
+            "New password",
+        )
+        .value
+        .clone()
+    };
+    assert_eq!(value_read(), "");
+
+    // Typed with the keyboard, after a click in the field.
+    let typed = "fake-typed-secret-1";
+    field().mock_single_click(PointerEventButton::Left);
+    type_text(&window, typed);
+    assert_eq!(
+        ui.get_edit_password(),
+        typed,
+        "the keys reach the text the browser reads"
+    );
+    assert_eq!(value_read(), "");
+    assert!(
+        !everything_read(&window).contains(typed),
+        "the typed password is in what is read:\n{}",
+        everything_read(&window)
+    );
+
+    // Revealed: the characters are drawn, and still nothing more is read.
+    press(&window, Role::Button, "Show the new password");
+    let nodes = a11y::reading_order(&window);
+    assert!(absent(&nodes, Role::Button, "Show the new password"));
+    find(&nodes, Role::Button, "Hide the new password");
+    assert_eq!(value_read(), "");
+    assert!(!everything_read(&window).contains(typed));
+    let nodes = freeze(&window, "windows-settings-passwords-editing-typed");
+    assert_eq!(find(&nodes, Role::TextInput, "New password").value, "");
+
+    // Put there by an assistive technology (as VoiceOver's dictation does): it works, and what
+    // it set is not read back either.
+    let set = "fake-set-secret-2";
+    field().set_accessible_value(set);
+    assert_eq!(ui.get_edit_password(), set);
+    assert_eq!(value_read(), "");
+    assert!(!everything_read(&window).contains(set));
+
+    // Put there by the browser (the Generate button, which the desktop crate fills in).
+    let generated = "fake-generated-secret-3";
+    ui.set_edit_password(generated.into());
+    assert_eq!(value_read(), "");
+    assert!(!everything_read(&window).contains(generated));
+}
+
+#[test]
+fn the_reveal_button_of_the_new_password_is_there_while_there_is_text_to_reveal() {
+    let window = passwords_window();
+    open_first_login(&window);
+    let ui = window.global::<PasswordManagerUi>();
+    ui.set_editing(true);
+
+    let nodes = a11y::reading_order(&window);
+    assert!(absent(&nodes, Role::Button, "Show the new password"));
+    assert!(absent(&nodes, Role::Button, "Hide the new password"));
+
+    ui.set_edit_password("fake-text".into());
+    let nodes = a11y::reading_order(&window);
+    let show = find(&nodes, Role::Button, "Show the new password");
+    // Inside the field it belongs to, on its right.
+    let field = find(&nodes, Role::TextInput, "New password");
+    assert!(
+        show.rect().x >= field.rect().right() - 0.01,
+        "the reveal button is beside the typed text: {:?} and {:?}",
+        show.rect(),
+        field.rect()
+    );
+    assert!(show.rect().width > 0.0 && show.rect().height > 0.0);
+
+    // A click in the reported rectangle does what the default action does.
+    show.handle.mock_single_click(PointerEventButton::Left);
+    let nodes = a11y::reading_order(&window);
+    find(&nodes, Role::Button, "Hide the new password");
+    press(&window, Role::Button, "Hide the new password");
+    let nodes = a11y::reading_order(&window);
+    find(&nodes, Role::Button, "Show the new password");
+
+    // Emptied again: nothing left to reveal.
+    ui.set_edit_password("".into());
+    let nodes = a11y::reading_order(&window);
+    assert!(absent(&nodes, Role::Button, "Show the new password"));
 }
 
 #[test]

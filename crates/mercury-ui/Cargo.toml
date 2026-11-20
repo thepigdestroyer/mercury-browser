@@ -34,5 +34,11 @@ image.workspace = true
 slint = { workspace = true, features = ["renderer-software", "software-renderer-systemfonts"] }
 talaria-core = { path = "../talaria-core" }
 
+# a11y-base: `examples/a11y_real_adapter.rs` asks its own process for the accessibility tree that
+# AccessKit's macOS adapter builds, the way VoiceOver does. Dev-only; both are already in the build.
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+objc2.workspace = true
+objc2-foundation = { workspace = true, features = ["std", "NSString"] }
+
 [build-dependencies]
 slint-build.workspace = true

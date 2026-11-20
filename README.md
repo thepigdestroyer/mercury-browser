@@ -145,7 +145,7 @@ pie showData title Work packages, 19 November 2026
 | Filter lists as separate files, updated in the background | ✅ Done | |
 | Servo patches: safety checks, frame identity, password autofill hooks, leave-page prompts and more | 🗓️ Planned | Approved. The camera work has landed, and most Servo crates are vendored as published, ready for the rest |
 | A completely redesigned, highly customisable interface | 🗓️ Planned | Replaces the look inherited from Hermes |
-| Screen-reader labels for Mercury's own windows (toolbar, tabs, address bar, menus, dialogs, Settings and the other windows) | ✅ Done | Written into the code and covered by automated tests, but not yet tried with VoiceOver on a real Mac. Web pages are not readable by a screen reader yet: VoiceOver sees a page as one item |
+| Screen-reader labels for Mercury's own windows (toolbar, tabs, address bar, menus, dialogs, Settings and the other windows) | 🔄 In progress | Written into the code, covered by automated tests and read back through macOS's accessibility interface by a test program, but not yet tried with VoiceOver by a person, and not yet run with the GPU renderer. In a long list (history, bookmarks manager) a screen reader reaches only the rows on screen until keyboard scrolling is added. Web pages are not readable by a screen reader yet: VoiceOver sees a page as one item |
 | Accessibility of web pages (a screen reader reading what a page says) | 🗓️ Planned | Needs Servo patches |
 | Phishing protection, search suggestions, password breach checks, translation, update checks | 🗓️ Planned | Waiting for decisions on providers and keys |
 | macOS disk image built and published by CI, signed ad hoc | ✅ Done | No release has been published yet |

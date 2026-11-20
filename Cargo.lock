@@ -6093,6 +6093,8 @@ version = "0.2.0"
 dependencies = [
  "i-slint-backend-testing",
  "image",
+ "objc2 0.6.5",
+ "objc2-foundation 0.3.2",
  "slint",
  "slint-build",
  "talaria-core",

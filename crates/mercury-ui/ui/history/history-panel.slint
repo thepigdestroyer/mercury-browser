@@ -85,6 +85,15 @@ export component HistoryPanel inherits FocusScope {
     callback close();
     callback clear-data();
 
+    // a11y-base: how many visits the list holds, for a visit's "item n of m". The rows are the
+    // visits with a heading before each day and "Show more" at the end, and a visit's `entry` is
+    // its position among the visits alone, so the last visit's `entry` is the count less one.
+    property <int> visit-count: root.rows.length == 0
+        ? 0
+        : root.rows[root.rows.length - 1].is-more
+            ? (root.rows.length > 1 ? root.rows[root.rows.length - 2].entry + 1 : 0)
+            : root.rows[root.rows.length - 1].entry + 1;
+
     public function focus-search() {
         search-input.focus();
         search-input.select-all();
@@ -244,15 +253,21 @@ export component HistoryPanel inherits FocusScope {
 
                     // a11y-base: a visit is a list item named by its title (or its address when
                     // it has none) and described by its address and time, holding its three
-                    // buttons. The wrapper fills the row, so nothing moves. Items of this list
-                    // are counted with the day headings and "Show more": Slint cannot count
-                    // only the visits.
+                    // buttons. The wrapper fills the row, so nothing moves. Its place counts the
+                    // visits only (not the day headings or "Show more"): `entry` is the visit's
+                    // position, and `visit-count` the number of visits loaded so far.
+                    //
+                    // Limit: a ListView builds only the rows that are on screen, and the
+                    // accessibility tree has only those rows. Slint's adapter answers no scroll
+                    // action, so an assistive technology reaches the rows of the first screenful,
+                    // and the others only after the page is scrolled with the wheel or the trackpad.
+                    // The search field narrows the list. Keyboard scrolling is a follow-up.
                     if !row.is-day && !row.is-more: Rectangle {
                         accessible-role: list-item;
                         accessible-label: row.title == "" ? row.url : row.title;
                         accessible-description: row.title == "" ? row.time : row.time == "" ? row.url : row.url + ", " + row.time;
-                        accessible-item-index: index;
-                        accessible-item-count: root.rows.length;
+                        accessible-item-index: row.entry;
+                        accessible-item-count: root.visit-count;
                         accessible-action-default => {
                             root.open(row.entry, false);
                         }

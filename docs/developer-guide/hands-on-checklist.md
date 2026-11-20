@@ -186,6 +186,16 @@ first try. Web pages are **not** expected to read yet: only Mercury's own interf
 10. **A page.** With a page loaded, the VoiceOver cursor reaches "Page content" (main), whose help text
     says that Mercury doesn't pass web page content to assistive technology yet. Nothing inside the
     page is expected to read. Don't report that; do report a page area that cannot be reached at all.
+11. **A long list** (the known limit). Open History with more than a screenful of visits. The VoiceOver
+    cursor should reach the visits on screen; it cannot reach the ones below, because the list builds
+    only the rows on screen and VoiceOver has no way to scroll it (keyboard scrolling is a follow-up).
+    Scroll with the trackpad and check that the rows that come into view can be reached, and that
+    typing in "Search history" narrows the list to rows the cursor reaches. Do report any other
+    list that stops short, and whether "item n of m" is spoken for a visit.
+12. **A password being typed.** In Settings > Passwords, open a login, choose Edit and type into "New
+    password". VoiceOver must say "secure edit text" and must not read what was typed, as it does
+    not for the sign-in sheet's password field. "Show the new password" shows the characters on
+    screen only. Report it if VoiceOver reads the password aloud in either field.
 
 Report what reads badly: for each, the element, what VoiceOver said, what it should have said, the macOS
 version and the commit. Wording that can be better is a finding as much as a crash.

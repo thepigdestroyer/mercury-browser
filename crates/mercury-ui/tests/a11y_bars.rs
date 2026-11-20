@@ -33,7 +33,7 @@ use mercury_ui::{
     TabMenuCommand, TabSearchRow,
 };
 use slint::platform::PointerEventButton;
-use slint::{ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 
 const WIDTH: f32 = 1180.0;
 const HEIGHT: f32 = 760.0;
@@ -252,6 +252,132 @@ fn the_history_message_replaces_the_list() {
         &nodes,
         Role::Text,
         "Nothing in your history matches your search.",
+    );
+}
+
+/// `count` visits under one heading, then "Show more", as the browser lists a page of history.
+fn long_history_rows(count: i32) -> Vec<HistoryRow> {
+    let mut rows = vec![day("Today")];
+    for entry in 0..count {
+        rows.push(visit(
+            entry,
+            "10:00",
+            &format!("Page {entry}"),
+            &format!("https://example.com/{entry}"),
+            "example.com",
+        ));
+    }
+    rows.push(HistoryRow {
+        is_more: true,
+        ..HistoryRow::default()
+    });
+    rows
+}
+
+/// The visits an assistive technology can reach in the history window: label and place.
+fn reachable_visits(window: &MainWindow) -> Vec<(String, Item)> {
+    nodes_of(window, Role::Region, "History")
+        .iter()
+        .filter(|node| node.role == Role::ListItem)
+        .map(|node| (node.label.clone(), node.item))
+        .collect()
+}
+
+#[test]
+fn a_visits_place_counts_the_visits_and_not_the_headings_or_show_more() {
+    // Rows: heading, three visits, heading, one visit, "Show more". The visits are 1 to 4 of 4,
+    // not 1 to 5 of 7 as the rows are numbered.
+    let window = history_window();
+    let places: Vec<Item> = reachable_visits(&window)
+        .into_iter()
+        .map(|(_, item)| item)
+        .collect();
+    assert_eq!(
+        places,
+        [Some((0, 4)), Some((1, 4)), Some((2, 4)), Some((3, 4))]
+    );
+
+    // The same without "Show more", and with one visit only.
+    let mut rows = history_rows();
+    rows.pop();
+    window.set_history_rows(model(rows));
+    assert_eq!(
+        reachable_visits(&window).last().map(|(_, item)| *item),
+        Some(Some((3, 4)))
+    );
+    window.set_history_rows(model(vec![
+        day("Today"),
+        visit(0, "10:42", "Only", "https://a.test/", "a.test"),
+    ]));
+    assert_eq!(
+        reachable_visits(&window),
+        [("Only".to_string(), Some((0, 1)))]
+    );
+
+    // A second page: the count grows with the visits that were loaded.
+    window.set_history_rows(model(long_history_rows(120)));
+    assert!(
+        reachable_visits(&window)
+            .iter()
+            .all(|(_, item)| item.is_some_and(|(_, count)| count == 120))
+    );
+}
+
+#[test]
+fn a_long_history_gives_assistive_technology_only_the_rows_on_screen() {
+    // KNOWN LIMIT, frozen here so that a change to it is deliberate. The history list is a
+    // ListView, which builds only the rows that are on screen, and the accessibility tree has
+    // only the rows that exist. Slint's adapter answers no scroll action (it ignores every action
+    // but click, focus, increment, decrement, set value and expand), so an assistive technology
+    // cannot ask for the rows below. What a person with VoiceOver reaches without scrolling
+    // with the wheel is the first screenful; the search field narrows the list. Follow-up:
+    // keyboard scrolling (arrow and page keys, scrolling to the focused row).
+    let window = window();
+    window.set_history_rows(model(long_history_rows(200)));
+    window.set_history_open(true);
+
+    let reachable = reachable_visits(&window);
+    assert!(
+        !reachable.is_empty() && reachable.len() < 30,
+        "the rows on a {HEIGHT} pixel window are about fifteen, not {}",
+        reachable.len()
+    );
+    // From the top, in order, each with its place among all 200 visits loaded.
+    for (index, (label, item)) in reachable.iter().enumerate() {
+        assert_eq!(label, &format!("Page {index}"));
+        assert_eq!(*item, Some((index, 200)));
+    }
+    // The last visit and "Show more" are not in the tree: nothing to find, nothing to press.
+    let nodes = nodes_of(&window, Role::Region, "History");
+    assert!(all(&nodes, Role::ListItem, "Page 199").is_empty());
+    assert!(all(&nodes, Role::Button, "Show more").is_empty());
+    // The list says what it is, whatever it holds.
+    node_in(&nodes, Role::List, "Visited pages");
+
+    // Scrolling with the wheel (a pointer, which an assistive technology does not have) brings
+    // the rows below into the tree, and takes the first ones out.
+    let list = node_in(&nodes, Role::List, "Visited pages").rect();
+    let position =
+        slint::LogicalPosition::new(list.x + list.width / 2.0, list.y + list.height / 2.0);
+    window
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position,
+            delta_x: 0.0,
+            delta_y: -1_000.0,
+        });
+    let scrolled = reachable_visits(&window);
+    let (first_label, first_item) = scrolled.first().expect("rows after scrolling").clone();
+    assert_ne!(first_label, "Page 0", "scrolling changed which rows exist");
+    let first_index = first_item.expect("a place").0;
+    assert!(
+        first_index > 0,
+        "the rows after a scroll start further down"
+    );
+    assert_eq!(first_label, format!("Page {first_index}"));
+    assert!(
+        !scrolled.iter().any(|(label, _)| label == "Page 0"),
+        "the first rows left the tree with the scroll"
     );
 }
 

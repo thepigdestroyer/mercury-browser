@@ -160,6 +160,16 @@ fn main() -> Result<(), Box<dyn Error>> {
             &output.join(format!("passwords-{name}-editing.png")),
         )?;
 
+        // a11y-base: a password typed into the new-password field, with the dots and its Show button.
+        ui.set_edit_password("a typed password".into());
+        render(
+            window.window(),
+            1560,
+            2000,
+            &output.join(format!("passwords-{name}-editing-typed.png")),
+        )?;
+        ui.set_edit_password(String::new().into());
+
         ui.set_editing(false);
         ui.set_edit_problem(String::new().into());
         ui.set_confirming_delete(true);
