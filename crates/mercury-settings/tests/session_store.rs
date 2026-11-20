@@ -65,12 +65,14 @@ fn example() -> SessionSnapshot {
                     title: "Example Domain".to_owned(),
                     zoom_percent: 100,
                     pinned: true,
+                    ..TabSnapshot::default()
                 },
                 TabSnapshot {
                     url: "about:blank".to_owned(),
                     title: String::new(),
                     zoom_percent: 125,
                     pinned: false,
+                    ..TabSnapshot::default()
                 },
             ],
             active_tab: 1,
@@ -82,6 +84,7 @@ fn example() -> SessionSnapshot {
             }),
             maximized: false,
             fullscreen: false,
+            ..WindowSnapshot::default()
         }],
         closed_tabs: vec![ClosedTab {
             tab: TabSnapshot {
@@ -89,10 +92,12 @@ fn example() -> SessionSnapshot {
                 title: "Rust".to_owned(),
                 zoom_percent: 100,
                 pinned: false,
+                ..TabSnapshot::default()
             },
             window: 0,
             index: 2,
             closed_at_ms: 1_763_200_000_000,
+            ..ClosedTab::default()
         }],
         saved_at_ms: 1_763_200_005_000,
     }
@@ -427,6 +432,7 @@ fn the_largest_session_fits_under_the_file_limit() {
         title: "\u{1}".repeat(MAX_TITLE_BYTES),
         zoom_percent: 100,
         pinned: false,
+        ..TabSnapshot::default()
     };
     let session = SessionSnapshot {
         windows: vec![WindowSnapshot {
@@ -435,6 +441,7 @@ fn the_largest_session_fits_under_the_file_limit() {
             bounds: None,
             maximized: false,
             fullscreen: false,
+            ..WindowSnapshot::default()
         }],
         closed_tabs: (0..MAX_CLOSED_TABS)
             .map(|n| ClosedTab {
@@ -442,6 +449,7 @@ fn the_largest_session_fits_under_the_file_limit() {
                 window: usize::MAX,
                 index: usize::MAX,
                 closed_at_ms: i64::MIN,
+                ..ClosedTab::default()
             })
             .collect(),
         saved_at_ms: i64::MAX,

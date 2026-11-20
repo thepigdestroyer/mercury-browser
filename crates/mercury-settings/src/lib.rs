@@ -72,9 +72,10 @@ pub use search::{
     MAX_KEYWORD_BYTES, MAX_TEMPLATE_BYTES, SEARCH_TERMS_PLACEHOLDER, SearchEngine, builtin_engines,
 };
 pub use session::{
-    ClosedTab, MAX_CLOSED_TABS, MAX_RECOVERY_SESSIONS, MAX_RESTORED_TABS, MAX_TITLE_BYTES,
-    MAX_WINDOW_COORDINATE, MAX_WINDOW_SIDE, MIN_WINDOW_SIDE, SaveThrottle, SaveToken,
-    SessionSnapshot, TabSnapshot, WindowBounds, WindowSnapshot,
+    ClosedTab, GroupSnapshot, MAX_CLOSED_TABS, MAX_GROUP_NAME_BYTES, MAX_GROUPS_PER_WINDOW,
+    MAX_RECOVERY_SESSIONS, MAX_RESTORED_TABS, MAX_TITLE_BYTES, MAX_WINDOW_COORDINATE,
+    MAX_WINDOW_SIDE, MIN_WINDOW_SIDE, SaveThrottle, SaveToken, SessionSnapshot, TabSnapshot,
+    WindowBounds, WindowSnapshot,
 };
 pub use settings::{
     AppearanceSettings, ClearOnExit, DownloadSettings, MAX_LANGUAGE_TAG_BYTES,

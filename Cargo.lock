@@ -11664,6 +11664,8 @@ dependencies = [
 name = "talaria-core"
 version = "0.2.0"
 dependencies = [
+ "mercury-appearance",
+ "mercury-settings",
  "url",
 ]
 

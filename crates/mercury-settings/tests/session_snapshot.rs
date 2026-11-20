@@ -42,6 +42,7 @@ fn closed(n: usize) -> ClosedTab {
         window: n % 3,
         index: n,
         closed_at_ms: 1_000 + i64::try_from(n).expect("small"),
+        ..ClosedTab::default()
     }
 }
 
@@ -64,6 +65,7 @@ fn a_snapshot_survives_a_serde_round_trip() {
                     title: "Example — “quoted” 🦀".to_owned(),
                     zoom_percent: 150,
                     pinned: true,
+                    ..TabSnapshot::default()
                 },
                 tab("about:blank"),
             ],
@@ -76,6 +78,7 @@ fn a_snapshot_survives_a_serde_round_trip() {
             }),
             maximized: true,
             fullscreen: false,
+            ..WindowSnapshot::default()
         }],
         closed_tabs: vec![closed(1)],
         saved_at_ms: 1_763_200_000_000,

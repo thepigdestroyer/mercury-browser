@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 use crate::page_request::PageRequests;
 use crate::site_security::TabSiteSecurity;
-use crate::{BrowserCommand, BrowserEvent, BrowserState};
+use crate::{BrowserCommand, BrowserEvent, BrowserState, GroupId};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub struct TabId(u64);
@@ -45,6 +45,12 @@ pub struct Tab {
     site_security: TabSiteSecurity,
     // tabs-plus
     pinned: bool,
+    // groups-core
+    group: Option<GroupId>,
+    unread: bool,
+    crashed: bool,
+    /// The controller's activation count when the tab was last the active tab (0: never).
+    last_shown: u64,
 }
 
 impl Tab {
@@ -59,6 +65,10 @@ impl Tab {
             page_requests: PageRequests::default(),
             site_security: TabSiteSecurity::default(),
             pinned: false,
+            group: None,
+            unread: false,
+            crashed: false,
+            last_shown: 0,
         }
     }
 
@@ -162,6 +172,45 @@ impl Tab {
 
     pub(crate) fn set_pinned(&mut self, pinned: bool) {
         self.pinned = pinned;
+    }
+
+    // groups-core
+    /// The group the tab belongs to. Pinned tabs never have one.
+    pub const fn group(&self) -> Option<GroupId> {
+        self.group
+    }
+
+    /// Something happened to the tab in the background since the user last saw it: its page
+    /// finished loading, or its title or icon changed. Cleared when the tab becomes the active tab.
+    pub const fn is_unread(&self) -> bool {
+        self.unread
+    }
+
+    /// The tab's page crashed and has not started a new document since.
+    pub const fn has_crashed(&self) -> bool {
+        self.crashed
+    }
+
+    /// The controller's activation count when the tab was last the active tab; 0 if it never
+    /// was. A larger number is more recent.
+    pub(crate) const fn last_shown(&self) -> u64 {
+        self.last_shown
+    }
+
+    pub(crate) fn set_group(&mut self, group: Option<GroupId>) {
+        self.group = group;
+    }
+
+    pub(crate) fn set_unread(&mut self, unread: bool) {
+        self.unread = unread;
+    }
+
+    pub(crate) fn set_crashed(&mut self, crashed: bool) {
+        self.crashed = crashed;
+    }
+
+    pub(crate) fn set_last_shown(&mut self, last_shown: u64) {
+        self.last_shown = last_shown;
     }
 
     /// Whether the tab was restored and its page has not been created yet.
