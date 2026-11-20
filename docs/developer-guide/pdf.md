@@ -64,7 +64,24 @@ with actions that `downloads/mod.rs` performs (the block marked `pdf-viewer`).
 - A fetch that fails leaves a line in the downloads list. A second request for a one-time link can
   fail ("the site did not send the file again"): that is the downloads limitation, fixed when the
   engine hands over its own copy.
-- At start-up, files in `pdf-view/` older than a day (left by a crashed run) are removed.
+- **The fetch is bounded.** The request carries `DownloadRequest::max_bytes`
+  (`PRIVATE_COPY_MAX_BYTES`, the viewer's own `limits::MAX_FILE_BYTES`, 512 MiB). The download
+  crate refuses a response whose `Content-Length` (or `Content-Range` total) is over it before any
+  file is made, and stops a body that grows past it (a server with no length, or one that never
+  ends) before the byte that would cross it is written; the transfer then fails, its partial file
+  is removed, and the hand-off turns the `Failed` event into the note "The PDF could not be
+  opened: the file is larger than the 512 MiB limit". The tab stays on the PDF's address. Tests:
+  `mercury-downloads/tests/pdf_fetch.rs` (`/endless.pdf` is a chunked body that never ends).
+- **What removes a private file.** A closed tab, a tab that left the address, a newer offer, an
+  attachment, a body that is no PDF, a failed or cancelled fetch (as above); **the end of the run**
+  (`pdf::release()` in `release_window` of `post_run.rs`: every session is dropped, which stops its
+  helper and deletes its copy, then `clear_private_folder` removes what no session owns, such as a
+  fetch that finished as the run ended); and **the next start** (`sweep_at_start`: every file in
+  `pdf-view/` that is older than this run's start, which is all of them, because the profile is
+  locked by one Mercury and this run has fetched nothing yet). A crash or a forced quit therefore
+  leaves a copy only until the next start, not for a day. The copies "Open in Preview" makes in
+  `$TMPDIR/mercury-browser-pdf-open/` are the exception: another app may be reading them, so the
+  end of the run keeps them, and the next start (of any profile) removes those over a day old.
 
 The seam to the viewer is `PdfViewerSink` (`is_available`, `open(tab, url, PdfFile { path, owned })`,
 `tab_closed`) and `install_viewer`, both in `pdf_handoff.rs`; the viewer registers itself once at

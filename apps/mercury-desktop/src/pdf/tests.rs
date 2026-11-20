@@ -901,6 +901,69 @@ fn closing_the_tab_through_the_hand_off_ends_its_document() {
 }
 
 #[test]
+fn quitting_ends_every_document_and_deletes_the_private_copies_and_never_the_users_own_file() {
+    let rig = plain_rig(2);
+    let shown = rig.open("report.pdf");
+    rig.wait_for("the document to open", |rig| {
+        rig.state() == PdfViewState::Ready
+    });
+    // A background tab's document, which waits with its helper stopped, and a file the user
+    // opened from their own disk.
+    let background = private_copy_in(rig.folder.path(), "background.pdf");
+    rig.pdf.sessions.borrow_mut().insert(Session::new(
+        TabId::new(900),
+        url("https://a.test/background.pdf"),
+        DocumentFile {
+            path: background.path.clone(),
+            owned: true,
+        },
+        quiet(),
+    ));
+    let own = rig.folder.path().join("mine.pdf");
+    std::fs::write(&own, b"%PDF-1.4\n").expect("a file");
+    rig.pdf.sessions.borrow_mut().insert(Session::new(
+        TabId::new(901),
+        url("file:///Users/someone/mine.pdf"),
+        DocumentFile {
+            path: own.clone(),
+            owned: false,
+        },
+        quiet(),
+    ));
+    assert!(shown.exists() && background.path.exists());
+    assert_eq!(rig.pdf.sessions.borrow().tabs().len(), 3);
+    assert_eq!(rig.factory.started.get(), 1, "one helper runs");
+
+    // What the post-run sequence calls. The folder the hand-off fetches into belongs to the
+    // downloads module, which is not set up here: only the viewer's own side is checked.
+    let pdf = Rc::clone(&rig.pdf);
+    release();
+
+    assert!(pdf.sessions.borrow().is_empty(), "every document ended");
+    assert!(!shown.exists(), "the open document's private copy is gone");
+    assert!(!background.path.exists(), "so is a waiting tab's");
+    assert!(own.exists(), "the user's own file is never deleted");
+    assert!(
+        current().is_none(),
+        "the viewer is gone for the rest of the run"
+    );
+
+    // A file offered after that (a fetch that finished as the run ended) is nobody's to keep.
+    let late = private_copy_in(rig.folder.path(), "late.pdf");
+    Sink.open(
+        rig.tab(),
+        &url("https://a.test/late.pdf"),
+        PdfFile {
+            path: late.path.clone(),
+            owned: true,
+        },
+    );
+    assert!(!late.path.exists());
+    // Ending twice, or with no viewer, is quiet.
+    release();
+}
+
+#[test]
 fn a_second_offer_for_the_same_tab_replaces_the_document() {
     let rig = plain_rig(2);
     let first = rig.open("report.pdf");

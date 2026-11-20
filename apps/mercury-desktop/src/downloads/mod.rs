@@ -615,6 +615,7 @@ impl Downloads {
                         destination_dir: location::download_folder(),
                         suggested_name: suggested_name.clone(),
                         resume: None,
+                        max_bytes: None,
                     },
                 );
                 let Some(transfer) = downloads.manager().map(|manager| manager.start(request))
@@ -1106,6 +1107,7 @@ impl Downloads {
                         destination_dir: folder,
                         suggested_name: None,
                         resume: Some(resume),
+                        max_bytes: None,
                     },
                 );
                 let Some(transfer) = downloads.manager().map(|manager| manager.start(request))

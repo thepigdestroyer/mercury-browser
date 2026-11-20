@@ -235,6 +235,8 @@ async fn respond(stream: &mut TcpStream, port: u16, request: &Recorded) -> std::
             .await
         }
         "/redirect-to-pdf" => redirect(stream, "/doc.pdf").await,
+        // A PDF that never ends: no length, chunks until the client goes away.
+        "/endless.pdf" => endless_pdf(stream).await,
         "/slow.pdf" => slow_pdf(stream, 100_000).await,
         "/escape" => {
             let headers = [(
@@ -546,6 +548,7 @@ pub fn request(url: Url, destination_dir: &Path) -> DownloadRequest {
         destination_dir: destination_dir.to_path_buf(),
         suggested_name: None,
         resume: None,
+        max_bytes: None,
     }
 }
 
@@ -627,4 +630,33 @@ pub fn wait_started(receiver: &Receiver<DownloadEvent>, id: DownloadId) -> Downl
 /// The terminal event of a list produced by `events_until_done`.
 pub fn terminal(events: &[DownloadEvent]) -> &DownloadEvent {
     events.last().expect("at least one event")
+}
+
+/// How many chunks `/endless.pdf` sends at most, so that a client that never hangs up cannot keep
+/// the test server writing for ever (80 MB in all).
+pub const ENDLESS_MAX_CHUNKS: usize = 20_000;
+/// The size of one chunk of `/endless.pdf`.
+pub const ENDLESS_CHUNK: usize = 4096;
+
+/// A PDF that says no length and never ends: the marker, then filler in chunked pieces until the
+/// client hangs up. What a hostile server could send to fill a disk.
+async fn endless_pdf(stream: &mut TcpStream) -> std::io::Result<()> {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\n\
+                Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    stream.write_all(head.as_bytes()).await?;
+    let mut chunk = vec![b' '; ENDLESS_CHUNK];
+    chunk[..PDF_BODY.len()].copy_from_slice(PDF_BODY);
+    for _ in 0..ENDLESS_MAX_CHUNKS {
+        stream
+            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+            .await?;
+        stream.write_all(&chunk).await?;
+        stream.write_all(b"\r\n").await?;
+        stream.flush().await?;
+        chunk[..PDF_BODY.len()].fill(b' ');
+        // Yield, so that a client that has hung up is noticed and the runtime stays responsive.
+        tokio::task::yield_now().await;
+    }
+    stream.write_all(b"0\r\n\r\n").await?;
+    stream.shutdown().await
 }

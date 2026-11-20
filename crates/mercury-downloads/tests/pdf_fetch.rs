@@ -5,6 +5,9 @@
 //! `Content-Disposition` on `Started`, redirects, a body that is not a PDF, and a fetch that a
 //! newer offer cancels. The viewer's fetch is an ordinary transfer into a private folder; what
 //! turns it into a viewer or a download is the browser's decision on these events.
+//!
+//! The fetch is also bounded (`DownloadRequest::max_bytes`): a server that says its PDF is too
+//! big, or that streams one for ever, ends in a `Failed` event with no file left behind.
 
 mod support;
 
@@ -269,4 +272,103 @@ fn a_missing_pdf_fails_without_a_started_event_or_a_file() {
     assert_eq!(events.len(), 1);
     assert!(matches!(events[0], DownloadEvent::Failed { .. }));
     assert_eq!(TempDir::list(&dir.path), Vec::<String>::new());
+}
+
+fn failed_error(events: &[DownloadEvent]) -> &str {
+    match terminal(events) {
+        DownloadEvent::Failed {
+            error, resumable, ..
+        } => {
+            assert!(!resumable, "a file over the limit is never kept to resume");
+            error
+        }
+        other => panic!("expected Failed, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_pdf_that_never_ends_is_stopped_at_the_limit_and_leaves_no_file() {
+    const LIMIT: u64 = 100_000;
+    let server = TestServer::start();
+    let dir = TempDir::new("pdf-endless");
+    let (manager, events) = manager();
+    let mut view = request(server.url("/endless.pdf"), &dir.path);
+    view.max_bytes = Some(LIMIT);
+    let id = manager.start(view);
+    let events = events_until_done(&events, id);
+
+    // The response gave no length, so it was accepted and a file was started ...
+    assert!(
+        matches!(events[0], DownloadEvent::Started { .. }),
+        "{events:?}"
+    );
+    // ... and stopped when the body outgrew the limit, without writing past it.
+    assert_eq!(
+        failed_error(&events),
+        "the file is larger than the 100000 bytes limit"
+    );
+    for event in &events {
+        if let DownloadEvent::Progress { received_bytes, .. } = event {
+            assert!(*received_bytes <= LIMIT, "{received_bytes} > {LIMIT}");
+        }
+    }
+    assert_eq!(
+        TempDir::list(&dir.path),
+        Vec::<String>::new(),
+        "neither the file nor its partial file is left"
+    );
+}
+
+#[test]
+fn a_pdf_that_says_it_is_too_big_is_refused_before_any_file_is_made() {
+    let server = TestServer::start();
+    let dir = TempDir::new("pdf-too-big");
+    let (manager, events) = manager();
+    // `/slow.pdf` promises 102,400 bytes.
+    let mut view = request(server.url("/slow.pdf"), &dir.path);
+    view.max_bytes = Some(50_000);
+    let id = manager.start(view);
+    let events = events_until_done(&events, id);
+
+    assert_eq!(events.len(), 1, "no Started: {events:?}");
+    assert_eq!(
+        failed_error(&events),
+        "the file is larger than the 50000 bytes limit"
+    );
+    assert_eq!(TempDir::list(&dir.path), Vec::<String>::new());
+}
+
+#[test]
+fn the_limit_allows_exactly_its_size_and_no_limit_allows_anything() {
+    let server = TestServer::start();
+    let dir = TempDir::new("pdf-at-the-limit");
+    let (manager, events) = manager();
+
+    // Exactly the limit is allowed ...
+    let mut view = request(server.url("/doc.pdf"), &dir.path);
+    view.max_bytes = Some(PDF_BODY.len() as u64);
+    let id = manager.start(view);
+    let at_limit = events_until_done(&events, id);
+    assert_eq!(
+        std::fs::read(finished(&at_limit)).expect("the file"),
+        PDF_BODY
+    );
+
+    // ... one byte less is not.
+    let mut view = request(server.url("/doc.pdf"), &dir.path);
+    view.max_bytes = Some(PDF_BODY.len() as u64 - 1);
+    let id = manager.start(view);
+    let under = events_until_done(&events, id);
+    assert_eq!(under.len(), 1, "refused from its Content-Length: {under:?}");
+    assert!(failed_error(&under).starts_with("the file is larger than the"));
+    assert_eq!(TempDir::list(&dir.path), vec!["doc.pdf".to_owned()]);
+
+    // No limit is no limit.
+    let id = manager.start(request(server.url("/file.bin"), &dir.path));
+    let unlimited = events_until_done(&events, id);
+    assert_eq!(finished_len(&unlimited), 64 * 1024);
+}
+
+fn finished_len(events: &[DownloadEvent]) -> usize {
+    std::fs::read(finished(events)).expect("the file").len()
 }

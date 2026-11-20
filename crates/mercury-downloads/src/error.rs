@@ -38,6 +38,8 @@ pub(crate) enum TransferError {
     InvalidResume(&'static str),
     #[error("the download was interrupted")]
     Interrupted,
+    #[error("the file is larger than the {} limit", size_text(*limit))]
+    TooLarge { limit: u64 },
     /// Not shown to anyone: a cancelled transfer ends with `DownloadEvent::Cancelled`.
     #[error("cancelled")]
     Cancelled,
@@ -64,5 +66,44 @@ impl TransferError {
             }
             _ => false,
         }
+    }
+}
+
+/// A limit as people read it: whole mebibytes as `512 MiB`, anything else in bytes.
+fn size_text(bytes: u64) -> String {
+    const MIB: u64 = 1024 * 1024;
+    if bytes >= MIB && bytes.is_multiple_of(MIB) {
+        format!("{} MiB", bytes / MIB)
+    } else {
+        format!("{bytes} bytes")
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_limit_is_said_in_mebibytes_when_it_is_whole_ones() {
+        assert_eq!(
+            TransferError::TooLarge {
+                limit: 512 * 1024 * 1024
+            }
+            .to_string(),
+            "the file is larger than the 512 MiB limit"
+        );
+        assert_eq!(
+            TransferError::TooLarge { limit: 1_500_000 }.to_string(),
+            "the file is larger than the 1500000 bytes limit"
+        );
+        assert_eq!(
+            TransferError::TooLarge { limit: 1024 * 1024 }.to_string(),
+            "the file is larger than the 1 MiB limit"
+        );
+    }
+
+    #[test]
+    fn a_file_over_the_limit_is_not_worth_resuming() {
+        assert!(!TransferError::TooLarge { limit: 1 }.is_transient());
     }
 }

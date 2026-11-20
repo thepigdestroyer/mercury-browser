@@ -124,6 +124,20 @@ pub(crate) fn install(
     actions::sweep_old_copies();
 }
 
+/// The end of the run, called by `post_run.rs` (which also runs inside AppKit's terminate callback
+/// at log-out, so this starts no event loop and touches no Slint state): ends every document,
+/// which stops its helper and deletes its private copy, and then clears what is left in the
+/// private folder (a fetch that finished as the run ended, a cut-off partial file). A copy the
+/// user opened in another app stays: that app may still be reading it, and a later start removes
+/// it once it is a day old. Safe to call when the viewer was never installed.
+pub(crate) fn release() {
+    let pdf = PDF.with(|pdf| pdf.try_borrow_mut().ok().and_then(|mut pdf| pdf.take()));
+    if let Some(pdf) = pdf {
+        pdf.end_all();
+    }
+    crate::downloads::pdf_handoff::clear_private_folder();
+}
+
 /// What the PDF hand-off calls.
 struct Sink;
 
@@ -241,6 +255,22 @@ impl Pdf {
         if removed {
             self.schedule_sync();
         }
+    }
+
+    /// Ends every document: each helper stops and each private copy is deleted. Only for the end
+    /// of the run (`release`): the window is not synced afterwards.
+    fn end_all(&self) {
+        // Taken out of the cell first: dropping a session ends its helper, which takes a moment.
+        let sessions = match self.sessions.try_borrow_mut() {
+            Ok(mut sessions) => std::mem::take(&mut *sessions),
+            Err(_) => {
+                log::warn!(
+                    "the PDF documents were busy at the end of the run; the next start clears their copies"
+                );
+                return;
+            }
+        };
+        drop(sessions);
     }
 
     /// Has the window sync itself soon: a document arrived or went, and the sync decides what

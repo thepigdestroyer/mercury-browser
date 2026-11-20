@@ -73,13 +73,19 @@ has to open the file again later, it asks again. A wrong password says so and le
 ## Where the file goes
 
 Mercury fetches the PDF again for the viewer, with the same cookies as the page, and keeps it in a
-private folder inside your Mercury profile. That copy is removed when you close the tab and when
-the tab leaves the PDF. If Mercury is ended abruptly, a later start removes copies more than a day old. **Save a copy** saves
-the PDF to your Downloads folder like any other download. **Open in Preview** gives the file to the
-app your Mac uses for PDFs: a PDF you opened from your own disk is opened where it is, a PDF from
-the web is first copied, under its own name, into a private folder of the system's temporary
-files, which Mercury clears after a day. A PDF in a window that is run for a screenshot or in the
-background never opens another app.
+private folder inside your Mercury profile that only you can read. That fetch is not listed as a
+download, and it stops at 512 MiB, the largest file the viewer opens: a PDF that is bigger, or a
+server that never stops sending, is not opened, and the downloads list says "The PDF could not be
+opened: the file is larger than the 512 MiB limit". The copy is removed when you close the tab,
+when the tab leaves the PDF, and when you quit Mercury. If Mercury is ended abruptly (a crash, a
+power cut, a forced quit), the next start removes every copy that was left behind, at once.
+
+**Save a copy** saves the PDF to your Downloads folder like any other download. **Open in
+Preview** gives the file to the app your Mac uses for PDFs: a PDF you opened from your own disk is
+opened where it is, a PDF from the web is first copied, under its own name, into a private folder
+of the system's temporary files. That copy is not removed when you quit Mercury, because Preview
+may still be showing it; Mercury removes copies more than a day old the next time it starts. A PDF
+in a window that is run for a screenshot or in the background never opens another app.
 
 If a site marks a PDF as a file to save (not to show), Mercury saves it and does not open it. A PDF
 opened from your own disk (a `file:` address you typed in the address bar, or opened from another

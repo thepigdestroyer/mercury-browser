@@ -67,8 +67,8 @@ on, and fetches the file again itself:
     The engine has already fetched the whole file by the time Mercury notices it, and that copy
     is thrown away; Mercury then fetches it again. A large download therefore uses twice the
     bandwidth. Fixing this needs a change inside the engine, which is planned.
-    A PDF shown in the viewer is fetched again the same way, into a private copy that is removed
-    when you close the tab or leave the page.
+    A PDF shown in the viewer is fetched again the same way, into a private copy (not listed
+    here, and limited to 512 MiB) that is removed when you close the tab, leave the page or quit.
 
 Files of types the engine *can* show (text, images) open in the tab even when the site marks
 them as downloads. To save one, use **Save page as…**.

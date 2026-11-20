@@ -39,6 +39,12 @@ pub struct DownloadRequest {
     pub suggested_name: Option<String>,
     /// Continue an interrupted download instead of starting a new one.
     pub resume: Option<ResumeFrom>,
+    /// The most bytes the finished file may hold, `None` for no limit. A response that says
+    /// (`Content-Length`, or `Content-Range`'s total) it is bigger fails before any file is
+    /// made; a body that grows past it, whatever it said, stops there: the transfer fails with
+    /// a `Failed` event and its partial file is removed. For a fetch the user did not ask to
+    /// keep, such as the PDF viewer's private copy, so that a server cannot fill the disk.
+    pub max_bytes: Option<u64>,
 }
 
 impl fmt::Debug for DownloadRequest {
@@ -56,6 +62,7 @@ impl fmt::Debug for DownloadRequest {
             .field("destination_dir", &self.destination_dir)
             .field("suggested_name", &self.suggested_name)
             .field("resume", &self.resume)
+            .field("max_bytes", &self.max_bytes)
             .finish()
     }
 }

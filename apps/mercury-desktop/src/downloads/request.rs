@@ -78,6 +78,8 @@ pub(crate) struct RequestContext {
     pub(crate) destination_dir: PathBuf,
     pub(crate) suggested_name: Option<String>,
     pub(crate) resume: Option<ResumeFrom>,
+    /// The most bytes the file may hold; `None` for no limit (an ordinary download).
+    pub(crate) max_bytes: Option<u64>,
 }
 
 pub(crate) fn build_request(url: Url, context: RequestContext) -> DownloadRequest {
@@ -91,6 +93,7 @@ pub(crate) fn build_request(url: Url, context: RequestContext) -> DownloadReques
             .suggested_name
             .filter(|name| !name.trim().is_empty()),
         resume: context.resume,
+        max_bytes: context.max_bytes,
     }
 }
 
@@ -166,6 +169,7 @@ mod tests {
                 destination_dir: PathBuf::from("/scratch/downloads"),
                 suggested_name: Some("  ".into()),
                 resume: None,
+                max_bytes: Some(1_000),
             },
         );
         assert_eq!(request.url.as_str(), "https://files.example.com/a.zip");
@@ -182,6 +186,7 @@ mod tests {
         // A blank suggestion is no suggestion: the crate names the file.
         assert_eq!(request.suggested_name, None);
         assert_eq!(request.resume, None);
+        assert_eq!(request.max_bytes, Some(1_000));
 
         let named = build_request(
             url("https://example.com/img"),

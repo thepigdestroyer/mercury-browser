@@ -28,6 +28,13 @@
 //! - The tab stays on the PDF's address (no `GoBack`). When the fetch is done the viewer is
 //!   handed the file (owned, it deletes it) if the tab still shows the address; otherwise the
 //!   file is deleted. A closed tab cancels its fetch and removes its file.
+//! - The fetch stops at [`PRIVATE_COPY_MAX_BYTES`], what the viewer opens at most (a response
+//!   that says it is bigger is refused before a file is made, a body that outgrows it is cut off
+//!   and its file removed): a page can send the tab to a PDF that never ends, and nothing here
+//!   asks the user first. The fetch then fails and a one-line note says why.
+//! - A private file is removed by whatever ends its use: the tab closing or leaving the address,
+//!   a newer offer, the end of the run (`pdf::release` and [`clear_private_folder`]), and, for
+//!   what an abrupt end left, the next start ([`sweep_at_start`]).
 //! - `file:` addresses (only ones the user started) are read where they are, never copied.
 //!
 //! The system's PDF app is only ever started by [`Opener`], for a download the user started,
@@ -52,8 +59,8 @@ use url::Url;
 
 use super::request::{RequestContext, build_request, referrer_for};
 
-/// How long a private PDF file may stay before the next start-up removes it.
-pub(super) const CACHE_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
+/// The most bytes the viewer's private fetch writes: what the viewer opens at most.
+pub(super) const PRIVATE_COPY_MAX_BYTES: u64 = mercury_pdf::types::limits::MAX_FILE_BYTES;
 /// How long an ordinary download waits to be marked "open when finished" (the system viewer):
 /// the engine may keep it waiting briefly.
 const OPEN_NOTE_LIFETIME: Duration = Duration::from_secs(60);
@@ -410,6 +417,9 @@ impl PdfHandoff {
                 destination_dir: self.config.cache_dir.clone(),
                 suggested_name: Some((self.random_name)()),
                 resume: None,
+                // A page can send the tab to a PDF that never ends: the private copy stops at the
+                // largest file the viewer opens (the helper refuses more anyway).
+                max_bytes: Some(PRIVATE_COPY_MAX_BYTES),
             },
         )))
     }
@@ -735,20 +745,49 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
 }
 
 /// Start-up: removes the files an earlier run left in the private folder, on a thread of its own.
+///
+/// Every file already there is an earlier run's: the profile is locked by one running Mercury, and
+/// this run has fetched nothing yet (a profile-less run uses a folder named for its process). The
+/// cut-off is taken before the thread starts, so a file this run makes meanwhile is never removed.
 pub(super) fn sweep_at_start() {
     let dir = configured().cache_dir;
+    let started = SystemTime::now();
     std::thread::spawn(move || {
-        let removed = sweep(&dir, SystemTime::now(), CACHE_MAX_AGE);
+        let removed = sweep(&dir, started);
         if removed > 0 {
-            log::info!("removed {removed} old PDF file(s) from {}", dir.display());
+            log::info!(
+                "removed {removed} PDF file(s) an earlier run left in {}",
+                dir.display()
+            );
         }
     });
 }
 
-/// Removes files in `dir` last changed more than `max_age` before `now`: what an earlier run
-/// left behind. Only regular files are touched, and nothing in a sub-folder. Returns how many
-/// were removed.
-pub(super) fn sweep(dir: &Path, now: SystemTime, max_age: Duration) -> usize {
+/// Removes the files in `dir` last changed before `started`, the time this run began: what an
+/// earlier run left behind (it was ended abruptly; a normal end removes its own). Only regular
+/// files are touched, and nothing in a sub-folder. Returns how many were removed.
+pub(super) fn sweep(dir: &Path, started: SystemTime) -> usize {
+    remove_regular_files(dir, |modified| {
+        // A file that cannot say when it changed is not known to be this run's: it goes.
+        modified.is_none_or(|modified| modified < started)
+    })
+}
+
+/// The end of the run: removes every file still in the private folder. Called after the viewer's
+/// sessions have deleted theirs and the download manager has stopped, so what is left belongs to
+/// nobody: a fetch that finished as the run ended, a partial file. Returns how many were removed.
+pub(crate) fn clear_private_folder() -> usize {
+    let dir = configured().cache_dir;
+    let removed = remove_regular_files(&dir, |_| true);
+    if removed > 0 {
+        log::info!("removed {removed} PDF file(s) from {}", dir.display());
+    }
+    removed
+}
+
+/// Removes the regular files directly in `dir` for which `remove` (given when the file was last
+/// changed, if it says) answers yes. Returns how many were removed.
+fn remove_regular_files(dir: &Path, remove: impl Fn(Option<SystemTime>) -> bool) -> usize {
     let Ok(entries) = fs::read_dir(dir) else {
         return 0;
     };
@@ -760,12 +799,7 @@ pub(super) fn sweep(dir: &Path, now: SystemTime, max_age: Duration) -> usize {
         if !metadata.file_type().is_file() {
             continue;
         }
-        let old = metadata
-            .modified()
-            .ok()
-            .and_then(|modified| now.duration_since(modified).ok())
-            .is_some_and(|age| age > max_age);
-        if old && fs::remove_file(entry.path()).is_ok() {
+        if remove(metadata.modified().ok()) && fs::remove_file(entry.path()).is_ok() {
             removed += 1;
         }
     }
@@ -1176,6 +1210,13 @@ mod tests {
         );
         assert_eq!(request.destination_dir, rig.folder.path().join("pdf-view"));
         assert_eq!(request.suggested_name.as_deref(), Some("random-1.pdf"));
+        // A page can send the tab to a PDF that never ends: the copy stops at what the viewer
+        // opens at most, 512 MiB.
+        assert_eq!(
+            request.max_bytes,
+            Some(mercury_pdf::types::limits::MAX_FILE_BYTES)
+        );
+        assert_eq!(request.max_bytes, Some(512 * 1024 * 1024));
         #[cfg(unix)]
         {
             use std::os::unix::fs::PermissionsExt;
@@ -1450,6 +1491,34 @@ mod tests {
     }
 
     #[test]
+    fn a_fetch_that_outgrows_the_limit_is_a_note_and_never_reaches_the_viewer() {
+        let rig = rig(false);
+        let sink = install(true);
+        fetch(&rig, 1, "https://files.example/endless.pdf", 7);
+        // The download crate stops the body at the limit and says so (its own test is
+        // `pdf_fetch::a_pdf_that_never_ends_is_stopped_at_the_limit_and_leaves_no_file`).
+        let (rest, actions) = rig.handoff.events(
+            vec![DownloadEvent::Failed {
+                id: DownloadId(7),
+                error: "the file is larger than the 512 MiB limit".into(),
+                resumable: false,
+            }],
+            &always,
+        );
+        assert!(rest.is_empty(), "never listed as a download");
+        let [Action::Note { name, message }] = actions.as_slice() else {
+            panic!("{actions:?}")
+        };
+        assert_eq!(name, "endless.pdf");
+        assert_eq!(
+            message,
+            "The PDF could not be opened: the file is larger than the 512 MiB limit"
+        );
+        assert!(sink.opened.borrow().is_empty());
+        assert_eq!(rig.handoff.fetches(), 0);
+    }
+
+    #[test]
     fn a_fetch_that_cannot_start_is_a_note() {
         let rig = rig(false);
         let _sink = install(true);
@@ -1624,33 +1693,68 @@ mod tests {
     // ── Start-up ────────────────────────────────────────────────────────────────────────
 
     #[test]
-    fn the_start_up_sweep_removes_only_old_regular_files() {
+    fn the_start_up_sweep_removes_what_an_earlier_run_left_and_nothing_of_this_one() {
         let folder = tempfile::tempdir().unwrap();
-        let old = folder.path().join("old.pdf");
-        let fresh = folder.path().join("fresh.pdf");
-        fs::write(&old, b"%PDF-").unwrap();
-        fs::write(&fresh, b"%PDF-").unwrap();
+        // Whole seconds, so that a file system that keeps no finer time still tells the same
+        // answer: the run began at a time it can store exactly.
+        let started = SystemTime::UNIX_EPOCH
+            + Duration::from_secs(
+                SystemTime::now()
+                    .duration_since(SystemTime::UNIX_EPOCH)
+                    .unwrap()
+                    .as_secs(),
+            );
+        let set_modified = |path: &Path, when: SystemTime| {
+            let handle = fs::File::options().write(true).open(path).unwrap();
+            handle.set_modified(when).unwrap();
+        };
+        // An earlier run's, from a minute ago and from long ago (a crash left it, however recent).
+        let minute_ago = folder.path().join("minute-ago.pdf");
+        let long_ago = folder.path().join("long-ago.pdf.part");
+        fs::write(&minute_ago, b"%PDF-").unwrap();
+        fs::write(&long_ago, b"%PDF-").unwrap();
+        set_modified(&minute_ago, started - Duration::from_secs(60));
+        set_modified(&long_ago, started - Duration::from_secs(30 * 24 * 60 * 60));
+        // This run's, made as the sweep thread starts (the very moment counts as this run's).
+        let at_start = folder.path().join("at-start.pdf");
+        let later = folder.path().join("later.pdf.part");
+        fs::write(&at_start, b"%PDF-").unwrap();
+        fs::write(&later, b"%PDF-").unwrap();
+        set_modified(&at_start, started);
+        set_modified(&later, started + Duration::from_secs(5));
+        // Only regular files at the top are touched.
         fs::create_dir(folder.path().join("sub")).unwrap();
         fs::write(folder.path().join("sub").join("inner.pdf"), b"%PDF-").unwrap();
-        let handle = fs::File::options().write(true).open(&old).unwrap();
-        handle
-            .set_modified(SystemTime::now() - Duration::from_secs(2 * 24 * 60 * 60))
-            .unwrap();
-        drop(handle);
 
-        assert_eq!(sweep(folder.path(), SystemTime::now(), CACHE_MAX_AGE), 1);
-        assert!(!old.exists());
-        assert!(fresh.exists());
+        assert_eq!(sweep(folder.path(), started), 2);
+        assert!(!minute_ago.exists() && !long_ago.exists());
+        assert!(at_start.exists() && later.exists());
         assert!(folder.path().join("sub").join("inner.pdf").exists());
         // A folder that is not there is nothing to sweep.
+        assert_eq!(sweep(&folder.path().join("missing"), started), 0);
+    }
+
+    #[test]
+    fn the_end_of_the_run_clears_the_private_folder_of_what_nobody_owns() {
+        let profile = tempfile::tempdir().unwrap();
+        configure(Some(profile.path()), false);
+        let dir = profile.path().join("pdf-view");
+        // Nothing made yet: nothing to do.
+        assert_eq!(clear_private_folder(), 0);
+        fs::create_dir_all(dir.join("sub")).unwrap();
+        // A fetch that finished as the run ended, and one that was cut off.
+        fs::write(dir.join("finished.pdf"), b"%PDF-").unwrap();
+        fs::write(dir.join("cut.pdf.part"), b"%PDF-").unwrap();
+        fs::write(dir.join("sub").join("inner.pdf"), b"%PDF-").unwrap();
+
+        assert_eq!(clear_private_folder(), 2);
         assert_eq!(
-            sweep(
-                &folder.path().join("missing"),
-                SystemTime::now(),
-                CACHE_MAX_AGE
-            ),
-            0
+            fs::read_dir(&dir).unwrap().count(),
+            1,
+            "only the sub-folder"
         );
+        assert!(dir.join("sub").join("inner.pdf").exists());
+        assert_eq!(clear_private_folder(), 0);
     }
 
     #[test]

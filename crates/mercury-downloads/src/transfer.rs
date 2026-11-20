@@ -313,6 +313,12 @@ impl Transfer {
         } else {
             response.content_length()
         };
+        // A response that says it is too big is refused before any file is made.
+        if let (Some(limit), Some(total)) = (request.max_bytes, total)
+            && total > limit
+        {
+            return Err(TransferError::TooLarge { limit });
+        }
         let final_url = response.url().clone();
 
         let (dir, target, part, file) = match plan {
@@ -456,6 +462,13 @@ impl Transfer {
                 Ok(Ok(Ok(None))) => break Ok(()),
                 Ok(Ok(Ok(Some(chunk)))) => chunk,
             };
+            // A body that grows past the limit stops there, whatever it said it would be, so
+            // the file on disk never holds more than the limit.
+            if let Some(limit) = self.request.max_bytes
+                && received.saturating_add(chunk.len() as u64) > limit
+            {
+                break Err(TransferError::TooLarge { limit });
+            }
             if let Err(error) = writer.write_all(&chunk).await {
                 break Err(TransferError::Io(error));
             }
