@@ -100,6 +100,16 @@ pub const FIXTURES: &[Fixture] = &[
         height: 180,
         duration_ms: 8000,
     },
+    Fixture {
+        name: "av1-low-av1c",
+        path: "webm/video-av1-low-av1c.webm",
+        container: Container::WebM,
+        kind: MediaKind::Video,
+        mime: "video/webm; codecs=\"av01.0.00M.08\"",
+        width: 320,
+        height: 180,
+        duration_ms: 8000,
+    },
 ];
 
 /// `spikes/mse/fixtures/`, found from `CARGO_MANIFEST_DIR` at compile time.

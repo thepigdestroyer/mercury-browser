@@ -63,7 +63,8 @@ fn every_fixture_name_is_unique_and_loads() {
     names.dedup();
     assert_eq!(names.len(), FIXTURES.len());
     assert!(matches!(load("nope"), Err(SplitError::UnknownFixture(_))));
-    assert_eq!(all().len(), 9);
+    // Nine fixtures of the lane plus `av1-low-av1c`, the control added after the AV1 review.
+    assert_eq!(all().len(), 10);
 }
 
 #[test]

@@ -7,7 +7,10 @@
 # bytes and fixtures/SHA256SUMS are the reference (the MP4 muxers write the current time into the
 # movie header, so a rerun gives equivalent files, not identical bytes).
 #
-#   spikes/mse/fixtures/gen.sh [output-directory]       default: this directory
+#   spikes/mse/fixtures/gen.sh [output-directory] [av1c]   default: this directory, all fixtures
+#
+# With the word `av1c` as the second argument only the AV1 control fixture is made (see the end of the
+# script): the other fixtures keep their committed bytes, because the MP4 muxers write the time.
 #
 # Content: 8.0 s, 25 fps, a key frame every 2 s (50 frames), fragments of 2 s (4 media segments). The
 # video background is red for the first 4 s and blue for the last 4 s, with a small black ball, so
@@ -26,6 +29,7 @@ set -eu
 here="$(cd "$(dirname -- "$0")" && pwd -P)"
 root="$(cd "$here/../../.." && pwd -P)"
 out="${1:-$here}"
+only="${2:-}"
 
 if [ -z "${MERCURY_GSTREAMER_PREFIX:-}" ]; then
     MERCURY_GSTREAMER_PREFIX="$("$root/scripts/macos/gstreamer.sh" prefix)"
@@ -100,6 +104,66 @@ vp9() {
         $(video_sources "$2" "$3")
 }
 
+# av1c_control: the AV1 control fixture. The fixture video-av1-low.webm above carries a hand-written
+# four-byte av1C (81 00 0c 00) and no sequence header OBU; Apple's VideoToolbox only starts an AV1
+# session when the av1C includes it (community recipe), so a decode failure on a chip without AV1
+# hardware could be the fixture's fault rather than the chip's. This one has the complete record: the
+# same four bytes followed by the sequence header OBU that svtav1enc writes at the start of the stream
+# (read from a first, raw encode with the same settings: the sequence header depends on the settings,
+# not on the pictures). The file is otherwise the same stream.
+av1c_control() {
+    # shellcheck disable=SC2046 # the source description is meant to be split into words
+    gl concat name=c ! identity single-segment=true ! videoconvert ! video/x-raw,format=I420 \
+        ! svtav1enc target-bitrate=150 intra-period-length=49 preset=10 \
+        ! av1parse ! "video/x-av1,stream-format=(string)obu-stream,alignment=(string)tu" \
+        ! filesink location="$scratch/av1.obu" \
+        $(video_sources 320 180)
+    # A temporal unit starts with the temporal delimiter OBU (12 00), then the sequence header OBU:
+    # header byte 0a (type 1, has a size field), one LEB128 size byte (below 128), the payload.
+    hex="$(od -An -v -tx1 -N64 "$scratch/av1.obu" | tr -d ' \n')"
+    case "$hex" in
+        12000a??*) ;;
+        *)
+            printf '%s\n' "gen.sh: the raw AV1 stream does not start with a temporal delimiter and a sequence header OBU" >&2
+            exit 1
+            ;;
+    esac
+    size=$((0x$(printf '%s' "$hex" | cut -c7-8)))
+    if [ "$size" -ge 128 ] || [ "$size" -lt 1 ]; then
+        printf '%s\n' "gen.sh: unexpected sequence header size $size" >&2
+        exit 1
+    fi
+    seq_obu="$(printf '%s' "$hex" | cut -c5-$((8 + 2 * size)))"
+    # shellcheck disable=SC2046
+    gl concat name=c ! identity single-segment=true ! videoconvert ! video/x-raw,format=I420 \
+        ! svtav1enc target-bitrate=150 intra-period-length=49 preset=10 \
+        ! av1parse ! "video/x-av1,stream-format=(string)obu-stream,alignment=(string)tu,codec_data=(buffer)81000c00$seq_obu" \
+        ! webmmux streamable=true ! filesink location="$out/webm/video-av1-low-av1c.webm" \
+        $(video_sources 320 180)
+    # The sequence header must be in the file twice at least: in CodecPrivate and in the first key frame.
+    rest="$(od -An -v -tx1 "$out/webm/video-av1-low-av1c.webm" | tr -d ' \n')"
+    found=0
+    while :; do
+        case "$rest" in
+            *"$seq_obu"*)
+                found=$((found + 1))
+                rest="${rest#*"$seq_obu"}"
+                ;;
+            *) break ;;
+        esac
+    done
+    if [ "$found" -lt 2 ]; then
+        printf '%s\n' "gen.sh: the sequence header $seq_obu occurs $found time(s) in video-av1-low-av1c.webm, expected 2 or more" >&2
+        exit 1
+    fi
+}
+
+if [ "$only" = av1c ]; then
+    av1c_control
+    printf '%s\n' "gen.sh: wrote the AV1 control fixture to $out/webm"
+    exit 0
+fi
+
 # P0
 h264 video-h264-low.mp4 320 180 150000
 h264 video-h264-high.mp4 640 360 400000
@@ -149,5 +213,7 @@ gl concat name=c ! identity single-segment=true ! videoconvert ! video/x-raw,for
     ! av1parse ! "video/x-av1,stream-format=(string)obu-stream,alignment=(string)tu,codec_data=(buffer)81000c00" \
     ! webmmux streamable=true ! filesink location="$out/webm/video-av1-low.webm" \
     $(video_sources 320 180)
+
+av1c_control
 
 printf '%s\n' "gen.sh: wrote the fixtures to $out"

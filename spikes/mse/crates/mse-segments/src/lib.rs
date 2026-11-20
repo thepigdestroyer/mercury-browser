@@ -13,10 +13,14 @@
 //!   WebM `Tracks`), never typed by hand.
 //! * [`shift_media_time`], [`tile`] and [`with_pssh`] rewrite streams for the timestamp-offset, memory
 //!   and protection scenarios.
+//! * [`with_cenc_protection`] declares the first track protected (`encv`/`sinf`/`tenc`), without encrypting a
+//!   sample, for the protection-event probe.
 //! * [`FIXTURES`] / [`load`] give the committed media under `spikes/mse/fixtures/`.
 
+mod av1;
 mod bmff;
 mod bytes;
+mod cenc;
 mod chunking;
 mod ebml;
 mod fixtures;
@@ -29,6 +33,8 @@ mod tests;
 mod testutil;
 mod webm;
 
+pub use av1::{Av1Config, obu_types, webm_av1_config};
+pub use cenc::{CencInfo, cenc_info, with_cenc_protection};
 pub use chunking::chunks;
 pub use fixtures::{FIXTURES, fixture, fixtures_dir, load, read_fixture};
 pub use mp4::split_mp4;

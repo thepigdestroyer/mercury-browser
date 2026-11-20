@@ -125,6 +125,7 @@ path = [
   "spikes/mse/fixtures/fmp4/video-h264-low.mp4",
   "spikes/mse/fixtures/webm/audio-opus.webm",
   "spikes/mse/fixtures/webm/video-av1-low.webm",
+  "spikes/mse/fixtures/webm/video-av1-low-av1c.webm",
   "spikes/mse/fixtures/webm/video-vp9-high.webm",
   "spikes/mse/fixtures/webm/video-vp9-low.webm",
 ]

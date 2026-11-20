@@ -7,7 +7,7 @@ committed bytes (listed with their SHA-256 in [`SHA256SUMS`](SHA256SUMS)) are th
 muxers write the current time into the movie header, so rerunning `gen.sh` gives equivalent files, not
 identical ones. Committed bytes make the Intel and the Apple Silicon runs comparable.
 
-Total size: 586,658 bytes (budget 1.5 MB). Read them from Rust through `mse_segments::load(name)`, which
+Total size: 639,615 bytes (budget 1.5 MB). Read them from Rust through `mse_segments::load(name)`, which
 splits a fixture into its initialisation segment and media segments and derives the type string.
 
 ## Content
@@ -39,9 +39,11 @@ segments) unless the table says otherwise.
 | `vp9-high` | `webm/video-vp9-high.webm` | 112,844 | 4 x 2000 ms | `video/webm; codecs="vp09.00.21.08"` | `7b75f6c4df54416d29def986565722dc377f600a006a31f38c90c53e13382022` |
 | `opus` | `webm/audio-opus.webm` | 27,676 | **16 x 500 ms** | `audio/webm; codecs="opus"` | `8c3ed7c0eccbef7d012ed1532402d18678e1bf80cf4035c207c5f4973aa56e88` |
 | `av1-low` | `webm/video-av1-low.webm` | 52,986 | 4 x 2000 ms | `video/webm; codecs="av01.0.00M.08"` | `0913c716e09c0390253992e2c50a229ccd7c78190e2b6877cc14e9320b7fb53a` |
+| `av1-low-av1c` | `webm/video-av1-low-av1c.webm` | 52,957 | 4 x 2000 ms | `video/webm; codecs="av01.0.00M.08"` | `d7d133abc40d49e190d68c71e3535d4c59e64022354f3ecc1cd6c418de7cbbc7` |
 
 Priorities in the lane brief: P0 `h264-low`, `h264-high`, `aac`; P1 `h264-aac`, `vp9-low`, `vp9-high`, `opus`,
-`h264-bframes`; P2 `av1-low`. All nine were made.
+`h264-bframes`; P2 `av1-low`. All nine were made; the tenth, `av1-low-av1c`, is a control added after a review
+(below).
 
 ## Things that differ from "four 2 s segments", and why
 
@@ -76,6 +78,17 @@ Priorities in the lane brief: P0 `h264-low`, `h264-high`, `aac`; P1 `h264-aac`, 
   switch (`concat` changes the segment there) until `identity single-segment=true` was put in front of it.
   The type string is `av01.0.00M.08`: level index 0 is level 2.0, as the encoder chose; `rav1enc` would say
   level index 31.
+* **`av1-low-av1c`: the control for `av1-low`.** The same stream settings with the **complete** `av1C` record as
+  CodecPrivate: the four bytes `81 00 0c 00` followed by the sequence header OBU (`0a 0e` and 14 payload bytes,
+  16 bytes in all) that `svtav1enc` writes at the start of the stream. Apple's VideoToolbox only starts an AV1
+  decode session when the record carries the sequence header (a community recipe, not an Apple statement), so
+  a failure of `av1-low` on a Mac could be the fixture's fault and not the chip's; this file takes that
+  explanation away. `gen.sh` reads the sequence header from a first, raw encode (it depends on the settings,
+  not on the pictures) and checks that it occurs at least twice in the muxed file (CodecPrivate and the first
+  key frame). It is a fresh encode, so its frames are not byte for byte those of `av1-low` (the encoder is
+  not bit-reproducible: 52,957 against 52,986 bytes); the four fixed bytes and the type string are the same.
+  `gen.sh <dir> av1c` makes only this file. Tests: `mse_segments::av1` (the two records, the OBU walk, the
+  sequence header found again in the first media segment).
 
 ## Encoders and settings
 
@@ -97,6 +110,7 @@ licence, vo-aacenc Apache-2.0, VideoToolbox is part of macOS).
 | `vp9-high` | same, `target-bitrate=400000`, 640x360 | same |
 | `opus` | `opusenc bitrate=24000` (frames of 960 samples) | `webmmux streamable=true` |
 | `av1-low` | `svtav1enc target-bitrate=150 intra-period-length=49 preset=10`, `av1parse`, obu-stream/tu, codec_data `81000c00` | `webmmux streamable=true` |
+| `av1-low-av1c` | same, with codec_data `81000c00` followed by the sequence header OBU | `webmmux streamable=true` |
 
 ## Commands
 
