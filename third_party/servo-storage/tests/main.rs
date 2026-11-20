@@ -4,5 +4,9 @@
 
 mod cache_storage;
 mod client_storage;
+// Mercury: the multiEntry rows of the IndexedDB item (tests/indexeddb_multientry.rs, item 4).
+mod indexeddb_multientry;
 mod storage_thread;
+// Mercury: Web Locks (tests/weblocks.rs).
+mod weblocks;
 mod webstorage;
