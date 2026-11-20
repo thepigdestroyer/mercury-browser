@@ -9,6 +9,8 @@ use layout_api::{
     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutElementType, LayoutNodeType,
     SVGElementData,
 };
+// Mercury: lane txt-1 (EB7).
+use layout_api::{HighlightKind, TextHighlight, TextHighlights};
 use net_traits::image_cache::Image;
 use pixels::ImageMetadata;
 use script_bindings::codegen::InheritTypes::{
@@ -278,6 +280,40 @@ impl<'dom> LayoutDom<'dom, Node> {
         let end =
             is_end_node.then(|| Utf16CodeUnits(range.end.offset).to_utf32_code_units_in(&text));
         Some(RangeAny::new(start, end))
+    }
+
+    // Mercury: lane txt-1 (EB7). Beside `selection_for_text_node`, which is unchanged.
+    /// The typed highlights that cover this text node: the ranges of its document's
+    /// [`HighlightSet`](crate::dom::highlights::HighlightSet) that script resolved for it at the
+    /// last reflow, or, for the text of a text control, the marked text of the control's IME
+    /// composition. Offsets are in `char`s of the node's text.
+    pub(crate) fn highlights_for_text_node(&self) -> TextHighlights {
+        if let Some(shadow_root) = self.containing_shadow_root_for_layout() {
+            let host = shadow_root.get_host_for_layout();
+            let composition = if let Some(input) = host.downcast::<HTMLInputElement>() {
+                Some(input.composition_for_layout())
+            } else {
+                host.downcast::<HTMLTextAreaElement>()
+                    .map(|textarea| textarea.composition_for_layout())
+            };
+            if let Some(composition) = composition {
+                // The text of a text control is in a user agent widget: no range of the
+                // document reaches it, only the composition of the control does.
+                return composition
+                    .map(|range| TextHighlight {
+                        kind: HighlightKind::Composition,
+                        range,
+                    })
+                    .into_iter()
+                    .collect();
+            }
+        }
+
+        if !self.unsafe_get().get_flag(NodeFlags::OVERLAPS_HIGHLIGHT) {
+            return TextHighlights::new();
+        }
+        self.owner_doc_for_layout()
+            .highlights_for_node_for_layout(self.opaque())
     }
 
     pub(crate) fn text_node_paints_caret(&self) -> bool {

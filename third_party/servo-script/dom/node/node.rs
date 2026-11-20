@@ -202,7 +202,13 @@ bitflags! {
         /// animating image. This flag is never cleared once it is set.
         const HAS_EVER_ANIMATED = 1 << 3;
 
-        // There are two free bits here.
+        // Mercury: lane txt-1 (EB7) takes one of the two free bits.
+        /// Whether this text node is covered by a typed highlight of its document (an IME
+        /// composition, a find match, ...: see `dom::highlights`). Layout only asks the nodes that
+        /// have it.
+        const OVERLAPS_HIGHLIGHT = 1 << 4;
+
+        // There is one free bit here.
 
         /// Specifies whether the parser has set an associated form owner for
         /// this element. Only applicable for form-associatable elements.

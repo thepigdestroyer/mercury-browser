@@ -352,6 +352,11 @@ pub(crate) struct SharedTextRunData {
     /// Whether a caret should be painted when the selection is an empty range (start == end)
     // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
     pub paints_caret: AtomicBool,
+    // Mercury: lane txt-1 (EB7). Beside `selection`, which stays the fast path for the document
+    // selection and the caret.
+    /// The typed highlights (IME composition, find matches, spelling, ...) of this text run, in
+    /// offsets of the originating DOM node's text like `selection`. Painted without a relayout.
+    pub highlights: AtomicRefCell<layout_api::TextHighlights>,
     /// Whether a caret placeholder should be added for empty text runs or for empty
     /// lines after a forced line break.
     pub needs_caret_placeholder: bool,

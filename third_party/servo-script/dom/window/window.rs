@@ -2779,6 +2779,8 @@ impl Window {
         if let Some(selection) = document.selection() {
             selection.update_overlaps_document_selection_flags(cx.no_gc());
         }
+        // Mercury: lane txt-1 (EB7). Push the typed highlights (IME composition, find, ...) to layout.
+        document.update_highlights(cx.no_gc());
 
         let restyle_reason = document.restyle_reason(cx.no_gc());
         document.clear_restyle_reasons();

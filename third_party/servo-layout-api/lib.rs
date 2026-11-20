@@ -105,6 +105,12 @@ pub trait GenericLayoutDataTrait: Any + MallocSizeOfTrait + Send + Sync + 'stati
         new_paints_caret: bool,
     ) -> bool;
 
+    // Mercury: new method (lane txt-1, EB7), next to `set_text_run_selection` and independent of it.
+    /// Returns whether `highlights` was successfully set on an existing text run. The highlights
+    /// replace the previous ones of the text run (an empty set clears them); they are painted
+    /// beside the selection and a new display list (not a new layout) is enough to show them.
+    fn set_text_run_highlights(&self, highlights: TextHighlights) -> bool;
+
     /// Set whether or not this node is selected when it is an element. Returns `true`
     /// if anything changed that requires a new display list.
     fn set_element_selection(&self, selected: bool) -> bool;
