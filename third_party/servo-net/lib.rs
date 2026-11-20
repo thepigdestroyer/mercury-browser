@@ -33,6 +33,18 @@ pub mod subresource_integrity;
 pub mod test_util;
 mod websocket_loader;
 
+// Mercury: the network policy handle and everything that asks it (net-1 lane). `net_policy` is the handle and
+// the sites of a request (EC5, EC6, EC14, EC17, EC25, EC38); `mercury_cookies` its cookie rules (third-party
+// blocking, SameSite); `mercury_rewrite` the request rewrite hook (EC37); `mercury_mixed_content` the
+// mixed-content allow and report (EC17); `mercury_ws` WebSockets through the proxy (EC23a); `mercury_auth`
+// the limits on sign-in prompts for `fetch` and XHR (EC29). All are Mercury files.
+pub mod mercury_auth;
+mod mercury_cookies;
+mod mercury_mixed_content;
+mod mercury_rewrite;
+mod mercury_ws;
+pub mod net_policy;
+
 /// An implementation of the [Fetch specification](https://fetch.spec.whatwg.org/)
 pub mod fetch {
     pub mod cors_cache;
