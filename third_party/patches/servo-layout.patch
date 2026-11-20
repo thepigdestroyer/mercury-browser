@@ -22,6 +22,28 @@ diff --git a/Cargo.toml b/Cargo.toml
  [dependencies.app_units]
  version = "0.7"
 
+diff --git a/accessibility/frames.rs b/accessibility/frames.rs
+new file mode 100644
+--- /dev/null
++++ b/accessibility/frames.rs
+@@ -0,0 +1,17 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: a11y-1 item 5 (`actions-frames`) owns this file. The lead's stub only keeps the pinned
++// interface in place so that item 4's call compiles; item 5 replaces the body (EE7, iframes). See
++// `.superpowers/sdd/lane-a11y-1-brief.md`.
++
++use accesskit::TreeId;
++use script::layout_dom::ServoLayoutNode;
++
++/// The tree id of the document inside an `<iframe>` or `<frame>` node, so that the node can graft
++/// it; `None` for every other node, or when the nested document is not known yet.
++#[allow(dead_code)]
++pub(super) fn child_tree_id(_dom_node: &ServoLayoutNode<'_>) -> Option<TreeId> {
++    None
++}
 diff --git a/display_list/mod.rs b/display_list/mod.rs
 --- a/display_list/mod.rs
 +++ b/display_list/mod.rs
