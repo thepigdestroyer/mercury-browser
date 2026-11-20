@@ -264,10 +264,12 @@ mod tests {
         let on = WebSettings {
             experimental_web_features: true,
             gpu_canvas: true,
+            ..WebSettings::default()
         };
         let off = WebSettings {
             experimental_web_features: false,
             gpu_canvas: false,
+            ..WebSettings::default()
         };
         let disabled_on_the_command_line = LaunchOptions {
             gpu_canvas: false,

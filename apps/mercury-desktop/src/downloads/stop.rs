@@ -128,6 +128,7 @@ mod tests {
             destination_dir: folder.path().to_path_buf(),
             suggested_name: None,
             resume: None,
+            max_bytes: None,
         });
         let list = RefCell::new(DownloadList::default());
         list.borrow_mut().begin(NewItem {

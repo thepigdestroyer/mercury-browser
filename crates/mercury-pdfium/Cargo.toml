@@ -1,0 +1,28 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-pdfium"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The PDFium backend of the PDF viewer, and the helper process's entry point (`--pdf-worker`).
+# PDFium itself is a prebuilt dynamic library (scripts/macos/pdfium.sh) that this crate loads at run
+# time by path; nothing is linked at build time, so the crate builds without it. Light crate.
+[dependencies]
+mercury-pdf = { path = "../mercury-pdf" }
+# Pinned exactly in the workspace; the PDFium release it binds to is named in the root Cargo.toml.
+pdfium-render.workspace = true
+# The worker's process hygiene (signals, core dumps, terminal check): the only unsafe code of the
+# viewer, each use with a SAFETY comment.
+libc.workspace = true
+log.workspace = true
+
+# `src/bin/mercury-pdf-worker.rs` runs the helper without the browser: the tests of this crate
+# (CARGO_BIN_EXE_mercury-pdf-worker) and the memory and speed measurements use it.
+[[bin]]
+name = "mercury-pdf-worker"
+path = "src/bin/mercury-pdf-worker.rs"
+test = false

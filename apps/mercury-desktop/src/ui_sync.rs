@@ -85,6 +85,7 @@ pub(crate) fn sync_ui(window: &MainWindow, controller: &BrowserController) {
     window.set_status_text(single_line(state.status_text().unwrap_or_default()).into());
     sync_fullscreen(window, state.is_fullscreen());
     window.set_web_view_visible(area.web_view_visible);
+    crate::pdf::sync_window(window, controller); // pdf-viewer lane: a PDF in front hides the engine's page
     // tabs: the "Pop-up blocked" indicator
     window.set_pop_up_blocked_origin(
         crate::page_tabs::blocked_pop_up_origin(controller.active_tab_id(), state.url())

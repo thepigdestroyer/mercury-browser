@@ -43,7 +43,8 @@ const DEFAULT_FILE: &str = r#"{
   },
   "web": {
     "experimental_web_features": true,
-    "gpu_canvas": true
+    "gpu_canvas": true,
+    "pdf": "open_in_mercury"
   },
   "language": null
 }

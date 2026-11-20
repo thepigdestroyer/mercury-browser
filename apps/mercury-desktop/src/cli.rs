@@ -23,6 +23,8 @@ pub(crate) struct LaunchOptions {
     // find: diagnostics build only
     #[cfg(feature = "diagnostics")]
     pub find: Option<FindDiagnostic>,
+    /// pdf-viewer lane: `--pdf-page` and `--pdf-find` (diagnostics build only; empty otherwise).
+    pub pdf: crate::pdf::Diagnostics,
     /// media-capture: `--fake-media-devices`, a diagnostic for automated runs: pages get a fake
     /// camera and microphone. Allowed only beside a `lib` directory without the plugins that
     /// can open real ones (checked in `main`).
@@ -95,6 +97,7 @@ impl Default for LaunchOptions {
             exit_request: None,
             #[cfg(feature = "diagnostics")]
             find: None,
+            pdf: crate::pdf::Diagnostics::default(),
             fake_media_devices: false,
             answer_permission_prompts: None,
             fake_system_denies_capture: false,
@@ -208,7 +211,10 @@ Diagnostic options (this build has the `diagnostics` feature):
                                    before exiting
   --find <text>                    Once the page has loaded, open the find bar, search for
                                    <text> (empty: use the page's selection) and print the result
-  --find-steps <n>                 Then press Next n times (Previous if negative)";
+  --find-steps <n>                 Then press Next n times (Previous if negative)
+  --pdf-page <n>                   When a PDF opens in the viewer, scroll to its page <n> (from 1)
+  --pdf-find <text>                When a PDF opens in the viewer, open the find bar and search
+                                   for <text>";
 #[cfg(not(feature = "diagnostics"))]
 const DIAGNOSTIC_USAGE: &str = "";
 
@@ -281,6 +287,10 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
     let mut find_query = None;
     #[cfg(feature = "diagnostics")]
     let mut find_steps = None;
+    #[cfg(feature = "diagnostics")]
+    let mut pdf_page = None;
+    #[cfg(feature = "diagnostics")]
+    let mut pdf_find = None;
     let mut fake_media_devices = false;
     let mut answer_permission_prompts = None;
     let mut fake_system_denies_capture = false;
@@ -367,6 +377,22 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
                     format!("invalid --find-steps '{value}': expected a whole number")
                 })?);
             }
+            // pdf-viewer lane
+            #[cfg(feature = "diagnostics")]
+            "--pdf-page" => {
+                let value = option_value(&mut arguments, "--pdf-page", "<n>")?;
+                pdf_page = Some(
+                    value
+                        .parse::<u32>()
+                        .ok()
+                        .filter(|page| *page >= 1)
+                        .ok_or_else(|| {
+                            format!("invalid --pdf-page '{value}': expected a page number from 1")
+                        })?,
+                );
+            }
+            #[cfg(feature = "diagnostics")]
+            "--pdf-find" => pdf_find = Some(option_value(&mut arguments, "--pdf-find", "<text>")?),
             "--download" => {
                 download_url = Some(option_value(&mut arguments, "--download", "<URL>")?);
             }
@@ -472,6 +498,15 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         (None, None) => None,
     };
 
+    // pdf-viewer lane
+    #[cfg(feature = "diagnostics")]
+    let pdf = crate::pdf::Diagnostics {
+        page: pdf_page,
+        find: pdf_find,
+    };
+    #[cfg(not(feature = "diagnostics"))]
+    let pdf = crate::pdf::Diagnostics::default();
+
     Ok(CliOutcome::Run(Box::new(LaunchOptions {
         urls,
         screenshot,
@@ -488,6 +523,7 @@ fn parse_launch_options(mut arguments: impl Iterator<Item = String>) -> Result<C
         exit_request,
         #[cfg(feature = "diagnostics")]
         find,
+        pdf,
         fake_media_devices,
         answer_permission_prompts,
         fake_system_denies_capture,
@@ -586,6 +622,7 @@ mod tests {
                 exit_request: None,
                 #[cfg(feature = "diagnostics")]
                 find: None,
+                pdf: crate::pdf::Diagnostics::default(),
                 fake_media_devices: false,
                 answer_permission_prompts: None,
                 fake_system_denies_capture: false,
@@ -1246,6 +1283,45 @@ mod tests {
             Some(2)
         );
         assert_eq!(exit_code(&parse(&["--find"])), Some(2));
+    }
+
+    // pdf-viewer lane
+    #[cfg(feature = "diagnostics")]
+    #[test]
+    fn the_pdf_diagnostics_take_a_page_and_a_query() {
+        let CliOutcome::Run(options) = parse(&["--pdf-page", "2", "--pdf-find", "needle"]) else {
+            panic!("the PDF diagnostics should be accepted");
+        };
+        assert_eq!(
+            options.pdf,
+            crate::pdf::Diagnostics {
+                page: Some(2),
+                find: Some("needle".to_owned()),
+            }
+        );
+        let CliOutcome::Run(options) = parse(&["--pdf-find", ""]) else {
+            panic!("an empty --pdf-find query should be accepted");
+        };
+        assert_eq!(options.pdf.find.as_deref(), Some(""));
+        assert_eq!(exit_code(&parse(&["--pdf-page"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--pdf-page", "0"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--pdf-page", "two"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--pdf-find"])), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(text.contains("--pdf-page <n>") && text.contains("--pdf-find <text>"));
+    }
+
+    #[cfg(not(feature = "diagnostics"))]
+    #[test]
+    fn without_the_diagnostics_feature_the_pdf_options_are_unknown() {
+        assert_eq!(exit_code(&parse(&["--pdf-page", "2"])), Some(2));
+        assert_eq!(exit_code(&parse(&["--pdf-find", "needle"])), Some(2));
+        let CliOutcome::PrintAndExit { text, .. } = parse(&["--help"]) else {
+            panic!("--help should not run the browser");
+        };
+        assert!(!text.contains("--pdf-"));
     }
 
     // downloads-ui lane

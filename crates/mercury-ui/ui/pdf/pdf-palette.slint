@@ -1,0 +1,25 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The colours of the PDF viewer that no chrome role covers, kept in one place. Everything around
+// the pages (the toolbar, the panels, the text) takes its colour from `ChromePalette` and follows
+// the appearance setting. The paper and what is drawn on it do not: a PDF is a printed page, so it
+// is white in every theme and is never inverted, and the highlights are chosen to be seen on
+// white. Only the area behind the pages follows the theme.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export global PdfPalette {
+    out property <color> paper: #ffffff;
+    // The hairline round each page, so that white paper does not melt into a light backdrop.
+    out property <color> paper-edge: ChromePalette.dark ? #000000cc : #0000002e;
+    // The area behind and between the pages.
+    out property <color> backdrop: ChromePalette.dark ? #06080b : #d2d8df;
+    // Selected text, over the page (translucent: the text under it stays readable).
+    out property <color> selection: #e8892e59;
+    // Every find match, and the one the bar is on.
+    out property <color> find-hit: #ffd60a99;
+    out property <color> find-current: #ff9f0acc;
+    out property <color> find-current-edge: #b45309;
+    // The scroll indicator at the page area's edge.
+    // Grey, so that it shows on white paper as well as on the backdrop of either theme.
+    out property <color> scroll-thumb: #808080a6;
+}

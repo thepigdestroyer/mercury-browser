@@ -1,0 +1,127 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The PDF viewer: a toolbar over the pages, or one of three panels (opening, password, error). It
+// fills the browser window's page area while the active tab shows a PDF, and answers the keys of a
+// document: Space and Shift+Space, Page Up and Down, Home and End, the arrows, Cmd+C (Ctrl+C
+// elsewhere) and Escape. Cmd+F, Cmd+G and the zoom keys are browser shortcuts and never reach it.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { PdfScrollKey, PdfViewState, PdfViewerModel } from "pdf-model.slint";
+import { PdfToolbar } from "pdf-toolbar.slint";
+import { PdfPages } from "pdf-pages.slint";
+import { PdfErrorPanel, PdfLoadingPanel, PdfPasswordPanel } from "pdf-panels.slint";
+
+export component PdfViewer inherits Rectangle {
+    // The keyboard goes to the pages.
+    public function focus-viewer() {
+        scope.focus();
+    }
+
+    // Rust asks for the keyboard by adding one to `focus-serial`; while the password prompt shows
+    // it is the prompt's field that takes it (see pdf-panels.slint).
+    property <int> focus-serial: PdfViewerModel.focus-serial;
+
+    background: ChromePalette.content-background;
+    // The viewer is sized by what it is placed in (the browser window's page area gives it that
+    // area's size), never by what is inside it: the toolbar's width depends on the viewer's width
+    // (short words in a narrow window), so a size derived from the toolbar would be a loop.
+    min-width: 0px;
+    min-height: 0px;
+    preferred-width: 0px;
+    preferred-height: 0px;
+    max-width: 100000px;
+    max-height: 100000px;
+    horizontal-stretch: 0;
+    vertical-stretch: 0;
+
+    init => {
+        if PdfViewerModel.take-focus && PdfViewerModel.state != PdfViewState.password {
+            scope.focus();
+        }
+    }
+
+    changed focus-serial => {
+        if PdfViewerModel.state != PdfViewState.password {
+            scope.focus();
+        }
+    }
+
+    scope := FocusScope {
+        key-pressed(event) => {
+            if event.modifiers.control && !event.modifiers.shift && !event.modifiers.alt && (event.text == "c" || event.text == "C") {
+                PdfViewerModel.copy-selection();
+                return accept;
+            }
+            if event.modifiers.control || event.modifiers.alt {
+                return reject;
+            }
+            if PdfViewerModel.state != PdfViewState.ready {
+                return reject;
+            }
+            if event.text == " " {
+                PdfViewerModel.scroll-key(event.modifiers.shift ? PdfScrollKey.page-up : PdfScrollKey.page-down);
+                return accept;
+            }
+            if event.text == Key.PageDown {
+                PdfViewerModel.scroll-key(PdfScrollKey.page-down);
+                return accept;
+            }
+            if event.text == Key.PageUp {
+                PdfViewerModel.scroll-key(PdfScrollKey.page-up);
+                return accept;
+            }
+            if event.text == Key.Home {
+                PdfViewerModel.scroll-key(PdfScrollKey.top);
+                return accept;
+            }
+            if event.text == Key.End {
+                PdfViewerModel.scroll-key(PdfScrollKey.bottom);
+                return accept;
+            }
+            if event.text == Key.DownArrow {
+                PdfViewerModel.scroll-key(PdfScrollKey.line-down);
+                return accept;
+            }
+            if event.text == Key.UpArrow {
+                PdfViewerModel.scroll-key(PdfScrollKey.line-up);
+                return accept;
+            }
+            if event.text == Key.LeftArrow {
+                PdfViewerModel.scroll-key(PdfScrollKey.line-left);
+                return accept;
+            }
+            if event.text == Key.RightArrow {
+                PdfViewerModel.scroll-key(PdfScrollKey.line-right);
+                return accept;
+            }
+            if event.text == Key.Escape {
+                PdfViewerModel.escape();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            if PdfViewerModel.state == PdfViewState.ready: PdfToolbar {
+                return-focus => {
+                    scope.focus();
+                }
+            }
+
+            Rectangle {
+                vertical-stretch: 1;
+
+                if PdfViewerModel.state == PdfViewState.ready: PdfPages {
+                    focus-requested => {
+                        scope.focus();
+                    }
+                }
+
+                if PdfViewerModel.state == PdfViewState.loading: PdfLoadingPanel { }
+
+                if PdfViewerModel.state == PdfViewState.password: PdfPasswordPanel { }
+
+                if PdfViewerModel.state == PdfViewState.error: PdfErrorPanel { }
+            }
+        }
+    }
+}

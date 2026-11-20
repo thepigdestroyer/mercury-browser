@@ -10,6 +10,8 @@ members = [
     "crates/mercury-import",
     "crates/mercury-password-manager",
     "crates/mercury-passwords",
+    "crates/mercury-pdf",
+    "crates/mercury-pdfium",
     "crates/mercury-release",
     "crates/mercury-servo-patches",
     "crates/mercury-settings",
@@ -52,6 +54,11 @@ log = "0.4"
 mime_guess = "2.0.5"
 objc2 = "0.6.5"
 objc2-foundation = { version = "0.3.2", default-features = false }
+# pdf-viewer: the Rust binding to PDFium, which is loaded at run time (scripts/macos/pdfium.sh). The
+# bindings generation is named after the PDFium release it was made for, so the pinned binary must
+# be that release or one close enough to bind (the worker checks this with the real library). No
+# `pdfium_enable_v8` or `pdfium_enable_xfa`: the pinned build has neither (decision OD-11).
+pdfium-render = { version = "=0.9.5", default-features = false, features = ["pdfium_8125", "thread_safe"] }
 percent-encoding = "2.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "stream"] }
 resvg = { version = "0.48", default-features = false }

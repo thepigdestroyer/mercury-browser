@@ -47,7 +47,11 @@
 #     @rpath/@loader_path/@executable_path name whose file is in
 #     Contents/MacOS/lib/: nothing points back at the machine it was built on;
 #   - Contents/Resources/gstreamer-licenses/ holds the bundled libraries'
-#     licence files.
+#     licence files;
+#   - the PDF viewer's library: Contents/MacOS/lib/libpdfium.dylib is arm64
+#     only with the install name @rpath/libpdfium.dylib, and
+#     Contents/Resources/pdfium-licenses/ holds PDFium's LICENSE and every
+#     component licence file scripts/macos/pdfium.sh lists.
 #
 # Runs every check even after a failure, then exits 1 if any failed. Reads the
 # bundle; writes nothing except a temporary file it removes. macOS only.
@@ -357,6 +361,44 @@ if [ "$REQUIRE_MEDIA" = 1 ]; then
     done
     if [ "$outside" = 0 ]; then
         pass "every Mach-O file loads only system libraries and libraries in Contents/MacOS/lib"
+    fi
+fi
+
+# ── PDF library (--require-media) ─────────────────────────────────────────
+# pdf-viewer: PDFium beside the media libraries, with its licence texts. The file list is
+# the one definition in scripts/macos/pdfium.sh (read in a subshell: it defines die and say).
+if [ "$REQUIRE_MEDIA" = 1 ]; then
+    PDFIUM_LIBRARY="$APP/Contents/MacOS/lib/libpdfium.dylib"
+    if [ -f "$PDFIUM_LIBRARY" ]; then
+        pass "Contents/MacOS/lib/libpdfium.dylib is present"
+        archs="$(lipo -archs "$PDFIUM_LIBRARY" 2>/dev/null || true)"
+        if [ "$archs" = "arm64" ]; then
+            pass "libpdfium.dylib is arm64 only"
+        else
+            fail "libpdfium.dylib is built for '$archs', not arm64 only"
+        fi
+        install_name="$(otool -D "$PDFIUM_LIBRARY" 2>/dev/null | sed -n '2p')"
+        if [ "$install_name" = "@rpath/libpdfium.dylib" ]; then
+            pass "libpdfium.dylib has the install name @rpath/libpdfium.dylib"
+        else
+            fail "libpdfium.dylib has the install name '$install_name', not @rpath/libpdfium.dylib"
+        fi
+    else
+        fail "Contents/MacOS/lib/libpdfium.dylib is missing: the bundle has no PDF viewer library"
+    fi
+    # shellcheck source=scripts/macos/pdfium.sh disable=SC2086
+    PDFIUM_LICENSE_NAMES="$(. "$REPO/scripts/macos/pdfium.sh" && printf '%s\n' $PDFIUM_LICENSE_FILES)" || PDFIUM_LICENSE_NAMES=""
+    PDFIUM_LICENSES="$APP/Contents/Resources/pdfium-licenses"
+    missing=""
+    for licence_file in LICENSE $PDFIUM_LICENSE_NAMES; do
+        [ -s "$PDFIUM_LICENSES/$licence_file" ] || missing="$missing $licence_file"
+    done
+    if [ -z "$PDFIUM_LICENSE_NAMES" ]; then
+        fail "scripts/macos/pdfium.sh could not list PDFium's licence files"
+    elif [ -z "$missing" ]; then
+        pass "Contents/Resources/pdfium-licenses holds PDFium's LICENSE and its $(printf '%s\n' "$PDFIUM_LICENSE_NAMES" | wc -l | tr -d ' ') component licence files"
+    else
+        fail "Contents/Resources/pdfium-licenses lacks:$missing"
     fi
 fi
 

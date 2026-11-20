@@ -54,6 +54,7 @@ mod page_requests; // dialogs
 mod panic_hook;
 // tabs opened and closed by pages
 mod page_tabs;
+mod pdf; // pdf-viewer lane
 // passwords-ui
 mod passwords;
 #[cfg(target_os = "macos")]
@@ -86,6 +87,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // too. These only install handlers; no thread starts.
     crash_handler::install();
     std::panic::set_hook(Box::new(panic_hook::panic_hook));
+    // pdf-viewer: `--pdf-worker` makes this process the PDF helper (PDFium, one document)
+    if mercury_pdfium::run_worker_if_requested() {
+        return Ok(ExitCode::SUCCESS);
+    }
 
     // (2) Media: keep the bundled GStreamer away from the user's own plugins and registry.
     // Before any thread starts; content processes are this executable and inherit it.
@@ -283,6 +288,16 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         &window,
         Rc::clone(&controller),
         media_session::uses_system_services(&options),
+    );
+    // pdf-viewer lane: PDFs open in the viewer; registers it with the downloads hand-off below.
+    pdf::install(
+        &window,
+        Rc::clone(&controller),
+        Rc::clone(&web_view_focused),
+        pdf::Options {
+            automated: options.is_automated(),
+            diagnostics: options.pdf.clone(),
+        },
     );
     downloads::start(
         &window,

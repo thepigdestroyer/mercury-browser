@@ -34,7 +34,7 @@ pub(crate) fn strip_rows(controller: &BrowserController) -> Vec<BrowserTab> {
                 None => (Image::default(), false),
             };
             BrowserTab {
-                title: state.page_title().into(),
+                title: crate::pdf::tab_title(tab.id(), state.page_title()).into(), // pdf-viewer lane
                 icon,
                 has_icon,
                 active: tab.id() == active_tab_id,

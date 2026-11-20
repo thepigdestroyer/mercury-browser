@@ -32,6 +32,7 @@ use tokio::io::{AsyncWriteExt, BufWriter};
 use tokio::sync::watch;
 use url::Url;
 
+use crate::disposition;
 use crate::error::TransferError;
 use crate::manager::{DownloadEvent, DownloadId, DownloadRequest, ResumeFrom, Timeouts};
 use crate::naming::{self, PART_SUFFIX};
@@ -299,12 +300,25 @@ impl Transfer {
             .and_then(|value| value.split(';').next().map(str::trim).map(str::to_owned))
             .filter(|essence| !essence.is_empty())
             .map(|essence| essence.to_ascii_lowercase());
+        // The server's wish to have the file saved rather than shown (the PDF viewer asks).
+        let attachment = disposition::is_attachment(
+            headers
+                .get(header::CONTENT_DISPOSITION)
+                .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
+                .as_deref(),
+        );
         let total = if appending {
             content_range_total(headers)
                 .or_else(|| response.content_length().map(|rest| offset + rest))
         } else {
             response.content_length()
         };
+        // A response that says it is too big is refused before any file is made.
+        if let (Some(limit), Some(total)) = (request.max_bytes, total)
+            && total > limit
+        {
+            return Err(TransferError::TooLarge { limit });
+        }
         let final_url = response.url().clone();
 
         let (dir, target, part, file) = match plan {
@@ -350,6 +364,7 @@ impl Transfer {
             final_url: final_url.clone(),
             etag,
             last_modified,
+            attachment,
         });
 
         let received = self
@@ -447,6 +462,13 @@ impl Transfer {
                 Ok(Ok(Ok(None))) => break Ok(()),
                 Ok(Ok(Ok(Some(chunk)))) => chunk,
             };
+            // A body that grows past the limit stops there, whatever it said it would be, so
+            // the file on disk never holds more than the limit.
+            if let Some(limit) = self.request.max_bytes
+                && received.saturating_add(chunk.len() as u64) > limit
+            {
+                break Err(TransferError::TooLarge { limit });
+            }
             if let Err(error) = writer.write_all(&chunk).await {
                 break Err(TransferError::Io(error));
             }

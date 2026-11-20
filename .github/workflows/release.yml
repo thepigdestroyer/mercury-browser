@@ -457,6 +457,11 @@ jobs:
       - name: Build the release executable
         run: cargo build --locked --release --package mercury-desktop
 
+      # pdf-viewer: the arm64 PDFium that goes into the bundle (pinned by SHA-256 in
+      # scripts/macos/pdfium.sh).
+      - name: Fetch and unpack PDFium
+        run: make pdfium-macos
+
       - name: Stop XProtect
         # XProtect scans a freshly written disk image and can make hdiutil
         # fail; Servo's own macOS CI stops it the same way.
@@ -646,6 +651,18 @@ jobs:
           test -f "${prefix}/lib/libgstreamer-1.0.0.dylib"
           echo "GStreamer prefix: ${prefix}"
 
+      # pdf-viewer: PDFium, like GStreamer: no cache, downloaded here, the tarball and then the
+      # library inside it checked against the SHA-256 pinned in scripts/macos/pdfium.sh. `check`
+      # reads the library with otool and lipo; nothing from it is run.
+      - name: Download and unpack PDFium into a fresh directory
+        shell: bash
+        env:
+          MERCURY_PDFIUM_CACHE: ${{ runner.temp }}/pdfium
+        run: |
+          set -euo pipefail
+
+          scripts/macos/pdfium.sh --arch arm64 fetch unpack check
+
       - name: Fetch Servo's plugin lists from the pinned crate
         shell: bash
         run: |
@@ -829,6 +846,7 @@ jobs:
           MACOS_SIGN_IDENTITY: ${{ secrets.MACOS_SIGN_IDENTITY }}
           SIGN: ${{ steps.signing.outputs.sign }}
           MERCURY_GSTREAMER_CACHE: ${{ runner.temp }}/gstreamer
+          MERCURY_PDFIUM_CACHE: ${{ runner.temp }}/pdfium # pdf-viewer: where bundle.sh finds PDFium
         run: |
           set -euo pipefail
 

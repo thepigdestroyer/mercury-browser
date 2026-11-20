@@ -37,6 +37,10 @@ import { FindBar } from "find/find-bar.slint";
 // site-security
 import { HttpsOnlyInterstitial, SecurityIndicatorButton, SiteInfo, SiteInfoPopover, SiteSecurityIcon } from "site-security/site-security.slint";
 export { SiteInfo, SitePermissionRow, SiteSecurityIcon } from "site-security/site-security.slint";
+// pdf-viewer
+import { PdfViewer } from "pdf/pdf-viewer.slint";
+import { PdfViewerModel } from "pdf/pdf-model.slint";
+export { PdfFitMode, PdfPageRow, PdfPointer, PdfRectRow, PdfScrollKey, PdfTileRow, PdfViewState, PdfViewerModel } from "pdf/pdf-model.slint";
 
 export enum WebViewPointerButton {
     left,
@@ -126,7 +130,7 @@ export component MainWindow inherits Window {
     in property <string> status-text: "";
     // The page is fullscreen: the tab strip and toolbar are hidden.
     in property <bool> chrome-hidden: false;
-    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused) || root.history-search-focused || find-bar.field-focused;
+    out property <bool> text-input-focused: address-input.has-focus || (root.is-new-tab && root.new-tab-search-focused) || root.history-search-focused || find-bar.field-focused || (root.pdf-viewer-shown && PdfViewerModel.text-focused);
     out property <bool> web-view-hovered: web-view-input.has-hover;
     out property <float> web-view-pointer-x: web-view-input.mouse-x / 1px;
     out property <float> web-view-pointer-y: web-view-input.mouse-y / 1px;
@@ -603,6 +607,12 @@ export component MainWindow inherits Window {
         tab-search.show();
     }
     // --- end tabs-plus ---
+
+    // --- pdf-viewer ---
+    // The PDF viewer (ui/pdf) covers the page area while the active tab shows a PDF. Everything
+    // else it shows and asks for is in the global `PdfViewerModel`.
+    in property <bool> pdf-viewer-shown: false;
+    // --- end pdf-viewer ---
 
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
@@ -1217,6 +1227,12 @@ export component MainWindow inherits Window {
                         accept
                     }
                 }
+            }
+
+            // pdf-viewer: the PDF viewer, over the page area while the tab shows a PDF
+            if root.pdf-viewer-shown: PdfViewer {
+                width: parent.width;
+                height: parent.height;
             }
 
             // Drawn above the page; plain Rectangle and Text items do not take pointer input.

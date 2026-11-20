@@ -29,6 +29,9 @@ log.workspace = true
 mercury-downloads = { path = "../../crates/mercury-downloads" }
 mercury-filter-lists = { path = "../../crates/mercury-filter-lists" }
 mercury-import = { path = "../../crates/mercury-import" }
+# pdf-viewer: the PDF viewer's model and process protocol, and the PDFium backend with the helper process.
+mercury-pdf = { path = "../../crates/mercury-pdf" }
+mercury-pdfium = { path = "../../crates/mercury-pdfium" }
 # passwords-ui
 mercury-password-manager = { path = "../../crates/mercury-password-manager" }
 mercury-passwords = { path = "../../crates/mercury-passwords" }

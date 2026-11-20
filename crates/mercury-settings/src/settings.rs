@@ -220,6 +220,8 @@ pub struct WebSettings {
     pub experimental_web_features: bool,
     /// Draw `<canvas>` on the GPU.
     pub gpu_canvas: bool,
+    /// What happens when a link, a typed address or a page leads to a PDF file.
+    pub pdf: PdfAction,
 }
 
 impl Default for WebSettings {
@@ -227,7 +229,103 @@ impl Default for WebSettings {
         Self {
             experimental_web_features: true,
             gpu_canvas: true,
+            pdf: PdfAction::default(),
         }
+    }
+}
+
+/// What happens when a link, a typed address or a page leads to a PDF file.
+///
+/// Stored as `open_in_mercury`, `open_in_system_viewer` or `download`. A value the file holds
+/// that this version does not know (a setting a newer version wrote, or a hand-edited one) reads
+/// as the default and nothing else in the file is affected: `Theme` and the other choices would
+/// make the whole file unreadable, so this one decodes by hand.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PdfAction {
+    /// Show it in Mercury Browser's own PDF viewer, in the tab.
+    #[default]
+    OpenInMercury,
+    /// Save it in the Downloads folder and open it with the system's PDF app, when the user
+    /// asked for it; otherwise it is saved only.
+    OpenInSystemViewer,
+    /// Save it in the Downloads folder, as any other file.
+    Download,
+}
+
+impl<'de> Deserialize<'de> for PdfAction {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        use serde::de::{self, IgnoredAny, MapAccess, SeqAccess, Visitor};
+
+        /// Reads whatever value is there; only the three known strings choose, the rest is the
+        /// default (and is consumed, so the document goes on to decode).
+        struct Choice;
+
+        impl<'de> Visitor<'de> for Choice {
+            type Value = PdfAction;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("a PDF action")
+            }
+
+            fn visit_str<E: de::Error>(self, text: &str) -> Result<PdfAction, E> {
+                Ok(match text {
+                    "open_in_mercury" => PdfAction::OpenInMercury,
+                    "open_in_system_viewer" => PdfAction::OpenInSystemViewer,
+                    "download" => PdfAction::Download,
+                    other => {
+                        log::info!(
+                            "settings: web.pdf {} is not known to this version; using the default",
+                            quoted(other)
+                        );
+                        PdfAction::default()
+                    }
+                })
+            }
+
+            fn visit_bool<E: de::Error>(self, _: bool) -> Result<PdfAction, E> {
+                Ok(PdfAction::default())
+            }
+
+            fn visit_i64<E: de::Error>(self, _: i64) -> Result<PdfAction, E> {
+                Ok(PdfAction::default())
+            }
+
+            fn visit_u64<E: de::Error>(self, _: u64) -> Result<PdfAction, E> {
+                Ok(PdfAction::default())
+            }
+
+            fn visit_f64<E: de::Error>(self, _: f64) -> Result<PdfAction, E> {
+                Ok(PdfAction::default())
+            }
+
+            fn visit_unit<E: de::Error>(self) -> Result<PdfAction, E> {
+                Ok(PdfAction::default())
+            }
+
+            fn visit_none<E: de::Error>(self) -> Result<PdfAction, E> {
+                Ok(PdfAction::default())
+            }
+
+            fn visit_some<D2: serde::Deserializer<'de>>(
+                self,
+                deserializer: D2,
+            ) -> Result<PdfAction, D2::Error> {
+                deserializer.deserialize_any(self)
+            }
+
+            fn visit_seq<A: SeqAccess<'de>>(self, mut sequence: A) -> Result<PdfAction, A::Error> {
+                while sequence.next_element::<IgnoredAny>()?.is_some() {}
+                Ok(PdfAction::default())
+            }
+
+            fn visit_map<A: MapAccess<'de>>(self, mut map: A) -> Result<PdfAction, A::Error> {
+                while map.next_entry::<IgnoredAny, IgnoredAny>()?.is_some() {}
+                Ok(PdfAction::default())
+            }
+        }
+
+        deserializer.deserialize_any(Choice)
     }
 }
 

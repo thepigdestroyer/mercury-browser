@@ -219,6 +219,10 @@ fn run_command(
 
 /// An Edit menu click goes where the key would have gone.
 fn run_edit(window: &MainWindow, controller: &RefCell<BrowserController>, edit: EditCommand) {
+    // pdf-viewer lane: with a PDF in front, Copy copies its selected text; the other items do nothing
+    if crate::pdf::handle_edit(edit == EditCommand::Copy) {
+        return;
+    }
     match current_edit_target() {
         EditTarget::AddressBar => window.invoke_edit_address_bar(address_bar_edit(edit)),
         EditTarget::Page => {
@@ -244,7 +248,8 @@ fn current_edit_target() -> EditTarget {
             .web_view_focused
             .borrow()
             .as_ref()
-            .is_some_and(|focused| focused.get());
+            .is_some_and(|focused| focused.get())
+            || crate::pdf::keyboard_is_in_viewer(); // pdf-viewer lane: Copy is available in a PDF
         model::edit_target(
             state.browser_window_focused.get(),
             state.address_bar_focused.get(),

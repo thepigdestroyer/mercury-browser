@@ -1,0 +1,143 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The page area of the PDF viewer: white paper, the rendered tiles on it, the selection and the
+// find highlights above them. Rust owns the scroll position (`PdfViewerModel.scroll-x/-y`) and the
+// rows; this component draws them and reports the area's size, the pointer, the wheel and the
+// pinch. It is not a Flickable: the view model must know the scroll position to zoom around the
+// window's centre, to go to a page and to scroll a find match into view, so one owner keeps it.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { PdfPalette } from "pdf-palette.slint";
+import { PdfPointer, PdfViewerModel } from "pdf-model.slint";
+
+export component PdfPages inherits Rectangle {
+    // A press in the pages: the keyboard goes to the viewer.
+    callback focus-requested();
+
+    // The area's own size, to size the scroll indicators.
+    property <length> thumb-length-y: Math.max(24px, root.height * root.height / Math.max(PdfViewerModel.content-height, 1px));
+    property <length> thumb-length-x: Math.max(24px, root.width * root.width / Math.max(PdfViewerModel.content-width, 1px));
+    property <float> range-y: Math.max(PdfViewerModel.content-height - root.height, 1px) / 1px;
+    property <float> range-x: Math.max(PdfViewerModel.content-width - root.width, 1px) / 1px;
+
+    background: PdfPalette.backdrop;
+    clip: true;
+    accessible-role: AccessibleRole.main;
+    accessible-label: "PDF document, page " + PdfViewerModel.page + " of " + PdfViewerModel.page-count;
+
+    init => {
+        PdfViewerModel.viewport-changed(self.width, self.height);
+    }
+    changed width => {
+        PdfViewerModel.viewport-changed(self.width, self.height);
+    }
+    changed height => {
+        PdfViewerModel.viewport-changed(self.width, self.height);
+    }
+
+    // The pinch (trackpad, or two fingers on a touch screen) asks for a zoom relative to the
+    // zoom it began at; the handler passes events it does not use on to the pointer layer.
+    gesture := ScaleRotateGestureHandler {
+        property <float> start-percent: 100;
+
+        started => {
+            self.start-percent = PdfViewerModel.zoom-percent;
+        }
+        updated => {
+            PdfViewerModel.pinch(self.start-percent * self.scale);
+        }
+
+        content := Rectangle {
+            x: -PdfViewerModel.scroll-x;
+            y: -PdfViewerModel.scroll-y;
+            width: PdfViewerModel.content-width;
+            height: PdfViewerModel.content-height;
+
+            for page in PdfViewerModel.pages: Rectangle {
+                x: page.x - 1px;
+                y: page.y - 1px;
+                width: page.width + 2px;
+                height: page.height + 2px;
+                background: PdfPalette.paper-edge;
+
+                Rectangle {
+                    x: 1px;
+                    y: 1px;
+                    width: parent.width - 2px;
+                    height: parent.height - 2px;
+                    background: PdfPalette.paper;
+                }
+            }
+
+            for tile in PdfViewerModel.tiles: Image {
+                x: tile.x;
+                y: tile.y;
+                width: tile.width;
+                height: tile.height;
+                source: tile.image;
+                image-fit: fill;
+            }
+
+            for rect in PdfViewerModel.selection: Rectangle {
+                x: rect.x;
+                y: rect.y;
+                width: rect.width;
+                height: rect.height;
+                background: PdfPalette.selection;
+            }
+
+            for rect in PdfViewerModel.hits: Rectangle {
+                x: rect.x - (rect.current ? 1px : 0px);
+                y: rect.y - (rect.current ? 1px : 0px);
+                width: rect.width + (rect.current ? 2px : 0px);
+                height: rect.height + (rect.current ? 2px : 0px);
+                background: rect.current ? PdfPalette.find-current : PdfPalette.find-hit;
+                border-radius: 2px;
+                border-width: rect.current ? 1px : 0px;
+                border-color: PdfPalette.find-current-edge;
+            }
+        }
+
+        touch := TouchArea {
+            mouse-cursor: PdfViewerModel.over-link ? MouseCursor.pointer : MouseCursor.default;
+
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                    root.focus-requested();
+                    PdfViewerModel.pointer(PdfPointer.down, self.mouse-x, self.mouse-y);
+                } else if event.kind == PointerEventKind.up && event.button == PointerEventButton.left {
+                    PdfViewerModel.pointer(PdfPointer.up, self.mouse-x, self.mouse-y);
+                } else if event.kind == PointerEventKind.move {
+                    PdfViewerModel.pointer(PdfPointer.moved, self.mouse-x, self.mouse-y);
+                } else if event.kind == PointerEventKind.cancel {
+                    PdfViewerModel.pointer(PdfPointer.cancel, self.mouse-x, self.mouse-y);
+                }
+            }
+
+            scroll-event(event) => {
+                PdfViewerModel.scrolled(event.delta-x, event.delta-y);
+                accept
+            }
+        }
+    }
+
+    // Scroll indicators: thin, not interactive, only while the pages are larger than the area.
+    if PdfViewerModel.content-height > root.height: Rectangle {
+        x: root.width - 9px;
+        y: 2px + (root.height - 4px - self.height) * (PdfViewerModel.scroll-y / 1px) / root.range-y;
+        width: 5px;
+        height: root.thumb-length-y;
+        border-radius: 2.5px;
+        background: PdfPalette.scroll-thumb;
+        accessible-role: none;
+    }
+
+    if PdfViewerModel.content-width > root.width: Rectangle {
+        x: 2px + (root.width - 4px - self.width) * (PdfViewerModel.scroll-x / 1px) / root.range-x;
+        y: root.height - 9px;
+        width: root.thumb-length-x;
+        height: 5px;
+        border-radius: 2.5px;
+        background: PdfPalette.scroll-thumb;
+        accessible-role: none;
+    }
+}

@@ -1,0 +1,31 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-pdf"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The PDF viewer without PDFium and without Servo or Slint: the shared types, the protocol between
+# the browser and the PDF helper process, the client and the helper's request loop, the viewer's
+# page layout, tile cache, text selection and find state, and a fake backend for tests. The real
+# backend, which loads PDFium, is the crate `mercury-pdfium`. Light crate: it builds and tests
+# without the engine (see scripts/ci/light-crates.sh). Dependencies are added by the lane items
+# that need them, each named here with the reason.
+[dependencies]
+# The wire messages of the helper protocol (JSON headers) and their derives on the shared types.
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+# Diagnostics of the client and the request loop (never document contents or passwords).
+log.workspace = true
+# Wipes the buffers that held a password (the serialised open request) before they are freed.
+zeroize.workspace = true
+
+# `src/bin/pdf-fake-worker.rs` is a test-only helper process that serves the fake backend; the
+# client's integration tests start it through CARGO_BIN_EXE_pdf-fake-worker.
+[[bin]]
+name = "pdf-fake-worker"
+path = "src/bin/pdf-fake-worker.rs"
+test = false

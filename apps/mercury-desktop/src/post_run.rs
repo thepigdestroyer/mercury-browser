@@ -261,6 +261,9 @@ impl EndOfRun for Steps {
         crate::menus::release();
         // bookmarks lane: drops the bookmarks manager window and the bar's state.
         crate::bookmarks::release();
+        // pdf-viewer: stops the open PDFs' helpers and deletes their private copies, so a normal
+        // quit leaves none behind (only an abrupt end does; the next start removes those).
+        crate::pdf::release();
         drop(self.window.take());
     }
 
@@ -558,5 +561,26 @@ mod tests {
 
         assert_eq!(slot.finish(|_| 9), None);
         assert_eq!(slot.state(), PostRun::NotStarted);
+    }
+
+    /// `Steps` needs a window, a profile and the settings, so the real sequence cannot run in a
+    /// test; this reads its source instead. A normal quit must end the open PDFs, or their
+    /// private copies stay in the profile until the next start.
+    #[test]
+    fn the_real_end_of_the_run_ends_the_open_pdfs() {
+        let source = include_str!("post_run.rs");
+        let steps = source
+            .split("impl EndOfRun for Steps {")
+            .nth(1)
+            .expect("the real steps");
+        let release_window = steps
+            .split("fn release_window(&mut self) {")
+            .nth(1)
+            .and_then(|rest| rest.split("fn remove_media_buffers").next())
+            .expect("the window step");
+        assert!(
+            release_window.contains("crate::pdf::release();"),
+            "release_window does not end the open PDFs"
+        );
     }
 }

@@ -33,6 +33,8 @@ pub const CUT_SENT: usize = 4_000;
 pub const SLOW_CHUNKS: usize = 40;
 pub const SLOW_CHUNK: usize = 1024;
 pub const SLOW_DELAY: Duration = Duration::from_millis(50);
+/// The smallest body the PDF routes serve: it starts with the `%PDF-` marker.
+pub const PDF_BODY: &[u8] = b"%PDF-1.4\n1 0 obj\n<<>>\nendobj\ntrailer\n<<>>\n%%EOF\n";
 
 pub fn pattern(len: usize) -> Vec<u8> {
     (0..len).map(|index| (index % 251) as u8).collect()
@@ -194,6 +196,48 @@ async fn respond(stream: &mut TcpStream, port: u16, request: &Recorded) -> std::
             ];
             send(stream, "200 OK", &headers, b"%PDF-1.7 test").await
         }
+        // The PDF hand-off: what a PDF response can look like.
+        "/doc.pdf" => {
+            send(
+                stream,
+                "200 OK",
+                &[("Content-Type", "application/pdf")],
+                PDF_BODY,
+            )
+            .await
+        }
+        "/inline.pdf" => {
+            let headers = [
+                ("Content-Type", "application/pdf"),
+                ("Content-Disposition", "inline; filename=\"inline.pdf\""),
+            ];
+            send(stream, "200 OK", &headers, PDF_BODY).await
+        }
+        "/attachment.pdf" => {
+            let headers = [
+                ("Content-Type", "application/pdf"),
+                ("Content-Disposition", "attachment; filename=\"report.pdf\""),
+            ];
+            send(stream, "200 OK", &headers, PDF_BODY).await
+        }
+        "/x-pdf" => {
+            let headers = [("Content-Type", "Application/X-PDF; charset=binary")];
+            send(stream, "200 OK", &headers, PDF_BODY).await
+        }
+        "/not-a-pdf.pdf" => {
+            let headers = [("Content-Type", "application/pdf")];
+            send(
+                stream,
+                "200 OK",
+                &headers,
+                b"<html>this is not a PDF</html>",
+            )
+            .await
+        }
+        "/redirect-to-pdf" => redirect(stream, "/doc.pdf").await,
+        // A PDF that never ends: no length, chunks until the client goes away.
+        "/endless.pdf" => endless_pdf(stream).await,
+        "/slow.pdf" => slow_pdf(stream, 100_000).await,
         "/escape" => {
             let headers = [(
                 "Content-Disposition",
@@ -382,6 +426,28 @@ async fn cut(stream: &mut TcpStream, validators: bool) -> std::io::Result<()> {
     stream.shutdown().await
 }
 
+/// A PDF that arrives slowly: the marker in the first chunk, then filler, one chunk every
+/// `SLOW_DELAY`.
+async fn slow_pdf(stream: &mut TcpStream, chunks: usize) -> std::io::Result<()> {
+    let head = format!(
+        "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: {}\r\n\
+         Connection: close\r\n\r\n",
+        chunks * SLOW_CHUNK
+    );
+    stream.write_all(head.as_bytes()).await?;
+    let mut chunk = vec![b' '; SLOW_CHUNK];
+    chunk[..PDF_BODY.len()].copy_from_slice(PDF_BODY);
+    stream.write_all(&chunk).await?;
+    stream.flush().await?;
+    let filler = vec![b' '; SLOW_CHUNK];
+    for _ in 1..chunks {
+        tokio::time::sleep(SLOW_DELAY).await;
+        stream.write_all(&filler).await?;
+        stream.flush().await?;
+    }
+    Ok(())
+}
+
 /// Like `slow`, without a validator or byte ranges, so it cannot be resumed.
 async fn slow_plain(stream: &mut TcpStream, chunks: usize) -> std::io::Result<()> {
     let head = format!(
@@ -482,6 +548,7 @@ pub fn request(url: Url, destination_dir: &Path) -> DownloadRequest {
         destination_dir: destination_dir.to_path_buf(),
         suggested_name: None,
         resume: None,
+        max_bytes: None,
     }
 }
 
@@ -563,4 +630,33 @@ pub fn wait_started(receiver: &Receiver<DownloadEvent>, id: DownloadId) -> Downl
 /// The terminal event of a list produced by `events_until_done`.
 pub fn terminal(events: &[DownloadEvent]) -> &DownloadEvent {
     events.last().expect("at least one event")
+}
+
+/// How many chunks `/endless.pdf` sends at most, so that a client that never hangs up cannot keep
+/// the test server writing for ever (80 MB in all).
+pub const ENDLESS_MAX_CHUNKS: usize = 20_000;
+/// The size of one chunk of `/endless.pdf`.
+pub const ENDLESS_CHUNK: usize = 4096;
+
+/// A PDF that says no length and never ends: the marker, then filler in chunked pieces until the
+/// client hangs up. What a hostile server could send to fill a disk.
+async fn endless_pdf(stream: &mut TcpStream) -> std::io::Result<()> {
+    let head = "HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\n\
+                Transfer-Encoding: chunked\r\nConnection: close\r\n\r\n";
+    stream.write_all(head.as_bytes()).await?;
+    let mut chunk = vec![b' '; ENDLESS_CHUNK];
+    chunk[..PDF_BODY.len()].copy_from_slice(PDF_BODY);
+    for _ in 0..ENDLESS_MAX_CHUNKS {
+        stream
+            .write_all(format!("{:x}\r\n", chunk.len()).as_bytes())
+            .await?;
+        stream.write_all(&chunk).await?;
+        stream.write_all(b"\r\n").await?;
+        stream.flush().await?;
+        chunk[..PDF_BODY.len()].fill(b' ');
+        // Yield, so that a client that has hung up is noticed and the runtime stays responsive.
+        tokio::task::yield_now().await;
+    }
+    stream.write_all(b"0\r\n\r\n").await?;
+    stream.shutdown().await
 }

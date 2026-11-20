@@ -207,6 +207,7 @@ mod tests {
                 final_url: url::Url::parse("https://example.com/a.zip").unwrap(),
                 etag: None,
                 last_modified: None,
+                attachment: false,
             },
             now,
         );

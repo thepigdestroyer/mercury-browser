@@ -1,0 +1,217 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// What the PDF viewer shows instead of pages: the file is opening, the file needs a password, or the
+// file could not be shown. Text that comes from the document (its title) is elided and never
+// shown as the viewer's own words.
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { PdfViewerModel } from "pdf-model.slint";
+import { PdfPanelButton } from "pdf-controls.slint";
+
+component PdfCard inherits Rectangle {
+    in property <string> label;
+    // The width of the area the card is in.
+    in property <length> room;
+
+    width: Math.min(root.room - 32px, 440px);
+    border-radius: 12px;
+    border-width: 1px;
+    border-color: ChromePalette.separator;
+    background: ChromePalette.sheet-background;
+    drop-shadow-blur: 18px;
+    drop-shadow-color: ChromePalette.shadow;
+    drop-shadow-offset-y: 4px;
+    accessible-role: groupbox;
+    accessible-label: root.label;
+}
+
+export component PdfLoadingPanel inherits Rectangle {
+    background: ChromePalette.content-background;
+
+    Text {
+        text: "Opening the PDF…";
+        color: ChromePalette.text-secondary;
+        font-size: 14px;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-label: "Opening the PDF";
+    }
+}
+
+export component PdfPasswordPanel inherits Rectangle {
+    property <int> focus-serial: PdfViewerModel.focus-serial;
+
+    init => {
+        if PdfViewerModel.take-focus {
+            field.focus();
+            // A focus change made while the panel starts is not reported by `changed has-focus`.
+            PdfViewerModel.text-focused = true;
+        }
+    }
+
+    changed focus-serial => {
+        field.focus();
+    }
+
+    background: ChromePalette.content-background;
+
+    PdfCard {
+        label: "This PDF needs a password";
+        room: parent.width;
+        x: (parent.width - self.width) / 2;
+        y: Math.max(24px, (parent.height - self.height) / 3);
+        height: card-layout.preferred-height + 40px;
+
+        card-layout := VerticalLayout {
+            padding: 20px;
+            spacing: 10px;
+
+            Text {
+                text: "This PDF needs a password";
+                color: ChromePalette.text;
+                font-size: 15px;
+                font-weight: 700;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+
+            Text {
+                text: "Type the password to open " + PdfViewerModel.title + ".";
+                color: ChromePalette.text-secondary;
+                font-size: 13px;
+                wrap: word-wrap;
+                overflow: elide;
+                max-height: 54px;
+                accessible-role: none;
+            }
+
+            Rectangle {
+                height: 32px;
+                border-radius: 7px;
+                border-width: 1px;
+                border-color: PdfViewerModel.message != ""
+                    ? ChromePalette.danger
+                    : field.has-focus ? ChromePalette.accent : ChromePalette.field-border;
+                background: ChromePalette.field-background;
+
+                if field.text == "": Text {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    height: parent.height;
+                    text: "Password";
+                    color: ChromePalette.placeholder;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+
+                field := TextInput {
+                    x: 10px;
+                    width: parent.width - 20px;
+                    height: parent.height;
+                    color: ChromePalette.text;
+                    font-size: 13px;
+                    vertical-alignment: center;
+                    single-line: true;
+                    input-type: InputType.password;
+                    accessible-label: "Password";
+                    accessible-placeholder-text: "Password";
+
+                    accepted => {
+                        if self.text != "" {
+                            PdfViewerModel.submit-password(self.text);
+                            self.text = "";
+                        }
+                    }
+                    changed has-focus => {
+                        PdfViewerModel.text-focused = self.has-focus;
+                    }
+                }
+            }
+
+            if PdfViewerModel.message != "": Text {
+                text: PdfViewerModel.message;
+                color: ChromePalette.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+                accessible-role: text;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+
+                PdfPanelButton {
+                    label: "Open";
+                    primary: true;
+                    enabled: field.text != "";
+                    clicked => {
+                        PdfViewerModel.submit-password(field.text);
+                        field.text = "";
+                    }
+                }
+            }
+        }
+    }
+}
+
+export component PdfErrorPanel inherits Rectangle {
+    background: ChromePalette.content-background;
+
+    PdfCard {
+        label: "This PDF could not be shown";
+        room: parent.width;
+        x: (parent.width - self.width) / 2;
+        y: Math.max(24px, (parent.height - self.height) / 3);
+        height: card-layout.preferred-height + 40px;
+
+        card-layout := VerticalLayout {
+            padding: 20px;
+            spacing: 10px;
+
+            Text {
+                text: "This PDF could not be shown";
+                color: ChromePalette.text;
+                font-size: 15px;
+                font-weight: 700;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+
+            Text {
+                text: PdfViewerModel.message;
+                color: ChromePalette.text-secondary;
+                font-size: 13px;
+                wrap: word-wrap;
+                accessible-role: text;
+            }
+
+            HorizontalLayout {
+                alignment: end;
+                spacing: 8px;
+
+                PdfPanelButton {
+                    label: "Save a copy";
+                    enabled: PdfViewerModel.can-save-copy;
+                    clicked => {
+                        PdfViewerModel.save-copy();
+                    }
+                }
+
+                PdfPanelButton {
+                    label: "Open in Preview";
+                    enabled: PdfViewerModel.can-open-externally;
+                    clicked => {
+                        PdfViewerModel.open-externally();
+                    }
+                }
+
+                PdfPanelButton {
+                    label: "Try again";
+                    primary: true;
+                    clicked => {
+                        PdfViewerModel.retry();
+                    }
+                }
+            }
+        }
+    }
+}

@@ -26,6 +26,8 @@ mod format;
 mod location;
 mod model;
 mod offers;
+// pdf-viewer: the seam (`PdfViewerSink`, `install_viewer`) is public to the crate
+pub(crate) mod pdf_handoff;
 mod progress;
 mod quit;
 mod request;
@@ -121,6 +123,8 @@ struct Downloads {
     more_records: Cell<bool>,
     /// What to do once the user agrees to quit.
     pending_quit: RefCell<Option<Box<dyn FnOnce()>>>,
+    /// pdf-viewer: PDFs go to the viewer, the system's PDF app or the rules above.
+    pdf: pdf_handoff::PdfHandoff,
     /// Whether the page has the keyboard (shared with the window's input handling).
     web_view_focused: Rc<Cell<bool>>,
     /// Who had the keyboard when the popover, list or question opened.
@@ -151,6 +155,9 @@ pub(crate) fn start(
         options.automated,
         options.profile_root.as_deref(),
     );
+    // pdf-viewer: where the viewer's private files go; files an earlier run left are swept
+    pdf_handoff::configure(options.profile_root.as_deref(), options.automated);
+    pdf_handoff::sweep_at_start();
     let downloads = Rc::new(Downloads::new(
         window.as_weak(),
         &controller,
@@ -422,6 +429,7 @@ pub(crate) fn sync_tab(controller: &BrowserController) {
         downloads.bars.borrow_mut().remove(&tab);
         downloads.policy.borrow_mut().forget_tab(tab);
         downloads.navigations.borrow_mut().forget_tab(tab);
+        downloads.pdf_tab_closed(tab); // pdf-viewer
     }
     // A bar goes when its tab moves on from the page it went back to.
     downloads.bars.borrow_mut().retain(|tab, bar| {
@@ -534,6 +542,11 @@ impl Downloads {
             records_asked: Cell::new(0),
             more_records: Cell::new(false),
             pending_quit: RefCell::new(None),
+            pdf: pdf_handoff::PdfHandoff::new(
+                pdf_handoff::configured(),
+                Box::new(PdfOpener),
+                Box::new(random_pdf_name),
+            ),
             web_view_focused,
             focus_returns_to: Cell::new(FocusReturn::Nowhere),
         }
@@ -602,6 +615,7 @@ impl Downloads {
                         destination_dir: location::download_folder(),
                         suggested_name: suggested_name.clone(),
                         resume: None,
+                        max_bytes: None,
                     },
                 );
                 let Some(transfer) = downloads.manager().map(|manager| manager.start(request))
@@ -609,6 +623,10 @@ impl Downloads {
                     downloads.note(&name_guess, "Downloads could not be started");
                     return;
                 };
+                // pdf-viewer: a PDF for the system's PDF app is opened when it has finished
+                downloads
+                    .pdf
+                    .download_started(&fetched, transfer, Instant::now());
                 let guid = crate::profile_data::new_guid().unwrap_or_else(fallback_guid);
                 downloads.list.borrow_mut().begin(NewItem {
                     guid,
@@ -660,6 +678,10 @@ impl Downloads {
             return;
         };
         let navigation = self.navigations.borrow_mut().take(tab, &offer.url);
+        // pdf-viewer: a PDF goes to the viewer, the system's PDF app or the rules below
+        if self.pdf_offered(controller, tab, &offer, navigation.as_ref(), now) {
+            return;
+        }
         // No request seen for the page (it should not happen, as every top-level request
         // passes the hook): who started it is unknown, which is never answered with silence.
         let known = navigation.is_some();
@@ -862,7 +884,8 @@ impl Downloads {
 
     fn apply_events(&self) {
         let before = self.list.borrow().active_count();
-        let ops = stop::apply_events(&self.list, &self.inbox);
+        // pdf-viewer: the viewer's own fetches never reach the list (was `stop::apply_events`)
+        let ops = self.apply_events_but_pdf();
         // A finished file's identity, read right after it was published.
         let finished: Vec<(String, PathBuf)> = ops
             .iter()
@@ -1084,6 +1107,7 @@ impl Downloads {
                         destination_dir: folder,
                         suggested_name: None,
                         resume: Some(resume),
+                        max_bytes: None,
                     },
                 );
                 let Some(transfer) = downloads.manager().map(|manager| manager.start(request))
@@ -1379,6 +1403,185 @@ fn spawn_detached(command: &mut std::process::Command) {
         Err(error) => log::warn!("could not open the download: {error}"),
     }
 }
+
+// --- pdf-viewer: carrying out the PDF hand-off (`pdf_handoff` decides; this acts) ---
+
+/// Opens a finished download with the system's PDF app, the way "Open" in the list does.
+struct PdfOpener;
+
+impl pdf_handoff::Opener for PdfOpener {
+    fn open(&self, path: &Path) {
+        open_file(path);
+    }
+}
+
+/// A name for a private PDF file nobody can guess.
+fn random_pdf_name() -> String {
+    format!(
+        "{}.pdf",
+        crate::profile_data::new_guid().unwrap_or_else(fallback_guid)
+    )
+}
+
+impl Downloads {
+    /// One PDF the engine could not show. True when the hand-off took it (the viewer, the
+    /// viewer's private fetch, a `file:` PDF opened in place); false when the ordinary rules go
+    /// on, which is also what every refusal and the `Download` setting come to.
+    fn pdf_offered(
+        &self,
+        controller: &RefCell<BrowserController>,
+        tab: TabId,
+        offer: &DownloadOffer,
+        navigation: Option<&offers::Navigation>,
+        now: Instant,
+    ) -> bool {
+        let facts = navigation.map(|navigation| pdf_handoff::NavigationFacts {
+            user_started: navigation.user_started,
+            foreground: navigation.foreground,
+            from: navigation.from.clone(),
+        });
+        let foreground = controller.borrow().active_tab_id() == tab;
+        let outcome = self.pdf.offered(
+            &pdf_handoff::Offered {
+                tab,
+                offer,
+                navigation: facts.as_ref(),
+                foreground,
+                action: crate::settings::pdf_action(),
+            },
+            now,
+        );
+        match outcome {
+            pdf_handoff::Outcome::Ordinary => false,
+            pdf_handoff::Outcome::Handled(actions) => {
+                self.run_pdf_actions(actions, now);
+                true
+            }
+        }
+    }
+
+    fn run_pdf_actions(&self, actions: Vec<pdf_handoff::Action>, now: Instant) {
+        for action in actions {
+            match action {
+                pdf_handoff::Action::Fetch { token, url } => self.pdf_fetch(token, url),
+                pdf_handoff::Action::Cancel(id) => {
+                    if let Some(manager) = self.manager() {
+                        manager.cancel(id);
+                    }
+                }
+                pdf_handoff::Action::Note { name, message } => self.note(&name, &message),
+                pdf_handoff::Action::Replay(replay) => self.pdf_replay(replay, now),
+            }
+        }
+    }
+
+    /// Asks the engine for the user agent and the PDF's cookies, then starts the private fetch.
+    fn pdf_fetch(&self, token: u64, url: Url) {
+        engine_access::with_engine(
+            url,
+            Box::new(move |user_agent, cookies| {
+                let Some(downloads) = current() else {
+                    return;
+                };
+                let actions = match downloads.pdf.request_for(token, user_agent, cookies) {
+                    pdf_handoff::Prepared::Gone => return,
+                    pdf_handoff::Prepared::Failed(actions) => actions,
+                    pdf_handoff::Prepared::Go(request) => {
+                        match downloads.manager().map(|manager| manager.start(*request)) {
+                            Some(id) => downloads.pdf.fetch_started(token, id),
+                            None => downloads
+                                .pdf
+                                .fetch_failed(token, "Downloads could not be started"),
+                        }
+                    }
+                };
+                downloads.run_pdf_actions(actions, Instant::now());
+            }),
+            Box::new(move || {
+                if let Some(downloads) = current() {
+                    let actions = downloads
+                        .pdf
+                        .fetch_failed(token, "The browser engine was not available; try again");
+                    downloads.run_pdf_actions(actions, Instant::now());
+                }
+            }),
+        );
+    }
+
+    /// The hand-off gave a PDF up (an attachment, a body that was no PDF): it goes through the
+    /// ordinary rules as the offer it was, with the navigation facts it had.
+    fn pdf_replay(&self, replay: pdf_handoff::Replay, now: Instant) {
+        let Some(controller) = self.controller.upgrade() else {
+            return;
+        };
+        if controller.try_borrow_mut().is_err() {
+            let name = Url::parse(&replay.offer.url)
+                .map(|url| {
+                    mercury_downloads::file_name_for(
+                        None,
+                        &url,
+                        Some(replay.offer.mime_type.as_str()),
+                        None,
+                    )
+                })
+                .unwrap_or_default();
+            self.note(&name, "This file was not saved; download it from the page");
+            return;
+        }
+        if let Some(navigation) = &replay.navigation {
+            self.navigations.borrow_mut().request_started(
+                replay.tab,
+                &replay.offer.url,
+                false,
+                navigation.from.as_deref(),
+                navigation.user_started,
+                navigation.foreground,
+            );
+        }
+        self.offered(&controller, replay.tab, replay.offer, now);
+    }
+
+    /// `stop::apply_events` for the events that are not the viewer's: the viewer's own are taken
+    /// out of the queue first and acted on, so they never reach the list.
+    fn apply_events_but_pdf(&self) -> Vec<RecordOp> {
+        let events = self.inbox.take();
+        if events.is_empty() {
+            return Vec::new();
+        }
+        let controller = self.controller.upgrade();
+        // A tab that moved on is not shown the PDF. A controller that is busy answers "yes":
+        // the viewer closes a document whose tab shows another address anyway.
+        let still_wanted = |tab: TabId, url: &Url| {
+            controller
+                .as_ref()
+                .and_then(|controller| controller.try_borrow().ok())
+                .is_none_or(|controller| {
+                    controller.tabs().any(|candidate| {
+                        candidate.id() == tab && candidate.state().url() == url.as_str()
+                    })
+                })
+        };
+        let (rest, actions) = self.pdf.events(events, &still_wanted);
+        let now = Instant::now();
+        let ops = {
+            let mut list = self.list.borrow_mut();
+            rest.into_iter()
+                .flat_map(|event| list.apply(event, now))
+                .collect()
+        };
+        // After the list: the actions may add notes to it.
+        self.run_pdf_actions(actions, now);
+        ops
+    }
+
+    /// A tab was closed: its private fetch stops and the viewer lets go of its document.
+    fn pdf_tab_closed(&self, tab: TabId) {
+        let actions = self.pdf.tab_closed(tab);
+        self.run_pdf_actions(actions, Instant::now());
+    }
+}
+
+// --- end pdf-viewer ---
 
 #[cfg(test)]
 mod tests {

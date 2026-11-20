@@ -158,6 +158,7 @@ export component SettingsWindow inherits Window {
     in-out property <string> download-directory;
     in-out property <string> download-directory-problem;
     in-out property <bool> ask-where-to-save;
+    in-out property <int> pdf-index; // pdf-viewer: what a PDF file does (web.pdf)
 
     // Passwords
     in-out property <bool> offer-to-save-passwords;
@@ -702,6 +703,24 @@ export component SettingsWindow inherits Window {
 
                         Note {
                             text: "Kept for downloads, which arrive in a later version.";
+                        }
+
+                        // pdf-viewer
+                        LabelledRow {
+                            label: "PDF files";
+                            ComboBox {
+                                horizontal-stretch: 1;
+                                accessible-label: "PDF files";
+                                model: ["Open in Mercury Browser", "Open in the system's PDF app", "Download"];
+                                current-index <=> root.pdf-index;
+                                selected => {
+                                    root.chosen("pdf", self.current-index);
+                                }
+                            }
+                        }
+
+                        Note {
+                            text: "Mercury Browser shows a PDF in the tab. The system's PDF app opens only a file you asked for, after it is saved in your downloads folder.";
                         }
                     }
 
