@@ -5987,12 +5987,15 @@ dependencies = [
 name = "mercury-devtools"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
+ "fst",
  "getrandom 0.4.3",
  "httpdate",
  "image",
  "libc",
  "percent-encoding",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
