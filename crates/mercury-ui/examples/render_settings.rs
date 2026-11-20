@@ -190,6 +190,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sections = [
         "general",
         "appearance",
+        "tab-groups",
         "privacy",
         "downloads",
         "passwords",
@@ -230,7 +231,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     window.set_forced_color_scheme(ColorScheme::Unknown);
     window.set_system_color_scheme(ColorScheme::Dark);
     window.show()?;
-    window.set_section(2);
+    window.set_section(3);
     render(
         window.window(),
         1560,

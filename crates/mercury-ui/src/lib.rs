@@ -7,3 +7,6 @@ pub use tab_rows::update_tab_rows;
 
 // ring-geometry
 pub mod ring_geometry;
+
+// settings-ui: the Appearance and Tab groups sections of the settings window
+pub mod settings_sections;

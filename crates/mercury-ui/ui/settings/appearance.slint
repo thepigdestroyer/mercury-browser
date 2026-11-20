@@ -1,0 +1,54 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The Appearance section's layout cards and tab-group controls (lane settings-ui, SPEC §4.8).
+//
+// Skeleton by the lane lead. The `AppearanceUi` global below is the frozen contract (brief section 7):
+// item 1 `appearance-section` draws the section and may add properties, never rename or remove these.
+// Everything the section shows comes from `mercury_appearance::panels::layout_panel`, through
+// `mercury_ui::settings_sections::appearance::fill`; what the user does goes back through the two
+// callbacks, which `settings_sections::appearance::connect` turns into an `AppearanceAction`.
+
+export global AppearanceUi {
+    // Layout: 0 Mercury, 1 Classic.
+    in-out property <int> layout-index;
+
+    // Group dock: the switch of the chosen layout (`dock` or `dock_in_classic`), its note, and where it starts
+    // (0 open, 1 shrunk).
+    in-out property <bool> dock;
+    in property <string> dock-note;
+    in-out property <int> dock-starts-index;
+
+    in-out property <bool> ring;
+    in-out property <bool> orbit;
+    // Pinch to open Orbit; only usable while Orbit is on.
+    in-out property <bool> orbit-pinch;
+    in property <bool> orbit-pinch-enabled: true;
+    // Group keys (⌥ + letter): `keys.enabled`.
+    in-out property <bool> keys;
+    in-out property <bool> dial;
+    // The dial's corner: 0 top left, 1 top right, 2 bottom left, 3 bottom right; only usable while the dial is on.
+    in-out property <int> dial-corner-index;
+    in property <bool> dial-corner-enabled: true;
+    // Memory for Orbit previews: the choices as text ("128 MB") and the chosen one.
+    in property <[string]> snapshot-cap-choices;
+    in-out property <int> snapshot-cap-index;
+
+    // The one note that says the tab-group interface is not in yet; empty when it is.
+    in property <string> note;
+
+    // A switch: "dock", "ring", "orbit", "orbit-pinch", "keys", "dial", and its new state.
+    callback toggled(string, bool);
+    // A list: "layout", "dock-starts", "dial-corner", "snapshot-cap", and the chosen index.
+    callback chosen(string, int);
+}
+
+export component AppearanceSection inherits VerticalLayout {
+    spacing: 12px;
+
+    // Placeholder: item 1 replaces everything below.
+    Text {
+        text: AppearanceUi.note;
+        accessible-role: none;
+        wrap: word-wrap;
+    }
+}

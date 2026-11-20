@@ -26,6 +26,8 @@ glow.workspace = true
 image.workspace = true
 libc.workspace = true
 log.workspace = true
+# settings-ui: the key panel of the Tab groups section (`src/settings/groups_panel.rs`).
+mercury-appearance = { path = "../../crates/mercury-appearance" }
 mercury-downloads = { path = "../../crates/mercury-downloads" }
 mercury-filter-lists = { path = "../../crates/mercury-filter-lists" }
 mercury-import = { path = "../../crates/mercury-import" }

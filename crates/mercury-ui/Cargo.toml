@@ -14,6 +14,9 @@ test-support = []
 
 [dependencies]
 slint.workspace = true
+# settings-ui: the Appearance and Tab groups sections show what mercury-appearance computes from the stored settings.
+mercury-appearance = { path = "../mercury-appearance" }
+mercury-settings = { path = "../mercury-settings" }
 
 # Only for rendering without a display: `examples/render_settings.rs` (the settings window),
 # `examples/render_controls.rs` (the page-control popups), `examples/render_tabs.rs` (the

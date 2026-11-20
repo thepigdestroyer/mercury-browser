@@ -1,0 +1,70 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The Tab groups section: the table of the window's groups with their keys (lane settings-ui, SPEC §4.8).
+//
+// Skeleton by the lane lead. `KeyRowUi` and the `TabGroupsUi` global are the frozen contract (brief section 7):
+// item 3 `tab-groups-section` draws the section and may add properties, never rename or remove these.
+// Everything shown comes from `mercury_appearance::panels::key_panel::PanelView`, through
+// `mercury_ui::settings_sections::tab_groups::fill`; what the user does goes back through the callbacks, which
+// `settings_sections::tab_groups::connect` turns into a `PanelAction`.
+
+// One group of the table. `state`: 0 plain, 1 dead-key note, 2 conflict, 3 refused.
+export struct KeyRowUi {
+    id: int,
+    name: string,
+    colour: color,
+    tabs: string,
+    letter: string,
+    types: string,
+    state: int,
+    message: string,
+}
+
+export global TabGroupsUi {
+    in property <[KeyRowUi]> rows;
+    // Tabs in no group; the Loose line is shown when this is above zero and `rows` is not empty.
+    in property <int> loose-tabs;
+    in property <bool> empty;
+
+    in property <bool> keys-enabled: true;
+    in property <string> keys-off-note;
+    in property <string> types-header;
+    in-out property <bool> show-beside-names;
+    // 0 outside text or hold, 1 outside text, 2 always.
+    in-out property <int> capture-index;
+    in property <string> hold-text;
+    in property <[string]> hold-choices;
+    in-out property <int> hold-index;
+    in property <string> reset-label;
+    in property <bool> reset-enabled;
+
+    // The one note that says the tab-group interface is not in yet; empty when it is.
+    in property <string> note;
+
+    // The section appeared (called from its `init`): refresh the rows.
+    callback opened();
+    // A character typed in a group's key cap, or "" for Backspace or Delete.
+    callback key-typed(int, string);
+    callback swap(int);
+    callback choose-another(int);
+    callback reset-keys();
+    // "show-beside-names" and its new state.
+    callback toggled(string, bool);
+    // "capture" and "hold" with the chosen index.
+    callback chosen(string, int);
+}
+
+export component TabGroupsSection inherits VerticalLayout {
+    spacing: 12px;
+
+    init => {
+        TabGroupsUi.opened();
+    }
+
+    // Placeholder: item 3 replaces everything below.
+    Text {
+        text: TabGroupsUi.note;
+        accessible-role: none;
+        wrap: word-wrap;
+    }
+}

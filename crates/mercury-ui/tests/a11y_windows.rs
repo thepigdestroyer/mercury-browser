@@ -594,7 +594,7 @@ fn settings_window(section: i32) -> SettingsWindow {
 
 /// The Passwords section with the logins of the desktop crate's tests plus an HTTP sign-in.
 fn passwords_window() -> SettingsWindow {
-    let window = settings_window(4);
+    let window = settings_window(5);
     let ui = window.global::<PasswordManagerUi>();
     ui.set_storage_note("Saved in your login keychain.".into());
     ui.set_rows(ModelRc::new(VecModel::from(vec![
@@ -655,9 +655,10 @@ fn settings_log(window: &SettingsWindow) -> Log {
     log
 }
 
-const SECTIONS: [&str; 6] = [
+const SECTIONS: [&str; 7] = [
     "General",
     "Appearance",
+    "Tab groups",
     "Privacy and security",
     "Downloads",
     "Passwords",
@@ -665,7 +666,7 @@ const SECTIONS: [&str; 6] = [
 ];
 
 #[test]
-fn the_settings_sidebar_is_a_tab_list_of_six_tabs_with_the_chosen_one_selected() {
+fn the_settings_sidebar_is_a_tab_list_of_seven_tabs_with_the_chosen_one_selected() {
     let window = settings_window(0);
 
     let nodes = freeze(&window, "windows-settings-general");
@@ -677,7 +678,7 @@ fn the_settings_sidebar_is_a_tab_list_of_six_tabs_with_the_chosen_one_selected()
         SECTIONS
     );
     for (index, tab) in tabs.iter().enumerate() {
-        assert_eq!(tab.item, Some((index, 6)), "{}", tab.label);
+        assert_eq!(tab.item, Some((index, 7)), "{}", tab.label);
         assert_eq!(tab.selected, Some(index == 0), "{}", tab.label);
         a11y::assert_inside(tab, list);
     }
@@ -864,7 +865,7 @@ fn the_appearance_section_is_frozen_and_its_boxes_toggle() {
 
 #[test]
 fn the_privacy_section_groups_the_filter_lists_and_labels_each_control() {
-    let window = settings_window(2);
+    let window = settings_window(3);
 
     let nodes = freeze(&window, "windows-settings-privacy");
 
@@ -899,7 +900,7 @@ fn the_privacy_section_groups_the_filter_lists_and_labels_each_control() {
 
 #[test]
 fn the_privacy_controls_do_what_a_click_does_and_disabled_ones_do_nothing() {
-    let window = settings_window(2);
+    let window = settings_window(3);
     let log = settings_log(&window);
 
     press(&window, Role::Checkbox, "Update filter lists automatically");
@@ -931,7 +932,7 @@ fn the_privacy_controls_do_what_a_click_does_and_disabled_ones_do_nothing() {
 
 #[test]
 fn the_downloads_and_advanced_sections_are_frozen_with_their_fields_labelled() {
-    let window = settings_window(3);
+    let window = settings_window(4);
     window.set_download_directory("/Users/example/Downloads".into());
     window.set_download_directory_problem("That folder does not exist.".into());
 
@@ -943,7 +944,7 @@ fn the_downloads_and_advanced_sections_are_frozen_with_their_fields_labelled() {
     );
     find(&nodes, Role::Checkbox, "Ask where to save each download");
 
-    let window = settings_window(5);
+    let window = settings_window(6);
     window.set_language("en-GB".into());
     let nodes = freeze(&window, "windows-settings-advanced");
     assert_eq!(find(&nodes, Role::TextInput, "Language").value, "en-GB");
@@ -953,7 +954,7 @@ fn the_downloads_and_advanced_sections_are_frozen_with_their_fields_labelled() {
 
 #[test]
 fn the_never_save_list_names_each_site_on_its_remove_button() {
-    let window = settings_window(4);
+    let window = settings_window(5);
     let log = settings_log(&window);
 
     let nodes = a11y::reading_order(&window);
@@ -1331,7 +1332,7 @@ fn the_generator_reads_the_generated_password_and_copies_it() {
 
 #[test]
 fn exporting_is_disabled_and_does_nothing_without_saved_logins() {
-    let window = settings_window(4);
+    let window = settings_window(5);
     let ui = window.global::<PasswordManagerUi>();
     ui.set_total(0);
     let log = passwords_log(&window);
@@ -1373,7 +1374,7 @@ fn the_settings_and_passwords_labels_the_desktop_tests_look_up_are_unchanged() {
     check(&general, Role::Combobox, &["Search engine"]);
     check(&general, Role::Button, &["Remove Docs"]);
 
-    let privacy = settings_window(2);
+    let privacy = settings_window(3);
     check(
         &privacy,
         Role::Checkbox,
@@ -1383,7 +1384,7 @@ fn the_settings_and_passwords_labels_the_desktop_tests_look_up_are_unchanged() {
         ],
     );
 
-    let advanced = settings_window(5);
+    let advanced = settings_window(6);
     check(&advanced, Role::TextInput, &["Language"]);
 
     let passwords = passwords_window();

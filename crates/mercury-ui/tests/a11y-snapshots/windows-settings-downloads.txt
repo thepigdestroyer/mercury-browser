@@ -3,15 +3,18 @@
 # Reading order of the interface, one element per line: role | label | description | flags.
 # Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
 tab-list | Settings sections | |
-tab | General | | unselected, item 0 of 6
-tab | Appearance | | unselected, item 1 of 6
-tab | Privacy and security | | unselected, item 2 of 6
-tab | Downloads | | selected, item 3 of 6
-tab | Passwords | | unselected, item 4 of 6
-tab | Advanced | | unselected, item 5 of 6
+tab | General | | unselected, item 0 of 7
+tab | Appearance | | unselected, item 1 of 7
+tab | Tab groups | | unselected, item 2 of 7
+tab | Privacy and security | | unselected, item 3 of 7
+tab | Downloads | | selected, item 4 of 7
+tab | Passwords | | unselected, item 5 of 7
+tab | Advanced | | unselected, item 6 of 7
 text | Downloads | |
 text-input | Save downloads in | | placeholder "The Downloads folder", value "/Users/example/Downloads"
 text | That folder does not exist. | |
 checkbox | Ask where to save each download | | unchecked
 text | Ask where to save each download | |
 text | Kept for downloads, which arrive in a later version. | |
+combobox | PDF files | | collapsed, value "Open in Mercury Browser"
+text | Mercury Browser shows a PDF in the tab. The system's PDF app opens only a file you asked for, after it is saved in your downloads folder. | |

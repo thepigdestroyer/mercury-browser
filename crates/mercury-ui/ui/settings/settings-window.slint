@@ -4,6 +4,8 @@ import { Button, CheckBox, ComboBox, LineEdit, Palette, ScrollView } from "std-w
 import { ChromePalette } from "../theme/chrome-palette.slint";
 import { PasswordsSection } from "../passwords/passwords-section.slint";
 import { FilterListsGroup } from "filter-lists.slint";
+import { AppearanceSection } from "appearance.slint"; // settings-ui
+import { TabGroupsSection } from "tab-groups.slint"; // settings-ui
 
 // One search engine as the settings window lists it.
 export struct SearchEngineRow {
@@ -229,6 +231,7 @@ export component SettingsWindow inherits Window {
     property <[string]> sections: [
         "General",
         "Appearance",
+        "Tab groups",
         "Privacy and security",
         "Downloads",
         "Passwords",
@@ -591,10 +594,16 @@ export component SettingsWindow inherits Window {
                                 root.toggled("show-bookmarks-bar", self.checked);
                             }
                         }
+
+                        // settings-ui: the layout cards and the tab-group controls
+                        AppearanceSection { }
                     }
 
+                    // settings-ui: Tab groups
+                    if root.section == 2: TabGroupsSection { }
+
                     // Privacy and security
-                    if root.section == 2: VerticalLayout {
+                    if root.section == 3: VerticalLayout {
                         spacing: 12px;
 
                         CheckBox {
@@ -693,7 +702,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     // Downloads
-                    if root.section == 3: VerticalLayout {
+                    if root.section == 4: VerticalLayout {
                         spacing: 12px;
 
                         LabelledRow {
@@ -751,7 +760,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     // Passwords
-                    if root.section == 4: VerticalLayout {
+                    if root.section == 5: VerticalLayout {
                         spacing: 12px;
 
                         CheckBox {
@@ -801,7 +810,7 @@ export component SettingsWindow inherits Window {
                     }
 
                     // Advanced
-                    if root.section == 5: VerticalLayout {
+                    if root.section == 6: VerticalLayout {
                         spacing: 12px;
 
                         CheckBox {
