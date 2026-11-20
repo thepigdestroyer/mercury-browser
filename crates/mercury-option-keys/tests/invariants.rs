@@ -49,6 +49,24 @@ use mercury_option_keys::{
     Mods, OptionKeys, Outcome, Phase, Target,
 };
 
+/// The brief contradicts itself on one point, and this switch is where the integrator settles it.
+///
+/// Section 5.4, "Any phase": "Auto-repeat of a captured key is consumed with no effect". Section 6
+/// item 2: I6 (a key down with modifiers other than ⌥ alone is never consumed), I7 (disabled
+/// means nothing consumed) and I8 (no key down consumed while composing). For the auto-repeat of
+/// a key whose press was consumed, and is still held, the two cannot both hold: ⌘ pressed while a
+/// captured letter is held, a composition opened, or the keys switched off.
+///
+/// `false` (the default) checks I6 to I8 as stated, for every key down, and reports the
+/// auto-repeats as their own invariants (`I6 (auto-repeat ...)` and so on) apart from the
+/// fresh presses. `true` excuses exactly that class, as the brief already excuses a key-up whose
+/// press was consumed.
+const EXCUSE_CAPTURED_REPEATS: bool = false;
+
+const I6_REPEAT: &str = "I6 (auto-repeat of a captured key)";
+const I7_REPEAT: &str = "I7 (auto-repeat of a captured key)";
+const I8_REPEAT: &str = "I8 (auto-repeat of a captured key)";
+
 /// `on_event` calls per seed.
 const EVENTS_PER_SEED: usize = 20_000;
 /// The brief asks for at least this many events over all seeds.
@@ -592,6 +610,7 @@ struct Checker {
 /// What a call gave, printed only when an invariant fails.
 struct State {
     out: Outcome,
+    was: Phase,
     phase: Phase,
     view: CardView,
 }
@@ -600,8 +619,8 @@ impl fmt::Display for State {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(
             f,
-            "{:?}, phase {:?}, view {:?}",
-            self.out, self.phase, self.view
+            "{:?}, phase {:?} (was {:?}), view {:?}",
+            self.out, self.phase, self.was, self.view
         )
     }
 }
@@ -701,7 +720,12 @@ impl Checker {
         after: (Phase, CardView, Option<Duration>),
     ) {
         let (phase, view, deadline) = after;
-        let state = State { out, phase, view };
+        let state = State {
+            out,
+            was: before.0,
+            phase,
+            view,
+        };
 
         // Coverage.
         self.cov.phases[phase as usize] += 1;
@@ -764,6 +788,19 @@ impl Checker {
         }
 
         let mut excused_up = false;
+        // An auto-repeat of a key whose press was consumed (and not yet released).
+        let repeat_of_captured = match action {
+            Action::Event(
+                _,
+                Event::Key {
+                    key,
+                    down: true,
+                    repeat: true,
+                    ..
+                },
+            ) => self.recorded.contains(key),
+            _ => false,
+        };
         match action {
             Action::Event(_, Event::Modifiers(_)) => {
                 // I2.
@@ -783,21 +820,32 @@ impl Checker {
                         if !self.recorded.contains(key) {
                             self.recorded.push(*key);
                         }
-                        // I6.
-                        if !mods.alt_only() {
-                            self.fail(
-                                "I6",
-                                call,
-                                format!("a key down with [{}] consumed ({state})", mods_str(*mods)),
-                            );
-                        }
-                        // I8.
-                        if self.focus.composing {
-                            self.fail(
-                                "I8",
-                                call,
-                                format!("a key down consumed while composing ({state})"),
-                            );
+                        // I6 and I8, strictly as the brief states them; see `EXCUSE_CAPTURED_REPEATS`.
+                        if !(EXCUSE_CAPTURED_REPEATS && repeat_of_captured) {
+                            let (i6, i8) = if repeat_of_captured {
+                                (I6_REPEAT, I8_REPEAT)
+                            } else {
+                                ("I6", "I8")
+                            };
+                            let what = if repeat_of_captured {
+                                format!("an auto-repeat of {}", key_str(*key))
+                            } else {
+                                format!("the key down of {}", key_str(*key))
+                            };
+                            if !mods.alt_only() {
+                                self.fail(
+                                    i6,
+                                    call,
+                                    format!("{what} with [{}] consumed ({state})", mods_str(*mods)),
+                                );
+                            }
+                            if self.focus.composing {
+                                self.fail(
+                                    i8,
+                                    call,
+                                    format!("{what} consumed while composing ({state})"),
+                                );
+                            }
                         }
                     }
                 } else {
@@ -842,7 +890,22 @@ impl Checker {
         // I7.
         if !self.cfg.enabled {
             let consumed = out.consume && !excused_up;
-            if consumed || out.activate.is_some() || view.visible || phase != Phase::Idle {
+            let repeat_only = consumed && repeat_of_captured;
+            if consumed && !repeat_only {
+                self.fail(
+                    "I7",
+                    call,
+                    format!("the keys are off but a key is consumed: {state}"),
+                );
+            }
+            if repeat_only && !EXCUSE_CAPTURED_REPEATS {
+                self.fail(
+                    I7_REPEAT,
+                    call,
+                    format!("the keys are off but an auto-repeat is consumed: {state}"),
+                );
+            }
+            if out.activate.is_some() || view.visible || phase != Phase::Idle {
                 self.fail("I7", call, format!("the keys are off but: {state}"));
             }
         }

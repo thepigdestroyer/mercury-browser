@@ -786,31 +786,9 @@ fn a_key_event_applies_its_own_modifiers_first() {
         HIDDEN,
     );
 
-    // ⌥ released through the ⌥ key's own release event carrying the new modifiers.
-    let mut r = Rig::overlay(default_config(), TEXT);
-    r.tap(
-        500,
-        S_KEY,
-        ALT,
-        EAT_AND_UPDATE,
-        Phase::Overlay,
-        card(RESEARCH, None),
-    );
-    r.tap(
-        600,
-        digit(2),
-        ALT,
-        EAT_AND_UPDATE,
-        Phase::Overlay,
-        card(RESEARCH, Some(2)),
-    );
-    r.step(
-        700,
-        up(Key::Modifier, NONE),
-        commit(Some(tab(RESEARCH, 1))),
-        Phase::Idle,
-        HIDDEN,
-    );
+    // Not tested, brief ambiguous: a `Key::Modifier` event whose own `mods` differ from the
+    // tracked ones ("a key event first applies its own mods" against "Modifier: never changes
+    // the state"). The ⌥ key's release reaches the machine as `Event::Modifiers`.
 }
 
 // The three capture modes, in and out of a text field (Armed, a letter of a group).
