@@ -17,16 +17,21 @@
 //! - `Accept-Ranges: bytes` and `Cache-Control: no-store` on every response;
 //! - the downloads routes (`/download/<name>`, `POST /form-result`) and the request log
 //!   (`--log FILE`), which the Python script gained after this crate was written (see
-//!   `downloads`).
+//!   `downloads`);
+//! - the `/net/*` routes of the network-policy work (`/net/echo`, `/net/set-cookie`, `/net/auth`,
+//!   `/net/redirect`, with CORS for local pages; see `net_probe`), which have no Python
+//!   counterpart.
 //!
 //! The work is split by job: `cli` reads the command line, `http` reads requests and
 //! writes responses, `files` answers the file routes, `downloads` the generated downloads and
-//! the request log, and `python` holds the Python-style text helpers the others share. This module accepts connections and routes each request.
+//! the request log, `net_probe` the `/net/*` routes, and `python` holds the Python-style text helpers the others share. This module accepts connections and routes each request.
 
 mod cli;
 mod downloads;
 mod files;
 mod http;
+// net: the routes the network-policy pages use (cookies, headers, sign-in, redirects).
+mod net_probe;
 mod python;
 
 pub use cli::{Command, DESCRIPTION, UsageError, help_text, parse_arguments};
@@ -211,6 +216,10 @@ fn handle_request(stream: &TcpStream, root: &Path, log: Option<&RequestLog>) -> 
     match request.command.as_str() {
         "GET" | "HEAD" => respond(&mut responder, &request, root, log),
         "POST" => post(&mut responder, &mut reader, &request, log),
+        // net: the CORS preflight of a `/net/*` route; `OPTIONS` anywhere else stays unsupported.
+        "OPTIONS" if net_probe::is_net_path(&request.path) => {
+            net_probe::preflight(&mut responder, &request, log)
+        }
         other => {
             let message = format!("Unsupported method ({})", python_repr(other));
             responder.send_error(501, Some(&message), None)
@@ -228,6 +237,10 @@ fn respond(
 ) -> io::Result<()> {
     if request.path.split('?').next() == Some(PRIVATE_PATH) {
         return send_private(responder, request);
+    }
+    // net: `/net/echo`, `/net/set-cookie`, `/net/auth` and `/net/redirect`.
+    if net_probe::is_net_path(&request.path) {
+        return net_probe::respond(responder, request, log);
     }
     if request.command == "GET" && url_path(&request.path).starts_with(DOWNLOAD_PREFIX) {
         return send_download(responder, request, log);
