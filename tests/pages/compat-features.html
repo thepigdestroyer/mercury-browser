@@ -33,9 +33,10 @@
   style sheet inside a shadow root, and a row of small boxes in which only the third is green
   (:nth-child(2 of .a)). In the screenshot nothing may be a crash page.
   container-type is "not supported" on purpose (layout_css_container_queries_enabled stays off, so that
-  @supports does not report a feature Servo drops). visualViewport is a trial that is OFF for now
-  (dom_visual_viewport_enabled, in talaria-servo/src/engine_prefs.rs PINNED_OFF): its line only prints
-  the numbers. To try it, move that preference from PINNED_OFF to apply() and look at the numbers.
+  @supports does not report a feature Servo drops). visualViewport is on (decision D2, kept because a window
+  run showed sane numbers): its width and height must match the window's own inner size and its scale
+  must be 1. If a run shows otherwise or crashes, turn it off in talaria-servo/src/engine_prefs.rs
+  (move dom_visual_viewport_enabled back to PINNED_OFF).
   cookieStore, RTCPeerConnection, service workers and WebGPU stay hidden until their lanes land.
   navigator.globalPrivacyControl and navigator.locks are information only: the network lane and the
   storage lane add them.
@@ -122,12 +123,23 @@
     return getComputedStyle(items[2]).backgroundColor + " / " + getComputedStyle(items[0]).backgroundColor;
   }, "rgb(0, 160, 0) / rgb(255, 255, 255)");
 
-  // The visual viewport (a trial, off for now): information only. With the preference on, the width, height
-  // and scale must be finite and positive and match the window; then turn this line into a check.
-  inform("window.visualViewport (width x height @ scale)", () => {
+  // The visual viewport (decision D2): an object whose size is the window's inner size (the visual viewport
+  // leaves out scrollbars, so a few pixels less is fine) and whose scale is 1 when nobody pinch-zoomed.
+  check("window.visualViewport matches the window (width, height, scale)", () => {
     const viewport = window.visualViewport;
-    if (viewport === undefined) return "undefined (the trial is off)";
-    return viewport.width + " x " + viewport.height + " @ " + viewport.scale;
+    if (typeof viewport !== "object" || viewport === null) return "no visualViewport (" + typeof viewport + ")";
+    const numbers = [viewport.width, viewport.height, viewport.scale, viewport.offsetLeft, viewport.offsetTop];
+    const shown = viewport.width + " x " + viewport.height + " @ " + viewport.scale + " (window " +
+      window.innerWidth + " x " + window.innerHeight + ")";
+    if (!numbers.every(Number.isFinite) || viewport.width <= 0 || viewport.height <= 0) return shown;
+    const near = (a, b) => a <= b && b - a <= 20;
+    return near(viewport.width, window.innerWidth) && near(viewport.height, window.innerHeight) &&
+      viewport.scale === 1 && viewport.offsetLeft === 0 && viewport.offsetTop === 0 ? "ok" : shown;
+  }, "ok");
+  inform("window.visualViewport (width x height @ scale, window inner size)", () => {
+    const viewport = window.visualViewport;
+    return viewport.width + " x " + viewport.height + " @ " + viewport.scale + ", window " +
+      window.innerWidth + " x " + window.innerHeight;
   });
 
   // Hidden until the lane that makes each one work turns it on.

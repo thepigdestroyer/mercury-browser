@@ -1485,7 +1485,7 @@ mod tests {
 
             assert!(preferences.dom_composition_event_enabled, "{enabled}");
             assert!(preferences.dom_adoptedstylesheet_enabled, "{enabled}");
-            assert!(!preferences.dom_visual_viewport_enabled, "{enabled}");
+            assert!(preferences.dom_visual_viewport_enabled, "{enabled}");
         }
     }
 

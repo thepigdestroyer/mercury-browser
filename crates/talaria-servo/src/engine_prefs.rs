@@ -61,11 +61,6 @@ const PINNED_OFF: &[&str] = &[
     // The accessibility tree is built for the active tab only, by its own lane.
     "accessibility_enabled",
     "expensive_accessibility_test_assertions_enabled",
-    // `window.visualViewport` (K0 trial, R14d ED1): Servo implements it, but the K0 integration run could
-    // not open a window (the macOS screen was locked), so nobody has seen its numbers. Turn it on, and
-    // change the page check to a PASS, once `tests/pages/compat-features.html` prints a sane width, height
-    // and scale and a run of the desktop browser does not crash.
-    "dom_visual_viewport_enabled",
 ];
 
 /// Sets Mercury's engine preferences on `preferences`.
@@ -88,12 +83,15 @@ pub(crate) fn apply(preferences: &mut Preferences) {
     // - composition events: Servo already dispatches them; with the preference off,
     //   `'CompositionEvent' in window` is false and React's input-method path falls back;
     // - adopted style sheets: constructable style sheets in documents and shadow roots (Lit);
-    // - the visual viewport (`window.visualViewport`) is a trial that is OFF until a run of
-    //   `tests/pages/compat-features.html` shows sane numbers (see `PINNED_OFF`).
+    // - the visual viewport: read-only `window.visualViewport`. A trial (decision D2) that stays only
+    //   while `tests/pages/compat-features.html` shows sane values and no run crashes; the K0 window
+    //   run showed 1000 x 658 @ scale 1 in a 1000 x 800 window with no crash, and the page checks the
+    //   numbers against `innerWidth` and `innerHeight`. To turn it off, move its name to `PINNED_OFF`.
     // Container queries are off, in `runtime.rs` (`EXCLUDED_EXPERIMENTAL_PREFS`): Servo parses
     // `@container` blocks and drops them, and `@supports` would report support that is not there.
     preferences.dom_composition_event_enabled = true;
     preferences.dom_adoptedstylesheet_enabled = true;
+    preferences.dom_visual_viewport_enabled = true;
 }
 
 #[cfg(test)]
@@ -153,8 +151,7 @@ mod tests {
         let preferences = applied();
         assert!(preferences.dom_composition_event_enabled);
         assert!(preferences.dom_adoptedstylesheet_enabled);
-        // The visual viewport is a trial that stays off until a page run shows sane numbers.
-        assert!(!preferences.dom_visual_viewport_enabled);
+        assert!(preferences.dom_visual_viewport_enabled);
     }
 
     #[test]
