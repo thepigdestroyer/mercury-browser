@@ -141,6 +141,9 @@ fn sum(advances: &[Au]) -> i64 {
 /// A line that fits (its total is at most `available`) is `None`, whatever the size of the marker. A line
 /// that does not fit keeps the most clusters that fit in `available - ellipsis` and nothing when that is
 /// negative.
+// Layout calls `keep_within` for each text run of a line that is already known to overflow, so only
+// the tests call this entry point, which is the one the lane's brief pins.
+#[allow(dead_code)]
 pub fn cut_point(
     advances: &[Au],
     available: Au,
