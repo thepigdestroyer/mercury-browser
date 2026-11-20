@@ -79,6 +79,8 @@ endif
 	ci-tools \
 	lint-scripts \
 	servo-patches-check \
+	hsts-preload-refresh \
+	hsts-preload-check \
 	vendored-tests \
 	deny \
 	credits \
@@ -124,6 +126,8 @@ help:
 		'ci-tools' 'Download the pinned shellcheck, actionlint and cargo-deny.' \
 		'lint-scripts' 'Lint scripts/ (shellcheck), the workflows (actionlint), licence headers and vendored crates.' \
 		'servo-patches-check' 'Check that each crate in third_party/ is the published crate plus its exported patch.' \
+		'hsts-preload-refresh' 'Rebuild the HSTS preload list from Chromium (needs the network; a release-time step).' \
+		'hsts-preload-check' 'Check that the shipped HSTS preload list is fit to ship (HSTS_MAX_AGE_DAYS=N limits its age).' \
 		'vendored-tests' 'Run the unit tests of the vendored Servo crates that need no engine (preferences, message types).' \
 		'deny' 'Check dependencies against the policy in deny.toml.' \
 		'credits' 'Write the credits page (the licence text of every crate in the app) to target/<profile>/credits.' \
@@ -316,6 +320,19 @@ lint-scripts:
 # crate from crates.io when Cargo's cache lacks it (vendored crates never are in it).
 servo-patches-check:
 	"$(CARGO)" run --locked --quiet $(CARGO_FLAGS) --package mercury-servo-patches -- check
+
+# The HSTS preload list (crates/talaria-servo/resources/hsts_preload.fstmap and its manifest).
+# hsts-preload-refresh downloads Chromium's list, so it needs the network: it is a release-time
+# maintainer step that CI never runs, and it leaves the changes uncommitted. HSTS_CHROMIUM_REF is a
+# Chromium branch, tag or commit (a commit hash pins the refresh). hsts-preload-check is
+# engine-free and reads the file only; HSTS_MAX_AGE_DAYS=N makes a list retrieved longer ago fail.
+HSTS_CHROMIUM_REF ?= main
+
+hsts-preload-refresh:
+	scripts/dev/update-hsts-preload.sh "$(HSTS_CHROMIUM_REF)"
+
+hsts-preload-check:
+	"$(CARGO)" run --locked --quiet $(CARGO_FLAGS) --package mercury-devtools --bin hsts-preload -- check crates/talaria-servo/resources/hsts_preload.fstmap$(if $(HSTS_MAX_AGE_DAYS), --max-age-days $(HSTS_MAX_AGE_DAYS))
 
 # The vendored crates' own unit tests that need neither GStreamer nor a window, so that this also
 # runs on the Linux CI runner: Servo's preferences, the Stylo preference bridge and the message
