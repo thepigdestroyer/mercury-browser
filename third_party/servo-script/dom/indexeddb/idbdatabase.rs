@@ -2,6 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: this file carries upstream code from LunarWerxs/servo, branch pr/indexeddb, commit
+// 860d2eff1 (author L0garithmic, MPL-2.0; the branch is AI-written): `clear_upgrade_transaction`
+// no longer panics. Mercury's other changes to this file are marked `Mercury:` where they are.
+
 use std::cell::Cell;
 
 use dom_struct::dom_struct;
@@ -163,10 +167,16 @@ impl IDBDatabase {
     }
 
     pub(crate) fn clear_upgrade_transaction(&self, transaction: &IDBTransaction) {
-        let current = self
-            .upgrade_transaction
-            .get()
-            .expect("clear_upgrade_transaction called but no upgrade transaction is set");
+        // Mercury: LunarWerxs/servo pr/indexeddb 860d2eff1 (L0garithmic, MPL-2.0), kept as
+        // upstream wrote it: the former `.expect()` here took the content process down.
+        // A backend error during an upgrade (for example a schema constraint failure
+        // on createIndex) can abort the transaction before it was recorded here, and
+        // an abort must never take the whole script thread down with it. Treat a
+        // missing upgrade transaction as already cleared.
+        let Some(current) = self.upgrade_transaction.get() else {
+            warn!("clear_upgrade_transaction called but no upgrade transaction is set");
+            return;
+        };
 
         debug_assert!(
             &*current == transaction,
