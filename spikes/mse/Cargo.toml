@@ -17,6 +17,7 @@ publish = false
 
 [workspace.dependencies]
 glib = "0.22"
+libc = "0.2"
 # `v1_28`: the framework is GStreamer 1.28.9 (scripts/macos/gstreamer.sh). Servo 0.8 uses gstreamer-rs 0.25.4.
 gstreamer = { version = "0.25", features = ["v1_28"] }
 gstreamer-app = { version = "0.25", features = ["v1_28"] }

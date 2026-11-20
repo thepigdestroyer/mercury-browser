@@ -10,6 +10,7 @@ publish.workspace = true
 
 [dependencies]
 glib = { workspace = true }
+libc = { workspace = true }
 gstreamer = { workspace = true }
 gstreamer-app = { workspace = true }
 gstreamer-mse = { workspace = true }
@@ -18,3 +19,12 @@ gstreamer-video = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 thiserror = { workspace = true }
+
+[dev-dependencies]
+mse-segments = { path = "../mse-segments" }
+
+# The harness protocol test starts copies of its own executable as scenario children (`--child <ID>`),
+# so it needs its own `main` instead of libtest's.
+[[test]]
+name = "harness_protocol"
+harness = false

@@ -2,7 +2,8 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The event log: every callback GstMSE and GstPlay make, with the time and the thread. A scenario
 //! reads it to check order ("`updatestart` before `update` before `updateend`") and thread.
-//! Complete (not a stub); item 1 may extend it.
+//! Complete (not a stub); item 1 extended it with a hook list, an elapsed clock and the real OS
+//! thread name (see [`current_thread_name`]).
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
@@ -53,21 +54,55 @@ pub enum MseEvent {
     /// `notify::duration` on `msesrc` (`None` is "unknown").
     ElementDuration(Option<ClockTime>),
     Play(PlayEvent),
+    /// `notify::position` on `msesrc`. Only logged after `MseBackend::set_log_position(true)`: it can
+    /// fire for every buffer, so it is off by default (C14 turns it on to measure the update rate).
+    ElementPosition(Option<ClockTime>),
 }
 
 #[derive(Debug, Clone)]
 pub struct TimedEvent {
     /// Time since the log was created.
     pub at: Duration,
-    /// `std::thread::current().name()`, or `unnamed-<id>`; GStreamer's threads have names such as `queue:src`.
+    /// The OS name of the emitting thread (see [`current_thread_name`]); GStreamer's threads have
+    /// names such as `queue:src` or `GstPlay`, Rust threads the name given to the builder.
     pub thread: String,
     pub event: MseEvent,
+}
+
+/// A callback run on the emitting thread for every event, after it is in the log and with no lock held.
+/// A hook may call back into the log and into the backend: that is how re-entrancy (T02) is exercised.
+pub type EventHook = Arc<dyn Fn(&TimedEvent) + Send + Sync + 'static>;
+
+/// The name of the calling thread. A thread that GStreamer or GLib created is unknown to Rust's
+/// `std::thread::current()` (it has no name there), so the name is read from the OS
+/// (`pthread_getname_np`, which also returns the names Rust sets). Falls back to the Rust name and
+/// then to `unnamed-<id>`.
+pub fn current_thread_name() -> String {
+    let mut buffer = [0 as libc::c_char; 64];
+    // SAFETY: `pthread_self()` is the calling thread and `buffer` is writable for its whole length;
+    // the call writes a NUL-terminated string that fits in it, or fails and writes nothing we read.
+    let status = unsafe {
+        libc::pthread_getname_np(libc::pthread_self(), buffer.as_mut_ptr(), buffer.len())
+    };
+    if status == 0 {
+        // SAFETY: on success the buffer holds a NUL-terminated string (written by the call above).
+        let name = unsafe { std::ffi::CStr::from_ptr(buffer.as_ptr()) }.to_string_lossy();
+        if !name.is_empty() {
+            return name.into_owned();
+        }
+    }
+    let thread = std::thread::current();
+    match thread.name() {
+        Some(name) => name.to_owned(),
+        None => format!("unnamed-{:?}", thread.id()),
+    }
 }
 
 /// Cheap to clone; all clones share one log.
 #[derive(Clone)]
 pub struct EventLog {
     shared: Arc<(Mutex<Vec<TimedEvent>>, Condvar)>,
+    hooks: Arc<Mutex<Vec<EventHook>>>,
     t0: Instant,
 }
 
@@ -81,28 +116,64 @@ impl EventLog {
     pub fn new() -> Self {
         EventLog {
             shared: Arc::new((Mutex::new(Vec::new()), Condvar::new())),
+            hooks: Arc::new(Mutex::new(Vec::new())),
             t0: Instant::now(),
         }
     }
 
-    /// Records `event` now, on the calling thread.
+    /// Records `event` now, on the calling thread, then runs the hooks on that thread.
     pub fn push(&self, event: MseEvent) {
-        let thread = std::thread::current();
-        let thread = match thread.name() {
-            Some(name) => name.to_owned(),
-            None => format!("unnamed-{:?}", thread.id()),
+        let timed = TimedEvent {
+            at: self.t0.elapsed(),
+            thread: current_thread_name(),
+            event,
         };
         let (lock, changed) = &*self.shared;
-        lock.lock().unwrap().push(TimedEvent {
-            at: self.t0.elapsed(),
-            thread,
-            event,
-        });
+        lock.lock().unwrap().push(timed.clone());
         changed.notify_all();
+        // Hooks run with no lock held, so that they can use the log (and anything else) freely.
+        let hooks: Vec<EventHook> = self.hooks.lock().unwrap().clone();
+        for hook in hooks {
+            hook(&timed);
+        }
+    }
+
+    /// Registers a callback for every event pushed from now on, on the thread that pushed it.
+    pub fn add_hook(&self, hook: impl Fn(&TimedEvent) + Send + Sync + 'static) {
+        self.hooks.lock().unwrap().push(Arc::new(hook));
+    }
+
+    /// Removes every hook (a hook that calls into the backend should be removed before teardown).
+    pub fn clear_hooks(&self) {
+        self.hooks.lock().unwrap().clear();
+    }
+
+    /// Time since the log was created: the clock `TimedEvent::at` and the counting sinks' arrival
+    /// times use, so that events and frames can be put on one timeline.
+    pub fn elapsed(&self) -> Duration {
+        self.t0.elapsed()
+    }
+
+    /// How many events are recorded.
+    pub fn len(&self) -> usize {
+        self.shared.0.lock().unwrap().len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
     }
 
     pub fn snapshot(&self) -> Vec<TimedEvent> {
         self.shared.0.lock().unwrap().clone()
+    }
+
+    /// The events recorded at index `from` and later (`snapshot()[from..]` without copying the rest).
+    pub fn snapshot_from(&self, from: usize) -> Vec<TimedEvent> {
+        let events = self.shared.0.lock().unwrap();
+        events
+            .get(from..)
+            .map(<[TimedEvent]>::to_vec)
+            .unwrap_or_default()
     }
 
     pub fn clear(&self) {
@@ -162,5 +233,68 @@ mod tests {
     fn wait_for_times_out() {
         let log = EventLog::new();
         assert!(!log.wait_for(Duration::from_millis(20), |events| !events.is_empty()));
+    }
+
+    #[test]
+    fn the_thread_name_is_the_os_name_of_a_named_thread() {
+        let name = std::thread::Builder::new()
+            .name("os-name-test".into())
+            .spawn(current_thread_name)
+            .unwrap()
+            .join()
+            .unwrap();
+        assert_eq!(name, "os-name-test");
+    }
+
+    #[test]
+    fn an_unnamed_thread_gets_a_stable_fallback_name() {
+        let name = std::thread::spawn(current_thread_name).join().unwrap();
+        // macOS leaves the pthread name empty for it; the fallback names the Rust thread id.
+        assert!(name.starts_with("unnamed-"), "{name}");
+    }
+
+    #[test]
+    fn hooks_run_on_the_pushing_thread_after_the_event_is_logged_and_can_use_the_log() {
+        let log = EventLog::new();
+        let seen = Arc::new(Mutex::new(Vec::new()));
+        {
+            let seen = seen.clone();
+            let inner = log.clone();
+            log.add_hook(move |timed| {
+                // The event is already in the log, and the hook may call back into it.
+                seen.lock()
+                    .unwrap()
+                    .push((timed.event.clone(), inner.len(), timed.thread.clone()));
+            });
+        }
+        let other = log.clone();
+        std::thread::Builder::new()
+            .name("hooked".into())
+            .spawn(move || other.push(MseEvent::UpdateEnd(3)))
+            .unwrap()
+            .join()
+            .unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(
+            seen.as_slice(),
+            &[(MseEvent::UpdateEnd(3), 1, "hooked".to_owned())]
+        );
+        log.clear_hooks();
+        log.push(MseEvent::SourceOpen);
+        assert_eq!(seen.len(), 1);
+    }
+
+    #[test]
+    fn snapshot_from_returns_the_tail_and_tolerates_a_start_past_the_end() {
+        let log = EventLog::new();
+        log.push(MseEvent::SourceOpen);
+        log.push(MseEvent::UpdateStart(0));
+        log.push(MseEvent::UpdateEnd(0));
+        assert_eq!(log.len(), 3);
+        let tail = log.snapshot_from(1);
+        assert_eq!(tail.len(), 2);
+        assert_eq!(tail[1].event, MseEvent::UpdateEnd(0));
+        assert!(log.snapshot_from(9).is_empty());
+        assert!(!log.is_empty());
     }
 }

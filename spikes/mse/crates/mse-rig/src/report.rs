@@ -68,6 +68,18 @@ pub struct RunInfo {
     pub glib_main_loop: bool,
     /// Seconds since the Unix epoch at the start of the run. (No host name, user name or path: reports are shared.)
     pub started_unix: u64,
+    /// The seed of the run (`--seed`, or the one derived from the time).
+    #[serde(default)]
+    pub seed: u64,
+    /// `--iterations`.
+    #[serde(default)]
+    pub iterations: usize,
+    /// Whether `msesrc` was there (the `mse` plugin loaded).
+    #[serde(default)]
+    pub msesrc_available: bool,
+    /// Plugin files that failed to load in `servo-style` mode, as `file: reason` (no paths).
+    #[serde(default)]
+    pub failed_plugins: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -118,11 +130,33 @@ mod tests {
                 shape: "bare".into(),
                 glib_main_loop: false,
                 started_unix: 0,
+                seed: 7,
+                iterations: 1,
+                msesrc_available: true,
+                failed_plugins: vec!["libgstfoo.dylib: not found".into()],
             },
             results: vec![result],
         };
         let back: Report = serde_json::from_str(&report.to_json()).unwrap();
         assert_eq!(back.results[0].metrics["frames"], 200);
+        assert_eq!(back.run.seed, 7);
+        assert_eq!(back.run.failed_plugins.len(), 1);
         assert!(report.summary().starts_with("PASS  C01"));
+    }
+
+    #[test]
+    fn an_older_report_without_the_new_run_fields_still_parses() {
+        let json = r#"{"run":{"tool":"t","gst_version":"1.28.9","arch":"x86_64","plugin_mode":"system-path",
+            "shape":"bare","glib_main_loop":false,"started_unix":1},"results":[]}"#;
+        let report: Report = serde_json::from_str(json).unwrap();
+        assert_eq!(report.run.seed, 0);
+        assert!(!report.run.msesrc_available);
+    }
+
+    #[test]
+    fn a_result_starts_as_an_error_until_the_scenario_sets_its_status() {
+        let result = ScenarioResult::new("T01", "threads");
+        assert_eq!(result.status, Status::Error);
+        assert!(result.metrics.is_empty() && result.notes.is_empty());
     }
 }

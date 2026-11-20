@@ -428,6 +428,8 @@ dependencies = [
  "gstreamer-mse",
  "gstreamer-play",
  "gstreamer-video",
+ "libc",
+ "mse-segments",
  "serde",
  "serde_json",
  "thiserror",
