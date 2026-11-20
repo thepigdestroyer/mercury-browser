@@ -248,3 +248,166 @@ Rust crates that load and wrap the library are compiled into `mercury-browser` a
   2020 Armin Ronacher, 2019 Manish Goregaokar; `LICENSES/MIT-utf16string.txt`) — a dependency of `pdfium-render`.
 - `vecmath` 1.0.0 — https://github.com/pistondevelopers/vecmath — MIT (Copyright (c) 2014 PistonDevelopers;
   `LICENSES/MIT-vecmath.txt`) — a dependency of `pdfium-render`.
+## Vendored crates (`third_party/`)
+
+Mercury Browser carries 25 crates in `third_party/`. Each is the crate exactly as published on
+crates.io plus Mercury's changes in `third_party/patches/<name>.patch`; `third_party/vendor.toml`
+records, for each, the upstream repository, commit and path, and its `MERCURY.md` says what was
+changed and why. They keep their own licences, and `make servo-patches-check` fails when a
+directory and its patch disagree. The credits page (see "Rust crates" below) lists every one of
+them with its licence text and a pointer to its source.
+
+- `gaol` 0.2.1 — https://github.com/servo/gaol, commit `4544946c5c922ee619a932ae5c3fd1d26f143384` — MIT/Apache-2.0, used under the MIT licence (Copyright (c) 2012-2013 Mozilla Foundation); the texts are in `third_party/gaol/LICENSE-MIT` and `third_party/gaol/LICENSE-APACHE`.
+- `surfman` 0.14.0 — https://github.com/servo/surfman, commit `ca64434fb50cab45d9eda38a00f01fa0ddc43fe4` — MIT OR Apache-2.0 OR MPL-2.0, used under the MIT licence (Copyright (c) 2010 The Rust Project Developers) or the Apache-2.0 licence; the texts are in `third_party/surfman/LICENSE-MIT`, `LICENSE-APACHE` and `LICENSE-MPL`.
+- `i-slint-backend-winit` 1.17.1 — https://github.com/slint-ui/slint, commit `cf62c975c311e7036d599ed8ed0b7e6a8386a934`, path `internal/backends/winit` — offered under `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`, used under the Slint Royalty-free Desktop, Mobile and Web Applications License 2.0 like the rest of Slint (see "Slint" below). Mercury's changes to it stay under that licence. Its `LICENSES/` directory is kept as published; `third_party/i-slint-backend-winit/MERCURY.md` has the conditions every change must keep.
+- The Servo crates `servo`, `servo-canvas`, `servo-config`, `servo-constellation`, `servo-constellation-traits`, `servo-default-resources`, `servo-embedder-traits`, `servo-layout`, `servo-layout-api`, `servo-media`, `servo-media-gstreamer`, `servo-media-player`, `servo-media-streams`, `servo-media-webrtc`, `servo-net`, `servo-net-traits`, `servo-script`, `servo-script-bindings`, `servo-storage`, `servo-storage-traits` and `servo-webgl` (all 0.8.0, from https://github.com/servo/servo, commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`) and `stylo_static_prefs` 0.23.0 (from https://github.com/servo/stylo, commit `2dca34592ced37c6aa01733e94206a767194cf9d`) — MPL-2.0 (`servo-script-bindings` also BSD-3-Clause for the PLY library its build script runs, which is not part of the executable). Where Mercury changed one of them, the changed files stay under the MPL-2.0 and are published with the release tag in the Mercury repository (https://github.com/thepigdestroyer/mercury-browser, `third_party/`), as the MPL-2.0 requires; the unchanged files are at the upstream commit named above.
+
+## Slint
+
+Mercury Browser's interface is built with Slint 1.17.1 (https://slint.dev). Slint is offered
+under `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`;
+Mercury Browser uses it under the Slint Royalty-free Desktop, Mobile and Web Applications
+License 2.0 (`deny.toml` allows that licence for the Slint crates only). The licence requires
+the application to show Slint's attribution, which Mercury Browser does with the `AboutSlint`
+widget in its About window (**About Mercury Browser**, in the application menu and in the
+browser menu). Mercury Browser does not expose Slint's APIs to themes, extensions or scripts.
+The licence text is in each Slint crate's `LICENSES/` directory and on the credits page.
+
+## Rust crates
+
+Mercury Browser is built from about 880 Rust crates (the exact number depends on the platform).
+Their copyright notices and licence texts, with the `NOTICE` files of the Apache-2.0 crates, are
+in one page that is generated for each build from the crates actually built into it, by
+`mercury-credits` (`crates/mercury-credits`): `credits/credits.html`, which is
+`Contents/Resources/credits/credits.html` in the macOS application and `credits/credits.html` in
+the Linux archive. **About Mercury Browser, Third-party notices** opens it. For each crate that is
+under the MPL-2.0 the page also says where its source is. For a crate that offers several
+licences, the page shows the permissive ones Mercury Browser may use, as `deny.toml` lists them;
+copyleft alternatives are not used. Where a crate ships no licence file, the page gives the
+standard text of its licence with a copyright line taken from the crate's metadata, and says so.
+
+Several of these crates compile native code into the application, whose licence files the page
+includes: SpiderMonkey (`mozjs_sys`, with LZ4, xsum, Zydis, irregexp, double-conversion, fdlibm,
+{fmt}, function2, gemmology and xsimd), ANGLE (`mozangle`), AWS-LC (`aws-lc-sys`), HarfBuzz
+(`harfbuzz-sys`), the OpenType Sanitiser and LZ4 (`fontsan`), Zstandard (`zstd-sys`) and zlib
+(`libz-sys`).
+
+- **SQLite** (`libsqlite3-sys`) is in the public domain (https://www.sqlite.org/copyright.html) and has no licence text.
+- **The Linux archive** also contains FreeType 2.13.3 (bundled by the `freetype-sys` crate), used under the FreeType License. Portions of this software are copyright © 2024 The FreeType Project (www.freetype.org). All rights reserved.
+- **SpiderMonkey source files with their own notice.** These notices are in the files' headers, not in licence files, so they are reproduced here. The text of the Apache License 2.0 is in `LICENSES/Apache-2.0.txt`, and the Unicode License v3 in `LICENSES/Unicode-3.0.txt`.
+  - `js/src/wasm/` and a few related files — Copyright 2014 to 2025 Mozilla Foundation — Licensed under the Apache License, Version 2.0.
+  - ICU, in `intl/icu/source` — © 2016 and later: Unicode, Inc. and others, as its files say; they point to https://www.unicode.org/copyright.html for the licence, and the Unicode License v3 is in `LICENSES/Unicode-3.0.txt`.
+  - `js/src/jit/arm64/vixl/` (the ARM64 assembler, used by the Apple Silicon build) — Copyright 2013 to 2019, ARM Limited and the VIXL authors — BSD-3-Clause, with this text:
+
+    ```text
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are met:
+
+      * Redistributions of source code must retain the above copyright notice,
+        this list of conditions and the following disclaimer.
+      * Redistributions in binary form must reproduce the above copyright notice,
+        this list of conditions and the following disclaimer in the documentation
+        and/or other materials provided with the distribution.
+      * Neither the name of ARM Limited nor the names of its contributors may be
+        used to endorse or promote products derived from this software without
+        specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS CONTRIBUTORS "AS IS" AND
+    ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE IMPLIED
+    WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+    DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER OR CONTRIBUTORS BE LIABLE
+    FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+    DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+    SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+    CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+    OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+    ```
+
+  - `js/src/jit/ExecutableAllocator.cpp` and `.h`, `js/src/jit/x86-shared/AssemblerBuffer-x86-shared.h` and `BaseAssembler-x86-shared.h` (Copyright (C) 2008 Apple Inc. All rights reserved.), and the parts of `js/src/vm/BigIntType.cpp` taken from WebKit (Copyright (C) 2017 Caio Lima and Copyright (C) 2017-2018 Apple Inc. All rights reserved.) — BSD-2-Clause, with this text:
+
+    ```text
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions
+    are met:
+    1. Redistributions of source code must retain the above copyright
+       notice, this list of conditions and the following disclaimer.
+    2. Redistributions in binary form must reproduce the above copyright
+       notice, this list of conditions and the following disclaimer in the
+       documentation and/or other materials provided with the distribution.
+
+    THIS SOFTWARE IS PROVIDED BY APPLE INC. ``AS IS'' AND ANY
+    EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+    IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR
+    PURPOSE ARE DISCLAIMED.  IN NO EVENT SHALL APPLE INC. OR
+    CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+    EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+    PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+    PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY
+    OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+    ```
+
+  - `js/src/vm/BigIntType.cpp` also contains portions taken from V8 (Copyright 2017 the V8 project authors; BSD-3-Clause, with the same wording as the V8 text of `irregexp` on the credits page), from Dart (Copyright (c) 2014 the Dart project authors) and from Go (Copyright 2009 The Go Authors), the last two under BSD-style licences that the file's header refers to (https://github.com/dart-lang/sdk/blob/master/LICENSE and https://golang.org/LICENSE).
+  - `mozglue/misc/decimal/` (Blink's decimal arithmetic) — Copyright (C) 2012 Google Inc. All rights reserved. — BSD-3-Clause, with this text:
+
+    ```text
+    Redistribution and use in source and binary forms, with or without
+    modification, are permitted provided that the following conditions are
+    met:
+
+        * Redistributions of source code must retain the above copyright
+    notice, this list of conditions and the following disclaimer.
+        * Redistributions in binary form must reproduce the above
+    copyright notice, this list of conditions and the following disclaimer
+    in the documentation and/or other materials provided with the
+    distribution.
+        * Neither the name of Google Inc. nor the names of its
+    contributors may be used to endorse or promote products derived from
+    this software without specific prior written permission.
+
+    THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+    "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+    LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+    A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+    OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+    SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+    LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+    DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+    THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+    (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+    OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+    ```
+
+  - `js/src/vm/Float16.h` (the `half` library, version 2.2.0) — Copyright (c) 2012-2021 Christian Rau — MIT, with this text:
+
+    ```text
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in
+    all copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
+    THE SOFTWARE.
+    ```
+
+## Codecs and patents
+
+The macOS application bundles codec libraries as separate dynamic libraries, listed in the table
+under "Bundled libraries by project" above: FFmpeg's `libavcodec` and its companions, libvpx, opus,
+libvorbis, libtheora and libogg for audio and video, and libjpeg-turbo and libpng for images. The
+Linux archive uses the codec libraries of the system's GStreamer instead. Mercury Browser grants
+no patent licence for any codec. Some codecs in those libraries may be covered by patents owned by
+third parties, in some countries; the user or distributor of the software is responsible for any
+licence that a codec needs.

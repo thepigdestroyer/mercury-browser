@@ -28,3 +28,6 @@ says where it came from and how to replace a library.
 
 Third-party code, vendored dependencies and bundled data keep their own licences and notices; see
 THIRD-PARTY-NOTICES.md and the LICENSES directory.
+
+The full list of third-party components, with their copyright notices and licence texts, is in the
+application (About, Third-party notices) and in credits/credits.html.

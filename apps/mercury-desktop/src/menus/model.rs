@@ -3,6 +3,8 @@
 //! What the menus contain and who owns each key: the macOS menu bar and the browser menu are
 //! both built from this table, and the tests check it against `shortcuts.rs`.
 
+use std::borrow::Cow;
+
 use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey};
 
 use crate::shortcuts::{Platform, ShortcutAction, shortcut_action};
@@ -56,18 +58,35 @@ pub(crate) enum Document {
     Help,
     Licence,
     ThirdPartyNotices,
+    /// The source of the MPL-2.0 parts as of this version: the repository at the tag `v<version>`
+    /// (MPL-2.0 §3.2 asks for the source of the version that was distributed). The same address as
+    /// the "Source code" section of the credits page, `source_code_url`.
+    SourceCode,
+}
+
+/// The Mercury repository (the same as `REPOSITORY` in `mercury-credits`, checked by a test).
+pub(crate) const REPOSITORY_URL: &str = "https://github.com/thepigdestroyer/mercury-browser";
+
+/// The repository at the tag of `version`, where `release.yml` tags every release as `v<version>`:
+/// the source of what the user has installed, not of the default branch, which moves on. A build
+/// between releases, whose tag does not exist yet, opens GitHub's "not found" page until the
+/// release is tagged; only released builds are distributed.
+pub(crate) fn source_code_url(version: &str) -> String {
+    format!("{REPOSITORY_URL}/tree/v{version}")
 }
 
 impl Document {
-    pub(crate) const fn url(self) -> &'static str {
+    /// The address the page opens at. Only the third-party notices depend on the installation:
+    /// they open the page packaged with the program as a `file://` address, and the notices file
+    /// on GitHub when there is none (see `about::third_party_notices_url`).
+    pub(crate) fn url(self) -> Cow<'static, str> {
         match self {
-            Self::Help => "https://thepigdestroyer.github.io/mercury-browser/",
-            Self::Licence => {
-                "https://github.com/thepigdestroyer/mercury-browser/blob/master/LICENSE"
-            }
-            Self::ThirdPartyNotices => {
-                "https://github.com/thepigdestroyer/mercury-browser/blob/master/THIRD-PARTY-NOTICES.md"
-            }
+            Self::Help => Cow::Borrowed("https://thepigdestroyer.github.io/mercury-browser/"),
+            Self::Licence => Cow::Borrowed(
+                "https://github.com/thepigdestroyer/mercury-browser/blob/master/LICENSE",
+            ),
+            Self::ThirdPartyNotices => crate::about::third_party_notices_url(),
+            Self::SourceCode => Cow::Owned(source_code_url(env!("CARGO_PKG_VERSION"))),
         }
     }
 }
@@ -1351,6 +1370,105 @@ mod tests {
         assert_eq!(KeyEquivalent::new('f', CONTROL_CMD).mac_label(), "⌃⌘F");
         assert_eq!(KeyEquivalent::new('t', SHIFT_CMD).mac_label(), "⇧⌘T");
         assert_eq!(KeyEquivalent::new(DELETE_KEY, SHIFT_CMD).mac_label(), "⇧⌘⌫");
+    }
+
+    const DOCUMENTS: [Document; 4] = [
+        Document::Help,
+        Document::Licence,
+        Document::ThirdPartyNotices,
+        Document::SourceCode,
+    ];
+
+    #[test]
+    fn documents_open_the_pages_they_name() {
+        assert_eq!(
+            Document::Help.url(),
+            "https://thepigdestroyer.github.io/mercury-browser/"
+        );
+        assert_eq!(
+            Document::Licence.url(),
+            "https://github.com/thepigdestroyer/mercury-browser/blob/master/LICENSE"
+        );
+        assert_eq!(
+            Document::SourceCode.url(),
+            format!(
+                "https://github.com/thepigdestroyer/mercury-browser/tree/v{}",
+                env!("CARGO_PKG_VERSION")
+            )
+        );
+    }
+
+    #[test]
+    fn the_source_code_link_is_the_tag_of_this_version() {
+        assert_eq!(
+            source_code_url("1.2.3"),
+            "https://github.com/thepigdestroyer/mercury-browser/tree/v1.2.3"
+        );
+        assert_eq!(
+            source_code_url("1.2.3-rc.1+build.5"),
+            "https://github.com/thepigdestroyer/mercury-browser/tree/v1.2.3-rc.1+build.5"
+        );
+        // `release.yml` refuses a tag other than `v<workspace version>`, and this crate takes the
+        // workspace's version (`version.workspace`).
+        let url = Document::SourceCode.url();
+        assert!(
+            url.ends_with(&format!("/tree/v{}", env!("CARGO_PKG_VERSION"))),
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn the_source_code_link_is_the_one_on_the_credits_page() {
+        // `mercury-credits` is a tool, not a dependency of the browser, so the two addresses are
+        // tied by their text: the same repository, and the page links `<repository>/tree/v<version>`.
+        let page = include_str!("../../../../crates/mercury-credits/src/page.rs");
+        assert!(
+            page.contains(&format!(
+                "pub const REPOSITORY: &str = \"{REPOSITORY_URL}\";"
+            )),
+            "the credits page names another repository"
+        );
+        assert!(
+            page.contains(r#"&format!("{REPOSITORY}/tree/v{}", url_segment(version))"#),
+            "the credits page no longer links the tag of the version"
+        );
+    }
+
+    #[test]
+    fn the_third_party_notices_are_the_bundled_page_or_the_page_on_github() {
+        // The test program is in `target/<profile>/deps`, with no page beside it, so GitHub is
+        // what it gets; a packaged program gets the `file://` address of its own page.
+        let url = Document::ThirdPartyNotices.url();
+        let bundled = url.starts_with("file:///") && url.ends_with("/credits/credits.html");
+        assert!(
+            bundled || url == crate::about::THIRD_PARTY_NOTICES_ONLINE_URL,
+            "{url}"
+        );
+    }
+
+    #[test]
+    fn every_document_is_an_address_the_browser_resolves_in_a_new_tab() {
+        for document in DOCUMENTS {
+            let url = document.url();
+            let parsed = url::Url::parse(&url).expect("the address parses");
+            match document {
+                // `file:` is for the page of the installed program; the rest are web pages.
+                Document::ThirdPartyNotices => {
+                    assert!(matches!(parsed.scheme(), "https" | "file"), "{url}");
+                }
+                _ => assert_eq!(parsed.scheme(), "https", "{document:?}"),
+            }
+            // `open_tab_with` resolves it like a typed address, and keeps it as it is.
+            let target = talaria_core::classify_address(&url).expect("the address resolves");
+            assert_eq!(target, talaria_core::NavigationTarget::Url(parsed));
+        }
+    }
+
+    #[test]
+    fn a_document_is_a_command_that_is_always_available() {
+        for document in DOCUMENTS {
+            assert!(is_available(MenuCommand::OpenDocument(document)));
+        }
     }
 
     // tabs-plus

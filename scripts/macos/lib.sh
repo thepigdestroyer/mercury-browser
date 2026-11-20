@@ -38,6 +38,96 @@ missing_notice_files() {
     done < <(bundled_notice_files)
 }
 
+# Prints why file $1 is not the credits page, or nothing. The page holds the licence text,
+# copyright line and notices of every crate built into the executable; `mercury-credits generate`
+# (crates/mercury-credits) writes it at package time and it is never committed. Used by
+# bundle.sh (before it builds anything), scripts/ci/check-macos-bundle.sh (on the finished bundle),
+# the Linux archive step of .github/workflows/release.yml and the package-linux Makefile target,
+# so the rule lives here only. The limits are floors that catch a missing, empty, cut-off or
+# foreign file: the real page is megabytes and credits over 850 crates. The file is an argument
+# of grep and wc, never fed through a pipe (see the note at the top).
+credits_problem() {
+    local file="$1" size tag count
+    if [ ! -f "$file" ] || [ ! -s "$file" ]; then
+        printf '%s\n' "$file is missing or empty; generate the credits page with: make credits (make app-macos and make package-macos do it)"
+        return 0
+    fi
+    size="$(wc -c <"$file")" || { printf '%s\n' "$file cannot be read"; return 0; }
+    size="${size//[[:space:]]/}"
+    if [ "$size" -lt 100000 ]; then
+        printf '%s\n' "$file is only $size bytes; the credits page of the whole application has at least 100000, so this one is cut off or is not it"
+        return 0
+    fi
+    if ! LC_ALL=C grep -q -a -F -- '<meta name="generator" content="mercury-credits' "$file"; then
+        printf '%s\n' "$file was not written by mercury-credits (it has no generator tag)"
+        return 0
+    fi
+    # The crate count, as the page states it: <meta name="credits-crates" content="N">.
+    tag="$(LC_ALL=C grep -a -o -m 1 '<meta name="credits-crates" content="[0-9][0-9]*"' "$file")" || tag=""
+    count="${tag#*content=\"}"
+    count="${count%\"}"
+    # Nine digits at most, so that the arithmetic below cannot overflow.
+    if [ -z "$tag" ] || [ "${#count}" -gt 9 ]; then
+        printf '%s\n' "$file does not say how many crates it credits (no usable credits-crates tag)"
+        return 0
+    fi
+    if [ "$((10#$count))" -lt 500 ]; then
+        printf '%s\n' "$file credits only $((10#$count)) crates; at least 500 are expected, so it was made for something else or is incomplete"
+        return 0
+    fi
+    # The page is licence text, never code: it opens in the browser itself and has no JavaScript.
+    if LC_ALL=C grep -q -a -i -F -- '<script' "$file"; then
+        printf '%s\n' "$file contains a script tag; the credits page has no JavaScript"
+        return 0
+    fi
+}
+
+# Prints why the file $1 does not have the SHA-256 $2, or nothing. The build job of
+# .github/workflows/release.yml records the digest of the credits page it generated; the signing
+# job (no cargo, so it cannot generate the page) and its check of the disk image compare against
+# it. The digest is 64 lowercase hex digits, as `shasum -a 256` prints it; anything else (empty,
+# a job output that did not arrive, upper case) is refused rather than compared.
+credits_digest_problem() {
+    local file="$1" expected="$2" actual
+    case "$expected" in
+        "" | *[!0-9a-f]*)
+            printf '%s\n' "the build job recorded no usable digest for the credits page"
+            return 0
+            ;;
+    esac
+    if [ "${#expected}" -ne 64 ]; then
+        printf '%s\n' "the build job recorded no usable digest for the credits page (${#expected} characters, not 64)"
+        return 0
+    fi
+    actual="$(shasum -a 256 "$file")" || { printf '%s\n' "$file cannot be read"; return 0; }
+    actual="${actual%% *}"
+    if [ "$actual" != "$expected" ]; then
+        printf '%s\n' "the credits page $file has digest $actual, not the build's $expected"
+        return 0
+    fi
+}
+
+# Prints why directory $1 is not the credits artefact that the build job recorded the SHA-256 $2
+# for, or nothing: exactly one regular file `credits.html` (no link, nothing else in the
+# directory) with that digest (credits_digest_problem). The signing job downloads the artefact
+# `credits-macos-arm64` and calls this before anything uses the file; it is only copied, never
+# opened. The rule for the page's own content is credits_problem, which bundle.sh applies after.
+credits_artefact_problem() {
+    local directory="$1" expected="$2" page listing problem
+    page="$directory/credits.html"
+    if [ -L "$page" ] || [ ! -f "$page" ]; then
+        printf '%s\n' "$page is not a regular file"
+        return 0
+    fi
+    listing="$(find "$directory" -mindepth 1)" || { printf '%s\n' "$directory cannot be listed"; return 0; }
+    if [ "$listing" != "$page" ]; then
+        printf '%s\n' "the artefact holds more than the credits page: $listing"
+        return 0
+    fi
+    problem="$(credits_digest_problem "$page" "$expected")"
+    [ -z "$problem" ] || printf '%s\n' "$problem"
+}
+
 # Prints why an identity is unusable, or nothing if it is "-" or plausibly a
 # certificate name or SHA-1 hash. Odd values are refused rather than passed to
 # codesign: " - " and "-x" are almost certainly typos for "-", and they would

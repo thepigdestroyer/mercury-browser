@@ -36,6 +36,7 @@ path = [
   "docs/assets/readme-banner.svg",
   "docs/developer-guide/continuous-integration.md",
   "docs/developer-guide/hands-on-checklist.md",
+  "docs/developer-guide/licence-compliance.md",
   "docs/developer-guide/media-capture.md",
   "docs/developer-guide/origins.md",
   "docs/developer-guide/passwords.md",

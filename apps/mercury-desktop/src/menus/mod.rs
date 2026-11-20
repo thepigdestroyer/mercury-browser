@@ -195,11 +195,13 @@ fn run_command(
         MenuCommand::About => about::show(),
         MenuCommand::Edit(edit) => run_edit(window, controller, edit),
         MenuCommand::OpenDocument(document) => {
+            let url = document.url();
+            let address: &str = &url;
             let opened = controller
                 .borrow_mut()
-                .open_tab_with(Some(document.url()), TabActivation::Foreground);
+                .open_tab_with(Some(address), TabActivation::Foreground);
             if let Err(error) = opened {
-                log::warn!("could not open {}: {error}", document.url());
+                log::warn!("could not open {url}: {error}");
                 return;
             }
             sync_ui(window, &controller.borrow());

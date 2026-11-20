@@ -46,6 +46,19 @@ endif
 INSTALL_FILTER_LISTS = "$(CARGO)" run --quiet --package mercury-filter-lists --bin mercury-filter-lists
 INSTALL_FILTER_LISTS_RELEASE = $(INSTALL_FILTER_LISTS) --release
 
+# The credits page: the licence text, copyright line and notices of every crate built into the
+# application (crates/mercury-credits). It is generated at package time from Cargo.lock and never
+# committed. It needs the crate sources (`cargo fetch --locked`, or any build) but compiles no
+# engine and needs no GStreamer. The products are the macOS app (aarch64-apple-darwin) and the
+# Linux archive (x86_64-unknown-linux-gnu); CREDITS_TARGET is the one of this host, for the
+# `credits` and `credits-check` targets.
+CREDITS = "$(CARGO)" run --quiet --locked $(CARGO_FLAGS) --package mercury-credits --bin mercury-credits --
+ifeq ($(shell uname -s),Darwin)
+CREDITS_TARGET = aarch64-apple-darwin
+else
+CREDITS_TARGET = x86_64-unknown-linux-gnu
+endif
+
 .PHONY: \
 	help \
 	doctor \
@@ -67,6 +80,8 @@ INSTALL_FILTER_LISTS_RELEASE = $(INSTALL_FILTER_LISTS) --release
 	servo-patches-check \
 	vendored-tests \
 	deny \
+	credits \
+	credits-check \
 	build \
 	build-release \
 	package-linux \
@@ -110,6 +125,8 @@ help:
 		'servo-patches-check' 'Check that each crate in third_party/ is the published crate plus its exported patch.' \
 		'vendored-tests' 'Run the unit tests of the vendored Servo crates that need no engine (preferences, message types).' \
 		'deny' 'Check dependencies against the policy in deny.toml.' \
+		'credits' 'Write the credits page (the licence text of every crate in the app) to target/<profile>/credits.' \
+		'credits-check' 'Check that every crate in the app can be credited (needs the crate sources: make fetch).' \
 		'build' 'Build the complete workspace in debug mode.' \
 		'build-release' 'Build the complete workspace in release mode.' \
 		'package-linux' 'Build and package the Linux x86-64 release.' \
@@ -333,6 +350,15 @@ deny:
 	fi; \
 	cargo-deny --locked check --show-stats
 
+# Engine-free: builds only the small mercury-credits tool. `credits-check` stops at the first
+# crate in the app that has no licence text it may carry; `credits` also writes the page.
+# Neither runs in build, run or test, so the development loop stays fast.
+credits-check:
+	$(CREDITS) check --package "$(APP_PACKAGE)" --target "$(CREDITS_TARGET)"
+
+credits:
+	$(CREDITS) generate --package "$(APP_PACKAGE)" --target "$(CREDITS_TARGET)" --out "target/$(PROFILE_DIR)/credits"
+
 build:
 	$(GSTREAMER_ENV) "$(CARGO)" build --workspace
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) $(COLLECT_GSTREAMER) target/debug/lib)
@@ -356,6 +382,11 @@ package-linux: build-release
 	cp THIRD-PARTY-NOTICES.md "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/THIRD-PARTY-NOTICES.md"
 	rm -rf "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/LICENSES"
 	cp -R LICENSES "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/LICENSES"
+# The credits page (licence text and notices of every crate in the executable), beside it as
+# credits/credits.html. Checked with the rule bundle.sh uses (credits_problem in scripts/macos/lib.sh),
+# which also fails when the page is missing.
+	$(CREDITS) generate --package "$(APP_PACKAGE)" --target x86_64-unknown-linux-gnu --out "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/credits"
+	@bash -c '. scripts/macos/lib.sh; problem="$$(credits_problem "$$1")"; [ -z "$$problem" ] || { printf "error: %s\n" "$$problem" >&2; exit 1; }' credits-page "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/credits/credits.html"
 	$(INSTALL_FILTER_LISTS_RELEASE) -- install "$(DIST_DIR)/$(LINUX_PACKAGE_NAME)/filter-lists"
 	tar -C "$(DIST_DIR)" -czf "$(DIST_DIR)/$(LINUX_ARCHIVE)" "$(LINUX_PACKAGE_NAME)"
 	cd "$(DIST_DIR)" && sha256sum "$(LINUX_ARCHIVE)" > "$(LINUX_ARCHIVE).sha256"
@@ -367,18 +398,24 @@ REQUIRE_MACOS = @[ "$$(uname -s)" = Darwin ] || { \
 
 # The bundle needs its media libraries (bundle.sh refuses to build without a GStreamer
 # prefix); both steps run with the GStreamer environment, and the prefix it names is passed on.
+# It needs the credits page too (bundle.sh refuses without it): generated here for the app's
+# own target, whatever this host is, into target/release/credits, which is passed on. Needs the
+# crate sources, which the build has just fetched. The signing job of the release workflow has no
+# cargo and takes the page from the build job instead.
 # The bundle is arm64 only and carries the arm64 PDFium, whatever Mac builds it (pdf-viewer).
 app-macos package-macos: PDFIUM_ARCH = arm64
 app-macos package-macos: pdfium-macos
 app-macos:
 	$(REQUIRE_MACOS)
 	$(GSTREAMER_ENV) "$(CARGO)" build --release --package "$(APP_PACKAGE)"
-	$(GSTREAMER_ENV) scripts/macos/bundle.sh --out "$(DIST_DIR)" --gstreamer-prefix "$$MERCURY_GSTREAMER_PREFIX"
+	$(CREDITS) generate --package "$(APP_PACKAGE)" --target aarch64-apple-darwin --out target/release/credits
+	$(GSTREAMER_ENV) scripts/macos/bundle.sh --out "$(DIST_DIR)" --gstreamer-prefix "$$MERCURY_GSTREAMER_PREFIX" --credits target/release/credits
 
 package-macos:
 	$(REQUIRE_MACOS)
 	$(GSTREAMER_ENV) "$(CARGO)" build --release --package "$(APP_PACKAGE)"
-	$(GSTREAMER_ENV) scripts/macos/bundle.sh --out "$(DIST_DIR)" --gstreamer-prefix "$$MERCURY_GSTREAMER_PREFIX" --dmg
+	$(CREDITS) generate --package "$(APP_PACKAGE)" --target aarch64-apple-darwin --out target/release/credits
+	$(GSTREAMER_ENV) scripts/macos/bundle.sh --out "$(DIST_DIR)" --gstreamer-prefix "$$MERCURY_GSTREAMER_PREFIX" --credits target/release/credits --dmg
 
 test-bundle-macos:
 	$(REQUIRE_MACOS)

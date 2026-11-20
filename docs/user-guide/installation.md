@@ -7,7 +7,7 @@ description: Install Mercury Browser on macOS from the disk image, or build and 
 
 ## macOS (Apple Silicon)
 
-Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `Mercury-Browser-0.2.0-macos-arm64.dmg`, attached to each release on the [GitHub Releases page](https://github.com/thepigdestroyer/mercury-browser/releases). Mercury is source-available, free for non-commercial use; the disk image carries its `LICENSE` and `NOTICE` next to the app, and the app carries them, with the third-party notices, in its own `Contents/Resources`. The app bundles GStreamer and the libraries it needs; the source of the LGPL ones is attached to the same release as `Mercury-Browser-<version>-lgpl-sources.tar`. This software is based in part on the work of the Independent JPEG Group.
+Mercury for macOS runs on Macs with Apple silicon (M1 or later) and macOS 13 Ventura or later. It is distributed as a disk image named like `Mercury-Browser-0.2.0-macos-arm64.dmg`, attached to each release on the [GitHub Releases page](https://github.com/thepigdestroyer/mercury-browser/releases). Mercury is source-available, free for non-commercial use; the disk image carries its `LICENSE` and `NOTICE` next to the app, and the app carries them, with the third-party notices, in its own `Contents/Resources`. The app bundles GStreamer and the libraries it needs; the source of the LGPL ones is attached to the same release as `Mercury-Browser-<version>-lgpl-sources.tar`. This software is based in part on the work of the Independent JPEG Group. In the app, **About Mercury Browser**, then **Third-party notices**, lists every library it contains and its licence.
 
 ### Install from the disk image
 
