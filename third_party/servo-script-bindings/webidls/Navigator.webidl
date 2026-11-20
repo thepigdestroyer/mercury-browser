@@ -72,6 +72,15 @@ interface mixin NavigatorConcurrentHardware {
   readonly attribute unsigned long long hardwareConcurrency;
 };
 
+// Mercury: Global Privacy Control. Always present, false while the signal is off (the specification
+// asks for exactly that, so that a page can tell "no signal" from "no support").
+// https://privacycg.github.io/gpc-spec/#js-dom
+[Exposed=(Window,Worker)]
+interface mixin NavigatorGPC {
+  readonly attribute boolean globalPrivacyControl;
+};
+Navigator includes NavigatorGPC;
+
 // https://w3c.github.io/clipboard-apis/#navigator-interface
 partial interface Navigator {
   [SecureContext, SameObject, Pref="dom_async_clipboard_enabled"] readonly attribute Clipboard clipboard;

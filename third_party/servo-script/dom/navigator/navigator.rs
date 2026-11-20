@@ -428,6 +428,13 @@ impl NavigatorMethods<crate::DomTypeHolder> for Navigator {
         true
     }
 
+    /// Mercury: <https://privacycg.github.io/gpc-spec/#js-dom>. Always present, `false` while the
+    /// signal is off, and it reads the preference that also turns on the `Sec-GPC` request header,
+    /// so the two cannot disagree (Mercury sets both in `talaria-servo`).
+    fn GlobalPrivacyControl(&self) -> bool {
+        pref!(privacy_gpc_enabled)
+    }
+
     /// <https://www.w3.org/TR/gamepad/#dom-navigator-getgamepads>
     #[cfg(feature = "gamepad")]
     fn GetGamepads(&self, cx: &mut JSContext) -> Fallible<Vec<Option<DomRoot<Gamepad>>>> {

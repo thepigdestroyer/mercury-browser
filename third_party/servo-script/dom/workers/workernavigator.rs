@@ -139,4 +139,10 @@ impl WorkerNavigatorMethods<crate::DomTypeHolder> for WorkerNavigator {
     fn HardwareConcurrency(&self) -> u64 {
         hardware_concurrency()
     }
+
+    /// Mercury: <https://privacycg.github.io/gpc-spec/#js-dom>. The same preference as
+    /// `Navigator.globalPrivacyControl` and the `Sec-GPC` request header.
+    fn GlobalPrivacyControl(&self) -> bool {
+        pref!(privacy_gpc_enabled)
+    }
 }
