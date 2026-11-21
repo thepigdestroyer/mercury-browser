@@ -308,9 +308,8 @@ impl DocumentEventHandler {
             .flush(cx, &self.window.Document(), FlushMode::AfterInput);
     }
 
-    // Mercury: the same after a reflow, when layout is up to date (EB11). `Document::update_the_rendering()`
-    // is to call this after its reflow (the hook is in the notes of lane txt-1).
-    #[allow(dead_code)] // Mercury: until that hook exists.
+    // Mercury: the same after a reflow, when layout is up to date (EB11); `Document::update_the_rendering()`
+    // calls this after its reflow.
     pub(crate) fn flush_text_input_state_after_reflow(&self, cx: &mut JSContext) {
         self.ime
             .flush(cx, &self.window.Document(), FlushMode::AfterReflow);

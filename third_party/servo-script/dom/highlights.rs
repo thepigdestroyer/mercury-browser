@@ -281,8 +281,8 @@ fn for_each_text_node_in_range<'no_gc>(
         {
             continue;
         }
-        let is_start = std::ptr::eq::<Node>(&*node, &*start_container);
-        let is_end = std::ptr::eq::<Node>(&*node, &*end_container);
+        let is_start = std::ptr::eq::<Node>(&**node, &*start_container);
+        let is_end = std::ptr::eq::<Node>(&**node, &*end_container);
         callback(
             node,
             is_start.then_some(Utf16CodeUnits(start_offset)),

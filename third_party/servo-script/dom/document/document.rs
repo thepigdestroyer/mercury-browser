@@ -3443,6 +3443,8 @@ impl Document {
         }
 
         let (reflow_phases, statistics) = self.window().reflow(cx, ReflowGoal::UpdateTheRendering);
+        // Mercury: lane txt-1 (EB11). Send the focused editable's text state when layout is current.
+        self.event_handler().flush_text_input_state_after_reflow(cx);
         let phases = phases.union(reflow_phases);
 
         self.window().paint_api().update_epoch(
