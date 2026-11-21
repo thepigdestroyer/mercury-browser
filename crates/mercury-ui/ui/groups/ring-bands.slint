@@ -1,0 +1,165 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The shared drawing of the tab-group ring (SPEC design/ui-final/SPEC.md §4.2): the hub ring, the
+// corner dial's fan and the Orbit planets all compose `RingBands`. Rust (src/ring_geometry and
+// src/ring_bands) computes every shape; Slint draws what it is given.
+//
+// THE PROPERTIES, CALLBACKS, STRUCTS AND ENUMS BELOW ARE THE PINNED CONTRACT of lane ring-bands
+// (sdd/lane-ring-bands-brief.md §3.1). Other lanes build on them; a change goes through the lane
+// lead, and only additions are allowed. The body of `RingBands` is filled in by the ring-bands lane.
+
+import { ArcGlyph, ArcSeg, GroupRow, TabRow } from "models.slint";
+import { FlagPin, RingFlags } from "flags.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// What a point of the ring is over (ring_geometry::Hit).
+export enum RingHitKind {
+    outside,
+    tab,
+    group,
+    centre,
+    reserve,
+}
+
+// `id` is a `TabRow.id` for a tab, a `GroupRow.id` for a group, and -1 for the other kinds.
+export struct RingHit {
+    kind: RingHitKind,
+    id: int,
+}
+
+// Where a dragged tab would land: `group` is a `GroupRow.id`, `index` the index-in-group to insert at,
+// `indicator` the accent bar to draw at the insertion point.
+export struct RingDropTarget {
+    valid: bool,
+    group: int,
+    index: int,
+    indicator: ArcSeg,
+}
+
+// A square box; every coordinate is ring-local (origin at the box's top-left corner). The arrays
+// are PARALLEL and in ring order: fill them only through ring_bands::RingBandsModels.
+export component RingBands inherits Rectangle {
+    // Data.
+    // Only groups that have a shown tab; groups[g] belongs to label-bands[g].
+    in property <[GroupRow]> groups;
+    // Shown tabs, group by group; tabs[i] belongs to segments[i].
+    in property <[TabRow]> tabs;
+    // ArcSeg.tab = TabRow.id.
+    in property <[ArcSeg]> segments;
+    // The hovered shape of segments[i].
+    in property <[ArcSeg]> lifted-segments;
+    // The accessible label of segments[i].
+    in property <[string]> segment-labels;
+    // ArcSeg.tab = GroupRow.id; drawn in `tint` (`colour` while held).
+    in property <[ArcSeg]> label-bands;
+    // Colours already resolved by Rust.
+    in property <[ArcGlyph]> label-glyphs;
+    in property <[FlagPin]> flags;
+    // The box edge, for the Path viewbox (hub 516).
+    in property <length> ring-size;
+    // State.
+    // TabRow.id of the hovered tab; RingBands sets it from the pointer, a host may set it too.
+    in-out property <int> hovered-tab: -1;
+    // TabRow.id; draws the 2 px focus ring.
+    in property <int> focused-tab: -1;
+    // ⌥ held: solid label bands.
+    in property <bool> held;
+    // GroupRow.id.
+    in property <int> selected-group: -1;
+    // With `selected-group`: the other groups at 45 %.
+    in property <bool> dim-others;
+    // Segments without `matches-query` at 18 %.
+    in property <bool> query-active;
+    // TabRow.id of the tab being dragged (its slot is dashed and a ghost follows the pointer).
+    in property <int> dragging-tab: -1;
+    // false: draws only; no hover, press or drag.
+    in property <bool> interactive: true;
+    // The container's `list` label; hosts override it ("Tab dial", a planet's name).
+    in property <string> accessible-name: "Tab ring";
+    // true: every animation is 0 ms.
+    in property <bool> reduce-motion: false;
+    // false: spinners stand still (renders and tests).
+    in property <bool> animate-spinners: true;
+
+    // The host forwards these two to ring_bands::RingBandsData::{hit, drop_target}.
+    pure callback hit-test(length, length, int /* hovered tab id */) -> RingHit;
+    pure callback drop-target(length, length, int /* dragging tab id */) -> RingDropTarget;
+    // Row ids throughout.
+    callback tab-activated(int);
+    // -1 = none.
+    callback tab-hovered(int);
+    callback group-activated(int);
+    // Middle click on a segment.
+    callback tab-close(int);
+    // Click on a speaker or muted flag.
+    callback tab-mute(int);
+    // After 6 px of movement with the primary button down on a segment.
+    callback drag-started(int);
+    // Ring-local, also while the pointer is outside the box.
+    callback drag-moved(length, length);
+    // group id, index-in-group: released over a valid drop target.
+    callback drop(int, int);
+    // Released with no valid target.
+    callback drag-cancelled();
+    // A primary-button press whose hit-test kind is `outside` (lead request R1, corner-dial).
+    callback background-pressed();
+
+    // The markers; item 4 of the lane adds everything else around this (z-order: after the glyphs).
+    RingFlags {
+        width: parent.width;
+        height: parent.height;
+        flags: root.flags;
+        animate-spinners: root.animate-spinners;
+        reduce-motion: root.reduce-motion;
+        mute-clicked(id) => {
+            root.tab-mute(id);
+        }
+    }
+}
+
+// A window around one RingBands, with every property and callback forwarded, for the lane's
+// examples and tests and for the other lanes' renders. Not used by the browser's own windows.
+export component RingBandsPreview inherits Window {
+    preferred-width: 516px;
+    preferred-height: 516px;
+    background: ChromePalette.window-background;
+
+    in property <[GroupRow]> groups <=> ring.groups;
+    in property <[TabRow]> tabs <=> ring.tabs;
+    in property <[ArcSeg]> segments <=> ring.segments;
+    in property <[ArcSeg]> lifted-segments <=> ring.lifted-segments;
+    in property <[string]> segment-labels <=> ring.segment-labels;
+    in property <[ArcSeg]> label-bands <=> ring.label-bands;
+    in property <[ArcGlyph]> label-glyphs <=> ring.label-glyphs;
+    in property <[FlagPin]> flags <=> ring.flags;
+    in property <length> ring-size <=> ring.ring-size;
+    in-out property <int> hovered-tab <=> ring.hovered-tab;
+    in property <int> focused-tab <=> ring.focused-tab;
+    in property <bool> held <=> ring.held;
+    in property <int> selected-group <=> ring.selected-group;
+    in property <bool> dim-others <=> ring.dim-others;
+    in property <bool> query-active <=> ring.query-active;
+    in property <int> dragging-tab <=> ring.dragging-tab;
+    in property <bool> interactive <=> ring.interactive;
+    in property <string> accessible-name <=> ring.accessible-name;
+    in property <bool> reduce-motion <=> ring.reduce-motion;
+    in property <bool> animate-spinners <=> ring.animate-spinners;
+
+    pure callback hit-test <=> ring.hit-test;
+    pure callback drop-target <=> ring.drop-target;
+    callback tab-activated <=> ring.tab-activated;
+    callback tab-hovered <=> ring.tab-hovered;
+    callback group-activated <=> ring.group-activated;
+    callback tab-close <=> ring.tab-close;
+    callback tab-mute <=> ring.tab-mute;
+    callback drag-started <=> ring.drag-started;
+    callback drag-moved <=> ring.drag-moved;
+    callback drop <=> ring.drop;
+    callback drag-cancelled <=> ring.drag-cancelled;
+    callback background-pressed <=> ring.background-pressed;
+
+    ring := RingBands {
+        width: parent.width;
+        height: parent.height;
+    }
+}
