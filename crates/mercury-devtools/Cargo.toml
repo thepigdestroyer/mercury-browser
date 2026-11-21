@@ -29,6 +29,10 @@ path = "src/bin/light-crates.rs"
 name = "github-env"
 path = "src/bin/github-env.rs"
 
+[[bin]]
+name = "pixel-diff"
+path = "src/bin/pixel-diff.rs"
+
 [dependencies]
 getrandom.workspace = true
 httpdate.workspace = true
