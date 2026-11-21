@@ -101,6 +101,7 @@ flowchart TB
 | `crates/mercury-filter-lists` | The ad and tracker filter lists as data files: the manifest and its SHA-256 checks, the compiled engine's cache and the background updates |
 | `crates/mercury-site-security` | Site security with no engine inside: safe display of host names, Mercury's network, certificate and crash error pages, and certificate-exception requests |
 | `crates/mercury-tab-snapshots` | Small pictures of the open tabs, for the Orbit view, with no engine inside: shrinking a frame to at most 480 by 300 pixels, a store kept in memory under a 128 MB cap, and the rules for when a picture is taken |
+| `crates/mercury-option-keys` | The ⌥ group-key state machine with no engine inside: from the keys, the focus and the groups it says whether a key goes to the page, which group or tab to switch to, and when the "Switch group" card shows; time is passed in, so it is tested without a clock |
 | `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset (`scripts/macos/make-icns.sh`) |
 | `crates/mercury-release` | A release tool: writes and signs the update manifest (`update.json`) published with each release |
 | `crates/mercury-servo-patches` | A build tool: vendors a Servo crate exactly as published, exports Mercury's changes to it as a patch and checks them (`make servo-patches-check`) |
