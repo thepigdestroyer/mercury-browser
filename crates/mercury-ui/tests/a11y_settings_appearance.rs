@@ -491,7 +491,7 @@ fn a_focused_card_is_chosen_with_space_and_a_focused_switch_with_space_or_return
 
     // Mercury is the first stop, Classic the second.
     let (window, actions) = defaults();
-    press_keys(&window, &vec![TAB; TABS_TO_FIRST_CARD + 1]);
+    press_keys(&window, &[TAB; TABS_TO_FIRST_CARD + 1]);
     press_keys(&window, &[" "]);
     assert_eq!(
         taken(&actions),
@@ -500,7 +500,7 @@ fn a_focused_card_is_chosen_with_space_and_a_focused_switch_with_space_or_return
 
     // The Group dock switch is the third stop.
     let (window, actions) = defaults();
-    press_keys(&window, &vec![TAB; TABS_TO_FIRST_CARD + 2]);
+    press_keys(&window, &[TAB; TABS_TO_FIRST_CARD + 2]);
     press_keys(&window, &["\n"]);
     assert_eq!(
         taken(&actions),
@@ -511,7 +511,7 @@ fn a_focused_card_is_chosen_with_space_and_a_focused_switch_with_space_or_return
     // With Orbit off its pinch switch is greyed and Tab skips it: Dock, Starts, Ring, Orbit,
     // then Group keys.
     let (window, actions) = appearance_window(&orbit_and_dial_off(), true, WIDE);
-    press_keys(&window, &vec![TAB; TABS_TO_FIRST_CARD + 5]);
+    press_keys(&window, &[TAB; TABS_TO_FIRST_CARD + 5]);
     press_keys(&window, &[" "]);
     press_keys(&window, &[TAB, " "]);
     assert_eq!(
