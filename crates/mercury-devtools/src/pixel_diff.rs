@@ -223,10 +223,11 @@ fn list(root: &Path) -> Result<BTreeSet<PathBuf>, Error> {
                 .map_err(|error| Error(format!("{}: {error}", path.display())))?;
             if kind.is_dir() {
                 folders.push(path);
-            } else if kind.is_file() && is_png_name(&path) {
-                if let Ok(relative) = path.strip_prefix(root) {
-                    found.insert(relative.to_path_buf());
-                }
+            } else if kind.is_file()
+                && is_png_name(&path)
+                && let Ok(relative) = path.strip_prefix(root)
+            {
+                found.insert(relative.to_path_buf());
             }
         }
     }
