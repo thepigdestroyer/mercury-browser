@@ -394,10 +394,17 @@ impl Document {
         // This function does not do any checks for whether or not we are actually inside an
         // editing host, since those checks are performed by exec_command_for_command_id either way.
         let (command, argument) = match editing_action {
-            // TODO: composition should be supported once editing hosts have selection support
-            EditingAction::MoveCursor(..) |
+            EditingAction::MoveCursor(..) => return false,
+            // Mercury: composition in editing hosts (EB11). The marked text is kept by the
+            // document's IME state, which also fires the input events of the composition.
             EditingAction::StartComposition |
-            EditingAction::EndComposition(..) => return false,
+            EditingAction::InsertCompositionText(..) |
+            EditingAction::EndComposition(..) => {
+                return self
+                    .event_handler()
+                    .ime()
+                    .perform_composition_action(cx, self, editing_action);
+            },
             EditingAction::SelectAll | EditingAction::Clipboard(_) => {
                 unreachable!("Should have been handled before this point.")
             },
@@ -434,8 +441,8 @@ impl Document {
             // > with value equal to the text the user provided. If the user inserts multiple
             // > characters at once or in quick succession, this specification does not define
             // > whether it is treated as one insertion or several consecutive insertions.
-            // TODO: composition should be supported once editing hosts have selection support
-            EditingAction::InsertText(text) | EditingAction::InsertCompositionText(text) => (
+            // Mercury: the composition actions are handled above (EB11).
+            EditingAction::InsertText(text) => (
                 DOMString::from_static("inserttext"),
                 DOMString::from(text.as_str()),
             ),
@@ -523,7 +530,8 @@ pub(crate) enum TextControlElementEditingContext {
 }
 
 impl TextControlElementEditingContext {
-    fn text_control_element(&self) -> &dyn TextControlElement {
+    // Mercury: `pub(crate)`, the IME state of the document uses it (EB11).
+    pub(crate) fn text_control_element(&self) -> &dyn TextControlElement {
         match self {
             TextControlElementEditingContext::TextArea(text_area) => &**text_area,
             TextControlElementEditingContext::Input(input) => &**input,
