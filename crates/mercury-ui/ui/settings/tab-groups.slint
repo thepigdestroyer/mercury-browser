@@ -2,11 +2,17 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // The Tab groups section: the table of the window's groups with their keys (lane settings-ui, SPEC §4.8).
 //
-// Skeleton by the lane lead. `KeyRowUi` and the `TabGroupsUi` global are the frozen contract (brief section 7):
-// item 3 `tab-groups-section` draws the section and may add properties, never rename or remove these.
-// Everything shown comes from `mercury_appearance::panels::key_panel::PanelView`, through
-// `mercury_ui::settings_sections::tab_groups::fill`; what the user does goes back through the callbacks, which
-// `settings_sections::tab_groups::connect` turns into a `PanelAction`.
+// `KeyRowUi` and the `TabGroupsUi` global are the frozen contract (brief section 7). Everything shown comes from
+// `mercury_appearance::panels::key_panel::PanelView`, through `mercury_ui::settings_sections::tab_groups::fill`;
+// what the user does goes back through the callbacks, which `settings_sections::tab_groups::connect` turns into a
+// `PanelAction`. This file only draws values and reports what the user did: no logic of its own (what a typed
+// character means, what a conflict says, what Reset changes are all decided by the panel).
+//
+// Colours: `ChromePalette` roles and the window's own `Palette`, nothing else (brief D16). A key cap is drawn on
+// `field-background` with `text`; a conflict and a refused key are `danger`; the dead-key note is the warning bar's
+// `notice-background` and `notice-border` with ordinary `text`; muted lines are `text-secondary`.
+import { Button, ComboBox, Palette } from "std-widgets.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
 
 // One group of the table. `state`: 0 plain, 1 dead-key note, 2 conflict, 3 refused.
 export struct KeyRowUi {
@@ -41,6 +47,11 @@ export global TabGroupsUi {
     // The one note that says the tab-group interface is not in yet; empty when it is.
     in property <string> note;
 
+    // Whether a key press is one typed character for a key cap (a letter, a digit, a symbol), as opposed to Tab,
+    // Return, Escape, an arrow, a modifier key or a function key, which the key cap lets through. Decided in Rust
+    // (`settings_sections::tab_groups::connect`), where characters are easy to classify; false until connected.
+    pure callback is-typed-character(string) -> bool;
+
     // The section appeared (called from its `init`): refresh the rows.
     callback opened();
     // A character typed in a group's key cap, or "" for Backspace or Delete.
@@ -54,17 +65,762 @@ export global TabGroupsUi {
     callback chosen(string, int);
 }
 
+component GroupTitle inherits Text {
+    font-size: 13px;
+    font-weight: 650;
+    color: Palette.foreground;
+}
+
+// A short explanation under a control.
+component Note inherits Text {
+    font-size: 12px;
+    color: ChromePalette.text-secondary;
+    wrap: word-wrap;
+}
+
+// A column heading of the table. Decorative: each key cap says what it is in its own label.
+component ColumnHeading inherits Text {
+    font-size: 11px;
+    font-weight: 650;
+    color: ChromePalette.text-secondary;
+    overflow: elide;
+    vertical-alignment: center;
+    accessible-role: none;
+}
+
+// The 2 px outline of the control that has keyboard focus, drawn just outside `parent`.
+component FocusRing inherits Rectangle {
+    in property <length> outset: 3px;
+    in property <length> corner: 8px;
+    // The size of the control it surrounds (a component root cannot name its `parent`).
+    in property <length> target-width;
+    in property <length> target-height;
+
+    x: -root.outset;
+    y: -root.outset;
+    width: root.target-width + 2 * root.outset;
+    height: root.target-height + 2 * root.outset;
+    border-radius: root.corner;
+    border-width: 2px;
+    border-color: ChromePalette.focus-ring;
+    accessible-role: none;
+}
+
+// The warning bar's colours with ordinary text: the note that the interface is not in yet, and a dead key's note.
+component NoticeBar inherits Rectangle {
+    in property <string> text;
+
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: ChromePalette.notice-border;
+    background: ChromePalette.notice-background;
+    height: message.preferred-height + 16px;
+
+    message := Text {
+        x: 10px;
+        width: parent.width - 20px;
+        text: root.text;
+        color: ChromePalette.text;
+        font-size: 12px;
+        wrap: word-wrap;
+        vertical-alignment: center;
+    }
+}
+
+// A dead key's note: the same bar, but hidden from assistive technology, because the key cap reads the same words
+// as its description.
+component KeyNoteBar inherits Rectangle {
+    in property <string> text;
+
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: ChromePalette.notice-border;
+    background: ChromePalette.notice-background;
+    height: message.preferred-height + 16px;
+    accessible-role: none;
+
+    message := Text {
+        x: 10px;
+        width: parent.width - 20px;
+        text: root.text;
+        color: ChromePalette.text;
+        font-size: 12px;
+        wrap: word-wrap;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+// A switch with its label to the left of it, as in the design. The switch is an outline when off and accent-filled
+// when on; its knob is the primary button's text colour on the accent. Pressing it from assistive technology does
+// what a click does.
+component LabelledSwitch inherits Rectangle {
+    in property <string> label;
+    in-out property <bool> checked;
+    callback toggled(bool);
+
+    height: 26px;
+    preferred-width: caption.preferred-width + 12px + 40px;
+    accessible-role: switch;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-action-default => {
+        root.flip();
+    }
+
+    function flip() {
+        root.checked = !root.checked;
+        root.toggled(root.checked);
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: end;
+
+        caption := Text {
+            text: root.label;
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        Rectangle {
+            width: 40px;
+            height: 22px;
+            y: 2px;
+            border-radius: 11px;
+            border-width: 2px;
+            border-color: root.checked ? ChromePalette.accent : ChromePalette.text-secondary;
+            background: root.checked ? ChromePalette.accent : transparent;
+            accessible-role: none;
+
+            Rectangle {
+                x: root.checked ? 22px : 4px;
+                y: 4px;
+                width: 14px;
+                height: 14px;
+                border-radius: 7px;
+                background: root.checked ? ChromePalette.primary-button-text : ChromePalette.text-secondary;
+            }
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.flip();
+        }
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.flip();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    if focus.has-focus: FocusRing {
+        target-width: parent.width;
+        target-height: parent.height;
+        outset: 4px;
+        corner: 8px;
+    }
+}
+
+// One group's key, drawn as a key cap. It is a focusable element and not a text box (brief D11): it takes one typed
+// character, or Backspace or Delete to clear. Anything with Command, Control or Option held, and everything that is
+// not a typed character (Escape, Tab, Return, arrows, modifiers), is rejected so that it reaches the window: Escape
+// and Cmd+W still close it, Cmd+Q still quits and Tab still moves on.
+component KeyCap inherits FocusScope {
+    in property <string> group-name;
+    in property <string> letter;
+    in property <string> message;
+    // As `KeyRowUi.state`.
+    in property <int> state;
+    callback typed(string);
+
+    width: 44px;
+    height: 34px;
+    accessible-role: text-input;
+    accessible-label: "Key for " + root.group-name;
+    accessible-value: root.letter;
+    accessible-description: root.message;
+    // Assistive technology that sets the value types it: the panel decides what the text means.
+    accessible-action-set-value(value) => {
+        root.typed(value);
+    }
+
+    key-pressed(event) => {
+        if event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
+            return reject;
+        }
+        if event.text == Key.Backspace || event.text == Key.Delete {
+            root.typed("");
+            return accept;
+        }
+        if TabGroupsUi.is-typed-character(event.text) {
+            root.typed(event.text);
+            return accept;
+        }
+        reject
+    }
+
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 8px;
+        border-width: root.state == 2 || root.state == 3 || root.state == 1 ? 2px : 1px;
+        border-color: root.state == 2 || root.state == 3 ? ChromePalette.danger
+            : root.state == 1 ? ChromePalette.notice-border
+            : ChromePalette.field-border;
+        background: ChromePalette.field-background;
+        accessible-role: none;
+
+        Text {
+            width: parent.width;
+            height: parent.height;
+            text: root.letter != "" ? root.letter : "–";
+            color: root.letter != "" ? ChromePalette.text : ChromePalette.text-secondary;
+            font-size: 15px;
+            font-weight: 700;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    if root.has-focus: FocusRing {
+        target-width: parent.width;
+        target-height: parent.height;
+        corner: 11px;
+    }
+}
+
+// The colour ring of a group: a thick ring in the group's colour (already resolved by the panel, brief D15).
+component ColourRing inherits Rectangle {
+    in property <color> ring-colour;
+
+    width: 22px;
+    height: 22px;
+    border-radius: 11px;
+    border-width: 4px;
+    border-color: root.ring-colour;
+    accessible-role: none;
+}
+
+// One group of the table: colour ring, name, "5 tabs", key cap and, when there is room, what ⌥ plus the key types.
+// Under it, when the row has something to say: the dead-key note, or the conflict with Swap and Choose another, or
+// the refusal. With no room for the "types" column the value drops below the name.
+component GroupRow inherits VerticalLayout {
+    in property <KeyRowUi> entry;
+    in property <bool> wide;
+    callback typed(string);
+    callback swap;
+    callback choose-another;
+
+    spacing: 4px;
+
+    HorizontalLayout {
+        spacing: 12px;
+
+        VerticalLayout {
+            alignment: center;
+            ColourRing {
+                ring-colour: root.entry.colour;
+            }
+        }
+
+        HorizontalLayout {
+            horizontal-stretch: 1;
+            spacing: 8px;
+            alignment: start;
+
+            Text {
+                text: root.entry.name;
+                color: Palette.foreground;
+                font-size: 13px;
+                font-weight: 650;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+
+            Text {
+                text: root.entry.tabs;
+                color: ChromePalette.text-secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+            }
+        }
+
+        KeyCap {
+            group-name: root.entry.name;
+            letter: root.entry.letter;
+            message: root.entry.message;
+            state: root.entry.state;
+            typed(text) => {
+                root.typed(text);
+            }
+        }
+
+        // The column keeps its width (so the key caps line up) whether or not the group has a key.
+        if root.wide: Rectangle {
+            width: 230px;
+            accessible-role: none;
+
+            if root.entry.types != "": Text {
+                width: parent.width;
+                height: parent.height;
+                text: root.entry.types;
+                color: Palette.foreground;
+                font-size: 13px;
+                vertical-alignment: center;
+                overflow: elide;
+                // A lone glyph (å, ∂) means nothing read out of its column.
+                accessible-label: "Option types " + root.entry.types;
+            }
+        }
+    }
+
+    // Beneath the name, past the colour ring.
+    if !root.wide && root.entry.types != "": HorizontalLayout {
+        padding-left: 34px;
+
+        Text {
+            text: "⌥ " + root.entry.types;
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            overflow: elide;
+            accessible-label: "Option types " + root.entry.types;
+        }
+    }
+
+    // The dead-key note: the warning bar's colours.
+    if root.entry.state == 1 && root.entry.message != "": HorizontalLayout {
+        padding-left: 34px;
+        KeyNoteBar {
+            text: root.entry.message;
+        }
+    }
+
+    // A refused key: the message in the danger colour, no buttons.
+    if root.entry.state == 3 && root.entry.message != "": HorizontalLayout {
+        padding-left: 34px;
+        Text {
+            text: root.entry.message;
+            color: ChromePalette.danger;
+            font-size: 12px;
+            wrap: word-wrap;
+            accessible-role: none;
+        }
+    }
+
+    // A conflict: the message and the two ways out, side by side when there is room, else stacked.
+    if root.entry.state == 2: HorizontalLayout {
+        padding-left: 34px;
+        spacing: 8px;
+
+        if root.wide: Text {
+            horizontal-stretch: 1;
+            text: root.entry.message;
+            color: ChromePalette.danger;
+            font-size: 12px;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        if root.wide: Button {
+            text: "Swap";
+            accessible-label: "Swap keys for " + root.entry.name;
+            accessible-description: root.entry.message;
+            clicked => {
+                root.swap();
+            }
+        }
+
+        if root.wide: Button {
+            text: "Choose another";
+            accessible-label: "Choose another key for " + root.entry.name;
+            accessible-description: root.entry.message;
+            clicked => {
+                root.choose-another();
+            }
+        }
+
+        if !root.wide: VerticalLayout {
+            spacing: 6px;
+
+            Text {
+                text: root.entry.message;
+                color: ChromePalette.danger;
+                font-size: 12px;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+
+                Button {
+                    text: "Swap";
+                    accessible-label: "Swap keys for " + root.entry.name;
+                    accessible-description: root.entry.message;
+                    clicked => {
+                        root.swap();
+                    }
+                }
+
+                Button {
+                    text: "Choose another";
+                    accessible-label: "Choose another key for " + root.entry.name;
+                    accessible-description: root.entry.message;
+                    clicked => {
+                        root.choose-another();
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The line for tabs that belong to no group (brief D10): information, not a row with a key.
+component LooseRow inherits HorizontalLayout {
+    in property <string> tabs;
+
+    spacing: 12px;
+
+    VerticalLayout {
+        alignment: center;
+        ColourRing {
+            ring-colour: ChromePalette.text-secondary;
+        }
+    }
+
+    Text {
+        text: "Loose";
+        color: Palette.foreground;
+        font-size: 13px;
+        font-weight: 650;
+        vertical-alignment: center;
+    }
+
+    Text {
+        text: root.tabs;
+        color: ChromePalette.text-secondary;
+        font-size: 12px;
+        vertical-alignment: center;
+    }
+
+    Text {
+        horizontal-stretch: 1;
+        text: "Tabs in no group";
+        color: ChromePalette.text-secondary;
+        font-size: 12px;
+        vertical-alignment: center;
+        overflow: elide;
+    }
+}
+
+// One of the three ways ⌥ can switch groups: a radio and its wording. Pressing it from assistive technology does what
+// a click does; the chosen one again reports nothing.
+component RadioRow inherits Rectangle {
+    in property <string> label;
+    in property <bool> selected;
+    // Its place among the choices, for "n of m".
+    in property <int> index;
+    in property <int> count;
+    callback chosen;
+
+    height: row.preferred-height + 4px;
+    accessible-role: radio-button;
+    accessible-label: root.label;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.pick();
+    }
+
+    function pick() {
+        if !root.selected {
+            root.chosen();
+        }
+    }
+
+    row := HorizontalLayout {
+        y: 2px;
+        spacing: 10px;
+
+        VerticalLayout {
+            alignment: start;
+            padding-top: 1px;
+
+            Rectangle {
+                width: 18px;
+                height: 18px;
+                border-radius: 9px;
+                border-width: 2px;
+                border-color: root.selected ? ChromePalette.accent : ChromePalette.text-secondary;
+                accessible-role: none;
+
+                if root.selected: Rectangle {
+                    x: 4px;
+                    y: 4px;
+                    width: 6px;
+                    height: 6px;
+                    border-radius: 3px;
+                    background: ChromePalette.accent;
+                }
+            }
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.label;
+            color: Palette.foreground;
+            font-size: 13px;
+            wrap: word-wrap;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    TouchArea {
+        clicked => {
+            root.pick();
+        }
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.pick();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    if focus.has-focus: FocusRing {
+        target-width: parent.width;
+        target-height: parent.height;
+        outset: 2px;
+        corner: 8px;
+    }
+}
+
 export component TabGroupsSection inherits VerticalLayout {
     spacing: 12px;
+
+    // The table keeps its "types" column from this section width up (the window can be as narrow as 560 px, which
+    // leaves 312 px); below it the value of the column drops below the name and the title row stacks.
+    property <bool> wide: root.width >= 520px;
 
     init => {
         TabGroupsUi.opened();
     }
 
-    // Placeholder: item 3 replaces everything below.
-    Text {
+    // The one note that the interface is not in yet (brief D4): the warning bar's colours with ordinary text.
+    if TabGroupsUi.note != "": NoticeBar {
         text: TabGroupsUi.note;
-        accessible-role: none;
+    }
+
+    HorizontalLayout {
+        spacing: 12px;
+
+        GroupTitle {
+            horizontal-stretch: 1;
+            text: "Group keys";
+            vertical-alignment: center;
+        }
+
+        if root.wide: LabelledSwitch {
+            label: "Show keys beside names";
+            checked <=> TabGroupsUi.show-beside-names;
+            toggled(on) => {
+                TabGroupsUi.toggled("show-beside-names", on);
+            }
+        }
+    }
+
+    Note {
+        text: "Hold ⌥ and tap a group's key to switch to it. Keys appear beside each group's name.";
+    }
+
+    if !root.wide: LabelledSwitch {
+        label: "Show keys beside names";
+        checked <=> TabGroupsUi.show-beside-names;
+        toggled(on) => {
+            TabGroupsUi.toggled("show-beside-names", on);
+        }
+    }
+
+    // Group keys are switched off in Appearance (brief D9): the table stays editable.
+    if TabGroupsUi.keys-off-note != "": Text {
+        text: TabGroupsUi.keys-off-note;
+        color: Palette.foreground;
+        font-size: 12px;
+        font-weight: 600;
         wrap: word-wrap;
+    }
+
+    if TabGroupsUi.empty: Note {
+        text: TabGroupsUi.note != "" ? "No tab groups in this window yet. Make one from the tab strip once the tab-group interface is in." : "No tab groups in this window yet. Make one from the tab strip.";
+    }
+
+    if !TabGroupsUi.empty: VerticalLayout {
+        spacing: 10px;
+
+        // The column headings, over the same columns as the rows.
+        VerticalLayout {
+            spacing: 2px;
+
+            HorizontalLayout {
+                spacing: 12px;
+
+                Rectangle {
+                    width: 22px;
+                }
+
+                ColumnHeading {
+                    horizontal-stretch: 1;
+                    text: "GROUP";
+                }
+
+                ColumnHeading {
+                    width: 44px;
+                    text: "KEY";
+                    horizontal-alignment: center;
+                }
+
+                if root.wide: ColumnHeading {
+                    width: 230px;
+                    text: TabGroupsUi.types-header;
+                }
+            }
+
+            // With no room for the column, its heading sits under the names and the values drop below them.
+            if !root.wide: HorizontalLayout {
+                padding-left: 34px;
+
+                ColumnHeading {
+                    text: TabGroupsUi.types-header;
+                }
+            }
+        }
+
+        for row in TabGroupsUi.rows: GroupRow {
+            entry: row;
+            wide: root.wide;
+            typed(text) => {
+                TabGroupsUi.key-typed(row.id, text);
+            }
+            swap => {
+                TabGroupsUi.swap(row.id);
+            }
+            choose-another => {
+                TabGroupsUi.choose-another(row.id);
+            }
+        }
+
+        if TabGroupsUi.loose-tabs > 0: LooseRow {
+            tabs: TabGroupsUi.loose-tabs == 1 ? "1 tab" : TabGroupsUi.loose-tabs + " tabs";
+        }
+    }
+
+    Rectangle {
+        height: 4px;
+        accessible-role: none;
+    }
+
+    GroupTitle {
+        text: "When ⌥ switches groups";
+    }
+
+    VerticalLayout {
+        spacing: 2px;
+
+        RadioRow {
+            label: "Outside text fields, and anywhere after holding ⌥ for " + TabGroupsUi.hold-text + " (recommended)";
+            index: 0;
+            count: 3;
+            selected: TabGroupsUi.capture-index == 0;
+            chosen => {
+                TabGroupsUi.capture-index = 0;
+                TabGroupsUi.chosen("capture", 0);
+            }
+        }
+
+        RadioRow {
+            label: "Only outside text fields";
+            index: 1;
+            count: 3;
+            selected: TabGroupsUi.capture-index == 1;
+            chosen => {
+                TabGroupsUi.capture-index = 1;
+                TabGroupsUi.chosen("capture", 1);
+            }
+        }
+
+        RadioRow {
+            label: "Always: ⌥ + letter never types a character in Mercury";
+            index: 2;
+            count: 3;
+            selected: TabGroupsUi.capture-index == 2;
+            chosen => {
+                TabGroupsUi.capture-index = 2;
+                TabGroupsUi.chosen("capture", 2);
+            }
+        }
+    }
+
+    // The hold time matters only for the first choice, so it is greyed (and keeps its value) under the others.
+    HorizontalLayout {
+        spacing: 12px;
+        alignment: start;
+
+        Text {
+            text: "Hold time";
+            color: Palette.foreground;
+            font-size: 13px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+
+        ComboBox {
+            width: 110px;
+            enabled: TabGroupsUi.capture-index == 0;
+            accessible-label: "Hold time";
+            accessible-description: "How long to hold ⌥ before a letter switches groups inside a text field.";
+            model: TabGroupsUi.hold-choices;
+            current-index <=> TabGroupsUi.hold-index;
+            selected => {
+                TabGroupsUi.chosen("hold", self.current-index);
+            }
+        }
+    }
+
+    HorizontalLayout {
+        alignment: start;
+
+        Button {
+            text: TabGroupsUi.reset-label;
+            enabled: TabGroupsUi.reset-enabled;
+            clicked => {
+                // Slint's Button does not refuse its own action while disabled (an accessibility press reaches it).
+                if TabGroupsUi.reset-enabled {
+                    TabGroupsUi.reset-keys();
+                }
+            }
+        }
     }
 }
