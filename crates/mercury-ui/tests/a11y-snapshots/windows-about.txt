@@ -11,5 +11,6 @@ text | Source-available: free for non-commercial use (PolyForm Noncommercial 1.0
 text | Began as a fork of Hermes Browser by Kayk Caputo. | |
 button | Licence | Opens the licence terms in a new tab. |
 button | Third-party notices | Opens the list of third-party notices in a new tab. |
+button | Source code | Opens the source code of this version in a new tab. |
 image | #MadeWithSlint | |
 text | Version 1.17.1\nhttps://slint.dev/ | |

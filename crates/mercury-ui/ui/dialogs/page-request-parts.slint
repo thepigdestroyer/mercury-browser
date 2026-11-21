@@ -161,6 +161,9 @@ export component RequestField inherits Rectangle {
     in property <bool> password;
     // Select the whole text whenever the field gains focus (Slint does not on Tab on macOS).
     in property <bool> select-on-focus;
+    // What was typed was refused (the PDF viewer's wrong password): the border is drawn in the
+    // danger colour, which wins over the focus colour.
+    in property <bool> invalid;
     out property <bool> has-focus: input.has-focus;
     callback accepted;
 
@@ -172,7 +175,9 @@ export component RequestField inherits Rectangle {
     height: 32px;
     border-radius: 7px;
     border-width: 1px;
-    border-color: input.has-focus ? ChromePalette.accent : ChromePalette.field-border;
+    border-color: root.invalid
+        ? ChromePalette.danger
+        : input.has-focus ? ChromePalette.accent : ChromePalette.field-border;
     background: ChromePalette.field-background;
 
     if root.text == "": Text {

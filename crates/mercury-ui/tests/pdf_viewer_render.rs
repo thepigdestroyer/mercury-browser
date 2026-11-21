@@ -703,9 +703,18 @@ fn the_viewer_sources_name_every_control_and_use_only_palette_colours() {
     // The page area says what it is and where it is.
     assert!(pages.contains("accessible-role: AccessibleRole.main;"));
     assert!(pages.contains("accessible-label: \"PDF document, page \""));
-    // The password field is labelled, and its placeholder is not read twice.
-    assert!(panels.contains("accessible-label: \"Password\";"));
-    assert!(panels.contains("accessible-placeholder-text: \"Password\";"));
+    // The password field is a `RequestField` in its password mode (the field that keeps a typed
+    // password from assistive technology; `a11y_secrets.rs` allows a password input type nowhere
+    // else), labelled "Password". The field gives that word as its label and as its placeholder,
+    // and hides the drawn placeholder, so it is not read twice.
+    assert!(panels.contains("field := RequestField {"));
+    assert!(panels.contains("accessible-name: \"Password\";"));
+    assert!(panels.contains("placeholder: \"Password\";"));
+    assert!(panels.contains("password: true;"));
+    assert!(
+        !panels.contains("input-type:"),
+        "the panels write no input type of their own"
+    );
     assert!(panels.contains("accessible-role: groupbox;"));
 
     // Colours come from the palettes: no colour literal anywhere else.

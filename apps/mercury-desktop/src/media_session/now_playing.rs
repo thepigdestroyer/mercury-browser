@@ -5,9 +5,10 @@
 use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
-use talaria_core::{
-    BrowserController, BrowserState, MediaPlaybackState, MediaSessionAction, TabId,
-};
+use talaria_core::{BrowserController, BrowserState, MediaPlaybackState, TabId};
+// For `action_for`, which only macOS's media keys (and the tests) reach.
+#[cfg(any(target_os = "macos", test))]
+use talaria_core::MediaSessionAction;
 
 /// A consecutive position report this far from the last one is a seek, not playback (Servo
 /// reports the position about ten times a second while playing).
@@ -25,7 +26,9 @@ const SESSION_HOLD: Duration = Duration::from_secs(1);
 /// Each text shown in Control Centre is cut to this many characters.
 pub(crate) const MAX_TEXT_CHARACTERS: usize = 256;
 
-/// What the system's media controls ask for.
+/// What the system's media controls ask for. Only the macOS command centre sends these; the
+/// tests build it everywhere.
+#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum RemoteCommand {
     Play,
@@ -181,11 +184,13 @@ impl NowPlayingPolicy {
     }
 
     /// Whether actions for the published tab can go through Servo's media session.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn through_engine(&self) -> bool {
         self.published.as_ref().is_some_and(|info| info.can_skip)
     }
 
     /// Where a remote command goes: always the tab shown in Now Playing.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn action_for(&self, command: RemoteCommand) -> Option<(TabId, MediaSessionAction)> {
         let info = self.published.as_ref()?;
         let action = match command {
