@@ -31,6 +31,21 @@ Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message 
   they need a compiled `servo` crate and cargo refuses `-p servo` from the Mercury workspace (dev-dependencies), so they have not been run; `talaria-servo`'s `mercury_messages` tests cover the router behind the delegate hooks, not `deliver` itself; the first message sent by a lane is its end-to-end test.
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
+Changes made by lane txt-1 (text, 21 Nov 2026).
+
+### IME sequences and the state messages — `tests/input_methods.rs`, `tests/common/mod.rs`
+
+- **What:** the test of servo/servo#49400 (`test_commit_without_composition`) and 21 tests more for Pinyin in `<input>`,
+  `<textarea>` and `contenteditable`, Japanese clauses with a selected clause, Korean (marked text replaced in place), a dead key,
+  cancel (`Commit("")` and `SetMarkedText("")`), `Dismissed`, `InsertText` with and without a replacement (a current sequence, a
+  stale one, changed text, past the end, inside a surrogate pair), `beforeinput` `preventDefault` during a composition, and the
+  state messages (on focus, typing, selection change, `None` on blur, no text for a password, a 4,096-unit window for a long
+  text). `tests/common/mod.rs` records every `TextMsg::InputState` that arrives through `notify_mercury_message`. The tests use
+  a `SoftwareRenderingContext` and no window. A Servo with `dom_exec_command_enabled` is built for the editing-host cases.
+- **Why:** the engine side of EB11 had no test of its own.
+- **Tested by:** `timeout 600 cargo test --release -p servo --test input_methods` (see the report of lane txt-1 for the result).
+- **Drop when:** the #49400 test at the bump that contains it; the rest stays.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in
