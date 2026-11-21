@@ -466,14 +466,15 @@ fn the_mark_is_10_and_a_half_px_from_the_ring_centre_on_the_active_segments_side
     let tile = &model.tiles[0];
     let m = model.layout.metrics;
     // Five tabs: the first one's middle is at 36 degrees (the mockup's dot is at +6.2, -8.5).
-    let (dx, dy) = (tile.mark_x - m.ring_cx, tile.mark_y - m.ring_cy);
+    let half = m.ring_size / 2.0;
+    let (dx, dy) = (tile.mark_x - half, tile.mark_y - half);
     assert!(
         (dx - 6.2).abs() < 0.1 && (dy + 8.5).abs() < 0.1,
         "({dx}, {dy})"
     );
     assert!((dx.hypot(dy) - 10.5).abs() < 0.05);
-    // In tile coordinates: the ring centre is (54, 46), so the dot is at about (60.2, 37.5).
-    assert!((tile.mark_x - 60.2).abs() < 0.1 && (tile.mark_y - 37.5).abs() < 0.1);
+    // Ring-local: from the top-left of the ring's box, whose centre is (half, half).
+    assert!((tile.mark_x - (half + 6.2)).abs() < 0.1 && (tile.mark_y - (half - 8.5)).abs() < 0.1);
 }
 
 #[test]
@@ -489,7 +490,8 @@ fn the_mark_follows_the_active_tab() {
     let m = model.layout.metrics;
     let tile = &model.tiles[2];
     let rad = 150.0_f32.to_radians();
-    let want = (m.ring_cx + 10.5 * rad.sin(), m.ring_cy - 10.5 * rad.cos());
+    let half = m.ring_size / 2.0;
+    let want = (half + 10.5 * rad.sin(), half - 10.5 * rad.cos());
     assert!((tile.mark_x - want.0).abs() < 0.1 && (tile.mark_y - want.1).abs() < 0.1);
 }
 
@@ -506,7 +508,8 @@ fn the_mark_stays_inside_the_ring_for_compact_tiles_too() {
     let m = model.layout.metrics;
     for tile in &model.tiles {
         assert!(tile.has_mark);
-        let distance = (tile.mark_x - m.ring_cx).hypot(tile.mark_y - m.ring_cy);
+        let half = m.ring_size / 2.0;
+        let distance = (tile.mark_x - half).hypot(tile.mark_y - half);
         assert!((distance - 14.0 * 0.525).abs() < 0.05, "{distance}");
     }
 }

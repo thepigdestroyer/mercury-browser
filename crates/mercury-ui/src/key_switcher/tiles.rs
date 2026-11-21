@@ -16,7 +16,8 @@
 //! - Every ring path is ring-local to a square box of `KeyMetrics.ring-size` that is **centred on
 //!   the ring's centre** (`ring-cx`, `ring-cy`): the box's top-left in the tile is
 //!   `(ring-cx - ring-size / 2, ring-cy - ring-size / 2)`.
-//! - `mark-x` and `mark-y` are the **centre** of the active tab's dot, in tile coordinates.
+//! - `mark-x` and `mark-y` are the **centre** of the active tab's dot, ring-local like the paths (from
+//!   the top-left of the ring's box); the component adds the box's position.
 
 use std::collections::{HashMap, HashSet};
 
@@ -98,7 +99,7 @@ fn ring_tab_positions(len: usize, active: Option<usize>) -> Vec<usize> {
     positions
 }
 
-/// Where the active tab's dot sits in the tile: [`MARK_REACH`] of the ring's radius from the ring's
+/// Where the active tab's dot sits, ring-local (from the top-left of the ring's box): [`MARK_REACH`] of the ring's radius from the ring's
 /// centre, towards `mid` (the middle of the active segment, ring-local). A `mid` on the centre
 /// or not a number puts the dot straight above the centre.
 fn mark_position(metrics: &TileMetrics, mid: (f32, f32)) -> (f32, f32) {
@@ -111,7 +112,7 @@ fn mark_position(metrics: &TileMetrics, mid: (f32, f32)) -> (f32, f32) {
         (0.0, -1.0)
     };
     let reach = metrics.ring_radius * MARK_REACH;
-    (metrics.ring_cx + ux * reach, metrics.ring_cy + uy * reach)
+    (half + ux * reach, half + uy * reach)
 }
 
 /// The tabs of every group, each list sorted by `index-in-group` (equal values keep their order).
@@ -347,7 +348,7 @@ mod tests {
             ((half - 20.0, half), (-1.0, 0.0)),
         ] {
             let (x, y) = mark_position(&metrics, mid);
-            let (dx, dy) = (x - metrics.ring_cx, y - metrics.ring_cy);
+            let (dx, dy) = (x - half, y - half);
             assert!((dx - direction.0 * 10.5).abs() < 0.01, "{mid:?}: dx {dx}");
             assert!((dy - direction.1 * 10.5).abs() < 0.01, "{mid:?}: dy {dy}");
         }
@@ -356,7 +357,7 @@ mod tests {
         let mid = (half + 20.0 * rad.sin(), half - 20.0 * rad.cos());
         let (x, y) = mark_position(&metrics, mid);
         assert!(
-            (x - (54.0 + 6.2)).abs() < 0.1 && (y - (46.0 - 8.5)).abs() < 0.1,
+            (x - (half + 6.2)).abs() < 0.1 && (y - (half - 8.5)).abs() < 0.1,
             "{x} {y}"
         );
     }
@@ -366,16 +367,13 @@ mod tests {
         let metrics = card_layout(12).metrics;
         let half = metrics.ring_size / 2.0;
         let (x, y) = mark_position(&metrics, (half + 14.0, half));
-        assert!(
-            (x - (metrics.ring_cx + 14.0 * 0.525)).abs() < 0.01
-                && (y - metrics.ring_cy).abs() < 0.01
-        );
+        assert!((x - (half + 14.0 * 0.525)).abs() < 0.01 && (y - half).abs() < 0.01);
         // A degenerate mid (on the centre, or not a number) still gives a finite point above it.
         for mid in [(half, half), (f32::NAN, 3.0), (f32::INFINITY, 0.0)] {
             let (x, y) = mark_position(&metrics, mid);
             assert!(x.is_finite() && y.is_finite(), "{mid:?}");
-            assert!((x - metrics.ring_cx).abs() < 0.01);
-            assert!((y - (metrics.ring_cy - 14.0 * 0.525)).abs() < 0.01);
+            assert!((x - half).abs() < 0.01);
+            assert!((y - (half - 14.0 * 0.525)).abs() < 0.01);
         }
     }
 

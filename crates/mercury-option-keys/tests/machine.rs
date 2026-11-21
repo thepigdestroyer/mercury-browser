@@ -983,6 +983,20 @@ mod switched {
         assert_eq!(press(&mut m, 120, digit(1), ALT), swallowed());
         assert_eq!(m.phase(), Phase::Switched);
     }
+
+    #[test]
+    fn a_composition_opening_ends_the_capture_and_the_page_gets_the_keys() {
+        let mut m = switched();
+        assert_eq!(m.set_focus(composing()), PASS);
+        assert_eq!(m.phase(), Phase::PassThrough);
+        // Neither a digit, nor a group letter, nor a repeat of the held S is captured any more.
+        assert_eq!(press(&mut m, 100, digit(2), ALT), PASS);
+        assert_eq!(press(&mut m, 110, A, ALT), PASS);
+        // The S that was captured keeps its key-up in step with its down.
+        assert_eq!(release(&mut m, 120, S, ALT), swallowed());
+        assert_eq!(modifiers(&mut m, 130, NONE), PASS);
+        assert_eq!(m.phase(), Phase::Idle);
+    }
 }
 
 // ---------------------------------------------------------------------------------------------

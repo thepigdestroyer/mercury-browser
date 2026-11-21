@@ -49,7 +49,7 @@ use mercury_option_keys::{
     Mods, OptionKeys, Outcome, Phase, Target,
 };
 
-/// The brief contradicts itself on one point, and this switch is where the integrator settles it.
+/// The brief contradicts itself on one point, and this switch is where the integrator settled it.
 ///
 /// Section 5.4, "Any phase": "Auto-repeat of a captured key is consumed with no effect". Section 6
 /// item 2: I6 (a key down with modifiers other than ⌥ alone is never consumed), I7 (disabled
@@ -57,11 +57,13 @@ use mercury_option_keys::{
 /// a key whose press was consumed, and is still held, the two cannot both hold: ⌘ pressed while a
 /// captured letter is held, a composition opened, or the keys switched off.
 ///
-/// `false` (the default) checks I6 to I8 as stated, for every key down, and reports the
-/// auto-repeats as their own invariants (`I6 (auto-repeat ...)` and so on) apart from the
-/// fresh presses. `true` excuses exactly that class, as the brief already excuses a key-up whose
-/// press was consumed.
-const EXCUSE_CAPTURED_REPEATS: bool = false;
+/// Settled `true` (lane integrator, 21 Nov 2026): the page never saw the first press, so it must
+/// not see its repeats either; a repeat is the same key, like the key-up that the brief already
+/// excuses from I1, I6 and I7 when its press was consumed. I6 to I8 still hold for every fresh
+/// press and for every repeat of a key that was passed. `false` checks I6 to I8 as stated, for
+/// every key down, and reports the auto-repeats as their own invariants (`I6 (auto-repeat ...)`
+/// and so on) apart from the fresh presses.
+const EXCUSE_CAPTURED_REPEATS: bool = true;
 
 const I6_REPEAT: &str = "I6 (auto-repeat of a captured key)";
 const I7_REPEAT: &str = "I7 (auto-repeat of a captured key)";

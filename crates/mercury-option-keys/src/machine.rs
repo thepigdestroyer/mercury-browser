@@ -90,12 +90,17 @@ impl OptionKeys {
         card_only(before, self.view())
     }
 
-    /// Follows the keyboard focus. `composing` cancels Armed (to `PassThrough`) and an open card
-    /// (`Hide`).
+    /// Follows the keyboard focus. `composing` ends every kind of capture: Armed and Switched go
+    /// to `PassThrough` and an open card is hidden (`Hide`), so an input method never loses a key.
     pub fn set_focus(&mut self, focus: Focus) -> Outcome {
         let before = self.view();
         self.focus = focus;
-        if focus.composing && matches!(self.state, State::Armed(_) | State::Overlay { .. }) {
+        if focus.composing
+            && matches!(
+                self.state,
+                State::Armed(_) | State::Switched(_) | State::Overlay { .. }
+            )
+        {
             self.state = self.resting();
         }
         card_only(before, self.view())
