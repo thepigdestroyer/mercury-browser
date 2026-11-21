@@ -52,7 +52,7 @@ MERCURY_DEV_MSE=1 ./target/release/mercury-browser http://127.0.0.1:<port>/pages
 
 **They have not been run** (the screen was locked while they were written). When the screen is free:
 
-1. Serve `tests/` and the fixtures: `scripts/serve-tests.sh` prints the port. The pages read the fixtures from `/mse-fixtures/<path>` (for example `/mse-fixtures/fmp4/video-h264-low.mp4`), a route of `crates/mercury-devtools`' `serve-tests` that maps to `crates/mercury-mse-testkit/fixtures/`; add `?fixtures=<base url>` to read them from elsewhere. (The route was requested from the lane lead and may not be in the server yet.)
+1. Serve `tests/` and the fixtures: `scripts/serve-tests.sh` prints the port. The pages read the fixtures from `/mse-fixtures/<path>` (for example `/mse-fixtures/fmp4/video-h264-low.mp4`), a route of `crates/mercury-devtools`' `serve-tests` that maps to `crates/mercury-mse-testkit/fixtures/`; add `?fixtures=<base url>` to read them from elsewhere.
 2. Run each page with `MERCURY_DEV_MSE=1`, in a window, once per page; `--screenshot out.png --screenshot-delay 20000` also works, and the title is the verdict.
 3. A page that stops early prints `FAIL the page stopped: ...` with the stack. `mse-quota.html` appends about 150 MiB and takes the longest; `mse-seek.html` prints the seek latencies as `INFO` lines (the targets are the first frame within 500 ms and a resume within 1000 ms after the late append).
 
