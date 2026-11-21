@@ -36,13 +36,13 @@ mod history_ui;
 mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
-mod option_keys; // key-switcher
 #[cfg(target_os = "macos")]
 mod macos_app_delegate;
 #[cfg(target_os = "macos")]
 mod macos_terminate;
 #[cfg(target_os = "macos")]
 mod media_buffers;
+mod option_keys; // key-switcher
 // media-capture
 mod media_capture;
 #[cfg(target_os = "macos")]
