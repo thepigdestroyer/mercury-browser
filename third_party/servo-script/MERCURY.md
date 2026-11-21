@@ -201,6 +201,68 @@ The `js` dependency (package `mozjs`) is `=0.27.0` instead of `=0.26.13`, with a
 SpiderMonkey's security fixes); the same line is changed in `servo-script-bindings` and `servo-script-webcrypto`. See
 `third_party/servo-script-webcrypto/MERCURY.md`. Drop at the bump that contains it (B1).
 
+## Changes: Media Source Extensions (lane med-1, MSE by Plan B, 20 Nov 2026)
+
+Behind `dom_media_source_enabled` (off by default; `MERCURY_DEV_MSE=1` turns it on for development, see
+`docs/developer-guide/media-source.md`). The DOM objects are carried from servo/servo#47269
+(decomoraes, MPL-2.0: `MediaSource`, `SourceBuffer`, `SourceBufferList`, the object URL store, the
+`HTMLMediaElement` attach and detach steps) and **thinned**: Mercury's own Servo-free crate
+`crates/mercury-mse` owns every spec algorithm that needs no DOM object (readyState, duration,
+`endOfStream`, the buffered intersection, abort, remove, `changeType`, the append window, the timestamp
+offset, the mode, the track buffers, the byte-stream parsers, quota and eviction), and a GStreamer source
+element in `crates/mercury-mse-gst` feeds the player. The DOM calls `MediaSourceBackend` and turns its
+`MseEvent`s into events and media element notifications. The PR's `bytestream.rs`, its parser and its
+`push_data` data plane are not carried; nothing is ever pushed to the player.
+
+1. **`dom/mse/` (new directory):** `mediasource.rs`, `sourcebuffer.rs`, `sourcebufferlist.rs`, `mod.rs`.
+   Each file's header names the PR. `MediaSource` creates its backend through
+   `ServoMedia::create_media_source` with a `GenericCallback` that only queues a media element task (the
+   media element's own player-callback pattern, with a weak reference so the object stays collectable),
+   and handles the `MseEvent`s there. `SourceBuffer` keeps the JavaScript-visible `updating` flag as the
+   specification's tasks publish it (cleared by the task that handles `AppendDone`, `AppendError`,
+   `RemoveDone`), the last known attribute values for a removed buffer, and empty `audioTracks` and
+   `videoTracks`. Left out: `textTracks` (this Servo's `TextTrackList` needs a media element), the
+   contents of the track lists, `ManagedMediaSource`, `BufferedChangeEvent`, `MediaSourceHandle`, MSE in
+   workers (`canConstructInDedicatedWorker` is false).
+2. **`dom/mod.rs`:** `pub(crate) mod mse;` and its glob re-export (the bindings look interfaces up as
+   `crate::dom::<lowercase name>::<Name>`).
+3. **`dom/globalscope/globalscope.rs`:** `media_source_url_store` and `track_media_source_url`,
+   `media_source_for_url`, `forget_media_source_url` (a `MediaSource` never leaves its thread, so unlike a
+   blob URL its entry cannot live in the file manager). Carried from the PR.
+4. **`dom/url/url.rs`:** `URL.createObjectURL(MediaSource)` (`CreateObjectURL_`) and `revokeObjectURL` for
+   it. Carried from the PR.
+5. **`dom/html/embedded_content/htmlmediaelement.rs`** (hot file, every hunk marked `Mercury (MED-1)`;
+   line numbers as of this commit, for the next Servo bump):
+   * 36, 63, 93: imports. 134-155: `SrcObject::MediaSource` and the union conversion
+     (`MediaStreamOrMediaSourceOrBlob`; the IDL union gained `MediaSource`). 300-304, 475: the
+     `media_source` field. 1353-1360: `load_from_src_attribute` makes `Resource::MediaSource` for a URL in
+     the object URL store. 1669-1690: `resource_fetch_algorithm` attaches first (failure steps when the
+     source is not closed or was attached before), then creates the player, and detaches if that fails.
+     1746-1752: the new `Resource::MediaSource` and `SrcObject::MediaSource` arms fetch nothing. 1840:
+     `in_error_state` is `pub(crate)`.
+   * 1845-2120: the new block of `media_source_*` functions: `media_source_for_resource`,
+     `queue_media_source_stop_delaying_the_load_event`, `detach_media_source`,
+     `media_source_position_changed`, `media_source_seeking`, `media_source_update_ready_state` (readiness
+     from `element_ready_state` around the position: HAVE_METADATA outside the buffered ranges, HAVE_ENOUGH_DATA
+     once ended, HAVE_CURRENT_DATA at the end), `media_source_metadata_received` (the "once enough of the
+     media data has been fetched" steps), `media_source_init_received`, `media_source_duration_changed`
+     (idempotent), `media_source_end_of_stream`, `media_source_error`.
+   * 2498-2503: `seek` calls `media_source_seeking` after setting the new position. 2565-2573, 2636-2670:
+     `create_media_player` (`StreamType::MediaSource`, `connect_media_source` as the player's first call, no
+     download buffering). 2713: `reset_media_player` detaches the MediaSource after the player is dropped.
+   * 2887, 3133, 3300-3315: `playback_metadata_updated` and `playback_duration_changed` ignore the media
+     engine for a MediaSource element; `playback_state_changed` never upgrades readiness from the
+     pipeline's state. 3338, 3966: `seekable` and `Buffered` come from the backend. 3735: `GetSrcObject`.
+     4247: the `Resource::MediaSource` variant. 4784: `PositionChanged` tells the backend and re-evaluates the
+     readiness.
+6. **`servo-script-bindings` (see its `MERCURY.md`):** `MediaSource.webidl`, `SourceBuffer.webidl`,
+   `SourceBufferList.webidl`, `URL.webidl` (the overload), `HTMLMediaElement.webidl` (the union),
+   `Bindings.conf` (`cx` lists and `weakReferenceable` for `MediaSource`).
+
+**Not run in a window** (the screen was locked): the DOM compiles and its pure logic is tested in
+`crates/mercury-mse`; the pages `tests/pages/mse-*.html` are written and unrun. Dropped when a Servo release
+has its own MSE (servo/servo#44403) and Mercury moves to it.
+
 ## Warnings
 
 Cargo does not cap lints for path dependencies, so compiling this crate in

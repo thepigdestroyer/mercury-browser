@@ -1152,6 +1152,71 @@ diff --git a/dom/gamepad/gamepad.rs b/dom/gamepad/gamepad.rs
                  None,
                  GamepadHand::_empty,
                  axis_bounds,
+diff --git a/dom/globalscope/globalscope.rs b/dom/globalscope/globalscope.rs
+--- a/dom/globalscope/globalscope.rs
++++ b/dom/globalscope/globalscope.rs
+@@ -122,6 +122,7 @@
+ };
+ use crate::dom::idbfactory::IDBFactory;
+ use crate::dom::messageport::MessagePort;
++use crate::dom::mse::mediasource::MediaSource; // Mercury: (MED-1)
+ use crate::dom::paintworkletglobalscope::PaintWorkletGlobalScope;
+ use crate::dom::performance::performance::Performance;
+ use crate::dom::performance::performanceentry::EntryType;
+@@ -184,6 +185,15 @@
+     /// The blobs managed by this global, if any.
+     blob_state: DomRefCell<HashMapTracedValues<BlobId, BlobInfo, FxBuildHasher>>,
+
++    /// Mercury: (MED-1) carried from servo/servo#47269 (decomoraes), MPL-2.0.
++    /// The media source object URLs created by this global, keyed by their serialization.
++    ///
++    /// A `MediaSource` never leaves the thread that created it, so unlike blob URLs these
++    /// entries cannot live in the file manager.
++    ///
++    /// <https://w3c.github.io/media-source/#dfn-media-source-object-url>
++    media_source_url_store: DomRefCell<HashMapTracedValues<String, Dom<MediaSource>, FxBuildHasher>>,
++
+     /// <https://w3c.github.io/ServiceWorker/#environment-settings-object-service-worker-registration-object-map>
+     registration_map: DomRefCell<
+         HashMapTracedValues<
+@@ -411,6 +421,7 @@
+             broadcast_channel_state: DomRefCell::new(BroadcastChannelState::UnManaged),
+             constellation_interest_counts: Default::default(),
+             blob_state: Default::default(),
++            media_source_url_store: Default::default(), // Mercury: (MED-1)
+             eventtarget: EventTarget::new_inherited(),
+             registration_map: DomRefCell::new(HashMapTracedValues::new_fx()),
+             indexeddb: Default::default(),
+@@ -1485,6 +1496,29 @@
+         self.blob_state.borrow_mut().insert(blob_id, blob_info);
+     }
+
++    /// Mercury: (MED-1) <https://w3c.github.io/media-source/#dom-url-createobjecturl>
++    pub(crate) fn track_media_source_url(&self, url: String, media_source: &MediaSource) {
++        self.media_source_url_store
++            .borrow_mut()
++            .insert(url, Dom::from_ref(media_source));
++    }
++
++    /// Mercury: (MED-1) <https://w3c.github.io/media-source/#dfn-media-source-object-url>
++    pub(crate) fn media_source_for_url(&self, url: &str) -> Option<DomRoot<MediaSource>> {
++        self.media_source_url_store
++            .borrow()
++            .get(url)
++            .map(|media_source| DomRoot::from_ref(&**media_source))
++    }
++
++    /// Mercury: (MED-1) <https://w3c.github.io/FileAPI/#dfn-revokeObjectURL>
++    pub(crate) fn forget_media_source_url(&self, url: &str) -> bool {
++        self.media_source_url_store
++            .borrow_mut()
++            .remove(url)
++            .is_some()
++    }
++
+     /// Start tracking a blob
+     pub(crate) fn track_blob(&self, dom_blob: &Blob, blob_impl: BlobImpl) {
+         let blob_id = blob_impl.blob_id();
 diff --git a/dom/html/embedded_content/htmlcanvaselement.rs b/dom/html/embedded_content/htmlcanvaselement.rs
 --- a/dom/html/embedded_content/htmlcanvaselement.rs
 +++ b/dom/html/embedded_content/htmlcanvaselement.rs
@@ -1173,6 +1238,614 @@ diff --git a/dom/html/embedded_content/htmlcanvaselement.rs b/dom/html/embedded_
      pub(crate) fn is_valid(&self) -> bool {
          self.Height() != 0 && self.Width() != 0
      }
+diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_content/htmlmediaelement.rs
+--- a/dom/html/embedded_content/htmlmediaelement.rs
++++ b/dom/html/embedded_content/htmlmediaelement.rs
+@@ -33,6 +33,8 @@
+ use servo_base::generic_channel::{self};
+ use servo_config::pref;
+ use servo_media::player::audio::AudioRenderer;
++// Mercury (MED-1): the MSE contract types the element reads from the backend.
++use servo_media::player::mse::{ElementReadyState, EosError, InitInfo, TrackKind};
+ use servo_media::player::video::{VideoFrame, VideoFrameRenderer};
+ use servo_media::player::{PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, StreamType};
+ use servo_media::{ClientContextId, ServoMedia, SupportsMediaType};
+@@ -58,7 +60,8 @@
+ use crate::dom::bindings::codegen::Bindings::URLBinding::URLMethods;
+ use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
+ use crate::dom::bindings::codegen::UnionTypes::{
+-    MediaStreamOrBlob, VideoTrackOrAudioTrackOrTextTrack,
++    MediaStreamOrMediaSourceOrBlob, // Mercury (MED-1): MediaSource joined the srcObject union
++    VideoTrackOrAudioTrackOrTextTrack,
+ };
+ use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
+ use crate::dom::bindings::inheritance::Castable;
+@@ -87,6 +90,7 @@
+ use crate::dom::mediafragmentparser::MediaFragmentParser;
+ use crate::dom::medialist::MediaList;
+ use crate::dom::mediastream::MediaStream;
++use crate::dom::mse::mediasource::{MediaSource, ranges_to_container}; // Mercury (MED-1)
+ use crate::dom::node::virtualmethods::VirtualMethods;
+ use crate::dom::node::{Node, NodeDamage, NodeTraits, UnbindContext};
+ use crate::dom::performance::performanceresourcetiming::InitiatorType;
+@@ -129,15 +133,21 @@
+ enum SrcObject {
+     MediaStream(Dom<MediaStream>),
+     Blob(Dom<Blob>),
++    /// Mercury (MED-1): a MediaSource assigned to `srcObject`, attached rather than fetched.
++    MediaSource(Dom<MediaSource>),
+ }
+
+-impl From<MediaStreamOrBlob> for SrcObject {
+-    fn from(src_object: MediaStreamOrBlob) -> SrcObject {
++impl From<MediaStreamOrMediaSourceOrBlob> for SrcObject {
++    fn from(src_object: MediaStreamOrMediaSourceOrBlob) -> SrcObject {
+         match src_object {
+-            MediaStreamOrBlob::Blob(blob) => SrcObject::Blob(Dom::from_ref(&*blob)),
+-            MediaStreamOrBlob::MediaStream(stream) => {
++            MediaStreamOrMediaSourceOrBlob::Blob(blob) => SrcObject::Blob(Dom::from_ref(&*blob)),
++            MediaStreamOrMediaSourceOrBlob::MediaStream(stream) => {
+                 SrcObject::MediaStream(Dom::from_ref(&*stream))
+             },
++            // Mercury (MED-1)
++            MediaStreamOrMediaSourceOrBlob::MediaSource(media_source) => {
++                SrcObject::MediaSource(Dom::from_ref(&*media_source))
++            },
+         }
+     }
+ }
+@@ -287,6 +297,12 @@
+     /// <https://html.spec.whatwg.org/multipage/#list-of-newly-introduced-cues>
+     newly_introduced_cues: DomRefCell<Vec<Dom<TextTrackCue>>>,
+     shadow_tree: DomRefCell<Option<ShadowTree>>,
++    /// Mercury (MED-1): the MediaSource attached through a media source object URL or `srcObject`, if
++    /// any. While it is set the media duration, the buffered and seekable ranges and the readiness
++    /// come from the MediaSource's backend, not from the media engine.
++    ///
++    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
++    media_source: MutNullableDom<MediaSource>,
+ }
+
+ /// <https://html.spec.whatwg.org/multipage/#dom-media-networkstate>
+@@ -456,6 +472,7 @@
+             position_when_time_marches_on_ran: Default::default(),
+             newly_introduced_cues: Default::default(),
+             shadow_tree: Default::default(),
++            media_source: Default::default(), // Mercury (MED-1)
+         }
+     }
+
+@@ -1332,7 +1349,15 @@
+         // then the load failed.
+         // Note that the resource fetch algorithm itself takes care
+         // of the cleanup in case of failure itself.
+-        self.resource_fetch_algorithm(cx, Resource::Url(url_record));
++        //
++        // Mercury (MED-1): a URL that names a MediaSource (a media source object URL) is attached
++        // instead of being fetched.
++        // <https://w3c.github.io/media-source/#dfn-media-source-object-url>
++        let resource = match self.global().media_source_for_url(url_record.as_str()) {
++            Some(media_source) => Resource::MediaSource(media_source),
++            None => Resource::Url(url_record),
++        };
++        self.resource_fetch_algorithm(cx, resource);
+     }
+
+     /// <https://html.spec.whatwg.org/multipage/#concept-media-load-algorithm>
+@@ -1641,8 +1666,23 @@
+
+     /// <https://html.spec.whatwg.org/multipage/#concept-media-load-resource>
+     fn resource_fetch_algorithm(&self, cx: &JSContext, resource: Resource) {
++        // Mercury (MED-1): the MediaSource attach steps come first, before the player exists.
++        // <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
++        if let Some(media_source) = self.media_source_for_resource(&resource) {
++            // If readyState is NOT set to "closed" (or the source was attached before), run the "If
++            // the media data cannot be fetched at all" steps.
++            if !media_source.attach(self) {
++                self.resource_selection_algorithm_failure_steps(cx);
++                return;
++            }
++            self.media_source.set(Some(&media_source));
++            self.queue_media_source_stop_delaying_the_load_event();
++        }
++
+         if let Err(e) = self.create_media_player(&resource) {
+             error!("Create media player error {:?}", e);
++            // Mercury (MED-1)
++            self.detach_media_source();
+             self.resource_selection_algorithm_failure_steps(cx);
+             return;
+         }
+@@ -1703,9 +1743,13 @@
+                 // Steps 5.remote.2-5.remote.8
+                 self.fetch_request(cx, None, None);
+             },
++            // Mercury (MED-1): attached above; the page appends the media data, nothing is fetched.
++            Resource::MediaSource(_) => {},
+             Resource::Object => {
+                 if let Some(ref src_object) = *self.src_object.borrow() {
+                     match src_object {
++                        // Mercury (MED-1): attached above.
++                        SrcObject::MediaSource(_) => {},
+                         SrcObject::Blob(blob) => {
+                             let blob_url = URL::CreateObjectURL(&self.global(), blob);
+                             *self.blob_url.borrow_mut() =
+@@ -1793,10 +1837,262 @@
+             }));
+     }
+
+-    fn in_error_state(&self) -> bool {
++    // Mercury (MED-1): `pub(crate)`, the source buffers check it (prepare append).
++    pub(crate) fn in_error_state(&self) -> bool {
+         self.error.get().is_some()
+     }
+
++    // ---- Mercury: (MED-1) Media Source Extensions -------------------------------------------------
++    //
++    // While a MediaSource is attached (`media_source`) the element asks its backend for the buffered
++    // and seekable ranges and for the readiness around the playback position, takes the media duration
++    // from the MediaSource, and ignores the media engine's own duration and metadata. The player pulls
++    // frames from the backend's feed; nothing is ever pushed to it. The hooks in the upstream functions
++    // are marked `Mercury (MED-1)`; `third_party/servo-script/MERCURY.md` lists them.
++
++    /// The MediaSource a resource names, if any: a media source object URL or `srcObject`.
++    fn media_source_for_resource(&self, resource: &Resource) -> Option<DomRoot<MediaSource>> {
++        match resource {
++            Resource::MediaSource(media_source) => Some(media_source.clone()),
++            Resource::Object => match *self.src_object.borrow() {
++                Some(SrcObject::MediaSource(ref media_source)) => {
++                    Some(DomRoot::from_ref(&**media_source))
++                },
++                _ => None,
++            },
++            Resource::Url(_) => None,
++        }
++    }
++
++    /// The attach steps set the delaying-the-load-event flag to false.
++    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
++    fn queue_media_source_stop_delaying_the_load_event(&self) {
++        let this = Trusted::new(self);
++        let generation_id = self.generation_id.get();
++
++        self.owner_global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(media_source_stop_delaying_the_load_event: move |cx| {
++                let this = this.root();
++                if generation_id != this.generation_id.get() {
++                    return;
++                }
++
++                this.delay_load_event(cx, false);
++            }));
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-detaching-from-a-media-element>
++    fn detach_media_source(&self) {
++        if let Some(media_source) = self.media_source.take() {
++            media_source.detach();
++        }
++    }
++
++    /// The backend learns every playback position (coded frame eviction, readiness).
++    fn media_source_position_changed(&self, position: f64) {
++        if let Some(media_source) = self.media_source.get() {
++            media_source.backend().set_position(position);
++        }
++    }
++
++    /// The MediaSource's seeking algorithm, run by the seek algorithm once the new playback position is
++    /// set: an ended MediaSource goes back to "open" (and `sourceopen` is queued) and the readiness is
++    /// re-evaluated at the new position (HAVE_METADATA when it is not buffered).
++    /// <https://w3c.github.io/media-source/#mediasource-seeking>
++    fn media_source_seeking(&self, time: f64) {
++        let Some(media_source) = self.media_source.get() else {
++            return;
++        };
++        media_source.backend().set_position(time);
++        media_source.seeking(time);
++        // The seek algorithm has no JavaScript context, so the readiness is re-evaluated in a task.
++        let this = Trusted::new(self);
++        let generation_id = self.generation_id.get();
++        self.owner_global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(media_source_seek_ready_state: move |cx| {
++                let this = this.root();
++                if generation_id != this.generation_id.get() {
++                    return;
++                }
++
++                this.media_source_update_ready_state(cx);
++            }));
++    }
++
++    /// Sets the element's readyState from what the backend says about the position (decision D13 of
++    /// the lane): HAVE_METADATA once every source buffer has its initialization segment and outside
++    /// the buffered ranges, HAVE_CURRENT_DATA, HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA by how much is
++    /// buffered ahead, HAVE_ENOUGH_DATA once the stream has ended. The events follow from
++    /// `change_ready_state`. Called on every initialization segment, append, removal, eviction,
++    /// position and seek. A no-op without a MediaSource.
++    pub(crate) fn media_source_update_ready_state(&self, cx: &mut JSContext) {
++        let Some(media_source) = self.media_source.get() else {
++            return;
++        };
++        let current = self.ready_state.get();
++        let mut target = match media_source
++            .backend()
++            .element_ready_state(self.current_playback_position.get())
++        {
++            ElementReadyState::HaveNothing => ReadyState::HaveNothing,
++            ElementReadyState::HaveMetadata => ReadyState::HaveMetadata,
++            ElementReadyState::HaveCurrentData => ReadyState::HaveCurrentData,
++            ElementReadyState::HaveFutureData => ReadyState::HaveFutureData,
++            ElementReadyState::HaveEnoughData => ReadyState::HaveEnoughData,
++        };
++
++        if current != ReadyState::HaveNothing {
++            // Once the metadata is known the readyState does not go back to HAVE_NOTHING.
++            if target < ReadyState::HaveMetadata {
++                target = ReadyState::HaveMetadata;
++            }
++            // At the end of the media resource the element is at HAVE_CURRENT_DATA, as the "reaches
++            // the end" steps leave it.
++            if self.ended_playback(LoopCondition::Ignored) {
++                target = ReadyState::HaveCurrentData;
++            }
++        }
++
++        if target == current {
++            return;
++        }
++
++        if current == ReadyState::HaveNothing {
++            // The first transition runs the media data processing steps for the metadata, which set
++            // HAVE_METADATA (and fire `loadedmetadata`), then go on to the target.
++            self.media_source_metadata_received(cx);
++            if target > ReadyState::HaveMetadata {
++                self.change_ready_state(cx, target);
++            }
++            return;
++        }
++
++        self.change_ready_state(cx, target);
++    }
++
++    /// The media data processing steps "once enough of the media data has been fetched to determine
++    /// the duration", for the MediaSource's initialization segments.
++    /// <https://html.spec.whatwg.org/multipage/#media-data-processing-steps-list>
++    fn media_source_metadata_received(&self, cx: &mut JSContext) {
++        let Some(media_source) = self.media_source.get() else {
++            return;
++        };
++
++        // Step 3. Set the current playback position and the official playback position to the
++        // earliest possible position.
++        let earliest_possible_position = self.earliest_possible_position();
++        self.current_playback_position
++            .set(earliest_possible_position);
++        self.official_playback_position
++            .set(earliest_possible_position);
++
++        // Step 4. Update the duration attribute with the time of the last frame of the resource (the
++        // MediaSource's duration), which queues `durationchange`.
++        self.duration
++            .set(media_source.backend().duration().unwrap_or(f64::NAN));
++        self.queue_media_element_task_to_fire_event(atom!("durationchange"));
++
++        // Step 5. For video elements, queue `resize` (the natural dimensions were set from the
++        // initialization segment).
++        if self.downcast::<HTMLVideoElement>().is_some() {
++            self.queue_media_element_task_to_fire_event(atom!("resize"));
++        }
++
++        // Step 6. Set the readyState attribute to HAVE_METADATA.
++        self.change_ready_state(cx, ReadyState::HaveMetadata);
++
++        // Steps 7 to 9. If the media element's default playback start position is greater than zero,
++        // then seek to that time; set it to zero.
++        if self.default_playback_start_position.get() > 0. {
++            self.seek(
++                self.default_playback_start_position.get(),
++                /* approximate_for_speed */ false,
++            );
++        }
++        self.default_playback_start_position.set(0.);
++    }
++
++    /// An initialization segment was parsed: the video's natural dimensions, then the readiness (the
++    /// MediaSource's initialization segment received algorithm, step 7 onwards).
++    /// <https://w3c.github.io/media-source/#dfn-initialization-segment-received>
++    pub(crate) fn media_source_init_received(&self, cx: &mut JSContext, init: &InitInfo) {
++        if let Some(video_element) = self.downcast::<HTMLVideoElement>() &&
++            let Some(track) = init
++                .tracks
++                .iter()
++                .find(|track| track.kind == TrackKind::Video && track.width > 0 && track.height > 0) &&
++            video_element.set_natural_dimensions(
++                cx.no_gc(),
++                Some(track.width),
++                Some(track.height),
++            ) &&
++            self.ready_state.get() != ReadyState::HaveNothing
++        {
++            self.queue_media_element_task_to_fire_event(atom!("resize"));
++        }
++
++        self.media_source_update_ready_state(cx);
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-duration-change> step 6: update the media duration
++    /// and run the media element's duration change algorithm. Idempotent: the backend reports a
++    /// change again by an event after the DOM called for it. Before HAVE_METADATA the media duration
++    /// stays NaN (the metadata steps publish it).
++    pub(crate) fn media_source_duration_changed(&self, duration: f64) {
++        if self.ready_state.get() == ReadyState::HaveNothing {
++            return;
++        }
++        let old_duration = self.duration.get();
++        if old_duration == duration || (old_duration.is_nan() && duration.is_nan()) {
++            return;
++        }
++
++        self.duration.set(duration);
++        self.queue_media_element_task_to_fire_event(atom!("durationchange"));
++
++        // If the duration is changed such that the current playback position ends up being greater
++        // than the time of the end of the media resource, then the user agent must also seek to the
++        // time of the end of the media resource.
++        if self.current_playback_position.get() > duration {
++            self.seek(duration, /* approximate_for_speed */ false);
++        }
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-end-of-stream> step 3.2: notify the media element
++    /// that it now has all of the media data. The duration may have changed with the stream's end, and
++    /// an ended stream has enough data.
++    pub(crate) fn media_source_end_of_stream(&self, cx: &mut JSContext) {
++        if let Some(media_source) = self.media_source.get() {
++            self.media_source_duration_changed(media_source.backend().duration().unwrap_or(f64::NAN));
++        }
++        self.media_source_update_ready_state(cx);
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-end-of-stream> steps 4 and 5: the media data
++    /// processing steps for a network or a decode error (`endOfStream("network")`, `("decode")`, or a
++    /// failed append).
++    pub(crate) fn media_source_error(&self, cx: &mut JSContext, error: EosError) {
++        if self.ready_state.get() == ReadyState::HaveNothing {
++            // => "If the media data cannot be fetched at all, due to network errors, causing the
++            // user agent to give up trying to fetch the resource" (and the unsupported-format case:
++            // both end in the failure steps).
++            self.media_data_processing_failure_steps(cx);
++            return;
++        }
++
++        // => "If the connection is interrupted after some media data has been received" and "If the
++        // media data is corrupted".
++        let error = match error {
++            EosError::Network => MEDIA_ERR_NETWORK,
++            EosError::Decode => MEDIA_ERR_DECODE,
++        };
++        self.media_data_processing_fatal_steps(cx, error);
++    }
++
+     /// <https://html.spec.whatwg.org/multipage/#potentially-playing>
+     fn is_potentially_playing(&self) -> bool {
+         // > A media element is said to be potentially playing when
+@@ -2199,6 +2495,10 @@
+         // Step 11. Set the current playback position to the new playback position.
+         self.current_playback_position.set(time);
+
++        // Mercury (MED-1): the MediaSource's seeking algorithm (an ended source reopens, the backend
++        // learns the position, the readiness is re-evaluated at the new position).
++        self.media_source_seeking(time);
++
+         if let Some(ref player) = *self.player.borrow() &&
+             let Err(error) = player.lock().unwrap().seek(time)
+         {
+@@ -2262,6 +2562,8 @@
+                 if let Some(ref src_object) = *self.src_object.borrow() {
+                     match src_object {
+                         SrcObject::MediaStream(_) => StreamType::Stream,
++                        // Mercury (MED-1)
++                        SrcObject::MediaSource(_) => StreamType::MediaSource,
+                         _ => StreamType::Seekable,
+                     }
+                 } else {
+@@ -2268,6 +2570,8 @@
+                     return Err(());
+                 }
+             },
++            // Mercury (MED-1)
++            Resource::MediaSource(_) => StreamType::MediaSource,
+             _ => StreamType::Seekable,
+         };
+
+@@ -2329,19 +2633,39 @@
+             Box::new(window.get_player_context()),
+         );
+
++        // Mercury (MED-1): connect a MediaSource player to the backend whose frame feed it plays. This
++        // builds the pipeline, so it must be the player's first call.
++        if stream_type == StreamType::MediaSource {
++            let Some(media_source) = self.media_source.get() else {
++                error!("A MediaSource player was created without an attached MediaSource");
++                return Err(());
++            };
++            if let Err(error) = player
++                .lock()
++                .unwrap()
++                .connect_media_source(media_source.backend())
++            {
++                error!("Could not connect the player to the MediaSource: {error:?}");
++                return Err(());
++            }
++        }
++
+         let player_id = {
+             let player_guard = player.lock().unwrap();
+
+             // We flag the media to enable download buffering when it's supposed to be big and
+             // that happens heuristically for videos with preload="auto" and audio that loops.
++            // Mercury (MED-1): not for a MediaSource, which has no download to buffer.
+             let is_video = matches!(
+                 self.media_type_id(),
+                 HTMLMediaElementTypeId::HTMLVideoElement
+             );
+-            let should_enable_download_buffering =
+-                (is_video || self.Loop()) && self.Preload() == "auto";
+-            if let Err(error) =
+-                player_guard.set_download_buffering_enabled(should_enable_download_buffering)
++            let should_enable_download_buffering = stream_type != StreamType::MediaSource &&
++                (is_video || self.Loop()) &&
++                self.Preload() == "auto";
++            if stream_type != StreamType::MediaSource &&
++                let Err(error) =
++                    player_guard.set_download_buffering_enabled(should_enable_download_buffering)
+             {
+                 warn!("Could not set download buffering: {error:?}");
+             }
+@@ -2386,6 +2710,9 @@
+         }
+
+         *self.player.borrow_mut() = None;
++        // Mercury (MED-1): detach the MediaSource once the player (and its pipeline) is gone.
++        // <https://w3c.github.io/media-source/#dfn-detaching-from-a-media-element>
++        self.detach_media_source();
+         self.video_renderer.lock().unwrap().reset();
+         *self.event_handler.borrow_mut() = None;
+
+@@ -2557,6 +2884,12 @@
+         cx: &mut JSContext,
+         metadata: &servo_media::player::metadata::Metadata,
+     ) {
++        // Mercury (MED-1): the metadata of a MediaSource comes from its initialization segments
++        // (`media_source_init_received`), not from the media engine.
++        if self.media_source.get().is_some() {
++            return;
++        }
++
+         // The following steps should be run once on the initial `metadata` signal from the media
+         // engine.
+         if self.ready_state.get() != ReadyState::HaveNothing {
+@@ -2797,6 +3130,12 @@
+     }
+
+     fn playback_duration_changed(&self, duration: Option<Duration>) {
++        // Mercury (MED-1): while a MediaSource is attached its duration is the media duration, so
++        // whatever the media engine derives from the frames it was fed is ignored.
++        if self.media_source.get().is_some() {
++            return;
++        }
++
+         let duration = duration.map_or(f64::INFINITY, |duration| duration.as_secs_f64());
+
+         if self.duration.get() == duration {
+@@ -2958,16 +3297,22 @@
+
+     fn playback_state_changed(&self, cx: &mut JSContext, state: &PlaybackState) {
+         let mut media_session_playback_state = MediaSessionPlaybackState::None_;
++        // Mercury (MED-1): the readiness of a MediaSource element comes from its backend (what is
++        // buffered around the position), never from the pipeline's state.
++        let has_media_source = self.media_source.get().is_some();
++        if has_media_source {
++            self.media_source_update_ready_state(cx);
++        }
+         match *state {
+             PlaybackState::Paused => {
+                 media_session_playback_state = MediaSessionPlaybackState::Paused;
+-                if self.ready_state.get() == ReadyState::HaveMetadata {
++                if self.ready_state.get() == ReadyState::HaveMetadata && !has_media_source {
+                     self.change_ready_state(cx, ReadyState::HaveEnoughData);
+                 }
+             },
+             PlaybackState::Playing => {
+                 media_session_playback_state = MediaSessionPlaybackState::Playing;
+-                if self.ready_state.get() == ReadyState::HaveMetadata {
++                if self.ready_state.get() == ReadyState::HaveMetadata && !has_media_source {
+                     self.change_ready_state(cx, ReadyState::HaveEnoughData);
+                 }
+             },
+@@ -2990,6 +3335,11 @@
+     }
+
+     fn seekable(&self) -> TimeRangesContainer {
++        // Mercury (MED-1): <https://w3c.github.io/media-source/#htmlmediaelement-extensions>
++        if let Some(media_source) = self.media_source.get() {
++            return ranges_to_container(&media_source.backend().seekable());
++        }
++
+         let mut seekable = TimeRangesContainer::default();
+         if let Some(ref player) = *self.player.borrow() {
+             let ranges = player.lock().unwrap().seekable();
+@@ -3374,19 +3724,23 @@
+     }
+
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
+-    fn GetSrcObject(&self) -> Option<MediaStreamOrBlob> {
++    fn GetSrcObject(&self) -> Option<MediaStreamOrMediaSourceOrBlob> {
+         (*self.src_object.borrow())
+             .as_ref()
+             .map(|src_object| match src_object {
+-                SrcObject::Blob(blob) => MediaStreamOrBlob::Blob(DomRoot::from_ref(blob)),
++                SrcObject::Blob(blob) => MediaStreamOrMediaSourceOrBlob::Blob(DomRoot::from_ref(blob)),
+                 SrcObject::MediaStream(stream) => {
+-                    MediaStreamOrBlob::MediaStream(DomRoot::from_ref(stream))
++                    MediaStreamOrMediaSourceOrBlob::MediaStream(DomRoot::from_ref(stream))
+                 },
++                // Mercury (MED-1)
++                SrcObject::MediaSource(media_source) => {
++                    MediaStreamOrMediaSourceOrBlob::MediaSource(DomRoot::from_ref(media_source))
++                },
+             })
+     }
+
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
+-    fn SetSrcObject(&self, cx: &mut JSContext, value: Option<MediaStreamOrBlob>) {
++    fn SetSrcObject(&self, cx: &mut JSContext, value: Option<MediaStreamOrMediaSourceOrBlob>) {
+         *self.src_object.borrow_mut() = value.map(|value| value.into());
+         self.media_element_load_algorithm(cx);
+     }
+@@ -3608,7 +3962,12 @@
+     /// <https://html.spec.whatwg.org/multipage/#dom-media-buffered>
+     fn Buffered(&self, cx: &mut JSContext) -> DomRoot<TimeRanges> {
+         let mut buffered = TimeRangesContainer::default();
+-        if let Some(ref player) = *self.player.borrow() {
++        if let Some(media_source) = self.media_source.get() {
++            // Mercury (MED-1): the intersection over the active source buffers, the last range
++            // extended to the highest end once the stream has ended.
++            // <https://w3c.github.io/media-source/#htmlmediaelement-extensions>
++            buffered = ranges_to_container(&media_source.backend().element_buffered());
++        } else if let Some(ref player) = *self.player.borrow() {
+             let ranges = player.lock().unwrap().buffered();
+             for range in ranges {
+                 let _ = buffered.add(range.start, range.end);
+@@ -3885,6 +4244,10 @@
+ enum Resource {
+     Object,
+     Url(ServoUrl),
++    /// Mercury (MED-1): a media source object URL, which is attached rather than fetched.
++    ///
++    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
++    MediaSource(DomRoot<MediaSource>),
+ }
+
+ #[derive(Debug, MallocSizeOf, PartialEq)]
+@@ -4418,7 +4781,11 @@
+             },
+             PlayerEvent::NeedData => element.playback_need_data(),
+             PlayerEvent::PositionChanged(position) => {
+-                element.playback_position_changed(cx, position)
++                // Mercury (MED-1): the backend learns every position (eviction, readiness), and the
++                // readiness is re-evaluated at it.
++                element.media_source_position_changed(position);
++                element.playback_position_changed(cx, position);
++                element.media_source_update_ready_state(cx);
+             },
+             PlayerEvent::SeekData(offset, seek_lock) => {
+                 element.fetch_request(cx, Some(offset), Some(seek_lock))
 diff --git a/dom/html/embedded_content/htmlvideoelement.rs b/dom/html/embedded_content/htmlvideoelement.rs
 --- a/dom/html/embedded_content/htmlvideoelement.rs
 +++ b/dom/html/embedded_content/htmlvideoelement.rs
@@ -1909,6 +2582,1383 @@ diff --git a/dom/mod.rs b/dom/mod.rs
  pub(crate) mod types {
      include!(concat!(env!("OUT_DIR"), "/InterfaceTypes.rs"));
  }
+@@ -287,6 +288,9 @@
+ pub(crate) use self::media::*;
+ pub(crate) mod mimetype;
+ pub(crate) use self::mimetype::*;
++// Mercury: (MED-1) Media Source Extensions (dom/mse/), behind `dom_media_source_enabled`.
++pub(crate) mod mse;
++pub(crate) use self::mse::*;
+ pub(crate) mod mutationobserver;
+ pub(crate) use self::mutationobserver::*;
+ pub(crate) mod navigator;
+diff --git a/dom/mse/mediasource.rs b/dom/mse/mediasource.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/mediasource.rs
+@@ -0,0 +1,655 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: (MED-1) the structure, the attach and detach steps, the event queuing and the method list are
++// carried from servo/servo#47269 by decomoraes (MPL-2.0). The spec algorithms are not: the readyState,
++// the duration rules, the end of stream algorithm, the buffered intersection and the seekable ranges are
++// Mercury's own and live in `crates/mercury-mse` (`MediaSourceBackend`), which this object calls and
++// whose `MseEvent`s it turns into DOM events and media element notifications. The backend is created
++// with a `GenericCallback` that queues a media element task, like the media element's own player
++// callback; the weak reference in that callback keeps the object collectable.
++
++use std::cell::{Cell, RefCell};
++use std::ffi::CString;
++use std::rc::Rc;
++use std::sync::{Arc, Mutex, OnceLock, Weak};
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use js::rust::HandleObject;
++use script_bindings::assert::assert_in_script;
++use script_bindings::reflector::reflect_weak_referenceable_dom_object_with_proto;
++use script_bindings::weakref::WeakRef;
++use servo_base::generic_channel;
++use servo_media::ServoMedia;
++use servo_media::player::mse::{
++    EosError, MediaSourceBackend, MediaSourceReadyState as BackendReadyState, MseError, MseEvent,
++    SourceBufferId, TimeRange, TrackKind,
++};
++use stylo_atoms::Atom;
++
++use crate::dom::bindings::codegen::Bindings::MediaSourceBinding::{
++    EndOfStreamError, MediaSourceMethods, ReadyState,
++};
++use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::num::Finite;
++use crate::dom::bindings::refcounted::Trusted;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
++use crate::dom::bindings::str::DOMString;
++use crate::dom::eventtarget::EventTarget;
++use crate::dom::globalscope::GlobalScope;
++use crate::dom::html::htmlmediaelement::HTMLMediaElement;
++use crate::dom::mse::sourcebuffer::SourceBuffer;
++use crate::dom::mse::sourcebufferlist::SourceBufferList;
++use crate::dom::timeranges::TimeRangesContainer;
++use crate::dom::window::Window;
++
++/// Maps what the backend refuses with to the exception the specification names (a JavaScript
++/// `TypeError` for `MseError::Type`).
++pub(crate) fn dom_error(error: MseError) -> Error {
++    match error {
++        MseError::InvalidState(message) | MseError::Other(message) => {
++            Error::InvalidState(Some(message))
++        },
++        MseError::Type(message) => {
++            Error::Type(CString::new(message.replace('\0', " ")).unwrap_or_default())
++        },
++        MseError::NotSupported(message) => Error::NotSupported(Some(message)),
++        MseError::NotFound(message) => Error::NotFound(Some(message)),
++        MseError::QuotaExceeded(_) => Error::QuotaExceeded {
++            quota: None,
++            requested: None,
++        },
++    }
++}
++
++/// The ranges the backend reports (nanoseconds) as a `TimeRanges` container (seconds).
++pub(crate) fn ranges_to_container(ranges: &[TimeRange]) -> TimeRangesContainer {
++    let mut container = TimeRangesContainer::default();
++    for range in ranges {
++        let _ = container.add(range.start_secs(), range.end_secs());
++    }
++    container
++}
++
++/// <https://w3c.github.io/media-source/#mediasource>
++#[dom_struct]
++pub(crate) struct MediaSource {
++    eventtarget: EventTarget,
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-sourcebuffers>
++    source_buffers: Dom<SourceBufferList>,
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-activesourcebuffers>
++    active_source_buffers: Dom<SourceBufferList>,
++
++    /// The media element this media source is attached to, if any.
++    ///
++    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
++    media_element: MutNullableDom<HTMLMediaElement>,
++
++    /// <https://w3c.github.io/media-source/#dfn-has-ever-been-attached>
++    has_ever_been_attached: Cell<bool>,
++
++    /// The backend that owns the readyState, the duration, the source buffers' data and the feed the
++    /// media player pulls from (`crates/mercury-mse`).
++    #[ignore_malloc_size_of = "mercury-mse"]
++    #[no_trace]
++    backend: Arc<dyn MediaSourceBackend>,
++
++    /// Receives the backend's events on the script thread. Owned here so that it is dropped on the
++    /// script thread with this object; the backend's callback holds a weak reference only.
++    #[conditional_malloc_size_of]
++    #[no_trace]
++    event_handler: RefCell<Option<Arc<Mutex<MediaSourceEventHandler>>>>,
++}
++
++impl MediaSource {
++    fn new_inherited(
++        source_buffers: &SourceBufferList,
++        active_source_buffers: &SourceBufferList,
++        backend: Arc<dyn MediaSourceBackend>,
++    ) -> MediaSource {
++        MediaSource {
++            eventtarget: EventTarget::new_inherited(),
++            source_buffers: Dom::from_ref(source_buffers),
++            active_source_buffers: Dom::from_ref(active_source_buffers),
++            media_element: Default::default(),
++            has_ever_been_attached: Cell::new(false),
++            backend,
++            event_handler: Default::default(),
++        }
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-mediasource>
++    pub(crate) fn new_with_proto(
++        cx: &mut JSContext,
++        global: &GlobalScope,
++        proto: Option<HandleObject>,
++    ) -> Fallible<DomRoot<MediaSource>> {
++        let window = global.as_window();
++
++        // The backend's events come back through a callback that only queues a task on the media
++        // element task source (the callback runs on the backend's own thread). It reaches this object
++        // through a slot filled once the object exists.
++        let task_source = global
++            .task_manager()
++            .media_element_task_source()
++            .to_sendable();
++        let handler_slot: Arc<OnceLock<Weak<Mutex<MediaSourceEventHandler>>>> =
++            Arc::new(OnceLock::new());
++        let callback_slot = handler_slot.clone();
++        let callback = generic_channel::GenericCallback::new(move |message| {
++            let Ok(event) = message else {
++                return;
++            };
++            let slot = callback_slot.clone();
++            task_source.queue(task!(media_source_event: move |cx| {
++                let Some(handler) = slot.get().and_then(Weak::upgrade) else {
++                    return;
++                };
++                handler.lock().unwrap().handle_event(cx, event);
++            }));
++        })
++        .map_err(|_| {
++            Error::NotSupported(Some(
++                "Media Source Extensions could not create an event channel".into(),
++            ))
++        })?;
++
++        // Step 1 to 5 of the constructor, spread over the backend (readyState "closed", duration NaN,
++        // the live seekable range empty) and the two lists.
++        let backend = ServoMedia::get()
++            .create_media_source(callback)
++            .map_err(dom_error)?;
++
++        let source_buffers = SourceBufferList::new(cx, window);
++        let active_source_buffers = SourceBufferList::new(cx, window);
++
++        // `MediaSource` is weak-referenceable (Bindings.conf), so it is created in an `Rc`.
++        let media_source = reflect_weak_referenceable_dom_object_with_proto(
++            cx,
++            Rc::new(MediaSource::new_inherited(
++                &source_buffers,
++                &active_source_buffers,
++                backend,
++            )),
++            global,
++            proto,
++        );
++
++        let handler = Arc::new(Mutex::new(MediaSourceEventHandler::new(&media_source)));
++        let _ = handler_slot.set(Arc::downgrade(&handler));
++        *media_source.event_handler.borrow_mut() = Some(handler);
++
++        Ok(media_source)
++    }
++
++    /// The backend, for the source buffers and the media element.
++    pub(crate) fn backend(&self) -> Arc<dyn MediaSourceBackend> {
++        self.backend.clone()
++    }
++
++    pub(crate) fn media_element(&self) -> Option<DomRoot<HTMLMediaElement>> {
++        self.media_element.get()
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
++    ///
++    /// Returns whether the media source could be attached. A media source that is not closed, or that
++    /// has been attached before, makes the resource fetch algorithm fail (the caller runs those
++    /// steps); the caller also sets the element's delaying-the-load-event flag to false.
++    pub(crate) fn attach(&self, media_element: &HTMLMediaElement) -> bool {
++        // If readyState is NOT set to "closed", then run the "If the media data cannot be fetched at
++        // all, due to network errors, causing the user agent to give up trying to fetch the
++        // resource" steps of the resource fetch algorithm.
++        if self.backend.ready_state() != BackendReadyState::Closed ||
++            self.has_ever_been_attached.get()
++        {
++            return false;
++        }
++
++        self.has_ever_been_attached.set(true);
++        self.media_element.set(Some(media_element));
++
++        // Set the readyState attribute to "open" and queue a task to fire sourceopen.
++        self.backend.open();
++        self.queue_event(Atom::from("sourceopen"));
++
++        true
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-detaching-from-a-media-element>
++    pub(crate) fn detach(&self) {
++        if self.media_element.get().is_none() {
++            return;
++        }
++
++        // Step 1. Set the readyState attribute to "closed". Step 2. Update duration to NaN.
++        // The backend also drops its source buffers (steps 3 and 5).
++        self.backend.close();
++
++        // Step 3. Remove all the SourceBuffer objects from activeSourceBuffers.
++        // Step 4. Queue a task to fire an event named removesourcebuffer at activeSourceBuffers.
++        let had_active_source_buffers = !self.active_source_buffers.is_empty();
++        self.active_source_buffers.clear();
++        if had_active_source_buffers {
++            self.active_source_buffers.queue_removesourcebuffer_event();
++        }
++
++        // Step 5. Remove all the SourceBuffer objects from sourceBuffers.
++        // Step 6. Queue a task to fire an event named removesourcebuffer at sourceBuffers.
++        let had_source_buffers = !self.source_buffers.is_empty();
++        for source_buffer in self.source_buffers.buffers() {
++            source_buffer.detach();
++        }
++        self.source_buffers.clear();
++        if had_source_buffers {
++            self.source_buffers.queue_removesourcebuffer_event();
++        }
++
++        // Step 7. Queue a task to fire an event named sourceclose at the MediaSource.
++        self.queue_event(Atom::from("sourceclose"));
++
++        self.media_element.set(None);
++    }
++
++    /// The seeking algorithm's MediaSource steps: an ended source goes back to "open" (the backend
++    /// reports it) and `sourceopen` is queued.
++    ///
++    /// <https://w3c.github.io/media-source/#mediasource-seeking>
++    pub(crate) fn seeking(&self, time: f64) {
++        if self.backend.seeking(time) {
++            self.queue_event(Atom::from("sourceopen"));
++        }
++    }
++
++    /// Queues the event the backend's readyState transition across a call implies: an ended source
++    /// reopened by an append, a removal, a mode or offset change (`sourceopen`), or ended by it
++    /// (`sourceended`). `before` is `ready_state()` read before the call.
++    pub(crate) fn note_ready_state(&self, before: BackendReadyState) {
++        match (before, self.backend.ready_state()) {
++            (BackendReadyState::Ended, BackendReadyState::Open) => {
++                self.queue_event(Atom::from("sourceopen"))
++            },
++            (BackendReadyState::Open, BackendReadyState::Ended) => {
++                self.queue_event(Atom::from("sourceended"))
++            },
++            _ => {},
++        }
++    }
++
++    /// Recomputes `activeSourceBuffers`, which the specification keeps in the same order as
++    /// `sourceBuffers`.
++    ///
++    /// <https://w3c.github.io/media-source/#dom-mediasource-activesourcebuffers>
++    fn update_active_source_buffers(&self) {
++        let active: Vec<_> = self
++            .source_buffers
++            .buffers()
++            .into_iter()
++            .filter(|source_buffer| source_buffer.is_active())
++            .collect();
++        self.active_source_buffers.update(&active);
++    }
++
++    /// Whether an append or a removal is in flight on any of the source buffers (the JavaScript-visible
++    /// `updating` flags, which the specification's checks read).
++    fn is_updating(&self) -> bool {
++        self.source_buffers
++            .buffers()
++            .into_iter()
++            .any(|source_buffer| source_buffer.updating())
++    }
++
++    fn source_buffer(&self, id: SourceBufferId) -> Option<DomRoot<SourceBuffer>> {
++        self.source_buffers
++            .buffers()
++            .into_iter()
++            .find(|source_buffer| source_buffer.id() == id)
++    }
++
++    pub(crate) fn queue_event(&self, name: Atom) {
++        let this = Trusted::new(self);
++        self.global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(fire_media_source_event: move |cx| {
++                let this = this.root();
++                this.upcast::<EventTarget>().fire_event(cx, name);
++            }));
++    }
++
++    /// What the backend tells the DOM (decisions D9 and D10 of the lane): the events that end an
++    /// append or a removal, the duration, the end of the stream, an initialization segment, a change
++    /// of what is buffered. Runs in a media element task on the script thread.
++    fn handle_backend_event(&self, cx: &mut JSContext, event: MseEvent) {
++        match event {
++            // The initialization segment received algorithm's DOM steps. The backend has already run
++            // the rest (the duration, the track checks, the track buffers).
++            MseEvent::InitSegment { id, init } => {
++                let Some(source_buffer) = self.source_buffer(id) else {
++                    return;
++                };
++                // Step 6. If the active track flag equals true, then add this SourceBuffer to
++                // activeSourceBuffers. The first initialization segment with an audio or video track
++                // enables the default track of its kind, which sets the flag.
++                if init.first &&
++                    init.tracks
++                        .iter()
++                        .any(|track| matches!(track.kind, TrackKind::Video | TrackKind::Audio))
++                {
++                    source_buffer.set_active(true);
++                    self.update_active_source_buffers();
++                }
++                if let Some(media_element) = self.media_element.get() {
++                    media_element.media_source_init_received(cx, &init);
++                }
++            },
++            // The buffer append algorithm's steps 7 to 9 (and the range removal algorithm's 4 to 6).
++            MseEvent::AppendDone { id } | MseEvent::RemoveDone { id } => {
++                if let Some(source_buffer) = self.source_buffer(id) {
++                    source_buffer.operation_finished();
++                }
++                self.media_data_changed(cx);
++            },
++            // The append error algorithm's steps 1 to 4; step 5 (the end of stream with "decode")
++            // arrives as `SourceEnded`.
++            MseEvent::AppendError { id, kind } => {
++                warn!("An append to MSE source buffer {id} failed: {kind:?}");
++                if let Some(source_buffer) = self.source_buffer(id) {
++                    source_buffer.operation_failed();
++                }
++            },
++            MseEvent::DurationChanged(duration) => {
++                if let Some(media_element) = self.media_element.get() {
++                    media_element.media_source_duration_changed(duration.unwrap_or(f64::NAN));
++                }
++            },
++            // The model ended the stream itself (an append error).
++            MseEvent::SourceEnded { error } => {
++                self.queue_event(Atom::from("sourceended"));
++                if let Some(media_element) = self.media_element.get() {
++                    match error {
++                        Some(error) => media_element.media_source_error(cx, error),
++                        None => media_element.media_source_end_of_stream(cx),
++                    }
++                }
++            },
++            // Data left `buffered` without a call from the page (eviction).
++            MseEvent::BufferedChanged { .. } => self.media_data_changed(cx),
++        }
++    }
++
++    /// What is buffered changed: the media element re-evaluates its readyState.
++    fn media_data_changed(&self, cx: &mut JSContext) {
++        if let Some(media_element) = self.media_element.get() {
++            media_element.media_source_update_ready_state(cx);
++        }
++    }
++}
++
++/// Receives the backend's `MseEvent`s, queued as media element tasks, and passes them to the
++/// `MediaSource` if it is still alive. A copy of the media element's `HTMLMediaElementEventHandler`:
++/// it exists to decouple the ownership of the object from the callback, which runs on another thread.
++#[derive(JSTraceable, MallocSizeOf)]
++struct MediaSourceEventHandler {
++    media_source: WeakRef<MediaSource>,
++}
++
++#[expect(unsafe_code)]
++unsafe impl Send for MediaSourceEventHandler {}
++
++impl MediaSourceEventHandler {
++    fn new(media_source: &MediaSource) -> Self {
++        Self {
++            media_source: WeakRef::new(media_source),
++        }
++    }
++
++    fn handle_event(&self, cx: &mut JSContext, event: MseEvent) {
++        let Some(media_source) = self.media_source.root() else {
++            return;
++        };
++        media_source.handle_backend_event(cx, event);
++    }
++}
++
++impl Drop for MediaSourceEventHandler {
++    fn drop(&mut self) {
++        // The weak reference is not thread-safe and MUST be deleted on the script thread, which is
++        // guaranteed by ownership of the handler by the MediaSource and by the queued tasks.
++        assert_in_script();
++    }
++}
++
++impl MediaSourceMethods<crate::DomTypeHolder> for MediaSource {
++    /// <https://w3c.github.io/media-source/#dom-mediasource-mediasource>
++    fn Constructor(
++        cx: &mut JSContext,
++        window: &Window,
++        proto: Option<HandleObject>,
++    ) -> Fallible<DomRoot<MediaSource>> {
++        MediaSource::new_with_proto(cx, &window.global(), proto)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-sourcebuffers>
++    fn SourceBuffers(&self) -> DomRoot<SourceBufferList> {
++        DomRoot::from_ref(&*self.source_buffers)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-activesourcebuffers>
++    fn ActiveSourceBuffers(&self) -> DomRoot<SourceBufferList> {
++        DomRoot::from_ref(&*self.active_source_buffers)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-readystate>
++    fn ReadyState(&self) -> ReadyState {
++        match self.backend.ready_state() {
++            BackendReadyState::Closed => ReadyState::Closed,
++            BackendReadyState::Open => ReadyState::Open,
++            BackendReadyState::Ended => ReadyState::Ended,
++        }
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-duration>
++    fn Duration(&self) -> f64 {
++        // If readyState equals "closed" then return NaN and abort these steps.
++        if self.backend.ready_state() == BackendReadyState::Closed {
++            return f64::NAN;
++        }
++
++        self.backend.duration().unwrap_or(f64::NAN)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-duration>
++    fn SetDuration(&self, value: f64) -> ErrorResult {
++        // Step 1. If the value being set is negative or NaN then throw a TypeError exception and
++        // abort these steps.
++        if value.is_nan() || value < 0. {
++            return Err(Error::Type(
++                c"The duration must not be negative or NaN".to_owned(),
++            ));
++        }
++
++        // Step 2. If the readyState attribute is not "open" then throw an InvalidStateError
++        // exception and abort these steps.
++        if self.backend.ready_state() != BackendReadyState::Open {
++            return Err(Error::InvalidState(Some(
++                "The media source is not open".into(),
++            )));
++        }
++
++        // Step 3. If the updating attribute equals true on any SourceBuffer in sourceBuffers, then
++        // throw an InvalidStateError exception and abort these steps.
++        if self.is_updating() {
++            return Err(Error::InvalidState(Some(
++                "A source buffer is still updating".into(),
++            )));
++        }
++
++        // Step 4. Run the duration change algorithm with new duration set to the value being
++        // assigned to this attribute (the backend's: the InvalidStateError for a value below the
++        // highest buffered start, the truncation of the buffers).
++        self.backend
++            .set_duration(Some(value))
++            .map_err(dom_error)?;
++
++        // The duration change algorithm's step 6: update the media duration. The backend's
++        // `DurationChanged` event follows and changes nothing more.
++        if let Some(media_element) = self.media_element.get() {
++            media_element.media_source_duration_changed(self.backend.duration().unwrap_or(f64::NAN));
++        }
++
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-canconstructindedicatedworker>
++    fn CanConstructInDedicatedWorker(_window: &Window) -> bool {
++        // Media sources are not exposed to dedicated workers yet.
++        false
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-addsourcebuffer>
++    fn AddSourceBuffer(
++        &self,
++        cx: &mut JSContext,
++        type_: DOMString,
++    ) -> Fallible<DomRoot<SourceBuffer>> {
++        // Step 1. If type is an empty string then throw a TypeError exception and abort these
++        // steps.
++        if type_.is_empty() {
++            return Err(Error::Type(c"The type must not be empty".to_owned()));
++        }
++
++        // Steps 2 to 4 (an unsupported type: NotSupportedError; no more source buffers or an
++        // unsupported configuration: QuotaExceededError; the readyState is not "open":
++        // InvalidStateError) and the creation of the backend's source buffer (steps 5 to 7).
++        let id = self
++            .backend
++            .add_source_buffer(&type_.str())
++            .map_err(dom_error)?;
++
++        let source_buffer = SourceBuffer::new(cx, self, id);
++
++        // Step 8. Add the new object to sourceBuffers and queue a task to fire an event named
++        // addsourcebuffer at sourceBuffers.
++        self.source_buffers.add(&source_buffer);
++
++        // Step 9. Return the new object.
++        Ok(source_buffer)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer>
++    fn RemoveSourceBuffer(&self, cx: &mut JSContext, source_buffer: &SourceBuffer) -> ErrorResult {
++        // Step 1. If sourceBuffer specifies an object that is not in sourceBuffers then throw a
++        // NotFoundError exception and abort these steps.
++        if !self.source_buffers.contains(source_buffer) {
++            return Err(Error::NotFound(Some(
++                "The source buffer is not in this media source".into(),
++            )));
++        }
++
++        // The backend drops the source buffer (aborting an append, destroying its resources).
++        self.backend
++            .remove_source_buffer(source_buffer.id())
++            .map_err(dom_error)?;
++
++        // Step 2. If the sourceBuffer.updating attribute equals true, then abort the buffer append
++        // algorithm, set updating to false and queue `abort` and `updateend`.
++        source_buffer.abort_pending();
++
++        // Steps 3 to 8, and their video and text track equivalents, remove the tracks of the source
++        // buffer from the media element (the track lists are not populated).
++        source_buffer.detach();
++
++        // Step 9. If sourceBuffer is in activeSourceBuffers, then remove sourceBuffer from
++        // activeSourceBuffers and queue a task to fire an event named removesourcebuffer at the
++        // SourceBufferList returned by activeSourceBuffers.
++        self.update_active_source_buffers();
++
++        // Step 10. Remove sourceBuffer from sourceBuffers and queue a task to fire an event named
++        // removesourcebuffer at the SourceBufferList returned by sourceBuffers.
++        self.source_buffers.remove(source_buffer);
++
++        // Step 11. Destroy all resources for sourceBuffer: done by the backend; the DOM object is
++        // collected when it is no longer reachable.
++        self.media_data_changed(cx);
++
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-endofstream>
++    fn EndOfStream(&self, cx: &mut JSContext, error: Option<EndOfStreamError>) -> ErrorResult {
++        // Step 1. If the readyState attribute is not in the "open" state then throw an
++        // InvalidStateError exception and abort these steps.
++        if self.backend.ready_state() != BackendReadyState::Open {
++            return Err(Error::InvalidState(Some(
++                "The media source is not open".into(),
++            )));
++        }
++
++        // Step 2. If the updating attribute equals true on any SourceBuffer in sourceBuffers, then
++        // throw an InvalidStateError exception and abort these steps.
++        if self.is_updating() {
++            return Err(Error::InvalidState(Some(
++                "A source buffer is still updating".into(),
++            )));
++        }
++
++        // Step 3. Run the end of stream algorithm with the error parameter set to error: the
++        // backend changes the readyState to "ended" and, without an error, the duration.
++        let error = error.map(|error| match error {
++            EndOfStreamError::Network => EosError::Network,
++            EndOfStreamError::Decode => EosError::Decode,
++        });
++        self.backend.end_of_stream(error).map_err(dom_error)?;
++
++        // The end of stream algorithm's step 2. Queue a task to fire an event named sourceended.
++        self.queue_event(Atom::from("sourceended"));
++
++        // Steps 3.2 to 5 notify the media element: all of the media data is there, or it ran into a
++        // network or a decode error.
++        if let Some(media_element) = self.media_element.get() {
++            match error {
++                None => media_element.media_source_end_of_stream(cx),
++                Some(error) => media_element.media_source_error(cx, error),
++            }
++        }
++
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-setliveseekablerange>
++    fn SetLiveSeekableRange(&self, start: Finite<f64>, end: Finite<f64>) -> ErrorResult {
++        // Steps 1 to 3: the readyState check, the range check (a TypeError) and the new live
++        // seekable range are the backend's.
++        self.backend
++            .set_live_seekable_range(*start, *end)
++            .map_err(dom_error)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-clearliveseekablerange>
++    fn ClearLiveSeekableRange(&self) -> ErrorResult {
++        self.backend.clear_live_seekable_range().map_err(dom_error)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-istypesupported>
++    fn IsTypeSupported(_window: &Window, type_: DOMString) -> bool {
++        // Steps 1 to 4 (an empty type, an invalid MIME type, an unsupported media type, subtype or
++        // codec) are the backend's, which also asks the platform for the decoders.
++        ServoMedia::get().is_type_supported_mse(&type_.str())
++    }
++
++    // <https://w3c.github.io/media-source/#dom-mediasource-onsourceopen>
++    event_handler!(sourceopen, GetOnsourceopen, SetOnsourceopen);
++
++    // <https://w3c.github.io/media-source/#dom-mediasource-onsourceended>
++    event_handler!(sourceended, GetOnsourceended, SetOnsourceended);
++
++    // <https://w3c.github.io/media-source/#dom-mediasource-onsourceclose>
++    event_handler!(sourceclose, GetOnsourceclose, SetOnsourceclose);
++}
+diff --git a/dom/mse/mod.rs b/dom/mse/mod.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/mod.rs
+@@ -0,0 +1,17 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: (MED-1) the Media Source Extensions DOM: `MediaSource`, `SourceBuffer` and
++// `SourceBufferList`. They are the JavaScript-visible objects, their events and the task queuing; every
++// spec algorithm that does not need a DOM object (readyState, duration, endOfStream, the buffered
++// intersection, abort, remove, changeType, the append window, the timestamp offset, the mode, `updating`)
++// is a call into `MediaSourceBackend` (crates/mercury-mse), which the media player feeds from. The
++// structure, the object URL store and the event plumbing are carried from servo/servo#47269 by
++// decomoraes (MPL-2.0); see `third_party/servo-script/MERCURY.md`.
++//
++// A new directory (not `dom/media/`) so that `dom/media/mod.rs` stays upstream's.
++
++pub(crate) mod mediasource;
++pub(crate) mod sourcebuffer;
++pub(crate) mod sourcebufferlist;
+diff --git a/dom/mse/sourcebuffer.rs b/dom/mse/sourcebuffer.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/sourcebuffer.rs
+@@ -0,0 +1,513 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: (MED-1) the structure, the method list and the event plumbing are carried from
++// servo/servo#47269 by decomoraes (MPL-2.0). The data plane and the spec algorithms are not: they are
++// Mercury's own and live in `crates/mercury-mse`. This object keeps its JavaScript-visible state (the
++// `updating` flag as the specification's tasks publish it, the track lists, the last known values of the
++// attributes once the buffer has been removed) and forwards everything else to
++// `MediaSourceBackend`, mapping `MseError` to the DOMException the specification names.
++//
++// Left out on purpose (listed in `third_party/servo-script/MERCURY.md`): `textTracks` (this Servo's
++// `TextTrackList` needs a media element), and the contents of `audioTracks` and `videoTracks`.
++
++use std::cell::Cell;
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use script_bindings::reflector::reflect_dom_object;
++use servo_media::player::mse::{
++    AppendMode as BackendAppendMode, MediaSourceReadyState as BackendReadyState, SourceBufferId,
++};
++use stylo_atoms::Atom;
++
++use crate::dom::audio::audiotracklist::AudioTrackList;
++use crate::dom::bindings::buffer_source::get_buffer_source_copy;
++use crate::dom::bindings::codegen::Bindings::SourceBufferBinding::{
++    AppendMode, SourceBufferMethods,
++};
++use crate::dom::bindings::codegen::UnionTypes::ArrayBufferViewOrArrayBuffer;
++use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::num::Finite;
++use crate::dom::bindings::refcounted::Trusted;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
++use crate::dom::bindings::str::DOMString;
++use crate::dom::eventtarget::EventTarget;
++use crate::dom::mse::mediasource::{MediaSource, dom_error, ranges_to_container};
++use crate::dom::timeranges::TimeRanges;
++use crate::dom::videotracklist::VideoTrackList;
++
++/// <https://w3c.github.io/media-source/#sourcebuffer>
++#[dom_struct]
++pub(crate) struct SourceBuffer {
++    eventtarget: EventTarget,
++
++    /// The media source this object belongs to, cleared once it is removed from the `sourceBuffers`
++    /// attribute of its parent media source.
++    media_source: MutNullableDom<MediaSource>,
++
++    /// The backend's handle of this source buffer.
++    id: SourceBufferId,
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
++    ///
++    /// The JavaScript-visible flag. It follows the specification's tasks: set when an append or a
++    /// removal is accepted, cleared by the task that handles the backend's `AppendDone`,
++    /// `AppendError` or `RemoveDone` (and by `abort()` and removal), so a page never sees it false
++    /// before the `update` and `updateend` events are queued. The backend keeps its own flag for its
++    /// own checks.
++    updating: Cell<bool>,
++
++    /// Whether this source buffer belongs in `activeSourceBuffers`, which the specification derives
++    /// from the enabled and selected tracks: set by the first initialization segment that has an audio
++    /// or video track.
++    ///
++    /// <https://w3c.github.io/media-source/#dfn-active-track-flag>
++    active: Cell<bool>,
++
++    /// The last known values of the attributes the backend owns, returned once this source buffer has
++    /// been removed (the specification keeps the attributes readable).
++    mode: Cell<AppendMode>,
++    timestamp_offset: Cell<f64>,
++    append_window_start: Cell<f64>,
++    append_window_end: Cell<f64>,
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-audiotracks>
++    audio_tracks: Dom<AudioTrackList>,
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-videotracks>
++    video_tracks: Dom<VideoTrackList>,
++}
++
++fn to_backend_mode(mode: AppendMode) -> BackendAppendMode {
++    match mode {
++        AppendMode::Segments => BackendAppendMode::Segments,
++        AppendMode::Sequence => BackendAppendMode::Sequence,
++    }
++}
++
++fn from_backend_mode(mode: BackendAppendMode) -> AppendMode {
++    match mode {
++        BackendAppendMode::Segments => AppendMode::Segments,
++        BackendAppendMode::Sequence => AppendMode::Sequence,
++    }
++}
++
++impl SourceBuffer {
++    fn new_inherited(
++        media_source: &MediaSource,
++        id: SourceBufferId,
++        audio_tracks: &AudioTrackList,
++        video_tracks: &VideoTrackList,
++    ) -> SourceBuffer {
++        SourceBuffer {
++            eventtarget: EventTarget::new_inherited(),
++            media_source: MutNullableDom::new(Some(media_source)),
++            id,
++            updating: Cell::new(false),
++            active: Cell::new(false),
++            mode: Cell::new(AppendMode::Segments),
++            timestamp_offset: Cell::new(0.),
++            append_window_start: Cell::new(0.),
++            append_window_end: Cell::new(f64::INFINITY),
++            audio_tracks: Dom::from_ref(audio_tracks),
++            video_tracks: Dom::from_ref(video_tracks),
++        }
++    }
++
++    pub(crate) fn new(
++        cx: &mut JSContext,
++        media_source: &MediaSource,
++        id: SourceBufferId,
++    ) -> DomRoot<SourceBuffer> {
++        let global = media_source.global();
++        let window = global.as_window();
++        let audio_tracks = AudioTrackList::new(cx, window, &[], None);
++        let video_tracks = VideoTrackList::new(cx, window, &[], None);
++
++        let source_buffer = reflect_dom_object(
++            cx,
++            Box::new(SourceBuffer::new_inherited(
++                media_source,
++                id,
++                &audio_tracks,
++                &video_tracks,
++            )),
++            window,
++        );
++        // Seed the cached attributes from the backend (a mode other than "segments" would be a
++        // generate-timestamps format).
++        if let Ok(mode) = media_source.backend().mode(id) {
++            source_buffer.mode.set(from_backend_mode(mode));
++        }
++        source_buffer
++    }
++
++    pub(crate) fn id(&self) -> SourceBufferId {
++        self.id
++    }
++
++    pub(crate) fn updating(&self) -> bool {
++        self.updating.get()
++    }
++
++    /// Whether this source buffer belongs in `activeSourceBuffers`.
++    pub(crate) fn is_active(&self) -> bool {
++        self.active.get()
++    }
++
++    pub(crate) fn set_active(&self, active: bool) {
++        self.active.set(active);
++    }
++
++    /// Detaches this source buffer from its media source, which the specification describes as
++    /// removing it from the `sourceBuffers` attribute. The backend has already dropped its half.
++    pub(crate) fn detach(&self) {
++        self.updating.set(false);
++        self.active.set(false);
++        self.media_source.set(None);
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer> step 2: the append
++    /// that was running ends with `abort` and `updateend` events.
++    pub(crate) fn abort_pending(&self) {
++        if !self.updating.get() {
++            return;
++        }
++        self.updating.set(false);
++        self.queue_event(Atom::from("abort"));
++        self.queue_event(Atom::from("updateend"));
++    }
++
++    /// The backend finished an append: the buffer append algorithm's steps 7 to 9 (and the same
++    /// steps of the range removal algorithm). Ignored when no append is pending (it was aborted or
++    /// the buffer removed while the event was in flight).
++    pub(crate) fn operation_finished(&self) {
++        if !self.updating.get() {
++            return;
++        }
++        // Step 7. Set the updating attribute to false.
++        self.updating.set(false);
++        // Step 8. Queue a task to fire an event named update at this SourceBuffer object.
++        self.queue_event(Atom::from("update"));
++        // Step 9. Queue a task to fire an event named updateend at this SourceBuffer object.
++        self.queue_event(Atom::from("updateend"));
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-append-error> steps 2 to 4 (the end of stream with a
++    /// decode error, step 5, comes as the backend's `SourceEnded` event).
++    pub(crate) fn operation_failed(&self) {
++        if !self.updating.get() {
++            return;
++        }
++        // Step 2. Set the updating attribute to false.
++        self.updating.set(false);
++        // Step 3. Queue a task to fire an event named error at this SourceBuffer object.
++        self.queue_event(Atom::from("error"));
++        // Step 4. Queue a task to fire an event named updateend at this SourceBuffer object.
++        self.queue_event(Atom::from("updateend"));
++    }
++
++    /// The specification tests for removal from `sourceBuffers` in almost every method.
++    fn require_attached(&self) -> Fallible<DomRoot<MediaSource>> {
++        self.media_source.get().ok_or_else(|| {
++            Error::InvalidState(Some(
++                "The source buffer has been removed from the media source".into(),
++            ))
++        })
++    }
++
++    /// The `updating` check the specification makes at the top of most methods.
++    fn require_not_updating(&self) -> ErrorResult {
++        if self.updating.get() {
++            return Err(Error::InvalidState(Some(
++                "The source buffer is still updating".into(),
++            )));
++        }
++        Ok(())
++    }
++
++    fn queue_event(&self, name: Atom) {
++        let this = Trusted::new(self);
++        self.global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(fire_source_buffer_event: move |cx| {
++                let this = this.root();
++                this.upcast::<EventTarget>().fire_event(cx, name);
++            }));
++    }
++}
++
++impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-mode>
++    fn Mode(&self) -> AppendMode {
++        if let Some(media_source) = self.media_source.get() &&
++            let Ok(mode) = media_source.backend().mode(self.id)
++        {
++            self.mode.set(from_backend_mode(mode));
++        }
++        self.mode.get()
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-mode>
++    fn SetMode(&self, value: AppendMode) -> ErrorResult {
++        // Step 1. Removed from sourceBuffers: InvalidStateError. Step 2. updating: InvalidStateError.
++        let media_source = self.require_attached()?;
++        self.require_not_updating()?;
++
++        // Steps 3 to 8 (the generate timestamps flag, the reopening of an ended source, the append
++        // state, the group start timestamp) are the backend's.
++        let before = media_source.backend().ready_state();
++        let result = media_source
++            .backend()
++            .set_mode(self.id, to_backend_mode(value))
++            .map_err(dom_error);
++        media_source.note_ready_state(before);
++        result?;
++        self.mode.set(value);
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
++    fn Updating(&self) -> bool {
++        self.updating.get()
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-buffered>
++    fn GetBuffered(&self, cx: &mut JSContext) -> Fallible<DomRoot<TimeRanges>> {
++        // Step 1. Removed from sourceBuffers: InvalidStateError.
++        let media_source = self.require_attached()?;
++
++        // Steps 2 to 6: the backend computes the intersection of the track buffers' ranges.
++        let ranges = media_source.backend().buffered(self.id);
++        let global = self.global();
++        Ok(TimeRanges::new(
++            cx,
++            global.as_window(),
++            ranges_to_container(&ranges),
++        ))
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-timestampoffset>
++    fn TimestampOffset(&self) -> Finite<f64> {
++        if let Some(media_source) = self.media_source.get() &&
++            let Ok(offset) = media_source.backend().timestamp_offset(self.id)
++        {
++            self.timestamp_offset.set(offset);
++        }
++        Finite::wrap(self.timestamp_offset.get())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-timestampoffset>
++    fn SetTimestampOffset(&self, value: Finite<f64>) -> ErrorResult {
++        let media_source = self.require_attached()?;
++        self.require_not_updating()?;
++
++        let before = media_source.backend().ready_state();
++        let result = media_source
++            .backend()
++            .set_timestamp_offset(self.id, *value)
++            .map_err(dom_error);
++        media_source.note_ready_state(before);
++        result?;
++        self.timestamp_offset.set(*value);
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-audiotracks>
++    fn AudioTracks(&self) -> DomRoot<AudioTrackList> {
++        DomRoot::from_ref(&*self.audio_tracks)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-videotracks>
++    fn VideoTracks(&self) -> DomRoot<VideoTrackList> {
++        DomRoot::from_ref(&*self.video_tracks)
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-appendwindowstart>
++    fn AppendWindowStart(&self) -> Finite<f64> {
++        if let Some(media_source) = self.media_source.get() &&
++            let Ok(start) = media_source.backend().append_window_start(self.id)
++        {
++            self.append_window_start.set(start);
++        }
++        Finite::wrap(self.append_window_start.get())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-appendwindowstart>
++    fn SetAppendWindowStart(&self, value: Finite<f64>) -> ErrorResult {
++        // Steps 1 and 2 (removed, updating), then the TypeError range checks of steps 3 and 4: the
++        // backend knows `appendWindowEnd`.
++        let media_source = self.require_attached()?;
++        self.require_not_updating()?;
++        media_source
++            .backend()
++            .set_append_window_start(self.id, *value)
++            .map_err(dom_error)?;
++        self.append_window_start.set(*value);
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-appendwindowend>
++    fn AppendWindowEnd(&self) -> f64 {
++        if let Some(media_source) = self.media_source.get() &&
++            let Ok(end) = media_source.backend().append_window_end(self.id)
++        {
++            self.append_window_end.set(end);
++        }
++        self.append_window_end.get()
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-appendwindowend>
++    fn SetAppendWindowEnd(&self, value: f64) -> ErrorResult {
++        let media_source = self.require_attached()?;
++        self.require_not_updating()?;
++        // Step 3. NaN is a TypeError (the backend checks it too, with the comparison to the start).
++        media_source
++            .backend()
++            .set_append_window_end(self.id, value)
++            .map_err(dom_error)?;
++        self.append_window_end.set(value);
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-appendbuffer>
++    fn AppendBuffer(&self, data: ArrayBufferViewOrArrayBuffer) -> ErrorResult {
++        // Step 1. Run the prepare append algorithm.
++        // <https://w3c.github.io/media-source/#dfn-prepare-append>
++        // Step 1.1. Removed from sourceBuffers: InvalidStateError. Step 1.2. updating:
++        // InvalidStateError.
++        let media_source = self.require_attached()?;
++        self.require_not_updating()?;
++
++        // Steps 1.3 and 1.4. If the media element's error attribute is not null, InvalidStateError.
++        if let Some(media_element) = media_source.media_element() &&
++            media_element.in_error_state()
++        {
++            return Err(Error::InvalidState(Some(
++                "The media element is in an error state".into(),
++            )));
++        }
++
++        // Step 2. Add data to the end of the input buffer (a copy: the page may reuse its buffer).
++        let bytes = match &data {
++            ArrayBufferViewOrArrayBuffer::ArrayBufferView(view) => {
++                get_buffer_source_copy(view.into())
++            },
++            ArrayBufferViewOrArrayBuffer::ArrayBuffer(buffer) => {
++                get_buffer_source_copy(buffer.into())
++            },
++        };
++
++        // Steps 1.5 to 1.7 of prepare append (an ended source reopens, the coded frame eviction, the
++        // buffer full flag: QuotaExceededError) and steps 3 to 5 (updating, updatestart, the buffer
++        // append algorithm on the backend's worker thread) are the backend's.
++        let before = media_source.backend().ready_state();
++        let result = media_source
++            .backend()
++            .append(self.id, bytes)
++            .map_err(dom_error);
++        media_source.note_ready_state(before);
++        result?;
++
++        // Step 3. Set the updating attribute to true.
++        self.updating.set(true);
++
++        // Step 4. Queue a task to fire an event named updatestart at this SourceBuffer object.
++        self.queue_event(Atom::from("updatestart"));
++
++        // Step 5. The buffer append algorithm runs on the backend; its `AppendDone` or `AppendError`
++        // event ends the operation (`operation_finished`, `operation_failed`).
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-abort>
++    fn Abort(&self) -> ErrorResult {
++        // Step 1. Removed from sourceBuffers: InvalidStateError. Step 2. The parent is not "open":
++        // InvalidStateError. Step 3 (the range removal algorithm running) never holds on the script
++        // thread: the backend completes a removal before its event.
++        let media_source = self.require_attached()?;
++        if media_source.backend().ready_state() != BackendReadyState::Open {
++            return Err(Error::InvalidState(Some(
++                "The media source is not open".into(),
++            )));
++        }
++
++        // Steps 4 to 7 (abort the append, reset the parser state, the append window defaults) are the
++        // backend's.
++        media_source
++            .backend()
++            .abort(self.id)
++            .map_err(dom_error)?;
++
++        // Step 4.2 to 4.4. If updating, set it to false and queue `abort` and `updateend`.
++        self.abort_pending();
++        self.append_window_start.set(0.);
++        self.append_window_end.set(f64::INFINITY);
++        Ok(())
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-changetype>
++    fn ChangeType(&self, type_: DOMString) -> ErrorResult {
++        // Step 1. If type is an empty string then throw a TypeError exception.
++        if type_.is_empty() {
++            return Err(Error::Type(c"The type must not be empty".to_owned()));
++        }
++
++        // Steps 2 and 3. Removed from sourceBuffers, or updating: InvalidStateError.
++        let media_source = self.require_attached()?;
++        self.require_not_updating()?;
++
++        // Steps 4 to 9 (support check: NotSupportedError, reopening an ended source, reset parser
++        // state, the generate timestamps flag, the append state, the type) are the backend's.
++        let before = media_source.backend().ready_state();
++        let result = media_source
++            .backend()
++            .change_type(self.id, &type_.str())
++            .map_err(dom_error);
++        media_source.note_ready_state(before);
++        result
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-remove>
++    fn Remove(&self, start: Finite<f64>, end: f64) -> ErrorResult {
++        // Steps 1 and 2. Removed from sourceBuffers, or updating: InvalidStateError.
++        let media_source = self.require_attached()?;
++        self.require_not_updating()?;
++
++        // Steps 3 to 6 (duration NaN, start and end range checks: TypeError; reopening an ended
++        // source) and the range removal algorithm are the backend's.
++        let before = media_source.backend().ready_state();
++        let result = media_source
++            .backend()
++            .remove(self.id, *start, end)
++            .map_err(dom_error);
++        media_source.note_ready_state(before);
++        result?;
++
++        // Range removal step 1 and 2. Set updating to true and queue `updatestart`; step 5 and 6 come
++        // with the backend's `RemoveDone` event.
++        self.updating.set(true);
++        self.queue_event(Atom::from("updatestart"));
++        Ok(())
++    }
++
++    // <https://w3c.github.io/media-source/#dom-sourcebuffer-onupdatestart>
++    event_handler!(updatestart, GetOnupdatestart, SetOnupdatestart);
++
++    // <https://w3c.github.io/media-source/#dom-sourcebuffer-onupdate>
++    event_handler!(update, GetOnupdate, SetOnupdate);
++
++    // <https://w3c.github.io/media-source/#dom-sourcebuffer-onupdateend>
++    event_handler!(updateend, GetOnupdateend, SetOnupdateend);
++
++    // <https://w3c.github.io/media-source/#dom-sourcebuffer-onerror>
++    event_handler!(error, GetOnerror, SetOnerror);
++
++    // <https://w3c.github.io/media-source/#dom-sourcebuffer-onabort>
++    event_handler!(abort, GetOnabort, SetOnabort);
++}
+diff --git a/dom/mse/sourcebufferlist.rs b/dom/mse/sourcebufferlist.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/sourcebufferlist.rs
+@@ -0,0 +1,162 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: (MED-1) carried from servo/servo#47269 by decomoraes (MPL-2.0), adapted to this Servo's object
++// creation (`reflect_dom_object(cx, ..)`) and the `dom::mse` module; the logic is unchanged.
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use script_bindings::cell::DomRefCell;
++use script_bindings::reflector::reflect_dom_object;
++use stylo_atoms::Atom;
++
++use crate::dom::bindings::codegen::Bindings::SourceBufferListBinding::SourceBufferListMethods;
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::refcounted::Trusted;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::{Dom, DomRoot};
++use crate::dom::eventtarget::EventTarget;
++use crate::dom::mse::sourcebuffer::SourceBuffer;
++use crate::dom::window::Window;
++
++/// <https://w3c.github.io/media-source/#sourcebufferlist>
++#[dom_struct]
++pub(crate) struct SourceBufferList {
++    eventtarget: EventTarget,
++    buffers: DomRefCell<Vec<Dom<SourceBuffer>>>,
++}
++
++impl SourceBufferList {
++    fn new_inherited() -> SourceBufferList {
++        SourceBufferList {
++            eventtarget: EventTarget::new_inherited(),
++            buffers: DomRefCell::new(Vec::new()),
++        }
++    }
++
++    pub(crate) fn new(cx: &mut JSContext, window: &Window) -> DomRoot<SourceBufferList> {
++        reflect_dom_object(cx, Box::new(SourceBufferList::new_inherited()), window)
++    }
++
++    pub(crate) fn len(&self) -> usize {
++        self.buffers.borrow().len()
++    }
++
++    pub(crate) fn is_empty(&self) -> bool {
++        self.buffers.borrow().is_empty()
++    }
++
++    pub(crate) fn contains(&self, buffer: &SourceBuffer) -> bool {
++        self.buffers.borrow().iter().any(|item| &**item == buffer)
++    }
++
++    pub(crate) fn item(&self, index: usize) -> Option<DomRoot<SourceBuffer>> {
++        self.buffers
++            .borrow()
++            .get(index)
++            .map(|buffer| DomRoot::from_ref(&**buffer))
++    }
++
++    /// The source buffers of this list, rooted so that callers can iterate them without holding a
++    /// borrow of the list.
++    pub(crate) fn buffers(&self) -> Vec<DomRoot<SourceBuffer>> {
++        self.buffers
++            .borrow()
++            .iter()
++            .map(|buffer| DomRoot::from_ref(&**buffer))
++            .collect()
++    }
++
++    /// Appends `buffer` and queues the `addsourcebuffer` event the algorithms that mutate this list
++    /// require.
++    pub(crate) fn add(&self, buffer: &SourceBuffer) {
++        self.buffers.borrow_mut().push(Dom::from_ref(buffer));
++        self.queue_event(Atom::from("addsourcebuffer"));
++    }
++
++    /// Removes `buffer` and queues the `removesourcebuffer` event. Does nothing when the buffer is not
++    /// in the list.
++    pub(crate) fn remove(&self, buffer: &SourceBuffer) {
++        let mut buffers = self.buffers.borrow_mut();
++        let Some(index) = buffers.iter().position(|item| &**item == buffer) else {
++            return;
++        };
++        buffers.remove(index);
++        drop(buffers);
++
++        self.queue_event(Atom::from("removesourcebuffer"));
++    }
++
++    /// Replaces the contents of the list, queueing the events implied by the difference with the
++    /// previous contents. This backs `activeSourceBuffers`, which the specification keeps in the same
++    /// order as `sourceBuffers`.
++    pub(crate) fn update(&self, buffers: &[DomRoot<SourceBuffer>]) {
++        let previous = self.buffers();
++        let removed = previous
++            .iter()
++            .any(|buffer| !buffers.iter().any(|item| item == buffer));
++        let added = buffers
++            .iter()
++            .any(|buffer| !previous.iter().any(|item| item == buffer));
++
++        if !removed && !added {
++            return;
++        }
++
++        *self.buffers.borrow_mut() = buffers
++            .iter()
++            .map(|buffer| Dom::from_ref(&**buffer))
++            .collect();
++
++        if removed {
++            self.queue_event(Atom::from("removesourcebuffer"));
++        }
++        if added {
++            self.queue_event(Atom::from("addsourcebuffer"));
++        }
++    }
++
++    /// Empties the list without queueing any event, leaving it to the caller to queue the single
++    /// event the detaching algorithm asks for.
++    pub(crate) fn clear(&self) {
++        self.buffers.borrow_mut().clear();
++    }
++
++    pub(crate) fn queue_removesourcebuffer_event(&self) {
++        self.queue_event(Atom::from("removesourcebuffer"));
++    }
++
++    fn queue_event(&self, name: Atom) {
++        let this = Trusted::new(self);
++        self.global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(fire_source_buffer_list_event: move |cx| {
++                let this = this.root();
++                this.upcast::<EventTarget>().fire_event(cx, name);
++            }));
++    }
++}
++
++impl SourceBufferListMethods<crate::DomTypeHolder> for SourceBufferList {
++    /// <https://w3c.github.io/media-source/#dom-sourcebufferlist-length>
++    fn Length(&self) -> u32 {
++        self.len() as u32
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-sourcebufferlist-getter>
++    fn IndexedGetter(&self, index: u32) -> Option<DomRoot<SourceBuffer>> {
++        self.item(index as usize)
++    }
++
++    // <https://w3c.github.io/media-source/#dom-sourcebufferlist-onaddsourcebuffer>
++    event_handler!(addsourcebuffer, GetOnaddsourcebuffer, SetOnaddsourcebuffer);
++
++    // <https://w3c.github.io/media-source/#dom-sourcebufferlist-onremovesourcebuffer>
++    event_handler!(
++        removesourcebuffer,
++        GetOnremovesourcebuffer,
++        SetOnremovesourcebuffer
++    );
++}
 diff --git a/dom/navigator/navigator.rs b/dom/navigator/navigator.rs
 --- a/dom/navigator/navigator.rs
 +++ b/dom/navigator/navigator.rs
@@ -2197,6 +4247,51 @@ diff --git a/dom/serviceworker/notification.rs b/dom/serviceworker/notification.
          for (request, resource_type) in pending_requests {
              self.fetch_and_show_when_ready(request, resource_type);
          }
+diff --git a/dom/url/url.rs b/dom/url/url.rs
+--- a/dom/url/url.rs
++++ b/dom/url/url.rs
+@@ -28,6 +28,7 @@
+ use crate::dom::bindings::str::{DOMString, USVString};
+ use crate::dom::blob::Blob;
+ use crate::dom::globalscope::GlobalScope;
++use crate::dom::mse::mediasource::MediaSource; // Mercury: (MED-1)
+ use crate::dom::url::urlhelper::UrlHelper;
+ use crate::dom::url::urlsearchparams::URLSearchParams;
+
+@@ -203,11 +204,33 @@
+         DOMString::from(URL::unicode_serialization_blob_url(origin.immutable(), &id))
+     }
+
++    /// <https://w3c.github.io/media-source/#dom-url-createobjecturl>
++    ///
++    /// Mercury: (MED-1) carried from servo/servo#47269 (decomoraes), MPL-2.0.
++    fn CreateObjectURL_(global: &GlobalScope, media_source: &MediaSource) -> DOMString {
++        // Step 1. Return the result of adding an entry to the blob URL store for mediaSource.
++        //
++        // A media source is bound to the thread that created it, so its entry is kept in the
++        // global rather than in the file manager that backs blob URLs.
++        let origin = global.origin();
++        let url = URL::unicode_serialization_blob_url(origin.immutable(), &Uuid::new_v4());
++
++        global.track_media_source_url(url.clone(), media_source);
++
++        DOMString::from(url)
++    }
++
+     /// <https://w3c.github.io/FileAPI/#dfn-revokeObjectURL>
+     fn RevokeObjectURL(global: &GlobalScope, url: DOMString) {
+         // If the value provided for the url argument is not a Blob URL OR
+         // if the value provided for the url argument does not have an entry in the Blob URL Store,
+         // this method call does nothing. User agents may display a message on the error console.
++        //
++        // Mercury: (MED-1) a media source object URL lives in the global, not in the file manager.
++        if global.forget_media_source_url(&url.str()) {
++            return;
++        }
++
+         let origin = global.origin().immutable().clone();
+
+         if let Ok(url) = ServoUrl::parse(&url.str()) &&
 diff --git a/dom/webgl/validations/tex_image_2d.rs b/dom/webgl/validations/tex_image_2d.rs
 --- a/dom/webgl/validations/tex_image_2d.rs
 +++ b/dom/webgl/validations/tex_image_2d.rs
