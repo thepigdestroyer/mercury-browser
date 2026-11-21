@@ -58,8 +58,9 @@ const PINNED_OFF: &[&str] = &[
     // report what is not there, until their items land.
     "dom_serviceworker_enabled",
     "dom_web_animations_enabled",
-    // The accessibility tree is built for the active tab only, by its own lane.
-    "accessibility_enabled",
+    // The tree integrity checks walk the whole tree on every update: for Servo's own tests only.
+    // (`accessibility_enabled` itself is on, in [`apply`]: the tree is still built only for the tab
+    // whose page assistive technology reads, see `accessibility.rs`.)
     "expensive_accessibility_test_assertions_enabled",
 ];
 
@@ -92,6 +93,11 @@ pub(crate) fn apply(preferences: &mut Preferences) {
     preferences.dom_composition_event_enabled = true;
     preferences.dom_adoptedstylesheet_enabled = true;
     preferences.dom_visual_viewport_enabled = true;
+    // Page accessibility (lane a11y-1): lets a web view build an accessibility tree when asked
+    // (`WebView::set_accessibility_active`). Nothing is built until assistive technology attaches
+    // to the window and the tab is the shown one: activation is lazy per document, and a document
+    // that was never activated records no accessibility damage.
+    preferences.accessibility_enabled = true;
 }
 
 #[cfg(test)]
@@ -152,6 +158,26 @@ mod tests {
         assert!(preferences.dom_composition_event_enabled);
         assert!(preferences.dom_adoptedstylesheet_enabled);
         assert!(preferences.dom_visual_viewport_enabled);
+    }
+
+    #[test]
+    fn page_accessibility_is_on_and_the_expensive_checks_stay_off() {
+        let preferences = applied();
+        assert!(preferences.accessibility_enabled);
+        assert!(!preferences.expensive_accessibility_test_assertions_enabled);
+        // A value set before does not matter: the product's value wins.
+        let mut before = Preferences::default();
+        before.set_value("accessibility_enabled", PrefValue::Bool(false));
+        before.set_value(
+            "expensive_accessibility_test_assertions_enabled",
+            PrefValue::Bool(true),
+        );
+        apply(&mut before);
+        assert!(before.accessibility_enabled);
+        assert!(!before.expensive_accessibility_test_assertions_enabled);
+        // It is not a pinned-off name any more, but the other one is.
+        assert!(!PINNED_OFF.contains(&"accessibility_enabled"));
+        assert!(PINNED_OFF.contains(&"expensive_accessibility_test_assertions_enabled"));
     }
 
     #[test]

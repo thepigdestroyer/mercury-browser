@@ -476,6 +476,7 @@ impl EngineState {
             crate::activation::forget_tab(*closed);
             crate::tab_snapshots::forget_tab(*closed); // tab-snapshots
             crate::page_tabs::forget_tab(*closed);
+            crate::accessibility::tab_closed(&self.web_views, *closed); // a11y-1
         }
         self.web_views.retain(|tab_id, _| tab_ids.contains(tab_id));
         self.event_receivers
@@ -494,6 +495,7 @@ impl EngineState {
                         "tab {}: replacing a page that never committed",
                         tab_id.value()
                     );
+                    crate::accessibility::tab_closed(&self.web_views, tab_id); // a11y-1: the new web view is activated afresh when shown
                     self.web_views.remove(&tab_id);
                     self.event_receivers.remove(&tab_id);
                     if self.visible_tab_id == Some(tab_id) {
@@ -545,6 +547,10 @@ impl EngineState {
                 let _focus_result = previous_web_view.set_focus(false);
                 previous_web_view.hide();
             }
+            // a11y-1: a hidden tab builds no accessibility tree
+            if let Some(previous_tab_id) = self.visible_tab_id {
+                crate::accessibility::tab_hidden(&self.web_views, previous_tab_id);
+            }
 
             if let Some(active_web_view) = self.web_views.get_mut(&active_tab_id) {
                 // Servo 0.8 couples visibility and throttling: show() resumes the active
@@ -556,11 +562,15 @@ impl EngineState {
                 active_web_view.paint();
                 active_web_view.discard_ready_frame();
                 let _focus_result = active_web_view.set_focus(self.web_view_focused.get());
+                crate::accessibility::tab_shown(&self.web_views, active_tab_id); // a11y-1
             }
             // tabs: keep the previous frame briefly instead of flashing the background
             self.tab_switch_frame.begin(window);
             self.visible_tab_id = Some(active_tab_id);
         }
+        // a11y-1: what the window asked for since the last pump (assistive technology attached or
+        // detached) is done with the web views at hand
+        crate::accessibility::run_pending(&self.web_views);
 
         if self.current_scale_factor != Some(scale_factor) {
             for web_view in self.web_views.values() {

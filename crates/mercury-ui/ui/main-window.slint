@@ -1174,7 +1174,6 @@ export component MainWindow inherits Window {
                 focus-on-tab-navigation: false;
                 accessible-role: main; // a11y-base
                 accessible-label: "Page content"; // a11y-base
-                accessible-description: "Mercury doesn't pass web page content to assistive technology yet."; // a11y-base: the page-accessibility lane deletes this line when it grafts the page's tree here
 
                 focus-gained => {
                     root.web-view-focus-changed(true);

@@ -134,12 +134,10 @@ fn the_new_tab_state_names_every_control_and_landmark() {
         "Search with DuckDuckGo or enter an address"
     );
 
-    // The page node tells the truth about pages until the engine's tree hangs from it.
+    // The page node carries no description of its own any more: the engine's tree hangs from
+    // it (`tests/a11y_page_node.rs` pins that the node exists exactly once).
     let page = node_in(&nodes, Role::Main, "Page content");
-    assert_eq!(
-        page.description,
-        "Mercury doesn't pass web page content to assistive technology yet."
-    );
+    assert_eq!(page.description, "");
 
     // The new-tab page keeps its captions as plain text, and nothing else reads twice: the
     // logo, the placeholder and the arrow in the search button are hidden.

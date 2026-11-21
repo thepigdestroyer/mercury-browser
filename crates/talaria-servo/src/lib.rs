@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
+// a11y-1: the page's accessibility tree on its way out of the engine.
+mod accessibility;
 mod adblocker;
 mod clipboard;
 mod content_process;
@@ -46,6 +48,7 @@ mod site_security;
 pub use resources::record_error_page_secret;
 pub use site_information::SiteDataSummary;
 
+pub use accessibility::AccessibilitySink; // a11y-1
 pub use adblocker::FilterEngineSlot;
 pub use clipboard::{ActivationUse, UserActivationCheck};
 pub use content_process::{
