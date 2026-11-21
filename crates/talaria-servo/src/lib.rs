@@ -76,4 +76,8 @@ pub use proxy::{ProxyPreferences, ProxyServer, SystemProxySettings};
 pub use runtime::{EventLoopWaker, NEW_TAB_URL, RuntimeOptions, ServoRuntime};
 pub use screen::ScreenMetrics;
 pub use site_data::SiteDataKinds;
+// sh-pages: the sites whose images are refused (the desktop app fills it); the `view-source:`
+// handler's registration, public for the engine test (`tests/view_source_engine.rs`).
+pub use site_images::SiteImagesHandle;
+pub use view_source::{ViewSourceConfig, register as register_view_source};
 pub use web_view::ServoWebView;

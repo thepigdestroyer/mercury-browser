@@ -5,6 +5,8 @@ use std::net::IpAddr;
 
 use url::Url;
 
+use crate::view_source_target; // sh-pages
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavigationTarget {
     Url(Url),
@@ -66,7 +68,8 @@ pub fn classify_address(input: &str) -> Result<NavigationTarget, AddressResoluti
     }
 
     let parsed_absolute = match Url::parse(input) {
-        Ok(url) if is_supported_scheme(url.scheme()) => {
+        // sh-pages: `view-source:` is an address only with an `http(s)` address inside.
+        Ok(url) if is_supported_scheme(url.scheme()) || view_source_target(&url).is_some() => {
             return Ok(NavigationTarget::Url(url));
         }
         result => result,
