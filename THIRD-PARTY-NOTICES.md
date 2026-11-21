@@ -249,6 +249,39 @@ Rust crates that load and wrap the library are compiled into `mercury-browser` a
 - `vecmath` 1.0.0 — https://github.com/pistondevelopers/vecmath — MIT (Copyright (c) 2014 PistonDevelopers;
   `LICENSES/MIT-vecmath.txt`) — a dependency of `pdfium-render`.
 
+## View source (tree-sitter)
+
+The View Source page (`crates/mercury-view-source`) colours HTML, JavaScript and CSS with **tree-sitter**, a parsing
+library written in C. It is not downloaded as a binary: the C core and each grammar's `parser.c` are compiled into
+`mercury-browser` by their crates' build scripts (with `cc`), on Intel and on Apple Silicon alike, so there is nothing
+to pin by checksum. Every crate below is under the MIT licence, read in the package as it is in the cargo registry on
+20 Nov 2026, and keeps it; the copyright lines are the ones the packages give.
+
+- `tree-sitter` 0.27.2 — https://github.com/tree-sitter/tree-sitter — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — the parsing library: the C core and its Rust binding. It also carries a small part
+  of ICU, the UTF-8 and UTF-16 macros in `src/unicode/` (Copyright © 1991-2019 Unicode, Inc., under the ICU 58 and later
+  licence, whose text is `src/unicode/LICENSE` in the package and is on the credits page), and `src/portable/endian.h`,
+  which its author, Mathias Panzenböck, put in the public domain (his header says so). The `wasm` feature (Wasmtime, and
+  the libc stub in `src/wasm-stdlib/`) is off.
+- `tree-sitter-highlight` 0.27.2 — the same repository — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — turns a parse tree and a highlight query into highlighted ranges, with the
+  injection of one language into another (`<script>` as JavaScript, `<style>` as CSS).
+- `tree-sitter-language` 0.1.9 — the same repository — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — the small crate through which a grammar hands its language to the library.
+- `tree-sitter-html` 0.23.2 — https://github.com/tree-sitter/tree-sitter-html — MIT (Copyright (c) Max Brunsfeld and
+  Amaan Qureshi, the crate's `authors`; `LICENSES/MIT-tree-sitter-html.txt`) — the HTML grammar and its highlight and
+  injection queries. **The package ships no licence file** (`Cargo.toml` and `tree-sitter.json` say `MIT`, and
+  `grammar.js` says `@license MIT`), so, as for `pdfium-render` above, the file in `LICENSES/` is the standard MIT text
+  with the copyright lines the package does give, and the credits page does the same (`[[clarify]]` in
+  `crates/mercury-credits/credits.toml`).
+- `tree-sitter-javascript` 0.25.0 — https://github.com/tree-sitter/tree-sitter-javascript — MIT (Copyright (c) 2014 Max
+  Brunsfeld; `LICENSES/MIT-tree-sitter.txt`) — the JavaScript grammar and its queries.
+- `tree-sitter-css` 0.25.0 — https://github.com/tree-sitter/tree-sitter-css — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — the CSS grammar and its queries.
+- `streaming-iterator` 0.1.9 — https://github.com/sfackler/streaming-iterator — MIT OR Apache-2.0 (used under MIT;
+  Copyright (c) 2016 Steven Fackler; its own `LICENSE-MIT`, which the credits page shows) — an iterator trait that
+  `tree-sitter` and `tree-sitter-highlight` use. Rust only.
+
 ## Vendored crates (`third_party/`)
 
 Mercury Browser carries 26 crates in `third_party/`. Each is the crate exactly as published on
@@ -290,8 +323,8 @@ standard text of its licence with a copyright line taken from the crate's metada
 Several of these crates compile native code into the application, whose licence files the page
 includes: SpiderMonkey (`mozjs_sys`, with LZ4, xsum, Zydis, irregexp, double-conversion, fdlibm,
 {fmt}, function2, gemmology and xsimd), ANGLE (`mozangle`), AWS-LC (`aws-lc-sys`), HarfBuzz
-(`harfbuzz-sys`), the OpenType Sanitiser and LZ4 (`fontsan`), Zstandard (`zstd-sys`) and zlib
-(`libz-sys`).
+(`harfbuzz-sys`), the OpenType Sanitiser and LZ4 (`fontsan`), Zstandard (`zstd-sys`), zlib
+(`libz-sys`) and tree-sitter (`tree-sitter`, with ICU's UTF macros; see "View source (tree-sitter)" above).
 
 - **SQLite** (`libsqlite3-sys`) is in the public domain (https://www.sqlite.org/copyright.html) and has no licence text.
 - **The Linux archive** also contains FreeType 2.13.3 (bundled by the `freetype-sys` crate), used under the FreeType License. Portions of this software are copyright © 2024 The FreeType Project (www.freetype.org). All rights reserved.
