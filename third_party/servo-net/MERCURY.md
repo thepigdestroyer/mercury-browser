@@ -34,7 +34,7 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   `"<redacted>"` and print other headers as before.
 - **Why:** session cookies and credentials reached the log at `info` and `debug`. Not changed: URL logging at `info`
   (`http_network_fetch` still prints every URL, query strings included; a follow-up).
-- **Tested by:** the unit tests in `mercury_log.rs` (29 with the SVG ones below), run in a scratch crate that includes the two files with `#[path]` (see "Testing a vendored crate" in `docs/developer-guide/vendored-patches.md`: cargo refuses `-p servo-net` outside the crate's own workspace, because it has dev-dependencies). They are: redaction of each
+- **Tested by:** the unit tests in `mercury_log.rs` (10 of the 30 in the two files, the other 20 are the SVG ones below), run by `make test-servo-net`: `tests/mercury_unit.rs` includes the two files with `#[path]` into the `main` test target, because the library has `test = false`. They are: redaction of each
   name and of mixed case, other headers unchanged, an empty value, a full map with two `Set-Cookie` entries; and
   `include_str!` guards: `the_cookie_files_do_not_log_a_cookie_value` fails if a logging call in `cookie_storage.rs` or
   `cookie.rs` logs anything but the cookie's name, domain, path or the sent count;
@@ -75,8 +75,8 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   alone accepts and the guard refuses, 100,000 levels on a 2 MiB stack, entities (600 deep, 400 twice, five nested of 120),
   SVGZ, nested data images by `image/svg+xml`, `text/plain` and gzip, the shared budget (299 + 300 refused, 100 + 100 and 249 + 250
   allowed), the document limit, the chain cleaned after every parse, raster data untouched, and the `<use>` document
-  above, which aborts the test process on a 2 MiB stack unless the large stack is used). They run in a scratch crate that
-  includes the file by `#[path]` (cargo cannot test `servo-net` itself, see `docs/developer-guide/vendored-patches.md`); the
+  above, which aborts the test process on a 2 MiB stack unless the large stack is used). They run in `make test-servo-net`
+  (`tests/mercury_unit.rs` includes the file by `#[path]` into the `main` test target; they ran in a scratch crate in K0); the
   three mutants (small stack, plain default resolver, no depth count) were run and fail. And the page
   `tests/pages/svg-deep-nesting.html` (600 `g`, 800 nested `svg`, an entity, a nested `data:` image and the `<use>` document,
   none of which usvg alone refuses).
@@ -223,9 +223,9 @@ Servo's own API cannot express (the recorded failure).
 workspace root does not work (cargo refuses a package that is not a workspace member). The root `Cargo.toml`
 lists `third_party/servo-net` under `exclude`, as it does `third_party/gaol`, so cargo accepts the crate's own
 manifest, and `make test-servo-net` runs the crate's whole `main` target on its own `Cargo.lock`, against the
-published sibling crates (the same code as Mercury's copies, because only `servo-net` changes; not
-Mercury's vendored copies and not Mercury's `Cargo.lock`: of the crates it links against, `servo-net` is the only one
-Mercury changes in a way that matters to it; the others are byte-identical to the published ones, except
+published sibling crates (not Mercury's vendored copies and not Mercury's `Cargo.lock`; Mercury's K0 changes to
+`servo-embedder-traits` and `servo-config` are not in this build, and `servo-net` is the only crate Mercury changes in
+a way that matters to these tests; the others it links against are byte-identical to the published ones, except
 `servo-default-resources`, which Mercury patches only to stop it registering the default resource reader, and
 the tests need that reader registered). `make test` runs it, so do the full gates, and the
 CI job "Vendored servo-net tests" does. Two tests fail on the unpatched crate as well and are skipped by
@@ -240,6 +240,10 @@ MERCURY_SLOT_POOL=light ~/mercury-browser/.superpowers/tools/guarded.sh "$PWD" \
    --manifest-path third_party/servo-net/Cargo.toml \
    --features test-util,devtools --test main certificate_exceptions"
 ```
+
+`make test-servo-net` adds `fonts/bundled_freetype` to the features, which builds FreeType from source: on Linux
+the crate's own graph needs FreeType 24.3.18 or later (`freetype-sys`) and Ubuntu 22.04 has 24.1.18; on macOS the
+feature does nothing. Add `,fonts/bundled_freetype` to the command above on such a system.
 
 The first run builds the published dependencies (about 11 minutes on a 12-thread Intel Mac, a few
 hundred MB under `target/`; `--target-dir` keeps the build out of the vendored crate). After an

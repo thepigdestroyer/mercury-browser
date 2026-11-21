@@ -3224,6 +3224,34 @@ diff --git a/tests/main.rs b/tests/main.rs
  mod cookie;
  mod cookie_http_state;
  mod data_loader;
+@@ -20,6 +22,8 @@
+ mod http_cache;
+ mod http_loader;
+ mod image_cache;
++// Mercury: the unit tests of mercury_log.rs and mercury_svg.rs (the library itself has `test = false`).
++mod mercury_unit;
+ mod resource_thread;
+ mod subresource_integrity;
+ use std::sync::Arc;
+diff --git a/tests/mercury_unit.rs b/tests/mercury_unit.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/mercury_unit.rs
+@@ -0,0 +1,14 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++// Mercury: runs the unit tests inside Mercury's two lib files, which `[lib] test = false` never compiles.
++
++//! The unit tests of `mercury_log.rs` (cookie and credential redaction, EC13) and `mercury_svg.rs`
++//! (the SVG depth guard, D8). The library has `test = false`, so the tests inside those files
++//! would run in no gate; this module compiles them into the `main` test target instead.
++//! `include_str!` in them is relative to the real files, so their source-scan guards read the
++//! crate's `cookie_storage.rs`, `cookie.rs` and `http_loader.rs`.
++
++#[path = "../mercury_log.rs"]
++mod mercury_log;
++#[path = "../mercury_svg.rs"]
++mod mercury_svg;
 diff --git a/websocket_loader.rs b/websocket_loader.rs
 --- a/websocket_loader.rs
 +++ b/websocket_loader.rs
