@@ -4,8 +4,9 @@
 //! groups-core brief (section 7) and `pop_closed_run`.
 
 use mercury_settings::{
-    ClosedTab, GroupSnapshot, MAX_CLOSED_TABS, MAX_GROUP_NAME_BYTES, MAX_GROUPS_PER_WINDOW,
-    MAX_RESTORED_TABS, PreviousSession, SessionSnapshot, SessionStore, TabSnapshot, WindowSnapshot,
+    ClosedTab, DialCorner, GroupSnapshot, MAX_CLOSED_TABS, MAX_GROUP_NAME_BYTES,
+    MAX_GROUPS_PER_WINDOW, MAX_RESTORED_TABS, PreviousSession, SessionSnapshot, SessionStore,
+    TabSnapshot, WindowSnapshot,
 };
 
 /// The largest group id the interface can carry (`i32::MAX`); the session keeps the counter
@@ -739,6 +740,63 @@ fn the_dial_corner_is_one_of_four_names_or_nothing() {
         assert_eq!(corner(Some(bad)), None, "{bad:?}");
     }
     assert_eq!(corner(Some(&"t".repeat(1024 * 1024))), None);
+}
+
+/// The dial's corner names are written in two places: the variants of `DialCorner`, the corner the
+/// user chose in `settings.json`, and the names the session file keeps for the corner a window's
+/// dial was dragged to (`DIAL_CORNERS`, kept private to the session). A corner that one file can
+/// name and the other cannot would be lost when it moves from one to the other, so the two sets
+/// are pinned together: every `DialCorner` name survives the session file, and every name the
+/// session file keeps reads back as that same `DialCorner`.
+#[test]
+fn the_session_keeps_the_name_of_every_settings_corner_and_the_settings_read_it_back() {
+    // An exhaustive match, so that a fifth corner does not compile until it is listed here, and
+    // so reaches the session file's list and the checks below.
+    fn position(corner: DialCorner) -> usize {
+        match corner {
+            DialCorner::TopLeft => 0,
+            DialCorner::TopRight => 1,
+            DialCorner::BottomLeft => 2,
+            DialCorner::BottomRight => 3,
+        }
+    }
+    let all = [
+        DialCorner::TopLeft,
+        DialCorner::TopRight,
+        DialCorner::BottomLeft,
+        DialCorner::BottomRight,
+    ];
+
+    let mut names = Vec::new();
+    for (index, corner) in all.into_iter().enumerate() {
+        assert_eq!(position(corner), index, "{corner:?} is out of order here");
+        let name = match serde_json::to_value(corner).expect("serialise") {
+            serde_json::Value::String(name) => name,
+            other => panic!("{corner:?} is written as {other}, not as a string"),
+        };
+        let kept = settled(WindowSnapshot {
+            tabs: vec![tab(1)],
+            dial_corner: Some(name.clone()),
+            ..WindowSnapshot::default()
+        })
+        .dial_corner;
+        assert_eq!(
+            kept.as_deref(),
+            Some(name.as_str()),
+            "the session file drops the corner {corner:?} that the settings call {name:?}"
+        );
+        let read: DialCorner = serde_json::from_value(serde_json::Value::String(name.clone()))
+            .expect("the settings read the name the session keeps");
+        assert_eq!(read, corner, "{name:?}");
+        names.push(name);
+    }
+    names.sort();
+    names.dedup();
+    assert_eq!(
+        names.len(),
+        all.len(),
+        "two corners share a name: {names:?}"
+    );
 }
 
 #[test]

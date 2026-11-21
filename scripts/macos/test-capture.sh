@@ -54,6 +54,14 @@ check() {
 [ -f "$EXE" ] || { printf 'FAIL %s is missing; run make build-release\n' "$EXE"; exit 1; }
 gst_env="$(scripts/macos/gstreamer.sh env)" || { printf 'FAIL no GStreamer; run make gstreamer-macos\n'; exit 1; }
 eval "$gst_env"
+# The executable finds GStreamer only through its rpath @executable_path/lib/ (build.rs), so
+# without target/release/lib, where `make build-release` collects the libraries, dyld aborts
+# it before main runs and the refusal check below fails with an opaque "Abort trap: 6".
+[ -f "$(dirname -- "$EXE")/lib/libgstreamer-1.0.0.dylib" ] || {
+    printf 'FAIL %s has no GStreamer libraries; run make build-release (or scripts/macos/collect-gstreamer.sh)\n' \
+        "$(dirname -- "$EXE")/lib"
+    exit 1
+}
 
 # ── The copy with fake-device plugins only ────────────────────────────────
 RUN="$TMP/run"
