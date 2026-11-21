@@ -131,6 +131,39 @@ fn after_a_seek_the_next_pull_starts_with_the_config_and_a_discontinuity() {
 }
 
 #[test]
+fn seeking_points_the_feed_at_the_target_before_the_pipeline_can_seek() {
+    // A player that starts at 4 s: the init segment, the page's seek to 4 s, then the data that begins
+    // there. The pipeline refuses a seek until its first buffer has arrived, so the feed has to learn
+    // the target from the MediaSource's seeking algorithm, or no data is ever served.
+    let s = load("h264-low");
+    let rig = Rig::new();
+    let wakes = counting_wake(&rig);
+    let id = rig.add(&s.mime);
+    rig.append_ok(id, &s.init.bytes);
+    let feed = rig.backend.frame_feed();
+    let before = wakes.load(Ordering::SeqCst);
+    assert!(!rig.backend.seeking(4.0), "the source was open, not ended");
+    woken_after(&wakes, before, "the seeking algorithm");
+    let b = feed.pull(TrackKind::Video, 16);
+    assert!(b.items.is_empty(), "no data at 4 s yet");
+    assert_eq!(b.state, FeedState::WaitingForData);
+
+    let before = wakes.load(Ordering::SeqCst);
+    rig.append_ok(id, &s.media[2].bytes);
+    woken_after(&wakes, before, "the data at 4 s");
+    let got = drain(&*feed, TrackKind::Video);
+    let first = got.frames.first().expect("the feed serves the data at 4 s");
+    assert!(
+        first.keyframe && (first.pts as f64 / 1e9 - 4.0).abs() < 0.001,
+        "starts at the keyframe at 4 s, not {} s",
+        first.pts as f64 / 1e9
+    );
+    assert!(got.discont[0], "the first frame after a seek is a discontinuity");
+    assert_eq!(got.configs.len(), 1, "one Config, in front of the first frame");
+    assert_in_order("seeking before the data", &got.frames);
+}
+
+#[test]
 fn the_last_batch_carries_ended() {
     let s = load("h264-low");
     let rig = Rig::new();

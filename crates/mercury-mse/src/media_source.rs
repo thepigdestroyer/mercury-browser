@@ -886,9 +886,18 @@ impl MediaSource {
 
     /// The spec's seeking algorithm, the part that is the MediaSource's: ended becomes open (`true`, the
     /// DOM fires `sourceopen`). Picking the random access point is the feed's: `feed_seek`.
+    ///
+    /// The feed is pointed at the target here as well, and woken. The pipeline's own seek reaches the
+    /// feed (`FrameFeed::seek`) only once `playbin3` has prerolled, and it cannot preroll while the feed
+    /// is still at the old position, with the first data of a player that starts at 30 s (or resumes
+    /// there) arriving at 30 s: neither would ever happen. The pipeline's seek that follows repeats
+    /// this one, which is harmless: the element drops the frames that cross a seek.
     pub fn seeking(&mut self, secs: f64) -> bool {
         self.position = secs_to_ns(secs);
-        self.reopen_if_ended()
+        let reopened = self.reopen_if_ended();
+        self.feed_seek(self.position);
+        self.push_wake();
+        reopened
     }
 
     // ---- the feed ----
