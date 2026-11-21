@@ -26,5 +26,7 @@ pub mod snapshot;
 pub mod states;
 pub mod testing;
 
+/// The id index `compute` takes, so that an adapter needs no direct dependency on `accname`.
+pub use accname::IdIndex;
 pub use host::{HostState, NativeFlags, RangeValue};
 pub use semantics::{NodeSemantics, Relations, compute};

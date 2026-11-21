@@ -63,4 +63,24 @@ pub trait HostState: Document {
     fn position_in_set<'n>(&'n self, _node: Self::N<'n>) -> Option<(usize, usize)> {
         None
     }
+
+    /// Whether the node is the document's focused element **or contains it** (`:focus-within`).
+    /// `states` uses it for one rule: an element with `aria-hidden="true"` that holds keyboard focus
+    /// is not hidden, so that focus never lands on something a screen reader cannot see. Default:
+    /// nothing has focus, so `aria-hidden="true"` always hides.
+    fn has_focus<'n>(&'n self, _node: Self::N<'n>) -> bool {
+        false
+    }
+
+    /// Whether a page script listens for `click` on this very element, so that `actions` advertises
+    /// Click on a `div` that is a button in all but name. Default: nothing known.
+    fn has_click_handler<'n>(&'n self, _node: Self::N<'n>) -> bool {
+        false
+    }
+
+    /// The absolute URL a link points at (`href` resolved against the document's base URL), if the
+    /// engine can resolve it. Without it `states` exposes the `href` attribute as written.
+    fn link_url<'n>(&'n self, _node: Self::N<'n>) -> Option<String> {
+        None
+    }
 }

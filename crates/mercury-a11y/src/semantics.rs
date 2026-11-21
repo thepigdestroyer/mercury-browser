@@ -34,8 +34,11 @@ pub struct NodeSemantics {
     /// no children, bounds, transform, tree id or relation lists.
     pub node: Node,
     pub relations: Relations,
-    /// `aria-hidden`, `inert`, the `hidden` attribute, `visibility: hidden`: the node and its
-    /// subtree are not exposed. (`display: none` is layout's own hide.)
+    /// `aria-hidden`, `inert`, the `hidden` attribute, `visibility: hidden|collapse` and computed
+    /// `display: none`: the node and its subtree are not exposed. `semantics.node.is_hidden()`
+    /// mirrors it; this field is the one to read. (Layout hides `display: none` on its own too: the
+    /// engine's flag is the OR of the two.) An element with `aria-hidden` that holds keyboard focus
+    /// is not hidden: see [`crate::states`].
     pub hidden: bool,
 }
 
