@@ -39,6 +39,13 @@ package = "servo-malloc-size-of"
 [dependencies.malloc_size_of_derive]
 version = "0.1"
 
+# Mercury: (MED-1) the contract of Mercury's Media Source Extensions backend (`MediaSourceBackend`,
+# `MseEvent`, `MseError`) lives in the workspace crate crates/mercury-mse, which has no Servo or
+# GStreamer dependency. A vendored crate depending on a workspace member is the allowed direction
+# (the reverse would be formatted by `cargo fmt --all`; see docs/developer-guide/vendored-patches.md).
+[dependencies.mercury-mse]
+path = "../../crates/mercury-mse"
+
 [dependencies.serde]
 version = "1.0.228"
 features = ["derive"]

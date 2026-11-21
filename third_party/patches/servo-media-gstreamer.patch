@@ -1,6 +1,68 @@
 # Mercury's changes to servo-media-gstreamer 0.8.0, against the crate as published on crates.io
 # (SHA-256 7bb5bc60a53436a224a57f23059a494bf84296119f1c6e8f5bbba8a2af3fa96f). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-media-gstreamer.
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -81,6 +81,15 @@
+ [dependencies.log]
+ version = "0.4.32"
+
++# Mercury: (MED-1) Mercury's Media Source Extensions backend (crates/mercury-mse) and its GStreamer
++# source element (crates/mercury-mse-gst), workspace members with no Servo dependency. See
++# `mercury_mse.rs` and the hooks in `player.rs`.
++[dependencies.mercury-mse]
++path = "../../crates/mercury-mse"
++
++[dependencies.mercury-mse-gst]
++path = "../../crates/mercury-mse-gst"
++
+ [dependencies.servo-base]
+ version = "=0.8.0"
+
+diff --git a/lib.rs b/lib.rs
+--- a/lib.rs
++++ b/lib.rs
+@@ -10,6 +10,7 @@
+ pub mod media_capture;
+ pub mod media_stream;
+ mod media_stream_source;
++mod mercury_mse; // Mercury: (MED-1) the glue to Mercury's Media Source Extensions backend
+ pub mod player;
+ mod registry_scanner;
+ mod render;
+@@ -136,6 +137,10 @@
+             return Err(ErrorLoadingPlugins(errors));
+         }
+
++        // Mercury: (MED-1) register the `MseSrc` element (the `mercury-mse://` URI handler) that Media
++        // Source Extensions play through. A failure is logged and only leaves MSE unsupported.
++        mercury_mse::register();
++
+         type MediaInstancesVec = Vec<(usize, Weak<Mutex<dyn MediaInstance>>)>;
+         let instances: HashMap<ClientContextId, MediaInstancesVec> = Default::default();
+         let instances = Arc::new(Mutex::new(instances));
+@@ -304,6 +309,20 @@
+         SupportsMediaType::No
+     }
+
++    // Mercury: (MED-1) Media Source Extensions, see `mercury_mse.rs`.
++    fn create_media_source(
++        &self,
++        events: GenericCallback<servo_media_player::mse::MseEvent>,
++    ) -> Result<Arc<dyn servo_media_player::mse::MediaSourceBackend>, servo_media_player::mse::MseError>
++    {
++        mercury_mse::create_media_source(events)
++    }
++
++    // Mercury: (MED-1)
++    fn is_type_supported_mse(&self, mime: &str) -> bool {
++        mercury_mse::is_type_supported(mime)
++    }
++
+     fn set_capture_mocking(&self, mock: bool) {
+         self.capture_mocking.store(mock, Ordering::Release)
+     }
 diff --git a/media_capture.rs b/media_capture.rs
 --- a/media_capture.rs
 +++ b/media_capture.rs
@@ -69,10 +131,123 @@ diff --git a/media_stream.rs b/media_stream.rs
                      .property("mtu", 1200u32)
                      .build()?;
                  let queue2 = gstreamer::ElementFactory::make("queue").build()?;
+diff --git a/mercury_mse.rs b/mercury_mse.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_mse.rs
+@@ -0,0 +1,92 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++
++// Mercury: this file is new (lane med-1, MSE by Plan B of R14a). It is the whole of the glue between
++// Servo's media layer and Mercury's Media Source Extensions backend: `crates/mercury-mse` (parsers,
++// coded-frame processing, track buffers, the MediaSource model, a threaded `MseBackend`) and
++// `crates/mercury-mse-gst` (the `mercury-mse://` source element that feeds GStreamer's `appsrc`).
++// Nothing in it is copied from Servo or another project. The hooks are in `lib.rs` (registration,
++// `create_media_source`, `is_type_supported_mse`) and `player.rs` (`StreamType::MediaSource`,
++// `connect_media_source`, `source-setup`); `MERCURY.md` lists them.
++
++use std::sync::atomic::{AtomicBool, Ordering};
++use std::sync::{Arc, Mutex};
++
++use ::mercury_mse::{
++    EventSink, Limits, MediaSourceBackend, MseBackend, MseError, MseEvent, TypeSupport,
++};
++use ::mercury_mse_gst::{GstTypeSupport, MSE_URI_SCHEME};
++use log::{debug, warn};
++use servo_base::generic_channel::GenericCallback;
++
++/// Set once `mercury_mse_gst::register()` succeeded: the `MseSrc` element and its `mercury-mse://` URI
++/// handler exist. Without it MSE is reported as unsupported and a MediaSource player refuses to start.
++static REGISTERED: AtomicBool = AtomicBool::new(false);
++
++/// Registers the `MseSrc` element with GStreamer (idempotent). Called after `gstreamer::init()` and the
++/// plugin loading. A failure is logged and leaves MSE unsupported; it never stops the media backend.
++pub(crate) fn register() {
++    match ::mercury_mse_gst::register() {
++        Ok(()) => REGISTERED.store(true, Ordering::Release),
++        Err(error) => {
++            REGISTERED.store(false, Ordering::Release);
++            warn!("Media Source Extensions are unavailable: the MseSrc element did not register: {error}");
++        },
++    }
++}
++
++/// `true` when the `MseSrc` element is registered.
++pub(crate) fn is_available() -> bool {
++    REGISTERED.load(Ordering::Acquire)
++}
++
++/// The URI `playbin3` is given for the MediaSource player `player_id`: `mercury-mse://<id>`. GStreamer
++/// finds the `MseSrc` element through its URI handler; the id only keeps the names apart.
++pub(crate) fn uri_for(player_id: usize) -> String {
++    format!("{MSE_URI_SCHEME}://{player_id}")
++}
++
++/// `MediaSource.isTypeSupported(mime)`: the container and every codec are ones the backend feeds and the
++/// GStreamer registry has a decoder for.
++pub(crate) fn is_type_supported(mime: &str) -> bool {
++    is_available() && MseBackend::is_type_supported(mime, &GstTypeSupport as &dyn TypeSupport)
++}
++
++/// A new MediaSource backend. Its events go to `events`, from the backend's worker thread: the callback the
++/// script thread made only queues a task there, and nothing in this crate calls back into the backend on
++/// that thread's behalf (the rule of `mercury_mse::MseEvent`).
++pub(crate) fn create_media_source(
++    events: GenericCallback<MseEvent>,
++) -> Result<Arc<dyn MediaSourceBackend>, MseError> {
++    if !is_available() {
++        return Err(MseError::NotSupported(
++            "the MseSrc GStreamer element is not registered".to_owned(),
++        ));
++    }
++    // The callback may not be `Sync` (it can wrap an IPC sender), so it sits behind a mutex like the
++    // player's own observer does.
++    let events = Mutex::new(events);
++    let sink: EventSink = Arc::new(move |event| {
++        let result = events
++            .lock()
++            .expect("the MSE event callback mutex is never poisoned")
++            .send(event);
++        if let Err(error) = result {
++            debug!("An MSE event could not be delivered (the media element is gone): {error:?}");
++        }
++    });
++    Ok(Arc::new(MseBackend::new(
++        sink,
++        Arc::new(GstTypeSupport),
++        Limits::default(),
++    )))
++}
++
++/// Connects the source element `playbin3` made for the `mercury-mse://` URI (the `source-setup`
++/// argument) to the backend's frame feed. Runs on a GStreamer thread: it only hands the feed over.
++pub(crate) fn attach(
++    source: &gstreamer::Element,
++    backend: &Arc<dyn MediaSourceBackend>,
++) -> Result<(), String> {
++    ::mercury_mse_gst::attach(source, backend.frame_feed())
++}
 diff --git a/player.rs b/player.rs
 --- a/player.rs
 +++ b/player.rs
-@@ -139,6 +139,9 @@
+@@ -21,6 +21,7 @@
+ use servo_media_player::audio::AudioRenderer;
+ use servo_media_player::context::PlayerGLContext;
+ use servo_media_player::metadata::Metadata;
++use servo_media_player::mse::MediaSourceBackend; // Mercury: (MED-1) MSE
+ use servo_media_player::video::VideoFrameRenderer;
+ use servo_media_player::{
+     PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, SeekLockMsg, StreamType,
+@@ -31,6 +32,7 @@
+ use super::BACKEND_BASE_TIME;
+ use crate::media_stream::GStreamerMediaStream;
+ use crate::media_stream_source::{ServoMediaStreamSrc, register_servo_media_stream_src};
++use crate::mercury_mse; // Mercury: (MED-1) the MSE glue
+ use crate::render::GStreamerRender;
+ use crate::source::{ServoSrc, register_servo_src};
+
+@@ -139,6 +141,9 @@
      last_metadata: Option<Metadata>,
      cat: gstreamer::DebugCategory,
      enough_data: Arc<AtomicBool>,
@@ -82,10 +257,42 @@ diff --git a/player.rs b/player.rs
  }
 
  impl PlayerInner {
-@@ -456,6 +459,25 @@
-     download_buffering_enabled: AtomicBool,
- }
+@@ -179,7 +184,8 @@
+     }
 
+     pub fn set_playback_rate(&mut self, playback_rate: f64) -> Result<(), PlayerError> {
+-        if self.stream_type != StreamType::Seekable {
++        // Mercury: (MED-1) a MediaSource stream is seekable, so it may change its rate too.
++        if self.stream_type == StreamType::Stream {
+             return Err(PlayerError::NonSeekableStream);
+         }
+
+@@ -259,10 +265,14 @@
+     }
+
+     pub fn seek(&mut self, time: f64) -> Result<(), PlayerError> {
+-        if self.stream_type != StreamType::Seekable {
++        // Mercury: (MED-1) a MediaSource stream is seekable; its duration is the MediaSource's, which the
++        // media element clamps the target to, so the duration check below is skipped for it (GstPlay's
++        // own duration lags behind a duration the page changed).
++        if self.stream_type == StreamType::Stream {
+             return Err(PlayerError::NonSeekableStream);
+         }
+-        if let Some(ref metadata) = self.last_metadata &&
++        if self.stream_type == StreamType::Seekable &&
++            let Some(ref metadata) = self.last_metadata &&
+             let Some(ref duration) = metadata.duration &&
+             duration < &time::Duration::new(time as u64, 0)
+         {
+@@ -454,6 +464,28 @@
+     /// Whether to enable download buffering. This is only enabled heuristically for some media,
+     /// because it causes issues in certain situations. See <https://github.com/servo/servo/issues/23241>.
+     download_buffering_enabled: AtomicBool,
++    /// Mercury: (MED-1) the MediaSource backend whose frame feed a `StreamType::MediaSource` player
++    /// plays (set by `connect_media_source`, which comes before `setup`; read by `source-setup`).
++    media_source: Mutex<Option<Arc<dyn MediaSourceBackend>>>,
++}
++
 +/// Mercury: servo/servo#49889 (EA0 backport).
 +/// downloadbuffer keeps the download in the user cache directory and it will
 +/// make the whole pipeline fail if it can't be accessed.
@@ -103,26 +310,51 @@ diff --git a/player.rs b/player.rs
 +            false
 +        },
 +    }
-+}
-+
+ }
+
  impl GStreamerPlayer {
-     #[allow(clippy::too_many_arguments)]
-     pub fn new(
-@@ -509,9 +531,10 @@
+@@ -486,6 +518,7 @@
+             stream_type,
+             render: Arc::new(Mutex::new(GStreamerRender::new(gl_context))),
+             download_buffering_enabled: AtomicBool::new(false),
++            media_source: Mutex::new(None), // Mercury: (MED-1)
+         }
+     }
+
+@@ -509,9 +542,19 @@
          let signal_adapter = gstreamer_play::PlaySignalAdapter::new_sync_emit(&player);
          let pipeline = player.pipeline();
 
 -        // FIXME(#282): The progressive downloading breaks playback on Windows and Android.
 -        if !cfg!(any(target_os = "windows", target_os = "android")) &&
 -            self.download_buffering_enabled.load(Ordering::Relaxed)
++        // Mercury: (MED-1) a MediaSource has no download to buffer: it is a pull source of coded frames.
++        let media_source = self.media_source.lock().unwrap().clone();
++        if self.stream_type == StreamType::MediaSource && media_source.is_none() {
++            return Err(PlayerError::Backend(
++                "a MediaSource player must be connected to its MediaSource first".to_owned(),
++            ));
++        }
++
 +        // FIXME(#43421): The progressive downloading breaks playback on Android.
 +        if !cfg!(target_os = "android") &&
++            self.stream_type != StreamType::MediaSource &&
 +            self.download_buffering_enabled.load(Ordering::Relaxed) &&
 +            ensure_download_directory()
          {
              // Set player to perform progressive downloading. This will make the
              // player store the downloaded media in a local temporary file for
-@@ -652,6 +675,7 @@
+@@ -627,6 +670,9 @@
+                 })?;
+                 "servosrc://".to_value()
+             },
++            // Mercury: (MED-1) `playbin3` makes the `MseSrc` element for this URI; `source-setup` below
++            // attaches the backend's frame feed to it.
++            StreamType::MediaSource => mercury_mse::uri_for(self.id).to_value(),
+         };
+         player.set_property("uri", &uri);
+
+@@ -652,6 +698,7 @@
              last_metadata: None,
              cat: gstreamer::DebugCategory::get("servoplayer").unwrap(),
              enough_data: Arc::new(AtomicBool::new(false)),
@@ -130,7 +362,7 @@ diff --git a/player.rs b/player.rs
          })));
 
          let inner = self.inner.borrow();
-@@ -668,10 +692,13 @@
+@@ -668,10 +715,13 @@
              let _ = notify!(observer, PlayerEvent::Error(error.to_string()));
          });
 
@@ -145,7 +377,7 @@ diff --git a/player.rs b/player.rs
              inner_clone.lock().unwrap().play_state = play_state;
 
              let state = match play_state {
-@@ -701,7 +728,7 @@
+@@ -701,7 +751,7 @@
          });
 
          // Handle `media-info-updated` signal.
@@ -154,7 +386,7 @@ diff --git a/player.rs b/player.rs
          let observer = self.observer.clone();
          signal_adapter.connect_media_info_updated(move |_, info| {
              let Ok(metadata) = metadata_from_media_info(info) else {
-@@ -708,6 +735,9 @@
+@@ -708,6 +758,9 @@
                  return;
              };
 
@@ -164,7 +396,7 @@ diff --git a/player.rs b/player.rs
              let mut inner = inner_clone.lock().unwrap();
 
              if inner.last_metadata.as_ref() == Some(&metadata) {
-@@ -730,6 +760,14 @@
+@@ -730,6 +783,14 @@
                  }
              }
 
@@ -179,7 +411,7 @@ diff --git a/player.rs b/player.rs
              inner.last_metadata = Some(metadata.clone());
              gstreamer::info!(
                  inner.cat,
-@@ -739,6 +777,20 @@
+@@ -739,6 +800,20 @@
              );
              let _ = notify!(observer, PlayerEvent::MetadataUpdated(metadata));
 
@@ -200,7 +432,7 @@ diff --git a/player.rs b/player.rs
              if send_pause_event {
                  let _ = notify!(observer, PlayerEvent::StateChanged(PlaybackState::Paused));
              }
-@@ -745,7 +797,7 @@
+@@ -745,7 +820,7 @@
          });
 
          // Handle `duration-changed` signal.
@@ -209,7 +441,7 @@ diff --git a/player.rs b/player.rs
          let observer = self.observer.clone();
          signal_adapter.connect_duration_changed(move |_, duration| {
              let duration = duration.map(|duration| {
-@@ -755,6 +807,9 @@
+@@ -755,6 +830,9 @@
                  )
              });
 
@@ -219,7 +451,7 @@ diff --git a/player.rs b/player.rs
              let mut inner = inner_clone.lock().unwrap();
              if let Some(ref mut metadata) = inner.last_metadata &&
                  metadata.duration != duration
-@@ -822,7 +877,7 @@
+@@ -822,7 +900,7 @@
          };
 
          let (receiver, error_handler_id) = {
@@ -228,7 +460,7 @@ diff --git a/player.rs b/player.rs
              let inner = inner.lock().unwrap();
              let pipeline = inner.player.pipeline();
 
-@@ -835,6 +890,7 @@
+@@ -835,6 +913,7 @@
              pipeline.connect("source-setup", false, move |args| {
                  let source = args[1].get::<gstreamer::Element>().unwrap();
 
@@ -236,7 +468,7 @@ diff --git a/player.rs b/player.rs
                  let mut inner = inner_clone.lock().unwrap();
                  let source = match inner.stream_type {
                      StreamType::Seekable => {
-@@ -852,10 +908,11 @@
+@@ -852,10 +931,11 @@
                          let observer_ = observer.clone();
                          let observer__ = observer.clone();
                          let observer___ = observer.clone();
@@ -249,7 +481,7 @@ diff --git a/player.rs b/player.rs
                          servosrc.set_callbacks(
                              gstreamer_app::AppSrcCallbacks::builder()
                                  .need_data(move |_, _| {
-@@ -876,6 +933,9 @@
+@@ -876,6 +956,9 @@
                                      let _ = notify!(observer__, PlayerEvent::EnoughData);
                                  })
                                  .seek_data(move |_, offset| {
@@ -259,7 +491,63 @@ diff --git a/player.rs b/player.rs
                                      let (ret, ack_channel) = if servosrc_.set_seek_offset(offset) {
                                          let _ = notify!(
                                              observer___,
-@@ -1057,5 +1117,41 @@
+@@ -912,6 +995,25 @@
+                         });
+                         PlayerSource::Stream(media_stream_src)
+                     },
++                    // Mercury: (MED-1) hand the backend's frame feed to the `MseSrc` element. The setup
++                    // caller is released here, like for a stream: there is no `need-data` to wait for
++                    // before the page has appended anything.
++                    StreamType::MediaSource => {
++                        let attached = match media_source.as_ref() {
++                            Some(media_source) => mercury_mse::attach(&source, media_source),
++                            None => Err("no MediaSource is connected to this player".to_owned()),
++                        };
++                        let sender_clone = sender.clone();
++                        is_ready_clone.call_once(|| {
++                            let _ = notify!(
++                                sender_clone,
++                                attached.map_err(|error| PlayerError::Backend(format!(
++                                    "MediaSource attach failed: {error}"
++                                )))
++                            );
++                        });
++                        return None;
++                    },
+                 };
+
+                 inner.set_src(source);
+@@ -1019,6 +1121,29 @@
+     fn render_use_gl(&self) -> bool {
+         self.render.lock().unwrap().is_gl()
+     }
++
++    // Mercury: (MED-1) Connects the player to the MediaSource backend whose frames it plays, and builds
++    // the pipeline (`uri=mercury-mse://<id>`; `source-setup` attaches the feed). It must be the first call.
++    fn connect_media_source(&self, source: Arc<dyn MediaSourceBackend>) -> Result<(), PlayerError> {
++        if self.stream_type != StreamType::MediaSource {
++            return Err(PlayerError::Backend(
++                "only a MediaSource player can be connected to a MediaSource".to_owned(),
++            ));
++        }
++        if self.inner.borrow().is_some() {
++            return Err(PlayerError::Backend(
++                "the player is already set up: connect_media_source must be the first call".to_owned(),
++            ));
++        }
++        if !mercury_mse::is_available() {
++            return Err(PlayerError::Backend(
++                "Media Source Extensions are not available (the MseSrc element is not registered)"
++                    .to_owned(),
++            ));
++        }
++        *self.media_source.lock().unwrap() = Some(source);
++        self.setup()
++    }
+ }
+
+ impl MediaInstance for GStreamerPlayer {
+@@ -1057,5 +1182,41 @@
                  tx_ack,
              });
          let _ = rx_ack.recv();

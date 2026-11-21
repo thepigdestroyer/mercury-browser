@@ -49,3 +49,29 @@ comment at each (they apply cleanly to 0.8.0 and fall away at the next Servo bum
 6. **`render.rs`, servo/servo#49661:** a frame whose rows are padded (VideoToolbox aligns them) is copied
    row by row into a packed buffer, so the consumer of `VideoFrame` sees the picture it expects. Reads the
    stride from the mapped frame, not from the caps.
+
+## Media Source Extensions glue (lane med-1, MSE by Plan B)
+
+MSE is Mercury's own code, not GStreamer's `mse` plugin (the spike said no, R17): `crates/mercury-mse`
+holds the parsers, the coded-frame processing, the track buffers and the MediaSource model, and
+`crates/mercury-mse-gst` holds `MseSrc`, a source element (a `GstBin` with one `appsrc` per track) registered
+as the URI handler of `mercury-mse://`. This crate only connects them to Servo's player. `Cargo.toml` gains
+path dependencies on both crates. Everything new is in `mercury_mse.rs`; the hooks in upstream files are:
+
+7. **`mercury_mse.rs` (new file):** `register()` (the element and its URI handler; a failure is logged and
+   leaves MSE unsupported), `create_media_source(events)` (an `MseBackend` whose `EventSink` sends on the
+   `GenericCallback`, with `GstTypeSupport` and the default quota `Limits`), `is_type_supported(mime)`,
+   `uri_for(player id)` and `attach(source element, backend)`.
+8. **`lib.rs`:** `mod mercury_mse`, `register()` after the plugins are loaded, and the two `Backend`
+   methods `create_media_source` and `is_type_supported_mse`.
+9. **`player.rs`:** `StreamType::MediaSource` builds the same `playbin3` with `uri=mercury-mse://<id>` and
+   no download buffering; the `source-setup` closure attaches the feed (`mercury_mse::attach`) and releases
+   the caller of `setup` (there is no `need-data` to wait for before the page appends anything);
+   `Player::connect_media_source` stores the backend and runs `setup`, so it must come first; `seek` and
+   `set_playback_rate` accept the new stream type (the duration check in `seek` is skipped for it: the
+   MediaSource owns the duration); `push_data` is never used. Hunks are marked `Mercury: (MED-1)`.
+
+Tested by `mercury-mse` and `mercury-mse-gst`'s own suites (light pool, no Servo). The Servo-side glue
+compiles (`cargo check -p servo-media-gstreamer`) and has **not been run in a window** (the screen was locked);
+`tests/pages/mse-*.html` and `docs/developer-guide/media-source.md` say how to run it. Dropped when a Servo
+release has its own MSE (servo/servo#44403) and Mercury moves to it.
