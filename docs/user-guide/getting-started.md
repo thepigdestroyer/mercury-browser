@@ -117,14 +117,39 @@ Open the settings window with ++cmd+comma++, from **Mercury Browser → Settings
 | Section | What you can set |
 | --- | --- |
 | General | What opens at start-up (a new tab, the home page or the tabs from last time), the home page, the default page zoom, the search engine and your own engines |
-| Appearance | Theme (Follow the system, Light or Dark) for Mercury's own windows and the colour scheme pages are told to use; the home button; the bookmarks bar |
+| Appearance | Theme (Follow the system, Light or Dark) for Mercury's own windows and the colour scheme pages are told to use; the home button; the bookmarks bar; the layout (Mercury or Classic) and the tab-group controls (see below) |
+| Tab groups | The letter of each tab group, and when ⌥ plus a letter switches groups (see below) |
 | Privacy and security | Blocking ads and trackers, and whether the filter lists update themselves (**Update now** checks at once); blocking pop-up windows; loading pages over HTTPS only; what to clear when Mercury quits (browsing and download history, cookies and site data, cached files), and the **Clear browsing data…** button |
 | Downloads | A folder and a question about where to save; neither does anything yet (see below) |
 | Passwords | Whether Mercury offers to save passwords, the sites it never offers for, and the saved logins themselves |
 | Advanced | Experimental web features and drawing canvases on the GPU; both take effect at the next start |
 
+### Layout, tab groups and their keys
+
+**The tab-group interface is not in this version yet.** The choices in **Appearance → Layout** and **Tab group controls**, and everything in **Tab groups**, are saved, but until the interface they control arrives in a later version they change nothing you can see. Both sections say so at the top.
+
+**Appearance** shows two layouts to choose from, **Mercury (default)** (the toolbar on top and a group dock at the bottom) and **Classic** (tabs in the title strip, with group labels). Below them, in this order:
+
+- **Group dock**, with where it **Starts** (open or shrunk). Each layout remembers its own choice: in Classic the dock is optional and off unless you turn it on.
+- **Ring from the toolbar hub**.
+- **Orbit overview**, and **Pinch to open Orbit**, which is greyed while Orbit is off and keeps its setting.
+- **Group keys (⌥ + letter)**.
+- **Corner dial**, and its **Corner**, which is greyed while the dial is off and keeps its setting.
+- **Memory for Orbit previews**, from 32 MB to 1 GB (128 MB unless you change it).
+
+**Tab groups** lists the groups of the window with a key for each:
+
+- A group has at most one letter, and a letter belongs to one group. Click the key and type a letter (either case) to give it; Backspace or Delete takes it away. Anything that is not a letter from A to Z is refused with a message.
+- If another group already has the letter, the row says so and offers **Swap** (this group takes the letter and the other group takes this group's old letter) or **Choose another** (nothing changes).
+- Some letters are accent keys on your keyboard (⌥E, ⌥I, ⌥N and ⌥U on the U.S. layout). They are allowed; a note under the row says what happens to them with the capture mode you chose. The "⌥ + key types" column shows what each letter types with ⌥ held. Until Mercury has seen your keyboard it shows the U.S. layout and says so.
+- **When ⌥ switches groups** has three choices: outside text fields and anywhere after holding ⌥ for the hold time (recommended); only outside text fields; or always, which means ⌥ + letter never types a character in Mercury. The **Hold time** applies to the first choice.
+- **Show keys beside names** and the button **Reset to A, S, D, F, G…**, which gives the groups, in order, the letters of your default sequence.
+
+If group keys are switched off in Appearance, the Tab groups section says so; you can still assign letters. Tabs that belong to no group are listed as **Loose**, with no key.
+
 Some settings are already in the window but do nothing yet, because the feature behind them is not there yet. Their notes say so:
 
+- **Layout**, **Tab group controls** and **Tab groups**, as described above;
 - the **Downloads** section, **Save downloads in** and **Ask where to save each download**: files go to your Downloads folder without asking;
 - **Show search suggestions while typing**, which is greyed out;
 - **Language**: Mercury is only in English for now.

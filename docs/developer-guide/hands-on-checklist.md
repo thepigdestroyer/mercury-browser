@@ -36,6 +36,25 @@ when you are done.
    without pressing Return. Reopen: the text is still there.
 6. **Clear on exit:** turn on "Cookies and site data", sign in to a site, quit, start again: you are
    signed out. Turn it off again afterwards.
+7. **Seven sections:** the sidebar lists General, Appearance, Tab groups, Privacy and security,
+   Downloads, Passwords and Advanced; each opens its own page.
+8. **Appearance, layout and tab-group controls:** the page looks like the PNGs of
+   `render_settings_appearance` in light and dark (two layout cards, the note that the interface is
+   not in yet, the switches in order, nothing clipped at the narrowest window). Choose Classic: its
+   Group dock switch is off and its note names Classic; back in Mercury the dock is as you left it.
+   Turn Orbit off: "Pinch to open Orbit" greys out; turn it on again: it keeps its old setting. Quit
+   and start again: every choice is still there.
+9. **Tab groups, keys:** with no groups the page says so. (Making groups needs the tab-group
+   interface, so this step needs a build that has it; until then check only that the page opens, is
+   not clipped and shows the note.) With groups: each row has a key cap; click one and type a letter
+   that another group has: the cap turns red, the row names the other group and offers Swap and
+   Choose another. Swap exchanges the letters; Choose another changes nothing. Type a digit: "Type a
+   letter from A to Z." Type E: an amber note about accent keys appears. Reset gives A, S, D, F, G…
+   in order.
+10. **Escape and Cmd+W with a key cap focused:** click a key cap, press Escape: the window closes;
+    reopen, click a key cap, press Cmd+W: it closes. Tab leaves the key cap for the next control.
+11. **VoiceOver on a key cap:** it reads "Key for <group>", the letter, and the row's message (the
+    conflict or the accent-key note) as its description.
 
 ## Page dialogs and permission prompts
 
