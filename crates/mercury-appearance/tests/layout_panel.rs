@@ -160,14 +160,14 @@ fn each_layout_remembers_its_own_dock_choice_when_the_layouts_are_switched() {
 
     assert!(set_choice(&mut settings, Choice::Layout, 0));
     let panel = layout_panel(&settings, true);
-    assert!(!panel.dock, "back in Mercury, its choice (off) is unchanged");
+    assert!(
+        !panel.dock,
+        "back in Mercury, its choice (off) is unchanged"
+    );
     assert_eq!(panel.dock_note, MERCURY_DOCK_NOTE);
 
     assert!(set_choice(&mut settings, Choice::Layout, 1));
-    assert!(
-        layout_panel(&settings, true).dock,
-        "and Classic's (on) too"
-    );
+    assert!(layout_panel(&settings, true).dock, "and Classic's (on) too");
 }
 
 #[test]
@@ -185,7 +185,10 @@ fn an_unknown_stored_layout_reads_and_writes_as_mercury() {
     set_switch(&mut settings, Control::Dock, false);
     assert!(!settings.tab_groups.dock);
     assert!(!settings.tab_groups.dock_in_classic);
-    assert_eq!(settings.layout, "future", "a switch never rewrites the layout");
+    assert_eq!(
+        settings.layout, "future",
+        "a switch never rewrites the layout"
+    );
 }
 
 // --- Names ---
@@ -292,7 +295,10 @@ fn a_switch_never_touches_the_page_zoom_theme_or_palettes() {
     assert_eq!(settings.theme, before.theme);
     assert_eq!(settings.palette_light, before.palette_light);
     assert_eq!(settings.palette_dark, before.palette_dark);
-    assert_eq!(settings.tab_groups.keys.hold_ms, before.tab_groups.keys.hold_ms);
+    assert_eq!(
+        settings.tab_groups.keys.hold_ms,
+        before.tab_groups.keys.hold_ms
+    );
 }
 
 // --- Dependent controls (D6) ---
@@ -407,15 +413,11 @@ fn the_memory_choice_stores_the_megabytes_of_the_chosen_item() {
 
 #[test]
 fn an_index_outside_the_list_returns_false_and_changes_nothing() {
-    let starts = [
-        AppearanceSettings::default(),
-        classic(),
-        {
-            let mut odd = AppearanceSettings::default();
-            odd.tab_groups.snapshot_cap_mb = 200;
-            odd
-        },
-    ];
+    let starts = [AppearanceSettings::default(), classic(), {
+        let mut odd = AppearanceSettings::default();
+        odd.tab_groups.snapshot_cap_mb = 200;
+        odd
+    }];
     for start in starts {
         for (choice, len) in [
             (Choice::Layout, 2),
@@ -457,26 +459,23 @@ fn a_hand_edited_memory_value_is_offered_in_its_place_in_the_order() {
         snapshot_cap_choices(200),
         [32, 64, 128, 200, 256, 512, 1024]
     );
-    assert_eq!(
-        snapshot_cap_choices(33),
-        [32, 33, 64, 128, 256, 512, 1024]
-    );
+    assert_eq!(snapshot_cap_choices(33), [32, 33, 64, 128, 256, 512, 1024]);
     assert_eq!(
         snapshot_cap_choices(1000),
         [32, 64, 128, 256, 512, 1000, 1024]
     );
     // Values the validation would repair are still listed, so the panel never panics on them.
-    assert_eq!(
-        snapshot_cap_choices(0),
-        [0, 32, 64, 128, 256, 512, 1024]
-    );
+    assert_eq!(snapshot_cap_choices(0), [0, 32, 64, 128, 256, 512, 1024]);
     assert_eq!(
         snapshot_cap_choices(u16::MAX),
         [32, 64, 128, 256, 512, 1024, u16::MAX]
     );
     for current in [0_u16, 1, 31, 33, 100, 200, 300, 1000, 1025, u16::MAX] {
         let choices = snapshot_cap_choices(current);
-        assert!(choices.windows(2).all(|pair| pair[0] < pair[1]), "{current}");
+        assert!(
+            choices.windows(2).all(|pair| pair[0] < pair[1]),
+            "{current}"
+        );
         assert!(choices.contains(&current), "{current}");
         assert_eq!(choices.len(), 7, "{current}");
     }
@@ -491,7 +490,9 @@ fn the_panel_selects_the_odd_stored_memory_value_and_choosing_another_drops_it()
     let panel = layout_panel(&settings, true);
     assert_eq!(
         caps(&panel),
-        ["32 MB", "64 MB", "128 MB", "200 MB", "256 MB", "512 MB", "1024 MB"]
+        [
+            "32 MB", "64 MB", "128 MB", "200 MB", "256 MB", "512 MB", "1024 MB"
+        ]
     );
     assert_eq!(panel.snapshot_cap_index, 3);
 
@@ -537,7 +538,13 @@ fn starting_points() -> Vec<AppearanceSettings> {
     let mut shrunk = AppearanceSettings::default();
     assert!(set_choice(&mut shrunk, Choice::DockStarts, 1));
     assert!(set_choice(&mut shrunk, Choice::DialCorner, 0));
-    vec![AppearanceSettings::default(), classic(), all_off, odd, shrunk]
+    vec![
+        AppearanceSettings::default(),
+        classic(),
+        all_off,
+        odd,
+        shrunk,
+    ]
 }
 
 #[test]
@@ -586,7 +593,10 @@ fn a_long_random_walk_over_the_controls_never_leaves_a_value_validation_would_re
             let choice = Choice::ALL[walk.next(Choice::ALL.len())];
             let taken = set_choice(&mut settings, choice, walk.next(8));
             if !taken {
-                assert_eq!(settings, before, "step {step}: a refused choice changed things");
+                assert_eq!(
+                    settings, before,
+                    "step {step}: a refused choice changed things"
+                );
             }
         }
         assert_survives_validation(&settings, &format!("step {step}"));
@@ -594,9 +604,18 @@ fn a_long_random_walk_over_the_controls_never_leaves_a_value_validation_would_re
         // The panel always agrees with the settings, in both modes.
         let panel = layout_panel(&settings, walk.next(2) == 0);
         assert_eq!(panel.orbit, settings.tab_groups.orbit, "step {step}");
-        assert_eq!(panel.orbit_pinch, settings.tab_groups.orbit_pinch, "step {step}");
-        assert_eq!(panel.orbit_pinch_enabled, settings.tab_groups.orbit, "step {step}");
-        assert_eq!(panel.dial_corner_enabled, settings.tab_groups.dial, "step {step}");
+        assert_eq!(
+            panel.orbit_pinch, settings.tab_groups.orbit_pinch,
+            "step {step}"
+        );
+        assert_eq!(
+            panel.orbit_pinch_enabled, settings.tab_groups.orbit,
+            "step {step}"
+        );
+        assert_eq!(
+            panel.dial_corner_enabled, settings.tab_groups.dial,
+            "step {step}"
+        );
         let dock = if panel.layout_index == 0 {
             settings.tab_groups.dock
         } else {

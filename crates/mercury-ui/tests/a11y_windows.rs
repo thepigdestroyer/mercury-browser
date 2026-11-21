@@ -568,6 +568,14 @@ fn settings_window(section: i32) -> SettingsWindow {
     window.set_zoom_index(2);
     window.set_theme_index(0);
     window.set_show_bookmarks_bar(true);
+    // settings-ui: the Appearance section as the desktop fills it, with the interface not live yet.
+    mercury_ui::settings_sections::appearance::fill(
+        &window,
+        &mercury_appearance::panels::layout_panel::layout_panel(
+            &mercury_settings::AppearanceSettings::default(),
+            false,
+        ),
+    );
     window.set_block_ads_and_trackers(true);
     window.set_update_filter_lists(true);
     window.set_filter_lists_publishers(
