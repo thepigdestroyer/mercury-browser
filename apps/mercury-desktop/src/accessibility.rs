@@ -78,6 +78,7 @@ pub(crate) fn install(window: &MainWindow) {
 
     let attached = Rc::downgrade(&shell);
     slint_window.on_activation_changed(move |active| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(shell) = attached.upgrade() {
             shell.activation_changed(active);
         }
@@ -85,6 +86,7 @@ pub(crate) fn install(window: &MainWindow) {
 
     let acted = Rc::downgrade(&shell);
     slint_window.on_foreign_action(move |request| {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(shell) = acted.upgrade() {
             shell.forward_action(request);
         }

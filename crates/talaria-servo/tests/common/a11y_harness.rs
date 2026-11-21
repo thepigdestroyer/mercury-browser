@@ -161,13 +161,15 @@ impl A11yPage {
 
     fn start(url: Url) -> A11yPage {
         let servo_test = ServoTest::new_with_builder(|builder| {
-            let mut preferences = Preferences::default();
-            // The pages are in the page itself or on localhost: a proxy would only interfere.
-            preferences.network_http_proxy_uri = String::new();
-            preferences.network_https_proxy_uri = String::new();
-            preferences.accessibility_enabled = true;
-            // The product keeps this off (it is expensive); a test wants the tree checked.
-            preferences.expensive_accessibility_test_assertions_enabled = true;
+            let preferences = Preferences {
+                // The pages are in the page itself or on localhost: a proxy would only interfere.
+                network_http_proxy_uri: String::new(),
+                network_https_proxy_uri: String::new(),
+                accessibility_enabled: true,
+                // The product keeps this off (it is expensive); a test wants the tree checked.
+                expensive_accessibility_test_assertions_enabled: true,
+                ..Preferences::default()
+            };
             builder.preferences(preferences)
         });
         let delegate = Rc::new(WebViewDelegateImpl::default());
