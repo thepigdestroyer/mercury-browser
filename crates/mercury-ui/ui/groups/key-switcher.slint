@@ -1,19 +1,245 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 // The "Switch group" card (SPEC design/ui-final/SPEC.md §4.7, lane brief
-// `lane-key-switcher-brief.md` §3 and §6 item 4).
+// `lane-key-switcher-brief.md` §3 and §6 item 4). Rust (`src/key_switcher*`) works out every
+// position and word; this file only draws what it is given.
 //
-// GROUNDWORK STUB. The properties, callbacks and the preview window below are the frozen
-// contract of the lane; item 4 `slint-card` draws the body. Remove this paragraph when you do.
+// Numbers (from `design/ui-final/keys/keys-overlay-light.svg`, 1440 x 900, from the card's top-left
+// unless it says "tile"): title 20 px weight 700 at x 30 (baseline 40); the "⌥ held" chip 24 px
+// high, 25 px after the title; "Change keys…" 13 px weight 600 ending at x 730; the tiles from
+// `tiles-left`/`tiles-top`; hint 1 13 px with its baseline 32 px under the last row of tiles and
+// hint 2 12 px with its baseline at 56 px; the card ends 96 px under the last row.
+//
+// Colours come only from `ChromePalette` (card `sheet-background`, border `popup-border`, tile
+// `toolbar-background`, keycap `field-background` with a `text-secondary` border, the chip
+// `primary-button-*`, links and the chosen tile's border `accent`, the chosen tile's fill
+// `item-hover`, hints and counts `text-secondary`, scrim `scrim`) and from the group colours of
+// the model: the palette's B2 values reach the card with the theme lane, without a change here.
+// The counts and the second hint use `text-secondary`, not `text-muted`: `text-muted` is 4.0:1 on a
+// chosen tile (light) and 3.6:1 on it (dark), under the 4.5:1 that small text needs
+// (`key_switcher_render.rs` checks the card's text pairs).
+//
+// The card never takes keyboard focus (⌥ is held and the page keeps its focus): there is no
+// `FocusScope`, the keys come from the state machine in `mercury-option-keys`. A pointer moving
+// over a tile changes nothing; only a click chooses.
 import { Palette } from "std-widgets.slint";
 import { ChromePalette } from "../theme/chrome-palette.slint";
 import { KeyChip, KeyMetrics, KeyRingSeg, KeyTile } from "key-switcher-models.slint";
 export { KeyChip, KeyMetrics, KeyRingSeg, KeyTile }
 
-// The overlay: a scrim over the page area and the card, centred. It fills its parent. While
-// `shown` is false it is invisible and every event goes through. The card never takes keyboard
-// focus: ⌥ is held and the page keeps its focus, so the keys come from the state machine
-// (`mercury-option-keys`), not from this component.
+// One group's tile: the halo and ring behind a keycap, then the name and the tab count. The ring
+// is one `Path` per tab (the commands are ring-local to a `ring-size` box centred on
+// `ring-cx`/`ring-cy`); the mark of the active tab is a dot at (`mark-x`, `mark-y`), ring-local too.
+// Everything inside is hidden from assistive technology: the tile's label already says it.
+component KeyTileView inherits Rectangle {
+    in property <KeyTile> tile;
+    in property <KeyMetrics> metrics;
+    // 0-based position among the tiles, and how many there are.
+    in property <int> position;
+    in property <int> count;
+    in property <bool> chosen;
+    callback pressed();
+
+    // The ring's box, from the tile's top-left.
+    property <length> ring-left: root.metrics.ring-cx - root.metrics.ring-size / 2;
+    property <length> ring-top: root.metrics.ring-cy - root.metrics.ring-size / 2;
+    // The mark's width: 6.4 px on the ring of the full tile, in proportion on the compact one.
+    property <length> mark-size: max(root.metrics.ring-size * 0.136, 4px);
+
+    width: root.metrics.tile-width;
+    height: root.metrics.tile-height;
+    border-radius: 12px;
+    background: root.chosen ? ChromePalette.item-hover : ChromePalette.toolbar-background;
+    border-width: root.chosen ? 2px : 1px;
+    border-color: root.chosen ? ChromePalette.accent : ChromePalette.popup-border;
+
+    accessible-role: list-item;
+    accessible-label: root.tile.accessible-label;
+    accessible-item-index: root.position;
+    accessible-item-count: root.count;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.chosen;
+    accessible-action-default => {
+        root.pressed();
+    }
+
+    // The halo: a full circle ring in the group's tint (a rounded box whose border is the ring,
+    // so no arc path is needed). It may poke a little above the tile, as in the mockup.
+    Rectangle {
+        x: root.metrics.ring-cx - root.metrics.halo-outer;
+        y: root.metrics.ring-cy - root.metrics.halo-outer;
+        width: 2 * root.metrics.halo-outer;
+        height: 2 * root.metrics.halo-outer;
+        border-radius: root.metrics.halo-outer;
+        border-width: root.metrics.halo-width;
+        border-color: root.tile.tint;
+        background: transparent;
+    }
+
+    for segment in root.tile.segments: Path {
+        x: root.ring-left;
+        y: root.ring-top;
+        width: root.metrics.ring-size;
+        height: root.metrics.ring-size;
+        viewbox-width: root.metrics.ring-size / 1px;
+        viewbox-height: root.metrics.ring-size / 1px;
+        commands: segment.commands;
+        fill: segment.shade;
+        accessible-role: none;
+    }
+
+    if root.tile.has-mark: Rectangle {
+        x: root.ring-left + root.tile.mark-x - root.mark-size / 2;
+        y: root.ring-top + root.tile.mark-y - root.mark-size / 2;
+        width: root.mark-size;
+        height: root.mark-size;
+        border-radius: root.mark-size / 2;
+        background: ChromePalette.text;
+    }
+
+    // The keycap.
+    Rectangle {
+        x: (root.metrics.tile-width - root.metrics.key-size) / 2;
+        y: root.metrics.key-y;
+        width: root.metrics.key-size;
+        height: root.metrics.key-size;
+        border-radius: root.metrics.key-radius;
+        background: ChromePalette.field-background;
+        border-width: 1.5px;
+        border-color: ChromePalette.text-secondary;
+
+        Text {
+            width: 100%;
+            height: 100%;
+            text: root.tile.key-label;
+            font-size: root.metrics.key-font;
+            font-weight: 800;
+            color: ChromePalette.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+
+    Text {
+        x: 6px;
+        y: root.metrics.name-y;
+        width: root.metrics.tile-width - 12px;
+        text: root.tile.name;
+        font-size: root.metrics.name-font;
+        font-weight: 600;
+        color: ChromePalette.text;
+        horizontal-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    Text {
+        x: 6px;
+        y: root.metrics.count-y;
+        width: root.metrics.tile-width - 12px;
+        text: root.tile.count-text;
+        font-size: root.metrics.count-font;
+        font-weight: 400;
+        color: ChromePalette.text-secondary;
+        horizontal-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    // Last, so it is on top: a click chooses the group.
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.pressed();
+        }
+    }
+}
+
+// One numbered tab of the chosen group: a digit badge, the tab's shade as a dot and its title.
+component KeyChipView inherits Rectangle {
+    in property <KeyChip> chip;
+    // 0-based position among the chips, and how many there are.
+    in property <int> position;
+    in property <int> count;
+    in property <bool> chosen;
+    callback pressed();
+
+    width: 72px;
+    height: 24px;
+    border-radius: 12px;
+    background: root.chosen ? ChromePalette.item-hover : ChromePalette.toolbar-background;
+    border-width: root.chosen ? 2px : 1px;
+    border-color: root.chosen ? ChromePalette.accent : ChromePalette.popup-border;
+
+    accessible-role: list-item;
+    accessible-label: root.chip.accessible-label;
+    accessible-item-index: root.position;
+    accessible-item-count: root.count;
+    accessible-item-selectable: true;
+    accessible-item-selected: root.chosen;
+    accessible-action-default => {
+        root.pressed();
+    }
+
+    // The digit, in a small keycap like the dock's key badges.
+    Rectangle {
+        x: 5px;
+        y: (root.height - self.height) / 2;
+        width: 14px;
+        height: 16px;
+        border-radius: 4px;
+        background: ChromePalette.field-background;
+        border-width: 1px;
+        border-color: ChromePalette.text-secondary;
+
+        Text {
+            width: 100%;
+            height: 100%;
+            text: "\{root.chip.index}";
+            font-size: 10px;
+            font-weight: 700;
+            color: ChromePalette.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    Rectangle {
+        x: 23px;
+        y: (root.height - self.height) / 2;
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.chip.shade;
+    }
+
+    Text {
+        x: 33px;
+        y: 0px;
+        width: root.width - 33px - 6px;
+        height: root.height;
+        text: root.chip.title;
+        font-size: 10.5px;
+        font-weight: 600;
+        color: ChromePalette.text;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    TouchArea {
+        mouse-cursor: pointer;
+        clicked => {
+            root.pressed();
+        }
+    }
+}
+
+// The overlay: a scrim over everything it fills, and the card, centred. While `shown` is false it
+// is invisible and every event goes through to what is behind it.
 export component KeySwitcher inherits Rectangle {
     // Fades in over 100 ms when it becomes true (0 ms with `reduce-motion`).
     in property <bool> shown;
@@ -43,11 +269,214 @@ export component KeySwitcher inherits Rectangle {
     // The backdrop was clicked.
     callback dismissed();
 
+    // Where the last row of tiles ends, from the card's top: the last tile is in the last row.
+    out property <length> tiles-bottom: root.tiles.length > 0
+        ? root.tiles-top + root.tiles[root.tiles.length - 1].y + root.metrics.tile-height
+        : root.tiles-top;
+    // Whether the tab chips are shown instead of the second hint.
+    out property <bool> chips-shown: root.selected-group >= 0 && root.chips.length > 0;
+    // The most chips there are room for: digits reach only 1 to 9.
+    property <int> chip-count: min(root.chips.length, 9);
+
     visible: root.shown;
+
+    // Nothing exists while hidden, so nothing can be read or hit. The card is made each time it is
+    // shown and fades in from nothing over 100 ms (at once with Reduce Motion): `init` starts the
+    // fade, so it does not depend on what was drawn while the card was hidden.
+    if root.shown: Rectangle {
+        property <float> fade: 0;
+        init => {
+            self.fade = 1.0;
+        }
+        animate fade {
+            duration: root.reduce-motion ? 0ms : 100ms;
+            easing: ease-out;
+        }
+        opacity: self.fade;
+
+        // The backdrop: a click outside the card closes it with no effect.
+        Rectangle {
+            background: ChromePalette.scrim;
+
+            TouchArea {
+                clicked => {
+                    root.dismissed();
+                }
+            }
+        }
+
+        card := Rectangle {
+            x: Math.round((root.width - root.card-width) / 2px) * 1px;
+            y: Math.round((root.height - root.card-height) / 2px) * 1px;
+            width: root.card-width;
+            height: root.card-height;
+            border-radius: 12px;
+            background: ChromePalette.sheet-background;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+            drop-shadow-offset-y: 10px;
+            drop-shadow-blur: 18px;
+            drop-shadow-color: ChromePalette.shadow;
+
+            // A click on the card's own padding is not a click outside it: it is kept.
+            TouchArea { }
+
+            title := Text {
+                x: 30px;
+                y: 21px;
+                height: 24px;
+                text: "Switch group";
+                font-size: 20px;
+                font-weight: 700;
+                color: ChromePalette.text;
+                vertical-alignment: center;
+                accessible-role: none;
+            }
+
+            // "⌥ held": the card is up while ⌥ is down.
+            Rectangle {
+                x: 30px + title.preferred-width + 25px;
+                y: 24px;
+                width: held.preferred-width + 30px;
+                height: 24px;
+                border-radius: 12px;
+                background: ChromePalette.primary-button-background;
+
+                held := Text {
+                    width: 100%;
+                    height: 100%;
+                    text: "⌥ held";
+                    font-size: 12px;
+                    font-weight: 700;
+                    color: ChromePalette.primary-button-text;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+
+            // "Change keys…", right-aligned so that the text ends 30 px from the card's edge.
+            Rectangle {
+                x: root.card-width - 22px - self.width;
+                y: 21px;
+                width: change.preferred-width + 16px;
+                height: 28px;
+                accessible-role: button;
+                accessible-label: "Change keys";
+                accessible-action-default => {
+                    root.change-keys();
+                }
+
+                change := Text {
+                    x: 8px;
+                    height: 100%;
+                    text: "Change keys…";
+                    font-size: 13px;
+                    font-weight: 600;
+                    color: link-touch.has-hover ? ChromePalette.button-label-hover : ChromePalette.accent;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+
+                link-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        root.change-keys();
+                    }
+                }
+            }
+
+            // The tiles, or the words that say there are none.
+            if root.tiles.length > 0: Rectangle {
+                x: root.tiles-left;
+                y: root.tiles-top;
+                width: root.card-width - 2 * root.tiles-left;
+                height: root.tiles-bottom - root.tiles-top;
+                accessible-role: list;
+                accessible-label: "Switch group";
+
+                for entry[idx] in root.tiles: KeyTileView {
+                    x: entry.x;
+                    y: entry.y;
+                    tile: entry;
+                    metrics: root.metrics;
+                    position: idx;
+                    count: root.tiles.length;
+                    chosen: entry.group == root.selected-group;
+                    pressed => {
+                        root.tile-clicked(entry.group);
+                    }
+                }
+            }
+
+            if root.tiles.length == 0: Text {
+                x: root.tiles-left;
+                y: root.tiles-top;
+                width: root.card-width - 2 * root.tiles-left;
+                height: max(root.card-height - root.tiles-top - 30px, 0px);
+                text: root.empty-text;
+                font-size: 13px;
+                color: ChromePalette.text-secondary;
+                wrap: word-wrap;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            if root.tiles.length > 0: Text {
+                x: root.tiles-left;
+                y: root.tiles-bottom + 19.5px;
+                width: root.card-width - 2 * root.tiles-left;
+                height: 20px;
+                text: root.hint-primary;
+                font-size: 13px;
+                color: ChromePalette.text-secondary;
+                overflow: elide;
+            }
+
+            // The second hint; it may take two lines.
+            if root.tiles.length > 0 && !root.chips-shown: Text {
+                x: root.tiles-left;
+                y: root.tiles-bottom + 44.5px;
+                width: root.card-width - 2 * root.tiles-left;
+                height: 32px;
+                text: root.hint-secondary;
+                font-size: 12px;
+                color: ChromePalette.text-secondary;
+                wrap: word-wrap;
+                overflow: elide;
+            }
+
+            // The chosen group's numbered tabs, up to nine, in the place of the second hint.
+            if root.tiles.length > 0 && root.chips-shown: Rectangle {
+                x: root.tiles-left;
+                y: root.tiles-bottom + 42px;
+                width: root.card-width - 2 * root.tiles-left;
+                height: 24px;
+                accessible-role: list;
+                accessible-label: "Tabs of " + root.chosen-name;
+
+                HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+
+                    for idx in root.chip-count: KeyChipView {
+                        chip: root.chips[idx];
+                        position: idx;
+                        count: root.chip-count;
+                        chosen: root.chips[idx].index == root.selected-tab;
+                        pressed => {
+                            root.chip-clicked(root.chips[idx].index);
+                        }
+                    }
+                }
+            }
+        }
+    }
 }
 
 // The card over a mock page at the mockup's size, for the renderings and tests: the properties
-// and callbacks of `KeySwitcher`, forwarded.
+// and callbacks of `KeySwitcher`, forwarded, and `page-clicked` for a click that reaches the page
+// behind it (it does not while the card is shown).
 export component KeySwitcherPreview inherits Window {
     in property <ColorScheme> forced-color-scheme: ColorScheme.unknown;
     in property <bool> shown <=> switcher.shown;
@@ -69,6 +498,7 @@ export component KeySwitcherPreview inherits Window {
     callback chip-clicked <=> switcher.chip-clicked;
     callback change-keys <=> switcher.change-keys;
     callback dismissed <=> switcher.dismissed;
+    callback page-clicked();
 
     // For renderings: the scheme of the std widgets (Rust sets `ChromePalette`'s theme).
     init => {
@@ -84,6 +514,65 @@ export component KeySwitcherPreview inherits Window {
     width: 1440px;
     height: 900px;
     background: ChromePalette.content-background;
+
+    // A mock page: a toolbar, a heading, lines of text, a picture and a side panel, in the
+    // palette's greys, so that the scrim has something to dim.
+    Rectangle {
+        y: 0px;
+        height: 46px;
+        background: ChromePalette.toolbar-background;
+    }
+
+    Rectangle {
+        y: 46px;
+        height: 1px;
+        background: ChromePalette.toolbar-divider;
+    }
+
+    Rectangle {
+        x: 200px;
+        y: 143px;
+        width: 632px;
+        height: 24px;
+        border-radius: 6px;
+        background: ChromePalette.field-border;
+    }
+
+    Rectangle {
+        x: 200px;
+        y: 253px;
+        width: 686px;
+        height: 250px;
+        border-radius: 10px;
+        background: ChromePalette.separator;
+    }
+
+    for row in 14: Rectangle {
+        x: 200px;
+        y: 533px + row * 20px;
+        width: 560px + mod(row * 37, 120) * 1px;
+        height: 9px;
+        border-radius: 4.5px;
+        background: ChromePalette.separator;
+    }
+
+    Rectangle {
+        x: 926px;
+        y: 143px;
+        width: 314px;
+        height: 190px;
+        border-radius: 10px;
+        border-width: 1px;
+        border-color: ChromePalette.field-border;
+        background: ChromePalette.field-background;
+    }
+
+    // The page takes a click only when the card does not.
+    TouchArea {
+        clicked => {
+            root.page-clicked();
+        }
+    }
 
     switcher := KeySwitcher {
         width: 100%;
