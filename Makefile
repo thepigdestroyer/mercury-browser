@@ -260,18 +260,20 @@ test:
 	"$(CARGO)" test --target-dir target --manifest-path third_party/gaol/Cargo.toml --test shared-memory
 	"$(MAKE)" test-servo-net
 
-# servo-net's own tests (third_party/servo-net/tests/main.rs, 420 tests run, the certificate-exception ones among
-# them), part of `make test` and run by their own CI job. The crate is vendored, has dev-dependencies and is
+# servo-net's own tests (third_party/servo-net/tests/main.rs, 450 tests run, the certificate-exception ones and the 30 unit tests of
+# Mercury's two lib files among them), part of `make test` and run by their own CI job. The crate is vendored, has dev-dependencies and is
 # excluded from the workspace (Cargo.toml), so cargo runs it on its own manifest and its own Cargo.lock,
-# like gaol: against the published sibling crates (only servo-net is patched), not Mercury's vendored
-# copies. Two tests fail without any Mercury change and are skipped by name: `fetch::test_file` reads a path
-# that exists only in Servo's repository, and `filemanager_thread::test_filemanager` panics on the
-# process-wide async runtime when it runs with the others. No GStreamer and no window; the first build takes
+# like gaol: against the published sibling crates (Mercury's K0 changes to servo-embedder-traits and servo-config
+# are not in this build), not Mercury's vendored copies. `fonts/bundled_freetype` builds FreeType from source, as the
+# root build does, because Ubuntu 22.04's is too old for freetype-sys (it does nothing on macOS). Two tests fail
+# without any Mercury change and are skipped by name: `fetch::test_file` reads a path that exists only in Servo's
+# repository, and `filemanager_thread::test_filemanager` panics on the process-wide async runtime when it runs with
+# the others. No GStreamer and no window; the first build takes
 # about 11 minutes on 12 threads, the tests a few seconds. Set RUST_TEST_THREADS=2 on a shared machine.
 test-servo-net:
 	"$(CARGO)" test --locked $(CARGO_FLAGS) --target-dir target \
 		--manifest-path third_party/servo-net/Cargo.toml \
-		--features test-util,devtools --test main -- \
+		--features test-util,devtools,fonts/bundled_freetype --test main -- \
 		--exact --skip fetch::test_file --skip filemanager_thread::test_filemanager
 
 qa:
