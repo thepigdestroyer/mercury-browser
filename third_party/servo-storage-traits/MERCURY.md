@@ -12,8 +12,20 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane net-1 (Web Locks, ED4).
+
+### The Web Locks thread's messages — `lib.rs`, new `weblocks.rs`
+
+- **What:** `weblocks.rs` (new, MPL-2.0 like the rest; it carries upstream code, see below) defines `WebLocksThreadMsg`, `LockRequest`,
+  `LockEventMsg`, `LockMode` and the snapshot types. `lib.rs` has `pub mod weblocks;`, a fifth `StorageThreads` field
+  `web_locks_thread` (and constructor argument) and `impl GenericSend<WebLocksThreadMsg> for StorageThreads` (0.8.0 lines about
+  10, 14, 27, 37 and 150).
+- **Why:** `navigator.locks` (WhatsApp Web hangs at "Loading your chats" without it, servo/servo#47893). The lock table has
+  to live outside the content process so that locks span tabs and processes.
+- **Source:** servo/servo#47981 "storages: implement Web Locks API" (draft, xbwwj, MPL-2.0), branch head `a900121b`, the
+  storage-thread design; the file says so at its top.
+- **Tested by:** `servo-storage/tests/weblocks.rs` and the unit tests in `servo-storage/weblocks/mod.rs` (`make test-servo-storage`).
+- **Drop when:** the Servo bump that contains PR #47981 (or its successor).
 
 ## Removing this directory
 

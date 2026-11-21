@@ -12,8 +12,30 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane net-1 (Web Locks, ED4; the IndexedDB schema facts, ED3).
+
+### The Web Locks thread — `lib.rs`, `storage_thread.rs`, new `weblocks/mod.rs`
+
+- **What:** `weblocks/mod.rs` (new, MPL-2.0, carries upstream code) is the lock manager and its thread: exclusive and
+  shared locks per origin and name, a queue, `ifAvailable`, `steal`, abort, `query()`, and release of everything a client
+  holds when it goes away. `lib.rs` has `mod weblocks;` and `pub use weblocks::WebLocksThreadFactory;` (public so the
+  integration test can start the thread). `storage_thread.rs` starts the thread beside the others and passes its sender as
+  the fifth argument of `StorageThreads::new` (0.8.0 lines about 12, 14, 34, 38 and 44).
+- **How a held lock is released when its window, worker or process goes away:** (1) the `LockManager` in the content
+  process sends `ClientGone` when it is finalized; (2) while a request waits, the thread probes every second and a client
+  whose global is closed answers `ClientGone`; (3) a failed `GenericCallback::send` (the receiving process died) counts as
+  "client gone" at any moment. No edit of `servo-constellation`.
+- **Why:** `navigator.locks`, servo/servo#47893.
+- **Source:** servo/servo#47981 (xbwwj, draft, MPL-2.0, head `a900121b`) for the storage-thread design; LunarWerxs
+  `pr/web-locks` commit `23583d753` (MPL-2.0, written with an AI assistant) for the idea that a lock lives as long as the
+  promise of its callback and for the scenarios of the tests, rewritten here. The draft did not work as written (a lock was
+  never released, `ifAvailable` was inverted, `steal` told nobody, the argument checks never all ran); the differences are
+  listed in the lane's notes and the module comment.
+- **Tested by:** 24 unit tests in `weblocks/mod.rs` and 13 thread tests in `tests/weblocks.rs`; `tests/indexeddb_multientry.rs`
+  (new, PolyForm) pins the facts about the `index_data` and `unique_index_data` tables that the IndexedDB multiEntry work
+  relies on (it includes `indexeddb/engines/sqlite/create.rs` by `#[path]`). Run with `make test-servo-storage` (the crate has
+  dev-dependencies, so cargo runs it on its own manifest, with `servo-storage-traits` patched in).
+- **Drop when:** the Servo bump that contains PR #47981.
 
 ## Removing this directory
 

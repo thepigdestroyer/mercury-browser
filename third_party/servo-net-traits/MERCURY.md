@@ -12,8 +12,20 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane net-1 (21 Nov 2026; third-party cookies and the request path).
+
+### `document.cookie` carries the document's site — `lib.rs`
+
+- **What:** two new `CoreResourceMsg` variants after `GetCookieStringForUrl` (0.8.0 line about 812):
+  `GetCookieStringForDocument(ServoUrl, NetworkPartitionKey, Option<WebViewId>, GenericSender<Option<String>>, CookieSource)`
+  and `SetCookiesForDocument(ServoUrl, NetworkPartitionKey, Option<WebViewId>, Vec<Serde<Cookie<'static>>>, CookieSource)`.
+  The old variants stay, unfiltered, for WebDriver and the tests.
+- **Why:** the resource thread has to know which top-level site a document belongs to before it can block a third-party
+  `document.cookie` (EC5, EC6). The old messages carry the URL only.
+- **Tested by:** `servo-net/tests/cookie_policy.rs` (blocked and allowed document reads and writes, over the real
+  resource thread); `servo-script` sends them from `Document::GetCookie` and `SetCookie`.
+- **Drop when:** Servo filters `document.cookie` by site itself (PR #44469 is the only upstream work on it and does not
+  cover it).
 
 ## Removing this directory
 
