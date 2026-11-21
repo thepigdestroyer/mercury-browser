@@ -1,0 +1,23 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Text</title>
+</head>
+<body>
+<h1>Text</h1>
+<p>A screen reader reads the paragraphs below one after the other, with the text of each exactly as
+written, a quotation, and a block of preformatted text.</p>
+<p id="p1">First paragraph with <a href="#x">a link</a> and <b>bold</b> text.</p>
+<p id="p2">Second paragraph.</p>
+<p id="p3">Line one<br>Line two</p>
+<blockquote id="quote">Quoted text</blockquote>
+<pre id="pre">  spaced
+  text</pre>
+<script>
+  function changeText(text) { document.getElementById("p2").textContent = text; }
+</script>
+</body>
+</html>

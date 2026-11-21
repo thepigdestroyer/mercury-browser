@@ -91,6 +91,7 @@ endif
 	test-bundle-macos \
 	test-capture-macos \
 	test-certificate-exceptions-macos \
+	test-a11y-pages \
 	test-servo-net \
 	run \
 	run-debug \
@@ -136,6 +137,7 @@ help:
 		'test-bundle-macos' 'Check the macOS bundle script helpers (no build needed).' \
 		'test-capture-macos' 'Check camera and microphone capture with fake devices (needs build-release).' \
 		'test-certificate-exceptions-macos' 'Check that a certificate exception is bound to its host (needs build-release).' \
+		'test-a11y-pages' 'Read the accessibility test pages in a headless Servo (needs a GL context: not on a Mac that cannot render).' \
 		'run' 'Run the optimized Mercury Desktop build.' \
 		'run-debug' 'Run Mercury Desktop with development debug information.' \
 		'run-release' 'Alias for the optimized run target.' \
@@ -425,6 +427,14 @@ test-capture-macos:
 test-certificate-exceptions-macos:
 	$(REQUIRE_MACOS)
 	scripts/macos/test-certificate-exceptions.sh
+
+# a11y-1: the pages of tests/pages/a11y/ read in a headless Servo (crates/talaria-servo/tests/a11y_*.rs).
+# Each test starts a Servo with a software rendering context, which is a GL context, so they are
+# `#[ignore]`d and `make test` skips them; this target runs them. Servo's tests run serially on one
+# thread (--test-threads=1). The GStreamer libraries are found as for `make test`: pass CARGO_FLAGS=--release
+# (the default under the disk guard) so that target/release/lib is the one that holds them.
+test-a11y-pages:
+	$(GSTREAMER_ENV) $(TEST_LIBRARY_PATH) "$(CARGO)" test $(CARGO_FLAGS) -p talaria-servo --test a11y_pages -- --ignored --test-threads=1
 
 run:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) "$(CARGO)" build --package "$(APP_PACKAGE)" --release)

@@ -481,6 +481,16 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: scripts/macos/test-capture.sh
 
+      # a11y-1: the accessibility test pages (tests/pages/a11y/) read in a headless Servo, by
+      # crates/talaria-servo/tests/a11y_*.rs. Each test starts a Servo with a software rendering
+      # context, which is a GL context, so the Test step above skips them (`#[ignore]`) and this step
+      # runs them, one after the other, with the GStreamer libraries collected above. Until the first
+      # run on a runner that renders, nothing has run them anywhere: read a failure here as a page or
+      # a property to look at, not as a regression.
+      - name: Accessibility test pages
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        run: make test-a11y-pages CARGO_FLAGS=--release
+
   scripts:
     name: Scripts
     runs-on: ubuntu-24.04

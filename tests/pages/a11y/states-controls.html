@@ -1,0 +1,35 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>States</title>
+</head>
+<body>
+<h1>States</h1>
+<p>A screen reader reads the checkbox "Subscribe" as checked and "Partial" as mixed, the button "Bold" as
+not pressed, the disclosure "More details" as collapsed, the slider "Volume" at 3 of 10, the spin button
+"Quantity" at 2, the progress bar "Loading" at 30, the read-only "Read-only field", the disabled "Disabled
+field", the pop-up button "Size" showing "Small", a list of three items, the heading "Level four" at level 4
+and the link "Current page" as the current page.</p>
+<label><input id="subscribe" type="checkbox" checked> Subscribe</label>
+<label><input id="partial" type="checkbox"> Partial</label>
+<button id="bold" aria-pressed="false">Bold</button>
+<details id="more"><summary>More details</summary><p>Extra details.</p></details>
+<label for="volume">Volume</label><input id="volume" type="range" min="0" max="10" value="3" step="1">
+<label for="qty">Quantity</label><input id="qty" type="number" min="1" max="9" value="2">
+<progress id="loading" aria-label="Loading" value="30" max="100"></progress>
+<input id="ro" aria-label="Read-only field" readonly value="fixed">
+<input id="dis" aria-label="Disabled field" disabled>
+<label for="size">Size</label>
+<select id="size"><option>Small</option><option>Medium</option><option>Large</option></select>
+<label for="msg">Message</label><textarea id="msg"></textarea>
+<ul id="list"><li>One</li><li>Two</li><li>Three</li></ul>
+<h4>Level four</h4>
+<a id="current" href="#current" aria-current="page">Current page</a>
+<script>
+  document.getElementById("partial").indeterminate = true;
+</script>
+</body>
+</html>

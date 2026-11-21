@@ -1,0 +1,20 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frames: parent</title>
+</head>
+<body>
+<h1>Parent page</h1>
+<p>A screen reader reads the heading "Parent page", then a frame called "Same-origin frame", and
+inside the frame the heading "Child page" and a button "Child button". Pressing the button from
+the screen reader reaches the page inside the frame, which tells this page with a message.</p>
+<iframe id="frame" title="Same-origin frame" src="frames-child.html" width="400" height="200"></iframe>
+<script>
+  window.messages = [];
+  window.addEventListener("message", (event) => window.messages.push(String(event.data)));
+</script>
+</body>
+</html>
