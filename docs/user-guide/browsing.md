@@ -26,6 +26,7 @@ description: Keyboard shortcuts, the macOS menu bar, the browser menu, the right
 | ++cmd+y++ / ++shift+cmd+backspace++ | History / clear browsing data |
 | ++shift+cmd+m++ | Mute or unmute the active tab |
 | ++cmd+s++ | Save the page |
+| ++alt+cmd+u++ | View the page's source in a new tab (++ctrl+u++ on Linux) |
 | ++shift+cmd+j++ | Downloads |
 | ++ctrl+cmd+f++ | Enter or leave full screen |
 | ++escape++ | Leave a page's full screen |
@@ -50,7 +51,7 @@ On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go
 | Mercury Browser | About Mercury Browser, Settings…, Services, Hide, Hide Others, Show All, Quit |
 | File | New Tab, Duplicate Tab, Open Location…, Close Tab, Close Other Tabs, Reopen Closed Tab, Import… |
 | Edit | Undo, Redo, Cut, Copy, Paste, Select All, Find…, Find Next, Find Previous |
-| View | Reload Page, Stop, Actual Size, Zoom In, Zoom Out, Enter Full Screen |
+| View | Reload Page, Stop, Actual Size, Zoom In, Zoom Out, View Source, Block Images on This Site, Show Images on This Site, Enter Full Screen |
 | History | Back, Forward, Show All History, Clear Browsing Data…, Restore Previous Session |
 | Bookmarks | Bookmark This Page…, Show Bookmarks Bar, Bookmarks Manager, then one item per bookmark or folder on the bookmarks bar |
 | Window | Minimize, Zoom, Show Next Tab, Show Previous Tab, Search Tabs…, Move Tab Left, Move Tab Right, Pin Tab, Unpin Tab, then one item per open tab |
@@ -61,6 +62,8 @@ Some items are greyed out:
 - **Stop**: Servo 0.8 has no way for Mercury to stop a load.
 - **Reopen Closed Tab** until you have closed a tab, and **Restore Previous Session** unless the last run's tabs are still waiting to be restored.
 - **Undo**, **Redo** and **Select All** while the page has the keyboard: Servo offers only cut, copy and paste to Mercury.
+- **View Source** unless the tab shows a web page (`http` or `https`) that has loaded: a new tab, a file, one of Mercury's own pages, an error page and the source page itself have no source to view.
+- **Block Images on This Site** and **Show Images on This Site**: exactly one of them is available at a time, and neither on a page that is not a web page. See [Images on one site](privacy-and-security.md#images-on-one-site).
 
 **About Mercury Browser** shows the version, the engine and media versions, the copyright and licence, and three links: **Licence**, **Third-party notices** (the page packaged with the app, which lists the licence text and copyright of every library built into it and works offline; a build run straight from the source tree has none and opens the notices on GitHub instead) and **Source code** (the repository at the tag of your version, where the source of the MPL-2.0 parts is; a build of a version that is not released yet has no tag, and GitHub says the page is not found).
 
@@ -75,9 +78,23 @@ Right-click (or Control-click) in a page:
 - on a link: **Open link in new tab** (in the background) and **Copy link address**;
 - on an image: **Open image in new tab** and **Copy image address**;
 - on a password field, when logins are saved for the site: **Fill login…** at the top (see [Saved passwords](privacy-and-security.md#saved-passwords));
-- below those, and anywhere else in the page: Cut, Copy, Paste, Select all, Back, Forward and Reload, each greyed out when it doesn't apply there.
+- below those, and anywhere else in the page: Cut, Copy, Paste, Select all, Back, Forward and Reload, each greyed out when it doesn't apply there;
+- after Reload, in a menu for the page itself (not on a link or an image), when the page is a web page: **View page source**.
 
 `javascript:` and `blob:` addresses are neither opened nor copied, and `data:` addresses can be copied but not opened.
+
+## View source
+
+**View → View Source** (++alt+cmd+u++, ++ctrl+u++ on Linux) and **View page source** in the right-click menu open the source of the page in a new tab right after the current one, and switch to it. You can also type or paste an address that starts with `view-source:`, such as `view-source:https://example.com/`. Only `http` and `https` pages have a source to view: `view-source:file:…`, `view-source:data:…` and the like are refused. A page cannot open a `view-source:` address itself, by a link or by a script; only you can.
+
+The source page shows the text with line numbers and colours: HTML (with the JavaScript in `<script>` and the CSS in `<style>` coloured as such), JavaScript files, CSS files, and XML and SVG, which are coloured like HTML. JSON and any other text are shown without colours. The **Wrap long lines** tick box at the top turns wrapping off and on (it starts on, and is not remembered). In an HTML source, the addresses in `href` and `src` attributes are links that open the source of that address. The colours follow the light or dark appearance of the system. The page has no script of its own.
+
+What to know:
+
+- **It is a fresh copy.** Mercury fetches the address again; it does not show the exact bytes the page was drawn from. A page that came from a form (a POST), that changes at every request, that was built with a one-time token, or that the engine showed from its cache can differ from its source. The page says so at the top. Mercury sends your cookies for the site, but it cannot send what only the engine holds: a certificate you accepted with **Continue anyway** (the source page then says "The secure connection to the server failed."), a name and password you typed into a sign-in sheet, and the copy in the HTTP cache. It stores no cookie the server sets.
+- **It follows your proxy.** The fetch goes through the same proxy settings as the pages (see [Proxy servers](privacy-and-security.md#proxy-servers)), and when a proxy applies to the address and cannot fetch it, the source page says "The proxy could not fetch the page." instead of connecting directly.
+- **Limits.** At most 2 MiB of the source is fetched and shown, at most 50,000 lines are shown, and a source over 512 KiB is not coloured; the page says when the text was cut. A file that is not text (an image, a PDF, a font) is not shown: the page gives its size.
+- **Nothing is kept.** A source tab is not recorded in the history and is not restored the next time Mercury starts.
 
 ## Dialogs and prompts from pages
 

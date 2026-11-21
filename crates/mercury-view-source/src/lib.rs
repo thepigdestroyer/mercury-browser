@@ -11,10 +11,8 @@
 //! `talaria-servo` serves the page through a protocol handler for the scheme; this crate never
 //! sees a Servo type.
 //!
-//! The types and signatures below are frozen by the lane lead (lane `sh-pages`, brief
-//! `sdd/lane-sh-pages-brief.md`); changes go through the integrator. Two workers fill in the
-//! bodies: the page and the highlighter (`highlight`, `page`, `style`), and the address and the
-//! fetch (`address`, `fetch`, `text`).
+//! The page and the highlighter live in `highlight`, `page` and `style`; the address, the fetch
+//! and the text handling in `address`, `fetch` and `text`.
 
 #![deny(missing_docs)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
