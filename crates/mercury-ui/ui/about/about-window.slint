@@ -187,6 +187,7 @@ export component AboutWindow inherits Window {
                 // MPL-2.0 §3.2: the binary says where the source is.
                 LinkText {
                     text: "Source code";
+                    hint: "Opens the source code of this version in a new tab.";
                     clicked => {
                         root.open-link(AboutLink.source-code);
                     }

@@ -55,24 +55,25 @@ impl GroupId {
 /// them and hands them out the same way (`auto_colour`): the two lists must be equal, in this
 /// order, and the names are part of `session.json` for good. `mercury-appearance` does not depend
 /// on this crate, so `tests/appearance_contract.rs` (which links both) pins them against each
-/// other. The variants are listed in the hand-out order, a farthest-point order from blue
-/// (`mercury-appearance` measured it): a window's first groups get the colours furthest apart,
-/// and slate, the colour of the loose-tabs pseudo-group, comes last.
+/// other. The variants are listed in the hand-out order, which `mercury-appearance` chose by four
+/// rules (see its `PRESETS`): blue first and slate, the colour of the loose-tabs pseudo-group,
+/// last; a window's first groups furthest apart; two groups made one after the other far apart in
+/// hue (at least 100 degrees); and, among the orders that tie, the earliest groups most spread.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum GroupPreset {
     Blue,
     Amber,
-    Rose,
-    Mint,
     Orchid,
-    Brown,
-    Green,
+    Mint,
+    Rose,
     Lime,
-    Sky,
     Plum,
-    Salmon,
-    Violet,
     Teal,
+    Salmon,
+    Sky,
+    Brown,
+    Violet,
+    Green,
     Slate,
 }
 
@@ -81,17 +82,17 @@ impl GroupPreset {
     pub const ALL: [Self; 14] = [
         Self::Blue,
         Self::Amber,
-        Self::Rose,
-        Self::Mint,
         Self::Orchid,
-        Self::Brown,
-        Self::Green,
+        Self::Mint,
+        Self::Rose,
         Self::Lime,
-        Self::Sky,
         Self::Plum,
-        Self::Salmon,
-        Self::Violet,
         Self::Teal,
+        Self::Salmon,
+        Self::Sky,
+        Self::Brown,
+        Self::Violet,
+        Self::Green,
         Self::Slate,
     ];
 
@@ -100,17 +101,17 @@ impl GroupPreset {
         match self {
             Self::Blue => "blue",
             Self::Amber => "amber",
-            Self::Rose => "rose",
-            Self::Mint => "mint",
             Self::Orchid => "orchid",
-            Self::Brown => "brown",
-            Self::Green => "green",
+            Self::Mint => "mint",
+            Self::Rose => "rose",
             Self::Lime => "lime",
-            Self::Sky => "sky",
             Self::Plum => "plum",
-            Self::Salmon => "salmon",
-            Self::Violet => "violet",
             Self::Teal => "teal",
+            Self::Salmon => "salmon",
+            Self::Sky => "sky",
+            Self::Brown => "brown",
+            Self::Violet => "violet",
+            Self::Green => "green",
             Self::Slate => "slate",
         }
     }
@@ -820,7 +821,7 @@ mod tests {
             default_colour(&used),
             GroupColour::Preset(GroupPreset::Amber)
         );
-        // Blue and Amber taken, and Mint after Rose too: Rose is the first free one.
+        // Blue and Amber taken, and Mint after Orchid too: Orchid is the first free one.
         let skipping = [
             preset_group("a", GroupPreset::Blue),
             preset_group("b", GroupPreset::Amber),
@@ -828,7 +829,7 @@ mod tests {
         ];
         assert_eq!(
             default_colour(&skipping),
-            GroupColour::Preset(GroupPreset::Rose)
+            GroupColour::Preset(GroupPreset::Orchid)
         );
         let custom = [group(
             "c",
@@ -854,12 +855,12 @@ mod tests {
             default_colour(&groups),
             GroupColour::Preset(GroupPreset::Blue)
         );
-        // Blue and Amber twice: Rose is the earliest of the once-used ones.
+        // Blue and Amber twice: Orchid is the earliest of the once-used ones.
         groups.push(preset_group("g", GroupPreset::Blue));
         groups.push(preset_group("g", GroupPreset::Amber));
         assert_eq!(
             default_colour(&groups),
-            GroupColour::Preset(GroupPreset::Rose)
+            GroupColour::Preset(GroupPreset::Orchid)
         );
         // Everything twice except the last (Slate): the least used wins over the earliest.
         for preset in &GroupPreset::ALL[2..13] {

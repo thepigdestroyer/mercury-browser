@@ -15,3 +15,5 @@ text | That folder does not exist. | |
 checkbox | Ask where to save each download | | unchecked
 text | Ask where to save each download | |
 text | Kept for downloads, which arrive in a later version. | |
+combobox | PDF files | | collapsed, value "Open in Mercury Browser"
+text | Mercury Browser shows a PDF in the tab. The system's PDF app opens only a file you asked for, after it is saved in your downloads folder. | |

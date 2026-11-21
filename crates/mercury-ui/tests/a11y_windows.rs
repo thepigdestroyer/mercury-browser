@@ -123,7 +123,7 @@ const SLINT_ATTRIBUTION: &[Exempt] = &[Exempt {
 }];
 
 #[test]
-fn the_about_window_reads_its_lines_then_its_two_links_then_the_attribution() {
+fn the_about_window_reads_its_lines_then_its_three_links_then_the_attribution() {
     let window = about_window("GStreamer 1.26.1 media framework");
 
     let nodes = freeze_except(&window, "windows-about", SLINT_ATTRIBUTION);
@@ -138,10 +138,23 @@ fn the_about_window_reads_its_lines_then_its_two_links_then_the_attribution() {
         "the AboutSlint attribution text is read"
     );
     let buttons = names(&nodes, Role::Button);
-    assert_eq!(buttons, ["Licence", "Third-party notices"]);
-    let licence = find(&nodes, Role::Button, "Licence");
-    assert_eq!(licence.description, "Opens the licence terms in a new tab.");
-    assert!(licence.enabled);
+    assert_eq!(buttons, ["Licence", "Third-party notices", "Source code"]);
+    // Each link says what pressing it does, which its short caption does not.
+    for (label, description) in [
+        ("Licence", "Opens the licence terms in a new tab."),
+        (
+            "Third-party notices",
+            "Opens the list of third-party notices in a new tab.",
+        ),
+        (
+            "Source code",
+            "Opens the source code of this version in a new tab.",
+        ),
+    ] {
+        let link = find(&nodes, Role::Button, label);
+        assert_eq!(link.description, description, "{label}");
+        assert!(link.enabled, "{label}");
+    }
 }
 
 #[test]
@@ -172,10 +185,15 @@ fn pressing_a_link_of_the_about_window_opens_what_a_click_opens() {
 
     press(&window, Role::Button, "Licence");
     press(&window, Role::Button, "Third-party notices");
+    press(&window, Role::Button, "Source code");
 
     assert_eq!(
         *opened.borrow(),
-        [AboutLink::Licence, AboutLink::ThirdPartyNotices]
+        [
+            AboutLink::Licence,
+            AboutLink::ThirdPartyNotices,
+            AboutLink::SourceCode
+        ]
     );
 }
 
@@ -184,16 +202,19 @@ fn the_about_links_have_the_text_rectangles_the_screen_reader_draws_its_cursor_i
     let window = about_window("");
     let nodes = a11y::reading_order(&window);
 
-    for label in ["Licence", "Third-party notices"] {
+    for label in ["Licence", "Third-party notices", "Source code"] {
         let link = find(&nodes, Role::Button, label);
         let rect = link.rect();
         assert!(rect.width > 20.0 && rect.height > 8.0, "{label}: {rect:?}");
     }
-    // Side by side, "Licence" first.
+    // Side by side, "Licence" first, then the notices, then the source.
     let licence = find(&nodes, Role::Button, "Licence").rect();
     let notices = find(&nodes, Role::Button, "Third-party notices").rect();
+    let source = find(&nodes, Role::Button, "Source code").rect();
     assert!(licence.right() < notices.x);
+    assert!(notices.right() < source.x);
     assert!((licence.y - notices.y).abs() < 4.0);
+    assert!((notices.y - source.y).abs() < 4.0);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -942,6 +963,11 @@ fn the_downloads_and_advanced_sections_are_frozen_with_their_fields_labelled() {
         "/Users/example/Downloads"
     );
     find(&nodes, Role::Checkbox, "Ask where to save each download");
+    // The PDF setting is a labelled choice, and says what the browser does by default.
+    assert_eq!(
+        find(&nodes, Role::Combobox, "PDF files").value,
+        "Open in Mercury Browser"
+    );
 
     let window = settings_window(5);
     window.set_language("en-GB".into());
