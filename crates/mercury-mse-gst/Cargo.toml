@@ -13,11 +13,10 @@ version.workspace = true
 edition.workspace = true
 license.workspace = true
 
-# Item 4 adds gstreamer-app, gstreamer-audio and gstreamer-video (same versions, already in the lock)
-# when it uses them; run `cargo metadata --offline` afterwards so that Cargo.lock follows.
 [dependencies]
 glib = "0.22"
 gstreamer = { version = "0.25", features = ["v1_18"] }
+gstreamer-app = "0.25"
 gstreamer-base = "0.25"
 log.workspace = true
 mercury-mse = { path = "../mercury-mse" }
