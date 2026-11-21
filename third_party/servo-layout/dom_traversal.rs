@@ -20,7 +20,8 @@ use style::values::specified::Quotes;
 use crate::context::LayoutContext;
 use crate::dom::{BoxSlot, LayoutBox, NodeExt};
 use crate::flow::inline::SharedInlineStyles;
-use crate::lists::generate_counter_representation;
+// Mercury: ED5 (lane txt-1). `counter()` and `counters()` show the values of the counter pass.
+use crate::lists::{counter_value, counters_values, generate_counter_representation};
 use crate::quotes::quotes_for_lang;
 use crate::replaced::ReplacedContents;
 use crate::style_ext::{Display, DisplayGeneratingBox, DisplayInside, DisplayOutside};
@@ -385,10 +386,23 @@ pub(crate) fn generate_pseudo_element_content(
                             };
                             maybe_quote.map(PseudoElementContentItem::Text)
                         },
-                        ContentItem::Counter(_, style) | ContentItem::Counters(_, _, style) => {
-                            // TODO: Add support for counters, this assumes a value of 0.
+                        // Mercury: ED5 (lane txt-1). The values come from the counter pass
+                        // (`counters.rs`); they used to be 0.
+                        ContentItem::Counter(name, style) => {
+                            let value = counter_value(context, pseudo_element_info, &name.0);
                             Some(PseudoElementContentItem::Text(
-                                generate_counter_representation(style).to_string(),
+                                generate_counter_representation(style, value),
+                            ))
+                        },
+                        ContentItem::Counters(name, separator, style) => {
+                            let values = counters_values(context, pseudo_element_info, &name.0);
+                            let texts: Vec<String> = values
+                                .iter()
+                                .map(|value| generate_counter_representation(style, *value))
+                                .collect();
+                            let separator = separator.to_string();
+                            Some(PseudoElementContentItem::Text(
+                                texts.join(separator.as_str()),
                             ))
                         },
                         ContentItem::NoOpenQuote | ContentItem::NoCloseQuote => None,
