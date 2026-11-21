@@ -42,7 +42,7 @@ pub mod mercury_auth;
 mod mercury_cookies;
 mod mercury_mixed_content;
 mod mercury_rewrite;
-mod mercury_ws;
+pub mod mercury_ws;
 pub mod net_policy;
 
 /// An implementation of the [Fetch specification](https://fetch.spec.whatwg.org/)

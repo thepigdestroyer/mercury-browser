@@ -3935,8 +3935,6 @@ dependencies = [
 [[package]]
 name = "servo-embedder-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76d97f10b2d5979cd0ff330ab257a69addcf08e853811f6f97ff12db5f7468af"
 dependencies = [
  "accesskit",
  "bitflags 2.13.2",
@@ -4215,8 +4213,6 @@ dependencies = [
 [[package]]
 name = "servo-net-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "80e6ac24573425319af0ac9dbc3ec7eec925b9da656902a15815506fd5e3e417"
 dependencies = [
  "bytes",
  "content-security-policy",

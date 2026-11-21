@@ -60,7 +60,6 @@ impl RequestContext {
     }
 
     /// The context of a request that is still a builder (the WebSocket handshake).
-    #[allow(dead_code)] // Mercury: used by the WebSocket handshake once websocket_loader.rs asks the policy (net-1 item 3).
     pub(crate) fn of_builder(policy: &NetPolicy, request: &RequestBuilder) -> RequestContext {
         RequestContext::of_parts(policy, &RequestParts::of_builder(request))
     }
@@ -240,7 +239,6 @@ pub(crate) fn async_cookie_messages_refused(state: &HttpState) -> bool {
 /// For the WebSocket handshake (`websocket_loader.rs`): the `Cookie` header value to send, or `None`. The
 /// caller builds the context once, with [`RequestContext::of_builder`], and passes it to
 /// [`websocket_may_store_cookies`] and [`accept_set_cookie`] for the response.
-#[allow(dead_code)] // Mercury: used by websocket_loader.rs once the handshake asks the policy (net-1 item 3).
 pub(crate) fn websocket_cookie_header(
     state: &HttpState,
     context: &RequestContext,
@@ -259,7 +257,6 @@ pub(crate) fn websocket_cookie_header(
 
 /// For the WebSocket handshake response: whether the `Set-Cookie` headers that came with it may be looked at
 /// at all (third-party blocking). Each cookie must then pass [`accept_set_cookie`].
-#[allow(dead_code)] // Mercury: used by websocket_loader.rs once the handshake asks the policy (net-1 item 3).
 pub(crate) fn websocket_may_store_cookies(state: &HttpState, context: &RequestContext) -> bool {
     state.net_policy.cookies_allowed(&context.sites)
 }

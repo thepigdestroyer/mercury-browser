@@ -645,3 +645,8 @@ jobs:
 
       - name: Test servo-net
         run: make test-servo-net
+
+      # servo-storage is vendored the same way (dev-dependencies, excluded from the workspace): the Web Locks and
+      # IndexedDB schema tests of the net-1 lane run on its own manifest, with servo-storage-traits patched in.
+      - name: Test servo-storage
+        run: make test-servo-storage
