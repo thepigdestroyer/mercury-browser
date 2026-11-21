@@ -1,0 +1,114 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The hub ring (SPEC design/ui-final/SPEC.md §4.3): `HubButton` (the toolbar's 30 px donut),
+// `RingPopoverContent` (the 516 px ring: `RingBands`, the pinned beads, the centre disc, the
+// tooltip and the keys), `RingPopover` (that content in a `PopupWindow` with a tail) and
+// `RingPopoverPreview` (a window around the content for examples and tests). Everything comes from
+// and goes to the `HubRingBridge` global (hub-ring-bridge.slint); hosts forward nothing.
+//
+// The scaffold has the pinned component names, the bridge-fed `RingBands` and empty shells; item 4
+// `popover` of lane hub-ring fills in the rest.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { RingBands } from "ring-bands.slint";
+import { HubRingBridge } from "hub-ring-bridge.slint";
+import { RingCentre } from "hub-ring-centre.slint";
+
+// The toolbar's hub button: 30 px, a donut of the group colours at rest, an accent fill while the
+// popover is open. `clicked` opens the popover (the host binds it).
+export component HubButton inherits Rectangle {
+    callback clicked();
+    width: 30px;
+    height: 30px;
+    accessible-role: button;
+    accessible-label: HubRingBridge.hub-label;
+}
+
+// The ring and the centre, without the popup: 516 x 516.
+export component RingPopoverContent inherits Rectangle {
+    width: HubRingBridge.ring-size;
+    height: HubRingBridge.ring-size;
+
+    RingBands {
+        width: parent.width;
+        height: parent.height;
+        ring-size: HubRingBridge.ring-size;
+        groups: HubRingBridge.groups;
+        tabs: HubRingBridge.tabs;
+        segments: HubRingBridge.segments;
+        lifted-segments: HubRingBridge.lifted-segments;
+        segment-labels: HubRingBridge.segment-labels;
+        label-bands: HubRingBridge.label-bands;
+        label-glyphs: HubRingBridge.label-glyphs;
+        flags: HubRingBridge.flags;
+        held: HubRingBridge.held;
+        selected-group: HubRingBridge.selected-group;
+        dim-others: HubRingBridge.held && HubRingBridge.selected-group >= 0;
+        query-active: HubRingBridge.query-active;
+        focused-tab: HubRingBridge.focused-tab;
+        reduce-motion: HubRingBridge.reduce-motion;
+        hovered-tab <=> HubRingBridge.hovered-tab;
+        hit-test(x, y, hovered) => {
+            return HubRingBridge.hit-test(x, y, hovered);
+        }
+        drop-target(x, y, dragging) => {
+            return HubRingBridge.drop-target(x, y, dragging);
+        }
+        tab-activated(id) => {
+            HubRingBridge.tab-activated(id);
+        }
+        tab-hovered(id) => {
+            HubRingBridge.tab-hovered(id);
+        }
+        group-activated(id) => {
+            HubRingBridge.group-activated(id);
+        }
+        tab-close(id) => {
+            HubRingBridge.tab-close(id);
+        }
+        tab-mute(id) => {
+            HubRingBridge.tab-mute(id);
+        }
+        drop(group, index) => {
+            HubRingBridge.drop(group, index);
+        }
+        drag-cancelled() => {
+            HubRingBridge.drag-cancelled();
+        }
+    }
+
+    RingCentre {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+// The popover: a `PopupWindow` (close on click outside) with the tail towards the hub button. The
+// host calls `show()` at the button; the popup closes itself when Rust adds to `close-request`.
+export component RingPopover inherits Rectangle {
+    width: HubRingBridge.ring-size;
+    height: HubRingBridge.ring-size;
+    // The distance from the left edge of the popover to the tip of the tail.
+    in property <length> tail-x: 116px;
+    public function show() {
+        popup.show();
+    }
+    popup := PopupWindow {
+        close-policy: close-on-click-outside;
+        width: HubRingBridge.ring-size;
+        height: HubRingBridge.ring-size;
+        RingPopoverContent { }
+    }
+}
+
+// A window around `RingPopoverContent` on the page colour, for the examples and the tests
+// (the `PopupWindow` itself cannot be rendered headless).
+export component RingPopoverPreview inherits Window {
+    preferred-width: 516px;
+    preferred-height: 516px;
+    background: ChromePalette.window-background;
+    RingPopoverContent {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+}

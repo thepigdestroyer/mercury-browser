@@ -1,0 +1,20 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The centre disc of the hub ring (SPEC design/ui-final/SPEC.md §4.3): rest (preview, title, path,
+// search field, hint), searching (field, the top results, "Search the web for ..."), an audio tab
+// (title, play state, Pause and Mute) and ⌥ held (key, group name, help). Reads only
+// `HubRingBridge`. Filled in by item 3 `centre` of lane hub-ring; the scaffold has the pinned
+// component name and size only.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { HubRingBridge } from "hub-ring-bridge.slint";
+
+// A square, 272 px (the disc's diameter); the popover centres it on the ring.
+export component RingCentre inherits Rectangle {
+    width: 272px;
+    height: 272px;
+    border-radius: 136px;
+    background: ChromePalette.window-background;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+}
