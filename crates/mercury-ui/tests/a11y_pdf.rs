@@ -62,7 +62,9 @@ fn window(state: PdfViewState) -> (MainWindow, Log) {
     model.on_retry(record("retry"));
     let submitted = Rc::clone(&log);
     model.on_submit_password(move |text| {
-        submitted.borrow_mut().push(format!("submit-password {text}"))
+        submitted
+            .borrow_mut()
+            .push(format!("submit-password {text}"))
     });
     a11y::open_window(&window, WIDTH, HEIGHT);
     (window, log)
@@ -84,10 +86,17 @@ fn mains(nodes: &[Node]) -> Vec<&Node> {
 /// passes no page content on.
 fn assert_one_landmark(nodes: &[Node]) {
     let found = mains(nodes);
-    assert_eq!(found.len(), 1, "expected one main landmark:\n{}", dump(nodes));
+    assert_eq!(
+        found.len(),
+        1,
+        "expected one main landmark:\n{}",
+        dump(nodes)
+    );
     // The status line of an empty page area is not read under the viewer that covers it.
     assert!(
-        nodes.iter().all(|n| n.label != "Type an address or search with DuckDuckGo."),
+        nodes
+            .iter()
+            .all(|n| n.label != "Type an address or search with DuckDuckGo."),
         "the page area's message is read under the viewer:\n{}",
         dump(nodes)
     );
@@ -194,8 +203,14 @@ fn the_toolbar_says_which_toggles_are_on_and_which_buttons_cannot_be_used() {
     model.set_fit(PdfFitMode::Width);
     model.set_find_open(false);
     let nodes = reading_order(&window);
-    assert_eq!(node_in(&nodes, Role::Button, "Fit width").checked, Some(true));
-    assert_eq!(node_in(&nodes, Role::Button, "Fit page").checked, Some(false));
+    assert_eq!(
+        node_in(&nodes, Role::Button, "Fit width").checked,
+        Some(true)
+    );
+    assert_eq!(
+        node_in(&nodes, Role::Button, "Fit page").checked,
+        Some(false)
+    );
     assert_eq!(
         node_in(&nodes, Role::Button, "Find in document").checked,
         Some(false)
@@ -210,8 +225,14 @@ fn the_toolbar_says_which_toggles_are_on_and_which_buttons_cannot_be_used() {
     model.set_zoom_percent(400);
     let nodes = reading_order(&window);
     assert_labelled(&nodes, "a PDF at its limits");
-    assert_eq!(node_in(&nodes, Role::Button, "Fit width").checked, Some(false));
-    assert_eq!(node_in(&nodes, Role::Button, "Fit page").checked, Some(true));
+    assert_eq!(
+        node_in(&nodes, Role::Button, "Fit width").checked,
+        Some(false)
+    );
+    assert_eq!(
+        node_in(&nodes, Role::Button, "Fit page").checked,
+        Some(true)
+    );
     assert_eq!(
         node_in(&nodes, Role::Button, "Find in document").checked,
         Some(true)
