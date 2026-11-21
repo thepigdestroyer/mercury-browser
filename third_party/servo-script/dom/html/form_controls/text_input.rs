@@ -8,9 +8,10 @@ use std::default::Default;
 use std::ops::Range;
 
 use app_units::Au;
+// Mercury: `TextWindow` has the UTF-16 helpers of the IME code (EB11).
 use embedder_traits::{
     EditingAction, EditingDirection, EditingMotion, EmbedderMsg, ModifySelection,
-    ScriptToEmbedderChan,
+    ScriptToEmbedderChan, TextWindow,
 };
 use js::context::JSContext;
 use layout_api::SegmentGranularity;
@@ -158,6 +159,19 @@ pub struct TextInput<T: ClipboardProvider> {
     pub(crate) previous_selection_range: Range<RopeIndex>,
     #[no_trace]
     pub(crate) selection_for_layout: Option<RangeAny<Utf32CodeUnits>>,
+
+    // Mercury: IME composition (EB11). The marked text of an open composition, and the clause the
+    // input method has selected inside it. The caret is the IME's caret, never a selection.
+    #[no_trace]
+    composition: Option<Range<RopeIndex>>,
+    #[no_trace]
+    composition_selected: Option<Range<RopeIndex>>,
+    // Mercury: what layout reads (`composition_for_layout()` of the element); the element keeps
+    // these equal to the composition when it pushes the highlights to the text run.
+    #[no_trace]
+    pub(crate) composition_for_layout: Option<RangeAny<Utf32CodeUnits>>,
+    #[no_trace]
+    pub(crate) composition_selected_for_layout: Option<RangeAny<Utf32CodeUnits>>,
 }
 
 /// <https://www.w3.org/TR/input-events-2/#interface-InputEvent-Attributes>
@@ -167,6 +181,8 @@ pub enum InputEventType {
     InsertLineBreak,
     InsertFromPaste,
     InsertCompositionText,
+    // Mercury: text the system replaces (the accent menu, dictation corrections), EB11.
+    InsertReplacementText,
     DeleteByCut,
     DeleteContentBackward,
     DeleteContentForward,
@@ -179,6 +195,7 @@ impl InputEventType {
             Self::InsertLineBreak => "insertLineBreak",
             Self::InsertFromPaste => "insertFromPaste",
             Self::InsertCompositionText => "insertCompositionText",
+            Self::InsertReplacementText => "insertReplacementText",
             Self::DeleteByCut => "deleteByCut",
             Self::DeleteContentBackward => "deleteContentBackward",
             Self::DeleteContentForward => "deleteContentForward",
@@ -219,6 +236,11 @@ impl<T: ClipboardProvider> TextInput<T> {
             was_last_change_by_set_content: true,
             previous_selection_range: Default::default(),
             selection_for_layout: None,
+            // Mercury: IME composition (EB11).
+            composition: None,
+            composition_selected: None,
+            composition_for_layout: None,
+            composition_selected_for_layout: None,
         }
     }
 
@@ -306,10 +328,8 @@ impl<T: ClipboardProvider> TextInput<T> {
         self.rope.index_to_utf16_offset(self.selection_start())
     }
 
-    /// The byte offset of the selection_start()
-    fn selection_start_offset(&self) -> Utf8CodeUnits {
-        self.rope.index_to_utf8_offset(self.selection_start())
-    }
+    // Mercury: `selection_start_offset()` was only used by `insert_for_composition()`, which the
+    // composition range replaced (EB11); both are removed.
 
     /// The end of the selection (or the edit point, if there is no selection). Always greater
     /// than or equal to selection_start(), regardless of the selection direction.
@@ -558,13 +578,24 @@ impl<T: ClipboardProvider> TextInput<T> {
                 self.insert(&text);
                 KeyReaction::DispatchInput(Some(text), InputEventType::InsertText)
             },
+            // Mercury: the marked text is replaced, not inserted and selected (EB11).
             EditingAction::InsertCompositionText(text) => {
-                self.insert_for_composition(&text);
+                self.replace_composition(&text);
                 KeyReaction::DispatchInput(Some(text), InputEventType::InsertCompositionText)
             },
-            EditingAction::EndComposition(..) => {
-                self.clear_selection();
-                KeyReaction::RedrawSelection
+            // Mercury: the text a composition ends with is the final text; it used to be dropped
+            // (EB11).
+            EditingAction::EndComposition(text) => {
+                if self.end_composition(Some(&text)) {
+                    KeyReaction::DispatchInput(Some(text), InputEventType::InsertCompositionText)
+                } else {
+                    KeyReaction::RedrawSelection
+                }
+            },
+            // Mercury: a composition starts at the selection (EB11).
+            EditingAction::StartComposition => {
+                self.begin_composition();
+                KeyReaction::Nothing
             },
             EditingAction::Delete => {
                 if self.delete_unit_or_selection(RopeMovement::Grapheme, EditingDirection::Forward)
@@ -590,21 +621,171 @@ impl<T: ClipboardProvider> TextInput<T> {
                     KeyReaction::Nothing
                 }
             },
-            EditingAction::SelectAll |
-            EditingAction::Clipboard(..) |
-            EditingAction::StartComposition => KeyReaction::Nothing,
+            EditingAction::SelectAll | EditingAction::Clipboard(..) => KeyReaction::Nothing,
         }
     }
 
-    fn insert_for_composition<S: Into<String>>(&mut self, insertion: S) {
-        let start = self.selection_start_offset();
-        let insertion = insertion.into();
-        self.insert(&insertion);
+    // Mercury: the IME composition API of a text control (EB11, the text lane). The marked text is
+    // a range of the rope that updates replace; the caret inside it is the input method's.
+
+    pub(crate) fn is_composing(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    /// Open a composition at the selection (the first marked text replaces what is selected).
+    /// Does nothing if one is open.
+    pub(crate) fn begin_composition(&mut self) {
+        if self.composition.is_none() {
+            self.composition = Some(self.selection_start()..self.selection_end());
+            self.composition_selected = None;
+        }
+    }
+
+    /// Forget the composition without touching the text (the control lost focus, the text was
+    /// replaced by a script, the user clicked elsewhere). Returns whether there was one.
+    pub(crate) fn abandon_composition(&mut self) -> bool {
+        self.composition_selected = None;
+        self.composition.take().is_some()
+    }
+
+    /// The marked text as UTF-16 offsets of the whole text.
+    pub(crate) fn composition_utf16_range(&self) -> Option<Range<u32>> {
+        let range = self.composition.as_ref()?;
+        let start = self
+            .rope
+            .index_to_utf16_offset(self.rope.normalize_index(range.start))
+            .0;
+        let end = self
+            .rope
+            .index_to_utf16_offset(self.rope.normalize_index(range.end))
+            .0;
+        Some(start..end.max(start))
+    }
+
+    /// Replace the marked text with `text`, opening a composition at the selection first if none
+    /// is open, and leave the caret after the new marked text. Newlines and the maximum length
+    /// follow the rules of typing.
+    pub(crate) fn replace_composition(&mut self, text: &str) {
+        self.begin_composition();
+        let Some(range) = self.composition.clone() else {
+            return;
+        };
+        let start = self.rope.normalize_index(range.start);
+        let end = self.rope.normalize_index(range.end).max(start);
+        self.selection_origin = Some(start);
+        self.edit_point = end;
+        self.selection_direction = SelectionDirection::Forward;
+        self.replace_selection(&DOMString::from(text));
+        // `replace_selection` cleared the selection and put the edit point after the insertion.
+        self.composition = Some(start..self.edit_point);
+        self.composition_selected = None;
+    }
+
+    /// Close the composition, leaving the caret after the marked text. With `final_text` the
+    /// marked text is first replaced by it when it differs. Returns whether the text changed.
+    pub(crate) fn end_composition(&mut self, final_text: Option<&str>) -> bool {
+        let Some(range) = self.composition.take() else {
+            return false;
+        };
+        self.composition_selected = None;
+        let start = self.rope.normalize_index(range.start);
+        let end = self.rope.normalize_index(range.end).max(start);
+        if let Some(final_text) = final_text {
+            let current: String = self.rope.slice(Some(start), Some(end)).into();
+            if current != self.mode.normalize(final_text) {
+                self.selection_origin = Some(start);
+                self.edit_point = end;
+                self.selection_direction = SelectionDirection::Forward;
+                self.replace_selection(&DOMString::from(final_text));
+                return true;
+            }
+        }
+        self.clear_selection();
+        self.edit_point = end;
+        false
+    }
+
+    /// Put the caret at `caret` inside the marked text and remember `selected` as the clause the
+    /// input method is working on. Both are UTF-16 offsets into the marked text; `None` puts the
+    /// caret at its end. Out of range offsets are clamped (and never split a surrogate pair).
+    pub(crate) fn set_composition_caret(
+        &mut self,
+        caret: Option<u32>,
+        selected: Option<Range<u32>>,
+    ) {
+        let Some(range) = self.composition.clone() else {
+            return;
+        };
+        let start = self.rope.normalize_index(range.start);
+        let end = self.rope.normalize_index(range.end).max(start);
+        let marked: String = self.rope.slice(Some(start), Some(end)).into();
+        let start_offset = self.rope.index_to_utf8_offset(start);
+        let rope = &self.rope;
+        let index_at = |utf16: u32| -> RopeIndex {
+            let mut utf16 = utf16.min(TextWindow::utf16_len(&marked));
+            // Not in the middle of a surrogate pair: round down.
+            let byte = loop {
+                if let Some(byte) = TextWindow::utf16_to_byte_offset(&marked, utf16) {
+                    break byte;
+                }
+                utf16 = utf16.saturating_sub(1);
+            };
+            rope.utf8_offset_to_rope_index(start_offset + Utf8CodeUnits(byte as u32))
+        };
+
+        let caret_index = caret.map_or(end, &index_at);
+        let selected = selected
+            .map(|selected| index_at(selected.start)..index_at(selected.end))
+            .filter(|selected| selected.start < selected.end);
+        self.clear_selection();
+        self.edit_point = caret_index;
+        self.composition_selected = selected;
+    }
+
+    /// The marked text as character offsets for layout (`None` when there is none or it is
+    /// empty).
+    pub(crate) fn composition_character_offsets(&self) -> Option<RangeAny<Utf32CodeUnits>> {
+        self.character_offsets_of(self.composition.as_ref()?)
+    }
+
+    /// The clause the input method has selected, as character offsets for layout.
+    pub(crate) fn composition_selected_character_offsets(
+        &self,
+    ) -> Option<RangeAny<Utf32CodeUnits>> {
+        self.character_offsets_of(self.composition_selected.as_ref()?)
+    }
+
+    fn character_offsets_of(&self, range: &Range<RopeIndex>) -> Option<RangeAny<Utf32CodeUnits>> {
+        let start = self.rope.normalize_index(range.start);
+        let end = self.rope.normalize_index(range.end);
+        if start >= end {
+            return None;
+        }
+        Some(RangeAny::new(
+            Some(self.rope.index_to_character_offset(start)),
+            Some(self.rope.index_to_character_offset(end)),
+        ))
+    }
+
+    /// Select the text between two UTF-16 offsets of the whole text, if both are inside it and
+    /// not in the middle of a surrogate pair. Returns whether the selection was set.
+    pub(crate) fn select_utf16_range_checked(&mut self, start: u32, end: u32) -> bool {
+        let content = self.rope.contents();
+        let (Some(start), Some(end)) = (
+            TextWindow::utf16_to_byte_offset(&content, start),
+            TextWindow::utf16_to_byte_offset(&content, end),
+        ) else {
+            return false;
+        };
+        if start > end {
+            return false;
+        }
         self.set_selection_range_utf8(
-            start,
-            start + Utf8CodeUnits(insertion.len() as u32),
+            Utf8CodeUnits(start as u32),
+            Utf8CodeUnits(end as u32),
             SelectionDirection::Forward,
         );
+        true
     }
 
     fn edit_point_for_hit_test_result(&self, hit_test_result: &HitTestResult) -> RopeIndex {
@@ -677,6 +858,11 @@ impl<T: ClipboardProvider> TextInput<T> {
             _ => false,
         };
 
+        // Mercury: a click moves the caret out of the marked text; the system ended it (EB11).
+        if selection_changed {
+            self.abandon_composition();
+        }
+
         if selection_changed && mouse_event.buttons().contains(MouseButtons::Primary) {
             element
                 .owner_document()
@@ -711,13 +897,27 @@ impl<T: ClipboardProvider> TextInput<T> {
     /// Newline stripping only happens for incremental updates to the [`Rope`] as `<input>`
     /// elements currently need to store unsanitized values while being created.
     pub fn set_content(&mut self, content: DOMString) {
-        self.rope = Rope::new(content.str().replace("\r\n", "\n").replace("\r", "\n"));
+        let new_contents = content.str().replace("\r\n", "\n").replace("\r", "\n");
+        // Mercury: a script that sets the text the control already has (a controlled input does
+        // after every `input` event) must not end the composition; any other text does (EB11).
+        if self.composition.is_some() && self.rope.contents() != new_contents {
+            self.composition = None;
+            self.composition_selected = None;
+        }
+        self.rope = Rope::new(new_contents);
         self.was_last_change_by_set_content = true;
 
         self.edit_point = self.rope.normalize_index(self.edit_point());
         self.selection_origin = self
             .selection_origin
             .map(|selection_origin| self.rope.normalize_index(selection_origin));
+        // Mercury: the marked text keeps its place when the text did not change (EB11).
+        self.composition = self.composition.take().map(|range| {
+            self.rope.normalize_index(range.start)..self.rope.normalize_index(range.end)
+        });
+        self.composition_selected = self.composition_selected.take().map(|range| {
+            self.rope.normalize_index(range.start)..self.rope.normalize_index(range.end)
+        });
     }
 
     pub fn set_selection_range_utf16(
