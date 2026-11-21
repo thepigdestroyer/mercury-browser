@@ -34,8 +34,9 @@ pub use parse::new_parser;
 
 // ---- item 2 `frames` exports ----
 pub use processor::{
-    FeedCursor, InitOutcome, ProcessError, Processed, Removed, SourceBufferProcessor,
+    EvictReport, FeedCursor, InitOutcome, ProcessError, Processed, Removed, SourceBufferProcessor,
 };
+pub use trackbuffer::{FrameKey, StoredFrame, TrackBuffer};
 
 // ---- item 3 `model` exports ----
 pub use backend::MseBackend;
