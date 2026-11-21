@@ -98,6 +98,8 @@ pub(crate) struct WebViewDelegateImpl {
     pub(crate) fullscreen: Cell<bool>,
     pub(crate) crashes: Cell<usize>,
     pub(crate) input_event_result: RefCell<Option<InputEventResult>>,
+    // Mercury: the text state messages of the text lane, in the order they arrived (EB11).
+    pub(crate) text_states: RefCell<Vec<Option<servo::TextInputState>>>,
 }
 
 #[allow(dead_code)] // Used by some tests and not others
@@ -116,6 +118,7 @@ impl WebViewDelegateImpl {
         self.fullscreen.set(false);
         self.crashes.set(0);
         *self.input_event_result.borrow_mut() = None;
+        self.text_states.borrow_mut().clear();
     }
 }
 
@@ -187,6 +190,15 @@ impl WebViewDelegate for WebViewDelegateImpl {
         result: InputEventResult,
     ) {
         *self.input_event_result.borrow_mut() = Some(result);
+    }
+
+    // Mercury: record the state messages of the text lane (EB11).
+    fn notify_mercury_message(&self, _webview: WebView, message: servo::MercuryEmbedderMsg) {
+        if let servo::MercuryEmbedderMsg::Text(servo::TextMsg::InputState(state)) = message {
+            self.text_states
+                .borrow_mut()
+                .push(state.map(|state| *state));
+        }
     }
 }
 
