@@ -16,7 +16,8 @@
 # empty `files` list.
 
 # ---------------------------------------------------------------------------------------------
-# mozjs_sys 153.6.0-1 (SpiderMonkey). The package root holds no licence file; `mozjs/LICENSE` only
+# mozjs_sys 153.7.0-0 (SpiderMonkey; the entries were read in 153.6.0-1, `make credits-check` finds every listed path
+# in 153.7.0-0, and the header notices were not re-read for 153.7.0-0). The package root holds no licence file; `mozjs/LICENSE` only
 # points at Firefox's `toolkit/content/license.html`, which is not in the package. MPL-2.0 is the
 # crate's licence, and the projects below are compiled into `libjs_static`. Not listed on purpose:
 #   third_party/python/**, tools/**, testing/**, devtools/**, build/pgo/** and every test directory

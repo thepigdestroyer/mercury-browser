@@ -75,7 +75,7 @@ dist/Mercury Browser.app/Contents/
   Info.plist            from apps/mercury-desktop/resources/macos/Info.plist.in
   PkgInfo
   MacOS/mercury-browser the release executable (arm64 only)
-  MacOS/lib/            the GStreamer libraries and plugins (see below); nothing else
+  MacOS/lib/            the GStreamer libraries and plugins (see below) and libpdfium.dylib (PDFium, the PDF viewer's library); nothing else
   Resources/AppIcon.icns
   Resources/LICENSE
   Resources/NOTICE
@@ -84,6 +84,7 @@ dist/Mercury Browser.app/Contents/
   Resources/credits/credits.html  the licence text and copyright of every crate in the executable (About, Third-party notices)
   Resources/filter-lists/  the ad and tracker filter lists and their manifest (data, read at start-up)
   Resources/gstreamer-licenses/  each bundled library project's licence files, from the GStreamer packages
+  Resources/pdfium-licenses/  PDFium's licence file and the licence file of every component built into it, from the PDFium tarball
   _CodeSignature/
 dist/Mercury-Browser-0.2.0-macos-arm64.dmg         with --dmg: the app, an Applications link, LICENSE and NOTICE
 dist/Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
