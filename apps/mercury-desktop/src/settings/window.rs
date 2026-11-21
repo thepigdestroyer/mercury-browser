@@ -59,6 +59,7 @@ pub(crate) fn show(handle: &Rc<SettingsHandle>) {
             super::apply_chrome_theme(&window);
             connect(&window, Rc::downgrade(handle));
             crate::passwords::connect_settings_window(&window); // passwords-ui
+            super::groups_panel::connect(&window, Rc::downgrade(handle)); // settings-ui
             fill_text_fields(&window, &handle.settings());
             *slot.window.borrow_mut() = Some(window);
         }
@@ -81,6 +82,7 @@ pub(crate) fn refresh(handle: &SettingsHandle) {
     if let Some(window) = handle.window.window.borrow().as_ref() {
         window.set_system_color_scheme(handle.system_color_scheme());
         fill(window, &handle.settings(), handle.save_problem());
+        super::groups_panel::fill_tab_groups(handle, window); // settings-ui
     }
 }
 
@@ -92,6 +94,7 @@ pub(crate) fn fill(window: &SettingsWindow, settings: &Settings, save_problem: O
         Theme::Dark => SlintColorScheme::Dark,
     });
     window.set_save_problem(save_problem.unwrap_or_default().into());
+    super::groups_panel::fill_appearance(window, settings); // settings-ui
 
     window.set_startup_index(index_of(&edit::STARTUP_CHOICES, &settings.startup));
     window.set_pdf_index(index_of(&edit::PDF_CHOICES, &settings.web.pdf)); // pdf-viewer
