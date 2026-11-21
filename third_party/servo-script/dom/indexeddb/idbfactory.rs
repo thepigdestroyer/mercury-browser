@@ -346,7 +346,14 @@ impl IDBFactory {
                         "There should be a request to handle ConnectionMsg::VersionChange."
                     );
                 };
-                let connection = request.connection();
+                // Mercury: `pending_connection()` instead of `connection()`, whose `expect()` took
+                // the content process down.
+                let Some(connection) = request.pending_connection() else {
+                    return debug_assert!(
+                        false,
+                        "There should be a connection to handle ConnectionMsg::VersionChange."
+                    );
+                };
 
                 // Step 10.2: fire a version change event named versionchange at entry with db’s version and version.
                 connection.dispatch_versionchange(cx, old_version, Some(version));

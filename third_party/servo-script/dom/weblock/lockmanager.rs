@@ -72,7 +72,6 @@ use crate::routed_promise::{RoutedPromiseListener, callback_promise};
 struct PendingRequest {
     #[no_trace]
     id: LockRequestId,
-    #[no_trace]
     name: String,
     callback: TracedCallback<LockGrantedCallback>,
     promise: TracedPromise,
@@ -95,7 +94,6 @@ struct HeldRequest {
 #[derive(JSTraceable, MallocSizeOf)]
 struct DroppableLockManager {
     /// Names this global in `query()` results and in `WebLocksThreadMsg::ClientGone`.
-    #[no_trace]
     client_id: String,
     #[no_trace]
     storage: GenericSender<WebLocksThreadMsg>,

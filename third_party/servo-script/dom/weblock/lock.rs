@@ -26,7 +26,6 @@ use crate::dom::globalscope::GlobalScope;
 #[dom_struct]
 pub(crate) struct Lock {
     reflector_: Reflector,
-    #[no_trace]
     name: String,
     mode: LockMode,
 }
