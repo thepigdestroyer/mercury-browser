@@ -14,7 +14,8 @@
 //! The ids and their order are one contract with `GroupPreset` in `talaria-core/src/groups.rs`,
 //! which writes and reads the same strings: the two lists must be equal, in this order. This
 //! crate does not depend on `talaria-core`, so `tests/group_colours.rs` pins this side as a
-//! literal list, and whatever crate links both asserts that the two agree.
+//! literal list, and `talaria-core/tests/appearance_contract.rs`, which links both crates, asserts
+//! that the two agree.
 
 use crate::colour::Colour;
 use crate::oklab::Oklab;
@@ -49,11 +50,26 @@ pub const PRESET_COUNT: usize = 14;
 /// apart in OKLab: the closest are green and teal at 0.086, then blue and violet at 0.102 and
 /// teal and slate at 0.104; every other pair is 0.13 or more.
 ///
-/// The order is chosen, not alphabetical: it is a farthest-point order that starts from blue, so
-/// the first groups in a window get the colours that are furthest apart (the first eleven stay at
-/// least 0.13 apart; the spec's own order would put violet third, 0.10 from blue). Slate is last
-/// because it is the colour of the "loose tabs" pseudo-group, and no real group should get it
-/// before the other 13 are in use. A picker that wants a rainbow can sort by [`crate::oklab::hue`].
+/// The order is chosen, not alphabetical and not the spec's. It follows four rules, in this
+/// order of priority:
+///
+/// 1. **Blue first, slate last.** Slate is the colour of the "loose tabs" pseudo-group, so no real
+///    group gets it before the other 13 are in use.
+/// 2. **The first groups stay far apart.** Every set of the first `n` presets, for `n` up to 11,
+///    has its closest pair at least 0.13 apart in OKLab (the spec's own order would put violet
+///    third, 0.10 from blue).
+/// 3. **Neighbours differ in hue.** Two presets handed out one after the other are at least 100
+///    degrees apart in OKLab hue (the smallest gap is 107; the spec's order has one of 40, and the
+///    farthest-point order this list had before has 27). Slate is left out: it is nearly grey, so it
+///    has no hue worth comparing. 107 is the best any order can do under rule 2; without rule 2
+///    it would be 134, at the price of three blues among the first five groups.
+/// 4. **Among the orders that tie, the earliest groups are the furthest apart**: farthest point
+///    first. The first four (blue, amber, orchid, mint) are four clearly different hues, no two of
+///    them closer than 0.19.
+///
+/// The order was found by an exhaustive search over all orders of the 13 coloured presets. A test
+/// pins rules 1 to 3, and the ids and this order are the stored contract with `talaria-core` (see
+/// the module documentation). A picker that wants a rainbow can sort by [`crate::oklab::hue`].
 pub static PRESETS: [Preset; PRESET_COUNT] = [
     Preset {
         id: "blue",
@@ -66,9 +82,9 @@ pub static PRESETS: [Preset; PRESET_COUNT] = [
         base: Colour::hex(0xe0912a),
     },
     Preset {
-        id: "rose",
-        name: "Rose",
-        base: Colour::hex(0xd9486e),
+        id: "orchid",
+        name: "Orchid",
+        base: Colour::hex(0xe08af3),
     },
     Preset {
         id: "mint",
@@ -76,19 +92,9 @@ pub static PRESETS: [Preset; PRESET_COUNT] = [
         base: Colour::hex(0x3ccaba),
     },
     Preset {
-        id: "orchid",
-        name: "Orchid",
-        base: Colour::hex(0xe08af3),
-    },
-    Preset {
-        id: "brown",
-        name: "Brown",
-        base: Colour::hex(0x9a5505),
-    },
-    Preset {
-        id: "green",
-        name: "Green",
-        base: Colour::hex(0x2e9e62),
+        id: "rose",
+        name: "Rose",
+        base: Colour::hex(0xd9486e),
     },
     Preset {
         id: "lime",
@@ -96,14 +102,14 @@ pub static PRESETS: [Preset; PRESET_COUNT] = [
         base: Colour::hex(0x91c43e),
     },
     Preset {
-        id: "sky",
-        name: "Sky",
-        base: Colour::hex(0x77b5fb),
-    },
-    Preset {
         id: "plum",
         name: "Plum",
         base: Colour::hex(0x954a7e),
+    },
+    Preset {
+        id: "teal",
+        name: "Teal",
+        base: Colour::hex(0x169c9c),
     },
     Preset {
         id: "salmon",
@@ -111,14 +117,24 @@ pub static PRESETS: [Preset; PRESET_COUNT] = [
         base: Colour::hex(0xf3909d),
     },
     Preset {
+        id: "sky",
+        name: "Sky",
+        base: Colour::hex(0x77b5fb),
+    },
+    Preset {
+        id: "brown",
+        name: "Brown",
+        base: Colour::hex(0x9a5505),
+    },
+    Preset {
         id: "violet",
         name: "Violet",
         base: Colour::hex(0x7e5bd0),
     },
     Preset {
-        id: "teal",
-        name: "Teal",
-        base: Colour::hex(0x169c9c),
+        id: "green",
+        name: "Green",
+        base: Colour::hex(0x2e9e62),
     },
     Preset {
         id: "slate",

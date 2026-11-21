@@ -91,7 +91,9 @@ impl IncomingQueue {
 }
 
 /// Which URLs from other apps are opened: web pages, and local files of the kinds a browser
-/// shows (HTML, text, images, PDF). Returns the URL as the parser writes it.
+/// shows (HTML, text, images, PDF). Returns the URL as the parser writes it. Only `deliver`
+/// calls it (macOS); the tests run everywhere.
+#[cfg(any(target_os = "macos", test))]
 pub(crate) fn accept_url_from_other_app(text: &str) -> Result<String, String> {
     const FILE_EXTENSIONS: [&str; 22] = [
         "html", "htm", "xhtml", "xht", "shtml", "txt", "text", "md", "markdown", "log", "csv",
@@ -178,6 +180,7 @@ pub(crate) fn receive_from_other_apps(automated: bool) {
 
 /// URLs from another app (Apple events on macOS). Call on the main thread. Only web pages and
 /// the kinds of files a browser shows are opened (`accept_url_from_other_app`).
+#[cfg(target_os = "macos")]
 pub(crate) fn deliver(urls: Vec<String>, source: &str) {
     let accepted = urls
         .into_iter()
