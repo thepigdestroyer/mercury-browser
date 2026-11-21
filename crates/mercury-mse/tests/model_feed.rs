@@ -158,8 +158,15 @@ fn seeking_points_the_feed_at_the_target_before_the_pipeline_can_seek() {
         "starts at the keyframe at 4 s, not {} s",
         first.pts as f64 / 1e9
     );
-    assert!(got.discont[0], "the first frame after a seek is a discontinuity");
-    assert_eq!(got.configs.len(), 1, "one Config, in front of the first frame");
+    assert!(
+        got.discont[0],
+        "the first frame after a seek is a discontinuity"
+    );
+    assert_eq!(
+        got.configs.len(),
+        1,
+        "one Config, in front of the first frame"
+    );
     assert_in_order("seeking before the data", &got.frames);
 }
 
