@@ -35,6 +35,7 @@ use talaria_core::{
 };
 
 use self::color::{ColorKey, ColorModel, SWATCHES, from_hue_lightness, hue_lightness};
+use self::context_menu::with_view_source; // sh-pages
 use self::context_menu::{
     MenuCommand, MenuKey, MenuModel, MenuOutcome, MenuRow, build_menu, with_login_chooser,
 };
@@ -321,6 +322,7 @@ impl Controls {
                         state.url(),
                         &origin,
                         state.password_field_menu(), // passwords-ui
+                        crate::view_source::can_view_source(controller), // sh-pages
                     )
                 }
             };
@@ -357,6 +359,7 @@ impl Controls {
         state.taken_keys.take(event.physical_key);
         let mut closing = None;
         let mut fill_login = None; // passwords-ui
+        let mut view_source = false; // sh-pages
         match &mut state.popup {
             Popup::Select { model, rows, .. } => {
                 if let Some(key) = select_key(&event.logical_key) {
@@ -383,6 +386,7 @@ impl Controls {
                     match model.key(key) {
                         MenuOutcome::Close(command) => {
                             fill_login = login_to_fill(command.as_ref()); // passwords-ui
+                            view_source = view_source_chosen(command.as_ref()); // sh-pages
                             closing = Some(menu_answer(command));
                         }
                         MenuOutcome::Stay => {
@@ -408,6 +412,10 @@ impl Controls {
                 }
             });
         }
+        // sh-pages: after the engine's menu was dismissed
+        if view_source {
+            self.open_source();
+        }
         true
     }
 
@@ -417,6 +425,7 @@ impl Controls {
         };
         let mut state = self.state.borrow_mut();
         let mut fill_login = None; // passwords-ui
+        let mut view_source = false; // sh-pages
         let closing = match &mut state.popup {
             Popup::Select { model, rows, .. } => match model.click(row) {
                 Outcome::Close(answer) => Some((answer, None)),
@@ -428,6 +437,7 @@ impl Controls {
             Popup::Menu { model, .. } => match model.click(row) {
                 MenuOutcome::Close(command) => {
                     fill_login = login_to_fill(command.as_ref()); // passwords-ui
+                    view_source = view_source_chosen(command.as_ref()); // sh-pages
                     Some(menu_answer(command))
                 }
                 MenuOutcome::Stay => None,
@@ -451,6 +461,19 @@ impl Controls {
                     window.window().request_redraw();
                 }
             });
+        }
+        // sh-pages: after the engine's menu was dismissed
+        if view_source {
+            self.open_source();
+        }
+    }
+
+    // sh-pages
+    /// "View page source": the page's source in a new tab, once the engine's menu is dismissed.
+    fn open_source(&self) {
+        if let Some(window) = self.window.upgrade() {
+            crate::view_source::open_source_of_active_tab(&window, &self.controller);
+            window.window().request_redraw();
         }
     }
 
@@ -629,6 +652,7 @@ fn open_popup(
     page_url: &str,
     _origin: &str,
     password_field: Option<ControlId>,
+    view_source: bool, // sh-pages: the page has a source to view
 ) -> Popup {
     match request {
         ControlRequest::Select {
@@ -673,6 +697,13 @@ fn open_popup(
                 image_url.as_deref(),
                 page_url,
             ));
+            // sh-pages: "View page source" after Reload, in a menu for the page itself
+            model = with_view_source(
+                model,
+                link_url.as_deref(),
+                image_url.as_deref(),
+                view_source,
+            );
             // passwords-ui: "Fill login…" over the focused password field
             if let Some(fill) = password_field
                 .and_then(|field| crate::passwords::fill_menu(tab_id, field, page_url))
@@ -713,6 +744,12 @@ fn login_to_fill(command: Option<&MenuCommand>) -> Option<usize> {
         Some(MenuCommand::FillLogin(index)) => Some(*index),
         _ => None,
     }
+}
+
+// sh-pages
+/// Whether the menu was closed by "View page source".
+fn view_source_chosen(command: Option<&MenuCommand>) -> bool {
+    matches!(command, Some(MenuCommand::ViewSource))
 }
 
 // passwords-ui: the menu became the list of logins; its height changed, so it is placed again
@@ -879,6 +916,8 @@ fn menu_answer(command: Option<MenuCommand>) -> (ControlAnswer, Option<String>) 
         Some(MenuCommand::ShowLogins | MenuCommand::FillLogin(_)) | None => {
             (ControlAnswer::Dismiss, None)
         }
+        // sh-pages: the new tab follows the dismissed menu (`key`, `row_clicked`).
+        Some(MenuCommand::ViewSource) => (ControlAnswer::Dismiss, None),
     }
 }
 
@@ -1295,5 +1334,24 @@ mod tests {
             )
         );
         assert_eq!(menu_answer(None), (ControlAnswer::Dismiss, None));
+    }
+
+    // sh-pages
+    #[test]
+    fn view_page_source_dismisses_the_engines_menu_and_opens_the_source_after_it() {
+        // The engine's menu is dismissed (it has no such action); the new tab is the browser's.
+        assert_eq!(
+            menu_answer(Some(MenuCommand::ViewSource)),
+            (ControlAnswer::Dismiss, None)
+        );
+        assert!(view_source_chosen(Some(&MenuCommand::ViewSource)));
+        assert!(!view_source_chosen(None));
+        assert!(!view_source_chosen(Some(&MenuCommand::ShowLogins)));
+        assert!(!view_source_chosen(Some(&MenuCommand::OpenInNewTab(
+            "https://a.test/".to_owned()
+        ))));
+        assert!(!view_source_chosen(Some(&MenuCommand::Engine(
+            talaria_core::ContextMenuAction::Reload
+        ))));
     }
 }

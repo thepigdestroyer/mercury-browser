@@ -88,6 +88,10 @@ pub(crate) enum ShortcutAction {
     Find,
     FindNext,
     FindPrevious,
+    // sh-pages
+    /// Cmd+Option+U on macOS, Ctrl+U elsewhere: the page's source in a new tab
+    /// (`view_source::shortcut`).
+    ViewSource,
 }
 
 impl ShortcutAction {
@@ -211,6 +215,10 @@ pub(crate) fn shortcut_action(
 
     // bookmarks lane
     if let Some(action) = bookmark_shortcut(character, primary, shift, alt, platform) {
+        return Some(action);
+    }
+    // sh-pages
+    if let Some(action) = crate::view_source::shortcut(character, primary, shift, alt, platform) {
         return Some(action);
     }
 
@@ -492,6 +500,10 @@ pub(crate) fn run_shortcut(
             web_view_focused,
             action == ShortcutAction::FindNext,
         ),
+        // sh-pages
+        ShortcutAction::ViewSource => {
+            crate::view_source::open_source_of_active_tab(window, controller)
+        }
     }
 }
 
@@ -783,6 +795,7 @@ mod tests {
             (Find, false),
             (FindNext, true),
             (FindPrevious, true),
+            (ViewSource, false), // sh-pages
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
@@ -820,6 +833,7 @@ mod tests {
                 | FindNext
                 | FindPrevious => {}
                 SavePage | ShowDownloads => {} // downloads-ui lane
+                ViewSource => {}               // sh-pages
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -1078,6 +1092,30 @@ mod tests {
         assert!(!SavePage.repeats() && !ShowDownloads.repeats());
     }
 
+    // sh-pages
+    #[test]
+    fn view_source_is_option_command_u_on_macos_and_control_u_elsewhere() {
+        // winit reports Cmd+Option+B as "b" (Option is ignored while Cmd is held); Option+U is a
+        // dead key on a US layout, so Cmd+Option+U is expected to arrive as "u" the same way. Not
+        // yet seen with a real key event (hands-on list); if it is not "u", match the physical
+        // U key as the KEY_R / KEY_T tests do.
+        assert_eq!(mac(character("u"), CMD | ALT), Some(ViewSource));
+        assert_eq!(mac(character("U"), CMD | ALT), Some(ViewSource));
+        assert_eq!(other(character("u"), CTRL), Some(ViewSource));
+        assert_eq!(other(character("U"), CTRL), Some(ViewSource));
+        // Cmd+U stays the page's (underline in an editor); Option+U and Ctrl+U are the page's
+        // on macOS; Ctrl+Alt and Ctrl+Shift belong to the layout and to Linux's Unicode input.
+        assert_eq!(mac(character("u"), CMD), None);
+        assert_eq!(mac(character("u"), ALT), None);
+        assert_eq!(mac(character("u"), CTRL), None);
+        assert_eq!(mac(character("u"), CMD | ALT | SHIFT), None);
+        assert_eq!(other(character("u"), CTRL | ALT), None);
+        assert_eq!(other(character("u"), CTRL | SHIFT), None);
+        assert_eq!(other(character("u"), CMD), None);
+        assert_eq!(other(character("u"), NONE), None);
+        assert!(!ViewSource.repeats());
+    }
+
     // --- the merged table: no two actions share a key ---
     //
     // Several lanes added keys to the one table (tab search, moving tabs and the browser menu,
@@ -1288,6 +1326,8 @@ mod tests {
                 &["cmd+shift+g"],
                 &["ctrl+shift+g", "shift+f3"],
             ),
+            // sh-pages: Cmd+U alone stays the page's (underline); Ctrl+Alt is AltGr elsewhere
+            row("ViewSource", &["cmd+alt+u"], &["ctrl+u"]),
         ];
         for number in 1..=8_usize {
             table.push(row(
