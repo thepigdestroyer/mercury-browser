@@ -27,7 +27,8 @@ pub(crate) use display_sleep::{DisplaySleepPolicy, PowerAssertions};
 /// Which implementation stands behind a service trait.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ServiceKind {
-    /// The operating system's: only in an interactive launch.
+    /// The operating system's: only in an interactive launch, and only on macOS (`macos.rs`).
+    #[cfg(target_os = "macos")]
     System,
     /// Logs what it would do: automated runs, and platforms without the service.
     Logging,
@@ -35,8 +36,13 @@ pub(crate) enum ServiceKind {
     Test,
 }
 pub(crate) use now_playing::{
-    NowPlayingCenter, NowPlayingChange, NowPlayingInfo, NowPlayingPolicy, RemoteCommand,
+    NowPlayingCenter, NowPlayingChange, NowPlayingInfo, NowPlayingPolicy,
 };
+// Media keys come only from the macOS command centre; other platforms have no source of them,
+// so the command type and what acts on it are built for macOS and for the tests that run
+// everywhere.
+#[cfg(any(target_os = "macos", test))]
+pub(crate) use now_playing::RemoteCommand;
 use probe::ProbeSchedule;
 
 use crate::ui_sync::sync_ui;
@@ -84,6 +90,7 @@ impl MediaSessionHub {
     }
 
     /// Sends a media key to the tab in Now Playing. Returns true if it queued a command.
+    #[cfg(any(target_os = "macos", test))]
     pub(crate) fn remote_command(
         &mut self,
         controller: &mut BrowserController,
@@ -143,6 +150,8 @@ fn diagnostic_commands(text: &str) -> Vec<(std::time::Duration, BrowserCommand)>
 
 struct Installed {
     hub: MediaSessionHub,
+    /// Read only to act on a media key (`on_remote_command`), which only macOS delivers.
+    #[cfg(target_os = "macos")]
     controller: Rc<RefCell<BrowserController>>,
 }
 
@@ -198,6 +207,7 @@ pub(crate) fn install(
     INSTALLED.with(|installed| {
         *installed.borrow_mut() = Some(Installed {
             hub: MediaSessionHub::new(center, power),
+            #[cfg(target_os = "macos")]
             controller: Rc::clone(&controller),
         });
     });
@@ -246,6 +256,7 @@ pub(crate) fn after_pump(
 }
 
 /// A media key or Now Playing control; runs on the event loop.
+#[cfg(target_os = "macos")]
 pub(crate) fn on_remote_command(command: RemoteCommand) {
     let queued = INSTALLED.with(|installed| {
         let mut installed = installed.borrow_mut();
