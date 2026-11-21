@@ -4,6 +4,7 @@
 // "all tabs" button when the tabs no longer fit, and what the hover preview needs.
 // Colours come only from `ChromePalette`.
 import { ChromePalette } from "../theme/chrome-palette.slint";
+import { ChromeMetrics } from "../theme/chrome-metrics.slint"; // theme-plumbing
 import { TabAudioButton, TabAudioState } from "../media/tab-audio.slint"; // media-session lane
 import { CaptureTabMark, CaptureView } from "../capture/capture-indicator.slint"; // media-capture
 
@@ -34,11 +35,11 @@ export enum TabMenuCommand {
 
 // The tab strip's measurements, shared with the window.
 export global TabStripMetrics {
-    out property <length> pinned-width: 40px;
-    out property <length> min-tab-width: 112px;
-    out property <length> max-tab-width: 184px;
-    out property <length> spacing: 6px;
-    out property <length> list-button-width: 34px;
+    out property <length> pinned-width: ChromeMetrics.tab-pinned-width;
+    out property <length> min-tab-width: ChromeMetrics.tab-min-width;
+    out property <length> max-tab-width: ChromeMetrics.tab-max-width;
+    out property <length> spacing: ChromeMetrics.tab-spacing;
+    out property <length> list-button-width: ChromeMetrics.tab-list-button-width;
     // How far the pointer moves with the button down before a press becomes a drag.
     out property <length> drag-threshold: 6px;
 }
@@ -106,7 +107,7 @@ component TabButton inherits Rectangle {
     // title; with sound they show it that way up to 160 px (see above).
     property <bool> show-close: root.tab.active || touch.has-hover || (!root.compact-audio && root.width >= 150px);
 
-    border-radius: 8px;
+    border-radius: ChromeMetrics.tab-radius;
     background: root.dragged ? transparent : root.tab.active || root.ghost
         ? ChromePalette.tab-active
         : touch.has-hover ? ChromePalette.tab-hover : transparent;
@@ -256,7 +257,7 @@ component TabButton inherits Rectangle {
                 horizontal-stretch: 1;
                 text: root.tab.title;
                 color: root.tab.active ? ChromePalette.text : ChromePalette.tab-title-inactive;
-                font-size: 13px;
+                font-size: ChromeMetrics.tab-title-font-size;
                 font-weight: root.tab.active ? 550 : 450;
                 overflow: elide;
                 vertical-alignment: center;
