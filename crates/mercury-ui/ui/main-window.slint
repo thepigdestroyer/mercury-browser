@@ -580,6 +580,14 @@ export component MainWindow inherits Window {
         site-info-popover.show();
     }
     // --- end site-security ---
+    // --- sh-pages ---
+    // Images per site, for the "Images" row of the site-information popover (the row exists only
+    // while the active tab shows a web page). Filled by `site_images::sync_popover`.
+    in property <bool> site-images-available: false;
+    in property <bool> site-images-blocked: false;
+    // The row's button: turn images off, or on again, for the active tab's site.
+    callback site-images-toggle();
+    // --- end sh-pages ---
 
     // --- tabs-plus ---
     // What the application last wrote into the address field (or the text the user accepted
@@ -770,6 +778,12 @@ export component MainWindow inherits Window {
                             }
                             remove-https-exception => {
                                 root.site-https-exception-remove();
+                            }
+                            // sh-pages: images per site
+                            images-available: root.site-images-available;
+                            images-blocked: root.site-images-blocked;
+                            toggle-images => {
+                                root.site-images-toggle();
                             }
                         }
                     }
