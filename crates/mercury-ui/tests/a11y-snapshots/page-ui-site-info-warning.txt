@@ -5,7 +5,7 @@
 groupbox | Site information | |
 text | self-signed.test | |
 text | Not secure: you allowed an invalid certificate | |
-text | You chose to continue although the certificate is not valid. Mercury Browser accepts it until it quits. | |
+text | You chose to continue although the certificate is not valid. Mercury Browser accepts this certificate for this site until it quits. | |
 text | Permissions | |
 text | This site has not asked for any permission. | |
 text | Cookies and site data | |

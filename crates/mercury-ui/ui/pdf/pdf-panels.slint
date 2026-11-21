@@ -6,6 +6,10 @@
 import { ChromePalette } from "../theme/chrome-palette.slint";
 import { PdfViewerModel } from "pdf-model.slint";
 import { PdfPanelButton } from "pdf-controls.slint";
+// The password is typed into the field written for secrets (a password input type is allowed
+// nowhere else, so that a typed password never reaches assistive technology: see
+// `tests/a11y_secrets.rs`).
+import { RequestField } from "../dialogs/page-request-parts.slint";
 
 component PdfCard inherits Rectangle {
     in property <string> label;
@@ -42,14 +46,14 @@ export component PdfPasswordPanel inherits Rectangle {
 
     init => {
         if PdfViewerModel.take-focus {
-            field.focus();
+            field.focus-and-select();
             // A focus change made while the panel starts is not reported by `changed has-focus`.
             PdfViewerModel.text-focused = true;
         }
     }
 
     changed focus-serial => {
-        field.focus();
+        field.focus-and-select();
     }
 
     background: ChromePalette.content-background;
@@ -84,47 +88,20 @@ export component PdfPasswordPanel inherits Rectangle {
                 accessible-role: none;
             }
 
-            Rectangle {
-                height: 32px;
-                border-radius: 7px;
-                border-width: 1px;
-                border-color: PdfViewerModel.message != ""
-                    ? ChromePalette.danger
-                    : field.has-focus ? ChromePalette.accent : ChromePalette.field-border;
-                background: ChromePalette.field-background;
+            field := RequestField {
+                placeholder: "Password";
+                accessible-name: "Password";
+                password: true;
+                invalid: PdfViewerModel.message != "";
 
-                if field.text == "": Text {
-                    x: 10px;
-                    width: parent.width - 20px;
-                    height: parent.height;
-                    text: "Password";
-                    color: ChromePalette.placeholder;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    accessible-role: none;
+                accepted => {
+                    if self.text != "" {
+                        PdfViewerModel.submit-password(self.text);
+                        self.text = "";
+                    }
                 }
-
-                field := TextInput {
-                    x: 10px;
-                    width: parent.width - 20px;
-                    height: parent.height;
-                    color: ChromePalette.text;
-                    font-size: 13px;
-                    vertical-alignment: center;
-                    single-line: true;
-                    input-type: InputType.password;
-                    accessible-label: "Password";
-                    accessible-placeholder-text: "Password";
-
-                    accepted => {
-                        if self.text != "" {
-                            PdfViewerModel.submit-password(self.text);
-                            self.text = "";
-                        }
-                    }
-                    changed has-focus => {
-                        PdfViewerModel.text-focused = self.has-focus;
-                    }
+                changed has-focus => {
+                    PdfViewerModel.text-focused = self.has-focus;
                 }
             }
 
