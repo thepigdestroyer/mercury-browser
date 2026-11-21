@@ -31,6 +31,15 @@ scaffold is in `servo-constellation-traits`, `servo-constellation` and `servo`.
   only itself, size) and `talaria-servo` `mercury_messages::tests` (serde round trip, wire format, size of `EmbedderMsg`).
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
+Changes made by lane a11y-1 (21 Nov 2026).
+
+### The epoch of a child document's accessibility tree — `mercury/a11y.rs`
+
+- **What:** `epoch_for_child_document` and `top_level_epoch_of_child_document`: a child (iframe) document's updates carry
+  its top-level document's epoch with the top bit set, so `WebView` can tell them from a new top-level document without a
+  new message.
+- **Drop when:** the constellation change in `servo-constellation` is dropped.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

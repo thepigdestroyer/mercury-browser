@@ -201,6 +201,38 @@ The `js` dependency (package `mozjs`) is `=0.27.0` instead of `=0.26.13`, with a
 SpiderMonkey's security fixes); the same line is changed in `servo-script-bindings` and `servo-script-webcrypto`. See
 `third_party/servo-script-webcrypto/MERCURY.md`. Drop at the bump that contains it (B1).
 
+## Changes: page accessibility (lane a11y-1, 21 Nov 2026)
+
+### 12. What an assistive technology can do to a page (EE5) — new `dom/document/accessibility_actions.rs`, `dom/window/window.rs`
+
+- **What:** upstream performs one accessibility action, an untrusted `click`, in `Window::handle_accessibility_actions`.
+  The new file performs the 16 actions that `mercury_a11y::actions::SUPPORTED_ACTIONS` advertises (Focus, Blur, Click,
+  SetValue, ReplaceSelectedText, ScrollIntoView, ScrollToPoint, ScrollUp/Down/Left/Right, Increment, Decrement, Expand,
+  Collapse, ShowContextMenu) with an exhaustive `match` on `accesskit::Action`. `Click` also sets the window's last
+  activation time (decision OD-5/D6: assistive-technology actions that click count as user activation; the action
+  channel is embedder-only, so a page cannot grant itself activation). `window.rs` has one hook: the body of
+  `handle_accessibility_actions` is one call, and the `use accesskit::Action` it needed is gone. No page content is
+  logged.
+- **Why:** VoiceOver's "activate", "set value", "scroll to" and so on have to do something on a page.
+- **Upstream:** `dom/window/window.rs` `handle_accessibility_actions` (about line 4021 in 0.8.0).
+- **Tested by:** unit tests of the pure helpers in the file; `crates/talaria-servo/tests/a11y_actions.rs`
+  (`headless_servo_*`, ignored, run by `make test-a11y-pages` where Servo can render).
+- **Drop when:** upstream Servo performs the actions itself.
+
+### 13. When a node's accessibility properties are stale (EE3, EE4) — new `dom/document/accessibility_attributes.rs`, `dom/element/element.rs`, `dom/html/form_controls/{htmlinputelement,htmltextareaelement,htmlselectelement}.rs`, `dom/html/embedded_content/htmliframeelement.rs`
+
+- **What:** upstream damages the accessibility tree for a `role` change and a text change only. The new file decides which
+  attribute changes (`aria-*`, `alt`, `title`, `for`, `id`, `value`, `hidden`, `disabled`, ...), which native state flags
+  and which value changes (typed text, a range's number, a select's selection) damage the node. Hook lines: one call in
+  `Element::attribute_mutated`, one in `Element::set_state`, one `damage_for_value_change` call in each
+  place a form control's value changes (`handle_text_content_changed`, `value_changed`, `update_shadow_tree`), and one
+  `add_pending_accessibility_damage` where an `<iframe>` gets a new pipeline (its node grafts that document's tree).
+  `dom/document/mod.rs` declares the two modules. All cost nothing while no assistive technology is attached
+  (`add_pending_accessibility_damage` records only for an active document).
+- **Why:** names, states and values are computed from the DOM; a stale answer is a wrong reading.
+- **Tested by:** `headless_servo_state_changes_reach_the_tree` and the frames tests in `crates/talaria-servo/tests/`.
+- **Drop when:** upstream servo#46241 and its follow-ups damage the tree for the same changes.
+
 ## Warnings
 
 Cargo does not cap lints for path dependencies, so compiling this crate in

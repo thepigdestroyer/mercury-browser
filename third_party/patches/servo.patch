@@ -205,6 +205,39 @@ diff --git a/servo_delegate.rs b/servo_delegate.rs
  }
 
  pub(crate) struct DefaultServoDelegate;
+diff --git a/webview.rs b/webview.rs
+--- a/webview.rs
++++ b/webview.rs
+@@ -1025,6 +1025,29 @@
+     }
+
+     pub(crate) fn process_accessibility_tree_update(&self, tree_update: TreeUpdate, epoch: Epoch) {
++        // Mercury: a11y-1 EE7 (iframes). A child (iframe) document sends its updates with its
++        // top-level document's epoch plus a flag (the constellation activates it that way, see
++        // `servo-constellation/mercury/a11y.rs`). Upstream treats "an update with a newer epoch" as
++        // "a new top-level document, graft this tree as the page", and a child's first update can
++        // arrive before the top-level document's own: it must never be grafted as the page. It is
++        // handed to the delegate as it is (the embedder holds a tree until a graft names it), and
++        // dropped only when the top-level document it belonged to has been replaced.
++        if let Some(top_level_epoch) = embedder_traits::top_level_epoch_of_child_document(epoch) {
++            if self
++                .inner()
++                .grafted_accesskit_tree_epoch
++                .is_some_and(|current| top_level_epoch < current)
++            {
++                debug!(
++                    "Ignoring stale tree update of a child document for {:?}",
++                    tree_update.tree_id
++                );
++                return;
++            }
++            self.delegate()
++                .notify_accessibility_tree_update(self.clone(), tree_update);
++            return;
++        }
+         if self
+             .inner()
+             .grafted_accesskit_tree_epoch
 diff --git a/webview_delegate.rs b/webview_delegate.rs
 --- a/webview_delegate.rs
 +++ b/webview_delegate.rs

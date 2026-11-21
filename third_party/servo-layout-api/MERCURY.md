@@ -23,6 +23,14 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
 - **Tested by:** `tests/pages/compat-editing.html`.
 - **Drop when:** the Servo bump that contains PR #48253 (B1).
 
+## Changes: page accessibility (lane a11y-1, 21 Nov 2026)
+
+### `SUPPORTED_ARIA_ROLES` is no longer consulted — `accessibility.rs`
+
+- **What:** a comment only. Layout no longer limits a node's role to the safe list; `mercury_a11y::roles` maps the whole
+  ARIA role set. The statics stay for script's `computedRole`.
+- **Drop when:** upstream servo#46241 lands.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

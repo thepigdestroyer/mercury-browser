@@ -2,6 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: a11y-1 items 4 and 5: when the accessibility tree is damaged, and what an assistive technology's
+// actions do.
+pub(crate) mod accessibility_actions;
+pub(crate) mod accessibility_attributes;
 pub(crate) mod accessibility_data;
 mod animation_manager;
 #[expect(clippy::module_inception, reason = "The interface name is Document")]

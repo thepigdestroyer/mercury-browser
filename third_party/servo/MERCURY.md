@@ -31,6 +31,18 @@ Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message 
   they need a compiled `servo` crate and cargo refuses `-p servo` from the Mercury workspace (dev-dependencies), so they have not been run; `talaria-servo`'s `mercury_messages` tests cover the router behind the delegate hooks, not `deliver` itself; the first message sent by a lane is its end-to-end test.
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
+Changes made by lane a11y-1 (21 Nov 2026).
+
+### A child document's tree is never grafted as the page — `webview.rs`
+
+- **What:** `WebView::process_accessibility_tree_update` treats an update with a newer epoch as a new top-level document
+  and grafts its tree as the page. An update whose epoch carries the child-document flag
+  (`embedder_traits::top_level_epoch_of_child_document`) is passed to the delegate unchanged, or dropped when its
+  top-level document is already replaced.
+- **Why:** an iframe's first update can arrive before the page's own.
+- **Tested by:** `crates/talaria-servo/tests/a11y_frames.rs` (ignored, needs a GL context).
+- **Drop when:** upstream distinguishes child documents' updates.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

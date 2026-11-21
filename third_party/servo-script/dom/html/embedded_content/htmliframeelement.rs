@@ -303,6 +303,11 @@ impl HTMLIFrameElement {
                 };
 
                 self.pipeline_id.set(Some(new_pipeline_id));
+                // Mercury: a11y-1 EE7: see `update_pipeline_id`.
+                self.upcast::<Node>().add_pending_accessibility_damage(
+                    cx.no_gc(),
+                    layout_api::AccessibilityDamage::Node,
+                );
                 with_script_thread(|script_thread| {
                     script_thread.spawn_pipeline(cx, new_pipeline_info);
                 });
@@ -642,6 +647,10 @@ impl HTMLIFrameElement {
         }
 
         self.pipeline_id.set(Some(new_pipeline_id));
+        // Mercury: a11y-1 EE7: the node grafts the tree of the document in this pipeline, so a new
+        // pipeline damages it (`frames::child_tree_id` is read again).
+        self.upcast::<Node>()
+            .add_pending_accessibility_damage(cx.no_gc(), layout_api::AccessibilityDamage::Node);
 
         // Only terminate the load blocker if the pipeline id was updated due to a traversal.
         // The load blocker will be terminated for a navigation in iframe_load_event_steps.

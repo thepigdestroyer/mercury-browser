@@ -394,6 +394,11 @@ impl HTMLSelectElement {
     }
 
     pub(crate) fn update_shadow_tree(&self, cx: &mut JSContext) {
+        // Mercury: a11y-1 item 4: the selected option is the value of the control.
+        crate::dom::document::accessibility_attributes::damage_for_value_change(
+            self.upcast::<Node>(),
+            cx.no_gc(),
+        );
         let shadow_tree = self.shadow_tree(cx);
 
         let selected_options = self.selected_options(cx.no_gc());
