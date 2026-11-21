@@ -219,6 +219,15 @@ first try. Web pages are **not** expected to read yet: only Mercury's own interf
     password". VoiceOver must say "secure edit text" and must not read what was typed, as it does
     not for the sign-in sheet's password field. "Show the new password" shows the characters on
     screen only. Report it if VoiceOver reads the password aloud in either field.
+13. **A PDF.** Open `three-pages.pdf` (the PDF viewer section above has the address). The window must
+    offer one "Page content" (main) and no other main area: the VoiceOver cursor reaches the "PDF
+    toolbar" (navigation) with the document's title, "Page number", "of 3 pages", "Zoom out", "Zoom
+    100 percent", "Zoom in", "Fit width", "Fit page", "Rotate clockwise", "Find in document", "Save a
+    copy" and "Open in Preview", and then "PDF document, page 1 of 3" (region). "Page content" must not say
+    that Mercury passes no page content on while a PDF is open. Press a button with Control-Option-Space
+    and check that it does what a click does. The text of the PDF's pages is not expected to read (the
+    known limit); do report a toolbar button the cursor cannot reach, and, for a PDF with a password and one
+    that cannot be shown, the panel's title, the "Password" field (which must say "secure edit text") and its buttons.
 
 Report what reads badly: for each, the element, what VoiceOver said, what it should have said, the macOS
 version and the commit. Wording that can be better is a finding as much as a crash.
