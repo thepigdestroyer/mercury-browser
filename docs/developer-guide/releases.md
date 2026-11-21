@@ -212,8 +212,8 @@ git push origin v0.2.0
 Before pushing a tag:
 
 1. Check that the one-time set-up in [Before the first public release](#before-the-first-public-release) is done. Without the committed public key the release fails in its first minute; without the two secrets it fails after both builds have finished.
-2. Run `make qa`.
-3. Refresh the HSTS preload list ([HSTS preload list](#hsts-preload-list)): run `make hsts-preload-refresh` (it downloads Chromium's list, so it needs the network), read `git diff --stat` and the summary of added, removed and changed hosts it prints, run `make hsts-preload-check HSTS_MAX_AGE_DAYS=<days>` and `cargo test --release -p mercury-devtools --test hsts_data` (`make qa` ran that test on the old list), and commit the two data files alone as `data(hsts): refresh the preload list from Chromium <date>`.
+2. Refresh the HSTS preload list ([HSTS preload list](#hsts-preload-list)): run `make hsts-preload-refresh` (it downloads Chromium's list, so it needs the network), read `git diff --stat` and the summary of added, removed and changed hosts it prints, run `make hsts-preload-check HSTS_MAX_AGE_DAYS=<days>`, and commit the two data files alone as `data(hsts): refresh the preload list from Chromium <date>`. It comes before `make qa` so that the next step tests the refreshed list (`crates/mercury-devtools/tests/hsts_data.rs` is part of it).
+3. Run `make qa`.
 4. Run `make docs`.
 5. Run `make package-macos` and `make test-bundle-macos` on an Apple Silicon Mac, and check the disk image mounts and holds the app (`hdiutil attach -readonly -nobrowse -mountpoint <dir> dist/Mercury-Browser-<version>-macos-arm64.dmg`, then `hdiutil detach <dir>`).
 6. Test the optimized browser on Linux.

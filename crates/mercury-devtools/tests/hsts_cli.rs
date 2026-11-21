@@ -1247,28 +1247,18 @@ fn chromium_shaped(entries: &[mercury_devtools::hsts::Entry]) -> String {
 
 /// The strongest offline proof of the format: the list Servo 0.8.0 ships, written back out in the
 /// shape of Chromium's file and built with the default guards, comes out with the same entries
-/// and flags (see the note on the canaries below).
+/// and flags, and byte for byte the same file.
 #[test]
 fn the_list_servo_ships_survives_a_round_trip_through_chromiums_shape() {
     let shipped = std::fs::read(servo_file()).expect("read the list Servo ships");
     let original = Preload::open(shipped.clone()).expect("the shipped list opens");
     assert_eq!(original.len(), 166_958);
 
-    // The canaries (`CANARIES`) are long-standing entries that every refreshed list must list with
-    // `include_subdomains`. Servo 0.8.0 lists `paypal.com` without the flag, so while `CANARIES`
-    // names it the default guards refuse this very list; the document below turns the flag on for
-    // exactly the canaries that lack it and `diff` says how many flags that changed (none once the
-    // canaries and the data agree, which is the "added 0 / removed 0 / changed 0" of the brief).
-    let unflagged: Vec<&str> = CANARIES
-        .into_iter()
-        .filter(|host| original.get(host) != Some(true))
-        .collect();
-    let mut expected = original.entries();
-    for entry in &mut expected {
-        if unflagged.contains(&entry.host.as_str()) {
-            entry.include_subdomains = true;
-        }
+    // The shipped list meets the default guards as it is: every canary is in it with the flag.
+    for host in CANARIES {
+        assert_eq!(original.get(host), Some(true), "{host}");
     }
+    let expected = original.entries();
 
     let json = chromium_shaped(&expected);
 
@@ -1292,10 +1282,7 @@ fn the_list_servo_ships_survives_a_round_trip_through_chromiums_shape() {
         expected,
         "the same hosts with the same flags"
     );
-    assert_eq!(
-        rebuilt.include_subdomains_count(),
-        original.include_subdomains_count() + unflagged.len()
-    );
+    assert_eq!(rebuilt.include_subdomains_count(), 166_708);
     assert_eq!(rebuilt.id_scheme_violation(), None);
 
     // The tool's own `diff` agrees, and so does `check` on the result.
@@ -1303,7 +1290,7 @@ fn the_list_servo_ships_survives_a_round_trip_through_chromiums_shape() {
     assert_done(&outcome);
     assert_eq!(
         outcome.out.lines().next(),
-        Some(format!("added 0 / removed 0 / changed {}", unflagged.len()).as_str()),
+        Some("added 0 / removed 0 / changed 0"),
         "{}",
         outcome.out
     );
@@ -1311,10 +1298,9 @@ fn the_list_servo_ships_survives_a_round_trip_through_chromiums_shape() {
     assert_done(&outcome);
     assert_eq!(outcome.last_line(), "ok");
     assert!(
-        outcome.out.contains(&format!(
-            "166,958 entries, 166,{} of them include subdomains",
-            708 + unflagged.len()
-        )),
+        outcome
+            .out
+            .contains("166,958 entries, 166,708 of them include subdomains"),
         "{}",
         outcome.out
     );
@@ -1330,19 +1316,12 @@ fn the_list_servo_ships_survives_a_round_trip_through_chromiums_shape() {
         again.out
     );
 
-    // Byte for byte: the encoding is deterministic, so the rebuilt file equals the shipped one
-    // exactly when this tool's encoder reproduces what Servo's generator wrote and no flag was
-    // changed above.
-    let identical = work.read("rebuilt.fstmap") == shipped;
-    eprintln!(
-        "the rebuilt list is byte-identical to the shipped one: {identical} (the encoder alone \
-         reproduces the shipped bytes: {}; flags changed above: {})",
-        original.rebuilds_identically(&shipped),
-        unflagged.len()
-    );
-    assert_eq!(
-        identical,
-        unflagged.is_empty() && original.rebuilds_identically(&shipped)
+    // Byte for byte: the encoding is deterministic, and this tool's encoder reproduces what the
+    // generator behind the shipped file wrote (measured on the 166,958 entries of Servo 0.8.0).
+    assert!(original.rebuilds_identically(&shipped));
+    assert!(
+        work.read("rebuilt.fstmap") == shipped,
+        "the rebuilt list differs from the shipped one"
     );
 }
 

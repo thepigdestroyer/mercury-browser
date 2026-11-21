@@ -737,9 +737,9 @@ fn the_shipped_file_has_the_canaries_and_the_hosts_the_tool_relies_on() {
     ] {
         assert_eq!(preload.get(host), Some(true), "{host}");
     }
-    // Every canary the tool checks is listed and secure.
+    // Every canary the tool checks is listed with the flag, so the shipped file meets the rule.
     for host in CANARIES {
-        assert!(preload.get(host).is_some(), "canary {host} is listed");
+        assert_eq!(preload.get(host), Some(true), "canary {host}");
         assert!(preload.is_secure(host), "canary {host}");
     }
     for host in [
@@ -760,8 +760,8 @@ fn the_shipped_file_has_the_canaries_and_the_hosts_the_tool_relies_on() {
 #[test]
 fn paypal_com_is_listed_without_include_subdomains_in_the_shipped_file() {
     // Measured on the file Servo 0.8.0 ships: paypal.com and www.paypal.com are both listed with
-    // the flag off (PayPal asked for the exact names only). A guard that requires
-    // `include_subdomains` on the canary `paypal.com` therefore refuses this very file.
+    // the flag off (PayPal asked for the exact names only). That is why `CANARIES` does not name
+    // it: a guard that requires `include_subdomains` on `paypal.com` would refuse this very file.
     let (_, preload, _) = shipped();
     assert_eq!(preload.get("paypal.com"), Some(false));
     assert_eq!(preload.get("www.paypal.com"), Some(false));

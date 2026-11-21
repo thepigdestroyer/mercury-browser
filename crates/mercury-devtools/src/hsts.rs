@@ -31,8 +31,10 @@ pub struct Entry {
 }
 
 /// Hosts every refreshed list must contain with `include_subdomains` (long-standing preloads, and
-/// the TLD `dev`, so that a parse that drops TLD entries is caught).
-pub const CANARIES: [&str; 4] = ["google.com", "github.com", "paypal.com", "dev"];
+/// the TLD `dev`, so that a parse that drops TLD entries is caught). Each one is listed with the
+/// flag in the list Servo 0.8.0 ships, so the shipped file meets the rule itself; `paypal.com` is
+/// deliberately not here: that list has it (and `www.paypal.com`) without the flag.
+pub const CANARIES: [&str; 4] = ["google.com", "github.com", "dropbox.com", "dev"];
 /// A refreshed list with fewer entries is refused (the list Servo 0.8.0 shipped has 166,958).
 pub const DEFAULT_MIN_ENTRIES: usize = 100_000;
 /// A refreshed list with more than this share fewer entries than the file it replaces is refused.

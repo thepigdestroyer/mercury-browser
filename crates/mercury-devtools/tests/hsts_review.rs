@@ -701,14 +701,14 @@ fn a_breach_of_the_id_scheme_is_a_problem_and_the_file_is_not_a_rebuild() {
     // The values `fst` writes from a plain list of 0 and 1 flags: valid for Servo, not ours.
     let bytes = raw(&[
         ("dev", 1),
+        ("dropbox.com", 1),
         ("github.com", 1),
         ("google.com", 1),
-        ("paypal.com", 1),
     ]);
     let verdict = check(&bytes, None, today(), &small());
     assert_eq!(verdict.problems.len(), 1, "{}", problems_of(&verdict));
     assert!(
-        verdict.problems[0].contains("github.com"),
+        verdict.problems[0].contains("dropbox.com"),
         "{}",
         problems_of(&verdict)
     );
@@ -1045,38 +1045,18 @@ fn the_shipped_file_is_checked_at_its_real_size() {
         "b94818a7e0c3515f9fd6a50af51e32019cbb50ee1015e1e56471fb3b06d72c42"
     );
 
-    // Servo 0.8.0 lists `paypal.com` WITHOUT include_subdomains (its other canaries have the
-    // flag), so while `CANARIES` names it, the canary rule is the one thing the shipped file
-    // does not meet. This test pins that down instead of hiding it: every problem must be a
-    // canary the file really lacks the flag for, and nothing else (size, include share, id
-    // scheme and manifest all pass). When the canary list and the data agree it asserts a clean
-    // pass. See the lane report.
-    let unflagged: Vec<&str> = CANARIES
-        .iter()
-        .copied()
-        .filter(|host| preload.get(host) != Some(true))
-        .collect();
-    let only_the_canaries = |verdict: &Verdict| {
-        assert_eq!(
-            verdict.problems.len(),
-            unflagged.len(),
-            "{}",
-            problems_of(verdict)
-        );
-        for host in &unflagged {
-            assert!(
-                has(
-                    &verdict.problems,
-                    &format!("{host} is listed without include_subdomains")
-                ),
-                "{host}: {}",
-                problems_of(verdict)
-            );
-        }
+    // The canaries are chosen so that the list Servo 0.8.0 ships meets every default rule: if
+    // `CANARIES` ever names a host the shipped file lists without the flag (`paypal.com` is
+    // one), the default guards would refuse the very list they are meant to protect.
+    for host in CANARIES {
+        assert_eq!(preload.get(host), Some(true), "{host}");
+    }
+    let no_problems = |verdict: &Verdict| {
+        assert!(verdict.ok(), "{}", problems_of(verdict));
     };
 
     let verdict = check(&bytes, None, today(), &Limits::default());
-    only_the_canaries(&verdict);
+    no_problems(&verdict);
     assert!(
         has(
             &verdict.notes,
@@ -1099,27 +1079,19 @@ fn the_shipped_file_is_checked_at_its_real_size() {
     );
     let parsed = Manifest::parse(&manifest.to_json()).expect("parse");
     assert_eq!(parsed, manifest);
-    only_the_canaries(&check(&bytes, Some(&parsed), today(), &Limits::default()));
+    no_problems(&check(&bytes, Some(&parsed), today(), &Limits::default()));
 
-    // The refresh guards read it the same way as its own replacement: size, share and shrink
-    // pass, and only the canary rule can refuse.
-    let guarded = guard_refresh(
-        Some(&preload),
-        &preload,
-        &Limits::default(),
-        DEFAULT_MAX_SHRINK_PERCENT,
-        false,
+    // The refresh guards accept it as its own replacement: size, share, canaries and shrink.
+    assert_eq!(
+        guard_refresh(
+            Some(&preload),
+            &preload,
+            &Limits::default(),
+            DEFAULT_MAX_SHRINK_PERCENT,
+            false,
+        ),
+        Ok(())
     );
-    match unflagged.first() {
-        None => assert_eq!(guarded, Ok(())),
-        Some(host) => {
-            let error = guarded.unwrap_err();
-            assert!(
-                error.contains(&format!("{host} is listed without include_subdomains")),
-                "{error}"
-            );
-        }
-    }
     let nothing = diff(&preload, &preload);
     assert!(nothing.is_empty());
     assert_eq!(
@@ -1282,10 +1254,10 @@ fn allow_shrink_waives_the_shrink_rule_and_only_that() {
     assert!(error.contains("80.0 %"), "{error}");
     let no_canary: Vec<Entry> = shaped(50, 50)
         .into_iter()
-        .filter(|entry| entry.host != "paypal.com")
+        .filter(|entry| entry.host != "dropbox.com")
         .collect();
     let error = guard_refresh(Some(&old), &open(&no_canary), &small(), 10, true).unwrap_err();
-    assert!(error.contains("paypal.com is missing"), "{error}");
+    assert!(error.contains("dropbox.com is missing"), "{error}");
 }
 
 #[test]

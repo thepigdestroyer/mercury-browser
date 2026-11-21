@@ -54,15 +54,6 @@ fn manifest() -> Manifest {
         .unwrap_or_else(|error| panic!("the shipped manifest does not parse: {error}"))
 }
 
-/// The canaries the shipped file lists without `include_subdomains` (the check refuses those).
-fn lacking_the_flag() -> Vec<&'static str> {
-    CANARIES
-        .iter()
-        .copied()
-        .filter(|host| shipped().get(host) == Some(false))
-        .collect()
-}
-
 #[test]
 fn the_shipped_list_passes_the_check_with_its_manifest_and_the_default_limits() {
     let manifest = manifest();
@@ -72,28 +63,12 @@ fn the_shipped_list_passes_the_check_with_its_manifest_and_the_default_limits() 
         Date::today_utc(),
         &Limits::default(),
     );
-    // Servo 0.8.0 lists `paypal.com` without `include_subdomains`, so while `CANARIES` names it
-    // the canary rule is the one thing this file does not meet (see the lane report). Every
-    // problem must be such a canary and nothing else (size, include share, id scheme and manifest
-    // all pass); once `CANARIES` and the data agree there is no problem at all.
-    let lacking: Vec<&str> = lacking_the_flag();
-    assert_eq!(
-        verdict.problems.len(),
-        lacking.len(),
+    assert!(
+        verdict.ok(),
         "problems: {:#?}\nnotes: {:#?}",
         verdict.problems,
         verdict.notes
     );
-    for host in &lacking {
-        assert!(
-            verdict
-                .problems
-                .iter()
-                .any(|problem| problem.contains(host)),
-            "{host}: {:#?}",
-            verdict.problems
-        );
-    }
     if manifest.source.retrieved.is_none() {
         // The copy taken from Servo records no retrieval date, and the check says so.
         assert!(
@@ -123,13 +98,9 @@ fn every_entry_is_a_valid_lower_case_host_name() {
 
 #[test]
 fn the_canary_hosts_are_listed() {
-    // Every canary is in the file. All but the ones `lacking_the_flag` names also include their
-    // subdomains; the baseline has `paypal.com` with the flag off (PayPal asked for the exact
-    // names), which is for the lead to settle in `CANARIES`, not for this test to hide.
+    // Every canary is in the file and includes its subdomains. (`paypal.com` is not a canary: the
+    // baseline lists it, and `www.paypal.com`, without the flag.)
     for host in CANARIES {
-        assert!(shipped().get(host).is_some(), "{host} is missing");
-    }
-    for host in ["google.com", "github.com", "dev"] {
         assert_eq!(shipped().get(host), Some(true), "{host}");
     }
     // Lookups the browser makes: a listed host, a subdomain of one that includes them, and a
