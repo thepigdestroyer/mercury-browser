@@ -15,6 +15,7 @@ mod saver;
 mod window;
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashSet;
 use std::path::Path;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc;
@@ -24,7 +25,7 @@ use std::time::{Duration, Instant};
 use mercury_settings::{
     SearchEngine, Settings, SettingsError, SettingsStore, StartupBehavior, Theme,
 };
-use mercury_ui::{ChromePalette, ChromeTheme, MainWindow};
+use mercury_ui::{ChromeMetrics, ChromePalette, ChromeTheme, Look, MainWindow, apply_look};
 use slint::winit_030::{WinitWindowAccessor, winit};
 use slint::{ComponentHandle, Timer, TimerMode};
 use talaria_core::BrowserController;
@@ -74,6 +75,9 @@ pub(crate) struct SettingsHandle {
     /// The browser window: its colour scheme is the system's, for the settings window.
     main_window: RefCell<slint::Weak<MainWindow>>,
     finished: Cell<bool>,
+    /// The notes about the look (a palette this version lacks) already logged, so that each text
+    /// is logged once per run and not on every settings change.
+    look_notes_logged: RefCell<HashSet<String>>,
 }
 
 impl SettingsHandle {
@@ -115,6 +119,7 @@ impl SettingsHandle {
             switches: RefCell::new(None),
             main_window: RefCell::default(),
             finished: Cell::new(false),
+            look_notes_logged: RefCell::default(),
         });
         HANDLE.with(|current| *current.borrow_mut() = Rc::downgrade(&handle));
         if startup.save_now {
@@ -436,21 +441,20 @@ pub(crate) fn apply_chrome_theme<C>(component: &C)
 where
     C: ComponentHandle + 'static,
     for<'a> ChromePalette<'a>: slint::Global<'a, C>,
+    for<'a> ChromeMetrics<'a>: slint::Global<'a, C>,
 {
     let Some(handle) = HANDLE.with(|current| current.borrow().upgrade()) else {
         log::warn!("settings: no settings yet; the window keeps the default theme");
         return;
     };
-    let theme = chrome_theme(handle.settings.borrow().appearance.theme);
-    component.global::<ChromePalette>().set_theme(theme);
+    handle.push_chrome_theme(component);
     let weak = component.as_weak();
     let settings = Rc::downgrade(&handle);
     handle.subscribe_while(move || {
         let (Some(component), Some(settings)) = (weak.upgrade(), settings.upgrade()) else {
             return false;
         };
-        let theme = chrome_theme(settings.settings.borrow().appearance.theme);
-        component.global::<ChromePalette>().set_theme(theme);
+        settings.push_chrome_theme(&component);
         true
     });
 }
@@ -581,6 +585,34 @@ pub(crate) fn chrome_theme(theme: Theme) -> ChromeTheme {
 }
 
 impl SettingsHandle {
+    /// Gives `component` the chrome theme and look the settings ask for: the colour scheme
+    /// (`appearance.theme`), the palettes (`appearance.palette_light` and `palette_dark`) and the
+    /// sizes. A palette id this version lacks falls back to the default; that is logged once per
+    /// run and the setting is left as it is.
+    fn push_chrome_theme<C>(&self, component: &C)
+    where
+        C: ComponentHandle,
+        for<'a> ChromePalette<'a>: slint::Global<'a, C>,
+        for<'a> ChromeMetrics<'a>: slint::Global<'a, C>,
+    {
+        let (theme, (look, notes)) = {
+            let settings = self.settings.borrow();
+            (
+                chrome_theme(settings.appearance.theme),
+                Look::from_appearance(&settings.appearance),
+            )
+        };
+        component.global::<ChromePalette>().set_theme(theme);
+        apply_look(component, &look);
+        let mut logged = self.look_notes_logged.borrow_mut();
+        for note in notes {
+            let text = format!("{}: {}", note.field, note.reason);
+            if logged.insert(text.clone()) {
+                log::warn!("settings: {text}");
+            }
+        }
+    }
+
     /// Gives the native window (its title bar) the chosen theme. The native window exists only
     /// once the event loop runs, so this retries until it does. Following the system again,
     /// the system's scheme is read back for pages, since the window reported the forced one.
@@ -824,5 +856,61 @@ pub(crate) mod tests {
         handle.update(|settings| settings.appearance.theme = Theme::Dark);
 
         assert_eq!(handle.listeners.borrow().len(), listeners_before);
+    }
+
+    #[test]
+    fn a_window_shows_the_look_the_appearance_settings_name() {
+        use slint::Color;
+
+        // `window-background` of mercury-b2 in each scheme, and of the legacy hermes palette.
+        const B2_LIGHT: Color = Color::from_rgb_u8(0xef, 0xe8, 0xdf);
+        const B2_DARK: Color = Color::from_rgb_u8(0x14, 0x0f, 0x27);
+        const HERMES_LIGHT: Color = Color::from_rgb_u8(0xe9, 0xed, 0xf2);
+
+        init_slint();
+        let handle = SettingsHandle::start(None);
+        let window = mercury_ui::SettingsWindow::new().expect("a window");
+        apply_chrome_theme(&window);
+        let palette = window.global::<ChromePalette>();
+
+        handle.update(|settings| settings.appearance.theme = Theme::Light);
+        assert_eq!(palette.get_window_background(), B2_LIGHT);
+        handle.update(|settings| settings.appearance.theme = Theme::Dark);
+        assert_eq!(palette.get_window_background(), B2_DARK);
+        assert_eq!(
+            window.global::<ChromeMetrics>().get_toolbar_height(),
+            60.0,
+            "the sizes are the roomy preset"
+        );
+
+        handle.update(|settings| {
+            settings.appearance.theme = Theme::Light;
+            settings.appearance.palette_light = "no-such-palette".to_owned();
+        });
+        assert_eq!(
+            palette.get_window_background(),
+            B2_LIGHT,
+            "an unknown palette id shows the default look"
+        );
+        assert_eq!(
+            handle.settings().appearance.palette_light,
+            "no-such-palette",
+            "and is not written back"
+        );
+        handle.update(|settings| settings.appearance.theme = Theme::Dark);
+        handle.update(|settings| settings.appearance.theme = Theme::Light);
+        assert_eq!(
+            handle.look_notes_logged.borrow().len(),
+            1,
+            "the note about the unknown id is logged once, not on every change"
+        );
+
+        handle.update(|settings| settings.appearance.palette_light = "hermes".to_owned());
+        assert_ne!(
+            palette.get_window_background(),
+            HERMES_LIGHT,
+            "the legacy palette cannot be chosen by hand-editing the settings"
+        );
+        assert_eq!(palette.get_window_background(), B2_LIGHT);
     }
 }
