@@ -144,6 +144,11 @@ struct PlayerInner {
     /// To allow teardown to free seek_data that is waiting for the script thread.
     /// Mercury: servo/servo#49784 (EA0 backport), with the weak references and the teardown in `Drop`.
     seek_lock: Option<SeekLock>,
+    /// Mercury: (MED-1) the latest seek asked for before `GstPlay` had media info. `GstPlay` drops a seek
+    /// until then, and a MediaSource pipeline cannot preroll on its own when the page seeked (or
+    /// resumed) to a position the feed has no data for yet; the seek is sent with the first seekable
+    /// metadata, which is what makes `playbin3` flush and start at the position.
+    pending_seek: Option<f64>,
 }
 
 impl PlayerInner {
@@ -225,6 +230,7 @@ impl PlayerInner {
         self.paused.set(true);
         self.can_resume.set(false);
         self.last_metadata = None;
+        self.pending_seek = None; // Mercury: (MED-1)
         self.source = None;
         Ok(())
     }
@@ -278,6 +284,12 @@ impl PlayerInner {
         {
             gstreamer::warning!(self.cat, obj = &self.player, "Trying to seek out of range");
             return Err(PlayerError::SeekOutOfRange);
+        }
+
+        // Mercury: (MED-1) see `pending_seek`.
+        if self.stream_type == StreamType::MediaSource && self.last_metadata.is_none() {
+            self.pending_seek = Some(time);
+            return Ok(());
         }
 
         let time = time * 1_000_000_000.;
@@ -699,6 +711,7 @@ impl GStreamerPlayer {
             cat: gstreamer::DebugCategory::get("servoplayer").unwrap(),
             enough_data: Arc::new(AtomicBool::new(false)),
             seek_lock: None,
+            pending_seek: None, // Mercury: (MED-1)
         })));
 
         let inner = self.inner.borrow();
@@ -799,6 +812,15 @@ impl GStreamerPlayer {
                 metadata
             );
             let _ = notify!(observer, PlayerEvent::MetadataUpdated(metadata));
+
+            // Mercury: (MED-1) `GstPlay` has media info now: send the seek it dropped before.
+            if inner.last_metadata.as_ref().is_some_and(|m| m.is_seekable) &&
+                let Some(time) = inner.pending_seek.take()
+            {
+                inner
+                    .player
+                    .seek(gstreamer::ClockTime::from_nseconds((time * 1_000_000_000.) as u64));
+            }
 
             // We need to check this here because there is no guarantee that
             // duration-changed and media-info-updated come in the same order.

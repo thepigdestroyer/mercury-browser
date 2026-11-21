@@ -69,7 +69,10 @@ path dependencies on both crates. Everything new is in `mercury_mse.rs`; the hoo
    the caller of `setup` (there is no `need-data` to wait for before the page appends anything);
    `Player::connect_media_source` stores the backend and runs `setup`, so it must come first; `seek` and
    `set_playback_rate` accept the new stream type (the duration check in `seek` is skipped for it: the
-   MediaSource owns the duration); `push_data` is never used. Hunks are marked `Mercury: (MED-1)`.
+   MediaSource owns the duration); `push_data` is never used. A `seek` asked for before `GstPlay` has media
+   info (`pending_seek`) is held and sent with the first seekable metadata: `GstPlay` drops it otherwise, and
+   `playbin3` refuses a seek until its first buffer has arrived (the backend's `seeking` points the feed at
+   the target, so that buffer comes). Hunks are marked `Mercury: (MED-1)`.
 
 Tested by `mercury-mse` and `mercury-mse-gst`'s own suites (light pool, no Servo). The Servo-side glue
 compiles (`cargo check -p servo-media-gstreamer`) and has **not been run in a window** (the screen was locked);
