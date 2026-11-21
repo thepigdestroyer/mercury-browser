@@ -264,7 +264,7 @@ test:
 	"$(CARGO)" test --target-dir target --manifest-path third_party/gaol/Cargo.toml --test shared-memory
 	"$(MAKE)" test-servo-net
 
-# servo-net's own tests (third_party/servo-net/tests/main.rs, 414 tests, the certificate-exception ones among
+# servo-net's own tests (third_party/servo-net/tests/main.rs, 420 tests run, the certificate-exception ones among
 # them), part of `make test` and run by their own CI job. The crate is vendored, has dev-dependencies and is
 # excluded from the workspace (Cargo.toml), so cargo runs it on its own manifest and its own Cargo.lock,
 # like gaol: against the published sibling crates (only servo-net is patched), not Mercury's vendored

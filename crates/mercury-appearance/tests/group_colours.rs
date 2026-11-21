@@ -101,13 +101,16 @@ fn the_seven_added_colours_are_the_measured_seeds() {
 
 /// The ids, in hand-out order, exactly as `session.json` holds them. This is one half of a
 /// contract: `talaria-core/src/groups.rs` (`GroupPreset::ALL` and `GroupPreset::name`) must name
-/// the same fourteen ids in the same order, and the crate that links both asserts
+/// the same fourteen ids in the same order, and `talaria-core/tests/appearance_contract.rs`, which
+/// links both crates, asserts
 /// `GroupPreset::ALL.map(GroupPreset::name) == PRESETS.map(|preset| preset.id)`. Changing this
 /// list changes a file format that is never migrated, so it is a decision to take on purpose:
-/// change it here and in `GroupPreset` together, never one side only.
+/// change it here and in `GroupPreset` together, never one side only. The order follows the four
+/// rules in the documentation of `PRESETS`; `the_hand_out_order_keeps_neighbours_apart_in_hue`
+/// and `the_first_colours_handed_out_stay_far_apart` pin the first three.
 const CONTRACT_IDS: [&str; 14] = [
-    "blue", "amber", "rose", "mint", "orchid", "brown", "green", "lime", "sky", "plum", "salmon",
-    "violet", "teal", "slate",
+    "blue", "amber", "orchid", "mint", "rose", "lime", "plum", "teal", "salmon", "sky", "brown",
+    "violet", "green", "slate",
 ];
 
 #[test]
@@ -182,8 +185,45 @@ fn the_first_colours_handed_out_stay_far_apart() {
                 "the first {count} presets have a pair {minimum} apart"
             );
         }
+        if count == 4 {
+            assert!(
+                minimum >= 0.19,
+                "the first four groups have a pair {minimum} apart"
+            );
+        }
     }
     println!("closest pair among the first n presets: {worst_of_each:.3?}");
+}
+
+/// The smallest angle between two hues, in degrees (0 to 180).
+fn hue_gap(a: f64, b: f64) -> f64 {
+    let turn = (a - b).abs() % 360.0;
+    turn.min(360.0 - turn)
+}
+
+#[test]
+fn the_hand_out_order_keeps_neighbours_apart_in_hue() {
+    // Two groups made one after the other sit side by side on the strip: their colours must
+    // not be near-neighbours on the colour wheel. Slate is nearly grey and has no hue to compare,
+    // so the 13 coloured presets are checked.
+    let coloured = &PRESETS[..PRESET_COUNT - 1];
+    let mut gaps = Vec::new();
+    for pair in coloured.windows(2) {
+        let gap = hue_gap(hue(pair[0].base), hue(pair[1].base));
+        gaps.push((pair[0].id, pair[1].id, gap));
+        assert!(
+            gap >= 100.0,
+            "{} then {} are only {gap:.1} degrees apart in hue",
+            pair[0].id,
+            pair[1].id
+        );
+    }
+    let smallest = gaps.iter().map(|(_, _, gap)| *gap).fold(f64::MAX, f64::min);
+    let mean = gaps.iter().map(|(_, _, gap)| *gap).sum::<f64>() / gaps.len() as f64;
+    println!("hue gap between neighbours: smallest {smallest:.1}, mean {mean:.1}: {gaps:.1?}");
+    // The order was searched for, not just checked: it is the best any order can do while the
+    // first eleven stay 0.13 apart (107.4 degrees), so a small loss here means a worse order.
+    assert!(smallest > 107.0, "smallest {smallest}");
 }
 
 #[test]
@@ -716,9 +756,9 @@ fn the_first_preset_not_in_use_is_chosen() {
 fn which_ids_are_in_use_matters_but_not_their_order_or_repeats_beyond_the_count() {
     assert_eq!(next(&["blue"]), "amber");
     assert_eq!(next(&["amber"]), "blue");
-    assert_eq!(next(&["amber", "blue"]), "rose");
-    assert_eq!(next(&["blue", "amber"]), "rose");
-    assert_eq!(next(&["blue", "blue", "amber"]), "rose");
+    assert_eq!(next(&["amber", "blue"]), "orchid");
+    assert_eq!(next(&["blue", "amber"]), "orchid");
+    assert_eq!(next(&["blue", "blue", "amber"]), "orchid");
     let all_but_teal: Vec<&str> = PRESETS
         .iter()
         .map(|found| found.id)
@@ -752,7 +792,7 @@ fn when_all_are_in_use_the_least_used_wins_and_the_first_breaks_ties() {
 
     let mut two_twice = once.clone();
     two_twice.extend(["blue", "amber"]);
-    assert_eq!(next(&two_twice), "rose");
+    assert_eq!(next(&two_twice), "orchid");
 
     // Everything twice except teal: teal is the least used.
     let mut twice: Vec<&str> = once.iter().chain(once.iter()).copied().collect();

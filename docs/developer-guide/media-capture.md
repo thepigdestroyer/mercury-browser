@@ -60,7 +60,7 @@ The option is refused (exit status 2) in three cases:
 
 A normal build therefore cannot use it. Each content process checks the directory again. It then also removes those two plugins and every other device provider from GStreamer's registry, in case the registry cache names one.
 
-`make test-capture-macos` (`scripts/macos/test-capture.sh`), after `make build-release`:
+`make test-capture-macos` (`scripts/macos/test-capture.sh`), after `make build-release`. The release executable finds GStreamer only in `target/release/lib`, which `make build-release` fills; the script stops with a message if the directory has no GStreamer libraries, and CI fills it with `scripts/macos/collect-gstreamer.sh` before it runs the script. The script:
 
 1. copies `target/release/mercury-browser` into a temporary directory;
 2. collects its GStreamer libraries with:
