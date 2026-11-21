@@ -1,0 +1,178 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The optional corner dial (SPEC design/ui-final/SPEC.md §4.5): a 72 px round button parked in a
+// corner of the page area, showing the active group's colour, the current favicon and a page-load
+// ring, that fans out into a quarter ring of tab segments (`RingBands`, `RingSpec::dial_fan`) away
+// from its corner and can be dragged to another corner. Rust (src/corner_dial) decides where the dial
+// sits and which corner a release snaps to; Slint draws what it is given.
+//
+// THE PROPERTIES, CALLBACKS, STRUCTS AND ENUMS BELOW ARE THE PINNED CONTRACT of lane corner-dial
+// (sdd/lane-corner-dial-brief.md §6). Other lanes build on them; a change goes through the lane lead,
+// and only additions are allowed. The body of `CornerDial` is filled in by the corner-dial lane.
+
+import { ArcGlyph, ArcSeg, GroupRow, TabRow } from "models.slint";
+import { FlagPin } from "flags.slint";
+import { RingBands, RingDropTarget, RingHit } from "ring-bands.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// mercury_settings::DialCorner (src/corner_dial/state.rs maps the two with exhaustive matches).
+export enum DialCornerKind {
+    top-left,
+    top-right,
+    bottom-left,
+    bottom-right,
+}
+
+// The dial's centre in the overlay area (the component's own box).
+export struct DialPlacement {
+    x: length,
+    y: length,
+}
+
+// The hover caption "Group · Title"; x and y are the top-left corner of its box, in the fan box's
+// coordinates. An empty `text` means no caption.
+export struct DialCaption {
+    text: string,
+    x: length,
+    y: length,
+}
+
+// Fills the overlay area the host gives it (the page area: below the toolbar, above the dock's
+// band). Only the dial (and, while fanned out, the scrim and the fan) take pointer input.
+export component CornerDial inherits Rectangle {
+    // Fan data: forwarded unchanged to the inner RingBands (parallel arrays: fill them only through
+    // ring_bands::RingBandsModels).
+    in property <[GroupRow]> groups;
+    in property <[TabRow]> tabs;
+    in property <[ArcSeg]> segments;
+    in property <[ArcSeg]> lifted-segments;
+    in property <[string]> segment-labels;
+    in property <[ArcSeg]> label-bands;
+    in property <[ArcGlyph]> label-glyphs;
+    in property <[FlagPin]> flags;
+    // The RingBands box edge (corner_dial::FAN_BOX); the box is centred on the dial.
+    in property <length> ring-size: 768px;
+    // Rest face.
+    // The active group's `colour`.
+    in property <color> active-colour;
+    in property <image> favicon;
+    in property <bool> has-favicon;
+    // The first letter of the host, upper case, shown when there is no favicon.
+    in property <string> fallback-letter;
+    in property <bool> loading;
+    // 0..1; -1 = unknown (an arc that turns once a second).
+    in property <float> progress;
+    // corner_dial::dial_label.
+    in property <string> dial-label;
+    // corner_dial::DialFan::caption, set by the host on `tab-hovered`.
+    in property <DialCaption> caption;
+    // State.
+    in-out property <DialCornerKind> corner: bottom-right;
+    in-out property <bool> expanded;
+    in-out property <int> hovered-tab: -1;
+    in property <int> focused-tab: -1;
+    // Full-screen video: nothing drawn, nothing clickable, the fan collapsed.
+    in property <bool> suppressed;
+    in property <bool> reduce-motion: false;
+    in property <bool> animate-spinners: true;
+
+    // Geometry and keys come from Rust through pure callbacks the host forwards (with no handler the
+    // dial sits at (0, 0)).
+    // The dial's centre for `corner` in an area of the given width and height.
+    pure callback place(DialCornerKind, length, length) -> DialPlacement;
+    // The dragged dial's centre kept inside the area: x, y, width, height.
+    pure callback clamp-drag(length, length, length, length) -> DialPlacement;
+    // The corner a release at x, y snaps to: x, y, width, height, the current corner.
+    pure callback snap-corner(length, length, length, length, DialCornerKind) -> DialCornerKind;
+    // The tab id after (+1) or before (-1) the focused tab id in ring order.
+    pure callback step-focus(int, int) -> int;
+    // Forwarded to RingBands.
+    pure callback hit-test(length, length, int) -> RingHit;
+    pure callback drop-target(length, length, int) -> RingDropTarget;
+
+    // `expanded` changed by a click, Space or Enter, or Esc.
+    callback toggled(bool);
+    // After a drag: the snapped corner (the host saves it as the window's dial_corner).
+    callback corner-changed(DialCornerKind);
+    // Esc, or a press outside the fan (RingBands.background-pressed); the host sets `expanded` false.
+    callback close-requested();
+    // RingBands' own callbacks, forwarded.
+    callback tab-activated(int);
+    callback tab-hovered(int);
+    callback group-activated(int);
+    callback tab-close(int);
+    callback tab-mute(int);
+    callback drag-started(int);
+    callback drag-moved(length, length);
+    callback drop(int, int);
+    callback drag-cancelled();
+
+    // SCAFFOLD: the body is item 3 `component` of the lane.
+    ring := RingBands {
+        visible: false;
+        ring-size: root.ring-size;
+    }
+}
+
+// A 1440 x 900 window around one CornerDial on a page stand-in, with every property and callback
+// forwarded, for the lane's examples and tests and for the other lanes' renders. Not used by the
+// browser's own windows.
+export component CornerDialPreview inherits Window {
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    background: ChromePalette.window-background;
+
+    in property <[GroupRow]> groups <=> dial.groups;
+    in property <[TabRow]> tabs <=> dial.tabs;
+    in property <[ArcSeg]> segments <=> dial.segments;
+    in property <[ArcSeg]> lifted-segments <=> dial.lifted-segments;
+    in property <[string]> segment-labels <=> dial.segment-labels;
+    in property <[ArcSeg]> label-bands <=> dial.label-bands;
+    in property <[ArcGlyph]> label-glyphs <=> dial.label-glyphs;
+    in property <[FlagPin]> flags <=> dial.flags;
+    in property <length> ring-size <=> dial.ring-size;
+    in property <color> active-colour <=> dial.active-colour;
+    in property <image> favicon <=> dial.favicon;
+    in property <bool> has-favicon <=> dial.has-favicon;
+    in property <string> fallback-letter <=> dial.fallback-letter;
+    in property <bool> loading <=> dial.loading;
+    in property <float> progress <=> dial.progress;
+    in property <string> dial-label <=> dial.dial-label;
+    in property <DialCaption> caption <=> dial.caption;
+    in-out property <DialCornerKind> corner <=> dial.corner;
+    in-out property <bool> expanded <=> dial.expanded;
+    in-out property <int> hovered-tab <=> dial.hovered-tab;
+    in property <int> focused-tab <=> dial.focused-tab;
+    in property <bool> suppressed <=> dial.suppressed;
+    in property <bool> reduce-motion <=> dial.reduce-motion;
+    in property <bool> animate-spinners <=> dial.animate-spinners;
+
+    pure callback place <=> dial.place;
+    pure callback clamp-drag <=> dial.clamp-drag;
+    pure callback snap-corner <=> dial.snap-corner;
+    pure callback step-focus <=> dial.step-focus;
+    pure callback hit-test <=> dial.hit-test;
+    pure callback drop-target <=> dial.drop-target;
+    callback toggled <=> dial.toggled;
+    callback corner-changed <=> dial.corner-changed;
+    callback close-requested <=> dial.close-requested;
+    callback tab-activated <=> dial.tab-activated;
+    callback tab-hovered <=> dial.tab-hovered;
+    callback group-activated <=> dial.group-activated;
+    callback tab-close <=> dial.tab-close;
+    callback tab-mute <=> dial.tab-mute;
+    callback drag-started <=> dial.drag-started;
+    callback drag-moved <=> dial.drag-moved;
+    callback drop <=> dial.drop;
+    callback drag-cancelled <=> dial.drag-cancelled;
+
+    // The page stand-in (not part of the contract).
+    Rectangle {
+        background: ChromePalette.content-background;
+    }
+
+    dial := CornerDial {
+        width: parent.width;
+        height: parent.height;
+    }
+}
