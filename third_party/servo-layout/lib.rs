@@ -10,14 +10,21 @@
 mod accessibility;
 mod cell;
 mod context;
+// Mercury: lane txt-1 (ED5): the counter pass and the counter styles.
+mod counter_styles;
+mod counters;
 mod display_list;
 mod dom;
 mod dom_traversal;
+// Mercury: lane txt-1 (ED7): text-overflow arithmetic.
+mod ellipsis;
 mod flexbox;
 pub mod flow;
 mod formatting_contexts;
 mod fragment_tree;
 pub mod geom;
+// Mercury: lane txt-1 (EB7): typed text highlights (pub for tests/highlights.rs).
+pub mod highlights;
 mod layout_box_base;
 mod layout_impl;
 mod taffy;

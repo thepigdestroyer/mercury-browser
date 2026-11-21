@@ -37,9 +37,26 @@ path = "lib.rs"
 test = true
 doctest = false
 
+# Mercury: lane txt-1, the pure tests of ED5, ED7 and EB7 (see MERCURY.md).
+[[test]]
+name = "counter_styles"
+path = "tests/counter_styles.rs"
+
+[[test]]
+name = "counters"
+path = "tests/counters.rs"
+
+[[test]]
+name = "ellipsis"
+path = "tests/ellipsis.rs"
+
 [[test]]
 name = "floats"
 path = "tests/floats.rs"
+
+[[test]]
+name = "highlights"
+path = "tests/highlights.rs"
 
 [[test]]
 name = "tables"
