@@ -22,8 +22,8 @@ use talaria_core::{
 /// and `mercury_appearance::PRESETS` are not all equal, one of the tests below names which one
 /// moved.
 const CONTRACT_IDS: [&str; 14] = [
-    "blue", "amber", "rose", "mint", "orchid", "brown", "green", "lime", "sky", "plum", "salmon",
-    "violet", "teal", "slate",
+    "blue", "amber", "orchid", "mint", "rose", "lime", "plum", "teal", "salmon", "sky", "brown",
+    "violet", "green", "slate",
 ];
 
 fn at(seconds: u64) -> SystemTime {
@@ -74,6 +74,11 @@ fn the_drawn_ids_are_the_contract_ids_in_the_contract_order() {
 fn both_crates_have_the_same_fourteen_ids_in_the_same_order() {
     assert_eq!(GroupPreset::ALL.len(), PRESETS.len());
     assert_eq!(core_ids(), drawn_ids());
+    // The same thing, as one array comparison.
+    assert_eq!(
+        GroupPreset::ALL.map(GroupPreset::name),
+        PRESETS.map(|p| p.id)
+    );
 }
 
 #[test]
