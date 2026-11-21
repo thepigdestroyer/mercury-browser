@@ -17,6 +17,7 @@ use talaria_servo::{RuntimeOptions, record_browser_process_id, run_content_proce
 use ui_sync::sync_ui;
 
 mod about;
+mod automated_render; // orbit-view
 // activation (tabs lane)
 mod activation;
 mod bookmarks;
@@ -50,6 +51,7 @@ mod media_session;
 mod menus;
 // openurl
 mod openurl;
+mod orbit; // orbit-view
 mod page_requests; // dialogs
 mod panic_hook;
 // tabs opened and closed by pages
@@ -318,6 +320,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
 
     let mut timers = Vec::new();
     timers.extend(session_timer); // session
+    timers.extend(automated_render::start(&window, options.is_automated())); // orbit-view
     // find: the `--find` diagnostic's timer stops with the others, before the engine shuts down.
     #[cfg(feature = "diagnostics")]
     timers.extend(options.find.map(|diagnostic| {

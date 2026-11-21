@@ -11,6 +11,9 @@ pub mod ring_geometry;
 // ring-bands
 pub mod ring_bands;
 
+// orbit-view
+pub mod orbit_view;
+
 // theme-plumbing
 mod theme;
 pub use theme::{Look, apply_look};

@@ -1,0 +1,146 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The Orbit overview (SPEC design/ui-final/SPEC.md §4.6): a full-window overlay with the title bar, the
+// sun and the planets (level 1), one group's ring with its tab previews (level 2) and one tab almost
+// full size (level 3), the "New group" ring, the key hints and the new-group popover. Rust
+// (src/orbit_view) decides what is where and what a click means; this file draws and reports.
+//
+// SCAFFOLD of lane orbit-view (sdd/lane-orbit-view-brief.md): the properties and callbacks below are
+// the contract that the desktop glue (item 5) and layout-switch build on. Item 4 `view` fills the body
+// and may ADD properties and callbacks (drag and drop payloads, see brief §6 item 4); it does not
+// rename or remove one.
+
+import { RingDropTarget, RingHit } from "../groups/ring-bands.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { OrbitCard, OrbitChip, OrbitDragView, OrbitLevel, OrbitNeighbour, OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreviewCard, OrbitSun } from "orbit-models.slint";
+export { OrbitCard, OrbitChip, OrbitDragView, OrbitLevel, OrbitNeighbour, OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreviewCard, OrbitSun } from "orbit-models.slint";
+
+export component OrbitView inherits Rectangle {
+    // What to draw (Rust: orbit_view::data::OrbitModels).
+    in property <OrbitLevel> level: OrbitLevel.groups;
+    in property <[OrbitPlanet]> planets;
+    // The group's ring at levels 2 and 3 (a planet row with its own ring size).
+    in property <OrbitPlanet> centre;
+    in property <bool> has-centre;
+    in property <[OrbitPreviewCard]> previews;
+    // "+N more" when a group has more tabs than the two preview rings show.
+    in property <int> more-previews;
+    in property <[OrbitChip]> chips;
+    in property <[OrbitNeighbour]> neighbours;
+    in property <OrbitCard> card;
+    in property <OrbitSun> sun;
+    in property <OrbitNewGroup> new-group;
+    in property <OrbitDragView> drag;
+    in property <OrbitPopover> popover;
+    // "Orbit", then the group, then the tab.
+    in property <[string]> crumbs;
+    in property <string> search-placeholder: "Search tabs";
+    in property <string> search-text;
+    in property <bool> query-active;
+    // The container's accessible label ("Orbit, every group", ...).
+    in property <string> container-label: "Orbit";
+    // A one-line notice (a drop that was refused), empty for none.
+    in property <string> notice;
+    // The pinch's progress, -1..1, while a pinch runs (the stage scales with it); 0 at rest.
+    in-out property <float> pinch-progress: 0;
+    in property <bool> reduce-motion: false;
+    in property <bool> animate-spinners: true;
+
+    // What happened (Rust: orbit_view::machine::OrbitMachine). Ids are row ids.
+    callback planet-hovered(int);       // -1: none
+    callback planet-clicked(int);
+    callback preview-hovered(int);      // -1: none
+    callback preview-clicked(int);
+    callback chip-clicked(int);
+    callback card-clicked();
+    callback neighbour-clicked(int);
+    callback backdrop-clicked();
+    callback new-group-clicked();
+    callback back-clicked();            // "Back to the page"
+    callback search-edited(string);
+    // A key the view did not use itself: text, command, shift, alt, control. true = handled.
+    callback key-pressed(string, bool, bool, bool, bool) -> bool;
+    callback pinch-started(length, length);
+    callback pinch-updated(float);      // the cumulative scale
+    callback pinch-ended();
+    callback pinch-cancelled();
+    // A tab dragged inside a planet's ring or the centre ring (RingBands' own drag), reported with
+    // the planet's group id; the moved point is in stage coordinates.
+    callback ring-drag-started(int, int);   // group, tab
+    callback ring-drag-moved(length, length);   // stage coordinates
+    callback ring-dropped(int, int);        // group, insertion slot
+    callback ring-drag-cancelled();
+    callback popover-name-edited(string);
+    callback popover-colour-chosen(int);
+    callback popover-confirmed();
+    callback popover-cancelled();
+    // The pure hit tests of the planets' rings (group id first): forwarded to RingBandsData.
+    pure callback ring-hit-test(int, length, length, int) -> RingHit;
+    pure callback ring-drop-target(int, length, length, int) -> RingDropTarget;
+
+    background: ChromePalette.window-background;
+    accessible-role: none;
+}
+
+// A 1440 x 900 window around one OrbitView with every property and callback forwarded, for the
+// lane's examples and tests and for the other lanes' renders. Not used by the browser's windows.
+export component OrbitPreview inherits Window {
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    background: ChromePalette.window-background;
+
+    in property <OrbitLevel> level <=> view.level;
+    in property <[OrbitPlanet]> planets <=> view.planets;
+    in property <OrbitPlanet> centre <=> view.centre;
+    in property <bool> has-centre <=> view.has-centre;
+    in property <[OrbitPreviewCard]> previews <=> view.previews;
+    in property <int> more-previews <=> view.more-previews;
+    in property <[OrbitChip]> chips <=> view.chips;
+    in property <[OrbitNeighbour]> neighbours <=> view.neighbours;
+    in property <OrbitCard> card <=> view.card;
+    in property <OrbitSun> sun <=> view.sun;
+    in property <OrbitNewGroup> new-group <=> view.new-group;
+    in property <OrbitDragView> drag <=> view.drag;
+    in property <OrbitPopover> popover <=> view.popover;
+    in property <[string]> crumbs <=> view.crumbs;
+    in property <string> search-placeholder <=> view.search-placeholder;
+    in property <string> search-text <=> view.search-text;
+    in property <bool> query-active <=> view.query-active;
+    in property <string> container-label <=> view.container-label;
+    in property <string> notice <=> view.notice;
+    in-out property <float> pinch-progress <=> view.pinch-progress;
+    in property <bool> reduce-motion <=> view.reduce-motion;
+    in property <bool> animate-spinners <=> view.animate-spinners;
+
+    callback planet-hovered <=> view.planet-hovered;
+    callback planet-clicked <=> view.planet-clicked;
+    callback preview-hovered <=> view.preview-hovered;
+    callback preview-clicked <=> view.preview-clicked;
+    callback chip-clicked <=> view.chip-clicked;
+    callback card-clicked <=> view.card-clicked;
+    callback neighbour-clicked <=> view.neighbour-clicked;
+    callback backdrop-clicked <=> view.backdrop-clicked;
+    callback new-group-clicked <=> view.new-group-clicked;
+    callback back-clicked <=> view.back-clicked;
+    callback search-edited <=> view.search-edited;
+    callback key-pressed <=> view.key-pressed;
+    callback pinch-started <=> view.pinch-started;
+    callback pinch-updated <=> view.pinch-updated;
+    callback pinch-ended <=> view.pinch-ended;
+    callback pinch-cancelled <=> view.pinch-cancelled;
+    callback ring-drag-started <=> view.ring-drag-started;
+    callback ring-drag-moved <=> view.ring-drag-moved;
+    callback ring-dropped <=> view.ring-dropped;
+    callback ring-drag-cancelled <=> view.ring-drag-cancelled;
+    callback popover-name-edited <=> view.popover-name-edited;
+    callback popover-colour-chosen <=> view.popover-colour-chosen;
+    callback popover-confirmed <=> view.popover-confirmed;
+    callback popover-cancelled <=> view.popover-cancelled;
+    pure callback ring-hit-test <=> view.ring-hit-test;
+    pure callback ring-drop-target <=> view.ring-drop-target;
+
+    view := OrbitView {
+        width: parent.width;
+        height: parent.height;
+    }
+}
