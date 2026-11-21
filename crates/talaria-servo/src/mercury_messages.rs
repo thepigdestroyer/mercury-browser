@@ -27,11 +27,7 @@ use talaria_core::{BrowserEvent, TabId};
 /// concerns, or `None` for a message that names no web view (or whose web view has gone). `emit`
 /// sends a browser event to that tab's state (a no-op for a message without a tab); a lane that has
 /// to tell the browser something uses it.
-pub(crate) fn handle(
-    tab: Option<TabId>,
-    message: MercuryEmbedderMsg,
-    emit: &dyn Fn(BrowserEvent),
-) {
+pub(crate) fn handle(tab: Option<TabId>, message: MercuryEmbedderMsg, emit: &dyn Fn(BrowserEvent)) {
     match message {
         MercuryEmbedderMsg::Core(message) => handle_core(tab, message),
         // The a11y lane: replace this call with the lane's handler.

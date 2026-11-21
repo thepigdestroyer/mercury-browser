@@ -1636,7 +1636,8 @@ mod tests {
 
             assert_eq!(
                 preferences.stylo_prefs,
-                "layout.css.nth-child-of.enabled=true"
+                "layout.css.nth-child-of.enabled=true,layout.css.counters.enabled=true,\
+                 layout.css.text-overflow.enabled=true"
             );
             // Every name is one Stylo has (the engine ignores names it does not know).
             assert!(servo::prefs::apply_stylo_prefs(&preferences.stylo_prefs).is_empty());
