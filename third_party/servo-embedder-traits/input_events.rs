@@ -417,7 +417,9 @@ impl WheelEvent {
 }
 
 /// The types of an input method event.
-#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+// Mercury: no derived `Debug`: it would print the typed text; see `impl Debug for ImeEvent` in
+// `mercury/text.rs`.
+#[derive(Clone, Deserialize, MallocSizeOf, Serialize)]
 pub enum ImeEvent {
     /// See [CompositionEvent].
     Composition(CompositionEvent),

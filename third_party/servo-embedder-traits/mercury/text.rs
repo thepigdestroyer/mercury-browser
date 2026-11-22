@@ -16,12 +16,17 @@ use strum::IntoStaticStr;
 /// `Debug` prints only the variant name, never a payload.
 #[derive(Deserialize, IntoStaticStr, Serialize)]
 pub enum TextMsg {
-    /// The text state of the focused editable (a text control or an editing host), or `None`
-    /// when nothing editable has focus. Sent only when it changed since the last message.
+    /// The text state of the focused editable (a text control or an editing host). Sent only when
+    /// it changed since the last message of that document.
     ///
     /// The state is boxed so that this variant stays small: every `EmbedderMsg` is as big as its
     /// largest variant (see the size test in `mercury/mod.rs`).
-    InputState(Option<Box<TextInputState>>),
+    InputState(Box<TextInputState>),
+    /// Nothing editable has focus in the document with this id any more (`TextInputState::document`).
+    /// It carries the document because the messages of two documents (a page and an iframe) can
+    /// reach the browser in either order when the focus moves between them: the browser clears
+    /// its state only if it is the state of that document.
+    InputCleared(u64),
 }
 
 impl fmt::Debug for TextMsg {
@@ -39,6 +44,9 @@ impl fmt::Debug for TextMsg {
 /// This holds the text a user types. It must never be logged: `Debug` prints sizes and flags only.
 #[derive(Clone, Deserialize, PartialEq, Serialize)]
 pub struct TextInputState {
+    /// The document (its pipeline id) whose focused editable this describes; see
+    /// [`TextMsg::InputCleared`].
+    pub document: u64,
     /// Grows by one with every message the engine sends. An `ImeReplacement` is honoured only if
     /// it names the sequence of the last message sent.
     pub sequence: u64,
@@ -83,6 +91,7 @@ impl fmt::Debug for TextInputState {
         // Deliberately no `text`: what a user typed must not reach a log.
         formatter
             .debug_struct("TextInputState")
+            .field("document", &self.document)
             .field("sequence", &self.sequence)
             .field("text_len_bytes", &self.text.len())
             .field("text_start", &self.text_start)
@@ -92,6 +101,43 @@ impl fmt::Debug for TextInputState {
             .field("multiline", &self.multiline)
             .field("is_password", &self.is_password)
             .finish()
+    }
+}
+
+// Mercury: `ImeEvent` has no derived `Debug` (see `input_events.rs`). Upstream logs whole messages
+// at `debug` level (`script_thread.rs`: "Handling event: {event:?}"), and a derived `Debug` would
+// print what the user typed. This one prints the variant and the lengths of its strings.
+impl fmt::Debug for crate::ImeEvent {
+    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+        match self {
+            crate::ImeEvent::Composition(event) => formatter
+                .debug_struct("Composition")
+                .field("state", &event.state)
+                .field("data_len_bytes", &event.data.len())
+                .finish(),
+            crate::ImeEvent::Commit(text) => formatter
+                .debug_struct("Commit")
+                .field("text_len_bytes", &text.len())
+                .finish(),
+            crate::ImeEvent::SetMarkedText {
+                text,
+                selected,
+                clauses,
+                replacement,
+            } => formatter
+                .debug_struct("SetMarkedText")
+                .field("text_len_bytes", &text.len())
+                .field("selected", selected)
+                .field("clauses", &clauses.len())
+                .field("has_replacement", &replacement.is_some())
+                .finish(),
+            crate::ImeEvent::InsertText { text, replacement } => formatter
+                .debug_struct("InsertText")
+                .field("text_len_bytes", &text.len())
+                .field("has_replacement", &replacement.is_some())
+                .finish(),
+            crate::ImeEvent::Dismissed => formatter.write_str("Dismissed"),
+        }
     }
 }
 
@@ -248,6 +294,7 @@ mod tests {
 
     fn state(text: &str) -> TextInputState {
         TextInputState {
+            document: 7,
             sequence: 1,
             text: text.to_owned(),
             text_start: 0,
@@ -261,7 +308,7 @@ mod tests {
 
     #[test]
     fn debug_prints_only_the_variant_name() {
-        let message = TextMsg::InputState(Some(Box::new(state("secret text"))));
+        let message = TextMsg::InputState(Box::new(state("secret text")));
         assert_eq!(format!("{message:?}"), "InputState");
     }
 
@@ -273,6 +320,37 @@ mod tests {
         let printed = format!("{with_text:?}");
         assert!(!printed.contains("hunter2"), "{printed}");
         assert!(printed.contains("sequence"));
+    }
+
+    #[test]
+    fn debug_of_an_ime_event_never_prints_the_typed_text() {
+        use crate::{CompositionEvent, CompositionState, ImeEvent, ImeReplacement};
+        let events = [
+            ImeEvent::Commit("hunter2 commit".to_owned()),
+            ImeEvent::SetMarkedText {
+                text: "hunter2 marked".to_owned(),
+                selected: Some(0..2),
+                clauses: vec![],
+                replacement: Some(ImeReplacement {
+                    range: 0..1,
+                    sequence: 3,
+                }),
+            },
+            ImeEvent::InsertText {
+                text: "hunter2 insert".to_owned(),
+                replacement: None,
+            },
+            ImeEvent::Composition(CompositionEvent {
+                state: CompositionState::Update,
+                data: "hunter2 composition".to_owned(),
+            }),
+        ];
+        for event in events {
+            let printed = format!("{event:?}");
+            assert!(!printed.contains("hunter2"), "{printed}");
+            assert!(printed.contains("len"), "{printed}");
+        }
+        assert_eq!(format!("{:?}", ImeEvent::Dismissed), "Dismissed");
     }
 
     #[test]

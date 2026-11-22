@@ -80,6 +80,10 @@ pub struct ImeReplacement {
 /// What the focused editable element of a page holds, as the engine last reported it.
 #[derive(Clone, PartialEq, Eq)]
 pub struct TextInputState {
+    /// The document (the engine's pipeline id) whose field this is. A page and an iframe each have
+    /// their own sequence and their own messages, which can arrive in either order when the focus
+    /// moves between them: the "nothing is focused" message of a document clears only this.
+    pub document: u64,
     /// Grows by one with every message the engine sends.
     pub sequence: u64,
     /// A window of at most 4,096 UTF-16 units around the selection. Empty for a password field.
@@ -104,6 +108,7 @@ impl fmt::Debug for TextInputState {
         // No text: only its size.
         formatter
             .debug_struct("TextInputState")
+            .field("document", &self.document)
             .field("sequence", &self.sequence)
             .field("text_units", &utf16_len(&self.text))
             .field("text_start", &self.text_start)

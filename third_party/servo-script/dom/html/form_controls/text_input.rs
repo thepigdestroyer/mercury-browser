@@ -172,6 +172,20 @@ pub struct TextInput<T: ClipboardProvider> {
     pub(crate) composition_for_layout: Option<RangeAny<Utf32CodeUnits>>,
     #[no_trace]
     pub(crate) composition_selected_for_layout: Option<RangeAny<Utf32CodeUnits>>,
+    // Mercury: bumped whenever the text changes (the two places that write the rope), so that the
+    // IME state flush can tell cheaply that nothing changed since the last message (EB11).
+    content_version: u64,
+}
+
+// Mercury: everything the text state message is made of, without the text itself: two equal
+// stamps mean an equal state, and comparing them copies nothing (EB11).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub(crate) struct TextInputStamp {
+    content_version: u64,
+    edit_point: RopeIndex,
+    selection_origin: Option<RopeIndex>,
+    composition: Option<Range<RopeIndex>>,
+    composition_selected: Option<Range<RopeIndex>>,
 }
 
 /// <https://www.w3.org/TR/input-events-2/#interface-InputEvent-Attributes>
@@ -241,6 +255,18 @@ impl<T: ClipboardProvider> TextInput<T> {
             composition_selected: None,
             composition_for_layout: None,
             composition_selected_for_layout: None,
+            content_version: 0,
+        }
+    }
+
+    // Mercury: see [`TextInputStamp`] (EB11).
+    pub(crate) fn change_stamp(&self) -> TextInputStamp {
+        TextInputStamp {
+            content_version: self.content_version,
+            edit_point: self.edit_point,
+            selection_origin: self.selection_origin,
+            composition: self.composition.clone(),
+            composition_selected: self.composition_selected.clone(),
         }
     }
 
@@ -439,6 +465,7 @@ impl<T: ClipboardProvider> TextInput<T> {
         let start = self.selection_start();
         let end = self.selection_end();
         let end_index_of_insertion = self.rope.replace_range(start..end, string_to_insert);
+        self.content_version += 1; // Mercury: see `change_stamp` (EB11).
 
         self.was_last_change_by_set_content = false;
         self.clear_selection();
@@ -905,6 +932,7 @@ impl<T: ClipboardProvider> TextInput<T> {
             self.composition_selected = None;
         }
         self.rope = Rope::new(new_contents);
+        self.content_version += 1; // Mercury: see `change_stamp` (EB11).
         self.was_last_change_by_set_content = true;
 
         self.edit_point = self.rope.normalize_index(self.edit_point());

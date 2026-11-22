@@ -18,6 +18,7 @@ const CARET: ControlRect = ControlRect {
 fn state(sequence: u64, text: &str) -> TextInputState {
     let end = utf16_len(text);
     TextInputState {
+        document: 1,
         sequence,
         text: text.to_owned(),
         text_start: 0,
@@ -68,6 +69,46 @@ fn the_text_state_follows_the_engines_events() {
     controller.handle_event(tab_id, BrowserEvent::TextInputState(None));
     assert_eq!(controller.active_state().text_input(), None);
     assert!(queued(&mut controller).is_empty());
+}
+
+#[test]
+fn a_late_cleared_message_of_the_page_does_not_hide_the_field_of_an_iframe() {
+    let (mut controller, tab_id) = ready_controller();
+    let in_page = TextInputState {
+        document: 10,
+        ..state(1, "page")
+    };
+    let in_frame = TextInputState {
+        document: 20,
+        ..state(1, "frame")
+    };
+    controller.handle_event(tab_id, BrowserEvent::TextInputState(Some(in_page)));
+
+    // The focus moves into the iframe: its state arrives before the page's "cleared".
+    controller.handle_event(tab_id, BrowserEvent::TextInputState(Some(in_frame.clone())));
+    controller.handle_event(tab_id, BrowserEvent::TextInputCleared { document: 10 });
+
+    assert_eq!(controller.active_state().text_input(), Some(&in_frame));
+
+    // The frame's own "cleared" clears it.
+    controller.handle_event(tab_id, BrowserEvent::TextInputCleared { document: 20 });
+    assert_eq!(controller.active_state().text_input(), None);
+}
+
+#[test]
+fn a_cleared_message_clears_the_state_of_its_own_document_and_never_panics_on_none() {
+    let (mut controller, tab_id) = ready_controller();
+    // Nothing is stored: nothing to hide, nothing to do.
+    controller.handle_event(tab_id, BrowserEvent::TextInputCleared { document: 3 });
+    assert_eq!(controller.active_state().text_input(), None);
+
+    let in_page = TextInputState {
+        document: 3,
+        ..state(1, "page")
+    };
+    controller.handle_event(tab_id, BrowserEvent::TextInputState(Some(in_page)));
+    controller.handle_event(tab_id, BrowserEvent::TextInputCleared { document: 3 });
+    assert_eq!(controller.active_state().text_input(), None);
 }
 
 #[test]

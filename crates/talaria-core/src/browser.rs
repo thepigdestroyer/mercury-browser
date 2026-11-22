@@ -305,6 +305,13 @@ pub enum BrowserEvent {
     /// The input method reads it to place its candidate window and to ask for the text around
     /// the cursor.
     TextInputState(Option<TextInputState>),
+    // txt-1
+    /// The editable of the document with this id lost the focus (the engine's message for it names
+    /// the document). The state is cleared only if it is that document's: the page's message can
+    /// arrive after the state of an iframe's field that took the focus, and must not hide it.
+    TextInputCleared {
+        document: u64,
+    },
     // openurl
     /// The page asked for a URL the engine cannot load (`mailto:`, `tel:`, an app's scheme) and
     /// the engine was refused. The controller queues it for
@@ -681,6 +688,15 @@ impl BrowserState {
             }
             // txt-1
             BrowserEvent::TextInputState(state) => self.text_input = state,
+            BrowserEvent::TextInputCleared { document } => {
+                if self
+                    .text_input
+                    .as_ref()
+                    .is_none_or(|state| state.document == document)
+                {
+                    self.text_input = None;
+                }
+            }
             // openurl: not part of what the tab shows; see `BrowserController::handle_event`.
             BrowserEvent::ExternalLinkRequested(_) => {}
             // dialogs: kept by the tab's page requests, not here.

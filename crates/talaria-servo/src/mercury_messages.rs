@@ -160,12 +160,12 @@ mod tests {
         let events = std::cell::RefCell::new(Vec::new());
         handle(
             Some(TabId::new(1)),
-            MercuryEmbedderMsg::Text(servo::TextMsg::InputState(None)),
+            MercuryEmbedderMsg::Text(servo::TextMsg::InputCleared(4)),
             &|event| events.borrow_mut().push(event),
         );
         assert_eq!(
             events.into_inner(),
-            vec![BrowserEvent::TextInputState(None)]
+            vec![BrowserEvent::TextInputCleared { document: 4 }]
         );
     }
 

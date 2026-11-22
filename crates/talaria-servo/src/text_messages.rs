@@ -27,10 +27,11 @@ pub(crate) fn handle(message: TextMsg, emit: &dyn Fn(BrowserEvent)) {
     match message {
         TextMsg::InputState(state) => {
             // The engine boxes the state (every engine message is as big as its largest variant).
-            emit(BrowserEvent::TextInputState(
-                state.map(|state| browser_text_state(*state)),
-            ));
+            emit(BrowserEvent::TextInputState(Some(browser_text_state(
+                *state,
+            ))));
         }
+        TextMsg::InputCleared(document) => emit(BrowserEvent::TextInputCleared { document }),
     }
 }
 
@@ -40,6 +41,7 @@ pub(crate) fn handle(message: TextMsg, emit: &dyn Fn(BrowserEvent)) {
 /// on the engine's side cannot put a password into the browser's state.
 fn browser_text_state(state: ServoTextInputState) -> TextInputState {
     let ServoTextInputState {
+        document,
         sequence,
         text,
         text_start,
@@ -55,6 +57,7 @@ fn browser_text_state(state: ServoTextInputState) -> TextInputState {
         (text, utf16_range(selection), marked.map(utf16_range))
     };
     TextInputState {
+        document,
         sequence,
         text,
         text_start,
@@ -162,6 +165,7 @@ mod tests {
 
     fn engine_state(text: &str) -> ServoTextInputState {
         ServoTextInputState {
+            document: 9,
             sequence: 5,
             text: text.to_owned(),
             text_start: 10,
@@ -181,11 +185,12 @@ mod tests {
 
     #[test]
     fn a_state_becomes_a_browser_event_with_the_same_fields() {
-        let events = emitted(TextMsg::InputState(Some(Box::new(engine_state("héllo")))));
+        let events = emitted(TextMsg::InputState(Box::new(engine_state("héllo"))));
 
         assert_eq!(
             events,
             vec![BrowserEvent::TextInputState(Some(TextInputState {
+                document: 9,
                 sequence: 5,
                 text: "héllo".to_owned(),
                 text_start: 10,
@@ -205,10 +210,10 @@ mod tests {
     }
 
     #[test]
-    fn no_state_means_nothing_editable_has_focus() {
+    fn a_cleared_message_names_the_document_that_lost_the_focus() {
         assert_eq!(
-            emitted(TextMsg::InputState(None)),
-            vec![BrowserEvent::TextInputState(None)]
+            emitted(TextMsg::InputCleared(9)),
+            vec![BrowserEvent::TextInputCleared { document: 9 }]
         );
     }
 
@@ -217,7 +222,7 @@ mod tests {
         let mut state = engine_state("hunter2");
         state.is_password = true;
 
-        let events = emitted(TextMsg::InputState(Some(Box::new(state))));
+        let events = emitted(TextMsg::InputState(Box::new(state)));
 
         let [BrowserEvent::TextInputState(Some(state))] = events.as_slice() else {
             panic!("one state event expected, got {events:?}");
@@ -380,7 +385,7 @@ mod tests {
     fn a_text_message_prints_only_its_variant() {
         let printed = format!(
             "{:?}",
-            TextMsg::InputState(Some(Box::new(engine_state("secret"))))
+            TextMsg::InputState(Box::new(engine_state("secret")))
         );
         assert!(!printed.contains("secret"), "{printed}");
     }

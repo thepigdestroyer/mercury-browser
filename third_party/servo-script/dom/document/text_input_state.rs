@@ -51,7 +51,7 @@ use crate::dom::iterators::ShadowIncluding;
 use crate::dom::node::{Node, NodeTraits};
 use crate::dom::range::Range;
 use crate::dom::text::Text;
-use crate::dom::text_input::Lines;
+use crate::dom::text_input::{Lines, TextInputStamp};
 use crate::dom::types::{CompositionEvent, Element, Event, EventTarget};
 
 /// When the text state is being flushed, which decides whether layout is asked for the caret
@@ -88,6 +88,56 @@ pub(crate) struct ImeState {
     sequence: Cell<u64>,
     /// Whether the caret of the editable moved since its rectangle was measured.
     caret_rect_stale: Cell<bool>,
+    /// What the last state was made of, so that a flush can skip the rebuild (and its copy of
+    /// the text) when nothing changed.
+    #[no_trace]
+    #[ignore_malloc_size_of = "a few numbers"]
+    last_stamp: DomRefCell<Option<Stamp>>,
+}
+
+/// A boundary point of a range: the node's address, its offset, for both ends.
+type RangeStamp = (usize, u32, usize, u32);
+
+/// Everything the text state of the focused editable is made of, except the caret rectangle and
+/// the text itself. Equal stamps mean an equal state; making one copies nothing (a text control
+/// keeps a counter of its changes, an editing host's block has a version number).
+#[derive(Clone, Debug, PartialEq)]
+enum Stamp {
+    Control {
+        input: TextInputStamp,
+        password: bool,
+    },
+    Host {
+        version: u64,
+        selection: Option<RangeStamp>,
+        marked: Option<RangeStamp>,
+    },
+}
+
+fn range_stamp(range: &Range) -> RangeStamp {
+    let (start, end) = (range.start_container(), range.end_container());
+    (
+        &*start as *const Node as usize,
+        range.start_offset(),
+        &*end as *const Node as usize,
+        range.end_offset(),
+    )
+}
+
+/// Whether a flush can return before it builds the state: it is the same editable as the last
+/// message described, a message was sent, nothing it is made of changed, and the caret rectangle
+/// does not need a new measurement after this reflow.
+fn can_skip_rebuild(
+    target_changed: bool,
+    sent_before: bool,
+    stamp_unchanged: bool,
+    mode: FlushMode,
+    caret_rect_stale: bool,
+) -> bool {
+    !target_changed &&
+        sent_before &&
+        stamp_unchanged &&
+        !(mode == FlushMode::AfterReflow && caret_rect_stale)
 }
 
 /// The focused element, if there is one.
@@ -206,6 +256,7 @@ impl ImeState {
         let Some((element, context)) = focused_editable(cx, document) else {
             return Default::default();
         };
+        self.end_stale_composition(cx, document, &element);
         if !is_still_rendered(cx, &element) {
             return Default::default();
         }
@@ -286,6 +337,7 @@ impl ImeState {
         let Some((element, context)) = focused_editable(cx, document) else {
             return Default::default();
         };
+        self.end_stale_composition(cx, document, &element);
         if self.composition_is_open(&element, &context) {
             return self.finish(cx, document, &element, &context, text);
         }
@@ -357,7 +409,7 @@ impl ImeState {
             EditingContext::Document(_) => {
                 // The same events as for an update, even when the text did not change.
                 self.update_host(cx, document, &text, None, None);
-                self.end_host(cx, document, None);
+                self.end_host(cx, document, None, true);
             }
         }
         // The composition is closed before the event, so that a page that reacts to it, or an
@@ -367,6 +419,17 @@ impl ImeState {
         self.marked_text.borrow_mut().clear();
         let flags = fire_composition_event(cx, document, element, CompositionState::End, &text);
         InputEventResult::from(flags) | InputEventResult::Consumed
+    }
+
+    /// A composition that belongs to another element than the focused editable (the focus moved
+    /// between two IME events, before any flush noticed): it ends, with its `compositionend`,
+    /// before the event for the new element is handled.
+    fn end_stale_composition(&self, cx: &mut JSContext, document: &Document, focused: &Element) {
+        if let Some(target) = self.composition_target.get() {
+            if !same_element(&target, focused) {
+                self.end_lost_composition(cx, document, &target);
+            }
+        }
     }
 
     /// A composition whose element is not the focused editable any more: end it where it is and
@@ -380,7 +443,7 @@ impl ImeState {
                 control.text_input_mut().end_composition(None);
                 control.maybe_update_composition_highlights();
             }
-            EditingContext::Document(_) => self.end_host(cx, document, None),
+            EditingContext::Document(_) => self.end_host(cx, document, None, false),
         }
         self.composition_target.set(None);
         self.host_marked.set(None);
@@ -406,7 +469,7 @@ impl ImeState {
             EditingAction::EndComposition(text) => {
                 let changed =
                     self.host_marked.get().is_some() && *self.marked_text.borrow() != *text;
-                self.end_host(cx, document, Some(text));
+                self.end_host(cx, document, Some(text), true);
                 changed
             }
             _ => false,
@@ -485,7 +548,16 @@ impl ImeState {
     /// End the composition of an editing host: with `final_text`, the marked text first becomes
     /// that (events as for an update, unless it already is); then the highlights go and the
     /// caret is after the text.
-    fn end_host(&self, cx: &mut JSContext, document: &Document, final_text: Option<&str>) {
+    ///
+    /// `move_caret` is false for a composition that lost its element (the focus, and with it the
+    /// selection, is somewhere else by now: putting the caret back would steal it).
+    fn end_host(
+        &self,
+        cx: &mut JSContext,
+        document: &Document,
+        final_text: Option<&str>,
+        move_caret: bool,
+    ) {
         if let Some(final_text) = final_text
             && self.host_marked.get().is_some()
             && *self.marked_text.borrow() != *final_text
@@ -493,7 +565,8 @@ impl ImeState {
             self.update_host(cx, document, final_text, None, None);
         }
 
-        if let Some(marked) = self.host_marked.get()
+        if move_caret
+            && let Some(marked) = self.host_marked.get()
             && let Some(selection) = document.GetSelection(cx)
         {
             let _ = selection.Collapse(cx, Some(&marked.end_container()), marked.end_offset());
@@ -589,20 +662,36 @@ impl ImeState {
 
         let Some((element, context)) = focused_editable(cx, document) else {
             self.last_target.set(None);
+            self.last_stamp.borrow_mut().take();
             if self.last_sent.borrow().is_some() {
                 self.send(document, None);
             }
             return;
         };
-        let Some(mut state) = self.build_state(cx, document, &element, &context) else {
-            return;
-        };
 
-        let previous = self.last_sent.borrow().clone();
+        // Cheap first: a stamp copies nothing. A reflow that changed nothing about the editable
+        // (an animation elsewhere on the page) ends here, whatever the size of the text.
         let target_changed = self
             .last_target
             .get()
             .is_none_or(|target| !same_element(&target, &element));
+        let stamp = self.stamp_of(cx, document, &element, &context);
+        if can_skip_rebuild(
+            target_changed,
+            self.last_sent.borrow().is_some(),
+            stamp.is_some() && *self.last_stamp.borrow() == stamp,
+            mode,
+            self.caret_rect_stale.get(),
+        ) {
+            return;
+        }
+
+        let Some(mut state) = self.build_state(cx, document, &element, &context) else {
+            return;
+        };
+        *self.last_stamp.borrow_mut() = stamp;
+
+        let previous = self.last_sent.borrow().clone();
         let content_changed = previous
             .as_ref()
             .is_none_or(|previous| !previous.same_content_as(&state));
@@ -636,19 +725,58 @@ impl ImeState {
         self.send(document, Some(state));
     }
 
+    /// What the state of the focused editable is made of, without copying its text.
+    fn stamp_of(
+        &self,
+        cx: &mut JSContext,
+        document: &Document,
+        element: &Element,
+        context: &EditingContext,
+    ) -> Option<Stamp> {
+        match context {
+            EditingContext::TextControl(control) => {
+                let control = control.text_control_element();
+                Some(Stamp::Control {
+                    input: control.text_input().change_stamp(),
+                    password: control.is_password_field(),
+                })
+            },
+            EditingContext::Document(_) => {
+                let host = element.upcast::<Node>().editing_host_of()?;
+                let selection = document
+                    .selection()
+                    .and_then(|selection| selection.active_range(cx))
+                    .map(|range| range_stamp(&range));
+                Some(Stamp::Host {
+                    version: host.inclusive_descendants_version(),
+                    selection,
+                    marked: self.host_marked.get().map(|marked| range_stamp(&marked)),
+                })
+            },
+        }
+    }
+
     /// Send a message and remember it. Every message, `None` included, takes the next sequence
     /// number.
     fn send(&self, document: &Document, state: Option<TextInputState>) {
         let sequence = self.sequence.get() + 1;
         self.sequence.set(sequence);
+        let document_id = u64::from(document.window().pipeline_id());
         let state = state.map(|mut state| {
             state.sequence = sequence;
+            state.document = document_id;
             state
         });
         *self.last_sent.borrow_mut() = state.clone();
+        // The "nothing is focused" message names its document: a late one from a page must not
+        // hide the field of the frame the focus moved to.
+        let message = match state {
+            Some(state) => TextMsg::InputState(Box::new(state)),
+            None => TextMsg::InputCleared(document_id),
+        };
         document.send_to_embedder(EmbedderMsg::Mercury(
             Some(document.webview_id()),
-            MercuryEmbedderMsg::Text(TextMsg::InputState(state.map(Box::new))),
+            MercuryEmbedderMsg::Text(message),
         ));
     }
 
@@ -762,6 +890,7 @@ impl ImeState {
 
 fn state_from_window(window: TextWindow, multiline: bool, is_password: bool) -> TextInputState {
     TextInputState {
+        document: 0,
         sequence: 0,
         text: window.text,
         text_start: window.text_start,
@@ -931,5 +1060,91 @@ impl HostText {
                 index + 1
             },
         ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::dom::text_input::{ClipboardProvider, SelectionDirection, TextInput};
+
+    struct NoClipboard;
+
+    impl ClipboardProvider for NoClipboard {
+        fn get_text(&mut self) -> Result<String, String> {
+            Err("no clipboard in tests".to_owned())
+        }
+        fn set_text(&mut self, _: String) {}
+    }
+
+    fn input(text: &str) -> TextInput<NoClipboard> {
+        TextInput::new(Lines::Single, DOMString::from(text), NoClipboard)
+    }
+
+    #[test]
+    fn a_flush_that_changed_nothing_skips_the_rebuild() {
+        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterReflow, false));
+        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterInput, true));
+    }
+
+    #[test]
+    fn a_changed_target_stamp_or_a_first_message_rebuilds() {
+        assert!(!can_skip_rebuild(true, true, true, FlushMode::AfterReflow, false));
+        assert!(!can_skip_rebuild(false, false, true, FlushMode::AfterReflow, false));
+        assert!(!can_skip_rebuild(false, true, false, FlushMode::AfterReflow, false));
+    }
+
+    #[test]
+    fn a_stale_caret_rectangle_is_measured_after_a_reflow_only() {
+        assert!(!can_skip_rebuild(false, true, true, FlushMode::AfterReflow, true));
+        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterInput, true));
+    }
+
+    #[test]
+    fn the_stamp_of_an_untouched_text_input_does_not_change() {
+        let mut text = input("hello");
+        let before = text.change_stamp();
+        // Reading and moving nothing: the same stamp, however often it is asked for.
+        assert_eq!(before, text.change_stamp());
+        text.clear_selection();
+        assert_eq!(before, text.change_stamp());
+    }
+
+    #[test]
+    fn an_edit_changes_the_stamp_even_when_the_length_does_not() {
+        let mut text = input("hello");
+        let before = text.change_stamp();
+
+        text.set_content(DOMString::from("jello"));
+
+        assert_ne!(before, text.change_stamp());
+    }
+
+    #[test]
+    fn a_selection_change_changes_the_stamp() {
+        let mut text = input("hello");
+        let before = text.change_stamp();
+
+        text.set_selection_range_utf16(
+            servo_base::text::Utf16CodeUnits(1),
+            servo_base::text::Utf16CodeUnits(3),
+            SelectionDirection::None,
+        );
+
+        assert_ne!(before, text.change_stamp());
+    }
+
+    #[test]
+    fn a_composition_changes_the_stamp() {
+        let mut text = input("hello");
+        let before = text.change_stamp();
+
+        text.begin_composition();
+        text.replace_composition("ni");
+        let composing = text.change_stamp();
+        assert_ne!(before, composing);
+
+        text.replace_composition("nihao");
+        assert_ne!(composing, text.change_stamp());
     }
 }
