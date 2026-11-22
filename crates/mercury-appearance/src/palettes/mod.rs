@@ -11,6 +11,7 @@
 //! one is a new module with two exhaustive tables, an entry in `ALL` below, and a run of
 //! `cargo test -p mercury-appearance`, whose contrast rules every selectable palette must pass.
 
+pub mod candidates;
 pub mod hermes;
 pub mod mercury_b2;
 
