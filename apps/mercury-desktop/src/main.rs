@@ -59,6 +59,7 @@ mod media_capture;
 mod media_isolation;
 mod media_session;
 mod menus;
+mod nav; // nav-basics
 // openurl
 mod openurl;
 mod page_requests; // dialogs
@@ -305,6 +306,14 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     );
     tab_strip::connect(&window, Rc::clone(&controller)); // tabs-plus
     quit::quit_when_the_window_is_closed(&window);
+    // nav-basics
+    nav::install(&nav::Context {
+        window: &window,
+        controller: &controller,
+        settings: &settings,
+        web_view_focused: &web_view_focused,
+        automated: options.is_automated(),
+    });
     bookmarks::connect(&window, Rc::clone(&controller), &settings); // bookmarks lane
     // media-session lane: system Now Playing and power assertions only in interactive launches.
     media_session::install(
