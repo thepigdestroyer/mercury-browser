@@ -11,7 +11,7 @@
 use std::rc::Rc;
 
 use mercury_appearance::panels::layout_panel::{AppearanceAction, Choice, Control, LayoutPanel};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::{AppearanceUi, SettingsWindow};
 
@@ -36,13 +36,19 @@ pub fn fill(window: &SettingsWindow, panel: &LayoutPanel) {
     ui.set_dial(panel.dial);
     ui.set_dial_corner_index(to_int(panel.dial_corner_index));
     ui.set_dial_corner_enabled(panel.dial_corner_enabled);
-    ui.set_snapshot_cap_choices(ModelRc::new(VecModel::from(
-        panel
-            .snapshot_cap_choices
-            .iter()
-            .map(|text| SharedString::from(text.as_str()))
-            .collect::<Vec<_>>(),
-    )));
+    let choices: Vec<SharedString> = panel
+        .snapshot_cap_choices
+        .iter()
+        .map(|text| SharedString::from(text.as_str()))
+        .collect();
+    // A list that has not changed is left alone, so the list the user is using keeps its state.
+    if ui
+        .get_snapshot_cap_choices()
+        .iter()
+        .ne(choices.iter().cloned())
+    {
+        ui.set_snapshot_cap_choices(ModelRc::new(VecModel::from(choices)));
+    }
     ui.set_snapshot_cap_index(to_int(panel.snapshot_cap_index));
     ui.set_note(SharedString::from(panel.note.as_str()));
 }

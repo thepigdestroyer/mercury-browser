@@ -20,6 +20,7 @@ use mercury_appearance::keymap::LetterKey;
 use mercury_appearance::panels::key_panel::{GroupInput, KeyPanel, KeyboardFacts, PanelView};
 use mercury_settings::{GroupKeySettings, KeyCapture};
 use mercury_ui::SettingsWindow;
+use mercury_ui::settings_sections::section;
 use mercury_ui::settings_sections::tab_groups;
 use slint::language::ColorScheme;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
@@ -247,7 +248,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 let window = SettingsWindow::new()?;
                 window.set_forced_color_scheme(scheme);
-                window.set_section(2);
+                window.set_section(section::TAB_GROUPS);
                 window.set_show_bookmarks_bar(true);
                 tab_groups::fill(&window, &view);
                 tab_groups::connect(&window, |_| {});

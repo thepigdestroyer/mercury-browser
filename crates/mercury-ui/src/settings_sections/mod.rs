@@ -14,3 +14,36 @@ pub mod tab_groups;
 ///
 /// Lane `layout-switch` (lane 14) sets it to `true` when the interface is in.
 pub const TAB_GROUP_INTERFACE_LIVE: bool = false;
+
+/// The settings window's sections by their place in the sidebar (`SettingsWindow.section`). The
+/// order is `settings-window.slint`'s `sections` list and its `if root.section == N` blocks; a
+/// test (`a11y_windows.rs`) checks that each constant here selects the section of its name, so
+/// code that opens a section by number says which one it means and a new section cannot
+/// silently move the others.
+pub mod section {
+    /// General.
+    pub const GENERAL: i32 = 0;
+    /// Appearance.
+    pub const APPEARANCE: i32 = 1;
+    /// Tab groups.
+    pub const TAB_GROUPS: i32 = 2;
+    /// Privacy and security.
+    pub const PRIVACY: i32 = 3;
+    /// Downloads.
+    pub const DOWNLOADS: i32 = 4;
+    /// Passwords.
+    pub const PASSWORDS: i32 = 5;
+    /// Advanced.
+    pub const ADVANCED: i32 = 6;
+
+    /// The sidebar's names, indexed by the constants above.
+    pub const NAMES: [&str; 7] = [
+        "General",
+        "Appearance",
+        "Tab groups",
+        "Privacy and security",
+        "Downloads",
+        "Passwords",
+        "Advanced",
+    ];
+}

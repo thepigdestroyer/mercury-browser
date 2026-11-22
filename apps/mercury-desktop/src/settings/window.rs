@@ -677,4 +677,112 @@ mod tests {
         );
         assert!(window.get_filter_lists_can_update());
     }
+
+    /// Presses and releases `text` on the window, as the keyboard does.
+    fn type_text(window: &SettingsWindow, text: &str) {
+        use slint::platform::WindowEvent;
+        let text = SharedString::from(text);
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+        window
+            .window()
+            .dispatch_event(WindowEvent::KeyReleased { text });
+    }
+
+    fn group_keys(controller: &Rc<RefCell<talaria_core::BrowserController>>) -> Vec<Option<char>> {
+        controller
+            .borrow()
+            .groups()
+            .iter()
+            .map(|group| group.key.map(talaria_core::GroupKey::letter))
+            .collect()
+    }
+
+    #[test]
+    fn the_connected_sections_edit_the_browsers_groups_through_a_real_window() {
+        use mercury_ui::TabGroupsUi;
+        use mercury_ui::settings_sections::section;
+        use talaria_core::BrowserController;
+
+        init_slint();
+        let handle = SettingsHandle::start(None);
+        let controller = Rc::new(RefCell::new(BrowserController::default()));
+        let make_group = |name: &str, at: u64| {
+            let mut controller = controller.borrow_mut();
+            let tab = if at == 0 {
+                controller.active_tab_id()
+            } else {
+                controller.open_tab()
+            };
+            controller
+                .create_group(
+                    &[tab],
+                    Some(name),
+                    None,
+                    std::time::UNIX_EPOCH + std::time::Duration::from_secs(at),
+                )
+                .expect("a group");
+        };
+        make_group("Group 1", 0);
+        make_group("Group 2", 1);
+        handle.groups.set_controller(&controller);
+        let window = open(&handle);
+        let rows = |window: &SettingsWindow| window.global::<TabGroupsUi>().get_rows().row_count();
+        assert_eq!(rows(&window), 2, "the window was filled when it opened");
+
+        // A group made while the settings window was open appears when the section is opened:
+        // choosing it fires `opened()`, which starts a fresh panel and refreshes it.
+        make_group("Group 3", 2);
+        assert_eq!(rows(&window), 2);
+        window.set_section(section::TAB_GROUPS);
+        element(&window, "Key for Group 3");
+        assert_eq!(rows(&window), 3);
+        assert_eq!(group_keys(&controller), [Some('A'), Some('S'), Some('D')]);
+
+        // A letter another group holds: nothing changes, the row says so.
+        element(&window, "Key for Group 3").mock_single_click(PointerEventButton::Left);
+        type_text(&window, "a");
+        assert_eq!(group_keys(&controller), [Some('A'), Some('S'), Some('D')]);
+        assert_eq!(
+            element(&window, "Key for Group 3")
+                .accessible_description()
+                .map(String::from),
+            Some("A is already Group 1's key.".to_owned())
+        );
+
+        // Swap goes to the controller, and the table shows the new keys.
+        element(&window, "Swap keys for Group 3").invoke_accessible_default_action();
+        assert_eq!(group_keys(&controller), [Some('D'), Some('S'), Some('A')]);
+        let letters: Vec<String> = window
+            .global::<TabGroupsUi>()
+            .get_rows()
+            .iter()
+            .map(|row| row.letter.to_string())
+            .collect();
+        assert_eq!(letters, ["D", "S", "A"]);
+
+        // The keyboard focus stayed in the cap through both refreshes: the next key lands there.
+        type_text(&window, "z");
+        assert_eq!(group_keys(&controller), [Some('D'), Some('S'), Some('Z')]);
+
+        // A key setting of the section goes through the settings, not the controller.
+        element(&window, "Show keys beside names").invoke_accessible_default_action();
+        assert!(
+            !handle
+                .settings()
+                .appearance
+                .tab_groups
+                .keys
+                .show_beside_names
+        );
+
+        // And an Appearance choice: Classic.
+        window.set_section(section::APPEARANCE);
+        element(&window, "Classic").invoke_accessible_default_action();
+        assert_eq!(
+            handle.settings().appearance.layout,
+            mercury_settings::LAYOUT_CLASSIC
+        );
+    }
 }

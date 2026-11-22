@@ -21,6 +21,8 @@ export struct KeyRowUi {
     colour: color,
     tabs: string,
     letter: string,
+    // The letter the user typed that another group holds (conflict rows only; empty otherwise): drawn in the red cap.
+    attempted: string,
     types: string,
     state: int,
     message: string,
@@ -240,6 +242,7 @@ component LabelledSwitch inherits Rectangle {
 component KeyCap inherits FocusScope {
     in property <string> group-name;
     in property <string> letter;
+    in property <string> attempted;
     in property <string> message;
     // As `KeyRowUi.state`.
     in property <int> state;
@@ -276,8 +279,10 @@ component KeyCap inherits FocusScope {
         height: parent.height;
         border-radius: 8px;
         border-width: root.state == 2 || root.state == 3 || root.state == 1 ? 2px : 1px;
+        // The accent for an accent key: 5.7:1 on the cap in light and 9:1 in dark (the warning bar's border is 1.5:1 and
+        // 1.9:1, which a cap needs 3:1 of); the sentence under the row carries the meaning as well.
         border-color: root.state == 2 || root.state == 3 ? ChromePalette.danger
-            : root.state == 1 ? ChromePalette.notice-border
+            : root.state == 1 ? ChromePalette.accent
             : ChromePalette.field-border;
         background: ChromePalette.field-background;
         accessible-role: none;
@@ -285,8 +290,8 @@ component KeyCap inherits FocusScope {
         Text {
             width: parent.width;
             height: parent.height;
-            text: root.letter != "" ? root.letter : "–";
-            color: root.letter != "" ? ChromePalette.text : ChromePalette.text-secondary;
+            text: root.attempted != "" ? root.attempted : root.letter != "" ? root.letter : "–";
+            color: root.attempted != "" ? ChromePalette.danger : root.letter != "" ? ChromePalette.text : ChromePalette.text-secondary;
             font-size: 15px;
             font-weight: 700;
             horizontal-alignment: center;
@@ -358,9 +363,10 @@ component GroupRow inherits VerticalLayout {
             }
         }
 
-        KeyCap {
+        cap := KeyCap {
             group-name: root.entry.name;
             letter: root.entry.letter;
+            attempted: root.entry.attempted;
             message: root.entry.message;
             state: root.entry.state;
             typed(text) => {
@@ -440,6 +446,7 @@ component GroupRow inherits VerticalLayout {
             accessible-label: "Swap keys for " + root.entry.name;
             accessible-description: root.entry.message;
             clicked => {
+                cap.focus();
                 root.swap();
             }
         }
@@ -449,6 +456,7 @@ component GroupRow inherits VerticalLayout {
             accessible-label: "Choose another key for " + root.entry.name;
             accessible-description: root.entry.message;
             clicked => {
+                cap.focus();
                 root.choose-another();
             }
         }
@@ -473,6 +481,7 @@ component GroupRow inherits VerticalLayout {
                     accessible-label: "Swap keys for " + root.entry.name;
                     accessible-description: root.entry.message;
                     clicked => {
+                        cap.focus();
                         root.swap();
                     }
                 }
@@ -482,6 +491,7 @@ component GroupRow inherits VerticalLayout {
                     accessible-label: "Choose another key for " + root.entry.name;
                     accessible-description: root.entry.message;
                     clicked => {
+                        cap.focus();
                         root.choose-another();
                     }
                 }

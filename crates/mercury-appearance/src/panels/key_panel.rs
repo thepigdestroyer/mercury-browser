@@ -27,7 +27,7 @@ use mercury_settings::{
 };
 
 use crate::colour::Colour;
-use crate::group_colour::{GroupColour, PRESETS, preset};
+use crate::group_colour::{GroupColour, PRESETS};
 use crate::keymap::{
     Assign, DeadKeyTable, KeyMap, LetterKey, OptionChar, dead_key_note, parse_sequence,
 };
@@ -128,6 +128,9 @@ pub struct KeyRow {
     pub tabs_text: String,
     /// The key as a capital letter, or empty when the group has none.
     pub letter: String,
+    /// The letter the user typed that another group holds, as a capital: set on a row in
+    /// [`RowState::Conflict`] only, so the red cap can show what was typed; empty otherwise.
+    pub attempted: String,
     /// The "⌥ + key types" cell: the character, "´ (accent key)", or empty without a key.
     pub types: String,
     /// How the row is drawn.
@@ -227,10 +230,6 @@ const REFUSED: &str = "Type a letter from A to Z.";
 
 /// The line above the table while group keys are switched off (D9).
 const KEYS_OFF: &str = "Group keys are off. Turn them on in Appearance.";
-
-/// The one note of D4. The same words as the Appearance panel's note; the two sections show it
-/// side by side and must never disagree.
-const INTERFACE_NOT_LIVE: &str = "These choices are saved, but the tab-group interface they control arrives in a later version. Until then they change nothing you see.";
 
 /// The header of the "types" column while nothing is learnt, and once something is (D12).
 const TYPES_HEADER_US: &str = "\u{2325} + KEY TYPES (U.S. LAYOUT)";
@@ -405,7 +404,7 @@ impl KeyPanel {
             note: if self.interface_live {
                 String::new()
             } else {
-                INTERFACE_NOT_LIVE.to_owned()
+                super::INTERFACE_NOTE.to_owned()
             },
         }
     }
@@ -495,6 +494,14 @@ impl KeyPanel {
             colour: resolved_colour(&group.colour),
             tabs_text: tabs_text(group.tabs),
             letter: key.map(|key| key.letter().to_string()).unwrap_or_default(),
+            attempted: match self.pending {
+                Some(Pending::Conflict {
+                    group: pending,
+                    wanted,
+                    ..
+                }) if pending == group.id => wanted.letter().to_string(),
+                _ => String::new(),
+            },
             types: key.map(|key| self.types_text(key)).unwrap_or_default(),
             state,
             message,
@@ -614,10 +621,11 @@ fn resolved_colour(stored: &str) -> Colour {
     GroupColour::parse(stored).map_or_else(slate, |colour| colour.base())
 }
 
-/// Slate, the colour of the Loose pseudo-group and of every unreadable colour.
+/// Slate, the colour of the Loose pseudo-group and of every unreadable colour: the last of the
+/// presets, as the hand-out order puts it (no preset is named here, D15).
 fn slate() -> Colour {
-    preset("slate")
-        .or_else(|| PRESETS.last())
+    PRESETS
+        .last()
         .map_or(Colour::rgb(0x80, 0x80, 0x80), |slate| slate.base)
 }
 

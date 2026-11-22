@@ -126,7 +126,7 @@ Open the settings window with ++cmd+comma++, from **Mercury Browser → Settings
 
 ### Layout, tab groups and their keys
 
-**The tab-group interface is not in this version yet.** The choices in **Appearance → Layout** and **Tab group controls**, and everything in **Tab groups**, are saved, but until the interface they control arrives in a later version they change nothing you can see. Both sections say so at the top.
+**The tab-group interface is not in this version yet.** The choices in **Appearance → Layout** and **Tab group controls**, and everything in **Tab groups**, are saved, but until the interface they control arrives in a later version they change nothing you can see. Both sections say so in a note at the top of their own settings (in Appearance, just above **Layout**).
 
 **Appearance** shows two layouts to choose from, **Mercury (default)** (the toolbar on top and a group dock at the bottom) and **Classic** (tabs in the title strip, with group labels). Below them, in this order:
 

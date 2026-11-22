@@ -28,6 +28,7 @@ use mercury_appearance::panels::key_panel::{
     GroupInput, KeyPanel, KeyboardFacts, PanelAction, PanelView,
 };
 use mercury_settings::{GroupKeySettings, KeyCapture};
+use mercury_ui::settings_sections::section;
 use mercury_ui::settings_sections::tab_groups;
 use mercury_ui::{SettingsWindow, TabGroupsUi};
 use slint::platform::{Key, PointerEventButton, WindowEvent};
@@ -104,7 +105,7 @@ fn plain_view() -> PanelView {
 fn window_with(view: &PanelView, size: (f32, f32)) -> (SettingsWindow, Actions) {
     a11y::init();
     let window = SettingsWindow::new().expect("a window");
-    window.set_section(2);
+    window.set_section(section::TAB_GROUPS);
     window.set_theme_index(0);
     window.set_show_bookmarks_bar(true);
     tab_groups::fill(&window, view);
@@ -584,13 +585,13 @@ fn the_section_reports_opened_once_when_it_appears_and_again_on_each_visit() {
     a11y::open_window(&window, WIDE.0, WIDE.1);
     assert_eq!(opened.get(), 0, "another section is shown");
 
-    window.set_section(2);
+    window.set_section(section::TAB_GROUPS);
     a11y::open_window(&window, WIDE.0, WIDE.1);
     assert_eq!(opened.get(), 1);
 
-    window.set_section(1);
+    window.set_section(section::APPEARANCE);
     let _ = a11y::reading_order(&window);
-    window.set_section(2);
+    window.set_section(section::TAB_GROUPS);
     let _ = a11y::reading_order(&window);
     assert_eq!(opened.get(), 2, "each visit refreshes the table");
 }
@@ -895,4 +896,257 @@ fn the_show_keys_switch_sits_beside_the_title_when_wide_and_under_the_note_when_
     let title = find(&nodes, Role::Text, "Group keys").rect();
     let switch = find(&nodes, Role::Switch, "Show keys beside names").rect();
     assert!(switch.y > title.bottom(), "stacked ({title:?}, {switch:?})");
+}
+
+// ---------------------------------------------------------------------------------------------
+// The desktop's loop: every edit refills the section, and the keyboard focus must survive it
+// ---------------------------------------------------------------------------------------------
+
+/// A window whose handler does what the desktop's does: it runs the panel, applies the change it
+/// asks for to a plain model of the groups, refreshes the panel and fills the section again.
+fn refilling_window(
+    groups: Vec<GroupInput>,
+) -> (SettingsWindow, Actions, Rc<RefCell<Vec<GroupInput>>>) {
+    a11y::init();
+    let window = SettingsWindow::new().expect("a window");
+    window.set_section(section::TAB_GROUPS);
+    let groups = Rc::new(RefCell::new(groups));
+    let panel = Rc::new(RefCell::new(KeyPanel::new()));
+    let actions: Actions = Rc::default();
+    let keys = GroupKeySettings::default();
+    let facts = KeyboardFacts::us();
+    let refill = {
+        let (groups, panel, weak) = (Rc::clone(&groups), Rc::clone(&panel), window.as_weak());
+        move || {
+            panel
+                .borrow_mut()
+                .refresh(&groups.borrow(), 0, &keys, &facts, true);
+            if let Some(window) = weak.upgrade() {
+                tab_groups::fill(&window, &panel.borrow().view());
+            }
+        }
+    };
+    refill();
+    tab_groups::connect(&window, {
+        let (groups, panel, actions) = (Rc::clone(&groups), Rc::clone(&panel), Rc::clone(&actions));
+        move |action| {
+            actions.borrow_mut().push(action.clone());
+            let change = match &action {
+                PanelAction::KeyTyped { group, text } => panel.borrow_mut().key_typed(*group, text),
+                PanelAction::Swap { group } => panel.borrow_mut().swap(*group),
+                PanelAction::ChooseAnother { group } => {
+                    panel.borrow_mut().choose_another(*group);
+                    None
+                }
+                _ => None,
+            };
+            apply_change(&mut groups.borrow_mut(), change);
+            refill();
+        }
+    });
+    a11y::open_window(&window, WIDE.0, WIDE.1);
+    actions.borrow_mut().clear();
+    (window, actions, groups)
+}
+
+fn apply_change(
+    groups: &mut [GroupInput],
+    change: Option<mercury_appearance::panels::key_panel::Change>,
+) {
+    use mercury_appearance::panels::key_panel::Change;
+    match change {
+        Some(Change::SetKey { group, key }) => {
+            if let Some(found) = groups.iter_mut().find(|candidate| candidate.id == group) {
+                found.key = key;
+            }
+        }
+        Some(Change::Swap { group, other }) => {
+            let keys = |id: u64| {
+                groups
+                    .iter()
+                    .find(|candidate| candidate.id == id)
+                    .map(|g| g.key)
+            };
+            if let (Some(mine), Some(theirs)) = (keys(group), keys(other)) {
+                for found in groups.iter_mut() {
+                    if found.id == group {
+                        found.key = theirs;
+                    } else if found.id == other {
+                        found.key = mine;
+                    }
+                }
+            }
+        }
+        None => {}
+    }
+}
+
+fn key_of(groups: &Rc<RefCell<Vec<GroupInput>>>, id: u64) -> Option<LetterKey> {
+    groups
+        .borrow()
+        .iter()
+        .find(|group| group.id == id)
+        .and_then(|group| group.key)
+}
+
+fn click_cap(window: &SettingsWindow, name: &str) {
+    find(&read(window), Role::TextInput, &format!("Key for {name}"))
+        .handle
+        .mock_single_click(PointerEventButton::Left);
+}
+
+fn typed(group: u64, text: &str) -> PanelAction {
+    PanelAction::KeyTyped {
+        group,
+        text: text.to_owned(),
+    }
+}
+
+#[test]
+fn typing_two_keys_in_a_row_keeps_the_focus_in_the_same_cap() {
+    let (window, actions, groups) = refilling_window(mockup_groups());
+
+    click_cap(&window, "Research");
+    type_keys(&window, &["q"]);
+    type_keys(&window, &["w"]);
+
+    // Both keys reached the same cap: the section was refilled after the first and kept it focused.
+    assert_eq!(taken(&actions), [typed(1, "q"), typed(1, "w")]);
+    assert_eq!(key_of(&groups, 1), Some(key('W')));
+    assert_eq!(
+        find(&read(&window), Role::TextInput, "Key for Research").value,
+        "W"
+    );
+}
+
+#[test]
+fn a_conflict_keeps_the_cap_focused_and_choose_another_leaves_the_focus_in_it() {
+    let (window, actions, groups) = refilling_window(mockup_groups());
+
+    click_cap(&window, "Shopping");
+    type_keys(&window, &["s"]);
+    // The conflict appeared (the row changed in place); typing again still lands in the cap.
+    assert_eq!(taken(&actions), [typed(4, "s")]);
+    assert_eq!(
+        find(&read(&window), Role::TextInput, "Key for Shopping").description,
+        "S is already Lisbon trip's key."
+    );
+
+    press(&window, Role::Button, "Choose another key for Shopping");
+    assert_eq!(
+        taken(&actions).pop(),
+        Some(PanelAction::ChooseAnother { group: 4 })
+    );
+    assert!(
+        read(&window)
+            .iter()
+            .all(|node| node.role != Role::Button || node.label.starts_with("Reset")),
+        "the conflict is gone with its buttons"
+    );
+
+    // The button that was pressed has gone; the focus is in the cap, where the user types again.
+    type_keys(&window, &["x"]);
+    assert_eq!(taken(&actions).pop(), Some(typed(4, "x")));
+    assert_eq!(key_of(&groups, 4), Some(key('X')));
+}
+
+#[test]
+fn swap_leaves_the_focus_in_the_cap_of_the_group_that_took_the_letter() {
+    let (window, actions, groups) = refilling_window(mockup_groups());
+
+    click_cap(&window, "Shopping");
+    type_keys(&window, &["s"]);
+    press(&window, Role::Button, "Swap keys for Shopping");
+
+    assert_eq!(taken(&actions).pop(), Some(PanelAction::Swap { group: 4 }));
+    assert_eq!(
+        key_of(&groups, 4),
+        Some(key('S')),
+        "Shopping took the letter"
+    );
+    assert_eq!(
+        key_of(&groups, 2),
+        None,
+        "Lisbon trip had none to give back"
+    );
+    type_keys(&window, &["k"]);
+    assert_eq!(
+        taken(&actions).pop(),
+        Some(typed(4, "k")),
+        "the focus is in Shopping's cap"
+    );
+    assert_eq!(key_of(&groups, 4), Some(key('K')));
+}
+
+#[test]
+fn a_conflict_cap_shows_the_letter_that_was_typed_in_it() {
+    let (window, _, _) = refilling_window(mockup_groups());
+
+    click_cap(&window, "Shopping");
+    type_keys(&window, &["s"]);
+
+    let ui = window.global::<TabGroupsUi>();
+    let shopping = ui.get_rows().iter().find(|row| row.id == 4).expect("a row");
+    assert_eq!(shopping.attempted, "S");
+    assert_eq!(shopping.letter, "", "the stored key is still none");
+    let others: Vec<String> = ui
+        .get_rows()
+        .iter()
+        .filter(|row| row.id != 4)
+        .map(|row| row.attempted.to_string())
+        .collect();
+    assert!(others.iter().all(String::is_empty));
+}
+
+#[test]
+fn filling_with_groups_that_came_went_and_moved_ends_with_exactly_the_rows_of_the_view() {
+    let (window, _) = window_with(&mockup_view(), WIDE);
+    let ids = |window: &SettingsWindow| -> Vec<i32> {
+        window
+            .global::<TabGroupsUi>()
+            .get_rows()
+            .iter()
+            .map(|row| row.id)
+            .collect()
+    };
+    assert_eq!(ids(&window), [1, 2, 3, 4, 5]);
+
+    let groups = mockup_groups();
+    for order in [
+        vec![5_usize, 3],       // fewer
+        vec![3, 5, 1, 0, 2, 4], // moved: indices into a copy
+        vec![],                 // none
+        vec![0, 1, 2, 3, 4],    // all again
+    ] {
+        let mut chosen: Vec<GroupInput> = order
+            .iter()
+            .filter_map(|&at| groups.get(at % groups.len().max(1)).cloned())
+            .collect();
+        chosen.dedup_by_key(|group| group.id);
+        let mut seen = std::collections::HashSet::new();
+        chosen.retain(|group| seen.insert(group.id));
+        let view = panel_of(&chosen, 0, &GroupKeySettings::default(), true).view();
+        tab_groups::fill(&window, &view);
+        assert_eq!(
+            ids(&window),
+            chosen
+                .iter()
+                .map(|group| i32::try_from(group.id).expect("small"))
+                .collect::<Vec<_>>(),
+            "{order:?}"
+        );
+        let names: Vec<String> = window
+            .global::<TabGroupsUi>()
+            .get_rows()
+            .iter()
+            .map(|row| row.name.to_string())
+            .collect();
+        assert_eq!(
+            names,
+            chosen
+                .iter()
+                .map(|group| group.name.clone())
+                .collect::<Vec<_>>()
+        );
+    }
 }

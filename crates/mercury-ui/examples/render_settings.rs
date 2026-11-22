@@ -10,6 +10,12 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use mercury_appearance::PRESETS;
+use mercury_appearance::keymap::LetterKey;
+use mercury_appearance::panels::key_panel::{GroupInput, KeyPanel, KeyboardFacts};
+use mercury_appearance::panels::layout_panel::layout_panel;
+use mercury_settings::{AppearanceSettings, GroupKeySettings};
+use mercury_ui::settings_sections::{appearance, tab_groups};
 use mercury_ui::{
     BrowserTab, ChromePalette, ChromeTheme, MainWindow, SearchEngineRow, SettingsWindow,
 };
@@ -79,6 +85,37 @@ fn strings(values: &[&str]) -> ModelRc<SharedString> {
     ))
 }
 
+/// The Appearance and Tab groups sections as the desktop fills them: the default settings, and
+/// five groups (colours are `PRESETS` by position) with one key typed that another group holds.
+fn fill_tab_group_sections(window: &SettingsWindow) {
+    appearance::fill(window, &layout_panel(&AppearanceSettings::default(), false));
+    let group =
+        |id: u64, name: &str, colour: usize, tabs: usize, letter: Option<char>| GroupInput {
+            id,
+            name: name.to_owned(),
+            colour: PRESETS[colour % PRESETS.len()].id.to_owned(),
+            tabs,
+            key: letter.and_then(LetterKey::from_char),
+        };
+    let groups = [
+        group(1, "Research", 0, 5, Some('A')),
+        group(2, "Lisbon trip", 1, 4, Some('S')),
+        group(3, "Reading", 2, 6, Some('D')),
+        group(4, "Shopping", 3, 3, None),
+        group(5, "Work", 4, 2, Some('E')),
+    ];
+    let mut panel = KeyPanel::new();
+    panel.refresh(
+        &groups,
+        2,
+        &GroupKeySettings::default(),
+        &KeyboardFacts::us(),
+        false,
+    );
+    panel.key_typed(4, "s");
+    tab_groups::fill(window, &panel.view());
+}
+
 fn sample_settings_window() -> Result<SettingsWindow, Box<dyn Error>> {
     let window = SettingsWindow::new()?;
     window.set_startup_index(0);
@@ -146,6 +183,7 @@ fn sample_settings_window() -> Result<SettingsWindow, Box<dyn Error>> {
     window.set_never_save_origins(strings(&["https://bank.example", "http://localhost:8080"]));
     window.set_experimental_web_features(true);
     window.set_gpu_canvas(true);
+    fill_tab_group_sections(&window);
     Ok(window)
 }
 

@@ -19,6 +19,7 @@ use std::rc::Rc;
 
 use common::a11y::{self, Exempt, Node};
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, ElementRoot};
+use mercury_ui::settings_sections::section;
 use mercury_ui::{
     AboutLink, AboutWindow, BookmarkBarItem, BookmarkMenuRow, BookmarkRowKind, BookmarksManager,
     BookmarksPreview, ImportPage, ImportProfileRow, ImportSummaryLine, ImportWindow, LoginListRow,
@@ -572,7 +573,7 @@ fn login(site: &str, username: &str, kind: &str) -> LoginListRow {
     }
 }
 
-fn settings_window(section: i32) -> SettingsWindow {
+fn settings_window(chosen: i32) -> SettingsWindow {
     a11y::init();
     let window = SettingsWindow::new().expect("a window");
     window.set_startup_index(0);
@@ -616,14 +617,14 @@ fn settings_window(section: i32) -> SettingsWindow {
     window.set_never_save_origins(strings(&["https://bank.example", "http://localhost:8080"]));
     window.set_experimental_web_features(true);
     window.set_gpu_canvas(true);
-    window.set_section(section);
+    window.set_section(chosen);
     a11y::open_window(&window, SETTINGS_SIZE.0, SETTINGS_SIZE.1);
     window
 }
 
 /// The Passwords section with the logins of the desktop crate's tests plus an HTTP sign-in.
 fn passwords_window() -> SettingsWindow {
-    let window = settings_window(5);
+    let window = settings_window(section::PASSWORDS);
     let ui = window.global::<PasswordManagerUi>();
     ui.set_storage_note("Saved in your login keychain.".into());
     ui.set_rows(ModelRc::new(VecModel::from(vec![
@@ -684,19 +685,42 @@ fn settings_log(window: &SettingsWindow) -> Log {
     log
 }
 
-const SECTIONS: [&str; 7] = [
-    "General",
-    "Appearance",
-    "Tab groups",
-    "Privacy and security",
-    "Downloads",
-    "Passwords",
-    "Advanced",
-];
+const SECTIONS: [&str; 7] = section::NAMES;
+
+#[test]
+fn each_section_constant_selects_the_section_of_its_name() {
+    let constants = [
+        (section::GENERAL, "General"),
+        (section::APPEARANCE, "Appearance"),
+        (section::TAB_GROUPS, "Tab groups"),
+        (section::PRIVACY, "Privacy and security"),
+        (section::DOWNLOADS, "Downloads"),
+        (section::PASSWORDS, "Passwords"),
+        (section::ADVANCED, "Advanced"),
+    ];
+    assert_eq!(constants.map(|(_, name)| name), section::NAMES);
+    for (index, name) in constants {
+        let window = settings_window(index);
+        let nodes = a11y::reading_order(&window);
+        let selected: Vec<&str> = nodes
+            .iter()
+            .filter(|node| node.role == Role::Tab && node.selected == Some(true))
+            .map(|node| node.label.as_str())
+            .collect();
+        assert_eq!(selected, [name], "section {index}");
+        let heading = nodes
+            .iter()
+            .find(|node| node.role == Role::Text && node.label == name);
+        assert!(
+            heading.is_some(),
+            "section {index} shows the heading {name:?}"
+        );
+    }
+}
 
 #[test]
 fn the_settings_sidebar_is_a_tab_list_of_seven_tabs_with_the_chosen_one_selected() {
-    let window = settings_window(0);
+    let window = settings_window(section::GENERAL);
 
     let nodes = freeze(&window, "windows-settings-general");
 
@@ -724,7 +748,7 @@ fn the_settings_sidebar_is_a_tab_list_of_seven_tabs_with_the_chosen_one_selected
 
 #[test]
 fn pressing_a_sidebar_tab_commits_the_texts_and_changes_the_section() {
-    let window = settings_window(0);
+    let window = settings_window(section::GENERAL);
     let log = settings_log(&window);
 
     for (index, name) in SECTIONS.iter().enumerate().skip(1) {
@@ -751,7 +775,7 @@ fn pressing_a_sidebar_tab_commits_the_texts_and_changes_the_section() {
 
 #[test]
 fn the_general_section_labels_every_field_and_reads_each_engine_once() {
-    let window = settings_window(0);
+    let window = settings_window(section::GENERAL);
     let nodes = a11y::reading_order(&window);
 
     for label in ["On start-up, open", "Default page zoom", "Search engine"] {
@@ -800,7 +824,7 @@ fn the_general_section_labels_every_field_and_reads_each_engine_once() {
 
 #[test]
 fn the_engine_buttons_name_their_engine_and_do_what_a_click_does() {
-    let window = settings_window(0);
+    let window = settings_window(section::GENERAL);
     let log = settings_log(&window);
 
     press(&window, Role::Button, "Edit Rust docs");
@@ -819,7 +843,7 @@ fn the_engine_buttons_name_their_engine_and_do_what_a_click_does() {
 
 #[test]
 fn adding_an_engine_does_nothing_at_the_limit_and_says_why() {
-    let window = settings_window(0);
+    let window = settings_window(section::GENERAL);
     window.set_can_add_engine(false);
     let log = settings_log(&window);
 
@@ -837,7 +861,7 @@ fn adding_an_engine_does_nothing_at_the_limit_and_says_why() {
 
 #[test]
 fn the_search_engine_form_is_a_labelled_group_with_labelled_fields() {
-    let window = settings_window(0);
+    let window = settings_window(section::GENERAL);
     window.set_editor_open(true);
     window.set_editor_name("Broken engine".into());
     window.set_editor_url("https://search.example/find".into());
@@ -872,7 +896,7 @@ fn the_search_engine_form_is_a_labelled_group_with_labelled_fields() {
 
 #[test]
 fn the_appearance_section_is_frozen_and_its_boxes_toggle() {
-    let window = settings_window(1);
+    let window = settings_window(section::APPEARANCE);
 
     let nodes = freeze(&window, "windows-settings-appearance");
 
@@ -894,7 +918,7 @@ fn the_appearance_section_is_frozen_and_its_boxes_toggle() {
 
 #[test]
 fn the_privacy_section_groups_the_filter_lists_and_labels_each_control() {
-    let window = settings_window(3);
+    let window = settings_window(section::PRIVACY);
 
     let nodes = freeze(&window, "windows-settings-privacy");
 
@@ -929,7 +953,7 @@ fn the_privacy_section_groups_the_filter_lists_and_labels_each_control() {
 
 #[test]
 fn the_privacy_controls_do_what_a_click_does_and_disabled_ones_do_nothing() {
-    let window = settings_window(3);
+    let window = settings_window(section::PRIVACY);
     let log = settings_log(&window);
 
     press(&window, Role::Checkbox, "Update filter lists automatically");
@@ -961,7 +985,7 @@ fn the_privacy_controls_do_what_a_click_does_and_disabled_ones_do_nothing() {
 
 #[test]
 fn the_downloads_and_advanced_sections_are_frozen_with_their_fields_labelled() {
-    let window = settings_window(4);
+    let window = settings_window(section::DOWNLOADS);
     window.set_download_directory("/Users/example/Downloads".into());
     window.set_download_directory_problem("That folder does not exist.".into());
 
@@ -978,7 +1002,7 @@ fn the_downloads_and_advanced_sections_are_frozen_with_their_fields_labelled() {
         "Open in Mercury Browser"
     );
 
-    let window = settings_window(6);
+    let window = settings_window(section::ADVANCED);
     window.set_language("en-GB".into());
     let nodes = freeze(&window, "windows-settings-advanced");
     assert_eq!(find(&nodes, Role::TextInput, "Language").value, "en-GB");
@@ -988,7 +1012,7 @@ fn the_downloads_and_advanced_sections_are_frozen_with_their_fields_labelled() {
 
 #[test]
 fn the_never_save_list_names_each_site_on_its_remove_button() {
-    let window = settings_window(5);
+    let window = settings_window(section::PASSWORDS);
     let log = settings_log(&window);
 
     let nodes = a11y::reading_order(&window);
@@ -1366,7 +1390,7 @@ fn the_generator_reads_the_generated_password_and_copies_it() {
 
 #[test]
 fn exporting_is_disabled_and_does_nothing_without_saved_logins() {
-    let window = settings_window(5);
+    let window = settings_window(section::PASSWORDS);
     let ui = window.global::<PasswordManagerUi>();
     ui.set_total(0);
     let log = passwords_log(&window);
@@ -1402,13 +1426,13 @@ fn the_settings_and_passwords_labels_the_desktop_tests_look_up_are_unchanged() {
         }
     };
 
-    let general = settings_window(0);
+    let general = settings_window(section::GENERAL);
     check(&general, Role::Tab, &SECTIONS);
     check(&general, Role::TextInput, &["Home page"]);
     check(&general, Role::Combobox, &["Search engine"]);
     check(&general, Role::Button, &["Remove Docs"]);
 
-    let privacy = settings_window(3);
+    let privacy = settings_window(section::PRIVACY);
     check(
         &privacy,
         Role::Checkbox,
@@ -1418,7 +1442,7 @@ fn the_settings_and_passwords_labels_the_desktop_tests_look_up_are_unchanged() {
         ],
     );
 
-    let advanced = settings_window(6);
+    let advanced = settings_window(section::ADVANCED);
     check(&advanced, Role::TextInput, &["Language"]);
 
     let passwords = passwords_window();
@@ -1901,7 +1925,7 @@ fn the_bookmarks_preview_reads_the_bar_the_menu_and_the_popover() {
 #[test]
 fn a_text_field_takes_what_the_set_value_action_gives_it() {
     // The settings window's Home page: the value reaches the property the browser reads.
-    let settings = settings_window(0);
+    let settings = settings_window(section::GENERAL);
     a11y::control(&settings, Role::TextInput, "Home page").set_accessible_value("example.net");
     assert_eq!(settings.get_homepage(), "example.net");
 
@@ -1940,7 +1964,7 @@ fn manager_search_log(window: &BookmarksManager) -> Log {
 
 #[test]
 fn a_combo_box_of_the_settings_window_opens_through_the_expand_action() {
-    let window = settings_window(1);
+    let window = settings_window(section::APPEARANCE);
     let theme = a11y::control(&window, Role::Combobox, "Theme");
     assert_eq!(theme.accessible_expandable(), Some(true));
     assert_eq!(theme.accessible_expanded(), Some(false));
@@ -1952,7 +1976,7 @@ fn a_combo_box_of_the_settings_window_opens_through_the_expand_action() {
 
 #[test]
 fn the_settings_notice_about_a_file_that_cannot_be_saved_is_read_before_the_section() {
-    let window = settings_window(0);
+    let window = settings_window(section::GENERAL);
     window.set_save_problem(
         "Your settings could not be read, so Mercury Browser is using its defaults.".into(),
     );

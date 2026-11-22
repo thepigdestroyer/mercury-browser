@@ -11,7 +11,7 @@
 use std::rc::Rc;
 
 use mercury_appearance::panels::key_panel::{KeyRow, PanelAction, PanelView, RowState};
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use crate::{KeyRowUi, SettingsWindow, TabGroupsUi};
 
@@ -30,6 +30,7 @@ fn row_ui(row: &KeyRow) -> Option<KeyRowUi> {
         colour,
         tabs: SharedString::from(row.tabs_text.as_str()),
         letter: SharedString::from(row.letter.as_str()),
+        attempted: SharedString::from(row.attempted.as_str()),
         types: SharedString::from(row.types.as_str()),
         state: match row.state {
             RowState::Plain => 0,
@@ -41,12 +42,45 @@ fn row_ui(row: &KeyRow) -> Option<KeyRowUi> {
     })
 }
 
+/// Makes the window's rows `rows`, changing the model it already has in place: a row of the same
+/// id is updated where it stands and only rows that came or went are inserted or removed. A new
+/// model on every fill would make the repeater drop and rebuild every row, and the key cap the
+/// user is typing in would lose the keyboard focus after each key.
+fn sync_rows(ui: &TabGroupsUi, rows: Vec<KeyRowUi>) {
+    let current = ui.get_rows();
+    let Some(model) = current.as_any().downcast_ref::<VecModel<KeyRowUi>>() else {
+        ui.set_rows(ModelRc::new(VecModel::from(rows)));
+        return;
+    };
+    let mut at = 0;
+    for row in &rows {
+        // Rows that have gone from here on are dropped.
+        while at < model.row_count()
+            && model.row_data(at).is_some_and(|held| {
+                held.id != row.id && rows.iter().all(|other| other.id != held.id)
+            })
+        {
+            model.remove(at);
+        }
+        match model.row_data(at) {
+            Some(held) if held.id == row.id => {
+                if held != *row {
+                    model.set_row_data(at, row.clone());
+                }
+            }
+            _ => model.insert(at, row.clone()),
+        }
+        at += 1;
+    }
+    while model.row_count() > at {
+        model.remove(model.row_count() - 1);
+    }
+}
+
 /// Puts every value of `view` into the window's `TabGroupsUi` global.
 pub fn fill(window: &SettingsWindow, view: &PanelView) {
     let ui = window.global::<TabGroupsUi>();
-    ui.set_rows(ModelRc::new(VecModel::from(
-        view.rows.iter().filter_map(row_ui).collect::<Vec<_>>(),
-    )));
+    sync_rows(&ui, view.rows.iter().filter_map(row_ui).collect());
     ui.set_loose_tabs(to_int(view.loose_tabs));
     ui.set_empty(view.empty);
     ui.set_keys_enabled(view.keys_enabled);
@@ -55,12 +89,15 @@ pub fn fill(window: &SettingsWindow, view: &PanelView) {
     ui.set_show_beside_names(view.show_beside_names);
     ui.set_capture_index(to_int(view.capture_index));
     ui.set_hold_text(SharedString::from(view.hold_text.as_str()));
-    ui.set_hold_choices(ModelRc::new(VecModel::from(
-        view.hold_choices
-            .iter()
-            .map(|text| SharedString::from(text.as_str()))
-            .collect::<Vec<_>>(),
-    )));
+    let hold: Vec<SharedString> = view
+        .hold_choices
+        .iter()
+        .map(|text| SharedString::from(text.as_str()))
+        .collect();
+    // A list that has not changed is left alone, so the list the user is using keeps its state.
+    if ui.get_hold_choices().iter().ne(hold.iter().cloned()) {
+        ui.set_hold_choices(ModelRc::new(VecModel::from(hold)));
+    }
     ui.set_hold_index(to_int(view.hold_index));
     ui.set_reset_label(SharedString::from(view.reset_label.as_str()));
     ui.set_reset_enabled(view.reset_enabled);
@@ -177,6 +214,7 @@ mod tests {
             colour: Colour::rgb(1, 2, 3),
             tabs_text: "1 tab".into(),
             letter: String::new(),
+            attempted: String::new(),
             types: String::new(),
             state: RowState::Plain,
             message: String::new(),

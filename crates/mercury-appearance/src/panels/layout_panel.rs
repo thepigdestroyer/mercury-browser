@@ -12,11 +12,6 @@ use mercury_settings::{AppearanceSettings, DialCorner, DockStart};
 
 use crate::resolve::Layout;
 
-/// The note of D4: the interface behind the controls is not in yet. Shown while
-/// `interface_live` is `false`.
-const INTERFACE_NOTE: &str = "These choices are saved, but the tab-group interface they control \
-                              arrives in a later version. Until then they change nothing you see.";
-
 /// The note under the Group dock switch while the Mercury layout is chosen (D5).
 const MERCURY_DOCK_NOTE: &str =
     "Bottom of the window. × shrinks it to a capsule; it never hides by itself.";
@@ -282,7 +277,7 @@ pub fn layout_panel(settings: &AppearanceSettings, interface_live: bool) -> Layo
         note: if interface_live {
             String::new()
         } else {
-            INTERFACE_NOTE.to_owned()
+            super::INTERFACE_NOTE.to_owned()
         },
     }
 }

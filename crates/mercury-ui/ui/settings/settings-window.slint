@@ -104,7 +104,10 @@ component LabelledRow inherits HorizontalLayout {
     alignment: stretch;
 
     Text {
-        width: 170px;
+        // 170 px in a wide window; it gives way to its control in a narrow one (the combo of a row clipped at 560 px).
+        preferred-width: 170px;
+        min-width: 90px;
+        horizontal-stretch: 0;
         text: root.label;
         accessible-role: none;
         color: Palette.foreground;

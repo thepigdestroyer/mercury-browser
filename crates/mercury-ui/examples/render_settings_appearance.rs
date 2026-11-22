@@ -20,6 +20,7 @@ use mercury_appearance::panels::layout_panel::{
 use mercury_settings::AppearanceSettings;
 use mercury_ui::SettingsWindow;
 use mercury_ui::settings_sections::appearance;
+use mercury_ui::settings_sections::section;
 use slint::language::ColorScheme;
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PlatformError, WindowAdapter, WindowEvent};
@@ -162,7 +163,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 }
                 let window = SettingsWindow::new()?;
                 window.set_forced_color_scheme(scheme);
-                window.set_section(1);
+                window.set_section(section::APPEARANCE);
                 window.set_show_bookmarks_bar(true);
                 appearance::fill(&window, &layout_panel(&settings, interface_live));
                 window.show()?;

@@ -23,7 +23,7 @@ const CAPTURES: [KeyCapture; 3] = [
 
 const REFUSED: &str = "Type a letter from A to Z.";
 const KEYS_OFF: &str = "Group keys are off. Turn them on in Appearance.";
-const D4_NOTE: &str = "These choices are saved, but the tab-group interface they control arrives in a later version. Until then they change nothing you see.";
+use mercury_appearance::panels::INTERFACE_NOTE as D4_NOTE;
 
 // ---- helpers ------------------------------------------------------------------------------
 
@@ -2241,4 +2241,37 @@ fn the_ids_a_walk_uses_are_all_different() {
     let world = World::new(9, 20, &mut rng);
     let ids: BTreeSet<u64> = world.model.groups.iter().map(|g| g.0).collect();
     assert_eq!(ids.len(), 20);
+}
+
+#[test]
+fn a_conflict_row_carries_the_letter_that_was_typed_and_no_other_row_does() {
+    let mut panel = panel_of(&mockup());
+    assert_eq!(panel.key_typed(4, "s"), None);
+
+    let view = panel.view();
+    assert_eq!(row(&view, 4).state, RowState::Conflict);
+    assert_eq!(
+        row(&view, 4).attempted,
+        "S",
+        "the capital of what was typed"
+    );
+    assert_eq!(row(&view, 4).letter, "", "the stored key is untouched");
+    assert!(
+        view.rows
+            .iter()
+            .filter(|row| row.id != 4)
+            .all(|row| row.attempted.is_empty())
+    );
+
+    // Once the conflict is dismissed the cap shows the stored key alone again.
+    panel.choose_another(4);
+    assert!(row(&panel.view(), 4).attempted.is_empty());
+}
+
+#[test]
+fn the_note_of_d4_is_these_words_in_both_panels() {
+    assert_eq!(
+        D4_NOTE,
+        "These choices are saved, but the tab-group interface they control arrives in a later version. Until then they change nothing you see."
+    );
 }

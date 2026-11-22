@@ -13,10 +13,8 @@ use mercury_settings::{
 };
 
 /// The note of D4, word for word.
-const NOTE: &str = "These choices are saved, but the tab-group interface they control arrives in a \
-                    later version. Until then they change nothing you see.";
+use mercury_appearance::panels::INTERFACE_NOTE as NOTE;
 
-/// The dock notes of D5, word for word.
 const MERCURY_DOCK_NOTE: &str =
     "Bottom of the window. × shrinks it to a capsule; it never hides by itself.";
 const CLASSIC_DOCK_NOTE: &str =

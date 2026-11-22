@@ -25,6 +25,7 @@ use mercury_appearance::panels::layout_panel::{
 };
 use mercury_settings::AppearanceSettings;
 use mercury_ui::settings_sections::appearance;
+use mercury_ui::settings_sections::section;
 use mercury_ui::{AppearanceUi, SettingsWindow};
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Model, SharedString};
@@ -55,7 +56,7 @@ fn appearance_window(
 ) -> (SettingsWindow, Actions) {
     a11y::init();
     let window = SettingsWindow::new().expect("a window");
-    window.set_section(1);
+    window.set_section(section::APPEARANCE);
     window.set_theme_index(0);
     window.set_show_bookmarks_bar(true);
     appearance::fill(&window, &layout_panel(settings, interface_live));

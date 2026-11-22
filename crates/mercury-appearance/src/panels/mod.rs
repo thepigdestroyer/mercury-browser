@@ -13,3 +13,9 @@
 
 pub mod key_panel;
 pub mod layout_panel;
+
+/// The note of D4: the tab-group interface behind the Appearance and Tab groups controls is not
+/// in yet. Both sections show these words while `interface_live` is `false`, so they live here,
+/// once.
+pub const INTERFACE_NOTE: &str = "These choices are saved, but the tab-group interface they control \
+                                  arrives in a later version. Until then they change nothing you see.";
