@@ -29,3 +29,6 @@ pub mod key_switcher;
 
 // settings-ui: the Appearance and Tab groups sections of the settings window
 pub mod settings_sections;
+
+// layout-switch: the layouts, the plan and the feed of the tab-group overlays
+pub mod window_layout;

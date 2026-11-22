@@ -63,6 +63,12 @@ import { PdfViewer } from "pdf/pdf-viewer.slint";
 import { PdfViewerModel } from "pdf/pdf-model.slint";
 export { PdfFitMode, PdfPageRow, PdfPointer, PdfRectRow, PdfScrollKey, PdfTileRow, PdfViewState, PdfViewerModel } from "pdf/pdf-model.slint";
 
+// layout-switch: the two layouts of the main window
+export enum WindowLayout {
+    classic,
+    mercury,
+}
+
 export enum WebViewPointerButton {
     left,
     middle,
@@ -648,6 +654,24 @@ export component MainWindow inherits Window {
     // else it shows and asks for is in the global `PdfViewerModel`.
     in property <bool> pdf-viewer-shown: false;
     // --- end pdf-viewer ---
+
+    // --- layout-switch ---
+    // Which layout the window shows. Rust pushes it; the default is today's window.
+    in property <WindowLayout> layout: WindowLayout.classic;
+    // The width the traffic lights take inside the first chrome row (0: the OS draws a title bar).
+    in property <length> window-controls-inset: 0px;
+    in property <bool> tab-row-shown: true;
+    in property <bool> hub-shown: false;
+    in property <bool> dock-shown: false;
+    // The height reserved under the page for the dock: the SETTLED value (the web view is resized once).
+    in property <length> dock-band: 0px;
+    in property <bool> dial-shown: false;
+    // Empty chrome was pressed or double-clicked while the traffic lights are inside it.
+    callback window-drag-requested();
+    callback window-zoom-requested();
+    public function show-tab-ring() {
+    }
+    // --- end layout-switch ---
 
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
