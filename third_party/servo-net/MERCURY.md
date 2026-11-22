@@ -217,6 +217,10 @@ put back to Servo's own call, the e2e test and the source scan fail again.
 `certificate_exceptions.rs`, restore the `connector.rs` and `fetch/methods.rs` hunks, and keep only what
 Servo's own API cannot express (the recorded failure).
 
+`Cargo.lock`, which `make test-servo-net` uses, takes `url` 2.5.9 and `form_urlencoded` 1.2.3 (RUSTSEC-2026-0592
+in `url` 2.5.8) instead of the versions the published crate ships. As a generated file it carries no `Mercury:`
+comment and is listed under `unmarked` in `third_party/vendor.toml`.
+
 ## Running the tests
 
 `servo-net` is a vendored dependency with dev-dependencies, so `cargo test -p servo-net` from the
