@@ -158,6 +158,129 @@ fn decodebin3_plays_an_audio_track_added_a_second_late() {
     watchdog("late-bare", 90, || late_audio_plays(Shape::Bare));
 }
 
+/// The late track takes part in a seek like any other: after the join, a flushing seek restarts both
+/// tracks at the target and each plays on from there.
+#[test]
+fn a_seek_after_the_late_join_restarts_both_tracks() {
+    require!(
+        "avdec_h264",
+        "avdec_aac",
+        "playbin3",
+        "videoconvert",
+        "appsrc"
+    );
+    watchdog("late-seek", 90, || {
+        let feed = video_first("h264-low", "aac");
+        let rig = Rig::new(
+            feed.clone(),
+            Options {
+                sync: true,
+                ..Options::default()
+            },
+        );
+        rig.play();
+        rig.wait_until(LIMIT, "a second of video", |rig| {
+            rig.video_stats().lock().unwrap().count() >= 25
+        });
+        let position = rig.position().expect("a position").nseconds();
+        feed.show_track_from(TrackKind::Audio, position as i64);
+        rig.wait_until(LIMIT, "half a second of late audio", |rig| {
+            rig.audio_stats().lock().unwrap().count() >= 25
+        });
+        let target = 5_000_000_000u64;
+        let outcome =
+            common::scenario::seek_and_measure(&rig, target, true, Duration::from_secs(10));
+        eprintln!("seek after the late join: {outcome:?}");
+        assert_eq!(
+            outcome.first_video_colour,
+            Some(Colour::Blue),
+            "{outcome:?}"
+        );
+        assert!(
+            outcome.first_audio_pts.unwrap() + 100_000_000 >= target,
+            "{outcome:?}"
+        );
+        assert_eq!(outcome.async_done, 1, "{outcome:?}");
+        rig.wait_eos(LIMIT);
+        let audio = rig.audio_stats();
+        let audio = audio.lock().unwrap();
+        let after = audio.flush_marks.last().copied().unwrap_or(0);
+        let played: f64 = audio.arrivals[after..]
+            .iter()
+            .filter_map(|a| a.duration)
+            .sum::<u64>() as f64
+            / 1e9;
+        assert!(
+            played > 2.7 && played < 3.2,
+            "audio after the seek {played:.3} s"
+        );
+    });
+}
+
+/// The other way round: audio first, the video track a second late.
+#[test]
+fn playbin_plays_a_video_track_added_a_second_late() {
+    require!(
+        "avdec_h264",
+        "avdec_aac",
+        "playbin3",
+        "videoconvert",
+        "appsrc"
+    );
+    watchdog("late-video", 90, || {
+        let video = common::frames::track("h264-low", TrackKind::Video);
+        let audio = common::frames::track("aac", TrackKind::Audio);
+        let feed = FakeFeed::new();
+        feed.add_track(&audio);
+        feed.add_track_with(
+            TrackKind::Video,
+            vec![video.config.clone()],
+            video.frames.iter().map(|f| (0, f.clone())).collect(),
+            false,
+        );
+        feed.set_duration(Some(8_000_000_000));
+        feed.set_initialized(true);
+        feed.release_all();
+        feed.end();
+        let rig = Rig::new(
+            feed.clone(),
+            Options {
+                sync: true,
+                ..Options::default()
+            },
+        );
+        rig.play();
+        rig.wait_until(LIMIT, "a second of audio", |rig| {
+            rig.audio_stats().lock().unwrap().total_seconds() >= 1.0
+        });
+        let position = rig.position().expect("a position").nseconds();
+        feed.show_track_from(TrackKind::Video, position as i64);
+        rig.wait_eos(LIMIT);
+        let (video, audio) = (rig.video_stats(), rig.audio_stats());
+        let (video, audio) = (video.lock().unwrap(), audio.lock().unwrap());
+        let first_pts = video.arrivals.first().and_then(|a| a.pts).unwrap_or(0);
+        eprintln!(
+            "late video: joined at {} ms, first video pts {} ms, {} frames, audio {:.2} s",
+            position / 1_000_000,
+            first_pts / 1_000_000,
+            video.count(),
+            audio.total_seconds()
+        );
+        assert!(video.count() > 100, "video frames {}", video.count());
+        // The feed starts at the random access point before the position: a keyframe up to a GOP
+        // (2 s in the fixture) earlier.
+        assert!(
+            first_pts + 2_100_000_000 >= position && first_pts < position + 1_500_000_000,
+            "first video pts {first_pts} for a join at {position}"
+        );
+        assert!(audio.total_seconds() > 7.9 && audio.total_seconds() < 8.1);
+        assert_eq!(
+            video.colours_since(0).last().map(|c| c.1),
+            Some(Colour::Blue)
+        );
+    });
+}
+
 /// The announced kinds are never announced twice: a configuration the feed repeats for a kind that
 /// plays (a quality switch, or the feed saying it again after a seek) adds no pad.
 #[test]

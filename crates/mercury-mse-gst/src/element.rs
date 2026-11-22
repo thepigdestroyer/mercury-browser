@@ -6,7 +6,9 @@
 //! Shape (the choice the brief's risk 1 is about): the bin has no pads when it is created. When the feed
 //! knows its tracks (`FrameFeed::all_initialized`), the feeder thread adds one `appsrc` per track
 //! (`format=time`, `stream-type=seekable`, not live, not blocking), a sometimes ghost pad for each
-//! (`video_0`, `audio_0`), and says `no-more-pads`. Every pad carries the same `stream-start` group id
+//! (`video_0`, `audio_0`), and says `no-more-pads`; a track of a kind that was not there at that moment
+//! (a source buffer initialized later) is added the same way by `add_track`, with a collection that lists
+//! every track so far. Every pad carries the same `stream-start` group id
 //! (a probe replaces the one `GstBaseSrc` would send with its own group) and a stream collection that
 //! lists all the tracks, as GStreamer's own `msesrc` does.
 //!

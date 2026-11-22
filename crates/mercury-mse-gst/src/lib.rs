@@ -14,10 +14,17 @@
 //! calls into the feed except on the feeder thread, the feeder thread never sleeps on a timer, teardown
 //! joins it without waiting, and no GLib main loop is needed anywhere.
 //!
+//! Tracks that appear after the streams were announced (a source buffer added or initialized later,
+//! lane med-1b decision D17) get their own `appsrc`, pad and an updated stream collection from the feeder
+//! thread; Opus streams get their pre-skip clipped (D18).
+//!
 //! OWNER: item 4. **The four items below are the contract with the glue (item 5)**: keep the signatures.
 //!
-//! `cfg` attributes in this crate: none. The code uses GStreamer 1.18 API only (`features = ["v1_18"]`),
-//! so it compiles with the 1.20 of Linux CI (not compiled here).
+//! `cfg` in this crate: one `cfg!(all(target_arch = "aarch64", target_os = "macos"))` in
+//! `typesupport.rs` (AV1 is hidden on Apple Silicon, D8) and `cfg(target_os = "macos")` on the thread
+//! count of the lifecycle test. The code uses GStreamer 1.18 API only (`features = ["v1_18"]`), so it
+//! compiles with the 1.20 of Linux CI (not compiled here). `gstreamer-audio` supplies
+//! `AudioClippingMeta` (since 1.8).
 
 use std::sync::Arc;
 use std::sync::Mutex;
