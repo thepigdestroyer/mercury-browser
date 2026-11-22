@@ -93,14 +93,14 @@ impl Dash {
             }
             if let Some(media) = plan.pending.take() {
                 match self.backend.append(plan.id, media) {
-                    Ok(()) => appends += 1,
+                    Ok(_) => appends += 1,
                     Err(e) => errors.push(format!("append: {e}")),
                 }
             } else if plan.removed_to + STEP_S <= pos - BEHIND_S && plan.removed_to < plan.end_s {
                 let (from, to) = (plan.removed_to, plan.removed_to + STEP_S);
                 plan.removed_to = to;
                 match self.backend.remove(plan.id, from, to) {
-                    Ok(()) => removes += 1,
+                    Ok(_) => removes += 1,
                     Err(e) => errors.push(format!("remove: {e}")),
                 }
             } else if plan.next < plan.segs.len() && plan.end_s - pos < AHEAD_S {
@@ -115,7 +115,7 @@ impl Dash {
                     None => seg.media.clone(),
                 };
                 match self.backend.append(plan.id, first) {
-                    Ok(()) => appends += 1,
+                    Ok(_) => appends += 1,
                     Err(e) => errors.push(format!("append: {e}")),
                 }
             }

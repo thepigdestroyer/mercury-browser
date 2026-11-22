@@ -17,7 +17,7 @@
 
 use crate::api::{
     AppendErrorKind, AppendMode, ByteStreamParser, Container, InitInfo, InitSegment, Limits,
-    MseError, Ns, ParseError, ParseEvent, SourceBufferId, TimeRange, TrackInfo, TrackKind,
+    MseError, Ns, OpId, ParseError, ParseEvent, SourceBufferId, TimeRange, TrackInfo, TrackKind,
     ns_to_secs, secs_to_ns,
 };
 use crate::mime::ParsedType;
@@ -134,6 +134,8 @@ pub struct SourceBuffer {
     /// Bumped by everything that must make the worker's current result stale (`abort`, removal,
     /// closing); the worker carries the value it started with and drops its result when it differs.
     pub generation: u64,
+    /// The operation (append or remove) the buffer is busy with; set by `begin_append`/`begin_remove`.
+    pub op: OpId,
     /// The spec's buffer full flag: the last eviction could not make room.
     pub buffer_full: bool,
     /// The spec's append state is PARSING_MEDIA_SEGMENT (MP4 only: a WebM Cluster of unknown size ends
@@ -159,6 +161,7 @@ impl SourceBuffer {
             processor: SourceBufferProcessor::new(limits),
             busy: None,
             generation,
+            op: OpId(0),
             buffer_full: false,
             in_media_segment: false,
             timestamp_offset: 0.0,

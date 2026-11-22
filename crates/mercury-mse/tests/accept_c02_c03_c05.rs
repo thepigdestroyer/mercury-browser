@@ -91,7 +91,7 @@ fn first_init_before_done(rig: &Rig, id: u32) {
         .expect("an InitSegment event");
     let done_at = events
         .iter()
-        .position(|e| matches!(e, MseEvent::AppendDone { id: i } if *i == id))
+        .position(|e| matches!(e, MseEvent::AppendDone { id: i, .. } if *i == id))
         .expect("an AppendDone event");
     assert!(
         init_at < done_at,

@@ -354,7 +354,7 @@ impl MediaSource {
                 }
             },
             // The buffer append algorithm's steps 7 to 9 (and the range removal algorithm's 4 to 6).
-            MseEvent::AppendDone { id } | MseEvent::RemoveDone { id } => {
+            MseEvent::AppendDone { id, .. } | MseEvent::RemoveDone { id, .. } => {
                 if let Some(source_buffer) = self.source_buffer(id) {
                     source_buffer.operation_finished();
                 }
@@ -362,7 +362,7 @@ impl MediaSource {
             },
             // The append error algorithm's steps 1 to 4; step 5 (the end of stream with "decode")
             // arrives as `SourceEnded`.
-            MseEvent::AppendError { id, kind } => {
+            MseEvent::AppendError { id, kind, .. } => {
                 warn!("An append to MSE source buffer {id} failed: {kind:?}");
                 if let Some(source_buffer) = self.source_buffer(id) {
                     source_buffer.operation_failed();

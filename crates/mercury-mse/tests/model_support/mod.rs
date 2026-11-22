@@ -88,14 +88,14 @@ impl Recorder {
             let mut inner = self.inner.lock().unwrap();
             let seq = inner.log.len();
             match &event {
-                MseEvent::AppendDone { id } | MseEvent::RemoveDone { id } => {
+                MseEvent::AppendDone { id, .. } | MseEvent::RemoveDone { id, .. } => {
                     inner
                         .completions
                         .entry(*id)
                         .or_default()
                         .push(Outcome::Done);
                 }
-                MseEvent::AppendError { id, kind } => {
+                MseEvent::AppendError { id, kind, .. } => {
                     inner
                         .completions
                         .entry(*id)

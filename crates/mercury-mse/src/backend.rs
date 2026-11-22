@@ -52,7 +52,7 @@ use std::thread::{self, JoinHandle, ThreadId};
 
 use crate::api::{
     AppendMode, ElementReadyState, EosError, EventSink, FeedBatch, FrameFeed, Limits,
-    MediaSourceBackend, MediaSourceReadyState, MemoryBudget, MseError, MseEvent, Ns,
+    MediaSourceBackend, MediaSourceReadyState, MemoryBudget, MseError, MseEvent, Ns, OpId,
     SourceBufferId, TimeRange, TrackConfig, TrackKind, TypeSupport,
 };
 use crate::media_source::{MediaSource, Outgoing, SliceStatus};
@@ -429,10 +429,10 @@ impl MediaSourceBackend for MseBackend {
         self.call(|s| s.clear_live_seekable_range())
     }
 
-    fn append(&self, id: SourceBufferId, data: Vec<u8>) -> Result<(), MseError> {
+    fn append(&self, id: SourceBufferId, data: Vec<u8>) -> Result<OpId, MseError> {
         let (prepared, outbox) = self.shared.with_state(|s| s.begin_append(id, data.len()));
-        let generation = match prepared {
-            Ok(generation) => generation,
+        let (generation, op) = match prepared {
+            Ok(prepared) => prepared,
             Err(error) => {
                 self.post(outbox);
                 return Err(error);
@@ -451,7 +451,7 @@ impl MediaSourceBackend for MseBackend {
             self.call(|s| s.cancel_append(id));
             return Err(error);
         }
-        Ok(())
+        Ok(op)
     }
 
     fn abort(&self, id: SourceBufferId) -> Result<(), MseError> {
@@ -462,10 +462,10 @@ impl MediaSourceBackend for MseBackend {
         result
     }
 
-    fn remove(&self, id: SourceBufferId, start: f64, end: f64) -> Result<(), MseError> {
+    fn remove(&self, id: SourceBufferId, start: f64, end: f64) -> Result<OpId, MseError> {
         let (prepared, outbox) = self.shared.with_state(|s| s.begin_remove(id, start, end));
         self.post(outbox);
-        let (generation, start, end) = prepared?;
+        let (generation, op, start, end) = prepared?;
         let job = Job::Remove {
             id,
             generation,
@@ -476,7 +476,7 @@ impl MediaSourceBackend for MseBackend {
             self.call(|s| s.cancel_remove(id));
             return Err(error);
         }
-        Ok(())
+        Ok(op)
     }
 
     fn change_type(&self, id: SourceBufferId, mime: &str) -> Result<(), MseError> {

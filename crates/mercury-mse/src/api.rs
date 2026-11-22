@@ -365,6 +365,18 @@ pub enum AppendErrorKind {
     QuotaExceeded,
 }
 
+/// Identifies one accepted `append` or `remove` (lane med-1b, D3). Never reused within a backend. The
+/// completion events carry it, so that the DOM can drop one that was already queued when it called
+/// `abort()` or removed the buffer (`OpTracker` in `op_tracker.rs` makes that decision).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct OpId(pub u64);
+
+impl std::fmt::Display for OpId {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "op{}", self.0)
+    }
+}
+
 /// Everything the backend tells the DOM. It crosses a `GenericCallback`, so it is plain data. The rules
 /// of decisions D8 to D10: one `AppendDone` or `AppendError` per accepted append and one `RemoveDone`
 /// per accepted remove, never a spurious event, the data is in `buffered` when `AppendDone` arrives,
@@ -373,32 +385,30 @@ pub enum AppendErrorKind {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum MseEvent {
     /// An initialization segment was parsed; sent before the `AppendDone` of the same append.
-    InitSegment {
-        id: SourceBufferId,
-        init: InitInfo,
-    },
+    InitSegment { id: SourceBufferId, init: InitInfo },
     /// The append finished: `updating` is already false and the frames are in `buffered`.
     AppendDone {
         id: SourceBufferId,
+        /// The operation this completes: what `append` returned.
+        op: OpId,
     },
     AppendError {
         id: SourceBufferId,
+        op: OpId,
         kind: AppendErrorKind,
     },
     RemoveDone {
         id: SourceBufferId,
+        /// The operation this completes: what `remove` returned.
+        op: OpId,
     },
     /// The MediaSource duration changed (initialization segment, end of stream, truncation).
     DurationChanged(Option<f64>),
     /// The model ended the stream itself (an append error); the DOM fires `sourceended` and, for
     /// `Some(Decode)`, the element's decode error.
-    SourceEnded {
-        error: Option<EosError>,
-    },
+    SourceEnded { error: Option<EosError> },
     /// Data left `buffered` without a DOM call (eviction).
-    BufferedChanged {
-        id: SourceBufferId,
-    },
+    BufferedChanged { id: SourceBufferId },
 }
 
 /// Where events go. The glue wraps a `GenericCallback<MseEvent>`; tests collect them.
@@ -645,11 +655,11 @@ pub trait MediaSourceBackend: Send + Sync {
     // ---- SourceBuffer ----
 
     /// Checks now (removed buffer, `updating`, the buffer-full flag, ended to open), parses on the
-    /// worker, then `AppendDone` or `AppendError`.
-    fn append(&self, id: SourceBufferId, data: Vec<u8>) -> Result<(), MseError>;
+    /// worker, then `AppendDone` or `AppendError`, both carrying the returned [`OpId`].
+    fn append(&self, id: SourceBufferId, data: Vec<u8>) -> Result<OpId, MseError>;
     fn abort(&self, id: SourceBufferId) -> Result<(), MseError>;
-    /// `end` may be `f64::INFINITY`. Then `RemoveDone`.
-    fn remove(&self, id: SourceBufferId, start: f64, end: f64) -> Result<(), MseError>;
+    /// `end` may be `f64::INFINITY`. Then `RemoveDone`, carrying the returned [`OpId`].
+    fn remove(&self, id: SourceBufferId, start: f64, end: f64) -> Result<OpId, MseError>;
     fn change_type(&self, id: SourceBufferId, mime: &str) -> Result<(), MseError>;
     fn updating(&self, id: SourceBufferId) -> bool;
     fn buffered(&self, id: SourceBufferId) -> Vec<TimeRange>;

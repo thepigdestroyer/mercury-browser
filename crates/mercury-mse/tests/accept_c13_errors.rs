@@ -456,7 +456,7 @@ fn c13_the_buffer_full_flag_and_quota_exceeded() {
     let mut refused = None;
     for (i, s) in good.media.iter().enumerate() {
         match rig.backend.append(id, s.bytes.clone()) {
-            Ok(()) => {
+            Ok(_) => {
                 rig.wait_idle(&[id]);
             }
             Err(e) => {

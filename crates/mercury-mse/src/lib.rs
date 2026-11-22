@@ -20,14 +20,20 @@ pub mod api;
 pub mod backend;
 pub mod media_source;
 pub mod mime;
+pub mod op_tracker;
 pub mod parse;
 pub mod processor;
 pub mod ranges;
 pub mod seek_hold;
 pub mod source_buffer;
+pub mod stall_guard;
 pub mod trackbuffer;
 
 pub use api::*;
+
+// ---- med-1b item 1 `core` exports ----
+pub use op_tracker::OpTracker;
+pub use stall_guard::{StallAction, StallGuard, StallInput};
 
 // ---- item 1 `parse` exports ----
 pub use mime::{ParsedType, is_type_supported, parse_type};

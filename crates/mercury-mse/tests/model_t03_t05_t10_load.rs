@@ -88,7 +88,7 @@ fn t03_two_threads_on_one_source_buffer_the_second_gets_invalid_state() {
                     let bytes = seg[(round + t) % seg.len()].clone();
                     let before = rig.rec.completions(id);
                     match rig.backend.append(id, bytes) {
-                        Ok(()) => {
+                        Ok(_) => {
                             accepted.fetch_add(1, Ordering::SeqCst);
                             // Wait for the append that this thread started (the other thread's appends
                             // interleave in the count, so wait until updating is false).
@@ -342,7 +342,7 @@ fn t10_sixteen_backends_at_once_do_not_cross_talk() {
         // Only this backend's own ids appear in its events, and each on its own worker thread.
         let events = rig.rec.snapshot();
         for r in &events {
-            if let MseEvent::AppendDone { id } | MseEvent::InitSegment { id, .. } = r.event {
+            if let MseEvent::AppendDone { id, .. } | MseEvent::InitSegment { id, .. } = r.event {
                 assert!(id <= 1, "backend {i} saw an event for buffer {id}");
             }
         }

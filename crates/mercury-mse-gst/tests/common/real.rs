@@ -66,7 +66,7 @@ impl RealSource {
             .events
             .iter()
             .filter(|(_, e)| {
-                matches!(e, MseEvent::AppendDone { id: i } | MseEvent::AppendError { id: i, .. } | MseEvent::RemoveDone { id: i } if *i == id)
+                matches!(e, MseEvent::AppendDone { id: i, .. } | MseEvent::AppendError { id: i, .. } | MseEvent::RemoveDone { id: i, .. } if *i == id)
             })
             .count()
     }
@@ -80,7 +80,7 @@ impl RealSource {
                 .events
                 .iter()
                 .filter(|(_, e)| {
-                    matches!(e, MseEvent::AppendDone { id: i } | MseEvent::AppendError { id: i, .. } | MseEvent::RemoveDone { id: i } if *i == id)
+                    matches!(e, MseEvent::AppendDone { id: i, .. } | MseEvent::AppendError { id: i, .. } | MseEvent::RemoveDone { id: i, .. } if *i == id)
                 })
                 .nth(n)
                 .cloned();

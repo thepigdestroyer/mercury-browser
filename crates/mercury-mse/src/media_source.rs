@@ -26,7 +26,7 @@ use std::sync::Arc;
 
 use crate::api::{
     ElementReadyState, EosError, FeedBatch, FeedState, Limits, MediaSourceReadyState, MemoryBudget,
-    MseError, MseEvent, Ns, SourceBufferId, TimeRange, TrackConfig, TrackKind, TypeSupport,
+    MseError, MseEvent, Ns, OpId, SourceBufferId, TimeRange, TrackConfig, TrackKind, TypeSupport,
     ns_to_secs, secs_to_ns,
 };
 use crate::mime::{ParsedType, parse_type};
@@ -563,7 +563,11 @@ impl MediaSource {
     /// element's error, ended to open, coded frame eviction, the buffer full flag. Returns the
     /// generation the worker must carry. When eviction took data a `BufferedChanged` event is pushed
     /// even if the call then fails.
-    pub fn begin_append(&mut self, id: SourceBufferId, len: usize) -> Result<u64, MseError> {
+    pub fn begin_append(
+        &mut self,
+        id: SourceBufferId,
+        len: usize,
+    ) -> Result<(u64, OpId), MseError> {
         let i = self.settable(id)?;
         if self.errored {
             return Err(MseError::InvalidState(
@@ -598,8 +602,10 @@ impl MediaSource {
                 "the source buffer cannot hold {len} more bytes; remove() media it no longer needs"
             )));
         }
+        let op = OpId(self.tick());
         self.buffers[i].busy = Some(Busy::Append);
-        Ok(self.buffers[i].generation)
+        self.buffers[i].op = op;
+        Ok((self.buffers[i].generation, op))
     }
 
     /// Undoes `begin_append` when the worker could not be started.
@@ -618,7 +624,7 @@ impl MediaSource {
         id: SourceBufferId,
         start: f64,
         end: f64,
-    ) -> Result<(u64, Ns, Option<Ns>), MseError> {
+    ) -> Result<(u64, OpId, Ns, Option<Ns>), MseError> {
         let i = self.settable(id)?;
         if self.duration.is_nan() {
             return Err(MseError::Type(
@@ -637,9 +643,11 @@ impl MediaSource {
             )));
         }
         self.reopen_if_ended();
+        let op = OpId(self.tick());
         self.buffers[i].busy = Some(Busy::Remove);
+        self.buffers[i].op = op;
         let end = end.is_finite().then(|| secs_to_ns(end));
-        Ok((self.buffers[i].generation, secs_to_ns(start), end))
+        Ok((self.buffers[i].generation, op, secs_to_ns(start), end))
     }
 
     pub fn cancel_remove(&mut self, id: SourceBufferId) {
@@ -770,9 +778,10 @@ impl MediaSource {
             return;
         }
         self.buffers[i].busy = None;
+        let op = self.buffers[i].op;
         match failure {
             None => {
-                self.push_guarded(MseEvent::AppendDone { id }, id, generation);
+                self.push_guarded(MseEvent::AppendDone { id, op }, id, generation);
                 self.push_wake();
             }
             Some(failure) => {
@@ -784,6 +793,7 @@ impl MediaSource {
                 self.push_guarded(
                     MseEvent::AppendError {
                         id,
+                        op,
                         kind: failure.kind,
                     },
                     id,
@@ -815,7 +825,8 @@ impl MediaSource {
             log::error!("mercury-mse: a panic while removing coded frames");
         }
         self.buffers[i].busy = None;
-        self.push_guarded(MseEvent::RemoveDone { id }, id, generation);
+        let op = self.buffers[i].op;
+        self.push_guarded(MseEvent::RemoveDone { id, op }, id, generation);
     }
 
     // ---- SourceBuffer: buffered ----

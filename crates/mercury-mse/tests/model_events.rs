@@ -32,8 +32,8 @@ fn watch_completions(rig: &Rig) -> Arc<Mutex<Vec<Seen>>> {
     let out = Arc::clone(&seen);
     rig.rec.add_hook(move |event| {
         let id = match event {
-            MseEvent::AppendDone { id }
-            | MseEvent::RemoveDone { id }
+            MseEvent::AppendDone { id, .. }
+            | MseEvent::RemoveDone { id, .. }
             | MseEvent::AppendError { id, .. } => *id,
             _ => return,
         };
@@ -150,7 +150,7 @@ fn d9_eviction_sends_buffered_changed_before_the_append_done() {
     for (i, seg) in long.media.iter().enumerate() {
         rig.backend.set_position(i as f64 * 2.0);
         match rig.backend.append(id, seg.bytes.clone()) {
-            Ok(()) => rig.wait_idle(&[id]),
+            Ok(_) => rig.wait_idle(&[id]),
             Err(_) => quota_errors += 1,
         }
     }
