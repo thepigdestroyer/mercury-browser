@@ -113,6 +113,9 @@ export global HubRingBridge {
 
     // Written by Slint (the search field); Rust sets it to "" when it clears the query.
     in-out property <string> query;
+    // Written by Slint: the search field has the keyboard focus. While it has, Rust does not take
+    // printable keys, so the field (and an input method) receives them first.
+    in-out property <bool> field-focused;
 
     // Forwarded to ring_bands::RingBandsData::{hit, drop_target}.
     pure callback hit-test(length, length, int) -> RingHit;

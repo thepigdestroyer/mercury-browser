@@ -65,11 +65,9 @@ fn rig() -> Rig {
 fn the_hub_button_is_a_button_labelled_with_the_group_and_tab_counts() {
     let rig = rig();
     let nodes = a11y::reading_order(&rig.window);
-    let label = hub_button::label(&rig.input.groups);
-    assert!(
-        label.starts_with("Tab groups, 6 groups"),
-        "the label names the groups: {label:?}"
-    );
+    // Review finding 15: the label counts the pinned tabs too, as the search field's "Search 25 tabs".
+    let label = hub_button::label_with_pinned(&rig.input.groups, 3);
+    assert_eq!(label, "Tab groups, 6 groups, 25 tabs");
     let button = a11y::node_in(&nodes, Role::Button, &label);
     assert!(button.enabled);
 

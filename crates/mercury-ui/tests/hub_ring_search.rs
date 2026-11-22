@@ -168,18 +168,102 @@ fn a_decomposed_accent_matches_like_the_composed_letter() {
 }
 
 #[test]
-fn sharp_s_is_kept_not_folded_to_ss() {
+fn sharp_s_and_ss_find_each_other_both_ways() {
     let docs = [
         doc(1, "Straße nach Wien", "a.example.org", "G"),
         doc(2, "Strasse nach Bern", "b.example.org", "G"),
+        doc(3, "Fußball", "c.example.org", "G"),
+        doc(4, "Fussball", "d.example.org", "G"),
+        doc(5, "Rua das flores", "e.example.org", "G"),
     ];
-    assert_eq!(run(&docs, "straße").matches, [1]);
-    assert_eq!(
-        run(&docs, "STRAẞE").matches,
-        [1],
-        "capital sharp s lower-cases to ß"
-    );
-    assert_eq!(run(&docs, "strasse").matches, [2]);
+    for text in ["straße", "strasse", "STRASSE", "STRAẞE", "Straẞe"] {
+        assert_eq!(run(&docs, text).matches, [1, 2], "{text}");
+    }
+    for text in ["fußball", "fussball", "FUSSBALL", "FUẞBALL"] {
+        assert_eq!(run(&docs, text).matches, [3, 4], "{text}");
+    }
+    // a lone ß is "ss" and a lone s is not
+    assert_eq!(run(&docs, "ß").matches, [1, 2, 3, 4]);
+    assert!(run(&docs, "strase").matches.is_empty());
+}
+
+#[test]
+fn vietnamese_tone_marks_fold_to_the_base_letters() {
+    let docs = [
+        doc(1, "Việt Nam travel", "a.example.org", "G"),
+        doc(2, "Nguyễn Huệ street", "b.example.org", "G"),
+        doc(3, "Phở bò ngon", "c.example.org", "G"),
+        doc(4, "Ơn trời, cứu tôi", "d.example.org", "G"),
+        doc(5, "Viet Nam trip", "e.example.org", "G"),
+    ];
+    assert_eq!(run(&docs, "viet").matches, [1, 5]);
+    assert_eq!(run(&docs, "VIỆT").matches, [1, 5]);
+    assert_eq!(run(&docs, "việt nam").matches, [1, 5]);
+    assert_eq!(run(&docs, "nguyen hue").matches, [2]);
+    assert_eq!(run(&docs, "pho bo").matches, [3]);
+    assert_eq!(run(&docs, "on troi cuu toi").matches, [4]);
+    assert_eq!(run(&docs, "ơn trời").matches, [4]);
+    // a decomposed ệ (e, circumflex, dot below) is the same
+    let decomposed = [doc(9, "Vie\u{323}\u{302}t Nam", "f.example.org", "G")];
+    assert_eq!(run(&decomposed, "viet").matches, [9]);
+}
+
+#[test]
+fn romanian_comma_below_letters_fold() {
+    let docs = [
+        doc(1, "România", "a.example.org", "G"),
+        doc(2, "Iași și Brașov", "b.example.org", "G"),
+        doc(3, "Ţara şi ţări", "c.example.org", "G"),
+        doc(4, "Iasi si Brasov", "d.example.org", "G"),
+    ];
+    assert_eq!(run(&docs, "romania").matches, [1]);
+    assert_eq!(run(&docs, "ROMÂNIA").matches, [1]);
+    assert_eq!(run(&docs, "iasi").matches, [2, 4]);
+    assert_eq!(run(&docs, "iași").matches, [2, 4]);
+    assert_eq!(run(&docs, "brasov").matches, [2, 4]);
+    // ș and s are the same letter to the filter, and so are ț (comma) and ţ (cedilla) and t
+    assert_eq!(run(&docs, "ș").matches, [2, 3, 4], "România has no s");
+    assert_eq!(run(&docs, "tara").matches, [3]);
+    assert_eq!(run(&docs, "țara").matches, [3]);
+    assert_eq!(run(&docs, "ȚARA").matches, [3]);
+    assert_eq!(run(&docs, "tari").matches, [3]);
+}
+
+#[test]
+fn pinyin_tone_marks_fold() {
+    let docs = [
+        doc(1, "nǐ hǎo shìjiè", "a.example.cn", "G"),
+        doc(2, "Nǚ ér lǜ chá", "b.example.cn", "G"),
+        doc(3, "Zhōngwén ǹ", "c.example.cn", "G"),
+    ];
+    assert_eq!(run(&docs, "ni hao").matches, [1]);
+    assert_eq!(run(&docs, "NǏ HǍO").matches, [1]);
+    assert_eq!(run(&docs, "shijie").matches, [1]);
+    assert_eq!(run(&docs, "nu er lu cha").matches, [2]);
+    assert_eq!(run(&docs, "zhongwen").matches, [3]);
+    assert_eq!(run(&docs, "ǹ").matches, [1, 2, 3]);
+}
+
+#[test]
+fn greek_tonos_and_final_sigma_are_folded() {
+    let docs = [
+        doc(1, "οδος Αθηνών", "a.example.gr", "G"),
+        doc(2, "ΟΔΟΣ ΑΘΗΝΩΝ", "b.example.gr", "G"),
+        doc(3, "οδοσ", "c.example.gr", "G"),
+        doc(4, "Αθήνα και Θεσσαλονίκη", "d.example.gr", "G"),
+        doc(5, "Σοφία", "e.example.gr", "G"),
+        doc(6, "Ελλάδα ΰ", "f.example.gr", "G"),
+    ];
+    for text in ["ΟΔΟΣ", "οδος", "οδοσ", "Οδός"] {
+        assert_eq!(run(&docs, text).matches, [1, 2, 3], "{text}");
+    }
+    assert_eq!(run(&docs, "αθηνα").matches, [4]);
+    assert_eq!(run(&docs, "ΑΘΉΝΑ").matches, [4]);
+    assert_eq!(run(&docs, "θεσσαλονικη").matches, [4]);
+    assert_eq!(run(&docs, "σοφια").matches, [5]);
+    assert_eq!(run(&docs, "ΣΟΦΊΑ").matches, [5]);
+    assert_eq!(run(&docs, "ελλαδα").matches, [6]);
+    assert_eq!(run(&docs, "υ").matches, [6]);
 }
 
 #[test]
@@ -192,20 +276,29 @@ fn non_latin_scripts_match_exactly() {
     assert_eq!(run(&docs, "ニュース").matches, [1]);
     assert_eq!(run(&docs, "日本").matches, [1]);
     assert_eq!(run(&docs, "ΑΘΉΝΑ").matches, [2], "case is folded");
-    assert!(
-        run(&docs, "αθηνα").matches.is_empty(),
-        "the Greek accent is not folded"
-    );
     assert_eq!(run(&docs, "НОВОСТИ").matches, [3]);
     assert!(
         run(&docs, "novosti").matches.is_empty(),
         "no transliteration"
     );
+    // Cyrillic й is not и: only Latin and Greek accents fold
+    let cyrillic = [doc(1, "Йога и спорт", "a.example.ru", "G")];
+    assert!(run(&cyrillic, "иога").matches.is_empty());
+    assert_eq!(run(&cyrillic, "йога").matches, [1]);
+    // CJK is exact: a voiced kana is not its plain kana
+    let kana = [doc(2, "バナナ", "b.example.jp", "G")];
+    assert!(run(&kana, "ハ").matches.is_empty());
+    assert_eq!(run(&kana, "バナ").matches, [2]);
 }
 
 #[test]
 fn fold_keeps_the_text_otherwise_and_lowercases() {
-    assert_eq!(fold("Café ÉCOLE Straße"), "cafe ecole straße");
+    assert_eq!(fold("Café ÉCOLE Straße"), "cafe ecole strasse");
+    assert_eq!(
+        fold("Việt Nam, România, nǐ hǎo"),
+        "viet nam, romania, ni hao"
+    );
+    assert_eq!(fold("ΟΔΟΣ Αθήνα"), "οδοσ αθηνα");
     assert_eq!(fold("Tram 28"), "tram 28");
     assert_eq!(fold("日本語"), "日本語");
     assert_eq!(fold(""), "");

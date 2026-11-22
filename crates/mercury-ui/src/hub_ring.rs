@@ -9,9 +9,8 @@
 //! Pure logic first: [`search`], [`centre`], [`nav`], [`beads`] and [`hub_button`] use no window
 //! and are unit-tested alone. The ring's own data comes from [`crate::ring_bands`].
 //!
-//! **The public items of this file and of the submodules' type definitions are the contract
-//! between the items of lane hub-ring**; the scaffold commit has them with stub bodies (marked
-//! `STUB`), the items fill the bodies in. Only additions are allowed, through the lane lead.
+//! The public items of this file and of the submodules are the contract the desktop adapter and
+//! the layout-switch lane build on; only additions are allowed, through the lane lead.
 //!
 //! # How a host uses it
 //!
@@ -19,7 +18,11 @@
 //!    forwarded, they read the `HubRingBridge` global.
 //! 2. `HubRing::install(&window, host, ring_bands::metrics())` once.
 //! 3. `ring.set_input(input)` on every change of tabs, groups, theme or window size, and
-//!    `ring.opened()` when the popover opens.
+//!    `ring.opened()` when the popover opens. The popover's `opened()` and `closed()` bridge
+//!    callbacks fire from `RingPopover` itself; a host that shows the content without a popup
+//!    must call `closed` and then `opened` after a close request, or the ring ignores keys.
+//! 4. The window-level ⌥ hook (which sees the physical key; ⌥S arrives as "ß" in the popover)
+//!    calls [`HubRing::option_key`] with the upper-case letter or digit while the ring is open.
 
 use slint::Image;
 
@@ -70,6 +73,10 @@ pub struct HubRingInput {
     /// without an entry uses its first tab.
     pub last_active: Vec<(i32, i32)>,
     pub dark: bool,
+    /// The colours of the ring's key letters and counts. `None` reads the window's live
+    /// `ChromePalette` (`RingColours::from_palette`) every time the input is set, so the ring
+    /// follows the theme layer; a host sets `Some` only to override it.
+    pub colours: Option<crate::ring_bands::RingColours>,
     /// Orbit exists: "See everything" is drawn (D9).
     pub orbit_available: bool,
     pub reduce_motion: bool,

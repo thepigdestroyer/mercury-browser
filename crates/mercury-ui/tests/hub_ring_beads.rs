@@ -10,7 +10,7 @@ use mercury_ui::hub_ring::beads::{
     BEAD_PITCH, BEAD_SIZE, BeadLayout, BeadSpot, PinnedBead, layout, layout_for, rows,
 };
 use mercury_ui::hub_ring::fixtures;
-use mercury_ui::hub_ring::hub_button::{BUTTON_SIZE, donut, label};
+use mercury_ui::hub_ring::hub_button::{BUTTON_SIZE, donut, label, label_with_pinned};
 use mercury_ui::ring_bands::fixtures as ring_fixtures;
 use mercury_ui::{GroupRow, TabRow};
 use slint::{Color, Image, Rgba8Pixel, SharedPixelBuffer};
@@ -503,6 +503,48 @@ fn the_label_is_singular_for_one_group_and_one_tab() {
     assert_eq!(label(&groups), "Tab groups, 1 group, 5 tabs");
     groups[0].count = 1;
     assert_eq!(label(&groups), "Tab groups, 1 group, 1 tab");
+}
+
+#[test]
+fn the_label_with_pinned_tabs_counts_them_like_the_search_field() {
+    assert_eq!(
+        label_with_pinned(&mockup_groups(), 3),
+        "Tab groups, 6 groups, 25 tabs"
+    );
+    assert_eq!(
+        label_with_pinned(&mockup_groups(), 0),
+        label(&mockup_groups()),
+        "no pinned tabs: the plain label"
+    );
+}
+
+#[test]
+fn the_label_with_pinned_tabs_is_singular_where_it_should_be() {
+    let mut groups = mockup_groups();
+    groups.truncate(1);
+    groups[0].count = 1;
+    assert_eq!(label_with_pinned(&groups, 0), "Tab groups, 1 group, 1 tab");
+    assert_eq!(label_with_pinned(&groups, 1), "Tab groups, 1 group, 2 tabs");
+}
+
+#[test]
+fn the_label_with_only_pinned_tabs_says_no_groups() {
+    assert_eq!(label_with_pinned(&[], 3), "Tab groups, no groups, 3 tabs");
+    assert_eq!(label_with_pinned(&[], 1), "Tab groups, no groups, 1 tab");
+    let mut groups = mockup_groups();
+    for group in &mut groups {
+        group.count = 0;
+    }
+    assert_eq!(
+        label_with_pinned(&groups, 2),
+        "Tab groups, no groups, 2 tabs",
+        "groups without tabs are no groups"
+    );
+}
+
+#[test]
+fn the_label_with_nothing_at_all_says_no_tabs() {
+    assert_eq!(label_with_pinned(&[], 0), "Tab groups, no tabs");
 }
 
 #[test]

@@ -13,13 +13,23 @@
 //!   ⌥ look changed, not for a hover or a focus move.
 //! - **The keys.** The popover's `FocusScope` sends every key here first. [`map_key`] turns Slint's
 //!   key text and modifiers into a [`NavKey`]; [`nav::step`] decides; the [`Intent`] is carried out.
-//!   While a query is active ↑ ↓ and ⏎ drive the result rows instead of the ring. Typing is done
-//!   here, not by the search field, so the field only shows `query`; keys the controller does not
-//!   use (⌘V and the like) go on to the field.
+//!   While a query is active ↑ ↓ and ⏎ drive the result rows instead of the ring.
+//! - **Typing.** The search field has the keyboard focus when the popover opens (so an input method
+//!   can start with the first key). While it has (`field-focused` on the bridge), printable keys and
+//!   Backspace go to the field, whose `edited` calls `query-edited`; the controller types into the
+//!   query itself only when the field has no focus (the fallback). Chords, arrows, Esc, ⏎ and M
+//!   always reach the controller first.
+//! - **⌘ and ⌥ on macOS.** Slint reports ⌘ as `modifiers.control` and ⌃ as `modifiers.meta` there
+//!   ([`is_command`]), and ⌥ with a letter or digit as the composed character ("ß", "¡"). So the
+//!   popover maps only the Alt key itself and ⌥ with arrows; the window-level hook, which sees the
+//!   physical key, calls [`HubRing::option_key`] for ⌥ letters and digits.
 //! - **The dragged tab.** The bridge's `drop(group, index)` carries no tab id, so the controller
 //!   remembers the `dragging` argument of the last `drop-target` call (RingBands asks for it while
 //!   it drags) and uses it for the drop.
 //! - **The ⌥ hold** is the only timer: `hold_ms` after ⌥ goes down the key look starts.
+//! - **Closing.** After the controller asks the popover to close (`close-request`), keys and
+//!   activations do nothing until the popover reports `closed` (or `opened` again), so nothing acts
+//!   during the 120 ms close animation.
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
@@ -28,7 +38,7 @@ use std::time::Duration;
 
 use slint::platform::Key;
 use slint::{
-    Color, ComponentHandle, Global, Image, ModelRc, SharedString, Timer, TimerMode, VecModel,
+    Color, ComponentHandle, Global, Image, Model, ModelRc, SharedString, Timer, TimerMode, VecModel,
 };
 
 use super::beads::{self, PinnedBead};
@@ -40,8 +50,8 @@ use super::{HubRingHost, HubRingInput, TabMedia};
 use crate::ring_bands::{RingBandsData, RingBandsModels, RingColours, RingOptions};
 use crate::ring_geometry::{ApproxMetrics, GlyphMetrics, Point, RingSpec};
 use crate::{
-    BeadRow, DonutArc, FlagKind, GroupRow, HubRingBridge, RingDropTarget, RingHit, RingHitKind,
-    SearchRow, TabRow,
+    BeadRow, ChromePalette, DonutArc, FlagKind, GroupRow, HubRingBridge, RingDropTarget, RingHit,
+    RingHitKind, SearchRow, TabRow,
 };
 
 /// The ring's box edge and its centre (the hub ring of the mockup).
@@ -52,11 +62,6 @@ const BEAD_RADIUS: f32 = 180.0;
 const TOOLTIP_HEIGHT: f32 = 22.0;
 const TOOLTIP_PAD: f32 = 16.0;
 const RING_EDGE: f32 = 516.0;
-/// The dark scheme's values of `RingColours` (the palette's `accent` and `text-muted`); the light
-/// ones are `RingColours::default()`. A host with a window can set the live ones through
-/// [`HubRing::set_colours`].
-const DARK_KEY: (u8, u8, u8) = (0xFF, 0xB5, 0x47);
-const DARK_COUNT: (u8, u8, u8) = (0x72, 0x7F, 0x8F);
 
 /// The controller of one hub ring popover; keep it alive as long as the window.
 pub struct HubRing {
@@ -65,6 +70,9 @@ pub struct HubRing {
 
 /// Calls `f` with the window's bridge, if the window still exists.
 type BridgeAccess = Rc<dyn Fn(&mut dyn FnMut(&HubRingBridge<'_>))>;
+
+/// The ring's label colours from the window's live `ChromePalette`, if the window still exists.
+type PaletteAccess = Rc<dyn Fn() -> Option<RingColours>>;
 
 impl HubRing {
     /// Sets the persistent models of the window's `HubRingBridge` once and every handler on it.
@@ -77,22 +85,33 @@ impl HubRing {
     where
         C: ComponentHandle + 'static,
         for<'a> HubRingBridge<'a>: Global<'a, C>,
+        for<'a> ChromePalette<'a>: Global<'a, C>,
     {
         let weak = component.as_weak();
-        let access: BridgeAccess = Rc::new(move |f: &mut dyn FnMut(&HubRingBridge<'_>)| {
-            if let Some(component) = weak.upgrade() {
-                f(&component.global::<HubRingBridge>());
+        let access: BridgeAccess = Rc::new({
+            let weak = weak.clone();
+            move |f: &mut dyn FnMut(&HubRingBridge<'_>)| {
+                if let Some(component) = weak.upgrade() {
+                    f(&component.global::<HubRingBridge>());
+                }
             }
+        });
+        let palette: PaletteAccess = Rc::new(move || {
+            weak.upgrade()
+                .map(|component| RingColours::from_palette(&component.global::<ChromePalette>()))
         });
         let shared = Rc::new(Shared {
             core: RefCell::new(Core::default()),
             host,
             metrics,
             access,
+            palette,
             models: Models::default(),
             timer: Timer::default(),
             dragging: Cell::new(-1),
         });
+        let live = (shared.palette)();
+        shared.with_core(|core| core.live_colours = live);
 
         let bridge = component.global::<HubRingBridge>();
         let ring = &shared.models.ring;
@@ -113,9 +132,14 @@ impl HubRing {
     }
 
     /// Rebuilds everything from new rows, theme or size: runs the search again and keeps the query
-    /// and the focus while the tab still exists.
+    /// and the focus while the tab still exists. The label colours are `input.colours`, or the
+    /// window's live `ChromePalette` read now when that is `None`.
     pub fn set_input(&self, input: HubRingInput) {
-        self.shared.with_core(|core| core.set_input(input));
+        let live = (self.shared.palette)();
+        self.shared.with_core(|core| {
+            core.live_colours = live;
+            core.set_input(input);
+        });
         self.shared.refresh();
     }
 
@@ -130,11 +154,24 @@ impl HubRing {
         self.shared.set_held(held);
     }
 
-    /// The live colours of the labels' key letters and counts (`RingColours::from_palette`). Until
-    /// the host calls this, the light or dark defaults are used, chosen by `HubRingInput::dark`.
+    /// An override of the labels' key-letter and count colours; it wins over `HubRingInput::colours`
+    /// and the live palette. Normally not needed: leave `HubRingInput::colours` `None`.
     pub fn set_colours(&self, colours: RingColours) {
-        self.shared.with_core(|core| core.colours = Some(colours));
+        self.shared.with_core(|core| {
+            core.override_colours = Some(colours);
+            core.input_version += 1;
+        });
         self.shared.refresh();
+    }
+
+    /// ⌥ with a letter or a digit, from the window-level hook that sees the PHYSICAL key (Slint
+    /// reports the composed character, "ß" for ⌥S, so the popover cannot use its own key events for
+    /// this). `key` is an upper-case ASCII letter `'A'..='Z'` (selects the group with that key) or a
+    /// digit `'1'..='9'` (shows that tab of the chosen group); anything else is ignored. It sets
+    /// "⌥ is down" first when it is not, as if the Alt key had come first, so the ⌥ release that
+    /// follows commits the group.
+    pub fn option_key(&self, key: char) {
+        self.shared.option_key(key);
     }
 }
 
@@ -152,6 +189,7 @@ struct Shared {
     host: Rc<dyn HubRingHost>,
     metrics: Box<dyn GlyphMetrics>,
     access: BridgeAccess,
+    palette: PaletteAccess,
     models: Models,
     timer: Timer,
     /// The tab being dragged (the last `drop-target` argument), -1 for none.
@@ -178,8 +216,13 @@ struct Core {
     selected_row: usize,
     search: SearchResult,
     hovered: i32,
-    colours: Option<RingColours>,
+    /// The window's live palette colours, read at install and on every `set_input`.
+    live_colours: Option<RingColours>,
+    /// `HubRing::set_colours`.
+    override_colours: Option<RingColours>,
     close_requests: i32,
+    /// The popover was asked to close and has not reported `closed` yet: nothing acts.
+    closing: bool,
     hub_open: bool,
     /// The focus ring is drawn: a key moved the focus since the popover opened (a pointer-only
     /// session shows none, as the mockups).
@@ -204,8 +247,10 @@ impl Default for Core {
             selected_row: 0,
             search: SearchResult::default(),
             hovered: -1,
-            colours: None,
+            live_colours: None,
+            override_colours: None,
             close_requests: 0,
+            closing: false,
             hub_open: false,
             focus_visible: false,
         }
@@ -374,6 +419,7 @@ impl Core {
             return;
         }
         self.query.push(c);
+        self.hovered = -1;
         self.selected_row = 0;
         self.research();
     }
@@ -382,6 +428,7 @@ impl Core {
         if self.query.pop().is_none() {
             return false;
         }
+        self.hovered = -1;
         self.selected_row = 0;
         self.research();
         true
@@ -441,18 +488,13 @@ impl Core {
             .unwrap_or(Cursor::None)
     }
 
+    /// The override, else the input's colours, else the window's live palette (the default only when
+    /// the window is gone).
     fn ring_colours(&self) -> RingColours {
-        self.colours.unwrap_or_else(|| {
-            if self.input.dark {
-                RingColours {
-                    key: Color::from_rgb_u8(DARK_KEY.0, DARK_KEY.1, DARK_KEY.2),
-                    count: Color::from_rgb_u8(DARK_COUNT.0, DARK_COUNT.1, DARK_COUNT.2),
-                    ..RingColours::default()
-                }
-            } else {
-                RingColours::default()
-            }
-        })
+        self.override_colours
+            .or(self.input.colours)
+            .or(self.live_colours)
+            .unwrap_or_default()
     }
 
     /// Rebuilds the ring's data when something it depends on changed since the last build.
@@ -543,6 +585,39 @@ impl Core {
             .min(RING_EDGE - width - 4.0)
             .max(4.0);
         Some((text, x, pin.y - TOOLTIP_HEIGHT / 2.0))
+    }
+}
+
+/// How [`patch`] brought a model up to date.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Patched {
+    /// The model already held these rows: not touched.
+    Unchanged,
+    /// This many rows were replaced in place (`set_row_data`).
+    Rows(usize),
+    /// The length changed: the whole model was replaced (`set_vec`).
+    Reset,
+}
+
+/// Brings `model` to `rows` touching as little as possible. A model reset recreates the repeater's
+/// elements: a bead's 120 ms fade would never play and a screen reader would lose its place. Equal
+/// rows are left alone and a same-length change replaces only the rows that differ.
+fn patch<T: Clone + PartialEq + 'static>(model: &VecModel<T>, rows: Vec<T>) -> Patched {
+    if model.row_count() != rows.len() {
+        model.set_vec(rows);
+        return Patched::Reset;
+    }
+    let mut replaced = 0;
+    for (index, row) in rows.into_iter().enumerate() {
+        if model.row_data(index).as_ref() != Some(&row) {
+            model.set_row_data(index, row);
+            replaced += 1;
+        }
+    }
+    if replaced == 0 {
+        Patched::Unchanged
+    } else {
+        Patched::Rows(replaced)
     }
 }
 
@@ -648,7 +723,8 @@ impl Core {
             beads: bead_rows,
             results,
             donut: hub_button::donut(&self.input.groups, fallback),
-            hub_label: hub_button::label(&self.input.groups).into(),
+            hub_label: hub_button::label_with_pinned(&self.input.groups, self.pinned_ids.len())
+                .into(),
             centre,
             preview,
             preview_mark,
@@ -684,9 +760,9 @@ impl Shared {
         if let Some(data) = &view.data {
             self.models.ring.update(data);
         }
-        self.models.beads.set_vec(view.beads.clone());
-        self.models.results.set_vec(view.results.clone());
-        self.models.donut.set_vec(view.donut.clone());
+        patch(&self.models.beads, view.beads.clone());
+        patch(&self.models.results, view.results.clone());
+        patch(&self.models.donut, view.donut.clone());
         let centre = &view.centre;
         self.with_bridge(|bridge| {
             bridge.set_mode(centre.mode);
@@ -749,12 +825,33 @@ impl Shared {
     }
 
     fn request_close(&self) {
-        self.with_core(|core| core.close_requests += 1);
+        self.with_core(|core| {
+            core.close_requests += 1;
+            core.closing = true;
+        });
+    }
+
+    /// The popover was asked to close and has not reported `closed` yet.
+    fn is_closing(&self) -> bool {
+        self.with_core(|core| core.closing).unwrap_or(false)
     }
 
     fn activate(&self, tab: i32) {
+        if self.is_closing() {
+            return;
+        }
         self.host.activate_tab(tab);
         self.request_close();
+    }
+
+    /// Esc while ⌥ is down or the key look is on: back to idle, nothing is shown.
+    fn cancel_look(&self) {
+        self.timer.stop();
+        self.with_core(|core| {
+            core.nav.option_down = false;
+            core.nav.held = false;
+            core.nav.held_group = None;
+        });
     }
 
     fn opened(&self) {
@@ -762,6 +859,7 @@ impl Shared {
         self.with_core(|core| {
             core.nav = NavState::default();
             core.hovered = -1;
+            core.closing = false;
             core.hub_open = true;
             core.focus_visible = false;
             core.nav.cursor = core.active_cursor();
@@ -775,6 +873,7 @@ impl Shared {
         self.dragging.set(-1);
         self.with_core(|core| {
             core.hub_open = false;
+            core.closing = false;
             core.focus_visible = false;
             core.hovered = -1;
             core.nav.option_down = false;
@@ -800,6 +899,10 @@ impl Shared {
         );
         let Some(outcome) = self.with_core(|core| {
             core.focus_visible |= moves_focus;
+            if moves_focus {
+                // The keyboard takes the focus from the pointer: the centre, ⏎ and M agree.
+                core.hovered = -1;
+            }
             let outcome = nav::step(&core.order, &core.nav, key);
             core.nav = outcome.state;
             core.nav.query_active = core.search.active;
@@ -813,7 +916,26 @@ impl Shared {
         outcome.handled
     }
 
+    fn option_key(self: &Rc<Self>, key: char) {
+        let nav_key = match key {
+            'A'..='Z' => NavKey::Letter(key),
+            '1'..='9' => NavKey::Digit(key as u8 - b'0'),
+            _ => return,
+        };
+        if self.is_closing() {
+            return;
+        }
+        if !self.with_core(|core| core.nav.option_down).unwrap_or(true) {
+            self.feed(NavKey::OptionDown);
+        }
+        self.feed(nav_key);
+        self.refresh();
+    }
+
     fn set_held(self: &Rc<Self>, held: bool) {
+        if self.is_closing() {
+            return;
+        }
         if held {
             self.with_core(|core| {
                 let down = nav::step(&core.order, &core.nav, NavKey::OptionDown);
@@ -887,6 +1009,9 @@ impl Shared {
             Tab(i32),
             Web(String),
         }
+        if self.is_closing() {
+            return;
+        }
         let pick = self
             .with_core(|core| match core.search.rows.get(row) {
                 Some(found) => Some(Pick::Tab(found.tab)),
@@ -906,25 +1031,48 @@ impl Shared {
     }
 
     fn key_pressed(self: &Rc<Self>, text: &str, mods: Mods) -> bool {
-        let Some((mapped, searching, selected, rows)) = self.with_core(|core| {
+        let mut field_focused = false;
+        self.with_bridge(|bridge| field_focused = bridge.get_field_focused());
+        let Some((mapped, searching, selected, rows, closing, looking)) = self.with_core(|core| {
             let context = KeyContext {
                 option_look: core.nav.option_down || core.nav.held,
                 query_active: core.search.active,
                 can_mute: core.centre_tab().is_some_and(|tab| core.has_sound(tab)),
+                can_pause: core
+                    .centre_tab()
+                    .and_then(|tab| core.media(tab))
+                    .is_some_and(|media| media.can_pause),
+                field_focused,
             };
             (
                 map_key(text, mods, &context),
                 core.search.active,
                 core.selected_row,
                 core.search.rows.len() + 1,
+                core.closing,
+                core.nav.option_down || core.nav.held,
             )
         }) else {
             return false;
         };
+        if closing {
+            // The popover is closing: the key is taken and nothing happens.
+            return true;
+        }
 
         let handled = match mapped {
             Mapped::Ignored => false,
             Mapped::Backspace => self.with_core(Core::pop_char).unwrap_or(false),
+            Mapped::TogglePause => {
+                if let Some(tab) = self.centre_tab() {
+                    self.host.toggle_pause(tab);
+                }
+                true
+            }
+            Mapped::Nav(NavKey::Escape) if looking => {
+                self.cancel_look();
+                true
+            }
             Mapped::Nav(NavKey::OptionDown)
                 if self.with_core(|core| core.nav.option_down).unwrap_or(false) =>
             {
@@ -947,6 +1095,9 @@ impl Shared {
     }
 
     fn key_released(self: &Rc<Self>, text: &str) {
+        if self.is_closing() {
+            return;
+        }
         let mut chars = text.chars();
         if let (Some(c), None) = (chars.next(), chars.next())
             && c == char::from(Key::Alt)
@@ -956,13 +1107,23 @@ impl Shared {
         }
     }
 
+    /// The pointer is over a tab (-1: none): the centre shows it and the keyboard focus follows, as
+    /// in a menu, so ← →, ⏎ and M then act on the tab the centre names.
     fn tab_hovered(&self, id: i32) {
-        self.with_core(|core| core.hovered = id);
+        self.with_core(|core| {
+            core.hovered = id;
+            if id >= 0 && core.ring_ids.contains(&id) {
+                core.nav.cursor = Cursor::Tab(id);
+            }
+        });
         self.refresh();
     }
 
     fn query_edited(&self, query: &str) {
-        self.with_core(|core| core.set_query(query.to_owned()));
+        self.with_core(|core| {
+            core.hovered = -1;
+            core.set_query(query.to_owned());
+        });
         self.refresh();
     }
 
@@ -1012,18 +1173,10 @@ fn install_handlers(bridge: &HubRingBridge<'_>, shared: &Rc<Shared>) {
     });
 
     let key_weak = weak.clone();
-    bridge.on_key_pressed(move |text, alt, control, meta, shift| {
-        key_weak.upgrade().is_some_and(|shared| {
-            shared.key_pressed(
-                &text,
-                Mods {
-                    alt,
-                    control,
-                    meta,
-                    shift,
-                },
-            )
-        })
+    bridge.on_key_pressed(move |text, alt, control, meta, _shift| {
+        key_weak
+            .upgrade()
+            .is_some_and(|shared| shared.key_pressed(&text, Mods { alt, control, meta }))
     });
     bridge.on_key_released(with!(
         |shared, text, _alt, _control, _meta, _shift| shared.key_released(&text)
@@ -1041,8 +1194,16 @@ fn install_handlers(bridge: &HubRingBridge<'_>, shared: &Rc<Shared>) {
             shared.refresh();
         }
     }));
-    bridge.on_tab_close(with!(|shared, id| shared.host.close_tab(id)));
-    bridge.on_tab_mute(with!(|shared, id| shared.host.toggle_mute(id)));
+    bridge.on_tab_close(with!(|shared, id| {
+        if !shared.is_closing() {
+            shared.host.close_tab(id);
+        }
+    }));
+    bridge.on_tab_mute(with!(|shared, id| {
+        if !shared.is_closing() {
+            shared.host.toggle_mute(id);
+        }
+    }));
     bridge.on_bead_activated(with!(|shared, id| {
         shared.activate(id);
         shared.refresh();
@@ -1050,19 +1211,21 @@ fn install_handlers(bridge: &HubRingBridge<'_>, shared: &Rc<Shared>) {
     bridge.on_drop(with!(|shared, group, index| shared.drop_tab(group, index)));
     bridge.on_drag_cancelled(with!(|shared| shared.dragging.set(-1)));
     bridge.on_pause_clicked(with!(|shared| {
-        if let Some(tab) = shared.centre_tab() {
+        if let Some(tab) = shared.centre_tab().filter(|_| !shared.is_closing()) {
             shared.host.toggle_pause(tab);
         }
     }));
     bridge.on_mute_clicked(with!(|shared| {
-        if let Some(tab) = shared.centre_tab() {
+        if let Some(tab) = shared.centre_tab().filter(|_| !shared.is_closing()) {
             shared.host.toggle_mute(tab);
         }
     }));
     bridge.on_see_everything(with!(|shared| {
-        shared.host.open_orbit();
-        shared.request_close();
-        shared.refresh();
+        if !shared.is_closing() {
+            shared.host.open_orbit();
+            shared.request_close();
+            shared.refresh();
+        }
     }));
     bridge.on_result_activated(with!(
         |shared, row| shared.activate_row(usize::try_from(row).unwrap_or(0))
@@ -1071,24 +1234,37 @@ fn install_handlers(bridge: &HubRingBridge<'_>, shared: &Rc<Shared>) {
     bridge.on_closed(with!(|shared| shared.closed()));
 }
 
-/// The modifiers of one key event.
+/// The modifiers of one key event (Shift is not used by any ring key).
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct Mods {
     alt: bool,
     control: bool,
     meta: bool,
-    #[allow(dead_code)]
-    shift: bool,
+}
+
+/// Whether ⌘ is down. Slint's winit backend maps the keys like Qt does on Apple platforms: ⌘ is
+/// reported as `control` and ⌃ as `meta`; elsewhere the "command" chord is `meta` (Super).
+fn is_command(mods: Mods) -> bool {
+    if cfg!(target_os = "macos") {
+        mods.control
+    } else {
+        mods.meta
+    }
 }
 
 /// What the mapping of a key needs to know about the ring's state.
 #[derive(Clone, Copy, Debug)]
 struct KeyContext {
-    /// ⌥ is down or the key look is on: letters and digits are group keys.
+    /// ⌥ is down or the key look is on: printable keys are not text.
     option_look: bool,
     query_active: bool,
     /// The tab the centre is about has sound (M mutes it).
     can_mute: bool,
+    /// The tab the centre is about has a media session with a pause command (Space).
+    can_pause: bool,
+    /// The search field has the keyboard focus and is visible: it takes printable keys and
+    /// Backspace itself (an input method starts there).
+    field_focused: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -1096,13 +1272,15 @@ enum Mapped {
     Nav(NavKey),
     /// Delete the last character of the query.
     Backspace,
+    /// Space on an audio tab: pause or play it.
+    TogglePause,
     /// Not for the ring: the key goes on to the search field.
     Ignored,
 }
 
 /// Slint's key text (one character; the named keys are private-use characters) and modifiers as a
-/// [`NavKey`]. On macOS ⌥ with a letter may arrive as the composed character; that case is not
-/// mapped (a hands-on item).
+/// [`NavKey`]. ⌥ with a letter or digit arrives composed on macOS ("ß" for ⌥S), so it is never
+/// mapped here: the window-level hook calls [`HubRing::option_key`] with the physical key.
 fn map_key(text: &str, mods: Mods, context: &KeyContext) -> Mapped {
     let mut chars = text.chars();
     let (Some(c), None) = (chars.next(), chars.next()) else {
@@ -1157,8 +1335,11 @@ fn map_key(text: &str, mods: Mods, context: &KeyContext) -> Mapped {
         });
     }
     if is(Key::Backspace) || is(Key::Delete) {
-        return if mods.meta {
+        return if is_command(mods) {
             Mapped::Nav(NavKey::CloseTab)
+        } else if mods.control || mods.meta || context.field_focused {
+            // ⌃⌫ (or ⌘⌫ off macOS' mapping) is not ours; with the field focused it edits itself.
+            Mapped::Ignored
         } else {
             Mapped::Backspace
         };
@@ -1169,18 +1350,27 @@ fn map_key(text: &str, mods: Mods, context: &KeyContext) -> Mapped {
     if is(Key::Escape) {
         return Mapped::Nav(NavKey::Escape);
     }
-    if c.is_control() || ('\u{e000}'..='\u{f8ff}').contains(&c) || mods.meta || mods.control {
+    // ⌘ and ⌃ chords are never text (both, whichever way the platform reports them).
+    if c.is_control()
+        || ('\u{e000}'..='\u{f8ff}').contains(&c)
+        || is_command(mods)
+        || mods.control
+        || mods.meta
+    {
         return Mapped::Ignored;
     }
+    // ⌥ with a letter or digit is the composed character here; the hook's `option_key` is the way.
     if mods.alt || context.option_look {
-        return match c {
-            'a'..='z' | 'A'..='Z' => Mapped::Nav(NavKey::Letter(c.to_ascii_uppercase())),
-            '1'..='9' => Mapped::Nav(NavKey::Digit(c as u8 - b'0')),
-            _ => Mapped::Ignored,
-        };
+        return Mapped::Ignored;
     }
     if matches!(c, 'm' | 'M') && !context.query_active && context.can_mute {
         return Mapped::Nav(NavKey::Mute);
+    }
+    if c == ' ' && !context.query_active && !context.field_focused && context.can_pause {
+        return Mapped::TogglePause;
+    }
+    if context.field_focused {
+        return Mapped::Ignored;
     }
     Mapped::Nav(NavKey::Type(c))
 }
@@ -1193,6 +1383,8 @@ mod tests {
         option_look: false,
         query_active: false,
         can_mute: false,
+        can_pause: false,
+        field_focused: false,
     };
 
     fn key(key: Key) -> String {
@@ -1206,10 +1398,33 @@ mod tests {
         }
     }
 
-    fn meta() -> Mods {
-        Mods {
-            meta: true,
-            ..Mods::default()
+    /// ⌘ as the platform reports it (`control` on macOS, `meta` elsewhere).
+    fn command() -> Mods {
+        if cfg!(target_os = "macos") {
+            Mods {
+                control: true,
+                ..Mods::default()
+            }
+        } else {
+            Mods {
+                meta: true,
+                ..Mods::default()
+            }
+        }
+    }
+
+    /// ⌃ as the platform reports it: the other one.
+    fn control() -> Mods {
+        if cfg!(target_os = "macos") {
+            Mods {
+                meta: true,
+                ..Mods::default()
+            }
+        } else {
+            Mods {
+                control: true,
+                ..Mods::default()
+            }
         }
     }
 
@@ -1234,15 +1449,83 @@ mod tests {
         );
     }
 
+    // Each of these fails on the code before the review round: it read ⌘ from `meta`, so on macOS
+    // ⌘⌫ was a plain Backspace and ⌃⌫ closed the tab.
     #[test]
-    fn command_backspace_closes_and_plain_backspace_edits_the_query() {
+    fn command_backspace_closes_a_tab() {
         assert_eq!(
-            map_key(&key(Key::Backspace), meta(), &REST),
+            map_key(&key(Key::Backspace), command(), &REST),
             Mapped::Nav(NavKey::CloseTab)
         );
+    }
+
+    #[test]
+    fn control_backspace_does_not_close_a_tab_and_does_not_edit() {
+        assert_eq!(
+            map_key(&key(Key::Backspace), control(), &REST),
+            Mapped::Ignored
+        );
+    }
+
+    #[test]
+    fn plain_backspace_edits_the_query_unless_the_field_has_the_focus() {
         assert_eq!(
             map_key(&key(Key::Backspace), Mods::default(), &REST),
             Mapped::Backspace
+        );
+        let focused = KeyContext {
+            field_focused: true,
+            ..REST
+        };
+        assert_eq!(
+            map_key(&key(Key::Backspace), Mods::default(), &focused),
+            Mapped::Ignored,
+            "the field deletes its own character"
+        );
+    }
+
+    #[test]
+    fn printable_keys_go_to_the_field_while_it_has_the_focus_and_to_the_query_otherwise() {
+        let focused = KeyContext {
+            field_focused: true,
+            ..REST
+        };
+        assert_eq!(map_key("t", Mods::default(), &focused), Mapped::Ignored);
+        assert_eq!(
+            map_key("t", Mods::default(), &REST),
+            Mapped::Nav(NavKey::Type('t'))
+        );
+        assert_eq!(
+            map_key(&key(Key::RightArrow), Mods::default(), &focused),
+            Mapped::Nav(NavKey::Right),
+            "arrows always reach the ring first"
+        );
+    }
+
+    #[test]
+    fn space_pauses_only_an_audio_tab_with_an_empty_query_and_no_field_focus() {
+        let audio = KeyContext {
+            can_pause: true,
+            ..REST
+        };
+        assert_eq!(map_key(" ", Mods::default(), &audio), Mapped::TogglePause);
+        let typing = KeyContext {
+            query_active: true,
+            ..audio
+        };
+        assert_eq!(
+            map_key(" ", Mods::default(), &typing),
+            Mapped::Nav(NavKey::Type(' '))
+        );
+        let focused = KeyContext {
+            field_focused: true,
+            ..audio
+        };
+        assert_eq!(map_key(" ", Mods::default(), &focused), Mapped::Ignored);
+        assert_eq!(
+            map_key(" ", Mods::default(), &REST),
+            Mapped::Nav(NavKey::Type(' ')),
+            "no media: a plain space"
         );
     }
 
@@ -1271,22 +1554,21 @@ mod tests {
     }
 
     #[test]
-    fn letters_and_digits_are_group_keys_while_option_is_down() {
+    fn option_letters_and_digits_are_not_mapped_here_composed_or_not() {
         let looking = KeyContext {
             option_look: true,
             ..REST
         };
-        assert_eq!(
-            map_key("s", alt(), &looking),
-            Mapped::Nav(NavKey::Letter('S'))
-        );
-        assert_eq!(map_key("2", alt(), &looking), Mapped::Nav(NavKey::Digit(2)));
-        assert_eq!(map_key("0", alt(), &looking), Mapped::Ignored);
+        for text in ["s", "S", "2", "ß", "¡", "å"] {
+            assert_eq!(map_key(text, alt(), &looking), Mapped::Ignored, "{text}");
+            assert_eq!(map_key(text, alt(), &REST), Mapped::Ignored, "{text}");
+        }
     }
 
     #[test]
     fn command_and_control_keys_and_bare_modifiers_are_not_typed() {
-        assert_eq!(map_key("v", meta(), &REST), Mapped::Ignored);
+        assert_eq!(map_key("v", command(), &REST), Mapped::Ignored);
+        assert_eq!(map_key("v", control(), &REST), Mapped::Ignored);
         assert_eq!(
             map_key(&key(Key::Shift), Mods::default(), &REST),
             Mapped::Ignored
@@ -1299,5 +1581,17 @@ mod tests {
             map_key("é", Mods::default(), &REST),
             Mapped::Nav(NavKey::Type('é'))
         );
+    }
+
+    #[test]
+    fn patch_touches_nothing_when_the_rows_are_equal_and_only_the_changed_rows_otherwise() {
+        let model = VecModel::from(vec![1, 2, 3]);
+        assert_eq!(patch(&model, vec![1, 2, 3]), Patched::Unchanged);
+        assert_eq!(patch(&model, vec![1, 9, 3]), Patched::Rows(1));
+        assert_eq!(model.row_data(1), Some(9));
+        assert_eq!(patch(&model, vec![1, 9]), Patched::Reset);
+        assert_eq!(model.row_count(), 2);
+        assert_eq!(patch(&model, vec![]), Patched::Reset);
+        assert_eq!(patch(&model, vec![]), Patched::Unchanged);
     }
 }

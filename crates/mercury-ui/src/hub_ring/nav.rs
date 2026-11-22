@@ -10,8 +10,15 @@
 //! group (wrapping); ⌥← and ⌥→ move the focused tab one place within its group; ⌥↑ and ⌥↓ move it to
 //! the end of the previous or next group; ⌘⌫ closes it; ⏎ opens it; M mutes it.
 //!
-//! STUB in the scaffold commit (types and signatures are the contract; item 2 `nav-beads` writes
-//! the bodies).
+//! # ⌥ and the hold (SPEC §5.1)
+//!
+//! ⌥ down starts the hold timer ([`Intent::BeginHold`]) unless the search field has text
+//! (`query_active`): then ⌥ is for the field (⌥A types "å") and nothing starts. Any other key
+//! before the timer runs out ([`Intent::CancelHold`]) ends the hold for good (`hold_cancelled`):
+//! `option_down` stays so that the later release is clean, the hold timer is ignored, and letters
+//! and digits are not taken. A group letter (from the window-level hook through
+//! `HubRing::option_key`, which sends [`NavKey::OptionDown`] first when ⌥ is not down yet) turns
+//! the key look on at once.
 
 /// Where the focus is.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -110,8 +117,11 @@ pub struct NavState {
     pub held: bool,
     /// The group chosen by its letter.
     pub held_group: Option<i32>,
-    /// The search field has text: Esc clears it first.
+    /// The search field has text: Esc clears it first, and ⌥ does not start a hold.
     pub query_active: bool,
+    /// The hold of this ⌥ press is over before it began (another key came first, or the field
+    /// had text): the timer is ignored and letters and digits are not taken until ⌥ is released.
+    pub hold_cancelled: bool,
 }
 
 /// What a key asks the host or the controller to do.
@@ -316,6 +326,11 @@ fn move_to_group(order: &FocusOrder, cursor: Cursor, next: bool) -> Option<Inten
     })
 }
 
+/// ⌥ is down, the key look is not on and the hold was not cancelled: the hold timer is running.
+fn armed(state: &NavState) -> bool {
+    state.option_down && !state.held && !state.hold_cancelled
+}
+
 /// One key applied to `state` over `order`.
 ///
 /// `outcome.state` is the state after the key as far as the machine can tell, so a caller can
@@ -325,8 +340,13 @@ fn move_to_group(order: &FocusOrder, cursor: Cursor, next: bool) -> Option<Inten
 ///
 /// `handled` is true for every key the ring owns, even when it does nothing (for example ⌥← at the
 /// first place of a group), so that the key does not leak to the page. While ⌥ is down, the plain
-/// keys (arrows, ⏎, ⌘⌫, M, typing) are not handled; the ⌥ combinations, Esc, the hold timer, group
-/// letters and digits are.
+/// keys (arrows, ⏎, ⌘⌫, M, typing) are not handled (they pass through); the ⌥ combinations, Esc,
+/// the hold timer, group letters and digits are, except that a letter (and a digit with no group
+/// chosen) is not taken while the search field has text or after the hold was cancelled.
+///
+/// While the hold is armed (⌥ down, timer running), any key but a group letter cancels it:
+/// the outcome carries [`Intent::CancelHold`] (a ⌥ move that has an intent of its own keeps that
+/// one; its `state.hold_cancelled` tells the controller) and `state.hold_cancelled` is set.
 pub fn step(order: &FocusOrder, state: &NavState, key: NavKey) -> NavOutcome {
     let mut next = *state;
     let mut intent = None;
@@ -342,6 +362,10 @@ pub fn step(order: &FocusOrder, state: &NavState, key: NavKey) -> NavOutcome {
         | NavKey::Type(_)
             if state.option_down =>
         {
+            if armed(state) {
+                intent = Some(Intent::CancelHold);
+                next.hold_cancelled = true;
+            }
             handled = false;
         }
         NavKey::Left | NavKey::Right => {
@@ -370,12 +394,20 @@ pub fn step(order: &FocusOrder, state: &NavState, key: NavKey) -> NavOutcome {
             }
             handled = true;
         }
-        NavKey::MoveLeft | NavKey::MoveRight => {
-            intent = move_within_group(order, state.cursor, key == NavKey::MoveRight);
-            handled = true;
-        }
-        NavKey::MoveToPrevGroup | NavKey::MoveToNextGroup => {
-            intent = move_to_group(order, state.cursor, key == NavKey::MoveToNextGroup);
+        NavKey::MoveLeft
+        | NavKey::MoveRight
+        | NavKey::MoveToPrevGroup
+        | NavKey::MoveToNextGroup => {
+            intent = match key {
+                NavKey::MoveLeft => move_within_group(order, state.cursor, false),
+                NavKey::MoveRight => move_within_group(order, state.cursor, true),
+                NavKey::MoveToPrevGroup => move_to_group(order, state.cursor, false),
+                _ => move_to_group(order, state.cursor, true),
+            };
+            if armed(state) {
+                next.hold_cancelled = true;
+                intent = intent.or(Some(Intent::CancelHold));
+            }
             handled = true;
         }
         NavKey::Mute => {
@@ -402,7 +434,13 @@ pub fn step(order: &FocusOrder, state: &NavState, key: NavKey) -> NavOutcome {
         NavKey::OptionDown => {
             if !state.option_down {
                 next.option_down = true;
-                intent = Some(Intent::BeginHold);
+                if state.query_active {
+                    // ⌥ is for the field now (⌥A types "å"): no hold.
+                    next.hold_cancelled = true;
+                } else {
+                    next.hold_cancelled = false;
+                    intent = Some(Intent::BeginHold);
+                }
             }
             handled = true;
         }
@@ -411,22 +449,34 @@ pub fn step(order: &FocusOrder, state: &NavState, key: NavKey) -> NavOutcome {
             if state.option_down {
                 intent = match (state.held, state.held_group) {
                     (true, Some(group)) => Some(Intent::CommitGroup(group)),
+                    // The timer is already stopped (or never started).
+                    _ if state.hold_cancelled => None,
                     _ => Some(Intent::CancelHold),
                 };
                 next.option_down = false;
                 next.held = false;
                 next.held_group = None;
+                next.hold_cancelled = false;
             }
         }
         NavKey::HoldElapsed => {
             handled = state.option_down;
-            if state.option_down {
+            if state.option_down && !state.hold_cancelled && !state.query_active {
                 next.held = true;
             }
         }
         NavKey::Letter(c) => {
-            handled = state.option_down;
-            if state.option_down {
+            if !state.option_down {
+                handled = false;
+            } else if state.query_active || (state.hold_cancelled && !state.held) {
+                // A letter typed with ⌥ in the field, or after a cancelled hold: not ours.
+                if armed(state) {
+                    intent = Some(Intent::CancelHold);
+                    next.hold_cancelled = true;
+                }
+                handled = false;
+            } else {
+                handled = true;
                 let wanted = c.to_uppercase().next();
                 let group = order
                     .groups
@@ -435,6 +485,9 @@ pub fn step(order: &FocusOrder, state: &NavState, key: NavKey) -> NavOutcome {
                 if let Some(group) = group {
                     next.held = true;
                     next.held_group = Some(group.id);
+                } else if armed(state) {
+                    intent = Some(Intent::CancelHold);
+                    next.hold_cancelled = true;
                 }
             }
         }
@@ -445,7 +498,13 @@ pub fn step(order: &FocusOrder, state: &NavState, key: NavKey) -> NavOutcome {
                 }
                 handled = true;
             }
-            _ => handled = false,
+            _ => {
+                if armed(state) {
+                    intent = Some(Intent::CancelHold);
+                    next.hold_cancelled = true;
+                }
+                handled = false;
+            }
         },
     }
     NavOutcome {

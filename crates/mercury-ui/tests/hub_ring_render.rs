@@ -244,38 +244,26 @@ fn a_segment_that_the_query_fades_is_the_18_percent_blend_over_the_popover() {
 }
 
 /// The accent shows in a thin column on the left edge of the search field while a query is typed
-/// (216 x 32 at (-108, -76) from the centre; at rest it is 200 x 30 at (-100, +46)): scanned, so a
-/// pixel of drift in the field's own layout does not matter.
-fn accent_on_field_edge(scene: &Scene, pixels: &Pixels, searching: bool) -> bool {
+/// (216 x 32 at (-108, -76) from the centre): scanned, so a pixel of drift in the field's own
+/// layout does not matter.
+fn accent_on_field_edge(scene: &Scene, pixels: &Pixels) -> bool {
     let accent = rgb(scene.window.global::<ChromePalette>().get_accent());
-    let (left, middle) = if searching {
-        (
-            scenes::RING_X + 258.0 - 108.0,
-            scenes::RING_Y + 258.0 - 76.0 + 16.0,
-        )
-    } else {
-        (
-            scenes::RING_X + 258.0 - 100.0,
-            scenes::RING_Y + 258.0 + 46.0 + 15.0,
-        )
-    };
+    let left = scenes::RING_X + 258.0 - 108.0;
+    let middle = scenes::RING_Y + 258.0 - 76.0 + 16.0;
     (-4..=4)
         .map(|step| left + step as f32 * 0.5)
         .any(|x| within(pixel(pixels, x, middle), accent, 8))
 }
 
+// The field has the keyboard focus from the start (an input method begins there), so the accent
+// border is not asserted absent at rest: only that it is drawn while a query is typed.
 #[test]
-fn the_search_field_border_is_the_accent_while_a_query_is_typed_and_not_at_rest() {
+fn the_search_field_border_is_the_accent_while_a_query_is_typed() {
     for dark in [false, true] {
         let (searching, pixels) = render("ring-search", dark);
         assert!(
-            accent_on_field_edge(&searching, &pixels, true),
+            accent_on_field_edge(&searching, &pixels),
             "dark={dark}: searching draws the accent border"
-        );
-        let (rest, pixels) = render("ring-open", dark);
-        assert!(
-            !accent_on_field_edge(&rest, &pixels, false),
-            "dark={dark}: at rest the border is not the accent"
         );
     }
 }

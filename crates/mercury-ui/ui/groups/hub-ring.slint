@@ -12,7 +12,7 @@
 
 import { ChromePalette } from "../theme/chrome-palette.slint";
 import { RingBands } from "ring-bands.slint";
-import { BeadRow, HubRingBridge } from "hub-ring-bridge.slint";
+import { BeadRow, CentreMode, HubRingBridge } from "hub-ring-bridge.slint";
 import { RingCentre } from "hub-ring-centre.slint";
 
 // The toolbar's hub button: 30 px, a donut of the group colours at rest, an accent fill while the
@@ -183,8 +183,8 @@ export component RingPopoverContent inherits Rectangle {
         ring.cancel-drag();
     }
 
-    // The first typed character puts the caret in the search field (its border turns accent); the
-    // keys still go to Rust first, the field gets the ones Rust leaves (paste and the like).
+    // A query starts (by the field or by Rust's fallback typing): the caret is in the field, its
+    // border turns accent.
     property <bool> searching: HubRingBridge.query-active;
     changed searching => {
         if root.searching {
@@ -192,9 +192,27 @@ export component RingPopoverContent inherits Rectangle {
         }
     }
 
-    // Gives the key handler the keyboard focus (a popup calls it when it opens).
+    // The search field is on screen (rest and searching). It is hidden in the audio and key-look
+    // states, and a hidden item cannot hold the keyboard focus: the key scope takes it back there
+    // so that the keys (and the ⌥ release) still arrive, and the field gets it again when it returns.
+    property <bool> field-shown: HubRingBridge.mode == CentreMode.rest || HubRingBridge.mode == CentreMode.searching;
+    changed field-shown => {
+        if root.field-shown {
+            centre.focus-field();
+        } else {
+            keys.focus();
+        }
+    }
+
+    // Gives the keyboard focus to the search field, so an input method can begin with the first key
+    // (to the key scope while the field is hidden). Rust still sees every key first and leaves the
+    // printable ones to the field. A popup calls it when it opens.
     public function focus-keys() {
-        keys.focus();
+        if root.field-shown {
+            centre.focus-field();
+        } else {
+            keys.focus();
+        }
     }
 
     // The round popover with its shadow (dy 12, blur 44).
@@ -212,9 +230,11 @@ export component RingPopoverContent inherits Rectangle {
         width: parent.width;
         height: parent.height;
         capture-key-pressed(event) => {
-            // Esc ends a drag in progress (the ring's own cancel); Rust still sees the key.
-            if event.text == Key.Escape {
+            // The first Esc only ends a drag in progress (the ring's own cancel); the query and the
+            // popover are left alone. The next Esc is Rust's (clear the query, then close).
+            if event.text == Key.Escape && ring.drag-source >= 0 {
                 ring.cancel-drag();
+                return accept;
             }
             if HubRingBridge.key-pressed(event.text, event.modifiers.alt, event.modifiers.control, event.modifiers.meta, event.modifiers.shift) {
                 return accept;
@@ -394,6 +414,10 @@ export component RingPopoverPreview inherits Window {
     in property <length> tail-x: 116px;
     // Clicks on the hub button (the examples and tests may count them).
     callback hub-clicked();
+    // What a popup does when it opens: the keyboard focus goes to the search field.
+    public function focus-keys() {
+        content.focus-keys();
+    }
     preferred-width: root.show-chrome ? 1000px : 516px;
     preferred-height: root.show-chrome ? 640px : 516px;
     background: root.show-chrome ? ChromePalette.content-background : ChromePalette.window-background;

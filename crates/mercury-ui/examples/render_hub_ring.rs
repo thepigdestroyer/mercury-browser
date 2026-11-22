@@ -163,8 +163,8 @@ pub mod scenes {
             }
             // ⌥ S: Lisbon trip, digits 1 to 4 on its tabs.
             "ring-keys" => {
-                scene.ring.set_held(true);
-                press(&scene, "s", true);
+                // The window-level hook calls this with the physical key.
+                scene.ring.option_key('S');
             }
             // The audio tab is hovered: Pause and Mute.
             "ring-status" => hover(&scene, 115),

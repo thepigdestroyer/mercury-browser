@@ -24,13 +24,14 @@ use std::collections::{HashMap, HashSet};
 use std::rc::Rc;
 use std::time::SystemTime;
 
+use mercury_appearance::Colour;
 use mercury_appearance::group_colour::{
     self, GroupColour as PaletteColour, MIN_TEXT_CONTRAST, Swatch, tab_shade,
 };
-use mercury_appearance::{Colour, Role, Scheme, default_palette};
 use mercury_settings::AppearanceSettings;
 use mercury_ui::hub_ring::{HubRing, HubRingHost, HubRingInput, LOOSE_GROUP_ID, TabMedia};
-use mercury_ui::{GroupRow, HubRingBridge, MainWindow, TabRow};
+use mercury_ui::ring_bands::RingColours;
+use mercury_ui::{ChromePalette, GroupRow, HubRingBridge, MainWindow, TabRow};
 use slint::{Color, ComponentHandle, Global, SharedString};
 use talaria_core::{
     BrowserCommand, BrowserController, CloseTabOutcome, GroupColour, GroupId, GroupKey,
@@ -88,16 +89,63 @@ impl RowSettings {
     }
 }
 
+/// The window's live colours, which the rows' swatches and the ring's label colours are computed
+/// from. Nothing here is designed against one palette: the surface, the ink and the accent are
+/// whatever the window's `ChromePalette` holds now, in the scheme it shows now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct RowStyle {
+    /// The scheme the window shows (`ChromePalette.dark`).
+    pub(crate) dark: bool,
+    /// `ChromePalette.popup-background`: what the ring is drawn on, the surface of the tints.
+    pub(crate) popup_background: Colour,
+    /// `ChromePalette.text`: the ink read on the tints.
+    pub(crate) text: Colour,
+    /// The ring's key and count colours (`RingColours::from_palette`); sent as
+    /// `HubRingInput.colours`.
+    pub(crate) ring: RingColours,
+}
+
+impl RowStyle {
+    /// Reads the window's live `ChromePalette`; build it again (cheap) whenever the theme, the
+    /// scheme or the palette may have changed, that is for every `rows` call.
+    pub(crate) fn from_window<C>(window: &C) -> Self
+    where
+        C: ComponentHandle,
+        for<'a> ChromePalette<'a>: Global<'a, C>,
+    {
+        let palette = window.global::<ChromePalette>();
+        Self {
+            dark: palette.get_dark(),
+            popup_background: appearance_colour(palette.get_popup_background()),
+            text: appearance_colour(palette.get_text()),
+            ring: RingColours::from_palette(&palette),
+        }
+    }
+}
+
+/// A window colour as the appearance crate's `Colour` (opaque: a group swatch is never drawn
+/// translucent).
+fn appearance_colour(colour: Color) -> Colour {
+    Colour::rgb(colour.red(), colour.green(), colour.blue())
+}
+
 // ---------------------------------------------------------------------------------------------
 // Rows
 // ---------------------------------------------------------------------------------------------
 
 /// The rows of the ring for the window's current groups and tabs: every tab (pinned too), the
-/// group rows (loose tabs get the pseudo group `LOOSE_GROUP_ID`), swatches for the `dark` scheme,
+/// group rows (loose tabs get the pseudo group `LOOSE_GROUP_ID`), swatches from the live `style`,
 /// flags from `TabStatus`, snapshots from `tab_snapshots::image_for`. `now` makes "2 min ago".
 /// Settings are the defaults: see [`rows_with`].
-pub(crate) fn rows(controller: &BrowserController, dark: bool, now: SystemTime) -> HubRingInput {
-    rows_with(controller, dark, now, &RowSettings::default())
+///
+/// layout-switch: this is `rows(controller, now)` plus one argument, the [`RowStyle`] of the
+/// window (`RowStyle::from_window(&window)`), so that no colour here is a palette's own.
+pub(crate) fn rows(
+    controller: &BrowserController,
+    now: SystemTime,
+    style: &RowStyle,
+) -> HubRingInput {
+    rows_with(controller, now, style, &RowSettings::default())
 }
 
 /// [`rows`] with the settings of the ring.
@@ -108,10 +156,11 @@ pub(crate) fn rows(controller: &BrowserController, dark: bool, now: SystemTime) 
 /// load starts (every `sync_ui` does) for the estimate to start with the load.
 pub(crate) fn rows_with(
     controller: &BrowserController,
-    dark: bool,
     now: SystemTime,
+    style: &RowStyle,
     settings: &RowSettings,
 ) -> HubRingInput {
+    let dark = style.dark;
     let active_tab = controller.active_tab_id();
     let mut groups = Vec::new();
     let mut bases: HashMap<i32, PaletteColour> = HashMap::new();
@@ -126,7 +175,7 @@ pub(crate) fn rows_with(
             continue;
         }
         let base = palette_colour(group.colour);
-        let swatch = swatch_for(base, dark);
+        let swatch = swatch_for(base, style);
         let summary = controller.group_summary(group.id).unwrap_or_default();
         groups.push(GroupRow {
             id,
@@ -156,7 +205,7 @@ pub(crate) fn rows_with(
     let loose = controller.loose_tabs();
     if !loose.is_empty() {
         let base = slate();
-        let swatch = swatch_for(base, dark);
+        let swatch = swatch_for(base, style);
         let summary =
             GroupSummary::from_statuses(loose.iter().filter_map(|tab| controller.tab_status(*tab)));
         groups.push(GroupRow {
@@ -177,12 +226,14 @@ pub(crate) fn rows_with(
         bases.insert(LOOSE_GROUP_ID, base);
     }
 
+    // The mark of a pinned tab's bead: the slate swatch's `deep`, as the appearance crate makes it
+    // (white reads on it at 4.5:1 in every scheme), not the lightened `deep` of the group rows.
+    let pinned_mark = slint_colour(mark_for(slate(), style));
     let open: HashSet<TabId> = controller.tabs().map(Tab::id).collect();
     let mut tabs = Vec::new();
     let mut media = Vec::new();
     let mut previews = Vec::new();
     let mut per_group: HashMap<i32, i32> = HashMap::new();
-    let mut pinned_seen = 0_usize;
 
     LOAD_CLOCK.with_borrow_mut(|clock| {
         clock.forget_closed(&open);
@@ -194,14 +245,14 @@ pub(crate) fn rows_with(
             let status = controller.tab_status(tab.id()).unwrap_or_default();
             let group = ring_group_of(controller, tab);
             let base = bases.get(&group).copied().unwrap_or_else(slate);
-            let (index_in_group, shade_index) = if tab.is_pinned() {
-                pinned_seen += 1;
-                (0, pinned_seen - 1)
+            let (index_in_group, shade) = if tab.is_pinned() {
+                (0, pinned_mark)
             } else {
                 let next = per_group.entry(group).or_insert(0);
                 let index = *next;
                 *next += 1;
-                (index, usize::try_from(index).unwrap_or(0))
+                let shade_index = usize::try_from(index).unwrap_or(0);
+                (index, slint_colour(tab_shade(base.base(), shade_index)))
             };
             let host = host_of(state.url());
             let title = crate::pdf::tab_title(tab.id(), state.page_title());
@@ -211,7 +262,7 @@ pub(crate) fn rows_with(
                 index_in_group,
                 title: display_title(&title, &host).into(),
                 host: host.into(),
-                shade: slint_colour(tab_shade(base.base(), shade_index)),
+                shade,
                 favicon: state
                     .page_icon()
                     .map(slint_image_from_page_icon)
@@ -227,8 +278,10 @@ pub(crate) fn rows_with(
                 capture: !status.capture.is_empty(),
                 matches_query: true,
             });
-            if status.audible || status.muted {
-                let session = state.media();
+            // Every tab with a media session stays controllable: a paused tab keeps its Play
+            // button, a muted one its Unmute.
+            let session = state.media();
+            if status.audible || status.muted || session.playback() != MediaPlaybackState::None {
                 media.push(media_for(
                     id,
                     session.playback(),
@@ -251,6 +304,7 @@ pub(crate) fn rows_with(
         previews,
         last_active,
         dark,
+        colours: Some(style.ring),
         orbit_available: settings.orbit_available,
         reduce_motion: settings.reduce_motion,
         hold_ms: settings.hold_ms,
@@ -305,27 +359,34 @@ fn slate() -> PaletteColour {
     )
 }
 
-/// The swatch of a group colour for the ring: it sits on the popover (`popup-background`) and is
-/// read with the chrome's text colour, in the Mercury B2 palette's table of the scheme.
+/// The swatch of a group colour for the ring's group rows: it sits on the popover, so the surface
+/// is the live `popup-background` and the ink the live `text` of the style.
 ///
 /// `tint` is the appearance crate's. Its `deep` is "the colour darkened until white reads on it":
 /// it has no dark half, and the ring draws the group's name in it on the popover (ring-bands D4),
 /// where in the dark scheme a dark colour would not be read. So for the dark scheme `deep` is the
-/// colour lightened until it reads on the popover at 4.5:1 (the colour itself when it already
-/// does), as the mockup's dark group names are.
-fn swatch_for(colour: PaletteColour, dark: bool) -> Swatch {
-    let scheme = if dark { Scheme::Dark } else { Scheme::Light };
-    let palette = default_palette();
-    let surface = palette.colour(scheme, Role::PopupBackground);
-    let swatch = colour.swatch(surface, palette.colour(scheme, Role::Text));
-    if !dark {
+/// colour lightened until it reads on the live surface at 4.5:1 (the colour itself when it
+/// already does). A name is not a bead mark: see [`mark_for`] for what white is drawn on.
+fn swatch_for(colour: PaletteColour, style: &RowStyle) -> Swatch {
+    let surface = style.popup_background;
+    let swatch = colour.swatch(surface, style.text);
+    if !style.dark {
         return swatch;
     }
+    // themes lane: move into mercury-appearance (Swatch::for_scheme(surface, ink, dark)); this loop
+    // is the stop-gap.
     let deep = (0..=255_u32)
         .map(|step| swatch.colour.lighter(f64::from(step) / 255.0))
         .find(|candidate| candidate.contrast_ratio(surface) >= MIN_TEXT_CONTRAST)
         .unwrap_or(Colour::WHITE);
     Swatch { deep, ..swatch }
+}
+
+/// A fill that white text reads on at 4.5:1 in either scheme: the appearance crate's own `deep`
+/// of the colour (never the lightened one of [`swatch_for`]). The bead of a pinned tab is drawn
+/// with it, with a white initial.
+fn mark_for(colour: PaletteColour, style: &RowStyle) -> Colour {
+    colour.swatch(style.popup_background, style.text).deep
 }
 
 fn slint_colour(colour: Colour) -> Color {
@@ -811,7 +872,7 @@ impl HubRingHost for DesktopHost {
 
 /// Installs the controller on a window that has the `HubRingBridge` global and returns it (keep it
 /// alive as long as the window). `actions` shows the changes in the window: for the main window,
-/// [`main_window_actions`].
+/// [`main_window_actions`]. The ring reads the window's live `ChromePalette`.
 pub(crate) fn install<C>(
     window: &C,
     controller: Rc<RefCell<BrowserController>>,
@@ -820,6 +881,7 @@ pub(crate) fn install<C>(
 where
     C: ComponentHandle + 'static,
     for<'a> HubRingBridge<'a>: Global<'a, C>,
+    for<'a> ChromePalette<'a>: Global<'a, C>,
 {
     HubRing::install(
         window,
@@ -840,6 +902,28 @@ mod tests {
 
     fn at(seconds: u64) -> SystemTime {
         UNIX_EPOCH + Duration::from_secs(seconds)
+    }
+
+    impl RowStyle {
+        /// Fixed colours of an ordinary light and dark chrome, for tests only: no window, and
+        /// nothing in the adapter depends on them.
+        fn for_tests(dark: bool) -> Self {
+            let (popup_background, text) = if dark {
+                (Colour::hex(0x0016_1e28), Colour::hex(0x00ed_f4fa))
+            } else {
+                (Colour::hex(0x00ff_ffff), Colour::hex(0x0014_1a21))
+            };
+            Self {
+                dark,
+                popup_background,
+                text,
+                ring: RingColours {
+                    key: Color::from_rgb_u8(0xaf, 0x00, 0x62),
+                    count: Color::from_rgb_u8(0x66, 0x66, 0x66),
+                    ..RingColours::default()
+                },
+            }
+        }
     }
 
     fn ring(tab: TabId) -> i32 {
@@ -990,7 +1074,8 @@ mod tests {
     #[test]
     fn the_swatch_depends_on_the_scheme_and_the_colour_does_not() {
         let base = palette_colour(GroupColour::Preset(talaria_core::GroupPreset::Blue));
-        let (light, dark) = (swatch_for(base, false), swatch_for(base, true));
+        let light = swatch_for(base, &RowStyle::for_tests(false));
+        let dark = swatch_for(base, &RowStyle::for_tests(true));
         assert_eq!(light.colour, dark.colour);
         assert_eq!(light.colour, Colour::hex(0x002f_6fd6));
         assert_ne!(light.tint, dark.tint);
@@ -1004,19 +1089,58 @@ mod tests {
     }
 
     #[test]
-    fn a_group_name_reads_on_the_popover_in_both_schemes() {
-        let palette = default_palette();
-        for dark in [false, true] {
-            let scheme = if dark { Scheme::Dark } else { Scheme::Light };
-            let surface = palette.colour(scheme, Role::PopupBackground);
+    fn a_group_name_reads_on_whatever_popover_the_window_has() {
+        let purple = RowStyle {
+            dark: true,
+            popup_background: Colour::hex(0x0024_1d42),
+            text: Colour::hex(0x00f3_eef8),
+            ..RowStyle::for_tests(true)
+        };
+        let cream = RowStyle {
+            popup_background: Colour::hex(0x00fc_faf6),
+            ..RowStyle::for_tests(false)
+        };
+        for style in [
+            RowStyle::for_tests(false),
+            RowStyle::for_tests(true),
+            purple,
+            cream,
+        ] {
             for preset in &group_colour::PRESETS {
-                let swatch = swatch_for(PaletteColour::Preset(preset), dark);
-                let ratio = swatch.deep.contrast_ratio(surface);
+                let swatch = swatch_for(PaletteColour::Preset(preset), &style);
+                let ratio = swatch.deep.contrast_ratio(style.popup_background);
                 // The light `deep` is the appearance crate's (white reads on it at 4.5:1, so it
-                // reads on the near-white popover at about that, a little less); the dark one is
-                // searched.
-                let least = if dark { MIN_TEXT_CONTRAST } else { 4.0 };
-                assert!(ratio >= least, "{} {scheme:?}: {ratio:.2}", preset.id);
+                // reads on a near-white popover at about that, a little less); the dark one is
+                // searched against the live surface.
+                let least = if style.dark { MIN_TEXT_CONTRAST } else { 4.0 };
+                assert!(
+                    ratio >= least,
+                    "{} on {:?}: {ratio:.2}",
+                    preset.id,
+                    style.popup_background
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_pinned_beads_white_initial_reads_on_its_mark_for_every_preset_and_scheme() {
+        let white = Colour::WHITE;
+        for dark in [false, true] {
+            let style = RowStyle::for_tests(dark);
+            let slate = mark_for(slate(), &style);
+            assert!(
+                white.contrast_ratio(slate) >= MIN_TEXT_CONTRAST,
+                "slate, dark: {dark}"
+            );
+            for preset in &group_colour::PRESETS {
+                let mark = mark_for(PaletteColour::Preset(preset), &style);
+                let ratio = white.contrast_ratio(mark);
+                assert!(
+                    ratio >= MIN_TEXT_CONTRAST,
+                    "{} dark: {dark}: {ratio:.2}",
+                    preset.id
+                );
             }
         }
     }
@@ -1279,7 +1403,7 @@ mod tests {
         controller.stamp_group_activity(at(10_300));
         assert!(controller.select_tab(ids[0]));
 
-        let input = rows(&controller, false, at(10_420));
+        let input = rows(&controller, at(10_420), &RowStyle::for_tests(false));
 
         let summary = input
             .groups
@@ -1345,7 +1469,7 @@ mod tests {
             reading,
             ..
         } = fixture();
-        let input = rows(&controller, false, at(2_000));
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
         let flags = |group: GroupId| {
             let row = group_row(&input, i32::try_from(group.value()).expect("a small id"));
             (row.any_loading, row.any_audible, row.any_unread)
@@ -1361,8 +1485,8 @@ mod tests {
     #[test]
     fn the_colours_are_the_groups_and_the_scheme_changes_tint_and_deep() {
         let controller = fixture().controller;
-        let light = rows(&controller, false, at(2_000));
-        let dark = rows(&controller, true, at(2_000));
+        let light = rows(&controller, at(2_000), &RowStyle::for_tests(false));
+        let dark = rows(&controller, at(2_000), &RowStyle::for_tests(true));
         assert!(!light.dark && dark.dark);
         for (one, other) in light.groups.iter().zip(&dark.groups) {
             assert_eq!(one.id, other.id);
@@ -1381,7 +1505,7 @@ mod tests {
         let Fixture {
             controller, ids, ..
         } = fixture();
-        let input = rows(&controller, false, at(2_000));
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
 
         assert_eq!(input.tabs.len(), 8);
         let place = |tab: TabId| {
@@ -1423,7 +1547,7 @@ mod tests {
         let Fixture {
             controller, ids, ..
         } = fixture();
-        let input = rows(&controller, false, at(2_000));
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
 
         let first = tab_row(&input, ids[0]);
         assert_eq!(first.title, "Page alpha");
@@ -1459,6 +1583,9 @@ mod tests {
         assert!(unread.unread);
         let pinned = tab_row(&input, ids[7]);
         assert!(pinned.pinned && !pinned.loading && !pinned.crashed && !pinned.capture);
+        // The bead's mark is the slate swatch's `deep`: white reads on it.
+        let mark = mark_for(slate(), &RowStyle::for_tests(false));
+        assert_eq!(pinned.shade, Color::from_rgb_u8(mark.r, mark.g, mark.b));
         assert!(input.tabs.iter().all(|row| row.matches_query));
         // Blank favicons: no tab has an icon.
         assert!(input.tabs.iter().all(|row| row.favicon.size().width == 0));
@@ -1472,7 +1599,7 @@ mod tests {
             ..
         } = fixture();
         let progress = |controller: &BrowserController, seconds: u64| {
-            let input = rows(controller, false, at(seconds));
+            let input = rows(controller, at(seconds), &RowStyle::for_tests(false));
             tab_row(&input, ids[1]).progress
         };
         assert_eq!(progress(&controller, 100), UNKNOWN_PROGRESS);
@@ -1494,7 +1621,7 @@ mod tests {
         let Fixture {
             controller, ids, ..
         } = fixture();
-        let input = rows(&controller, false, at(2_000));
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
 
         assert_eq!(input.media.len(), 2);
         let media = |tab: TabId| {
@@ -1521,6 +1648,41 @@ mod tests {
     }
 
     #[test]
+    fn a_paused_tab_keeps_its_media_entry_so_it_can_be_played_again() {
+        let Fixture {
+            mut controller,
+            ids,
+            ..
+        } = fixture();
+        // Tab 6 (loose, not muted) plays and is then paused by the user: it is no longer audible.
+        for state in [MediaPlaybackState::Playing, MediaPlaybackState::Paused] {
+            controller.handle_event(ids[6], BrowserEvent::MediaPlaybackChanged { state });
+        }
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
+
+        let paused = input
+            .media
+            .iter()
+            .find(|entry| entry.tab == ring(ids[6]))
+            .copied()
+            .expect("a paused tab has an entry");
+        assert_eq!(
+            paused,
+            TabMedia {
+                tab: ring(ids[6]),
+                playing: false,
+                paused: true,
+                can_pause: true,
+                muted: false,
+                position: None,
+            }
+        );
+        assert!(!tab_row(&input, ids[6]).audible);
+        // The playing tab and the muted one are still there.
+        assert_eq!(input.media.len(), 3);
+    }
+
+    #[test]
     fn a_group_key_goes_to_the_tab_shown_last_in_its_group() {
         let Fixture {
             mut controller,
@@ -1532,7 +1694,7 @@ mod tests {
         } = fixture();
         assert!(controller.select_tab(ids[4]));
         assert!(controller.select_tab(ids[0]));
-        let input = rows(&controller, false, at(2_000));
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
 
         let id = |group: GroupId| i32::try_from(group.value()).expect("a small id");
         // Tab 0 was shown last of Research; tab 4 after tab 3 in Lisbon trip; Reading has one.
@@ -1549,7 +1711,13 @@ mod tests {
     #[test]
     fn the_settings_and_the_missing_snapshots_are_in_the_input() {
         let controller = fixture().controller;
-        let input = rows(&controller, true, at(2_000));
+        let style = RowStyle::for_tests(true);
+        let input = rows(&controller, at(2_000), &style);
+        assert_eq!(
+            input.colours,
+            Some(style.ring),
+            "the ring's colours are the live ones"
+        );
         assert_eq!(input.hold_ms, 400);
         assert!(!input.orbit_available && !input.reduce_motion);
         assert!(input.previews.is_empty(), "no snapshots in a test");
@@ -1560,7 +1728,12 @@ mod tests {
             reduce_motion: true,
             previews: false,
         };
-        let input = rows_with(&controller, false, at(2_000), &settings);
+        let input = rows_with(
+            &controller,
+            at(2_000),
+            &RowStyle::for_tests(false),
+            &settings,
+        );
         assert_eq!(input.hold_ms, 650);
         assert!(input.orbit_available && input.reduce_motion);
     }
@@ -1579,7 +1752,7 @@ mod tests {
             .expect("a tab out of its group");
         assert!(controller.group(reading).is_none());
 
-        let input = rows(&controller, false, at(2_000));
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
 
         assert_eq!(input.groups.len(), 3, "Research, Lisbon trip and Loose");
         assert_eq!(input.groups.last().map(|row| row.id), Some(LOOSE_GROUP_ID));
@@ -1610,7 +1783,7 @@ mod tests {
         controller
             .move_tab_to_group(ids[6], Some(research), 3)
             .expect("the loose tab joins Research");
-        let input = rows(&controller, false, at(2_000));
+        let input = rows(&controller, at(2_000), &RowStyle::for_tests(false));
         assert!(input.groups.iter().all(|row| row.id != LOOSE_GROUP_ID));
         // The pinned tab keeps its row, in the loose id, and the ring draws it as a bead.
         let pinned = tab_row(&input, ids[7]);
@@ -1960,7 +2133,8 @@ mod tests {
             Rc::clone(&controller),
             DesktopActions::new(move |change| recorded.borrow_mut().push(change)),
         );
-        ring_controller.set_input(rows(&controller.borrow(), false, at(2_000)));
+        let style = RowStyle::from_window(&window);
+        ring_controller.set_input(rows(&controller.borrow(), at(2_000), &style));
         ring_controller.opened();
         let bridge = window.global::<HubRingBridge>();
 

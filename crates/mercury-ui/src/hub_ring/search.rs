@@ -7,6 +7,24 @@
 //! query is inactive. Rank: all terms at the start of a title word, then a title substring, then
 //! the host, then the group name; ties keep ring order. The centre lists the top two results and a
 //! "Search the web for ..." row.
+//!
+//! # What [`fold`] folds
+//!
+//! Text is lower-cased, then (a hand-written table, no dependency):
+//!
+//! - **Latin**: Latin-1 and Latin Extended-A letters (`é` to `e`, `ł` to `l`, `ø` to `o`), the
+//!   Latin Extended-B letters of Romanian and pinyin (`ș ț ǎ ǐ ǒ ǔ ǖ ǘ ǚ ǜ ǹ`) and of Vietnamese
+//!   (`ơ ư`), and all of Latin Extended Additional U+1E00 to U+1EFF (Vietnamese `ệ ạ ố`, `ḥ ṣ`).
+//!   `æ œ þ ĳ` fold to two letters (`ae oe th ij`) and `ß`/`ẞ` to `ss`, in the query and in the
+//!   haystack alike, so `strasse` and `straße` find each other.
+//! - **Greek**: the tonos and dialytika vowels (`ά έ ή ί ό ύ ώ ΐ ΰ ϊ ϋ`) fold to the plain vowel and the
+//!   final sigma `ς` to `σ`, so `ΟΔΟΣ`, `οδος` and `οδοσ` are one word.
+//! - **Combining marks** U+0300 to U+036F are dropped, so a decomposed `é` folds like `é`
+//!   (and Turkish `İ`, which lower-cases to `i` plus U+0307, becomes `i`).
+//!
+//! **Not folded**: every other script matches exactly (Cyrillic `й` is not `и`; no
+//! transliteration), polytonic Greek (U+1F00 to U+1FFF) is only lower-cased, and CJK is exact
+//! (a decomposed dakuten U+3099 or U+309A is not composed, `ガ` is not `カ`).
 
 use std::collections::HashSet;
 
@@ -211,11 +229,12 @@ pub fn web_row_text(query: &str) -> String {
     format!("Search the web for “{}”", query.trim())
 }
 
-/// Lower-cases and folds the Latin-1 and Latin-Extended-A letters to their base letters (`é` to `e`,
-/// `ß` is kept); other scripts are only lower-cased.
+/// Lower-cases and folds accented Latin and Greek letters to their base letters (`é` to `e`, `ß` to
+/// `ss`, `ά` to `α`, `ς` to `σ`; the module doc lists the coverage); other scripts are only
+/// lower-cased. Folding twice gives the same text as folding once.
 ///
 /// Combining marks (U+0300 to U+036F) are dropped, so a decomposed `é` folds like the composed one.
-/// A few letters fold to two (`æ` to `ae`, `œ` to `oe`, `þ` to `th`, `ĳ` to `ij`).
+/// A few letters fold to two (`æ` to `ae`, `œ` to `oe`, `þ` to `th`, `ĳ` to `ij`, `ß` to `ss`).
 pub fn fold(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     for c in text.chars().flat_map(char::to_lowercase) {
@@ -251,6 +270,54 @@ fn fold_char(c: char, out: &mut String) {
         'ŵ' => "w",
         'ý' | 'ÿ' | 'ŷ' => "y",
         'ź' | 'ż' | 'ž' => "z",
+        'ß' => "ss",
+        // Latin Extended-B: pinyin, Romanian, Vietnamese horn letters. Uppercase forms are
+        // lower-cased before they get here, so only the lowercase letters are listed.
+        'ǎ' => "a",
+        'ǐ' => "i",
+        'ǒ' | 'ơ' => "o",
+        '\u{1d3}'..='\u{1dc}' | 'ư' => "u", // ǔ ǖ ǘ ǚ ǜ (ǔ is U+01D4)
+        'ǹ' => "n",
+        'ș' => "s",
+        'ț' => "t",
+        // Latin Extended Additional. Every uppercase letter in the block has a lowercase partner,
+        // so each range stands for the lowercase letters in it.
+        '\u{1e00}'..='\u{1e01}' | '\u{1e9a}' | '\u{1ea0}'..='\u{1eb7}' => "a",
+        '\u{1e02}'..='\u{1e07}' => "b",
+        '\u{1e08}'..='\u{1e09}' => "c",
+        '\u{1e0a}'..='\u{1e13}' => "d",
+        '\u{1e14}'..='\u{1e1d}' | '\u{1eb8}'..='\u{1ec7}' => "e",
+        '\u{1e1e}'..='\u{1e1f}' => "f",
+        '\u{1e20}'..='\u{1e21}' => "g",
+        '\u{1e22}'..='\u{1e2b}' | '\u{1e96}' => "h",
+        '\u{1e2c}'..='\u{1e2f}' | '\u{1ec8}'..='\u{1ecb}' => "i",
+        '\u{1e30}'..='\u{1e35}' => "k",
+        '\u{1e36}'..='\u{1e3d}' | '\u{1efa}'..='\u{1efb}' => "l",
+        '\u{1e3e}'..='\u{1e43}' => "m",
+        '\u{1e44}'..='\u{1e4b}' => "n",
+        '\u{1e4c}'..='\u{1e53}' | '\u{1ecc}'..='\u{1ee3}' => "o",
+        '\u{1e54}'..='\u{1e57}' => "p",
+        '\u{1e58}'..='\u{1e5f}' => "r",
+        '\u{1e60}'..='\u{1e69}' | '\u{1e9b}'..='\u{1e9d}' => "s",
+        '\u{1e6a}'..='\u{1e71}' | '\u{1e97}' => "t",
+        '\u{1e72}'..='\u{1e7b}' | '\u{1ee4}'..='\u{1ef1}' => "u",
+        '\u{1e7c}'..='\u{1e7f}' | '\u{1efc}'..='\u{1efd}' => "v",
+        '\u{1e80}'..='\u{1e89}' | '\u{1e98}' => "w",
+        '\u{1e8a}'..='\u{1e8d}' => "x",
+        '\u{1e8e}'..='\u{1e8f}'
+        | '\u{1e99}'
+        | '\u{1ef2}'..='\u{1ef9}'
+        | '\u{1efe}'..='\u{1eff}' => "y",
+        '\u{1e90}'..='\u{1e95}' => "z",
+        // Greek: tonos and dialytika vowels to the plain vowel, final sigma to sigma.
+        'ά' => "α",
+        'έ' => "ε",
+        'ή' => "η",
+        'ί' | 'ΐ' | 'ϊ' => "ι",
+        'ό' => "ο",
+        'ύ' | 'ΰ' | 'ϋ' => "υ",
+        'ώ' => "ω",
+        'ς' => "σ",
         other => {
             out.push(other);
             return;
@@ -278,12 +345,12 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_latin_1_letter_folds_to_ascii_except_sharp_s() {
+    fn every_latin_1_letter_folds_to_ascii() {
         for code in 0xC0..=0xFF_u32 {
             let Some(c) = char::from_u32(code) else {
                 continue;
             };
-            if c == '×' || c == '÷' || c == 'ß' {
+            if c == '×' || c == '÷' {
                 continue;
             }
             let folded = fold(&c.to_string());
@@ -292,8 +359,73 @@ mod tests {
                 "{c} U+{code:04X} folded to {folded:?}"
             );
         }
-        assert_eq!(fold("ß"), "ß");
+        assert_eq!(fold("ß"), "ss");
+        assert_eq!(fold("ẞ"), "ss");
         assert_eq!(fold("×÷"), "×÷");
+    }
+
+    #[test]
+    fn every_latin_extended_additional_letter_folds_to_ascii() {
+        // U+1E9F (Greek delta with a stroke) is the one non-Latin letter of the block.
+        for code in (0x1E00..=0x1EFF_u32).filter(|&code| code != 0x1E9F) {
+            let Some(c) = char::from_u32(code) else {
+                continue;
+            };
+            let folded = fold(&c.to_string());
+            assert!(
+                !folded.is_empty() && folded.is_ascii(),
+                "{c} U+{code:04X} folded to {folded:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_extended_b_letters_of_romanian_pinyin_and_vietnamese_fold_to_ascii() {
+        for (text, base) in [
+            ("ș Ș", "s s"),
+            ("ț Ț", "t t"),
+            ("ǎ Ǎ", "a a"),
+            ("ǐ Ǐ", "i i"),
+            ("ǒ Ǒ", "o o"),
+            ("ǔ Ǔ ǖ Ǖ ǘ Ǘ ǚ Ǚ ǜ Ǜ", "u u u u u u u u u u"),
+            ("ǹ Ǹ", "n n"),
+            ("ơ Ơ", "o o"),
+            ("ư Ư", "u u"),
+            ("đ Đ ø Ø ł Ł", "d d o o l l"),
+        ] {
+            assert_eq!(fold(text), base, "{text}");
+        }
+    }
+
+    #[test]
+    fn every_greek_letter_folds_to_a_plain_lowercase_letter() {
+        for code in 0x386..=0x3CE_u32 {
+            let Some(c) = char::from_u32(code) else {
+                continue;
+            };
+            if !c.is_alphabetic() {
+                continue;
+            }
+            let folded: Vec<char> = fold(&c.to_string()).chars().collect();
+            assert!(
+                matches!(folded.as_slice(), [b] if ('α'..='ω').contains(b) && *b != 'ς'),
+                "{c} U+{code:04X} folded to {folded:?}"
+            );
+        }
+        assert_eq!(fold("ΟΔΟΣ"), "οδοσ");
+        assert_eq!(fold("οδος"), "οδοσ");
+        assert_eq!(fold("ΆΈΉΊΌΎΏ ΐΰ"), "αεηιουω ιυ");
+    }
+
+    #[test]
+    fn folding_every_char_of_the_tables_is_idempotent() {
+        for code in 0..=0x2000_u32 {
+            let Some(c) = char::from_u32(code) else {
+                continue;
+            };
+            let once = fold(&c.to_string());
+            assert_eq!(fold(&once), once, "{c} U+{code:04X}");
+        }
     }
 
     #[test]
@@ -315,7 +447,7 @@ mod tests {
         for text in [
             "Ünïcödé Straße Łódź İstanbul",
             "plain ascii 28",
-            "日本語 Αθήνα",
+            "日本語 Αθήνα ΟΔΟΣ Việt Nam Nǐ hǎo România ẞ",
         ] {
             assert_eq!(fold(&fold(text)), fold(text), "{text}");
         }

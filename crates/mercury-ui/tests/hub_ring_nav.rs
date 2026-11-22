@@ -610,6 +610,7 @@ fn a_letter_picks_another_group_when_pressed_again() {
 fn a_letter_without_a_group_is_handled_and_changes_nothing() {
     let mut run = Run::mockup(Cursor::Tab(101));
     run.key(NavKey::OptionDown);
+    run.key(NavKey::HoldElapsed);
     let before = run.state;
     let outcome = run.key(NavKey::Letter('z'));
     assert!(outcome.handled);
@@ -634,6 +635,7 @@ fn a_group_without_a_key_cannot_be_chosen_by_letter() {
     );
     let mut run = Run::new(order, Cursor::Tab(1));
     run.key(NavKey::OptionDown);
+    run.key(NavKey::HoldElapsed);
     let before = run.state;
     assert!(run.key(NavKey::Letter('l')).handled);
     assert_eq!(run.state, before);
@@ -771,14 +773,207 @@ fn plain_keys_are_not_handled_while_option_is_down() {
         NavKey::Mute,
         NavKey::Type('x'),
     ] {
+        // Once the key look is on, a plain key passes through and changes nothing.
         let mut run = Run::mockup(Cursor::Tab(103));
         run.key(NavKey::OptionDown);
+        run.key(NavKey::HoldElapsed);
         let before = run.state;
         let outcome = run.key(key);
         assert!(!outcome.handled, "{key:?}");
         assert_eq!(outcome.intent, None, "{key:?}");
         assert_eq!(run.state, before, "{key:?}");
     }
+}
+
+// ---- the hold is cancelled by other keys and never starts in the field (SPEC §5.1) ----------
+
+#[test]
+fn hold_does_not_start_while_searching() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.state.query_active = true;
+    let down = run.key(NavKey::OptionDown);
+    assert_eq!(down.intent, None, "no timer while the field has text");
+    assert!(down.handled);
+    assert!(run.state.option_down);
+
+    let elapsed = run.key(NavKey::HoldElapsed);
+    assert_eq!(elapsed.intent, None);
+    assert!(!run.state.held, "the look must not replace the results");
+
+    let up = run.key(NavKey::OptionUp);
+    assert_eq!(up.intent, None, "nothing was started, nothing to cancel");
+    assert!(up.handled);
+    assert!(!run.state.option_down);
+    assert!(!run.state.hold_cancelled);
+    assert!(run.state.query_active, "the query is untouched");
+}
+
+#[test]
+fn a_key_before_the_hold_time_cancels_it() {
+    for key in [
+        NavKey::Left,
+        NavKey::Right,
+        NavKey::Up,
+        NavKey::Down,
+        NavKey::Enter,
+        NavKey::CloseTab,
+        NavKey::Mute,
+        NavKey::Type('å'),
+        NavKey::Digit(3),
+        NavKey::Letter('z'),
+        NavKey::MoveLeft,
+        NavKey::MoveToNextGroup,
+    ] {
+        let mut run = Run::mockup(Cursor::Tab(101));
+        assert_eq!(run.key(NavKey::OptionDown).intent, Some(Intent::BeginHold));
+        let outcome = run.key(key);
+        assert_eq!(
+            outcome
+                .intent
+                .as_ref()
+                .filter(|i| **i == Intent::CancelHold),
+            // A ⌥ move keeps its own intent when it has one; everything else cancels.
+            match key {
+                NavKey::MoveToNextGroup => None,
+                _ => Some(&Intent::CancelHold),
+            },
+            "{key:?}"
+        );
+        assert!(run.state.hold_cancelled, "{key:?}");
+        assert!(run.state.option_down, "{key:?}: ⌥ is still down");
+        assert!(!run.state.held, "{key:?}");
+
+        let late = run.key(NavKey::HoldElapsed);
+        assert_eq!(late.intent, None, "{key:?}");
+        assert!(
+            !run.state.held,
+            "{key:?}: the timer is ignored after a cancel"
+        );
+    }
+}
+
+#[test]
+fn only_the_first_key_cancels_the_hold() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.key(NavKey::OptionDown);
+    assert_eq!(run.key(NavKey::Right).intent, Some(Intent::CancelHold));
+    assert_eq!(run.key(NavKey::Right).intent, None);
+    assert_eq!(run.key(NavKey::Type('x')).intent, None);
+}
+
+#[test]
+fn a_key_once_the_look_is_on_does_not_cancel_it() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.key(NavKey::OptionDown);
+    run.key(NavKey::HoldElapsed);
+    assert_eq!(run.key(NavKey::Right).intent, None);
+    assert!(run.state.held);
+    assert!(!run.state.hold_cancelled);
+}
+
+#[test]
+fn a_move_with_nothing_to_move_still_cancels_the_hold() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.key(NavKey::OptionDown);
+    let outcome = run.key(NavKey::MoveLeft);
+    assert_eq!(
+        outcome.intent,
+        Some(Intent::CancelHold),
+        "first place of the group"
+    );
+    assert!(run.state.hold_cancelled);
+}
+
+#[test]
+fn option_up_after_a_cancelled_hold_is_clean() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.key(NavKey::OptionDown);
+    run.key(NavKey::Right);
+    let cursor = run.cursor();
+    let up = run.key(NavKey::OptionUp);
+    assert_eq!(
+        up.intent, None,
+        "the timer was already stopped by the cancel"
+    );
+    assert!(up.handled);
+    assert_eq!(
+        run.state,
+        NavState {
+            cursor,
+            ..NavState::default()
+        },
+        "everything about ⌥ is reset"
+    );
+    // The next press starts a fresh hold.
+    assert_eq!(run.key(NavKey::OptionDown).intent, Some(Intent::BeginHold));
+    assert!(!run.state.hold_cancelled);
+}
+
+#[test]
+fn a_letter_after_a_cancelled_hold_is_not_taken() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.key(NavKey::OptionDown);
+    run.key(NavKey::Right);
+    let outcome = run.key(NavKey::Letter('s'));
+    assert!(!outcome.handled, "pass-through until ⌥ is released");
+    assert_eq!(outcome.intent, None);
+    assert_eq!(run.state.held_group, None);
+}
+
+// ---- `HubRing::option_key`: ⌥ is sent first, then the letter or digit ----------------------
+
+#[test]
+fn option_down_then_a_letter_in_one_run_selects_the_group() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    assert!(!run.state.option_down);
+    run.key(NavKey::OptionDown);
+    let outcome = run.key(NavKey::Letter('s'));
+    assert!(outcome.handled);
+    assert!(run.state.option_down);
+    assert!(run.state.held, "a letter turns the key look on at once");
+    assert_eq!(run.state.held_group, Some(2));
+    let digit = run.key(NavKey::Digit(2));
+    assert_eq!(digit.intent, Some(Intent::ActivateDigit { group: 2, n: 2 }));
+    assert_eq!(
+        run.key(NavKey::OptionUp).intent,
+        Some(Intent::CommitGroup(2))
+    );
+}
+
+#[test]
+fn a_letter_while_searching_is_left_to_the_field() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.key(NavKey::Type('t'));
+    assert!(run.state.query_active);
+    run.key(NavKey::OptionDown);
+    let before = run.state;
+    let outcome = run.key(NavKey::Letter('s'));
+    assert!(!outcome.handled, "⌥S in the field types a character");
+    assert_eq!(outcome.intent, None);
+    assert_eq!(run.state, before);
+    assert_eq!(run.state.held_group, None);
+}
+
+#[test]
+fn a_letter_while_searching_cancels_a_hold_that_was_already_running() {
+    // The query became active after ⌥ went down (the controller set it).
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.key(NavKey::OptionDown);
+    run.state.query_active = true;
+    let outcome = run.key(NavKey::Letter('s'));
+    assert!(!outcome.handled);
+    assert_eq!(outcome.intent, Some(Intent::CancelHold));
+    assert_eq!(run.state.held_group, None);
+}
+
+#[test]
+fn a_digit_while_searching_is_not_taken_without_a_chosen_group() {
+    let mut run = Run::mockup(Cursor::Tab(101));
+    run.state.query_active = true;
+    run.key(NavKey::OptionDown);
+    let outcome = run.key(NavKey::Digit(2));
+    assert!(!outcome.handled);
+    assert_eq!(outcome.intent, None);
 }
 
 #[test]

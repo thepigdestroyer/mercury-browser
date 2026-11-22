@@ -69,18 +69,31 @@ pub fn donut(groups: &[GroupRow], fallback: slint::Color) -> Vec<DonutArc> {
 
 /// "Tab groups, 6 groups, 22 tabs" ("1 group", "1 tab"; no groups: "Tab groups, no tabs").
 pub fn label(groups: &[GroupRow]) -> String {
+    label_with_pinned(groups, 0)
+}
+
+/// [`label`] for a window that also has `pinned` pinned tabs (which belong to no group), so that
+/// the label counts the same tabs as the search field's placeholder: "Tab groups, 6 groups, 25
+/// tabs" is 22 tabs in groups plus 3 pinned. With pinned tabs only: "Tab groups, no groups, 3
+/// tabs"; with nothing: "Tab groups, no tabs".
+pub fn label_with_pinned(groups: &[GroupRow], pinned: usize) -> String {
     let shown = groups.iter().filter(|group| group.count > 0).count();
-    let tabs: i64 = groups
+    let in_groups: usize = groups
         .iter()
         .filter(|group| group.count > 0)
-        .map(|group| i64::from(group.count))
+        .map(|group| usize::try_from(group.count).unwrap_or(0))
         .sum();
+    let tabs = in_groups.saturating_add(pinned);
+    let plural = |n: usize| if n == 1 { "" } else { "s" };
     if tabs == 0 {
-        return "Tab groups, no tabs".to_owned();
+        "Tab groups, no tabs".to_owned()
+    } else if shown == 0 {
+        format!("Tab groups, no groups, {tabs} tab{}", plural(tabs))
+    } else {
+        format!(
+            "Tab groups, {shown} group{}, {tabs} tab{}",
+            plural(shown),
+            plural(tabs)
+        )
     }
-    format!(
-        "Tab groups, {shown} group{}, {tabs} tab{}",
-        if shown == 1 { "" } else { "s" },
-        if tabs == 1 { "" } else { "s" },
-    )
 }

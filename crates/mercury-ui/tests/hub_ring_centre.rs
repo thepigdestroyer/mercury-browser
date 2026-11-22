@@ -466,11 +466,12 @@ fn results_are_list_items_that_fire_result_activated_with_their_row() {
     f.click(136.0, 203.0);
     assert_eq!(f.calls(), ["result 0", "result 1", "result 2"]);
 
-    // Return on the row that has the focus (the one just clicked) opens it too.
+    // Return is not the rows' own: the popover's key scope hands it to Rust, which opens the
+    // selected row (hub_ring_keys), so a click and Return fire the row once, not twice.
     f.calls();
     f.click(136.0, 168.0);
     f.key(Key::Return);
-    assert_eq!(f.calls(), ["result 1", "result 1"]);
+    assert_eq!(f.calls(), ["result 1"]);
 }
 
 #[test]

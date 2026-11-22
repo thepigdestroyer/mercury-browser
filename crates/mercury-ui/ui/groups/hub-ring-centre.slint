@@ -104,8 +104,17 @@ export component RingCentre inherits Rectangle {
     border-width: 1px;
     border-color: ChromePalette.popup-border;
     accessible-role: none;
+    forward-focus: input;
 
-    // Puts the caret in the search field (the popover calls it when the first key is typed).
+    // The search field is shown (rest and searching) and has the keyboard focus: Rust leaves it
+    // printable keys and Backspace (and an input method). False while it is hidden.
+    property <bool> field-active: input.has-focus && (root.rest || root.searching);
+    changed field-active => {
+        HubRingBridge.field-focused = root.field-active;
+    }
+
+    // Puts the caret in the search field (the popover calls it when it opens and when a query
+    // starts).
     public function focus-field() {
         input.focus();
     }
@@ -246,6 +255,9 @@ export component RingCentre inherits Rectangle {
 
     // Searching: the top results, then the "Search the web for ..." row (tab -1).
     if root.searching: Rectangle {
+        accessible-role: list;
+        accessible-label: "Search results";
+
         for row[i] in HubRingBridge.results: Rectangle {
             x: root.c - 112px;
             y: root.c - 30px + i * 42px;
@@ -280,20 +292,9 @@ export component RingCentre inherits Rectangle {
                 color: row.selected ? ChromePalette.item-selected-text : ChromePalette.text-muted;
             }
 
-            // Return on the row that was clicked (or given the focus) opens it too.
-            key-scope := FocusScope {
-                key-pressed(event) => {
-                    if event.text == Key.Return {
-                        HubRingBridge.result-activated(i);
-                        return accept;
-                    }
-                    return reject;
-                }
-            }
-
+            // Return reaches Rust first (the popover's key scope); a click opens the row.
             touch := TouchArea {
                 clicked => {
-                    key-scope.focus();
                     HubRingBridge.result-activated(i);
                 }
             }
