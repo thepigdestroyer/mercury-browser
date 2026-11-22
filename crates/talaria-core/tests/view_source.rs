@@ -420,6 +420,30 @@ fn the_address_bar_accepts_the_source_of_a_web_page() {
 }
 
 #[test]
+fn a_typed_source_address_loses_its_credentials_and_fragment_before_it_becomes_the_tabs_address() {
+    for (typed, expected) in [
+        (
+            "view-source:https://user:secret@example.com/a?b=1#top",
+            "view-source:https://example.com/a?b=1",
+        ),
+        (
+            "view-source:http://token@127.0.0.1:8080/",
+            "view-source:http://127.0.0.1:8080/",
+        ),
+    ] {
+        let NavigationTarget::Url(address) = classify_address(typed).expect("an address") else {
+            panic!("{typed:?} was taken for a search");
+        };
+        assert_eq!(address.as_str(), expected, "{typed:?}");
+        let resolved = resolve_address(typed, &test_search()).expect("it resolves");
+        assert!(
+            !resolved.as_str().contains("secret") && !resolved.as_str().contains("token"),
+            "{resolved}"
+        );
+    }
+}
+
+#[test]
 fn the_address_bar_refuses_every_other_source_address() {
     for typed in [
         "view-source:",

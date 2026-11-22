@@ -100,5 +100,6 @@ pub use navigation_policy::{
 // sh-pages
 pub use site_images::{MAX_IMAGE_BLOCKED_SITES, SiteImages, SiteImagesError, image_site_key};
 pub use view_source::{
-    VIEW_SOURCE_SCHEME, is_view_source, view_source_address, view_source_target,
+    VIEW_SOURCE_SCHEME, is_view_source, view_source_address, view_source_normalised,
+    view_source_target,
 };

@@ -5,7 +5,7 @@ use std::net::IpAddr;
 
 use url::Url;
 
-use crate::view_source_target; // sh-pages
+use crate::view_source_normalised; // sh-pages
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NavigationTarget {
@@ -68,12 +68,19 @@ pub fn classify_address(input: &str) -> Result<NavigationTarget, AddressResoluti
     }
 
     let parsed_absolute = match Url::parse(input) {
-        // sh-pages: `view-source:` is an address only with an `http(s)` address inside.
-        Ok(url) if is_supported_scheme(url.scheme()) || view_source_target(&url).is_some() => {
+        Ok(url) if is_supported_scheme(url.scheme()) => {
             return Ok(NavigationTarget::Url(url));
         }
         result => result,
     };
+
+    // sh-pages: `view-source:` is an address only with an `http(s)` address inside, and the tab
+    // gets it without credentials, as it will be fetched.
+    if let Ok(url) = &parsed_absolute
+        && let Some(source) = view_source_normalised(url)
+    {
+        return Ok(NavigationTarget::Url(source));
+    }
 
     if let Some(url) = parse_hostname(input) {
         return Ok(NavigationTarget::Url(url));

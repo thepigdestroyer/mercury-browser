@@ -33,18 +33,35 @@ use crate::{MAX_REDIRECTS, MAX_SHOWN_BYTES};
 /// `third_party/servo-script/navigation.rs` (line 272).
 const DOCUMENT_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
-/// The `Accept-Language` header, as far as it can be known here.
+/// The `Accept-Language` header when [`FetchOptions::accept_language`] is empty.
 ///
 /// The engine sends one language, the system's (`sys_locale`) or the `intl_locale_override`
 /// preference, through `set_default_accept_language` in `third_party/servo-net-traits/lib.rs`
 /// (lines 1441-1449; the locale is read by `get_current_locale`, lines 1425-1437). This crate
-/// cannot read either, and `FetchOptions` has no field for it, so it sends the value the engine
-/// itself falls back to when it cannot read a locale (same lines): `en-US`.
-const ACCEPT_LANGUAGE_VALUE: &str = "en-US";
+/// cannot read either; the engine glue passes the value in `accept_language`. This is what the
+/// engine itself falls back to when it cannot read a locale (same lines): `en-US`.
+const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US";
 
 /// The `Cookie` header text for a URL, asked for every hop of a redirect chain; `None` sends no
 /// cookie. Set-Cookie of a response is never stored.
+///
+/// The engine glue (`talaria-servo/src/view_source.rs`, `engine_cookies`) is the one place that
+/// says what the engine would send for a top-level GET of the address.
 pub type CookieLookup = Arc<dyn Fn(&Url) -> Option<String> + Send + Sync>;
+
+/// What the browser's own rules say about an address before it is requested.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum HopVerdict {
+    /// Request this address, which may be the one asked about, upgraded (`http` to `https`).
+    Go(Url),
+    /// Do not request it: [`FetchError::Blocked`].
+    Refuse,
+}
+
+/// The rules the engine applies to a top-level load that the re-fetch must apply too: HTTPS-only
+/// mode, the HSTS upgrade and the block on bad ports. Asked for the first address and for every
+/// redirect hop, before the cookies are looked up and before anything is sent.
+pub type HopPolicy = Arc<dyn Fn(&Url) -> HopVerdict + Send + Sync>;
 
 /// Servo's three proxy preferences as they are (`network_http_proxy_uri`,
 /// `network_https_proxy_uri`, `network_http_no_proxy`); an empty string means none. The fetch
@@ -68,6 +85,10 @@ pub struct FetchOptions {
     pub cookies: Option<CookieLookup>,
     /// The proxy.
     pub proxy: ProxyConfig,
+    /// Sent as `Accept-Language`: the engine's. Empty sends `en-US`.
+    pub accept_language: String,
+    /// The browser's rules for an address (HTTPS-only, HSTS, bad ports); `None` applies none.
+    pub policy: Option<HopPolicy>,
     /// How long connecting may take (default 10 s).
     pub connect_timeout: Duration,
     /// How long the whole fetch may take (default 30 s).
@@ -95,6 +116,10 @@ pub enum FetchError {
     /// The proxy refused or failed. Never retried directly.
     #[error("the proxy could not fetch the page")]
     Proxy,
+    /// The browser's rules for an address (HTTPS-only mode, the block on bad ports) refuse it,
+    /// as they would for a page.
+    #[error("the address is refused by the browser's rules")]
+    Blocked,
     /// Anything else (a bug, a panic caught by the caller).
     #[error("the page could not be fetched")]
     Internal,
@@ -110,6 +135,9 @@ impl FetchError {
             Self::TooManyRedirects => "The server redirected too many times.",
             Self::BadRedirect => "The server sent a redirect that cannot be followed.",
             Self::Proxy => "The proxy could not fetch the page.",
+            Self::Blocked => {
+                "This address is refused by the same rules that apply to pages (HTTPS-only mode, blocked ports)."
+            }
             Self::Internal => "The source could not be fetched.",
         }
     }
@@ -138,7 +166,7 @@ async fn fetch_chain(
     let proxies = Proxies::new(&options.proxy)?;
     let client = build_client(options, &proxies)?;
     let headers = RequestHeaders::new(options)?;
-    let mut current = url.target().clone();
+    let mut current = apply_policy(options, url.target().clone())?;
     let mut redirects = 0;
     let mut seen_https = false;
     loop {
@@ -167,7 +195,27 @@ async fn fetch_chain(
         redirects += 1;
         // The body of a redirect is never read: dropping the response closes the connection.
         drop(response);
-        current = next;
+        current = apply_policy(options, next)?;
+    }
+}
+
+/// The address to request for `url`: what the browser's rules make of it, or
+/// [`FetchError::Blocked`]. Credentials and the fragment never survive, whatever the rules do.
+fn apply_policy(options: &FetchOptions, url: Url) -> Result<Url, FetchError> {
+    let Some(policy) = &options.policy else {
+        return Ok(url);
+    };
+    match policy(&url) {
+        HopVerdict::Refuse => Err(FetchError::Blocked),
+        HopVerdict::Go(mut go) => {
+            if !matches!(go.scheme(), "http" | "https") || go.host_str().is_none() {
+                return Err(FetchError::Blocked);
+            }
+            let _ = go.set_username("");
+            let _ = go.set_password(None);
+            go.set_fragment(None);
+            Ok(go)
+        }
     }
 }
 
@@ -184,9 +232,13 @@ impl RequestHeaders {
             "" => None,
             text => Some(HeaderValue::from_str(text).map_err(|_| FetchError::Internal)?),
         };
+        let accept_language = match options.accept_language.trim() {
+            "" => HeaderValue::from_static(DEFAULT_ACCEPT_LANGUAGE),
+            text => HeaderValue::from_str(text).map_err(|_| FetchError::Internal)?,
+        };
         Ok(Self {
             accept: HeaderValue::from_static(DOCUMENT_ACCEPT),
-            accept_language: HeaderValue::from_static(ACCEPT_LANGUAGE_VALUE),
+            accept_language,
             user_agent,
         })
     }

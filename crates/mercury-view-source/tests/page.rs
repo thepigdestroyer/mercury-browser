@@ -692,6 +692,7 @@ fn every_fetch_error_has_a_page_with_one_fixed_sentence() {
         FetchError::TooManyRedirects,
         FetchError::BadRedirect,
         FetchError::Proxy,
+        FetchError::Blocked,
         FetchError::Internal,
     ];
     let req = request("https://example.test/dir/page.html?secret=1");

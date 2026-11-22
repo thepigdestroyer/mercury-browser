@@ -42,8 +42,8 @@ use futures_util::future::{Either, select};
 use http::header::{ALLOW, CACHE_CONTROL, CONTENT_TYPE};
 use http::{HeaderMap, HeaderName, HeaderValue, Method};
 use mercury_view_source::{
-    CookieLookup, FetchError, FetchOptions, ProxyConfig, SourceDocument, ViewSourcePage,
-    ViewSourceUrl, fetch_source, page_headers, render_error_page, render_page,
+    CookieLookup, FetchError, FetchOptions, HopPolicy, HopVerdict, ProxyConfig, SourceDocument,
+    ViewSourcePage, ViewSourceUrl, fetch_source, page_headers, render_error_page, render_page,
 };
 use tokio::sync::{Semaphore, oneshot};
 
@@ -145,11 +145,19 @@ fn check_request(method: &Method, address: &str) -> Result<ViewSourceUrl, Box<Re
 }
 
 /// What a fetch needs from the engine, with this handler's limits.
-fn fetch_options(user_agent: String, cookies: CookieLookup, proxy: ProxyConfig) -> FetchOptions {
+fn fetch_options(
+    user_agent: String,
+    cookies: CookieLookup,
+    proxy: ProxyConfig,
+    policy: HopPolicy,
+) -> FetchOptions {
     FetchOptions {
         user_agent,
         cookies: Some(cookies),
         proxy,
+        // The one language the engine sends (`net_traits::set_default_accept_language`).
+        accept_language: net_traits::get_current_locale().0.clone(),
+        policy: Some(policy),
         connect_timeout: CONNECT_TIMEOUT,
         total_timeout: TOTAL_TIMEOUT,
     }
@@ -268,25 +276,37 @@ fn is_embedded_view_source(scheme: &str, is_for_main_frame: bool, has_web_view: 
 
 use std::future::ready;
 use std::pin::Pin;
+use std::sync::RwLock;
 
+use net::cookie_storage::CookieStorage;
+use net::fetch::methods::should_request_be_blocked_due_to_a_bad_port;
+use net::hsts::HstsList;
 use servo::protocol_handler::{
     DoneChannel, FetchContext, HttpStatus, ProtocolHandler, ProtocolRegistry, Request,
     ResourceFetchTiming, Response, ResponseBody,
 };
 use servo::{CookieSource, ServoUrl, WebResourceLoad};
+use talaria_core::{HttpsPolicy, MainFrameLoad, main_frame_load};
+
+/// HTTPS-only mode as the handler's thread can read it: the tabs hold the policy in an `Rc` on
+/// the UI thread, so `ServoRuntime::set_https_policy` keeps this copy in step with it.
+pub type SharedHttpsPolicy = Arc<RwLock<HttpsPolicy>>;
 
 /// What the handler needs that the engine's request does not carry.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Default)]
 pub struct ViewSourceConfig {
     /// Servo's three proxy preferences, as they are: the fetch goes through the proxy the page
     /// went through, or fails; it never connects directly instead.
     pub proxy: ProxyConfig,
+    /// HTTPS-only mode and its exceptions, judged for every address the fetch requests.
+    pub https_policy: SharedHttpsPolicy,
 }
 
 /// Registers the `view-source` scheme. The handler is neither fetchable nor secure.
 pub fn register(registry: &mut ProtocolRegistry, config: ViewSourceConfig) {
     let handler = ViewSourceHandler {
         proxy: config.proxy,
+        https_policy: config.https_policy,
         permits: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
     };
     if let Err(error) = registry.register(mercury_view_source::SCHEME, handler) {
@@ -299,6 +319,7 @@ pub fn register(registry: &mut ProtocolRegistry, config: ViewSourceConfig) {
 
 struct ViewSourceHandler {
     proxy: ProxyConfig,
+    https_policy: SharedHttpsPolicy,
     permits: Arc<Semaphore>,
 }
 
@@ -318,13 +339,24 @@ impl ProtocolHandler for ViewSourceHandler {
         // The cookies the engine would send for each address of the fetch, from the engine's own
         // jar. The future outlives `context`, so it holds a clone of the engine's state.
         let state = Arc::clone(&context.state);
+        let cookie_state = Arc::clone(&state);
         let cookies: CookieLookup = Arc::new(move |address: &url::Url| {
-            state
-                .cookie_jar
-                .write()
-                .cookies_for_url(&ServoUrl::from(address.clone()), CookieSource::HTTP)
+            engine_cookies(&mut cookie_state.cookie_jar.write(), address)
         });
-        let options = fetch_options(context.user_agent.clone(), cookies, self.proxy.clone());
+        // HTTPS-only mode, the HSTS upgrade and the bad-port block, for every address.
+        let https_policy = Arc::clone(&self.https_policy);
+        let policy: HopPolicy = Arc::new(move |address: &url::Url| {
+            let https = https_policy
+                .read()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            judge_hop(&state.hsts_list.read(), &https, address)
+        });
+        let options = fetch_options(
+            context.user_agent.clone(),
+            cookies,
+            self.proxy.clone(),
+            policy,
+        );
         let permits = Arc::clone(&self.permits);
         Box::pin(async move {
             let fetch = fetch_future(target.clone(), options);
@@ -342,6 +374,45 @@ impl ProtocolHandler for ViewSourceHandler {
     fn is_secure(&self) -> bool {
         false
     }
+}
+
+/// The `Cookie` header text the engine sends for a top-level `GET` of `url`: the same two steps as
+/// `set_request_cookies` in `third_party/servo-net/http_loader.rs` (expired cookies of the host
+/// are dropped first, then the jar's `cookies_for_url` for an HTTP request). This is the one
+/// place the re-fetch asks the jar, so that what is sent stays what the engine sends.
+///
+/// Merge note for the train that merges `lane/net-1`: NET-1 keeps `cookies_for_url` as "every
+/// matching cookie" and adds `cookies_for_request(url, source, &may_send)`, whose filter applies
+/// the network policy (blocked cookies, third-party blocking, SameSite) and which also sets
+/// `Sec-GPC: 1` when the policy says so. Switch this function to `cookies_for_request` with the
+/// site context of a top-level user navigation to `url` (as NET-1's `note_main_frame` does), and
+/// add `Sec-GPC` to `FetchOptions`. The test
+/// `the_lookup_is_what_the_engine_sends_for_a_top_level_get` must then also show that a cookie
+/// the policy refuses is not in the answer.
+fn engine_cookies(jar: &mut CookieStorage, url: &url::Url) -> Option<String> {
+    let url = ServoUrl::from(url.clone());
+    jar.remove_expired_cookies_for_url(&url);
+    jar.cookies_for_url(&url, CookieSource::HTTP)
+}
+
+/// What the browser's rules make of an address before the fetch requests it, in the order the
+/// engine applies them to a top-level load: HTTPS-only mode (`main_frame_load`, the decision the
+/// tab's `HttpsUpgradeChain` makes: an `http` address becomes its `https` one, or is refused),
+/// then the block on bad ports (`should_request_be_blocked_due_to_a_bad_port`, the engine's own
+/// function and list), then the HSTS upgrade (`HstsList::apply_hsts_rules`, from the list the
+/// engine keeps). Asked for the first address and for every redirect hop.
+fn judge_hop(hsts: &HstsList, https: &HttpsPolicy, url: &url::Url) -> HopVerdict {
+    let url = match main_frame_load(https, url, true) {
+        MainFrameLoad::Allow => url.clone(),
+        MainFrameLoad::Upgrade(upgraded) => upgraded,
+        MainFrameLoad::Block => return HopVerdict::Refuse,
+    };
+    let mut address = ServoUrl::from(url);
+    if should_request_be_blocked_due_to_a_bad_port(&address) {
+        return HopVerdict::Refuse;
+    }
+    hsts.apply_hsts_rules(&mut address);
+    HopVerdict::Go(address.into_url())
 }
 
 /// The engine's response for a reply. The statuses here are those of the constructors above, all
@@ -589,8 +660,14 @@ mod tests {
             https: "http://proxy.test:3129".to_owned(),
             no_proxy: "localhost,.internal".to_owned(),
         };
-        let options = fetch_options("Mercury/1".to_owned(), cookies, proxy.clone());
+        let policy: HopPolicy = Arc::new(|url: &Url| HopVerdict::Go(url.clone()));
+        let options = fetch_options("Mercury/1".to_owned(), cookies, proxy.clone(), policy);
         assert_eq!(options.user_agent, "Mercury/1");
+        assert!(
+            !options.accept_language.is_empty(),
+            "the engine's one language"
+        );
+        assert!(options.policy.is_some());
         assert_eq!(options.proxy, proxy);
         assert_eq!(options.connect_timeout, Duration::from_secs(10));
         assert_eq!(options.total_timeout, Duration::from_secs(30));
@@ -622,6 +699,7 @@ mod tests {
             FetchError::TooManyRedirects,
             FetchError::BadRedirect,
             FetchError::Proxy,
+            FetchError::Blocked,
             FetchError::Internal,
         ] {
             let reply = render_reply(&address(), Err(error));
@@ -659,6 +737,7 @@ mod tests {
             "Mercury/1".to_owned(),
             Arc::new(|_: &Url| None),
             ProxyConfig::default(),
+            Arc::new(|url: &Url| HopVerdict::Go(url.clone())),
         );
         let fetch = fetch_future(address(), options);
         is_send(&fetch);
@@ -765,6 +844,213 @@ mod tests {
         });
         assert_eq!(permits.available_permits(), 1);
         assert_eq!(finished.load(Ordering::SeqCst), 0);
+    }
+
+    // ---- the cookies of the engine ----
+
+    fn jar_with(cookies: &[(&str, &str, bool)]) -> CookieStorage {
+        // (Set-Cookie text, the address it was set from, already expired)
+        let mut jar = CookieStorage::new(150);
+        for (text, from, expired) in cookies {
+            let from = ServoUrl::parse(from).expect("a URL");
+            let mut cookie =
+                net::cookie::ServoCookie::from_cookie_string(text, &from, CookieSource::HTTP)
+                    .expect("a valid cookie");
+            if *expired {
+                cookie.set_expiry_time_in_past();
+            }
+            jar.push(cookie, &from, CookieSource::HTTP);
+        }
+        jar
+    }
+
+    fn the_engine_sends(jar: &mut CookieStorage, address: &str) -> Option<String> {
+        // The engine's own steps for a request, as `set_request_cookies` writes them.
+        let url = ServoUrl::parse(address).expect("a URL");
+        jar.remove_expired_cookies_for_url(&url);
+        jar.cookies_for_url(&url, CookieSource::HTTP)
+    }
+
+    #[test]
+    fn the_lookup_is_what_the_engine_sends_for_a_top_level_get() {
+        let setup = [
+            ("sid=a; Path=/", "https://shop.test/", false),
+            ("tab=b; Path=/private", "https://shop.test/", false),
+            ("sec=c; Secure; Path=/", "https://shop.test/", false),
+            ("old=d; Path=/", "https://shop.test/", true),
+            ("other=e; Path=/", "https://elsewhere.test/", false),
+        ];
+        for address in [
+            "https://shop.test/",
+            "https://shop.test/private/area",
+            "http://shop.test/",
+            "https://elsewhere.test/x",
+            "https://nothing.test/",
+        ] {
+            let mut for_engine = jar_with(&setup);
+            let mut for_us = jar_with(&setup);
+            assert_eq!(
+                engine_cookies(&mut for_us, &url::Url::parse(address).expect("a URL")),
+                the_engine_sends(&mut for_engine, address),
+                "{address}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_lookup_sends_what_matches_and_nothing_expired() {
+        let mut jar = jar_with(&[
+            ("sid=a; Path=/", "https://shop.test/", false),
+            ("sec=c; Secure; Path=/", "https://shop.test/", false),
+            ("old=d; Path=/", "https://shop.test/", true),
+        ]);
+        let secure = url::Url::parse("https://shop.test/").expect("a URL");
+        let plain = url::Url::parse("http://shop.test/").expect("a URL");
+
+        // Without the purge the jar would still answer with the expired cookie: this is what the
+        // engine's `remove_expired_cookies_for_url` step is for.
+        let unpurged = jar
+            .cookies_for_url(&ServoUrl::from(secure.clone()), CookieSource::HTTP)
+            .expect("cookies");
+        assert!(unpurged.contains("old=d"), "{unpurged}");
+
+        let sent = engine_cookies(&mut jar, &secure).expect("cookies");
+        assert!(sent.contains("sid=a") && sent.contains("sec=c"), "{sent}");
+        assert!(
+            !sent.contains("old=d"),
+            "an expired cookie was sent: {sent}"
+        );
+        // A `Secure` cookie is not sent over `http`.
+        let sent = engine_cookies(&mut jar, &plain).expect("cookies");
+        assert!(sent.contains("sid=a") && !sent.contains("sec=c"), "{sent}");
+    }
+
+    // ---- the browser's rules for an address ----
+
+    fn hsts_for(host: &str, subdomains: net_traits::IncludeSubdomains) -> HstsList {
+        let mut list = HstsList::default();
+        list.push(
+            net::hsts::HstsEntry::new(host.to_owned(), subdomains, Some(Duration::from_secs(3600)))
+                .expect("a domain"),
+        );
+        list
+    }
+
+    // `HttpsPolicy` has a private field, so a struct update from `Default` is not possible here.
+    #[allow(clippy::field_reassign_with_default)]
+    fn https_policy(https_only: bool) -> HttpsPolicy {
+        let mut policy = HttpsPolicy::default();
+        policy.https_only = https_only;
+        policy
+    }
+
+    fn judged(hsts: &HstsList, https_only: bool, address: &str) -> HopVerdict {
+        let policy = https_policy(https_only);
+        judge_hop(hsts, &policy, &url::Url::parse(address).expect("a URL"))
+    }
+
+    fn go(address: &str) -> HopVerdict {
+        HopVerdict::Go(url::Url::parse(address).expect("a URL"))
+    }
+
+    #[test]
+    fn an_hsts_host_typed_as_http_is_fetched_over_https() {
+        let hsts = hsts_for(
+            "bank.example.com",
+            net_traits::IncludeSubdomains::NotIncluded,
+        );
+
+        assert_eq!(
+            judged(&hsts, false, "http://bank.example.com/login?x=1"),
+            go("https://bank.example.com/login?x=1")
+        );
+        // Another host, or the host over https, is as typed.
+        assert_eq!(
+            judged(&hsts, false, "http://other.example.com/"),
+            go("http://other.example.com/")
+        );
+        assert_eq!(
+            judged(&hsts, false, "https://bank.example.com/"),
+            go("https://bank.example.com/")
+        );
+        // A subdomain is covered only when the entry says so.
+        assert_eq!(
+            judged(&hsts, false, "http://www.bank.example.com/"),
+            go("http://www.bank.example.com/")
+        );
+        let with_subdomains = hsts_for("bank.example.com", net_traits::IncludeSubdomains::Included);
+        assert_eq!(
+            judged(&with_subdomains, false, "http://www.bank.example.com/"),
+            go("https://www.bank.example.com/")
+        );
+    }
+
+    #[test]
+    fn a_bad_port_is_refused_with_the_engines_own_list() {
+        let hsts = HstsList::default();
+        for port in [22, 25, 110, 6000, 10080] {
+            assert_eq!(
+                judged(&hsts, false, &format!("http://example.com:{port}/")),
+                HopVerdict::Refuse,
+                "port {port}"
+            );
+            assert_eq!(
+                judged(&hsts, false, &format!("https://example.com:{port}/")),
+                HopVerdict::Refuse,
+                "port {port} over https"
+            );
+        }
+        // Ports that are not on the list, and no port at all.
+        for address in [
+            "http://example.com:8080/",
+            "https://example.com:8443/",
+            "http://example.com/",
+        ] {
+            assert_eq!(judged(&hsts, false, address), go(address), "{address}");
+        }
+    }
+
+    #[test]
+    fn https_only_mode_upgrades_a_public_http_address_as_it_does_for_a_page() {
+        let hsts = HstsList::default();
+
+        assert_eq!(
+            judged(&hsts, true, "http://example.com/a?b=c"),
+            go("https://example.com/a?b=c")
+        );
+        // The mode off, or an address the mode leaves alone (this computer, the local network),
+        // is as typed.
+        assert_eq!(
+            judged(&hsts, false, "http://example.com/"),
+            go("http://example.com/")
+        );
+        for local in [
+            "http://localhost:3000/",
+            "http://192.168.1.5/",
+            "http://printer.local/",
+        ] {
+            assert_eq!(judged(&hsts, true, local), go(local), "{local}");
+        }
+        // An exception of the user is as typed, too.
+        let mut policy = https_policy(true);
+        policy.add_exception("old.example.com");
+        assert_eq!(
+            judge_hop(
+                &hsts,
+                &policy,
+                &url::Url::parse("http://old.example.com/").expect("a URL")
+            ),
+            go("http://old.example.com/")
+        );
+    }
+
+    #[test]
+    fn the_rules_run_in_the_engines_order_each_on_what_the_last_made() {
+        // HTTPS-only first (the port stays), then the bad-port block on the upgraded address.
+        assert_eq!(
+            judged(&HstsList::default(), true, "http://example.com:25/"),
+            HopVerdict::Refuse
+        );
     }
 
     // ---- the guard ----

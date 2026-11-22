@@ -51,6 +51,14 @@ pub fn view_source_target(url: &Url) -> Option<Url> {
     Some(target)
 }
 
+/// `url`, a `view-source:` URL as typed, as the tab should load and show it: the address inside
+/// without credentials and fragment, so that the tab's address is what is fetched. `None` where
+/// [`view_source_target`] is.
+pub fn view_source_normalised(url: &Url) -> Option<Url> {
+    let target = view_source_target(url)?;
+    Url::parse(&source_address(&target)?).ok()
+}
+
 /// Whether `url` has the scheme `view-source`.
 pub fn is_view_source(url: &Url) -> bool {
     url.scheme() == VIEW_SOURCE_SCHEME

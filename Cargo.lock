@@ -11906,6 +11906,8 @@ dependencies = [
  "serde_json",
  "servo",
  "servo-default-resources",
+ "servo-net",
+ "servo-net-traits",
  "talaria-core",
  "tempfile",
  "tokio",

@@ -26,7 +26,9 @@ mod style;
 mod text;
 
 pub use address::{UrlError, ViewSourceUrl};
-pub use fetch::{CookieLookup, FetchError, FetchOptions, ProxyConfig, fetch_source};
+pub use fetch::{
+    CookieLookup, FetchError, FetchOptions, HopPolicy, HopVerdict, ProxyConfig, fetch_source,
+};
 pub use page::{ViewSourcePage, page_headers, render_error_page, render_page};
 pub use source::{SourceBody, SourceDocument, SourceKind};
 pub use text::{classify, decode};

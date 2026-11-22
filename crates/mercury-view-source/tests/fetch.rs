@@ -7,11 +7,12 @@
 
 mod support;
 
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mercury_view_source::{
-    FetchError, MAX_REDIRECTS, MAX_SHOWN_BYTES, SourceBody, SourceDocument, SourceKind,
-    ViewSourceUrl, fetch_source,
+    FetchError, HopPolicy, HopVerdict, MAX_REDIRECTS, MAX_SHOWN_BYTES, SourceBody, SourceDocument,
+    SourceKind, ViewSourceUrl, fetch_source,
 };
 use support::{
     Reply, Server, chunked, closed_port, html, ok, options, options_with_cookies, redirect,
@@ -696,6 +697,152 @@ async fn a_secure_connection_to_a_server_that_does_not_speak_tls_is_a_tls_failur
         FetchError::Tls
     );
     assert_eq!(server.connections(), 1);
+}
+
+// ---- the browser's rules for an address (HTTPS-only, HSTS, bad ports) ----
+
+/// A policy like the engine glue's: `http` becomes `https` for these hosts (HSTS, HTTPS-only),
+/// and these ports are refused (the bad-port block).
+fn policy(upgrade_ports: Vec<u16>, refuse_ports: Vec<u16>) -> HopPolicy {
+    Arc::new(move |url: &Url| {
+        if url.port().is_some_and(|port| refuse_ports.contains(&port)) {
+            return HopVerdict::Refuse;
+        }
+        let mut go = url.clone();
+        if url.scheme() == "http" && url.port().is_some_and(|port| upgrade_ports.contains(&port)) {
+            go.set_scheme("https").expect("http to https");
+        }
+        HopVerdict::Go(go)
+    })
+}
+
+#[tokio::test]
+async fn an_address_the_rules_upgrade_is_fetched_over_https_and_never_in_the_clear() {
+    // The server does not speak TLS: a request to it as `https` fails, and what it reads first is
+    // a TLS hello (record type 0x16), not `GET`. The first address is typed as `http://`.
+    let server = Server::raw(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+    let port = server.addr.port();
+    let (mut options, asked) = options_with_cookies(|_| Some("sid=abc".to_owned()));
+    options.policy = Some(policy(vec![port], vec![]));
+
+    let outcome = fetch_source(&server.source("/"), &options).await;
+
+    assert_eq!(outcome.unwrap_err(), FetchError::Tls);
+    let first = server.first_bytes();
+    assert_eq!(first.len(), 1);
+    assert_eq!(first[0].first(), Some(&0x16), "a TLS hello, not a GET");
+    // The cookies were asked for the address that would be requested, not the typed one, and
+    // after the rules: a cookie of the `http` address is never looked up.
+    let asked: Vec<String> = asked
+        .lock()
+        .unwrap()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    assert_eq!(asked, [format!("https://127.0.0.1:{port}/")]);
+}
+
+#[tokio::test]
+async fn an_address_without_a_rule_is_fetched_as_typed() {
+    let server = Server::always(|| html("as typed"));
+    let mut options = options();
+    options.policy = Some(policy(vec![], vec![]));
+
+    let document = fetch_source(&server.source("/"), &options).await.unwrap();
+
+    assert_eq!(text_of(&document), "as typed");
+    assert_eq!(server.seen().len(), 1);
+}
+
+#[tokio::test]
+async fn a_blocked_port_is_refused_before_any_connection_or_cookie_lookup() {
+    // Ports of mail, SSH and printers: a GET there is a cross-protocol request the engine forbids.
+    for port in [25_u16, 22, 9100] {
+        let (mut options, asked) = options_with_cookies(|_| Some("sid=abc".to_owned()));
+        options.policy = Some(policy(vec![], vec![port]));
+        let url = source(&format!("http://127.0.0.1:{port}/"));
+
+        assert_eq!(
+            fetch_source(&url, &options).await.unwrap_err(),
+            FetchError::Blocked,
+            "port {port}"
+        );
+        assert!(asked.lock().unwrap().is_empty(), "port {port}");
+    }
+}
+
+#[tokio::test]
+async fn a_redirect_to_a_blocked_address_is_refused_and_nothing_is_sent_there() {
+    let first = Server::always(|| redirect(302, "http://127.0.0.1:25/inside"));
+    let (mut options, asked) = options_with_cookies(|_| Some("sid=abc".to_owned()));
+    options.policy = Some(policy(vec![], vec![25]));
+
+    let outcome = fetch_source(&first.source("/start"), &options).await;
+
+    assert_eq!(outcome.unwrap_err(), FetchError::Blocked);
+    assert_eq!(first.seen().len(), 1, "the first hop was requested");
+    let asked: Vec<Option<u16>> = asked.lock().unwrap().iter().map(Url::port).collect();
+    assert_eq!(
+        asked,
+        [Some(first.addr.port())],
+        "no cookies were looked up for the refused hop"
+    );
+}
+
+#[tokio::test]
+async fn a_redirect_to_http_is_upgraded_like_the_first_address() {
+    let second = Server::raw(b"HTTP/1.1 400 Bad Request\r\nContent-Length: 0\r\n\r\n");
+    let second_port = second.addr.port();
+    let first =
+        Server::always(move || redirect(302, &format!("http://127.0.0.1:{second_port}/landing")));
+    let mut options = options();
+    options.policy = Some(policy(vec![second_port], vec![]));
+
+    let outcome = fetch_source(&first.source("/start"), &options).await;
+
+    assert_eq!(outcome.unwrap_err(), FetchError::Tls);
+    let hello = second.first_bytes();
+    assert_eq!(hello.len(), 1);
+    assert_eq!(
+        hello[0].first(),
+        Some(&0x16),
+        "the second hop was tried over TLS, never in the clear"
+    );
+}
+
+#[tokio::test]
+async fn a_rule_that_answers_with_something_else_than_a_web_address_is_a_refusal() {
+    let server = Server::always(|| html("x"));
+    let mut options = options();
+    options.policy = Some(Arc::new(|_: &Url| {
+        HopVerdict::Go(Url::parse("file:///etc/hosts").unwrap())
+    }));
+
+    assert_eq!(
+        fetch_source(&server.source("/"), &options)
+            .await
+            .unwrap_err(),
+        FetchError::Blocked
+    );
+    assert_eq!(server.connections(), 0);
+}
+
+#[tokio::test]
+async fn the_language_of_the_browser_is_sent_and_en_us_only_without_one() {
+    let server = Server::always(|| html("x"));
+    let mut options = options();
+    options.accept_language = "de-CH".to_owned();
+
+    fetch_source(&server.source("/"), &options).await.unwrap();
+    assert_eq!(server.seen()[0].header("accept-language"), Some("de-CH"));
+
+    options.accept_language = "not valid\nat all".to_owned();
+    assert_eq!(
+        fetch_source(&server.source("/"), &options)
+            .await
+            .unwrap_err(),
+        FetchError::Internal
+    );
 }
 
 #[tokio::test]

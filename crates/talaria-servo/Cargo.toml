@@ -26,6 +26,10 @@ mercury-site-security = { path = "../mercury-site-security" }
 # sh-pages: the view-source handler (`view_source.rs`) fetches, highlights and renders with this crate.
 futures-util.workspace = true
 mercury-view-source = { path = "../mercury-view-source" }
+# sh-pages: the engine's own bad-port list (`should_request_be_blocked_due_to_a_bad_port`), HSTS
+# list, cookie jar type and locale, reused by the re-fetch so that it follows the same rules.
+servo-net = "=0.8.0"
+servo-net-traits = "=0.8.0"
 tokio = { workspace = true, features = ["rt", "sync", "time"] }
 servo-default-resources = "=0.8.0"
 url.workspace = true

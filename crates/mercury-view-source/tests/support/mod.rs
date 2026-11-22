@@ -66,6 +66,8 @@ enum Mode {
 
 struct State {
     seen: Mutex<Vec<Seen>>,
+    /// What a raw server read first on each connection.
+    raw_first: Mutex<Vec<Vec<u8>>>,
     connections: AtomicUsize,
     hangups: AtomicUsize,
     stop: AtomicBool,
@@ -97,6 +99,7 @@ impl Server {
         let addr = listener.local_addr().expect("local address");
         let state = Arc::new(State {
             seen: Mutex::new(Vec::new()),
+            raw_first: Mutex::new(Vec::new()),
             connections: AtomicUsize::new(0),
             hangups: AtomicUsize::new(0),
             stop: AtomicBool::new(false),
@@ -116,7 +119,7 @@ impl Server {
                         let mode = Arc::clone(&mode);
                         workers.push(thread::spawn(move || match &*mode {
                             Mode::Http(handler) => serve(stream, &state, handler.as_ref()),
-                            Mode::Raw(bytes) => serve_raw(stream, bytes),
+                            Mode::Raw(bytes) => serve_raw(stream, &state, bytes),
                         }));
                     }
                     Err(_) => thread::sleep(Duration::from_millis(5)),
@@ -161,6 +164,15 @@ impl Server {
             .clone()
     }
 
+    /// What a raw server read first on each connection (a TLS hello starts with 0x16).
+    pub fn first_bytes(&self) -> Vec<Vec<u8>> {
+        self.state
+            .raw_first
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .clone()
+    }
+
     /// Connections the server accepted, whether or not a request followed.
     pub fn connections(&self) -> usize {
         self.state.connections.load(Ordering::SeqCst)
@@ -195,10 +207,16 @@ impl Drop for Server {
     }
 }
 
-fn serve_raw(mut stream: TcpStream, bytes: &[u8]) {
+fn serve_raw(mut stream: TcpStream, state: &State, bytes: &[u8]) {
     let _ = stream.set_read_timeout(Some(Duration::from_secs(5)));
     let mut first = [0_u8; 4096];
-    let _ = stream.read(&mut first);
+    if let Ok(count) = stream.read(&mut first) {
+        state
+            .raw_first
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(first[..count].to_vec());
+    }
     let _ = stream.write_all(bytes);
     let _ = stream.flush();
     let _ = stream.shutdown(Shutdown::Both);
@@ -353,6 +371,8 @@ pub fn options() -> FetchOptions {
         user_agent: "MercuryTest/1.0".to_owned(),
         cookies: None,
         proxy: ProxyConfig::default(),
+        accept_language: String::new(),
+        policy: None,
         connect_timeout: Duration::from_secs(5),
         total_timeout: Duration::from_secs(20),
     }
