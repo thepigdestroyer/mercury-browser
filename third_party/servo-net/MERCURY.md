@@ -309,6 +309,8 @@ only the `Set-Cookie` of responses and adds a global setter message; it is *cons
   limiter with a fake clock).
 - **Drop when:** Servo sends WebSockets through its proxy and prompts for non-navigation 401s itself.
 
+**`Cargo.lock` of this crate** (listed as `unmarked` in `third_party/vendor.toml`, a lock file takes no comments) now records `servo-net-traits` and `servo-embedder-traits` as path packages without a registry source or checksum, because `make test-servo-net` patches the vendored copies in (see below).
+
 ## Running the tests
 
 `servo-net` is a vendored dependency with dev-dependencies, so `cargo test -p servo-net` from the

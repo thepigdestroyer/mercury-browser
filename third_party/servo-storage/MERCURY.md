@@ -37,6 +37,8 @@ Changes made by lane net-1 (Web Locks, ED4; the IndexedDB schema facts, ED3).
   dev-dependencies, so cargo runs it on its own manifest, with `servo-storage-traits` patched in).
 - **Drop when:** the Servo bump that contains PR #47981.
 
+`Cargo.lock` of this crate is changed the same way (`servo-storage-traits` as a path package; listed as `unmarked` in `third_party/vendor.toml`), so that `make test-servo-storage` runs against the vendored traits crate.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

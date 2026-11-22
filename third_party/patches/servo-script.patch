@@ -24,6 +24,52 @@ diff --git a/Cargo.toml b/Cargo.toml
 +# crates. See MERCURY.md, "Warnings".
 +[lints.cargo]
 +unused_dependencies = "allow"
+diff --git a/dom/abort/abortsignal.rs b/dom/abort/abortsignal.rs
+--- a/dom/abort/abortsignal.rs
++++ b/dom/abort/abortsignal.rs
+@@ -19,6 +19,8 @@
+ use script_bindings::js::JS_SetPendingException;
+ use script_bindings::reflector::reflect_weak_referenceable_dom_object_with_proto;
+ use script_bindings::weakref::WeakRef;
++// Mercury: Web Locks (servo/servo#47981).
++use storage_traits::weblocks::LockRequestId;
+
+ use crate::dom::bindings::codegen::Bindings::AbortSignalBinding::AbortSignalMethods;
+ use crate::dom::bindings::codegen::Bindings::EventListenerBinding::EventListener;
+@@ -31,6 +33,8 @@
+ use crate::dom::eventtarget::EventTarget;
+ use crate::dom::globalscope::GlobalScope;
+ use crate::dom::internalclosewatcher::InternalCloseWatcher;
++// Mercury: Web Locks (servo/servo#47981).
++use crate::dom::lockmanager::LockManager;
+ use crate::dom::readablestream::PipeTo;
+ use crate::dom::request::Request;
+ use crate::fetch::fetch::DeferredFetchRecordId;
+@@ -54,6 +58,11 @@
+     FetchLater(#[no_trace] DeferredFetchRecordId),
+     /// <https://html.spec.whatwg.org/multipage/#dom-closewatcher>
+     CloseWatcher(#[conditional_malloc_size_of] Rc<InternalCloseWatcher>),
++    /// Mercury: <https://www.w3.org/TR/web-locks/#signal-to-abort-the-request> (servo/servo#47981).
++    /// The pull request kept the origin, the name and the promise of the request here; the lock
++    /// manager that made the request keeps them, and knows whether the request still waits (an
++    /// abort after the lock was granted does nothing).
++    AbortLockRequest(Dom<LockManager>, #[no_trace] LockRequestId),
+ }
+
+ #[derive(Clone, JSTraceable, MallocSizeOf)]
+@@ -211,6 +220,12 @@
+             AbortAlgorithm::CloseWatcher(close_watcher) => {
+                 close_watcher.destroy(cx.no_gc());
+             },
++            // Mercury: Web Locks (servo/servo#47981).
++            AbortAlgorithm::AbortLockRequest(lock_manager, lock_request_id) => {
++                rooted!(&in(cx) let mut reason = UndefinedValue());
++                reason.set(self.abort_reason.get());
++                lock_manager.abort_request(cx, *lock_request_id, reason.handle());
++            },
+         }
+     }
+
 diff --git a/dom/animations/animationtimeline.rs b/dom/animations/animationtimeline.rs
 --- a/dom/animations/animationtimeline.rs
 +++ b/dom/animations/animationtimeline.rs
@@ -109,7 +155,17 @@ diff --git a/dom/characterdata/characterdata.rs b/dom/characterdata/characterdat
 diff --git a/dom/document/document.rs b/dom/document/document.rs
 --- a/dom/document/document.rs
 +++ b/dom/document/document.rs
-@@ -882,6 +882,10 @@
+@@ -44,7 +44,8 @@
+ use malloc_size_of::MallocSizeOfOps;
+ use metrics::{InteractiveFlag, InteractiveWindow, ProgressiveWebMetrics};
+ use net_traits::CookieSource::NonHTTP;
+-use net_traits::CoreResourceMsg::{GetCookieStringForUrl, SetCookiesForUrl};
++// Mercury: `document.cookie` sends its partition key and web view, for the network policy (EC5, EC6).
++use net_traits::CoreResourceMsg::{GetCookieStringForDocument, SetCookiesForDocument};
+ use net_traits::image_cache::ImageCache;
+ use net_traits::policy_container::PolicyContainer;
+ use net_traits::pub_domains::{Site, is_pub_domain};
+@@ -882,6 +883,10 @@
 
          self.clean_up_media_elements(cx.no_gc());
 
@@ -120,7 +176,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          // Step 3. For each WebTransport object transport whose relevant global object is window, run the context cleanup steps given transport.
          // TODO
 
-@@ -2531,6 +2535,8 @@
+@@ -2531,6 +2536,8 @@
      }
 
      /// Step 9 of <https://html.spec.whatwg.org/multipage/#the-end>
@@ -129,7 +185,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
      fn queue_document_completion(&self, cx: &mut JSContext) {
          // The initial about:blank document passes through
          // https://html.spec.whatwg.org/multipage/#creating-a-new-browsing-context
-@@ -3605,7 +3611,7 @@
+@@ -3605,7 +3612,7 @@
      }
 
      /// <https://html.spec.whatwg.org/multipage/#allowed-to-use>
@@ -138,7 +194,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          // Step 1. If document's browsing context is null, then return false.
          if !self.has_browsing_context {
              return false;
-@@ -3621,6 +3627,19 @@
+@@ -3621,6 +3628,19 @@
          // Step 4. Return false.
          // TODO: All features are currently enabled for `Document`s because we do not
          // implement the Permissions Policy specification.
@@ -158,7 +214,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          true
      }
 
-@@ -5133,6 +5152,8 @@
+@@ -5133,6 +5153,8 @@
              .collect()
      }
 
@@ -167,6 +223,46 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
      pub(crate) fn advance_animation_timeline_for_testing(&self, delta: TimeDuration) {
          self.timeline.advance_specific(delta);
          let current_timeline_value = self.current_animation_timeline_value();
+@@ -6793,11 +6815,18 @@
+         let url = self.url();
+         let (tx, rx) =
+             profile_generic_channel::channel(self.global().time_profiler_chan().clone()).unwrap();
++        // Mercury: the document's top-level site and web view let the policy judge it (EC5, EC6).
+         let _ = self
+             .window
+             .as_global_scope()
+             .resource_threads()
+-            .send(GetCookieStringForUrl(url, tx, NonHTTP));
++            .send(GetCookieStringForDocument(
++                url,
++                self.determine_the_network_partition_key(),
++                Some(self.window().webview_id()),
++                tx,
++                NonHTTP,
++            ));
+         let cookies = rx.recv().unwrap();
+         Ok(cookies.map_or(DOMString::new(), DOMString::from))
+     }
+@@ -6822,11 +6851,18 @@
+             vec![]
+         };
+
++        // Mercury: the document's top-level site and web view let the policy judge it (EC5, EC6).
+         let _ = self
+             .window
+             .as_global_scope()
+             .resource_threads()
+-            .send(SetCookiesForUrl(self.url(), cookies, NonHTTP));
++            .send(SetCookiesForDocument(
++                self.url(),
++                self.determine_the_network_partition_key(),
++                Some(self.window().webview_id()),
++                cookies,
++                NonHTTP,
++            ));
+         Ok(())
+     }
+
 diff --git a/dom/document/document_event_handler.rs b/dom/document/document_event_handler.rs
 --- a/dom/document/document_event_handler.rs
 +++ b/dom/document/document_event_handler.rs
@@ -1231,6 +1327,2071 @@ diff --git a/dom/html/htmlelement.rs b/dom/html/htmlelement.rs
              // Adding or removing a "disabled" attribute may disable or enable a disableable
              // form control.
              (&local_name!("disabled"), _) => {
+diff --git a/dom/indexeddb/idbcursor.rs b/dom/indexeddb/idbcursor.rs
+--- a/dom/indexeddb/idbcursor.rs
++++ b/dom/indexeddb/idbcursor.rs
+@@ -2,6 +2,11 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
++// Mercury: `execute_iteration` is hand-ported onto Servo 0.8 from LunarWerxs/servo, branch
++// pr/indexeddb, commit 4b07849e2 (author L0garithmic, MPL-2.0; the branch is AI-written): an index
++// cursor keeps asking through its index on every step. Mercury's other changes to this file are
++// marked `Mercury:` where they are.
++
+ #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
+
+ use std::cell::Cell;
+@@ -28,9 +33,9 @@
+ use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
+ use crate::dom::bindings::structuredclone;
+ use crate::dom::globalscope::GlobalScope;
+-use crate::dom::indexeddb::idbindex::IDBIndex;
++use crate::dom::indexeddb::idbindex::{IDBIndex, IndexQueryKind, IndexQueryParam};
+ use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
+-use crate::dom::indexeddb::idbrequest::IDBRequest;
++use crate::dom::indexeddb::idbrequest::{IDBRequest, RequestSource};
+ use crate::dom::indexeddb::idbtransaction::IDBTransaction;
+ use crate::dom::indexeddb::key::{
+     ExtractionResult, convert_value_to_key, extract_key, key_type_to_jsval,
+@@ -211,6 +216,56 @@
+         }
+         Ok(())
+     }
++
++    /// Asynchronously executes the steps to iterate this cursor, for `request`, the request created
++    /// with the cursor (the common last step of `advance`, `continue` and `continuePrimaryKey`).
++    ///
++    /// NOTE: According to the spec, execute_async should take the cursor's source (which may be an
++    /// index). Using effective_object_store here is a temporary workaround until execute_async
++    /// supports ObjectStoreOrIndex as source.
++    ///
++    /// Mercury: LunarWerxs pr/indexeddb 4b07849e2, "an index cursor losing its position". The
++    /// backend has no records for an index (see `IDBIndex::records_for`), so a cursor over an index
++    /// asks for the whole object store on every step and the reply handler derives the index's
++    /// records again; the cursor's range then applies to the index's keys. Without this a step
++    /// of an index cursor walked the records of the object store instead, or stopped after the
++    /// first one.
++    fn execute_iteration(
++        &self,
++        cx: &mut JSContext,
++        request: DomRoot<IDBRequest>,
++        iteration_param: IterationParam,
++    ) -> ErrorResult {
++        let (key_range, index_param) = match &self.source {
++            ObjectStoreOrIndex::Index(index) => (
++                IndexedDBKeyRange::default(),
++                Some(IndexQueryParam {
++                    index: Trusted::new(&**index),
++                    range: self.range.clone(),
++                    count: None,
++                    kind: IndexQueryKind::Cursor,
++                    needs_values: !self.key_only,
++                }),
++            ),
++            ObjectStoreOrIndex::ObjectStore(_) => (self.range.clone(), None),
++        };
++
++        IDBRequest::execute_async_indexed(
++            cx,
++            &self.effective_object_store(),
++            |callback| {
++                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
++                    callback,
++                    key_range,
++                })
++            },
++            Some(request),
++            Some(iteration_param),
++            index_param,
++        )?;
++
++        Ok(())
++    }
+ }
+
+ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
+@@ -328,24 +383,8 @@
+             count: Some(count),
+         };
+
+-        let range = self.range.clone();
+-        // NOTE: According to the spec, execute_async should take the cursor's source
+-        // (which may be an index). Using effective_object_store here is a temporary
+-        // workaround until execute_async supports ObjectStoreOrIndex as source.
+-        IDBRequest::execute_async(
+-            cx,
+-            &self.effective_object_store(),
+-            |callback| {
+-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
+-                    callback,
+-                    key_range: range,
+-                })
+-            },
+-            Some(request),
+-            Some(iteration_param),
+-        )?;
+-
+-        Ok(())
++        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
++        self.execute_iteration(cx, request, iteration_param)
+     }
+
+     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-continue>
+@@ -422,24 +461,8 @@
+             count: None,
+         };
+
+-        let range = self.range.clone();
+-        // NOTE: According to the spec, execute_async should take the cursor's source
+-        // (which may be an index). Using effective_object_store here is a temporary
+-        // workaround until execute_async supports ObjectStoreOrIndex as source.
+-        IDBRequest::execute_async(
+-            cx,
+-            &self.effective_object_store(),
+-            |callback| {
+-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
+-                    callback,
+-                    key_range: range,
+-                })
+-            },
+-            Some(request),
+-            Some(iteration_param),
+-        )?;
+-
+-        Ok(())
++        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
++        self.execute_iteration(cx, request, iteration_param)
+     }
+
+     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-continueprimarykey>
+@@ -568,24 +591,8 @@
+             count: None,
+         };
+
+-        let range = self.range.clone();
+-        // NOTE: According to the spec, execute_async should take the cursor's source
+-        // (which may be an index). Using effective_object_store here is a temporary
+-        // workaround until execute_async supports ObjectStoreOrIndex as source.
+-        IDBRequest::execute_async(
+-            cx,
+-            &self.effective_object_store(),
+-            |callback| {
+-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
+-                    callback,
+-                    key_range: range,
+-                })
+-            },
+-            Some(request),
+-            Some(iteration_param),
+-        )?;
+-
+-        Ok(())
++        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
++        self.execute_iteration(cx, request, iteration_param)
+     }
+
+     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-update>
+@@ -685,6 +692,10 @@
+             None,
+             None,
+         )
++        .inspect(|request| {
++            // Mercury: the source of the request is this cursor.
++            request.set_source(Some(RequestSource::Cursor(Dom::from_ref(self))));
++        })
+     }
+
+     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-delete>
+@@ -738,6 +749,10 @@
+             None,
+             None,
+         )
++        .inspect(|request| {
++            // Mercury: the source of the request is this cursor.
++            request.set_source(Some(RequestSource::Cursor(Dom::from_ref(self))));
++        })
+     }
+ }
+
+diff --git a/dom/indexeddb/idbdatabase.rs b/dom/indexeddb/idbdatabase.rs
+--- a/dom/indexeddb/idbdatabase.rs
++++ b/dom/indexeddb/idbdatabase.rs
+@@ -2,6 +2,10 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
++// Mercury: this file carries upstream code from LunarWerxs/servo, branch pr/indexeddb, commit
++// 860d2eff1 (author L0garithmic, MPL-2.0; the branch is AI-written): `clear_upgrade_transaction`
++// no longer panics. Mercury's other changes to this file are marked `Mercury:` where they are.
++
+ use std::cell::Cell;
+
+ use dom_struct::dom_struct;
+@@ -163,10 +167,16 @@
+     }
+
+     pub(crate) fn clear_upgrade_transaction(&self, transaction: &IDBTransaction) {
+-        let current = self
+-            .upgrade_transaction
+-            .get()
+-            .expect("clear_upgrade_transaction called but no upgrade transaction is set");
++        // Mercury: LunarWerxs/servo pr/indexeddb 860d2eff1 (L0garithmic, MPL-2.0), kept as
++        // upstream wrote it: the former `.expect()` here took the content process down.
++        // A backend error during an upgrade (for example a schema constraint failure
++        // on createIndex) can abort the transaction before it was recorded here, and
++        // an abort must never take the whole script thread down with it. Treat a
++        // missing upgrade transaction as already cleared.
++        let Some(current) = self.upgrade_transaction.get() else {
++            warn!("clear_upgrade_transaction called but no upgrade transaction is set");
++            return;
++        };
+
+         debug_assert!(
+             &*current == transaction,
+@@ -265,7 +275,8 @@
+         // stores named in scope.
+         let durability = options.durability;
+         let scope = DOMStringList::new(cx, &self.global(), scope);
+-        let transaction = IDBTransaction::new(cx, &self.global(), self, mode, durability, &scope);
++        // Mercury: `new` can fail now, with the error of the backend, instead of panicking.
++        let transaction = IDBTransaction::new(cx, &self.global(), self, mode, durability, &scope)?;
+
+         // Step 8. Set transaction’s cleanup event loop to the current event loop.
+         transaction.set_cleanup_event_loop();
+@@ -365,8 +376,10 @@
+             },
+         });
+
++        // Mercury: `create_abort_callback()?` and the `map_err` below replace a panic of the content
++        // process (an `unwrap()`) when the storage thread cannot be reached; nothing has changed yet.
+         let operation = AsyncSchemaOperation::CreateObjectStore {
+-            callback: transaction.create_abort_callback(),
++            callback: transaction.create_abort_callback()?,
+             key_path: key_paths,
+             auto_increment,
+         };
+@@ -379,7 +392,10 @@
+                 operation,
+                 transaction_serial_number: transaction.get_serial_number(),
+             })
+-            .unwrap();
++            .map_err(|error| {
++                error!("Could not send createObjectStore to the storage thread: {error:?}");
++                Error::Operation(Some("The storage thread cannot be reached".to_owned()))
++            })?;
+
+         self.object_store_names
+             .safe_borrow_mut(cx.no_gc())
+@@ -409,6 +425,10 @@
+             return Err(Error::NotFound(None));
+         }
+
++        // Mercury: the callback is made before the object store set changes, so that a failure to
++        // make it (it used to panic the content process) leaves the database as it was.
++        let callback = transaction.create_abort_callback()?;
++
+         // Step 5
+         self.object_store_names
+             .borrow_mut()
+@@ -418,10 +438,9 @@
+         // FIXME:(arihant2math) Remove from index set ...
+
+         // Step 7
+-        let operation = AsyncSchemaOperation::DeleteObjectStore {
+-            callback: transaction.create_abort_callback(),
+-        };
+-        self.get_idb_thread()
++        let operation = AsyncSchemaOperation::DeleteObjectStore { callback };
++        if let Err(error) = self
++            .get_idb_thread()
+             .send(IndexedDBThreadMsg::AsyncSchemaOperation {
+                 origin: self.global().origin().immutable().clone(),
+                 database_name: self.name.to_string(),
+@@ -429,7 +448,15 @@
+                 operation,
+                 transaction_serial_number: transaction.get_serial_number(),
+             })
+-            .unwrap();
++        {
++            // Mercury: the storage thread cannot be reached (this used to be an `unwrap()` that
++            // panicked the content process): put the name back and throw.
++            error!("Could not send deleteObjectStore to the storage thread: {error:?}");
++            self.object_store_names.borrow_mut().push(name.traced());
++            return Err(Error::Operation(Some(
++                "The storage thread cannot be reached".to_owned(),
++            )));
++        }
+
+         Ok(())
+     }
+diff --git a/dom/indexeddb/idbfactory.rs b/dom/indexeddb/idbfactory.rs
+--- a/dom/indexeddb/idbfactory.rs
++++ b/dom/indexeddb/idbfactory.rs
+@@ -15,7 +15,7 @@
+ use servo_url::origin::ImmutableOrigin;
+ use storage_traits::client_storage::{StorageIdentifier, StorageProxyMap, StorageType};
+ use storage_traits::indexeddb::{
+-    BackendResult, ConnectionMsg, DatabaseInfo, IndexedDBThreadMsg, SyncOperation,
++    BackendError, BackendResult, ConnectionMsg, DatabaseInfo, IndexedDBThreadMsg, SyncOperation,
+ };
+ use stylo_atoms::Atom;
+ use uuid::Uuid;
+@@ -202,9 +202,11 @@
+     }
+
+     /// Setup the callback to the backend service, if this hasn't been done already.
+-    fn get_or_setup_callback(&self) -> GenericCallback<ConnectionMsg> {
++    ///
++    /// Mercury: `Err` when the callback cannot be created; it used to panic the content process.
++    fn get_or_setup_callback(&self) -> Result<GenericCallback<ConnectionMsg>, ()> {
+         if let Some(cb) = self.callback.borrow().as_ref() {
+-            return cb.clone();
++            return Ok(cb.clone());
+         }
+
+         let global = self.global();
+@@ -226,11 +228,13 @@
+                 factory.handle_connection_message(cx, response)
+             }));
+         })
+-        .expect("Could not create open database callback");
++        .map_err(|error| {
++            error!("Could not create the open database callback: {error:?}");
++        })?;
+
+         *self.callback.borrow_mut() = Some(callback.clone());
+
+-        callback
++        Ok(callback)
+     }
+
+     fn get_request(&self, name: String, request_id: &Uuid) -> Option<DomRoot<IDBOpenDBRequest>> {
+@@ -342,7 +346,14 @@
+                         "There should be a request to handle ConnectionMsg::VersionChange."
+                     );
+                 };
+-                let connection = request.connection();
++                // Mercury: `pending_connection()` instead of `connection()`, whose `expect()` took
++                // the content process down.
++                let Some(connection) = request.pending_connection() else {
++                    return debug_assert!(
++                        false,
++                        "There should be a connection to handle ConnectionMsg::VersionChange."
++                    );
++                };
+
+                 // Step 10.2: fire a version change event named versionchange at entry with db’s version and version.
+                 connection.dispatch_versionchange(cx, old_version, Some(version));
+@@ -460,6 +471,10 @@
+         let global = self.global();
+         let request_id = request.get_id();
+
++        // Mercury: the callback is set up before the request is recorded as pending, so that a
++        // failure to set it up (it used to panic the content process) leaves no pending request.
++        let callback = self.get_or_setup_callback()?;
++
+         {
+             let mut pending = self.connections.borrow_mut();
+             let outer = pending.entry(DBName(name.to_string())).or_default();
+@@ -466,8 +481,6 @@
+             outer.insert(request_id, Dom::from_ref(request));
+         }
+
+-        let callback = self.get_or_setup_callback();
+-
+         // Step 5: Run these steps in parallel:
+         // Step 5.1: Let result be the result of opening a database connection,
+         // with storageKey, name, version if given and undefined otherwise, and request.
+@@ -664,7 +677,14 @@
+             .database_access_task_source()
+             .to_sendable();
+         let callback = GenericCallback::new(move |message| {
+-            let result: BackendResult<Vec<DatabaseInfo>> = message.unwrap();
++            // Mercury: a reply that cannot be received rejects the promise, it used to panic the
++            // content process.
++            let result: BackendResult<Vec<DatabaseInfo>> = message.unwrap_or_else(|error| {
++                error!("The reply to IDBFactory.databases() could not be received: {error:?}");
++                Err(BackendError::DbErr(
++                    "The reply of the storage thread could not be received".to_owned(),
++                ))
++            });
+             let Some(trusted_promise) = trusted_promise.take() else {
+                 return error!("Callback for `DataBases` called twice.");
+             };
+@@ -692,8 +712,13 @@
+                 },
+             }
+             }));
+-        })
+-        .expect("Could not create databases callback");
++        });
++        // Mercury: no panic; the promise is rejected.
++        let Ok(callback) = callback else {
++            error!("Could not create the databases callback");
++            p.reject_error(cx, Error::Operation(None));
++            return p;
++        };
+
+         let get_operation = SyncOperation::GetDatabases(callback, storage_key);
+         if global
+@@ -702,6 +727,8 @@
+             .is_err()
+         {
+             error!("Failed to send SyncOperation::GetDatabases");
++            // Mercury: nothing will answer, so reject the promise instead of leaving it pending.
++            p.reject_error(cx, Error::Operation(None));
+         }
+
+         // Step 5: Return p.
+diff --git a/dom/indexeddb/idbindex.rs b/dom/indexeddb/idbindex.rs
+--- a/dom/indexeddb/idbindex.rs
++++ b/dom/indexeddb/idbindex.rs
+@@ -1,10 +1,22 @@
+ /* This Source Code Form is subject to the terms of the Mozilla Public
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file carries upstream code, hand-ported onto Servo 0.8, from LunarWerxs/servo, branch
++// pr/indexeddb (author L0garithmic, MPL-2.0; the branch is AI-written, Co-Authored-By Claude Fable 5.1):
++//   4b07849e2 "indexeddb: implement IDBIndex queries, and fix an index cursor losing its position"
++//   098e8a02c "indexeddb: do not copy stored values into index records that never read them"
++//   c609fcd06 "indexeddb: require a key for index get/getKey, and log failed requests at the source"
++// (IDBIndex.get, getKey, getAll, getAllKeys and count, the records of an index derived in script, the
++// index cursor that keeps asking through its index, no value copies for key-only queries, and `get` and
++// `getKey` requiring a key). Mercury's other changes to this file are marked `Mercury:` where they are.
++use std::cmp::Ordering;
++
+ use dom_struct::dom_struct;
+ use js::context::JSContext;
+ use js::conversions::ToJSValConvertible;
+ use js::gc::MutableHandleValue;
++use js::jsval::{DoubleValue, JSVal, UndefinedValue};
+ use js::rust::HandleValue;
+ use script_bindings::cell::DomRefCell;
+ use script_bindings::codegen::GenericBindings::IDBIndexBinding::IDBIndexMethods;
+@@ -13,19 +25,25 @@
+ use script_bindings::error::{Error, ErrorResult, Fallible};
+ use script_bindings::reflector::{Reflector, reflect_dom_object};
+ use script_bindings::str::DOMString;
+-use storage_traits::indexeddb::{AsyncOperation, AsyncReadOnlyOperation};
++use storage_traits::indexeddb::{
++    AsyncOperation, AsyncReadOnlyOperation, IndexedDBKeyRange, IndexedDBKeyType, IndexedDBRecord,
++};
+
+ use crate::dom::bindings::codegen::Bindings::IDBCursorBinding::IDBCursorDirection;
+ use crate::dom::bindings::refcounted::Trusted;
+ use crate::dom::bindings::reflector::DomGlobal;
+ use crate::dom::bindings::root::{Dom, DomRoot};
++use crate::dom::bindings::structuredclone;
+ use crate::dom::globalscope::GlobalScope;
+ use crate::dom::idbobjectstore::KeyPath;
+ use crate::dom::indexeddb::idbcursor::{IDBCursor, IterationParam, ObjectStoreOrIndex};
+ use crate::dom::indexeddb::idbcursorwithvalue::IDBCursorWithValue;
+ use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
+-use crate::dom::indexeddb::idbrequest::IDBRequest;
+-use crate::dom::indexeddb::key::convert_value_to_key_range;
++use crate::dom::indexeddb::idbrequest::{IDBRequest, RequestSource};
++use crate::dom::indexeddb::key::{
++    ExtractionResult, clear_pending_exception, convert_value_to_key_range, extract_key,
++    index_keys_of, key_type_to_jsval,
++};
+
+ #[dom_struct]
+ pub(crate) struct IDBIndex {
+@@ -154,20 +172,310 @@
+             count: None,
+         };
+
+-        IDBRequest::execute_async(
++        // Mercury: the records of an index are not in the backend (see `records_for`), so it is asked
++        // for the whole object store and the reply handler of the request derives the index's records
++        // and applies `range` to them. The cursor does the same on every step, see `IDBCursor`.
++        let index_param = IndexQueryParam {
++            index: Trusted::new(self),
++            range,
++            count: None,
++            kind: IndexQueryKind::Cursor,
++            needs_values: !key_only,
++        };
++
++        IDBRequest::execute_async_indexed(
+             cx,
+             &self.object_store,
+             |callback| {
+                 AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
+                     callback,
+-                    key_range: range,
++                    key_range: IndexedDBKeyRange::default(),
+                 })
+             },
+             None,
+             Some(iteration_param),
++            Some(index_param),
+         )
+-        .inspect(|request| cursor.set_request(request))
++        .inspect(|request| {
++            // Mercury: the source of the request is this index.
++            request.set_source(Some(RequestSource::Index(Dom::from_ref(self))));
++            cursor.set_request(request)
++        })
++    }
++
++    /// The checks every index query makes before it creates a request.
++    ///
++    /// Mercury: shared by get, getKey, getAll, getAllKeys and count.
++    fn check_usable(&self) -> ErrorResult {
++        // Step: If index or its object store has been deleted, throw an "InvalidStateError" DOMException.
++        self.verify_not_deleted()?;
++
++        // Step: If transaction is not active, throw a "TransactionInactiveError" DOMException.
++        let transaction = self.object_store.transaction();
++        if !transaction.is_active() || !transaction.is_usable() {
++            return Err(Error::TransactionInactive(Some(
++                "Transaction is not active".to_owned(),
++            )));
++        }
++        Ok(())
++    }
++
++    /// Runs an index query that is not a cursor: get, getKey, getAll, getAllKeys and count.
++    ///
++    /// Mercury: Servo's IndexedDB backend keeps no index entries (its `index_data` and
++    /// `unique_index_data` tables are created and cleared but never written) and cannot derive them,
++    /// because it stores values as opaque structured-clone blobs. Until it maintains real indexes the
++    /// records are derived here, in the reply handler of the request (see `records_for`): the backend
++    /// is asked for the whole object store. That is correct but linear in the size of the store.
++    fn query(
++        &self,
++        cx: &mut JSContext,
++        query: HandleValue,
++        kind: IndexQueryKind,
++        count: Option<u32>,
++        needs_values: bool,
++    ) -> Fallible<DomRoot<IDBRequest>> {
++        self.check_usable()?;
++
++        // The range applies to the keys of this index, not to those of the object store. get() and
++        // getKey() ask for one record and so require a key (a "DataError" DOMException otherwise);
++        // the others treat an absent query as the whole index.
++        let null_disallowed = matches!(kind, IndexQueryKind::Get | IndexQueryKind::GetKey);
++        let range = convert_value_to_key_range(cx, query, Some(null_disallowed))?;
++
++        let index_param = IndexQueryParam {
++            index: Trusted::new(self),
++            range,
++            count,
++            kind,
++            needs_values,
++        };
++
++        IDBRequest::execute_async_indexed(
++            cx,
++            &self.object_store,
++            |callback| {
++                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
++                    callback,
++                    key_range: IndexedDBKeyRange::default(),
++                })
++            },
++            None,
++            None,
++            Some(index_param),
++        )
++        .inspect(|request| {
++            // Mercury: the source of the request is this index.
++            request.set_source(Some(RequestSource::Index(Dom::from_ref(self))));
++        })
++    }
++
++    /// The records of this index, derived from the records of its object store: the key path is
++    /// evaluated over each stored value, a record whose value has no valid key for the index is
++    /// not in it, a multiEntry key gives one record per member, and the result is sorted into
++    /// index order (key, then primary key). A unique index keeps the first record of a key.
++    ///
++    /// `needs_values` is false when only keys are wanted: stored values are then not copied into
++    /// records that nobody reads.
++    ///
++    /// <https://www.w3.org/TR/IndexedDB-3/#index-referenced-value>
++    pub(crate) fn records_for(
++        &self,
++        cx: &mut JSContext,
++        global: &GlobalScope,
++        store_records: Vec<IndexedDBRecord>,
++        needs_values: bool,
++    ) -> Vec<IndexedDBRecord> {
++        let mut entries = Vec::with_capacity(store_records.len());
++
++        for record in store_records {
++            rooted!(&in(cx) let mut value = UndefinedValue());
++            let read = postcard::from_bytes(&record.value)
++                .map_err(|_| ())
++                .and_then(|data| {
++                    structuredclone::read(cx, global, data, value.handle_mut()).map_err(|_| ())
++                });
++            if read.is_err() {
++                warn!("indexeddb: a stored value could not be read to build an index");
++                clear_pending_exception(cx);
++                continue;
++            }
++
++            // If extracting the key throws, or the key is invalid, or the value has none, the record
++            // is not in the index (the exception does not propagate).
++            let extracted = extract_key(cx, value.handle(), &self.key_path, Some(self.multi_entry));
++            let keys = match extracted {
++                Ok(ExtractionResult::Key(key)) => index_keys_of(key, self.multi_entry),
++                Ok(ExtractionResult::Invalid | ExtractionResult::Failure) => continue,
++                Err(_) => {
++                    clear_pending_exception(cx);
++                    continue;
++                },
++            };
++            entries.push((record, keys));
++        }
++
++        build_index_records(entries, self.unique, needs_values)
++    }
++}
++
++/// What an index query hands back once the records of the index have been derived.
++///
++/// Mercury: from LunarWerxs pr/indexeddb 4b07849e2.
++#[derive(Clone, Copy, PartialEq)]
++pub(crate) enum IndexQueryKind {
++    /// The referenced value of the first record in the range.
++    Get,
++    /// The primary key of the first record in the range.
++    GetKey,
++    /// The referenced value of every record in the range.
++    GetAll,
++    /// The primary key of every record in the range.
++    GetAllKeys,
++    /// How many records are in the range.
++    Count,
++    /// The records go to a cursor instead of being the answer.
++    Cursor,
++}
++
++/// Everything the reply handler of an `IDBRequest` needs to turn the scan of an object store into
++/// the answer to one index query (or into the records one cursor step chooses from).
++///
++/// Mercury: from LunarWerxs pr/indexeddb 4b07849e2 and 098e8a02c.
++#[derive(Clone)]
++pub(crate) struct IndexQueryParam {
++    pub(crate) index: Trusted<IDBIndex>,
++    pub(crate) range: IndexedDBKeyRange,
++    pub(crate) count: Option<u32>,
++    pub(crate) kind: IndexQueryKind,
++    /// False when only keys are wanted (getKey, getAllKeys, count, a key cursor). An index query
++    /// rebuilds its records from a full scan of the object store, and copying every stored value
++    /// into records nobody reads is the difference between a cheap query and an expensive one.
++    pub(crate) needs_values: bool,
++}
++
++impl IndexQueryParam {
++    /// Builds the answer of a query that is not a cursor from the records of the index that are in
++    /// its range, honouring the `count` limit.
++    pub(crate) fn answer(
++        &self,
++        cx: &mut JSContext,
++        global: &GlobalScope,
++        records: &[IndexedDBRecord],
++        mut answer: MutableHandleValue,
++    ) -> Result<(), Error> {
++        let limit = match self.count {
++            Some(0) | None => records.len(),
++            Some(count) => (count as usize).min(records.len()),
++        };
++
++        match self.kind {
++            IndexQueryKind::Get => match records.first() {
++                Some(record) => read_value(cx, global, record, answer)?,
++                // A query that matches nothing resolves with undefined, not with an error.
++                None => answer.set(UndefinedValue()),
++            },
++            IndexQueryKind::GetKey => match records.first() {
++                Some(record) => key_type_to_jsval(cx, &record.primary_key, answer),
++                None => answer.set(UndefinedValue()),
++            },
++            IndexQueryKind::GetAll => {
++                rooted!(&in(cx) let mut values = vec![JSVal::default(); limit]);
++                for (i, record) in records.iter().take(limit).enumerate() {
++                    read_value(cx, global, record, values.handle_mut_at(i))?;
++                }
++                values.to_jsval(cx, answer);
++            },
++            IndexQueryKind::GetAllKeys => {
++                rooted!(&in(cx) let mut keys = vec![JSVal::default(); limit]);
++                for (i, record) in records.iter().take(limit).enumerate() {
++                    key_type_to_jsval(cx, &record.primary_key, keys.handle_mut_at(i));
++                }
++                keys.to_jsval(cx, answer);
++            },
++            IndexQueryKind::Count => answer.set(DoubleValue(records.len() as f64)),
++            IndexQueryKind::Cursor => {
++                return Err(Error::InvalidState(Some(
++                    "A cursor query does not answer directly".to_owned(),
++                )));
++            },
++        }
++        Ok(())
++    }
++}
++
++/// Reads the stored value of a record into a JavaScript value.
++fn read_value(
++    cx: &mut JSContext,
++    global: &GlobalScope,
++    record: &IndexedDBRecord,
++    answer: MutableHandleValue,
++) -> Result<(), Error> {
++    let data = postcard::from_bytes(&record.value).map_err(|_| {
++        warn!(
++            "indexeddb: index record value failed to decode ({} bytes)",
++            record.value.len()
++        );
++        Error::Data(None)
++    })?;
++    structuredclone::read(cx, global, data, answer)
++        .map(|_ports| ())
++        .inspect_err(|_| warn!("indexeddb: index record value failed structured deserialize"))
++}
++
++/// The records of an index, from the stored records and the index keys extracted from each of them,
++/// in index order: by key, then by primary key. A record with no keys is not in the index. A unique
++/// index keeps the first record of each key.
++///
++/// With `needs_values` false the records carry no value; otherwise each carries a copy of the stored
++/// value (the last key of a record takes the stored value itself).
++///
++/// Mercury: the pure part of `IDBIndex::records_for`, split out so that it can be tested without a
++/// JavaScript context.
++fn build_index_records(
++    entries: Vec<(IndexedDBRecord, Vec<IndexedDBKeyType>)>,
++    unique: bool,
++    needs_values: bool,
++) -> Vec<IndexedDBRecord> {
++    let mut out: Vec<IndexedDBRecord> = Vec::new();
++
++    for (record, keys) in entries {
++        let IndexedDBRecord {
++            primary_key, value, ..
++        } = record;
++        let mut stored_value = needs_values.then_some(value);
++        let mut keys = keys.into_iter().peekable();
++        while let Some(key) = keys.next() {
++            let copy = if keys.peek().is_some() {
++                stored_value.clone()
++            } else {
++                stored_value.take()
++            };
++            out.push(IndexedDBRecord {
++                key,
++                primary_key: primary_key.clone(),
++                value: copy.unwrap_or_default(),
++            });
++        }
+     }
++
++    // Index order is by index key, then by primary key.
++    out.sort_by(|a, b| {
++        a.key
++            .partial_cmp(&b.key)
++            .unwrap_or(Ordering::Equal)
++            .then_with(|| {
++                a.primary_key
++                    .partial_cmp(&b.primary_key)
++                    .unwrap_or(Ordering::Equal)
++            })
++    });
++
++    // A unique index keeps only the first record for each key.
++    if unique {
++        out.dedup_by(|later, earlier| later.key == earlier.key);
++    }
++    out
+ }
+
+ impl IDBIndexMethods<crate::DomTypeHolder> for IDBIndex {
+@@ -224,7 +532,8 @@
+         }
+
+         // Step 9: Set index’s name to name.
+-        self.object_store.rename_index(&stored_name, &name);
++        // Mercury: `?`: the rename can fail now, with nothing changed, instead of going on locally.
++        self.object_store.rename_index(&stored_name, &name)?;
+
+         // Step 10: Set this’s name to name.
+         *stored_name = name.traced();
+@@ -258,6 +567,41 @@
+         }
+     }
+
++    /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbindex-get>
++    fn Get(&self, cx: &mut JSContext, query: HandleValue) -> Fallible<DomRoot<IDBRequest>> {
++        self.query(cx, query, IndexQueryKind::Get, None, true)
++    }
++
++    /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbindex-getkey>
++    fn GetKey(&self, cx: &mut JSContext, query: HandleValue) -> Fallible<DomRoot<IDBRequest>> {
++        self.query(cx, query, IndexQueryKind::GetKey, None, false)
++    }
++
++    /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbindex-getall>
++    fn GetAll(
++        &self,
++        cx: &mut JSContext,
++        query: HandleValue,
++        count: Option<u32>,
++    ) -> Fallible<DomRoot<IDBRequest>> {
++        self.query(cx, query, IndexQueryKind::GetAll, count, true)
++    }
++
++    /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbindex-getallkeys>
++    fn GetAllKeys(
++        &self,
++        cx: &mut JSContext,
++        query: HandleValue,
++        count: Option<u32>,
++    ) -> Fallible<DomRoot<IDBRequest>> {
++        self.query(cx, query, IndexQueryKind::GetAllKeys, count, false)
++    }
++
++    /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbindex-count>
++    fn Count(&self, cx: &mut JSContext, query: HandleValue) -> Fallible<DomRoot<IDBRequest>> {
++        self.query(cx, query, IndexQueryKind::Count, None, false)
++    }
++
+     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbindex-opencursor>
+     fn OpenCursor(
+         &self,
+@@ -278,3 +622,153 @@
+         self.open_cursor(cx, query, direction, true)
+     }
+ }
++
++// Mercury: tests for the pure part of deriving the records of an index (no JavaScript context).
++#[cfg(test)]
++mod tests {
++    use storage_traits::indexeddb::{IndexedDBKeyType, IndexedDBRecord};
++
++    use super::build_index_records;
++
++    fn number(n: f64) -> IndexedDBKeyType {
++        IndexedDBKeyType::Number(n)
++    }
++
++    fn string(s: &str) -> IndexedDBKeyType {
++        IndexedDBKeyType::String(s.to_owned())
++    }
++
++    /// A stored record with primary key `id` whose value is the bytes of `id`.
++    fn stored(id: u8) -> IndexedDBRecord {
++        IndexedDBRecord {
++            key: number(f64::from(id)),
++            primary_key: number(f64::from(id)),
++            value: vec![id],
++        }
++    }
++
++    /// (index key, primary key) of each record, in order.
++    fn pairs(records: &[IndexedDBRecord]) -> Vec<(IndexedDBKeyType, IndexedDBKeyType)> {
++        records
++            .iter()
++            .map(|record| (record.key.clone(), record.primary_key.clone()))
++            .collect()
++    }
++
++    #[test]
++    fn records_come_out_in_key_then_primary_key_order() {
++        let entries = vec![
++            (stored(1), vec![string("oslo")]),
++            (stored(2), vec![string("berlin")]),
++            (stored(3), vec![string("oslo")]),
++            (stored(4), vec![string("cairo")]),
++        ];
++        let records = build_index_records(entries, false, true);
++        assert_eq!(
++            pairs(&records),
++            vec![
++                (string("berlin"), number(2.0)),
++                (string("cairo"), number(4.0)),
++                (string("oslo"), number(1.0)),
++                (string("oslo"), number(3.0)),
++            ]
++        );
++    }
++
++    #[test]
++    fn a_multientry_record_is_in_the_index_once_per_key() {
++        // Record 1 has the tags a and b, record 2 has b and c, record 3 has none.
++        let entries = vec![
++            (stored(1), vec![string("a"), string("b")]),
++            (stored(2), vec![string("b"), string("c")]),
++            (stored(3), vec![]),
++        ];
++        let records = build_index_records(entries, false, true);
++        assert_eq!(
++            pairs(&records),
++            vec![
++                (string("a"), number(1.0)),
++                (string("b"), number(1.0)),
++                (string("b"), number(2.0)),
++                (string("c"), number(2.0)),
++            ]
++        );
++    }
++
++    #[test]
++    fn every_key_of_a_record_carries_the_stored_value_when_values_are_wanted() {
++        let entries = vec![(stored(7), vec![string("a"), string("b"), string("c")])];
++        let records = build_index_records(entries, false, true);
++        assert_eq!(records.len(), 3);
++        assert!(records.iter().all(|record| record.value == vec![7]));
++    }
++
++    #[test]
++    fn no_value_is_copied_when_only_keys_are_wanted() {
++        let entries = vec![
++            (stored(1), vec![string("a"), string("b")]),
++            (stored(2), vec![string("a")]),
++        ];
++        let records = build_index_records(entries, false, false);
++        assert_eq!(records.len(), 3);
++        assert!(records.iter().all(|record| record.value.is_empty()));
++    }
++
++    #[test]
++    fn a_unique_index_keeps_the_first_record_of_a_key() {
++        let entries = vec![
++            (stored(3), vec![string("x")]),
++            (stored(1), vec![string("x")]),
++            (stored(2), vec![string("y")]),
++        ];
++        let records = build_index_records(entries, true, true);
++        assert_eq!(
++            pairs(&records),
++            vec![(string("x"), number(1.0)), (string("y"), number(2.0))]
++        );
++    }
++
++    #[test]
++    fn a_unique_multientry_index_keeps_one_record_per_member() {
++        // Record 1 has x and y, record 2 has y and z: y belongs to the record with the smaller primary key.
++        let entries = vec![
++            (stored(1), vec![string("x"), string("y")]),
++            (stored(2), vec![string("y"), string("z")]),
++        ];
++        let records = build_index_records(entries, true, true);
++        assert_eq!(
++            pairs(&records),
++            vec![
++                (string("x"), number(1.0)),
++                (string("y"), number(1.0)),
++                (string("z"), number(2.0)),
++            ]
++        );
++    }
++
++    #[test]
++    fn keys_of_different_types_sort_by_the_specification_order() {
++        // number < date < string < binary < array
++        let entries = vec![
++            (stored(1), vec![IndexedDBKeyType::Array(vec![number(1.0)])]),
++            (stored(2), vec![string("s")]),
++            (stored(3), vec![number(5.0)]),
++            (stored(4), vec![IndexedDBKeyType::Date(1.0)]),
++        ];
++        let records = build_index_records(entries, false, false);
++        let order: Vec<_> = records
++            .iter()
++            .map(|record| record.primary_key.clone())
++            .collect();
++        assert_eq!(
++            order,
++            vec![number(3.0), number(4.0), number(2.0), number(1.0)]
++        );
++    }
++
++    #[test]
++    fn an_empty_store_gives_no_records() {
++        assert!(build_index_records(vec![], false, true).is_empty());
++        assert!(build_index_records(vec![], true, false).is_empty());
++    }
++}
+diff --git a/dom/indexeddb/idbobjectstore.rs b/dom/indexeddb/idbobjectstore.rs
+--- a/dom/indexeddb/idbobjectstore.rs
++++ b/dom/indexeddb/idbobjectstore.rs
+@@ -606,9 +606,13 @@
+     }
+
+     /// The caller must ensure that the original index exists.
+-    pub(crate) fn rename_index(&self, name: &TracedDOMString, new_name: &DOMString) {
++    ///
++    /// Mercury: returns an error, and changes nothing, when the rename cannot be sent to the
++    /// storage thread (it used to log and rename locally anyway) or its callback cannot be made;
++    /// a missing index no longer panics the content process (the caller checked that it exists).
++    pub(crate) fn rename_index(&self, name: &TracedDOMString, new_name: &DOMString) -> ErrorResult {
+         let operation = AsyncSchemaOperation::RenameIndex {
+-            callback: self.transaction.create_abort_callback(),
++            callback: self.transaction.create_abort_callback()?,
+             index_name: name.to_string(),
+             new_name: new_name.to_string(),
+         };
+@@ -625,18 +629,20 @@
+             .is_err()
+         {
+             warn!("Could not send AsyncSchemaOperation");
++            return Err(Error::Operation(Some(
++                "The storage thread cannot be reached".to_owned(),
++            )));
+         }
+
+         // We also need to update the key in the index set
+-        let index = self
+-            .index_set
+-            .borrow_mut()
+-            .remove(name)
+-            .expect("Earlier steps of the algorithm checked that the index exists")
+-            .as_rooted();
+-        self.index_set
+-            .borrow_mut()
+-            .insert(new_name.clone().traced(), Dom::from_ref(&index));
++        let removed = self.index_set.borrow_mut().remove(name);
++        if let Some(index) = removed {
++            let index = index.as_rooted();
++            self.index_set
++                .borrow_mut()
++                .insert(new_name.clone().traced(), Dom::from_ref(&index));
++        }
++        Ok(())
+     }
+ }
+
+@@ -1027,8 +1033,9 @@
+         // Step 11. Let index be a new index in store.
+         // Set index’s name to name and key path to keyPath. If unique is set, set index’s unique flag.
+         // If multiEntry is set, set index’s multiEntry flag.
++        // Mercury: `create_abort_callback()?` throws instead of panicking the content process.
+         let operation = AsyncSchemaOperation::CreateIndex {
+-            callback: self.transaction.create_abort_callback(),
++            callback: self.transaction.create_abort_callback()?,
+             index_name: name.to_string(),
+             key_path: key_path.clone().into(),
+             unique: options.unique,
+@@ -1071,11 +1078,14 @@
+         if !self.index_set.borrow().contains_key(&name) {
+             return Err(Error::NotFound(None));
+         }
++        // Mercury: the callback is made before the index set changes, and `?` throws instead of
++        // panicking the content process when it cannot be made.
++        let callback = self.transaction.create_abort_callback()?;
+         // Step 7. Remove index from this object store handle's index set.
+         self.index_set.borrow_mut().retain(|n, _| n != &*name);
+         // Step 8. Destroy index.
+         let operation = AsyncSchemaOperation::DeleteIndex {
+-            callback: self.transaction.create_abort_callback(),
++            callback,
+             index_name: name.to_string(),
+         };
+         if self
+diff --git a/dom/indexeddb/idbopendbrequest.rs b/dom/indexeddb/idbopendbrequest.rs
+--- a/dom/indexeddb/idbopendbrequest.rs
++++ b/dom/indexeddb/idbopendbrequest.rs
+@@ -12,7 +12,7 @@
+ use servo_base::generic_channel::GenericSend;
+ use servo_url::origin::ImmutableOrigin;
+ use storage_traits::client_storage::StorageProxyMap;
+-use storage_traits::indexeddb::{BackendResult, IndexedDBThreadMsg, SyncOperation};
++use storage_traits::indexeddb::{BackendError, BackendResult, IndexedDBThreadMsg, SyncOperation};
+ use stylo_atoms::Atom;
+ use uuid::Uuid;
+
+@@ -127,12 +127,6 @@
+         self.id
+     }
+
+-    pub(crate) fn connection(&self) -> DomRoot<IDBDatabase> {
+-        self.pending_connection
+-            .get()
+-            .expect("A connection should exist for the db.")
+-    }
+-
+     pub(crate) fn get_or_init_connection(
+         &self,
+         cx: &mut JSContext,
+@@ -246,13 +240,19 @@
+         let response_listener = OpenRequestListener {
+             open_request: Trusted::new(self),
+         };
++        // Mercury: a lost reply or a callback that cannot be created used to panic the content
++        // process (`unwrap()` and `expect()`); now the request fails with an error event.
+         let callback = GenericCallback::new(move |message| {
+             let response_listener = response_listener.clone();
+             task_source.queue(task!(request_callback: move |cx| {
+-                response_listener.handle_delete_db(cx, message.unwrap());
++                let result = message.unwrap_or_else(|error| {
++                    error!("The reply to deleteDatabase was lost: {error:?}");
++                    Err(BackendError::Abort)
++                });
++                response_listener.handle_delete_db(cx, result);
+             }))
+         })
+-        .expect("Could not create delete database callback");
++        .map_err(|error| error!("Could not create the deleteDatabase callback: {error:?}"))?;
+
+         let delete_operation =
+             SyncOperation::DeleteDatabase(callback, storage_key, name, proxy_map, self.get_id());
+diff --git a/dom/indexeddb/idbrequest.rs b/dom/indexeddb/idbrequest.rs
+--- a/dom/indexeddb/idbrequest.rs
++++ b/dom/indexeddb/idbrequest.rs
+@@ -2,6 +2,11 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
++// Mercury: this file carries upstream code, hand-ported onto Servo 0.8, from LunarWerxs/servo, branch
++// pr/indexeddb (author L0garithmic, MPL-2.0; the branch is AI-written): commit 4b07849e2 (the reply
++// handler derives index records: `execute_async_indexed`) and c609fcd06 (failed requests are logged
++// where they fail). Mercury's other changes to this file are marked `Mercury:` where they are.
++
+ #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
+
+ use std::cell::Cell;
+@@ -13,6 +18,7 @@
+ use js::jsval::{DoubleValue, JSVal, NullValue, ObjectValue, UndefinedValue};
+ use js::rust::HandleValue;
+ use profile_traits::generic_callback::GenericCallback;
++use script_bindings::cell::DomRefCell;
+ use script_bindings::reflector::{DomObject, reflect_dom_object};
+ use serde::{Deserialize, Serialize};
+ use servo_base::generic_channel::{GenericSend, SendError};
+@@ -26,27 +32,44 @@
+     IDBRequestMethods, IDBRequestReadyState,
+ };
+ use crate::dom::bindings::codegen::Bindings::IDBTransactionBinding::IDBTransactionMode;
++use crate::dom::bindings::codegen::UnionTypes::IDBObjectStoreOrIDBIndexOrIDBCursor;
+ use crate::dom::bindings::error::{Error, Fallible, create_dom_exception};
+ use crate::dom::bindings::inheritance::Castable;
+ use crate::dom::bindings::refcounted::Trusted;
+ use crate::dom::bindings::reflector::DomGlobal;
+-use crate::dom::bindings::root::{DomRoot, MutNullableDom};
++use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
+ use crate::dom::bindings::structuredclone;
+ use crate::dom::domexception::DOMException;
+ use crate::dom::event::{Event, EventBubbles, EventCancelable};
+ use crate::dom::eventtarget::EventTarget;
+ use crate::dom::globalscope::GlobalScope;
+-use crate::dom::indexeddb::idbcursor::{IterationParam, iterate_cursor};
++use crate::dom::indexeddb::idbcursor::{IDBCursor, IterationParam, iterate_cursor};
+ use crate::dom::indexeddb::idbcursorwithvalue::IDBCursorWithValue;
++use crate::dom::indexeddb::idbindex::{IDBIndex, IndexQueryKind, IndexQueryParam};
+ use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
+ use crate::dom::indexeddb::idbtransaction::IDBTransaction;
+-use crate::dom::indexeddb::key::key_type_to_jsval;
++use crate::dom::indexeddb::key::{key_type_to_jsval, map_backend_error_to_request_error};
+ use crate::realms::enter_auto_realm;
+
++/// <https://www.w3.org/TR/IndexedDB-3/#request-source>
++///
++/// Mercury: IDBRequest.source is an object store, an index or a cursor; it used to be an object
++/// store only, so a request made through an index or a cursor reported the wrong source.
++#[derive(JSTraceable, MallocSizeOf)]
++#[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
++pub(crate) enum RequestSource {
++    ObjectStore(Dom<IDBObjectStore>),
++    Index(Dom<IDBIndex>),
++    Cursor(Dom<IDBCursor>),
++}
++
+ #[derive(Clone)]
+ struct RequestListener {
+     request: Trusted<IDBRequest>,
+     iteration_param: Option<IterationParam>,
++    // Mercury: set when this request is an index query or a step of an index cursor, which the
++    // backend cannot answer itself, see `IDBIndex::records_for`.
++    index_param: Option<IndexQueryParam>,
+     request_id: u64,
+ }
+
+@@ -155,10 +178,12 @@
+         let request = self.request.root();
+         let global = request.global();
+
+-        let transaction = request
+-            .transaction
+-            .get()
+-            .expect("Request unexpectedly has no transaction");
++        // Mercury: a reply for a request that lost its transaction is dropped, not a panic of the
++        // content process.
++        let Some(transaction) = request.transaction.get() else {
++            warn!("indexeddb: the reply to a request arrived after its transaction was cleared");
++            return;
++        };
+         // Substep 1: Set the result of request to result.
+         request.set_ready_state_done();
+
+@@ -166,7 +191,24 @@
+         let cx: &mut JSContext = &mut realm;
+         rooted!(&in(cx) let mut answer = UndefinedValue());
+
+-        if let Ok(data) = result {
++        // Mercury: the request fails with the error the backend reported (a quota error, a
++        // constraint error, an abort, any other failure of the backend), where it used to fail
++        // with a DataError whatever went wrong.
++        let data = match result {
++            Ok(data) => data,
++            Err(error) => {
++                Self::handle_async_request_error(
++                    &global,
++                    cx,
++                    request,
++                    map_backend_error_to_request_error(error),
++                    self.request_id,
++                );
++                return;
++            },
++        };
++
++        {
+             match data {
+                 IdbResult::Key(key) => key_type_to_jsval(cx, &key, answer.handle_mut()),
+                 IdbResult::Keys(keys) => {
+@@ -214,38 +256,82 @@
+                     answer.handle_mut().set(DoubleValue(count as f64));
+                 },
+                 IdbResult::Iterate(records) => {
+-                    let param = self.iteration_param.as_ref().expect(
+-                        "iteration_param must be provided by IDBRequest::execute_async for Iterate",
+-                    );
+-                    let cursor = match iterate_cursor(&global, cx, param, records) {
+-                        Ok(cursor) => cursor,
+-                        Err(e) => {
+-                            warn!("Error reading structuredclone data");
++                    // Mercury: LunarWerxs pr/indexeddb 4b07849e2. An index query arrives here as
++                    // the scan of the whole object store that owns the index, because the backend
++                    // keeps no index entries: derive the records of the index first (see
++                    // `IDBIndex::records_for`). A query that is not a cursor is answered from them
++                    // directly; the records of a cursor step go to `iterate_cursor` below.
++                    let mut answered_directly = false;
++                    let records = match self.index_param.as_ref() {
++                        Some(index_param) => {
++                            let index = index_param.index.root();
++                            let mut records =
++                                index.records_for(cx, &global, records, index_param.needs_values);
++                            records.retain(|record| index_param.range.contains(&record.key));
++                            if index_param.kind != IndexQueryKind::Cursor {
++                                if let Err(e) =
++                                    index_param.answer(cx, &global, &records, answer.handle_mut())
++                                {
++                                    Self::handle_async_request_error(
++                                        &global,
++                                        cx,
++                                        request,
++                                        e,
++                                        self.request_id,
++                                    );
++                                    return;
++                                }
++                                answered_directly = true;
++                            }
++                            records
++                        },
++                        None => records,
++                    };
++
++                    if !answered_directly {
++                        // Mercury: execute_async_indexed asserted that a cursor step has one.
++                        let Some(param) = self.iteration_param.as_ref() else {
+                             Self::handle_async_request_error(
+                                 &global,
+                                 cx,
+                                 request,
+-                                e,
++                                Error::InvalidState(Some(
++                                    "A cursor step lost its iteration parameters".to_owned(),
++                                )),
+                                 self.request_id,
+                             );
+                             return;
+-                        },
+-                    };
+-                    if let Some(cursor) = cursor {
+-                        match cursor.downcast::<IDBCursorWithValue>() {
+-                            Some(cursor_with_value) => {
+-                                answer.handle_mut().set(ObjectValue(
+-                                    *cursor_with_value.reflector().get_jsobject(),
+-                                ));
+-                            },
+-                            None => {
+-                                answer
+-                                    .handle_mut()
+-                                    .set(ObjectValue(*cursor.reflector().get_jsobject()));
++                        };
++                        let cursor = match iterate_cursor(&global, cx, param, records) {
++                            Ok(cursor) => cursor,
++                            Err(e) => {
++                                warn!("Error reading structuredclone data");
++                                Self::handle_async_request_error(
++                                    &global,
++                                    cx,
++                                    request,
++                                    e,
++                                    self.request_id,
++                                );
++                                return;
+                             },
++                        };
++                        if let Some(cursor) = cursor {
++                            match cursor.downcast::<IDBCursorWithValue>() {
++                                Some(cursor_with_value) => {
++                                    answer.handle_mut().set(ObjectValue(
++                                        *cursor_with_value.reflector().get_jsobject(),
++                                    ));
++                                },
++                                None => {
++                                    answer
++                                        .handle_mut()
++                                        .set(ObjectValue(*cursor.reflector().get_jsobject()));
++                                },
++                            }
++                        } else {
++                            answer.handle_mut().set(NullValue());
+                         }
+-                    } else {
+-                        answer.handle_mut().set(NullValue());
+                     }
+                 },
+                 IdbResult::None => {
+@@ -304,16 +390,6 @@
+             transaction.request_finished();
+
+             Self::send_request_handled(cx, &transaction, self.request_id);
+-        } else {
+-            // FIXME:(arihant2math) dispatch correct error
+-            // Substep 2
+-            Self::handle_async_request_error(
+-                &global,
+-                cx,
+-                request,
+-                Error::Data(None),
+-                self.request_id,
+-            );
+         }
+     }
+
+@@ -326,10 +402,14 @@
+         error: Error,
+         request_id: u64,
+     ) {
+-        let transaction = request
+-            .transaction
+-            .get()
+-            .expect("Request has no transaction");
++        // Mercury: LunarWerxs pr/indexeddb c609fcd06. Log every failed request where it fails: a
++        // DOMException carries no JavaScript stack, so a page that swallows the rejection leaves
++        // nothing behind to find the cause by.
++        warn!("indexeddb: request {request_id} failed: {error:?}");
++        // Mercury: a request that lost its transaction has nothing left to abort or to report to.
++        let Some(transaction) = request.transaction.get() else {
++            return;
++        };
+         // Substep 1: Set the result of request to undefined.
+         rooted!(&in(cx) let undefined = UndefinedValue());
+         request.set_result(undefined.handle());
+@@ -400,12 +480,14 @@
+     #[ignore_malloc_size_of = "mozjs"]
+     result: Heap<JSVal>,
+     error: MutNullableDom<DOMException>,
+-    source: MutNullableDom<IDBObjectStore>,
++    // Mercury: an object store, an index or a cursor (it was an object store only).
++    source: DomRefCell<Option<RequestSource>>,
+     transaction: MutNullableDom<IDBTransaction>,
+     ready_state: Cell<IDBRequestReadyState>,
+ }
+
+ impl IDBRequest {
++    #[cfg_attr(crown, expect(crown::unrooted_must_root))]
+     pub fn new_inherited() -> IDBRequest {
+         IDBRequest {
+             eventtarget: EventTarget::new_inherited(),
+@@ -412,7 +494,7 @@
+
+             result: Heap::default(),
+             error: Default::default(),
+-            source: Default::default(),
++            source: DomRefCell::new(None),
+             transaction: Default::default(),
+             ready_state: Cell::new(IDBRequestReadyState::Pending),
+         }
+@@ -422,8 +504,12 @@
+         reflect_dom_object(cx, Box::new(IDBRequest::new_inherited()), global)
+     }
+
+-    pub fn set_source(&self, source: Option<&IDBObjectStore>) {
+-        self.source.set(source);
++    /// <https://www.w3.org/TR/IndexedDB-3/#request-source>
++    ///
++    /// Mercury: takes the source of any kind; the request of an index query has the index as
++    /// its source and the request of `IDBCursor.update()` or `delete()` the cursor.
++    pub(crate) fn set_source(&self, source: Option<RequestSource>) {
++        *self.source.borrow_mut() = source;
+     }
+
+     pub fn set_ready_state_done(&self) {
+@@ -476,6 +562,25 @@
+         T: Into<IdbResult> + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
+         F: FnOnce(GenericCallback<BackendResult<T>>) -> AsyncOperation,
+     {
++        Self::execute_async_indexed(cx, source, operation_fn, request, iteration_param, None)
++    }
++
++    /// As [`execute_async`](Self::execute_async), for a request whose reply has to be reinterpreted
++    /// through an index before script sees it: `index_param` says how (see `IDBIndex::records_for`).
++    ///
++    /// Mercury: LunarWerxs pr/indexeddb 4b07849e2.
++    pub fn execute_async_indexed<T, F>(
++        cx: &mut JSContext,
++        source: &IDBObjectStore,
++        operation_fn: F,
++        request: Option<DomRoot<IDBRequest>>,
++        iteration_param: Option<IterationParam>,
++        index_param: Option<IndexQueryParam>,
++    ) -> Fallible<DomRoot<IDBRequest>>
++    where
++        T: Into<IdbResult> + for<'a> Deserialize<'a> + Serialize + Send + Sync + 'static,
++        F: FnOnce(GenericCallback<BackendResult<T>>) -> AsyncOperation,
++    {
+         // Step 1: Let transaction be the transaction associated with source.
+         let transaction = source.transaction();
+         let global = transaction.global();
+@@ -489,7 +594,7 @@
+         // Step 3: If request was not given, let request be a new request with source as source.
+         let request = request.unwrap_or_else(|| {
+             let new_request = IDBRequest::new(cx, &global);
+-            new_request.set_source(Some(source));
++            new_request.set_source(Some(RequestSource::ObjectStore(Dom::from_ref(source))));
+             new_request.set_transaction(&transaction);
+             new_request
+         });
+@@ -508,6 +613,7 @@
+         let response_listener = RequestListener {
+             request: Trusted::new(&request),
+             iteration_param: iteration_param.clone(),
++            index_param: index_param.clone(),
+             request_id,
+         };
+
+@@ -518,10 +624,21 @@
+
+         let closure = move |message: Result<BackendResult<T>, SendError>| {
+             let response_listener = response_listener.clone();
++            // Mercury: a reply that cannot be received (the storage thread went away, or the
++            // message did not decode) fails the request; it used to panic the content process.
++            let result = match message {
++                Ok(result) => result,
++                Err(error) => {
++                    error!("The reply to an IndexedDB request could not be received: {error:?}");
++                    Err(BackendError::DbErr(
++                        "The reply of the storage thread could not be received".to_owned(),
++                    ))
++                },
++            };
+             task_source.queue(task!(request_callback: move |cx| {
+                 response_listener.handle_async_request_finished(
+                     cx,
+-                    message.expect("Could not unwrap message").inspect_err(|e| {
++                    result.inspect_err(|e| {
+                         if let BackendError::DbErr(e) = e {
+                             error!("Error in IndexedDB operation: {}", e);
+                         }
+@@ -529,7 +646,19 @@
+                 );
+             }));
+         };
+-        let callback = GenericCallback::new(closure).expect("Could not create callback");
++        // Mercury: no panic when the callback cannot be created. The request is taken out of the
++        // books of its transaction again, so that the transaction can still finish.
++        let callback = match GenericCallback::new(closure) {
++            Ok(callback) => callback,
++            Err(error) => {
++                error!("Could not create the callback of an IndexedDB request: {error:?}");
++                transaction.request_finished();
++                transaction.mark_request_handled(request_id);
++                return Err(Error::Operation(Some(
++                    "The storage thread cannot be reached".to_owned(),
++                )));
++            },
++        };
+         let operation = operation_fn(callback);
+
+         if matches!(
+@@ -536,9 +665,11 @@
+             operation,
+             AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate { .. })
+         ) {
++            // Mercury: an Iterate is a cursor step, which needs an iteration_param, or an index
++            // query, which scans the object store and derives the answer itself (index_param).
+             assert!(
+-                iteration_param.is_some(),
+-                "iteration_param must be provided for Iterate"
++                iteration_param.is_some() || index_param.is_some(),
++                "iteration_param or index_param must be provided for Iterate"
+             );
+         } else {
+             assert!(
+@@ -549,7 +680,8 @@
+
+         // Start is a backend database task (spec). Script does not model it with a
+         // separate queued task, backend scheduling decides when requests begin.
+-        transaction
++        // Mercury: no panic when the storage thread cannot be reached; same clean-up as above.
++        if transaction
+             .global()
+             .storage_threads()
+             .send(IndexedDBThreadMsg::Async(
+@@ -561,7 +693,15 @@
+                 transaction_mode,
+                 operation,
+             ))
+-            .unwrap();
++            .is_err()
++        {
++            error!("Could not send an IndexedDB request to the storage thread");
++            transaction.request_finished();
++            transaction.mark_request_handled(request_id);
++            return Err(Error::Operation(Some(
++                "The storage thread cannot be reached".to_owned(),
++            )));
++        }
+
+         // Step 6
+         Ok(request)
+@@ -601,8 +741,19 @@
+     }
+
+     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbrequest-source>
+-    fn GetSource(&self) -> Option<DomRoot<IDBObjectStore>> {
+-        self.source.get()
++    fn GetSource(&self) -> Option<IDBObjectStoreOrIDBIndexOrIDBCursor> {
++        // Mercury: an object store, an index or a cursor, as the specification says.
++        self.source.borrow().as_ref().map(|source| match source {
++            RequestSource::ObjectStore(store) => {
++                IDBObjectStoreOrIDBIndexOrIDBCursor::IDBObjectStore(store.as_rooted())
++            },
++            RequestSource::Index(index) => {
++                IDBObjectStoreOrIDBIndexOrIDBCursor::IDBIndex(index.as_rooted())
++            },
++            RequestSource::Cursor(cursor) => {
++                IDBObjectStoreOrIDBIndexOrIDBCursor::IDBCursor(cursor.as_rooted())
++            },
++        })
+     }
+
+     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbrequest-transaction>
+diff --git a/dom/indexeddb/idbtransaction.rs b/dom/indexeddb/idbtransaction.rs
+--- a/dom/indexeddb/idbtransaction.rs
++++ b/dom/indexeddb/idbtransaction.rs
+@@ -43,7 +43,7 @@
+ use crate::dom::indexeddb::idbdatabase::IDBDatabase;
+ use crate::dom::indexeddb::idbobjectstore::{IDBObjectStore, IDBObjectStoreAbortState};
+ use crate::dom::indexeddb::idbrequest::IDBRequest;
+-use crate::dom::indexeddb::key::map_backend_error_to_dom_error;
++use crate::dom::indexeddb::key::map_backend_error_to_request_error;
+
+ #[dom_struct]
+ pub struct IDBTransaction {
+@@ -141,10 +141,12 @@
+         mode: IDBTransactionMode,
+         durability: IDBTransactionDurability,
+         scope: &DOMStringList,
+-    ) -> DomRoot<IDBTransaction> {
++    ) -> Fallible<DomRoot<IDBTransaction>> {
++        // Mercury: a failure of the backend to create the transaction is an exception for the
++        // page now, it used to panic the content process.
+         let serial_number =
+-            IDBTransaction::create_transaction(global, connection.get_name(), mode, scope);
+-        IDBTransaction::new_with_serial(
++            IDBTransaction::create_transaction(global, connection.get_name(), mode, scope)?;
++        Ok(IDBTransaction::new_with_serial(
+             cx,
+             global,
+             connection,
+@@ -152,7 +154,7 @@
+             durability,
+             scope,
+             serial_number,
+-        )
++        ))
+     }
+
+     pub(crate) fn new_with_serial(
+@@ -182,7 +184,7 @@
+         db_name: DOMString,
+         mode: IDBTransactionMode,
+         scope: &DOMStringList,
+-    ) -> u64 {
++    ) -> Fallible<u64> {
+         let backend_mode = match mode {
+             IDBTransactionMode::Readonly => IndexedDBTxnMode::Readonly,
+             IDBTransactionMode::Readwrite => IndexedDBTxnMode::Readwrite,
+@@ -192,7 +194,16 @@
+             .filter_map(|i| scope.Item(i))
+             .map(String::from)
+             .collect();
+-        let (sender, receiver) = channel(global.time_profiler_chan().clone()).unwrap();
++        // Mercury: the failures below were `unwrap()` and `expect()`: a backend that cannot be
++        // reached is an AbortError, one that refuses the transaction is the error it reports.
++        let backend_unreachable = || {
++            Error::Abort(Some(
++                "The IndexedDB backend could not create the transaction".to_owned(),
++            ))
++        };
++        let Some((sender, receiver)) = channel(global.time_profiler_chan().clone()) else {
++            return Err(backend_unreachable());
++        };
+
+         global
+             .storage_threads()
+@@ -203,9 +214,15 @@
+                 mode: backend_mode,
+                 scope,
+             }))
+-            .expect("Failed to send IndexedDBThreadMsg::Sync");
++            .map_err(|_| backend_unreachable())?;
+
+-        receiver.recv().unwrap().expect("CreateTransaction failed")
++        receiver
++            .recv()
++            .map_err(|_| backend_unreachable())?
++            .map_err(|error| {
++                warn!("indexeddb: CreateTransaction failed: {error}");
++                map_backend_error_to_request_error(error)
++            })
+     }
+
+     /// <https://w3c.github.io/IndexedDB/#transaction-lifecycle>
+@@ -327,14 +344,23 @@
+             let task_source = task_source.clone();
+             task_source.queue(task!(handle_commit_result: move |cx| {
+                 let this = this.root();
+-                let message = message.expect("Could not unwrap message");
+-                match message.result {
++                // Mercury: a commit result that cannot be received aborts the transaction, it used
++                // to panic the content process.
++                let result = match message {
++                    Ok(message) => message.result,
++                    Err(error) => Err(BackendError::DbErr(format!(
++                        "the commit result could not be received: {error:?}"
++                    ))),
++                };
++                match result {
+                     Ok(()) => {
+                         this.finalize_commit();
+                     }
+-                    Err(_err) => {
+-                         // TODO: Map backend commit/rollback failure to an appropriate DOMException
+-                        this.initiate_abort(cx, Error::Operation(None));
++                    Err(error) => {
++                        // Mercury: the abort carries the error the backend reported, not an
++                        // OperationError whatever went wrong.
++                        warn!("indexeddb: a commit failed: {error}");
++                        this.initiate_abort(cx, map_backend_error_to_request_error(error));
+
+                         this.finalize_abort();
+                     }
+@@ -342,8 +368,12 @@
+                 // TODO: https://w3c.github.io/IndexedDB/#commit-a-transaction
+                 // Backend commit/rollback is not yet atomic.
+             }));
+-        })
+-        .expect("Could not create callback");
++        });
++        // Mercury: no panic; the caller aborts the transaction when this returns false.
++        let Ok(callback) = callback else {
++            error!("Could not create the callback of an IndexedDB commit");
++            return false;
++        };
+
+         let commit_operation = SyncOperation::Commit(
+             callback,
+@@ -534,11 +564,20 @@
+             let task_source = task_source.clone();
+             task_source.queue(task!(handle_abort_result: move || {
+                 let this = this.root();
+-                let _ = message.expect("Could not unwrap message");
++                // Mercury: an abort result that cannot be received still ends the abort; it used
++                // to panic the content process.
++                if let Err(error) = message {
++                    warn!("indexeddb: the result of an abort could not be received: {error:?}");
++                }
+                 this.finalize_abort();
+             }));
+-        })
+-        .expect("Could not create callback");
++        });
++        // Mercury: no panic; without a callback nobody would finish the abort, so finish it here.
++        let Ok(callback) = callback else {
++            error!("Could not create the callback of an IndexedDB abort");
++            self.finalize_abort();
++            return;
++        };
+         let operation = SyncOperation::Abort(
+             callback,
+             global.origin().immutable().clone(),
+@@ -545,9 +584,15 @@
+             String::from(self.db.get_name()),
+             self.serial_number,
+         );
+-        let _ = self
++        if self
+             .get_idb_thread()
+-            .send(IndexedDBThreadMsg::Sync(operation));
++            .send(IndexedDBThreadMsg::Sync(operation))
++            .is_err()
++        {
++            // Mercury: the storage thread is gone and will never answer: finish the abort here.
++            error!("Could not send an IndexedDB abort to the storage thread");
++            self.finalize_abort();
++        }
+     }
+
+     fn notify_backend_transaction_finished(&self) {
+@@ -697,8 +742,8 @@
+     ) -> Option<(IDBObjectStoreParameters, Vec<IndexedDBIndex>, Option<i64>)> {
+         let global = self.global();
+         let idb_sender = global.storage_threads().sender();
+-        let (sender, receiver) =
+-            channel(global.time_profiler_chan().clone()).expect("failed to create channel");
++        // Mercury: no panic when the channel cannot be created; the caller handles `None`.
++        let (sender, receiver) = channel(global.time_profiler_chan().clone())?;
+
+         let origin = global.origin().immutable().clone();
+         let db_name = String::from(self.db.get_name());
+@@ -730,7 +775,13 @@
+         ))
+     }
+
+-    pub(crate) fn create_abort_callback(&self) -> GenericCallback<BackendError> {
++    /// The callback that a schema operation (create or delete an object store or an index) gets:
++    /// when the backend fails the operation, the transaction aborts with the error it reported.
++    ///
++    /// Mercury: returns an error instead of panicking when the callback cannot be created, and the
++    /// abort carries the DOMException of the backend's error (a ConstraintError for a schema
++    /// constraint failure) instead of an OperationError that says the open failed.
++    pub(crate) fn create_abort_callback(&self) -> Fallible<GenericCallback<BackendError>> {
+         let trusted_transaction = Trusted::new(self);
+         let task_source = self
+             .global()
+@@ -744,11 +795,15 @@
+             let trusted_transaction = trusted_transaction.clone();
+             task_source.queue(task!(delete_failed: move |cx| {
+                 let transaction = trusted_transaction.root();
+-                transaction.initiate_abort(cx, map_backend_error_to_dom_error(error));
++                warn!("indexeddb: a schema operation failed: {error}");
++                transaction.initiate_abort(cx, map_backend_error_to_request_error(error));
+                 transaction.request_backend_abort();
+             }));
+         })
+-        .expect("Could not create GenericCallback")
++        .map_err(|error| {
++            error!("Could not create the callback of an IndexedDB schema operation: {error:?}");
++            Error::Operation(Some("The storage thread cannot be reached".to_owned()))
++        })
+     }
+ }
+
+diff --git a/dom/indexeddb/key.rs b/dom/indexeddb/key.rs
+--- a/dom/indexeddb/key.rs
++++ b/dom/indexeddb/key.rs
+@@ -2,6 +2,11 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
++// Mercury: this file carries upstream code from servo/servo pull request #45559 "script: Support
++// extraction of `multiEntry` keys." (author skyz1, MPL-2.0, open when it was taken):
++// `convert_value_to_multientry_key` and its use in `extract_key`. Mercury's other changes to this
++// file are marked `Mercury:` where they are.
++
+ use std::ffi::CString;
+ use std::ptr;
+
+@@ -13,9 +18,10 @@
+     JS_GetStringLength, JS_IsArrayBufferViewObject, NewArrayObject1, PropertyKey,
+ };
+ use js::jsval::{DoubleValue, ObjectValue, UndefinedValue};
++// Mercury: JS_ClearPendingException, for convert_value_to_multientry_key.
+ use js::rust::wrappers2::{
+-    GetArrayLength, IsArrayObject, JS_HasOwnPropertyById, JS_IndexToId, JS_IsIdentifier,
+-    NewDateObject, ObjectIsDate, SameValue,
++    GetArrayLength, IsArrayObject, JS_ClearPendingException, JS_HasOwnPropertyById, JS_IndexToId,
++    JS_IsIdentifier, NewDateObject, ObjectIsDate, SameValue,
+ };
+ use js::rust::{HandleValue, MutableHandleValue};
+ use js::typedarray::{ArrayBuffer, ArrayBufferU8, ArrayBufferView};
+@@ -379,6 +385,106 @@
+     Ok(ConversionResult::Invalid)
+ }
+
++/// <https://www.w3.org/TR/IndexedDB-3/#convert-a-value-to-a-multientry-key>
++///
++/// Mercury: hand-ported from servo/servo#45559 "script: Support extraction of `multiEntry` keys."
++/// (author skyz1, MPL-2.0, open) onto Servo 0.8's `key.rs`, which takes `JS_GetPropertyById` from
++/// `script_bindings::js`. It differs from the pull request where the specification says that an
++/// abrupt completion of `Get` or of converting one entry only skips that entry: the pending
++/// exception is cleared and the entry dropped, instead of failing the whole conversion.
++#[expect(unsafe_code)]
++pub(crate) fn convert_value_to_multientry_key(
++    cx: &mut JSContext,
++    input: HandleValue,
++) -> Result<ConversionResult, Error> {
++    // Step 1: If input is an Array exotic object, then:
++    if input.is_object() {
++        let mut is_array = false;
++        if unsafe { !IsArrayObject(cx, input, &mut is_array) } {
++            return Err(Error::JSFailed);
++        }
++        if is_array {
++            rooted!(&in(cx) let object = input.to_object());
++
++            // Step 1.1: Let len be ? ToLength( ? Get(input, "length")).
++            let mut len = 0;
++            if unsafe { !GetArrayLength(cx, object.handle(), &mut len) } {
++                return Err(Error::JSFailed);
++            }
++
++            // Step 1.2: Let seen be a new set containing only input.
++            let seen: Vec<HandleValue> = vec![input];
++
++            // Step 1.3: Let keys be a new empty list.
++            let mut keys: Vec<IndexedDBKeyType> = vec![];
++
++            // Step 1.4: Let index be 0.
++            // Step 1.5: While index is less than len:
++            for index in 0..len {
++                // Step 1.5.1: Let entry be Get(input, index).
++                rooted!(&in(cx) let mut id: PropertyKey);
++                rooted!(&in(cx) let mut entry = UndefinedValue());
++                if unsafe { !JS_IndexToId(cx, index, id.handle_mut()) } {
++                    return Err(Error::JSFailed);
++                }
++                if !JS_GetPropertyById(cx, object.handle(), id.handle(), entry.handle_mut()) {
++                    // Step 1.5.2: If entry is not an abrupt completion, then: this one is, so skip it.
++                    unsafe { JS_ClearPendingException(cx) };
++                    continue;
++                }
++
++                // Step 1.5.2.1: Let key be the result of converting a value to a key with
++                // arguments entry and seen.
++                match convert_value_to_key(cx, entry.handle(), Some(seen.clone())) {
++                    // Step 1.5.2.2: If key is not "invalid value" or "invalid type" or an abrupt
++                    // completion, and there is no item in keys equal to key, then append key to keys.
++                    Ok(ConversionResult::Valid(key)) => {
++                        if !keys.contains(&key) {
++                            keys.push(key);
++                        }
++                    },
++                    Ok(ConversionResult::Invalid) => {},
++                    Err(Error::JSFailed) => unsafe { JS_ClearPendingException(cx) },
++                    Err(error) => return Err(error),
++                }
++
++                // Step 1.5.3: Increase index by 1. (The loop does.)
++            }
++
++            // Step 1.6: Return a new array key with value set to keys.
++            return Ok(ConversionResult::Valid(IndexedDBKeyType::Array(keys)));
++        }
++    }
++
++    // Step 2: Otherwise, return the result of running the steps to convert a value to a key
++    // with argument input. Rethrow any exceptions.
++    convert_value_to_key(cx, input, None)
++}
++
++/// Drops the JavaScript exception that a failed conversion or extraction left pending.
++///
++/// Mercury: a record whose key cannot be extracted is skipped, not propagated (the specification
++/// says the exception is swallowed), so the context must not be left with it pending.
++#[expect(unsafe_code)]
++pub(crate) fn clear_pending_exception(cx: &mut JSContext) {
++    unsafe { JS_ClearPendingException(cx) };
++}
++
++/// The keys one record contributes to an index, from the key that
++/// [`extract_key`] returned for it.
++///
++/// <https://www.w3.org/TR/IndexedDB-3/#store-a-record-into-an-object-store> steps 6 and 7 (the
++/// index keys): a multiEntry index stores one record for each member of an array key, any other
++/// index one record for the key.
++///
++/// Mercury: written for the index queries in `idbindex.rs`, which derive index records in script.
++pub(crate) fn index_keys_of(key: IndexedDBKeyType, multi_entry: bool) -> Vec<IndexedDBKeyType> {
++    match key {
++        IndexedDBKeyType::Array(members) if multi_entry => members,
++        other => vec![other],
++    }
++}
++
+ /// <https://www.w3.org/TR/IndexedDB-3/#convert-a-value-to-a-key-range>
+ pub fn convert_value_to_key_range(
+     cx: &mut JSContext,
+@@ -430,6 +536,40 @@
+     }
+ }
+
++/// The error of a request, or of a transaction, that the backend failed.
++///
++/// <https://www.w3.org/TR/IndexedDB-3/#async-execute-request> step 5.4.2.1: "If result is an
++/// error, then ... set the error of request to result". The details of the backend's error are
++/// logged by the caller, not handed to the page.
++///
++/// Mercury: Servo 0.8 turned every backend error into a DataError. A backend failure that is
++/// unrelated to the database ("UnknownError" in the specification) has no DOMException of its own
++/// in this version (script_bindings has no `Error::Unknown`), so it is an OperationError.
++pub(crate) fn map_backend_error_to_request_error(error: BackendError) -> Error {
++    match error {
++        BackendError::QuotaExceeded => Error::QuotaExceeded {
++            quota: None,
++            requested: None,
++        },
++        BackendError::Abort => Error::Abort(Some("The transaction was aborted".to_owned())),
++        BackendError::DbNotFound | BackendError::StoreNotFound => Error::NotFound(Some(
++            "The database or the object store no longer exists".to_owned(),
++        )),
++        // sqlite.rs reports `format!("{:?}", rusqlite::Error)`; the extended result code names the
++        // class of the failure.
++        BackendError::DbErr(details) if details.contains("ConstraintViolation") => {
++            Error::Constraint(Some("The storage backend refused the record".to_owned()))
++        },
++        BackendError::DbErr(details) if details.contains("DiskFull") => Error::QuotaExceeded {
++            quota: None,
++            requested: None,
++        },
++        BackendError::DbErr(_) => {
++            Error::Operation(Some("The storage backend reported an error".to_owned()))
++        },
++    }
++}
++
+ /// The result of steps in
+ /// <https://www.w3.org/TR/IndexedDB-3/#evaluate-a-key-path-on-a-value>
+ pub(crate) enum EvaluationResult {
+@@ -805,18 +945,105 @@
+     // Step 3. Let key be the result of running the steps to convert a value to a key with r if the
+     // multiEntry flag is unset, and the result of running the steps to convert a value to a
+     // multiEntry key with r otherwise. Rethrow any exceptions.
+-    let key = match multi_entry {
+-        Some(true) => {
+-            // TODO: implement convert_value_to_multientry_key
+-            unimplemented!("multiEntry keys are not yet supported");
+-        },
+-        _ => match convert_value_to_key(cx, r.handle(), None)? {
+-            ConversionResult::Valid(key) => key,
+-            // Step 4. If key is invalid, return invalid.
+-            ConversionResult::Invalid => return Ok(ExtractionResult::Invalid),
+-        },
++    // Mercury: servo/servo#45559 (skyz1, MPL-2.0): a multiEntry index no longer reaches
++    // `unimplemented!()`, which took the content process down.
++    let ConversionResult::Valid(key) = (match multi_entry {
++        Some(true) => convert_value_to_multientry_key(cx, r.handle())?,
++        _ => convert_value_to_key(cx, r.handle(), None)?,
++    }) else {
++        // Step 4. If key is invalid, return invalid.
++        return Ok(ExtractionResult::Invalid);
+     };
+
+     // Step 5. Return key.
+     Ok(ExtractionResult::Key(key))
+ }
++
++// Mercury: tests for the pure parts of multiEntry handling and of the error mapping (no JavaScript
++// context needed).
++#[cfg(test)]
++mod tests {
++    use storage_traits::indexeddb::{BackendError, IndexedDBKeyType};
++
++    use super::{Error, index_keys_of, map_backend_error_to_request_error};
++
++    fn number(n: f64) -> IndexedDBKeyType {
++        IndexedDBKeyType::Number(n)
++    }
++
++    #[test]
++    fn a_quota_error_of_the_backend_is_a_quota_exceeded_error() {
++        let error = map_backend_error_to_request_error(BackendError::QuotaExceeded);
++        assert!(matches!(error, Error::QuotaExceeded { .. }));
++    }
++
++    #[test]
++    fn an_abort_of_the_backend_is_an_abort_error() {
++        let error = map_backend_error_to_request_error(BackendError::Abort);
++        assert!(matches!(error, Error::Abort(_)));
++    }
++
++    #[test]
++    fn a_missing_store_or_database_is_a_not_found_error() {
++        let store = map_backend_error_to_request_error(BackendError::StoreNotFound);
++        let database = map_backend_error_to_request_error(BackendError::DbNotFound);
++        assert!(matches!(store, Error::NotFound(_)));
++        assert!(matches!(database, Error::NotFound(_)));
++    }
++
++    #[test]
++    fn a_sqlite_constraint_failure_is_a_constraint_error() {
++        let details = "SqliteFailure(Error { code: ConstraintViolation, extended_code: 1555 }, \
++                       Some(\"UNIQUE constraint failed: unique_index_data.index_id\"))";
++        let error = map_backend_error_to_request_error(BackendError::DbErr(details.to_owned()));
++        assert!(matches!(error, Error::Constraint(_)));
++    }
++
++    #[test]
++    fn a_full_disk_is_a_quota_exceeded_error() {
++        let details = "SqliteFailure(Error { code: DiskFull, extended_code: 13 }, None)";
++        let error = map_backend_error_to_request_error(BackendError::DbErr(details.to_owned()));
++        assert!(matches!(error, Error::QuotaExceeded { .. }));
++    }
++
++    #[test]
++    fn any_other_failure_is_an_operation_error_that_hides_the_details() {
++        let secret = "/Users/someone/profile/indexeddb.sqlite";
++        let error = map_backend_error_to_request_error(BackendError::DbErr(secret.to_owned()));
++        match error {
++            Error::Operation(Some(message)) => assert!(!message.contains(secret)),
++            other => panic!("expected an OperationError, got {other:?}"),
++        }
++    }
++
++    #[test]
++    fn a_multientry_array_key_gives_one_key_per_member() {
++        let key = IndexedDBKeyType::Array(vec![number(1.0), number(2.0), number(3.0)]);
++        let keys = index_keys_of(key, true);
++        assert_eq!(keys, vec![number(1.0), number(2.0), number(3.0)]);
++    }
++
++    #[test]
++    fn an_empty_multientry_array_gives_no_key() {
++        assert!(index_keys_of(IndexedDBKeyType::Array(vec![]), true).is_empty());
++    }
++
++    #[test]
++    fn a_multientry_non_array_key_stays_single() {
++        let key = IndexedDBKeyType::String("a".to_owned());
++        assert_eq!(index_keys_of(key.clone(), true), vec![key]);
++    }
++
++    #[test]
++    fn without_multientry_an_array_key_stays_one_array_key() {
++        let key = IndexedDBKeyType::Array(vec![number(1.0), number(2.0)]);
++        assert_eq!(index_keys_of(key.clone(), false), vec![key]);
++    }
++
++    #[test]
++    fn nested_array_members_stay_whole_array_keys() {
++        let inner = IndexedDBKeyType::Array(vec![number(1.0)]);
++        let key = IndexedDBKeyType::Array(vec![inner.clone(), number(2.0)]);
++        assert_eq!(index_keys_of(key, true), vec![inner, number(2.0)]);
++    }
++}
 diff --git a/dom/media/mediadevices.rs b/dom/media/mediadevices.rs
 --- a/dom/media/mediadevices.rs
 +++ b/dom/media/mediadevices.rs
@@ -1909,10 +4070,48 @@ diff --git a/dom/mod.rs b/dom/mod.rs
  pub(crate) mod types {
      include!(concat!(env!("OUT_DIR"), "/InterfaceTypes.rs"));
  }
+@@ -357,6 +358,9 @@
+ pub(crate) mod gpucanvascontext;
+ pub(crate) mod webcrypto;
+ pub(crate) use self::webcrypto::*;
++// Mercury: Web Locks (servo/servo#47981).
++pub(crate) mod weblock;
++pub(crate) use self::weblock::*;
+ pub(crate) mod webrtc;
+ pub(crate) use self::webrtc::*;
+ pub(crate) mod webvtt;
 diff --git a/dom/navigator/navigator.rs b/dom/navigator/navigator.rs
 --- a/dom/navigator/navigator.rs
 +++ b/dom/navigator/navigator.rs
-@@ -188,6 +188,11 @@
+@@ -59,7 +59,8 @@
+ use crate::dom::serviceworkercontainer::ServiceWorkerContainer;
+ use crate::dom::servointernals::ServoInternals;
+ use crate::dom::storagemanager::StorageManager;
+-use crate::dom::types::UserActivation;
++// Mercury: Web Locks (servo/servo#47981).
++use crate::dom::types::{LockManager, UserActivation};
+ use crate::dom::wakelock::WakeLock;
+ #[cfg(feature = "webgpu")]
+ use crate::dom::webgpu::gpu::GPU;
+@@ -142,6 +143,8 @@
+     servo_internals: MutNullableDom<ServoInternals>,
+     user_activation: MutNullableDom<UserActivation>,
+     wake_lock: MutNullableDom<WakeLock>,
++    // Mercury: Web Locks (servo/servo#47981).
++    locks: MutNullableDom<LockManager>,
+ }
+
+ impl Navigator {
+@@ -171,6 +174,8 @@
+             servo_internals: Default::default(),
+             user_activation: Default::default(),
+             wake_lock: Default::default(),
++            // Mercury: Web Locks (servo/servo#47981).
++            locks: Default::default(),
+         }
+     }
+
+@@ -188,6 +193,11 @@
          self.geolocation.get()
      }
 
@@ -1924,6 +4123,32 @@ diff --git a/dom/navigator/navigator.rs b/dom/navigator/navigator.rs
      #[cfg(feature = "gamepad")]
      pub(crate) fn get_gamepad(&self, index: usize) -> Option<DomRoot<Gamepad>> {
          self.gamepads.borrow().get(index).and_then(|g| g.get())
+@@ -423,6 +433,13 @@
+         true
+     }
+
++    /// Mercury: <https://privacycg.github.io/gpc-spec/#js-dom>. Always present, `false` while the
++    /// signal is off, and it reads the preference that also turns on the `Sec-GPC` request header,
++    /// so the two cannot disagree (Mercury sets both in `talaria-servo`).
++    fn GlobalPrivacyControl(&self) -> bool {
++        pref!(privacy_gpc_enabled)
++    }
++
+     /// <https://www.w3.org/TR/gamepad/#dom-navigator-getgamepads>
+     #[cfg(feature = "gamepad")]
+     fn GetGamepads(&self, cx: &mut JSContext) -> Fallible<Vec<Option<DomRoot<Gamepad>>>> {
+@@ -675,6 +692,11 @@
+     fn WakeLock(&self, cx: &mut js::context::JSContext) -> DomRoot<WakeLock> {
+         self.wake_lock.or_init(|| WakeLock::new(cx, &self.global()))
+     }
++
++    /// Mercury: <https://w3c.github.io/web-locks/#navigator-mixins> (servo/servo#47981).
++    fn Locks(&self, cx: &mut JSContext) -> DomRoot<LockManager> {
++        self.locks.or_init(|| LockManager::new(cx, &self.global()))
++    }
+ }
+
+ struct BeaconFetchListener {
 diff --git a/dom/node/layout_dom.rs b/dom/node/layout_dom.rs
 --- a/dom/node/layout_dom.rs
 +++ b/dom/node/layout_dom.rs
@@ -2324,6 +4549,861 @@ diff --git a/dom/webgl/webgltexture.rs b/dom/webgl/webgltexture.rs
          }
 
          self.immutable_levels.set(Some(levels));
+diff --git a/dom/weblock/lock.rs b/dom/weblock/lock.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/weblock/lock.rs
+@@ -0,0 +1,57 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: carried from servo/servo pull request #47981 (draft, by xbwwj, Xubai Wang), branch
++// `weblocks` of xbwwj/servo, head commit a900121b (`components/script/dom/weblock/lock.rs`),
++// MPL-2.0. Changed for Servo 0.8's bindings: the name is a `String` that is not traced, the
++// object is made with `reflect_dom_object`, and the lock's id is not kept (the manager that
++// granted it knows it).
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use script_bindings::reflector::{Reflector, reflect_dom_object};
++use storage_traits::weblocks::LockMsg;
++
++use crate::conversions::Convert;
++use crate::dom::bindings::codegen::Bindings::WebLockBinding::{LockMethods, LockMode};
++use crate::dom::bindings::root::DomRoot;
++use crate::dom::bindings::str::DOMString;
++use crate::dom::globalscope::GlobalScope;
++
++/// <https://w3c.github.io/web-locks/#api-lock>
++///
++/// Handed to the callback of a granted request. It is a receipt, not a handle: the lock is
++/// released when the promise the callback returned settles, so there is nothing to call on it.
++#[dom_struct]
++pub(crate) struct Lock {
++    reflector_: Reflector,
++    name: String,
++    mode: LockMode,
++}
++
++impl Lock {
++    pub(crate) fn new_inherited(msg: LockMsg) -> Self {
++        Lock {
++            reflector_: Reflector::new(),
++            name: msg.name,
++            mode: msg.mode.convert(),
++        }
++    }
++
++    pub(crate) fn new(cx: &mut JSContext, global: &GlobalScope, msg: LockMsg) -> DomRoot<Self> {
++        reflect_dom_object(cx, Box::new(Self::new_inherited(msg)), global)
++    }
++}
++
++impl LockMethods<crate::DomTypeHolder> for Lock {
++    /// <https://w3c.github.io/web-locks/#dom-lock-name>
++    fn Name(&self) -> DOMString {
++        DOMString::from(self.name.clone())
++    }
++
++    /// <https://w3c.github.io/web-locks/#dom-lock-mode>
++    fn Mode(&self) -> LockMode {
++        self.mode
++    }
++}
+diff --git a/dom/weblock/lockmanager.rs b/dom/weblock/lockmanager.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/weblock/lockmanager.rs
+@@ -0,0 +1,582 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: carried from servo/servo pull request #47981 "storages: implement Web Locks API"
++// (draft, by xbwwj, Xubai Wang), branch `weblocks` of xbwwj/servo, head commit a900121b
++// (`components/script/dom/weblock/lockmanager.rs`), MPL-2.0. The shape comes from there: the
++// manager sends its requests to the lock thread in the storage threads and gets the grants back
++// through a callback. How a granted lock ends (the callback's promise settling) is after
++// LunarWerxs `pr/web-locks` (commit 23583d753, `components/script/dom/weblocks/lockmanager.rs`,
++// L0garithmic, MPL-2.0). What differs from the pull request:
++//
++// - The pull request called the page's callback and dropped the promise it returned: a lock was
++//   never released, and the promise `request()` returned never settled. Here a native handler on
++//   the callback's promise releases the lock and settles the request's promise the same way.
++// - The pull request ran `as_window()` on the global of every call, which panics in a worker.
++// - Its argument checks (steal and ifAvailable, steal and mode) sat inside one branch and the
++//   second one never ran; they are in `unsupported_request` (mod.rs), in the order of the
++//   specification, and an opaque origin is refused with a `SecurityError`.
++// - A stolen lock rejects the promise of its `request()` call with an `AbortError`.
++// - An `AbortSignal` that fires after the lock was granted does nothing.
++// - Nothing in the pull request ended a request when its window or worker went away. Here the
++//   callback each request gives the storage thread says the client is gone when its task source
++//   was cancelled (a window that was discarded, a worker that closed), the manager says so when it
++//   is dropped, and the storage thread finds out by itself when it cannot reach the callback (the
++//   content process died). See `servo-storage`, `weblocks/mod.rs`.
++// - Every other change is marked `Mercury:`.
++
++use std::cell::Cell;
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use js::realm::CurrentRealm;
++use js::rust::HandleValue;
++use script_bindings::cell::DomRefCell;
++use script_bindings::inheritance::Castable;
++use script_bindings::reflector::{Reflector, reflect_dom_object};
++use servo_base::generic_channel::{GenericCallback, GenericSend, GenericSender, SendError};
++use servo_url::ImmutableOrigin;
++use storage_traits::weblocks::{
++    LockEventMsg, LockManagerSnapshotMsg, LockMsg, LockRequest, LockRequestId, WebLocksThreadMsg,
++};
++use uuid::Uuid;
++
++use crate::conversions::Convert;
++use crate::dom::abortsignal::AbortAlgorithm;
++use crate::dom::bindings::callback::{ExceptionHandling, RootedCallback, TracedCallback};
++use crate::dom::bindings::codegen::Bindings::AbortSignalBinding::AbortSignalMethods;
++use crate::dom::bindings::codegen::Bindings::WebLockBinding::{
++    LockGrantedCallback, LockManagerMethods, LockManagerSnapshot, LockMode, LockOptions,
++};
++use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
++use crate::dom::bindings::error::Error;
++use crate::dom::bindings::refcounted::Trusted;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::{Dom, DomRoot};
++use crate::dom::bindings::str::DOMString;
++use crate::dom::globalscope::GlobalScope;
++use crate::dom::lock::Lock;
++use crate::dom::promise::{Promise, RootedPromise, TracedPromise};
++use crate::dom::promisenativehandler::Callback;
++use crate::dom::types::{AbortSignal, PromiseNativeHandler};
++use crate::dom::weblock::{ClientAction, client_action, unsupported_request};
++use crate::dom::window::Window;
++use crate::realms::enter_auto_realm;
++use crate::routed_promise::{RoutedPromiseListener, callback_promise};
++
++/// A request waiting for its turn: the page's callback and the promise `request()` returned.
++/// Kept here, on the DOM object, so that both stay traced while the lock is contended.
++#[derive(JSTraceable, MallocSizeOf)]
++#[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
++struct PendingRequest {
++    #[no_trace]
++    id: LockRequestId,
++    name: String,
++    callback: TracedCallback<LockGrantedCallback>,
++    promise: TracedPromise,
++}
++
++/// A request whose callback runs: the promise to reject when another request steals its lock.
++#[derive(JSTraceable, MallocSizeOf)]
++#[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
++struct HeldRequest {
++    #[no_trace]
++    id: LockRequestId,
++    promise: TracedPromise,
++}
++
++/// Tells the storage thread that this global scope has gone away, so that it releases what the
++/// global holds. It runs when the `LockManager` is finalized: the garbage collector of a window,
++/// the end of the script thread, the end of a worker's thread. A global that is discarded earlier
++/// is found by the probes (see `LockEventMsg::Probe`), and a global whose process died by the
++/// storage thread itself.
++#[derive(JSTraceable, MallocSizeOf)]
++struct DroppableLockManager {
++    /// Names this global in `query()` results and in `WebLocksThreadMsg::ClientGone`.
++    client_id: String,
++    #[no_trace]
++    storage: GenericSender<WebLocksThreadMsg>,
++    /// Whether this global ever asked for a lock. If it did not, there is nothing to release.
++    used: Cell<bool>,
++}
++
++impl Drop for DroppableLockManager {
++    fn drop(&mut self) {
++        if self.used.get() {
++            // The storage thread may be gone already, at the end of the process.
++            let _ = self
++                .storage
++                .send(WebLocksThreadMsg::ClientGone(self.client_id.clone()));
++        }
++    }
++}
++
++/// What `request()` was given, after the dictionary is read.
++struct RequestOptions<'a> {
++    mode: LockMode,
++    if_available: bool,
++    steal: bool,
++    signal: Option<&'a DomRoot<AbortSignal>>,
++}
++
++/// <https://w3c.github.io/web-locks/#api-lock-manager>
++#[dom_struct]
++pub(crate) struct LockManager {
++    reflector_: Reflector,
++    /// Requests waiting for a lock.
++    pending: DomRefCell<Vec<PendingRequest>>,
++    /// Requests that hold a lock (the callback's promise is not settled yet).
++    held: DomRefCell<Vec<HeldRequest>>,
++    droppable: DroppableLockManager,
++}
++
++impl LockManager {
++    fn new_inherited(storage: GenericSender<WebLocksThreadMsg>) -> LockManager {
++        LockManager {
++            reflector_: Reflector::new(),
++            pending: Default::default(),
++            held: Default::default(),
++            droppable: DroppableLockManager {
++                client_id: Uuid::new_v4().to_string(),
++                storage,
++                used: Cell::new(false),
++            },
++        }
++    }
++
++    pub(crate) fn new(cx: &mut JSContext, global: &GlobalScope) -> DomRoot<LockManager> {
++        let storage: GenericSender<WebLocksThreadMsg> =
++            GenericSend::sender(global.storage_threads());
++        reflect_dom_object(cx, Box::new(LockManager::new_inherited(storage)), global)
++    }
++
++    fn storage(&self) -> &GenericSender<WebLocksThreadMsg> {
++        &self.droppable.storage
++    }
++
++    fn origin(&self) -> ImmutableOrigin {
++        self.global().origin().immutable().clone()
++    }
++
++    /// The checks at the start of `request()` and `query()`, which refuse with an exception:
++    /// the document of a window must be fully active (Step 3) and the origin must not be opaque
++    /// (Step 4). Returns the exception.
++    fn refusal(&self) -> Option<Error> {
++        let global = self.global();
++        // Mercury: the pull request called `as_window()`, which panics in a worker.
++        if let Some(window) = global.downcast::<Window>()
++            && !window.Document().is_fully_active()
++        {
++            return Some(Error::InvalidState(Some(
++                "The document is not fully active".to_owned(),
++            )));
++        }
++        if !global.origin().is_tuple() {
++            return Some(Error::Security(Some(
++                "Web Locks are not available to an opaque origin".to_owned(),
++            )));
++        }
++        None
++    }
++
++    /// <https://w3c.github.io/web-locks/#dom-lockmanager-request>
++    fn request(
++        &self,
++        cx: &mut CurrentRealm,
++        name: DOMString,
++        options: RequestOptions<'_>,
++        callback: RootedCallback<LockGrantedCallback>,
++    ) -> RootedPromise {
++        // Step 10. Let promise be a new promise.
++        // (Made first: the steps that refuse return a rejected promise.)
++        let promise = Promise::new_in_realm(cx);
++
++        // Step 3. If the document is not fully active, reject with "InvalidStateError".
++        // Step 4. If origin is an opaque origin, reject with "SecurityError".
++        if let Some(error) = self.refusal() {
++            promise.reject_error(cx, error);
++            return promise;
++        }
++
++        // Step 5-8. Refuse the options that do not go together with "NotSupportedError".
++        let name = name.to_string();
++        if let Some(message) = unsupported_request(
++            &name,
++            options.mode,
++            options.steal,
++            options.if_available,
++            options.signal.is_some(),
++        ) {
++            promise.reject_error(cx, Error::NotSupported(Some(message.to_owned())));
++            return promise;
++        }
++
++        // Step 9. If options’ signal dictionary member is present and is aborted, then return a
++        // promise rejected with options’ signal’s abort reason.
++        if let Some(signal) = options.signal
++            && signal.aborted()
++        {
++            rooted!(&in(cx) let mut reason = js::jsval::UndefinedValue());
++            signal.Reason(reason.handle_mut());
++            promise.reject(cx, reason.handle());
++            return promise;
++        }
++
++        // Step 11. Request a lock with promise, the current agent’s event loop, environment’s id,
++        // origin, callback, name, options’ mode dictionary member, options’ ifAvailable
++        // dictionary member, and options’ steal dictionary member, and options’ signal
++        // dictionary member.
++        self.request_lock(cx, &promise, name, callback, options);
++
++        // Step 12. Return promise.
++        promise
++    }
++
++    /// <https://w3c.github.io/web-locks/#request-a-lock>
++    fn request_lock(
++        &self,
++        cx: &mut CurrentRealm,
++        promise: &RootedPromise,
++        name: String,
++        callback: RootedCallback<LockGrantedCallback>,
++        options: RequestOptions<'_>,
++    ) {
++        let global = self.global();
++        let request_id = LockRequestId::next();
++
++        // What the storage thread says about this request comes back to this callback. It may
++        // run on the router thread (several processes) or on the storage thread (one process).
++        let task_source = global.task_manager().weblocks_task_source().to_sendable();
++        let manager = Trusted::new(self);
++        let storage = self.storage().clone();
++        let client_id = self.droppable.client_id.clone();
++        let event_callback = GenericCallback::new(move |event: Result<LockEventMsg, SendError>| {
++            let Ok(event) = event else {
++                return;
++            };
++            // Mercury: a global whose task source is cancelled is gone: its window was
++            // discarded or its worker closed. Whatever the event, its locks are released.
++            let global_closed = task_source.canceller.cancelled();
++            match client_action(matches!(event, LockEventMsg::Probe), global_closed) {
++                ClientAction::Ignore => {},
++                ClientAction::ReportGone => {
++                    let _ = storage.send(WebLocksThreadMsg::ClientGone(client_id.clone()));
++                },
++                ClientAction::Deliver => {
++                    let manager = manager.clone();
++                    match event {
++                        LockEventMsg::Granted(lock) => {
++                            task_source.queue(task!(weblocks_lock_granted: move |cx| {
++                                manager.root().on_granted(cx, request_id, lock);
++                            }));
++                        },
++                        LockEventMsg::Stolen => {
++                            task_source.queue(task!(weblocks_lock_stolen: move |cx| {
++                                manager.root().on_stolen(cx, request_id);
++                            }));
++                        },
++                        LockEventMsg::Probe => {},
++                    }
++                },
++            }
++        });
++        let event_callback = match event_callback {
++            Ok(event_callback) => event_callback,
++            Err(error) => {
++                warn!("Could not create a Web Locks callback: {error}");
++                promise.reject_error(
++                    cx,
++                    Error::InvalidState(Some("Web Locks are not available".to_owned())),
++                );
++                return;
++            },
++        };
++
++        // Step 2. If signal is present, add the abort steps to signal.
++        // Mercury: the steps ask this manager, which knows whether the request still waits.
++        if let Some(signal) = options.signal {
++            signal.add(&AbortAlgorithm::AbortLockRequest(
++                Dom::from_ref(self),
++                request_id,
++            ));
++        }
++
++        self.pending.borrow_mut().push(PendingRequest {
++            id: request_id,
++            name: name.clone(),
++            callback: callback.to_traced(),
++            promise: promise.to_traced(),
++        });
++
++        // Step 3. Enqueue the following steps to the lock task queue.
++        // The inner steps (3.1 to 3.6) continue on the storage thread.
++        self.droppable.used.set(true);
++        let request = LockRequest {
++            id: request_id,
++            client_id: self.droppable.client_id.clone(),
++            name,
++            mode: options.mode.convert(),
++            callback: event_callback,
++            if_available: options.if_available,
++            steal: options.steal,
++        };
++        if let Err(error) = self
++            .storage()
++            .send(WebLocksThreadMsg::Request(request, self.origin()))
++        {
++            warn!("A Web Locks request could not be sent: {error}");
++            self.pending
++                .borrow_mut()
++                .retain(|pending| pending.id != request_id);
++            promise.reject_error(
++                cx,
++                Error::InvalidState(Some("Web Locks are not available".to_owned())),
++            );
++        }
++
++        // Step 4. Return request.
++    }
++
++    fn take_pending(&self, request_id: LockRequestId) -> Option<PendingRequest> {
++        let mut pending = self.pending.borrow_mut();
++        let index = pending
++            .iter()
++            .position(|pending| pending.id == request_id)?;
++        Some(pending.remove(index))
++    }
++
++    fn send_release(&self, lock: &LockMsg) {
++        _ = self.storage().send(WebLocksThreadMsg::Release(
++            lock.id,
++            lock.name.clone(),
++            self.origin(),
++        ));
++    }
++
++    /// <https://w3c.github.io/web-locks/#process-the-lock-request-queue>, Step 14: the request was
++    /// granted (`Some`), or it asked for `ifAvailable` and the lock is not available (`None`).
++    fn on_granted(&self, cx: &mut JSContext, request_id: LockRequestId, lock: Option<LockMsg>) {
++        let Some(pending) = self.take_pending(request_id) else {
++            // The request was aborted while the storage thread granted it. Give the lock back.
++            if let Some(lock) = lock {
++                self.send_release(&lock);
++            }
++            return;
++        };
++
++        let global = self.global();
++        let promise = pending.promise.root(cx);
++        rooted!(&in(cx) let callback = pending.callback);
++
++        // Step 14.1. Let r be the result of invoking callback with a new Lock object (or null)
++        // and "rethrow".
++        let lock_object = lock.clone().map(|msg| Lock::new(cx, &global, msg));
++        let result = callback.Call__(cx, lock_object.as_deref(), ExceptionHandling::Rethrow);
++        let waiting = match result {
++            Ok(waiting) => waiting,
++            Err(error) => {
++                // The callback threw: nothing holds the lock now. The request is rejected.
++                if let Some(lock) = &lock {
++                    self.send_release(lock);
++                }
++                promise.reject_error(cx, error);
++                return;
++            },
++        };
++
++        // Step 14.2 to 14.5. The lock is held until the promise the callback returned settles,
++        // and the request settles the way that promise does.
++        if lock.is_some() {
++            self.held.borrow_mut().push(HeldRequest {
++                id: request_id,
++                promise: promise.to_traced(),
++            });
++        }
++        let handler = PromiseNativeHandler::new(
++            cx,
++            &global,
++            Some(Box::new(SettleRequest {
++                manager: Dom::from_ref(self),
++                promise: promise.to_traced(),
++                request_id,
++                lock: lock.clone(),
++                rejected: false,
++            })),
++            Some(Box::new(SettleRequest {
++                manager: Dom::from_ref(self),
++                promise: promise.to_traced(),
++                request_id,
++                lock,
++                rejected: true,
++            })),
++        );
++        let mut realm = enter_auto_realm(cx, &*global);
++        waiting.append_native_handler(&mut realm.current_realm(), &handler);
++    }
++
++    /// <https://w3c.github.io/web-locks/#algorithm-request-lock>, Step 3.4.1: another request
++    /// stole the lock this request holds. The request is rejected with an `AbortError`.
++    fn on_stolen(&self, cx: &mut JSContext, request_id: LockRequestId) {
++        let held = {
++            let mut held = self.held.borrow_mut();
++            held.iter()
++                .position(|held| held.id == request_id)
++                .map(|index| held.remove(index))
++        };
++        if let Some(held) = held {
++            let promise = held.promise.root(cx);
++            promise.reject_error(
++                cx,
++                Error::Abort(Some("The lock was stolen by another request".to_owned())),
++            );
++        }
++    }
++
++    /// The promise the callback returned settled: the lock is released, and the request settles.
++    fn on_settled(&self, request_id: LockRequestId, lock: Option<&LockMsg>) {
++        self.held.borrow_mut().retain(|held| held.id != request_id);
++        if let Some(lock) = lock {
++            // A lock that was stolen is not held any more; the storage thread ignores this.
++            self.send_release(lock);
++        }
++    }
++
++    /// <https://w3c.github.io/web-locks/#signal-to-abort-the-request>
++    pub(crate) fn abort_request(
++        &self,
++        cx: &mut JSContext,
++        request_id: LockRequestId,
++        reason: HandleValue,
++    ) {
++        // Mercury: a request that was granted or aborted already is not pending, and the signal
++        // has no say any more.
++        let Some(pending) = self.take_pending(request_id) else {
++            return;
++        };
++        // Step 1. Enqueue the steps to abort the request to the lock task queue.
++        _ = self.storage().send(WebLocksThreadMsg::Abort(
++            request_id,
++            self.origin(),
++            pending.name,
++        ));
++        // Step 2. Reject request’s promise with signal’s abort reason.
++        let promise = pending.promise.root(cx);
++        promise.reject(cx, reason);
++    }
++}
++
++/// Releases the lock, then settles the request's promise the way the callback's promise settled.
++/// This is the whole release mechanism: a Web Lock is held for exactly as long as the promise its
++/// callback returned (after LunarWerxs `pr/web-locks`).
++#[derive(JSTraceable, MallocSizeOf)]
++#[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
++struct SettleRequest {
++    manager: Dom<LockManager>,
++    promise: TracedPromise,
++    #[no_trace]
++    request_id: LockRequestId,
++    /// `None` for an `ifAvailable` request that did not get the lock.
++    #[no_trace]
++    lock: Option<LockMsg>,
++    rejected: bool,
++}
++
++impl Callback for SettleRequest {
++    fn callback(&self, cx: &mut CurrentRealm, value: HandleValue) {
++        // Release first: whatever runs after the promise settles must find the lock free.
++        self.manager.on_settled(self.request_id, self.lock.as_ref());
++        if self.rejected {
++            self.promise.reject(cx, value);
++        } else {
++            self.promise.resolve(cx, value);
++        }
++    }
++}
++
++impl LockManagerMethods<crate::DomTypeHolder> for LockManager {
++    /// <https://w3c.github.io/web-locks/#dom-lockmanager-request>
++    fn Request(
++        &self,
++        cx: &mut CurrentRealm,
++        name: DOMString,
++        callback: RootedCallback<LockGrantedCallback>,
++    ) -> RootedPromise {
++        // Step 1. If options was not passed, set it to a default LockOptions.
++        self.request(
++            cx,
++            name,
++            RequestOptions {
++                mode: LockMode::Exclusive,
++                if_available: false,
++                steal: false,
++                signal: None,
++            },
++            callback,
++        )
++    }
++
++    /// <https://w3c.github.io/web-locks/#dom-lockmanager-request>
++    fn Request_(
++        &self,
++        cx: &mut CurrentRealm,
++        name: DOMString,
++        options: &LockOptions,
++        callback: RootedCallback<LockGrantedCallback>,
++    ) -> RootedPromise {
++        self.request(
++            cx,
++            name,
++            RequestOptions {
++                mode: options.mode,
++                if_available: options.ifAvailable,
++                steal: options.steal,
++                signal: options.signal.as_ref(),
++            },
++            callback,
++        )
++    }
++
++    /// <https://w3c.github.io/web-locks/#dom-lockmanager-query>
++    fn Query(&self, cx: &mut CurrentRealm) -> RootedPromise {
++        // Step 4. Let promise be a new promise.
++        let promise = Promise::new_in_realm(cx);
++
++        // Step 2. If the document is not fully active, reject with "InvalidStateError".
++        // Step 3. If origin is an opaque origin, reject with "SecurityError".
++        if let Some(error) = self.refusal() {
++            promise.reject_error(cx, error);
++            return promise;
++        }
++
++        // Step 5. Enqueue the steps to snapshot the lock state to the lock task queue.
++        let global = self.global();
++        let task_manager = global.task_manager();
++        let callback = callback_promise(&promise, self, task_manager.weblocks_task_source());
++        if let Err(error) = self
++            .storage()
++            .send(WebLocksThreadMsg::Query(callback, self.origin()))
++        {
++            warn!("A Web Locks query could not be sent: {error}");
++            promise.reject_error(
++                cx,
++                Error::InvalidState(Some("Web Locks are not available".to_owned())),
++            );
++        }
++
++        // Step 6. Return promise.
++        promise
++    }
++}
++
++impl RoutedPromiseListener<crate::DomTypeHolder, LockManagerSnapshotMsg> for LockManager {
++    fn handle_response(
++        &self,
++        cx: &mut JSContext,
++        msg: LockManagerSnapshotMsg,
++        promise: &RootedPromise,
++    ) {
++        let snapshot: LockManagerSnapshot = msg.convert();
++        promise.resolve_native(cx, &snapshot);
++    }
++}
+diff --git a/dom/weblock/mod.rs b/dom/weblock/mod.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/weblock/mod.rs
+@@ -0,0 +1,201 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++//! Web Locks: <https://w3c.github.io/web-locks/>
++//!
++//! Mercury: carried from servo/servo pull request #47981 "storages: implement Web Locks API"
++//! (draft, by xbwwj, Xubai Wang), branch `weblocks` of xbwwj/servo, head commit a900121b
++//! (`components/script/dom/weblock/`), MPL-2.0, with the `WorkerNavigator` exposure after
++//! LunarWerxs `pr/web-locks` (commit 23583d753, L0garithmic, MPL-2.0). The lock state lives in
++//! the storage thread (`servo-storage`, `weblocks/mod.rs`), so that windows and workers of one
++//! origin share it across content processes. `lockmanager.rs` says what differs from the pull
++//! request: it never released a lock, and never settled the promise of `request()`.
++
++use storage_traits::weblocks::{LockInfoMsg, LockManagerSnapshotMsg, LockModeMsg};
++
++use crate::conversions::Convert;
++use crate::dom::bindings::codegen::Bindings::WebLockBinding::{
++    LockInfo, LockManagerSnapshot, LockMode,
++};
++
++pub(crate) mod lock;
++pub(crate) mod lockmanager;
++
++impl Convert<LockManagerSnapshot> for LockManagerSnapshotMsg {
++    fn convert(self) -> LockManagerSnapshot {
++        let mut snapshot = LockManagerSnapshot::empty();
++        snapshot.held = Some(self.held.into_iter().map(Convert::convert).collect());
++        snapshot.pending = Some(self.pending.into_iter().map(Convert::convert).collect());
++        snapshot
++    }
++}
++
++impl Convert<LockInfo> for LockInfoMsg {
++    fn convert(self) -> LockInfo {
++        let mut lock_info = LockInfo::empty();
++        lock_info.name = Some(self.name.into());
++        lock_info.mode = Some(self.mode.convert());
++        lock_info.clientId = Some(self.client_id.into());
++        lock_info
++    }
++}
++
++impl Convert<LockMode> for LockModeMsg {
++    fn convert(self) -> LockMode {
++        match self {
++            LockModeMsg::Shared => LockMode::Shared,
++            LockModeMsg::Exclusive => LockMode::Exclusive,
++        }
++    }
++}
++
++impl Convert<LockModeMsg> for LockMode {
++    fn convert(self) -> LockModeMsg {
++        match self {
++            LockMode::Shared => LockModeMsg::Shared,
++            LockMode::Exclusive => LockModeMsg::Exclusive,
++        }
++    }
++}
++
++/// Mercury: the options `request()` refuses, in the order of steps 5 to 8 of
++/// <https://w3c.github.io/web-locks/#dom-lockmanager-request>. The message is the one of the
++/// `NotSupportedError`. (The pull request tested "steal and ifAvailable" inside a branch that
++/// only ran when both were set, so that its other two checks never ran.)
++pub(crate) fn unsupported_request(
++    name: &str,
++    mode: LockMode,
++    steal: bool,
++    if_available: bool,
++    has_signal: bool,
++) -> Option<&'static str> {
++    // Step 5. If name starts with U+002D HYPHEN-MINUS (-), then return a promise rejected with a
++    // "NotSupportedError" DOMException.
++    if name.starts_with('-') {
++        return Some("the name of a lock may not start with U+002D HYPHEN-MINUS");
++    }
++    // Step 6. If both options’ steal dictionary member and options’ ifAvailable dictionary member
++    // are true, then return a promise rejected with a "NotSupportedError" DOMException.
++    if steal && if_available {
++        return Some("steal and ifAvailable cannot both be true");
++    }
++    // Step 7. If options’ steal dictionary member is true and options’ mode dictionary member is
++    // not "exclusive", then return a promise rejected with a "NotSupportedError" DOMException.
++    if steal && mode != LockMode::Exclusive {
++        return Some("steal is true but mode is not exclusive");
++    }
++    // Step 8. If options’ signal dictionary member is present, and either of options’ steal
++    // dictionary member or options’ ifAvailable dictionary member is true, then return a promise
++    // rejected with a "NotSupportedError" DOMException.
++    if has_signal && (steal || if_available) {
++        return Some("signal is present but steal or ifAvailable is true");
++    }
++    None
++}
++
++/// Mercury: what the callback of a lock request does with an event of the storage thread, which
++/// it receives on the router thread (or on the storage thread itself in a single process).
++#[derive(Debug, PartialEq)]
++pub(crate) enum ClientAction {
++    /// Queue a task for the event on the global's event loop.
++    Deliver,
++    /// Nothing: the event only asks whether the client is alive, and it is.
++    Ignore,
++    /// The global scope is closed (its window was discarded or its worker closed): tell the
++    /// storage thread that the client is gone, so that it releases what the client holds.
++    ReportGone,
++}
++
++pub(crate) fn client_action(event_is_probe: bool, global_closed: bool) -> ClientAction {
++    match (event_is_probe, global_closed) {
++        (_, true) => ClientAction::ReportGone,
++        (true, false) => ClientAction::Ignore,
++        (false, false) => ClientAction::Deliver,
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    //! No JS engine here: the checks that do not need one.
++
++    use super::*;
++
++    #[test]
++    fn modes_convert_both_ways() {
++        assert_eq!(LockModeMsg::Shared.convert(), LockMode::Shared);
++        assert_eq!(LockModeMsg::Exclusive.convert(), LockMode::Exclusive);
++        assert_eq!(LockMode::Shared.convert(), LockModeMsg::Shared);
++        assert_eq!(LockMode::Exclusive.convert(), LockModeMsg::Exclusive);
++    }
++
++    #[test]
++    fn a_plain_request_is_supported() {
++        assert_eq!(
++            unsupported_request("x", LockMode::Exclusive, false, false, false),
++            None
++        );
++        assert_eq!(
++            unsupported_request("x", LockMode::Shared, false, true, false),
++            None
++        );
++        assert_eq!(
++            unsupported_request("x", LockMode::Shared, false, false, true),
++            None
++        );
++        assert_eq!(
++            unsupported_request("x", LockMode::Exclusive, true, false, false),
++            None
++        );
++    }
++
++    #[test]
++    fn a_name_that_starts_with_a_hyphen_is_not_supported() {
++        assert!(unsupported_request("-x", LockMode::Exclusive, false, false, false).is_some());
++        assert_eq!(
++            unsupported_request("x-", LockMode::Exclusive, false, false, false),
++            None
++        );
++        assert_eq!(
++            unsupported_request("", LockMode::Exclusive, false, false, false),
++            None,
++            "the empty name is a name"
++        );
++    }
++
++    #[test]
++    fn steal_and_if_available_exclude_each_other() {
++        assert!(unsupported_request("x", LockMode::Exclusive, true, true, false).is_some());
++    }
++
++    #[test]
++    fn steal_needs_the_exclusive_mode() {
++        assert!(unsupported_request("x", LockMode::Shared, true, false, false).is_some());
++        assert_eq!(
++            unsupported_request("x", LockMode::Exclusive, true, false, false),
++            None
++        );
++    }
++
++    #[test]
++    fn a_signal_excludes_steal_and_if_available() {
++        assert!(unsupported_request("x", LockMode::Exclusive, true, false, true).is_some());
++        assert!(unsupported_request("x", LockMode::Exclusive, false, true, true).is_some());
++        assert_eq!(
++            unsupported_request("x", LockMode::Exclusive, false, false, true),
++            None
++        );
++    }
++
++    #[test]
++    fn a_closed_global_is_reported_gone_whatever_the_event_is() {
++        assert_eq!(client_action(true, true), ClientAction::ReportGone);
++        assert_eq!(client_action(false, true), ClientAction::ReportGone);
++    }
++
++    #[test]
++    fn a_probe_of_a_live_client_is_ignored_and_any_other_event_is_delivered() {
++        assert_eq!(client_action(true, false), ClientAction::Ignore);
++        assert_eq!(client_action(false, false), ClientAction::Deliver);
++    }
++}
 diff --git a/dom/window/window.rs b/dom/window/window.rs
 --- a/dom/window/window.rs
 +++ b/dom/window/window.rs
@@ -2382,6 +5462,53 @@ diff --git a/dom/window/window.rs b/dom/window/window.rs
      pub(crate) fn advance_animation_clock(&self, no_gc: &NoGC, delta: TimeDuration) {
          self.Document()
              .advance_animation_timeline_for_testing(delta);
+diff --git a/dom/workers/workernavigator.rs b/dom/workers/workernavigator.rs
+--- a/dom/workers/workernavigator.rs
++++ b/dom/workers/workernavigator.rs
+@@ -18,6 +18,8 @@
+ use crate::dom::navigatorinfo;
+ use crate::dom::permissions::Permissions;
+ use crate::dom::storagemanager::StorageManager;
++// Mercury: Web Locks (servo/servo#47981).
++use crate::dom::types::LockManager;
+ #[cfg(feature = "webgpu")]
+ use crate::dom::webgpu::gpu::GPU;
+ use crate::dom::workerglobalscope::WorkerGlobalScope;
+@@ -30,6 +32,8 @@
+     storage: MutNullableDom<StorageManager>,
+     #[cfg(feature = "webgpu")]
+     gpu: MutNullableDom<GPU>,
++    // Mercury: Web Locks (servo/servo#47981).
++    locks: MutNullableDom<LockManager>,
+ }
+
+ impl WorkerNavigator {
+@@ -40,6 +44,8 @@
+             storage: Default::default(),
+             #[cfg(feature = "webgpu")]
+             gpu: Default::default(),
++            // Mercury: Web Locks (servo/servo#47981).
++            locks: Default::default(),
+         }
+     }
+
+@@ -139,4 +145,16 @@
+     fn HardwareConcurrency(&self) -> u64 {
+         hardware_concurrency()
+     }
++
++    /// Mercury: <https://w3c.github.io/web-locks/#navigator-mixins> (servo/servo#47981, with the
++    /// exposure in workers after LunarWerxs `pr/web-locks`).
++    fn Locks(&self, cx: &mut JSContext) -> DomRoot<LockManager> {
++        self.locks.or_init(|| LockManager::new(cx, &self.global()))
++    }
++
++    /// Mercury: <https://privacycg.github.io/gpc-spec/#js-dom>. The same preference as
++    /// `Navigator.globalPrivacyControl` and the `Sec-GPC` request header.
++    fn GlobalPrivacyControl(&self) -> bool {
++        pref!(privacy_gpc_enabled)
++    }
+ }
 diff --git a/dom/worklet/worklet.rs b/dom/worklet/worklet.rs
 --- a/dom/worklet/worklet.rs
 +++ b/dom/worklet/worklet.rs
@@ -2418,3 +5545,31 @@ diff --git a/tasks/task_manager.rs b/tasks/task_manager.rs
      task_source_functions!(self, gamepad_task_source, Gamepad);
      task_source_functions!(self, geolocation_task_source, Geolocation);
      task_source_functions!(self, media_element_task_source, MediaElement);
+@@ -165,4 +167,6 @@
+     task_source_functions!(self, storage_task_source, Storage);
+     #[cfg(feature = "webgpu")]
+     task_source_functions!(self, webgpu_task_source, WebGPU);
++    // Mercury: Web Locks (servo/servo#47981).
++    task_source_functions!(self, weblocks_task_source, WebLocks);
+ }
+diff --git a/tasks/task_source.rs b/tasks/task_source.rs
+--- a/tasks/task_source.rs
++++ b/tasks/task_source.rs
+@@ -56,6 +56,8 @@
+     Storage,
+     /// <https://www.w3.org/TR/webgpu/#-webgpu-task-source>
+     WebGPU,
++    /// Mercury: <https://www.w3.org/TR/web-locks/#web-locks-tasks-source> (servo/servo#47981).
++    WebLocks,
+ }
+
+ impl From<TaskSourceName> for ScriptThreadEventCategory {
+@@ -89,6 +91,8 @@
+             TaskSourceName::IntersectionObserver => ScriptThreadEventCategory::ScriptEvent,
+             TaskSourceName::Storage => ScriptThreadEventCategory::ScriptEvent,
+             TaskSourceName::WebGPU => ScriptThreadEventCategory::ScriptEvent,
++            // Mercury: Web Locks (servo/servo#47981).
++            TaskSourceName::WebLocks => ScriptThreadEventCategory::ScriptEvent,
+         }
+     }
+ }
