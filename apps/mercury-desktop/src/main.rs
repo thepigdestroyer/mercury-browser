@@ -28,6 +28,8 @@ mod clipboard;
 // controls
 mod controls;
 mod crash_handler;
+#[cfg(target_os = "macos")]
+mod dock_icon; // themes: the Dock icon follows the theme
 mod downloads; // downloads-ui lane
 mod engine;
 mod filter_lists; // blocklists

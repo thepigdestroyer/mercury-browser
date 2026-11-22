@@ -5,6 +5,7 @@
 // Colours come only from `ChromePalette`.
 import { ChromePalette } from "../theme/chrome-palette.slint";
 import { ChromeMetrics } from "../theme/chrome-metrics.slint"; // theme-plumbing
+import { MercuryMark } from "../theme/mercury-mark.slint"; // themes
 import { TabAudioButton, TabAudioState } from "../media/tab-audio.slint"; // media-session lane
 import { CaptureTabMark, CaptureView } from "../capture/capture-indicator.slint"; // media-capture
 
@@ -46,18 +47,28 @@ export global TabStripMetrics {
 
 component TabIcon inherits Rectangle {
     in property <image> source;
+    // themes: draw the Mercury mark (in the theme's accent) instead of `source`: the tab of an
+    // internal page, which has no favicon.
+    in property <bool> mark: false;
 
     width: 18px;
     background: transparent;
     accessible-role: none;
 
-    Image {
+    if !root.mark: Image {
         y: (parent.height - self.height) / 2;
         width: 18px;
         height: 18px;
         source: root.source;
         image-fit: contain;
         accessible-role: none;
+    }
+
+    if root.mark: MercuryMark {
+        y: (parent.height - self.height) / 2;
+        width: 18px;
+        height: 18px;
+        heavy: true;
     }
 }
 
@@ -186,7 +197,8 @@ component TabButton inherits Rectangle {
             TabIcon {
                 x: (parent.width - self.width) / 2;
                 height: parent.height;
-                source: root.tab.has-icon ? root.tab.icon : @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
+                source: root.tab.icon;
+                mark: !root.tab.has-icon; // themes
             }
 
             if root.tab.loading: Rectangle {
@@ -250,7 +262,7 @@ component TabButton inherits Rectangle {
             }
 
             if !root.compact-audio && !root.tab.has-icon: TabIcon {
-                source: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
+                mark: true; // themes
             }
 
             Text {

@@ -80,6 +80,9 @@ ash.workspace = true
 [target.'cfg(target_os = "macos")'.dependencies]
 # media-session lane: `block2` also gives the `MPRemoteCommand` handlers their blocks.
 block2 = "0.6.2"
+# themes: the Dock icon is the app icon artwork recoloured for the palette (`src/dock_icon.rs`).
+mercury-appearance = { path = "../../crates/mercury-appearance" }
+mercury-iconset = { path = "../../crates/mercury-iconset" }
 objc2 = "0.6.3"
 objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     "std",
@@ -91,6 +94,8 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
     # enables in this build).
     "NSCell",
     "NSEvent",
+    # themes: the Dock icon follows the theme (`src/dock_icon.rs`): an `NSImage` made from PNG data.
+    "NSImage",
     "NSMenu",
     "NSMenuItem",
     "NSOpenPanel",
@@ -106,6 +111,7 @@ objc2-app-kit = { version = "0.3.2", default-features = false, features = [
 objc2-foundation = { workspace = true, features = [
     "std",
     "NSArray",
+    "NSData", # themes: the Dock icon's PNG
     "NSDictionary",
     "NSEnumerator",
     "NSString",

@@ -435,6 +435,7 @@ pub(crate) fn system_theme_changed() {
         let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(handle) = HANDLE.with(|current| current.borrow().upgrade()) {
             window::refresh(&handle);
+            handle.push_dock_icon(false); // themes: "Follow the system" also moves the Dock icon
         }
     });
 }
@@ -601,13 +602,14 @@ fn apply_everywhere(
 /// The look every window gets: its colours and sizes, and the notes about anything that had to
 /// fall back.
 ///
-/// **Hermes, until the owner picks a new palette.** The owner rejected both `mercury-b2` and `hermes`
-/// on 22 Nov 2026 and asked for new, cooler ones, so what ships is today's look and the stored
-/// `appearance.palette_light` / `palette_dark` do not change it. The theme layer, the B2 data and
-/// [`Look::from_appearance`] stay: once a palette is chosen, this returns
-/// `Look::from_appearance(appearance)` again (and the `hermes` look goes with layout-switch).
-fn shipped_look(_appearance: &AppearanceSettings) -> (Look, Vec<Repair>) {
-    (Look::hermes_roomy(), Vec::new())
+/// The stored palette choice applies (`appearance.palette_light` for the light scheme and
+/// `palette_dark` for the dark one): Signal (the default), Forest, Abyss or Glacier, the four the
+/// owner chose on 22 Nov 2026. Anything else stored (an id this version lacks, or one of the
+/// palettes that stay in the code but cannot be chosen) shows Signal with one note and is kept in
+/// `settings.json`, never rewritten. The sizes are the roomy preset. A window nobody pushes to
+/// still shows Hermes (the built-in tables), which is the baseline of the pixel gate.
+fn shipped_look(appearance: &AppearanceSettings) -> (Look, Vec<Repair>) {
+    Look::from_appearance(appearance)
 }
 
 pub(crate) fn chrome_theme(theme: Theme) -> ChromeTheme {
@@ -636,6 +638,31 @@ impl SettingsHandle {
         };
         component.global::<ChromePalette>().set_theme(theme);
         self.push_look(component, &look, notes);
+        self.push_dock_icon(false); // themes
+    }
+
+    /// Makes the Dock icon the one of the palette and scheme now shown (macOS; `dock_icon.rs`).
+    /// With `force` the icon is set again even if it is the one in place: once the event loop runs.
+    fn push_dock_icon(&self, force: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            let (theme, (look, _notes)) = {
+                let settings = self.settings.borrow();
+                (
+                    settings.appearance.theme,
+                    shipped_look(&settings.appearance),
+                )
+            };
+            let dark = match theme {
+                Theme::Light => false,
+                Theme::Dark => true,
+                // As the chrome does: dark when the system's scheme is not known.
+                Theme::System => self.system_color_scheme() != slint::language::ColorScheme::Light,
+            };
+            crate::dock_icon::follow(&look, dark, force);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = force;
     }
 
     /// Gives `component` a look: its colours and sizes. The notes (a palette id this version
@@ -698,6 +725,8 @@ impl SettingsHandle {
                         .borrow_mut()
                         .set_color_scheme(color_scheme_from_winit(reported));
                 }
+                // themes: the event loop runs and the window exists: set the Dock icon again.
+                self.push_dock_icon(true);
             }
             None if attempts_left == 0 => {
                 log::warn!("settings: the window never appeared; its title bar keeps its theme");
@@ -901,67 +930,194 @@ pub(crate) mod tests {
         assert_eq!(handle.listeners.borrow().len(), listeners_before);
     }
 
-    // `window-background` of the Hermes palette (what ships) and of mercury-b2 (a look that can be
-    // chosen again once the owner picks a palette), in each scheme.
-    const HERMES_LIGHT: slint::Color = slint::Color::from_rgb_u8(0xe9, 0xed, 0xf2);
-    const HERMES_DARK: slint::Color = slint::Color::from_rgb_u8(0x0b, 0x0f, 0x14);
-    const B2_LIGHT: slint::Color = slint::Color::from_rgb_u8(0xef, 0xe8, 0xdf);
-    const B2_DARK: slint::Color = slint::Color::from_rgb_u8(0x14, 0x0f, 0x27);
+    // `window-background` of each palette a user can choose, in each scheme (hex from the palette
+    // data and the palettes-2026-11-22 notes, written out here so a change to the data fails).
+    const SIGNAL: (slint::Color, slint::Color) = (rgb(0xe4, 0xe4, 0xe8), rgb(0x00, 0x00, 0x00));
+    const FOREST: (slint::Color, slint::Color) = (rgb(0xdb, 0xe7, 0xd4), rgb(0x09, 0x13, 0x0c));
+    const ABYSS: (slint::Color, slint::Color) = (rgb(0xd3, 0xe6, 0xe8), rgb(0x04, 0x14, 0x1a));
+    const GLACIER: (slint::Color, slint::Color) = (rgb(0xd8, 0xe9, 0xf5), rgb(0x0a, 0x1a, 0x28));
+    // Hermes: what a window nobody pushes a look to shows (the pixel gate's baseline).
+    const HERMES_LIGHT: slint::Color = rgb(0xe9, 0xed, 0xf2);
+    const HERMES_DARK: slint::Color = rgb(0x0b, 0x0f, 0x14);
+
+    const fn rgb(r: u8, g: u8, b: u8) -> slint::Color {
+        slint::Color::from_rgb_u8(r, g, b)
+    }
+
+    fn background(window: &mercury_ui::SettingsWindow, theme: ChromeTheme) -> slint::Color {
+        let palette = window.global::<ChromePalette>();
+        palette.set_theme(theme);
+        palette.get_window_background()
+    }
 
     #[test]
-    fn every_window_shows_the_hermes_look_whatever_palette_is_stored() {
+    fn a_window_shows_signal_by_default() {
         init_slint();
         let handle = SettingsHandle::start(None);
         let window = mercury_ui::SettingsWindow::new().expect("a window");
         apply_chrome_theme(&window);
-        let palette = window.global::<ChromePalette>();
 
         handle.update(|settings| settings.appearance.theme = Theme::Light);
-        assert_eq!(palette.get_window_background(), HERMES_LIGHT);
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            SIGNAL.0
+        );
         handle.update(|settings| settings.appearance.theme = Theme::Dark);
-        assert_eq!(palette.get_window_background(), HERMES_DARK);
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            SIGNAL.1
+        );
         assert_eq!(
             window.global::<ChromeMetrics>().get_toolbar_height(),
             60.0,
             "the sizes are the roomy preset"
         );
-
-        // The stored palette names do not change what ships, and are never written back.
-        handle.update(|settings| {
-            settings.appearance.theme = Theme::Light;
-            settings.appearance.palette_light = "mercury-b2".to_owned();
-        });
-        assert_eq!(palette.get_window_background(), HERMES_LIGHT);
-        handle.update(|settings| settings.appearance.palette_light = "no-such-palette".to_owned());
-        assert_eq!(palette.get_window_background(), HERMES_LIGHT);
-        assert_eq!(
-            handle.settings().appearance.palette_light,
-            "no-such-palette"
-        );
-        assert!(
-            handle.look_notes_logged.borrow().is_empty(),
-            "the shipped look has nothing to say about palette ids"
-        );
+        assert!(handle.look_notes_logged.borrow().is_empty());
     }
 
     #[test]
-    fn a_look_that_is_chosen_reaches_the_window_and_its_notes_are_logged_once() {
+    fn a_stored_forest_abyss_or_glacier_reaches_the_window_in_each_scheme() {
+        init_slint();
+        let handle = SettingsHandle::start(None);
+        let window = mercury_ui::SettingsWindow::new().expect("a window");
+        apply_chrome_theme(&window);
+
+        for (id, (light, dark)) in [("forest", FOREST), ("abyss", ABYSS), ("glacier", GLACIER)] {
+            handle.update(|settings| {
+                settings.appearance.palette_light = id.to_owned();
+                settings.appearance.palette_dark = id.to_owned();
+                settings.appearance.theme = Theme::Light;
+            });
+            assert_eq!(
+                window.global::<ChromePalette>().get_window_background(),
+                light,
+                "{id} light"
+            );
+            handle.update(|settings| settings.appearance.theme = Theme::Dark);
+            assert_eq!(
+                window.global::<ChromePalette>().get_window_background(),
+                dark,
+                "{id} dark"
+            );
+        }
+
+        // The two schemes take their palettes independently.
+        handle.update(|settings| {
+            settings.appearance.palette_light = "glacier".to_owned();
+            settings.appearance.palette_dark = "forest".to_owned();
+            settings.appearance.theme = Theme::Light;
+        });
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            GLACIER.0
+        );
+        handle.update(|settings| settings.appearance.theme = Theme::Dark);
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            FOREST.1
+        );
+        assert!(handle.look_notes_logged.borrow().is_empty());
+    }
+
+    #[test]
+    fn an_unknown_or_unavailable_palette_shows_signal_with_one_note_and_is_kept() {
+        init_slint();
+        let handle = SettingsHandle::start(None);
+        let window = mercury_ui::SettingsWindow::new().expect("a window");
+        apply_chrome_theme(&window);
+
+        handle.update(|settings| {
+            settings.appearance.theme = Theme::Light;
+            settings.appearance.palette_light = "no-such-palette".to_owned();
+        });
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            SIGNAL.0
+        );
+        // Pushed again and again (every settings change does), it is noted once.
+        for _ in 0..3 {
+            handle.update(|settings| settings.appearance.default_zoom_percent += 10);
+            handle.update(|settings| settings.appearance.default_zoom_percent -= 10);
+        }
+        assert_eq!(handle.look_notes_logged.borrow().len(), 1);
+        assert!(
+            handle
+                .look_notes_logged
+                .borrow()
+                .iter()
+                .next()
+                .is_some_and(|note| note.contains("no-such-palette")),
+        );
+        assert_eq!(
+            handle.settings().appearance.palette_light,
+            "no-such-palette",
+            "the stored value is never rewritten"
+        );
+
+        // The palettes that stay in the code but are not offered (hermes, graphite, midnight)
+        // cannot be switched on by editing the file.
+        for id in ["hermes", "graphite", "midnight"] {
+            handle.update(|settings| settings.appearance.palette_light = id.to_owned());
+            assert_eq!(
+                window.global::<ChromePalette>().get_window_background(),
+                SIGNAL.0,
+                "{id}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_profile_that_still_holds_the_old_default_shows_signal_without_a_note() {
+        init_slint();
+        let handle = SettingsHandle::start(None);
+        let window = mercury_ui::SettingsWindow::new().expect("a window");
+        apply_chrome_theme(&window);
+
+        // `mercury-b2` was the default, so every profile that has saved its settings holds it.
+        handle.update(|settings| {
+            settings.appearance.palette_light = "mercury-b2".to_owned();
+            settings.appearance.palette_dark = "mercury-b2".to_owned();
+            settings.appearance.theme = Theme::Light;
+        });
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            SIGNAL.0
+        );
+        handle.update(|settings| settings.appearance.theme = Theme::Dark);
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            SIGNAL.1
+        );
+        assert!(
+            handle.look_notes_logged.borrow().is_empty(),
+            "no warning at launch for the retired default"
+        );
+        assert_eq!(handle.settings().appearance.palette_light, "mercury-b2");
+    }
+
+    #[test]
+    fn a_window_nobody_pushes_a_look_to_still_shows_hermes() {
+        init_slint();
+        let window = mercury_ui::SettingsWindow::new().expect("a window");
+        assert_eq!(background(&window, ChromeTheme::Light), HERMES_LIGHT);
+        assert_eq!(background(&window, ChromeTheme::Dark), HERMES_DARK);
+    }
+
+    #[test]
+    fn a_look_that_is_pushed_reaches_the_window_and_its_notes_are_logged_once() {
         use mercury_settings::AppearanceSettings;
 
         init_slint();
         let handle = SettingsHandle::start(None);
         let window = mercury_ui::SettingsWindow::new().expect("a window");
-        let palette = window.global::<ChromePalette>();
         let default = AppearanceSettings::default();
 
-        // The look the settings name (mercury-b2 by default) goes through the same push.
+        // The look the settings name (Signal by default) goes through the same push.
         let (look, notes) = Look::from_appearance(&default);
         assert!(notes.is_empty());
         handle.push_look(&window, &look, notes);
-        palette.set_theme(ChromeTheme::Light);
-        assert_eq!(palette.get_window_background(), B2_LIGHT);
-        palette.set_theme(ChromeTheme::Dark);
-        assert_eq!(palette.get_window_background(), B2_DARK);
+        assert_eq!(background(&window, ChromeTheme::Light), SIGNAL.0);
+        assert_eq!(background(&window, ChromeTheme::Dark), SIGNAL.1);
 
         // A palette this version lacks gives the default look and one note, however often it is pushed.
         let unknown = AppearanceSettings {
@@ -977,8 +1133,7 @@ pub(crate) mod tests {
 
         // And the Hermes look comes back through the same door.
         handle.push_look(&window, &Look::hermes_roomy(), Vec::new());
-        palette.set_theme(ChromeTheme::Light);
-        assert_eq!(palette.get_window_background(), HERMES_LIGHT);
+        assert_eq!(background(&window, ChromeTheme::Light), HERMES_LIGHT);
     }
 
     // net: the privacy settings reach the engine's network policy.
