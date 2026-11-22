@@ -45,6 +45,8 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |
 | `crates/mercury-filter-lists` | The ad and tracker filter lists as data files with a manifest, the engine built from them at start-up, and the background updates |
 | `crates/mercury-site-security` | Internationalised names shown safely, Mercury's network, certificate and crash pages, and the certificate-exception request |
+| `crates/mercury-dnr` | The `declarativeNetRequest` evaluator for browser extensions: rule parsing, limits, URL filters, and the verdict or request rewrite for one request, without the engine ([details](extensions.md#declarativenetrequest-mercury-dnr)) |
+| `crates/mercury-extensions` | Browser extensions without the engine: reading and verifying `.crx` and `.xpi` packages, the manifest, the update-check model and the permission model ([details](extensions.md)) |
 | `crates/mercury-tab-snapshots` | Small pictures of the open tabs, for the Orbit view, kept in memory only: the shrink to at most 480 by 300 pixels, the store under a 128 MB cap and the rules for when a picture is taken ([details](servo-integration.md#tab-snapshots)) |
 | `crates/mercury-release` | Writes, signs and checks the update manifest (`update.json`) that each release carries |
 | `crates/mercury-credits` | The credits tool: writes the page of licence texts, copyright lines, notices and MPL source pointers for every crate built into the app, and checks that every crate can be credited ([details](licence-compliance.md#the-credits-page-and-its-tool)) |

@@ -169,6 +169,15 @@ Mercury Browser ships can be used in a commercial product.
 - Brave Specific — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-specific.txt`) — local file `brave-specific.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-specific.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
 - Brave unbreak list (its only line is `! Brave desktop filters`) — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-unbreak.txt`) — local file `brave-unbreak.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-unbreak.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
 
+### Extension signature roots
+
+- Mozilla add-ons production signing certificates — Mozilla Corporation — `crates/mercury-extensions/data/addons-public.pem` (the root `CN=root-ca-production-amo`), `addons-public-intermediate.pem` and `addons-public-2018-intermediate.pem` — public certificate data copied byte for byte from https://github.com/mozilla-firefox/firefox, `security/manager/ssl/`, read at commit `e27b32bb75ad036200712c983ed5f2c28d069def`; Firefox's source tree is under the MPL-2.0 (`LICENSES/MPL-2.0.txt`) and the files keep it. They are compiled into the program (`include_bytes!`) as the trust anchor that `.xpi` extension signatures must chain to (decision OD-29); nothing is added to any system trust store. SHA-256 fingerprints and how to update them: `crates/mercury-extensions/data/README.md`. The add-ons stage root is not bundled.
+- Test fixture, not shipped: `crates/mercury-extensions/tests/fixtures/video-bg-play-1.8.1.xpi`, the add-on "Video Background Play Fix" 1.8.1 as Mozilla signed it (code MIT, Copyright (c) 2017 Mozilla Corporation, text in `crates/mercury-extensions/tests/fixtures/video-bg-play-LICENSE.txt`; its icon is "Glasses" by rahmatmasiv from the Noun Project, CC BY 3.0 US), used only by the tests of `mercury-extensions`.
+
+### Behaviour followed from other projects
+
+`crates/mercury-dnr` and `crates/mercury-extensions` copy no code. They follow the documented behaviour of Chrome's `declarativeNetRequest` and manifest reference pages, of MDN's WebExtensions pages, and (read for behaviour only) of Chromium's `extensions/browser/api/declarative_net_request/` (BSD-3-Clause, Copyright 2012 The Chromium Authors) and Firefox's `AppSignatureVerification.cpp` (MPL-2.0). A file that translates code from either would be a separate file under the upstream licence with its own entry here.
+
 ## Build tools
 
 Libraries linked only into Mercury's own build tools, never into the browser or its app bundle.

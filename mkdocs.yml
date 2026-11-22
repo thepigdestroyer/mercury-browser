@@ -77,6 +77,7 @@ nav:
       - Saved logins: developer-guide/passwords.md
       - Camera and microphone: developer-guide/media-capture.md
       - PDF viewer: developer-guide/pdf.md
+      - Extensions: developer-guide/extensions.md
       - Testing and quality: developer-guide/testing.md
       - Hands-on checklist: developer-guide/hands-on-checklist.md
       - Continuous integration: developer-guide/continuous-integration.md

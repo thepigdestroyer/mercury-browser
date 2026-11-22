@@ -40,6 +40,7 @@ path = [
   "docs/developer-guide/media-capture.md",
   "docs/developer-guide/origins.md",
   "docs/developer-guide/passwords.md",
+  "docs/developer-guide/extensions.md",
   "docs/developer-guide/pdf.md",
   "docs/screenshots/mercury-new-tab.png",
   "docs/screenshots/mercury-servo.png",
@@ -180,3 +181,39 @@ path = [
 ]
 SPDX-FileCopyrightText = "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)"
 SPDX-License-Identifier = "MPL-2.0"
+
+# ext-4: Mozilla's add-ons root and intermediates, public certificate data copied unchanged from
+# Firefox's source tree (MPL-2.0); see crates/mercury-extensions/data/README.md and
+# THIRD-PARTY-NOTICES.md, "Extension signature roots".
+[[annotations]]
+path = [
+  "crates/mercury-extensions/data/addons-public-2018-intermediate.pem",
+  "crates/mercury-extensions/data/addons-public-intermediate.pem",
+  "crates/mercury-extensions/data/addons-public.pem",
+]
+SPDX-FileCopyrightText = "Mozilla Corporation"
+SPDX-License-Identifier = "MPL-2.0"
+
+# ext-4: a real Mozilla-signed add-on (code MIT; its icon is CC BY 3.0 US, credited in the package's own
+# README) and its licence text, used by tests only; see crates/mercury-extensions/tests/fixtures/README.md.
+[[annotations]]
+path = [
+  "crates/mercury-extensions/tests/fixtures/video-bg-play-1.8.1.xpi",
+  "crates/mercury-extensions/tests/fixtures/video-bg-play-LICENSE.txt",
+]
+SPDX-FileCopyrightText = "2017 Mozilla Corporation"
+SPDX-License-Identifier = "MIT"
+
+# ext-4: Mercury's own data files and READMEs (no comment syntax).
+[[annotations]]
+path = [
+  "crates/mercury-extensions/data/README.md",
+  "crates/mercury-extensions/tests/fixtures/README.md",
+  "crates/mercury-extensions/tests/fixtures/manifest/chrome_mv2.json",
+  "crates/mercury-extensions/tests/fixtures/manifest/chrome_mv3.json",
+  "crates/mercury-extensions/tests/fixtures/manifest/firefox_mv2.json",
+  "crates/mercury-extensions/tests/fixtures/manifest/firefox_mv3.json",
+  "crates/mercury-extensions/tests/fixtures/manifest/minimal.json",
+]
+SPDX-FileCopyrightText = "2026 Mrinal Joshi and the Mercury Browser contributors"
+SPDX-License-Identifier = "PolyForm-Noncommercial-1.0.0"
