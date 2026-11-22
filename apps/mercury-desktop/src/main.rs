@@ -33,9 +33,9 @@ mod filter_lists; // blocklists
 mod find;
 mod geolocation;
 // hub-ring: installed by layout-switch (brief D7)
+mod history_ui;
 #[allow(dead_code)]
 mod hub_ring;
-mod history_ui;
 mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
