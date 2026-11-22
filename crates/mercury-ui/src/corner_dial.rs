@@ -8,8 +8,8 @@
 //! is pure and tested without a window.
 //!
 //! **The public items below are the pinned contract of lane corner-dial**
-//! (`.superpowers/sdd/lane-corner-dial-brief.md` §6). The scaffold commit has the final signatures
-//! with stub bodies (marked `STUB`); the lane's items fill them in.
+//! (`.superpowers/sdd/lane-corner-dial-brief.md` §6). Other lanes build on them; only additions are
+//! allowed.
 //!
 //! # Using it (the pattern of the host)
 //!
