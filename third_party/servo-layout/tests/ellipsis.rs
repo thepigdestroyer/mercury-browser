@@ -16,9 +16,10 @@ mod ellipsis_tests {
     use app_units::Au;
 
     use super::ellipsis::{
-        Cluster, Direction, GlyphMetrics, Side, cut_point, end_side, group_clusters, keep_within,
-        kept_totals,
+        Cluster, Direction, GlyphMetrics, Side, cut_point, end_side, group_clusters,
+        group_clusters_in_text, keep_within, kept_totals,
     };
+    use unicode_segmentation::UnicodeSegmentation;
 
     fn px(values: &[i32]) -> Vec<Au> {
         values.iter().map(|value| Au::from_px(*value)).collect()
@@ -355,5 +356,130 @@ mod ellipsis_tests {
         // Two values are physical: left then right.
         assert_eq!(end_side(false, false), Side::Second);
         assert_eq!(end_side(false, true), Side::First);
+    }
+
+    // ---- grapheme clusters: a font that does not ligate leaves one glyph per character, each with
+    // an advance (even the zero width joiner, in the worst case), and the cut must still fall
+    // between user-perceived characters.
+
+    /// One glyph per character, each as wide as `advance_px`.
+    fn glyph_per_char(text: &str, advance_px: i32) -> Vec<GlyphMetrics> {
+        text.chars().map(|_| glyph(advance_px, 1)).collect()
+    }
+
+    fn cluster_advances_px(text: &str) -> Vec<i32> {
+        let glyphs = glyph_per_char(text, 10);
+        group_clusters_in_text(&glyphs, false, Some(text))
+            .iter()
+            .map(|cluster| cluster.advance.to_px())
+            .collect()
+    }
+
+    #[test]
+    fn an_emoji_zwj_sequence_is_one_cluster() {
+        // a, man ZWJ woman ZWJ girl (5 characters), b
+        assert_eq!(
+            cluster_advances_px("a\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}b"),
+            vec![10, 50, 10]
+        );
+    }
+
+    #[test]
+    fn without_the_text_the_glyphs_alone_would_cut_the_sequence() {
+        // The reason for reading the text: with glyphs that all advance, the old rule makes one
+        // cluster per character.
+        let text = "a\u{1F468}\u{200D}\u{1F469}b";
+        let glyphs = glyph_per_char(text, 10);
+        assert_eq!(group_clusters(&glyphs, false).len(), 5);
+        assert_eq!(group_clusters_in_text(&glyphs, false, Some(text)).len(), 3);
+    }
+
+    #[test]
+    fn a_flag_of_two_regional_indicators_is_one_cluster() {
+        assert_eq!(
+            cluster_advances_px("\u{1F1FA}\u{1F1F8}x\u{1F1EB}\u{1F1F7}"),
+            vec![20, 10, 20]
+        );
+    }
+
+    #[test]
+    fn an_emoji_with_a_skin_tone_modifier_is_one_cluster() {
+        assert_eq!(cluster_advances_px("\u{1F44D}\u{1F3FD}!"), vec![20, 10]);
+    }
+
+    #[test]
+    fn an_indic_conjunct_is_one_cluster() {
+        // Devanagari ksha: KA, VIRAMA, SSA (one grapheme since Unicode 15.1), then KA alone.
+        assert_eq!(
+            cluster_advances_px("\u{0915}\u{094D}\u{0937}\u{0915}"),
+            vec![30, 10]
+        );
+    }
+
+    #[test]
+    fn a_decomposed_hangul_syllable_and_a_crlf_and_a_combining_mark_are_one_cluster() {
+        // Hangul jamo HIEUH, A, NIEUN; CR LF; e and a combining acute accent.
+        assert_eq!(
+            cluster_advances_px("\u{1112}\u{1161}\u{11AB}\r\ne\u{0301}"),
+            vec![30, 20, 20]
+        );
+    }
+
+    #[test]
+    fn a_ligature_over_several_graphemes_stays_whole() {
+        // "fi" is one glyph for two characters, then x.
+        let glyphs = [glyph(12, 2), glyph(10, 1)];
+        let clusters = group_clusters_in_text(&glyphs, false, Some("fix"));
+        assert_eq!(advances(&clusters), px(&[12, 10]));
+    }
+
+    #[test]
+    fn text_that_does_not_match_the_glyphs_is_ignored() {
+        // Three characters of text for two glyphs of one character each: the glyph rule applies.
+        let glyphs = [glyph(10, 1), glyph(10, 1)];
+        let clusters = group_clusters_in_text(&glyphs, false, Some("abc"));
+        assert_eq!(advances(&clusters), px(&[10, 10]));
+        assert_eq!(group_clusters_in_text(&glyphs, false, None), clusters);
+    }
+
+    #[test]
+    fn a_right_to_left_run_groups_in_reading_order() {
+        // Text in reading order: aleph, a combining mark (two characters, one grapheme), bet.
+        // Painted right to left, the glyphs are bet, the mark, aleph.
+        let text = "\u{05D0}\u{05B0}\u{05D1}";
+        let glyphs = glyph_per_char(text, 10);
+        let clusters = group_clusters_in_text(&glyphs, true, Some(text));
+        assert_eq!(advances(&clusters), px(&[10, 20]));
+    }
+
+    #[test]
+    fn no_cut_lands_inside_a_grapheme_cluster() {
+        let samples = [
+            "ab\u{1F468}\u{200D}\u{1F469}\u{200D}\u{1F467}cd",
+            "\u{1F1FA}\u{1F1F8}\u{1F1EB}\u{1F1F7}ab",
+            "x\u{1F44D}\u{1F3FD}y",
+            "\u{0915}\u{094D}\u{0937}\u{0915}\u{094D}\u{0937}",
+            "\u{1112}\u{1161}\u{11AB}\u{1100}\u{1161}",
+            "e\u{0301}e\u{0301}\u{0301}z",
+        ];
+        for text in samples {
+            // Where the graphemes end, counted in characters (one glyph per character).
+            let mut boundaries = vec![0usize];
+            for grapheme in text.graphemes(true) {
+                let last = *boundaries.last().unwrap();
+                boundaries.push(last + grapheme.chars().count());
+            }
+            let glyphs = glyph_per_char(text, 10);
+            let clusters = group_clusters_in_text(&glyphs, false, Some(text));
+            let line: Vec<Au> = clusters.iter().map(|cluster| cluster.advance).collect();
+            for budget_px in 0..=(10 * glyphs.len() as i32) {
+                let cut = keep_within(&line, Au::from_px(budget_px), Direction::Ltr);
+                let (_, kept_glyphs) = kept_totals(&clusters, cut, Direction::Ltr);
+                assert!(
+                    boundaries.contains(&kept_glyphs),
+                    "{text:?}: a budget of {budget_px} keeps {kept_glyphs} characters"
+                );
+            }
+        }
     }
 }

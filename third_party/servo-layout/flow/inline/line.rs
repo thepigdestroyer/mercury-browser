@@ -1289,6 +1289,17 @@ impl LineElisionState {
     }
 }
 
+/// Mercury: text-overflow. The text of a text fragment, in reading order, from the text of the
+/// inline formatting context (`None` if it is not there, or the ranges do not fit it).
+fn text_of_fragment(text_fragment: &TextFragment) -> Option<String> {
+    let ifc_text = text_fragment.run_data.text_content.get()?;
+    let run_start = text_fragment.run_data.character_range_in_ifc_text.start;
+    let range = &text_fragment.character_range_in_dom_node;
+    let start = (run_start + range.start).0 as usize;
+    let end = (run_start + range.end).0 as usize;
+    (start <= end).then(|| ifc_text.chars().skip(start).take(end - start).collect())
+}
+
 impl LineItemLayout<'_, '_> {
     /// Mercury: text-overflow. Decide what is left of a text run, given that this line overflows
     /// the block and the block elides its end. This returns the plain [`Fragment::Text`] for a
@@ -1325,7 +1336,11 @@ impl LineItemLayout<'_, '_> {
                 character_count: glyph.character_count().0,
             })
             .collect();
-        let clusters = ellipsis::group_clusters(&glyphs, bidi_level.is_rtl());
+        // The cut falls between grapheme clusters, which the glyphs alone do not tell: a font that
+        // does not ligate an emoji sequence, a flag or an Indic conjunct gives several glyphs.
+        let text = text_of_fragment(&text_fragment);
+        let clusters =
+            ellipsis::group_clusters_in_text(&glyphs, bidi_level.is_rtl(), text.as_deref());
         let advances: Vec<Au> = clusters.iter().map(|cluster| cluster.advance).collect();
 
         let baseline_block_offset = self.line_metrics.baseline_block_offset;

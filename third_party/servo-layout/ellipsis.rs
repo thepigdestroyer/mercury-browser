@@ -28,6 +28,7 @@
 //! is a hand-port of servo/servo#42394 by RichardTjokroutomo onto Servo 0.8 (see `MERCURY.md`).
 
 use app_units::Au;
+use unicode_segmentation::UnicodeSegmentation;
 
 /// Which physical end of a run of glyphs, laid out left to right, is the end of the line.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -81,7 +82,8 @@ pub struct Cluster {
     pub glyph_count: usize,
 }
 
-/// Groups glyphs, given in painting order (left to right), into clusters.
+/// Groups glyphs, given in painting order (left to right), into clusters, by what the shaper
+/// reports about each glyph alone.
 ///
 /// The text shaper reports one entry per character, so a base letter and its combining mark are two
 /// glyphs. A glyph joins the cluster before it, in reading order, when it stands for no character (the
@@ -89,10 +91,43 @@ pub struct Cluster {
 /// character); every other glyph starts a cluster. For a right-to-left run (`rtl_run`) the reading order is
 /// the reverse of the painting order, so a mark that follows its base letter in the text is painted before
 /// it, and the groups are made in reading order and then laid out again in painting order.
+///
+/// This is the fallback of [`group_clusters_in_text`], for a run whose text is not known: a font that does
+/// not ligate leaves an emoji sequence, a flag or an Indic conjunct as several glyphs that advance.
+// Mercury: `group_clusters_in_text` is what layout calls; this form is for the tests and as a fallback.
+#[allow(dead_code)]
 pub fn group_clusters(glyphs: &[GlyphMetrics], rtl_run: bool) -> Vec<Cluster> {
+    group_clusters_in_text(glyphs, rtl_run, None)
+}
+
+/// Like [`group_clusters`], with the text of the run: glyphs also stay together when their characters
+/// are in one extended grapheme cluster (UAX 29: an emoji ZWJ sequence, a flag of two regional
+/// indicators, an emoji with a skin-tone modifier, a consonant, a virama and a consonant of an Indic
+/// script, a decomposed Hangul syllable, CR LF). A glyph that stands for characters of several graphemes
+/// (a ligature) keeps all of them together.
+///
+/// `text` is the text of the glyphs in reading order. If its number of characters is not the number of
+/// characters the glyphs stand for (the two disagree, for a reason that is not known here), it is not
+/// used and the result is that of [`group_clusters`].
+pub fn group_clusters_in_text(
+    glyphs: &[GlyphMetrics],
+    rtl_run: bool,
+    text: Option<&str>,
+) -> Vec<Cluster> {
     let count = glyphs.len();
+    let grapheme_of_char = text.map(grapheme_of_each_char).filter(|graphemes| {
+        let stood_for: u64 = glyphs
+            .iter()
+            .map(|glyph| u64::from(glyph.character_count))
+            .sum();
+        graphemes.len() as u64 == stood_for
+    });
+
     let mut cluster_of = vec![0usize; count];
     let mut started = 0usize;
+    // The grapheme the last character of the current cluster is in.
+    let mut last_grapheme = None::<usize>;
+    let mut next_char = 0usize;
     for reading_index in 0..count {
         let index = if rtl_run {
             count - 1 - reading_index
@@ -100,8 +135,23 @@ pub fn group_clusters(glyphs: &[GlyphMetrics], rtl_run: bool) -> Vec<Cluster> {
             reading_index
         };
         let glyph = glyphs[index];
-        if started == 0 || (glyph.character_count > 0 && glyph.advance != Au(0)) {
+        let characters = glyph.character_count as usize;
+        let (first_grapheme, end_grapheme) = match &grapheme_of_char {
+            Some(graphemes) if characters > 0 => (
+                Some(graphemes[next_char]),
+                Some(graphemes[next_char + characters - 1]),
+            ),
+            _ => (None, None),
+        };
+        next_char += characters;
+
+        let joins_by_glyph = glyph.character_count == 0 || glyph.advance == Au(0);
+        let joins_by_text = first_grapheme.is_some() && first_grapheme == last_grapheme;
+        if started == 0 || !(joins_by_glyph || joins_by_text) {
             started += 1;
+        }
+        if end_grapheme.is_some() {
+            last_grapheme = end_grapheme;
         }
         cluster_of[index] = started - 1;
     }
@@ -123,6 +173,15 @@ pub fn group_clusters(glyphs: &[GlyphMetrics], rtl_run: bool) -> Vec<Cluster> {
         }
     }
     clusters
+}
+
+/// For each character of `text`, the number of the extended grapheme cluster it is in.
+fn grapheme_of_each_char(text: &str) -> Vec<usize> {
+    let mut graphemes = Vec::with_capacity(text.len());
+    for (grapheme_index, grapheme) in text.graphemes(true).enumerate() {
+        graphemes.extend(grapheme.chars().map(|_| grapheme_index));
+    }
+    graphemes
 }
 
 fn sum(advances: &[Au]) -> i64 {

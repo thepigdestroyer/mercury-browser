@@ -248,6 +248,10 @@ version = "0.3.18"
 [dependencies.unicode-script]
 version = "0.5"
 
+# Mercury: lane txt-1 (ED7), the grapheme clusters `text-overflow` never cuts inside.
+[dependencies.unicode-segmentation]
+version = "1.12"
+
 [dependencies.unicode_categories]
 version = "0.1.1"
 
