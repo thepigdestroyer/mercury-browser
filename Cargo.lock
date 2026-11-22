@@ -5951,8 +5951,10 @@ dependencies = [
  "image",
  "libc",
  "log",
+ "mercury-appearance",
  "mercury-downloads",
  "mercury-filter-lists",
+ "mercury-iconset",
  "mercury-import",
  "mercury-password-manager",
  "mercury-passwords",
@@ -6034,6 +6036,7 @@ dependencies = [
 name = "mercury-iconset"
 version = "0.2.0"
 dependencies = [
+ "mercury-appearance",
  "resvg 0.48.1",
  "tempfile",
  "thiserror 2.0.21",

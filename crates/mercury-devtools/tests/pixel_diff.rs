@@ -7,7 +7,7 @@ use std::fs;
 use std::path::Path;
 use std::process::Command;
 
-use mercury_devtools::pixel_diff::{Outcome, compare_dirs};
+use mercury_devtools::pixel_diff::{Mask, Outcome, compare_dirs, compare_masked};
 use tempfile::TempDir;
 
 /// A `width` x `height` picture of one colour, with `changes` as `(x, y, [r, g, b])`.
@@ -344,4 +344,70 @@ mod executable {
         assert_eq!(status, 2);
         assert!(err.contains("broken.png"), "{err}");
     }
+}
+
+#[test]
+fn a_mask_leaves_out_what_two_other_pictures_differ_by_and_nothing_else() {
+    let (before, after) = folders();
+    let (with, without) = folders();
+    // The thing drawn by the new code: a 2 x 2 block at (3, 3) in `with`, absent in `without`.
+    let block: Vec<(u32, u32, [u8; 3])> = (3..5)
+        .flat_map(|y| (3..5).map(move |x| (x, y, [200, 0, 0])))
+        .collect();
+    write(&with.path().join("a.png"), 10, 10, &block);
+    write(&without.path().join("a.png"), 10, 10, &[]);
+    // Before and after differ by the block (and its antialiased edge, one pixel around it).
+    write(
+        &before.path().join("a.png"),
+        10,
+        10,
+        &[(3, 3, [250, 250, 0])],
+    );
+    write(&after.path().join("a.png"), 10, 10, &block);
+    let mask = |grow| Mask {
+        with: with.path(),
+        without: without.path(),
+        grow,
+    };
+
+    let plain = compare_dirs(before.path(), after.path(), 0).expect("compares");
+    assert!(
+        !plain.is_identical(),
+        "without the mask the pictures differ"
+    );
+    let masked =
+        compare_masked(before.path(), after.path(), 0, None, Some(mask(1))).expect("compares");
+    assert!(masked.is_identical(), "{masked}");
+
+    // A difference outside the mask still counts, even in the same file.
+    write(
+        &after.path().join("a.png"),
+        10,
+        10,
+        &[(3, 3, [200, 0, 0]), (8, 8, [1, 2, 3])],
+    );
+    let masked =
+        compare_masked(before.path(), after.path(), 0, None, Some(mask(1))).expect("compares");
+    let entry = masked.entry("a.png").expect("an entry");
+    assert!(
+        matches!(
+            &entry.outcome,
+            Outcome::Differs {
+                pixels: 1,
+                bounds: (8, 8, 8, 8),
+                ..
+            }
+        ),
+        "{entry:?}"
+    );
+
+    // A file the mask has no pictures for is compared whole.
+    write(&before.path().join("b.png"), 4, 4, &[]);
+    write(&after.path().join("b.png"), 4, 4, &[(0, 0, [9, 9, 9])]);
+    let masked =
+        compare_masked(before.path(), after.path(), 0, None, Some(mask(1))).expect("compares");
+    assert!(matches!(
+        masked.entry("b.png").map(|entry| &entry.outcome),
+        Some(Outcome::Differs { pixels: 1, .. })
+    ));
 }

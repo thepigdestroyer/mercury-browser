@@ -14,7 +14,8 @@
 //! included):
 //!
 //! - [`graphite`] and [`midnight`]: two more of the 22 Nov designs the owner did not pick.
-//! - [`mercury_b2`]: `mercury-b2`, warm cream and deep violet with the brand's orange; rejected.
+//! - [`mercury_b2`]: `mercury-b2`, warm cream and deep violet with the brand's orange; rejected. It
+//!   was the default before Signal, so a stored `mercury-b2` quietly shows Signal ([`RETIRED_DEFAULT_ID`]).
 //! - [`hermes`]: `hermes`, the chrome's colours from before B2: the regression baseline of the
 //!   theme-plumbing pixel gate and the look of a window nobody pushes a palette to.
 //!
@@ -70,6 +71,11 @@ pub fn find(id: &str) -> Option<&'static Palette> {
 pub fn find_selectable(id: &str) -> Option<&'static Palette> {
     find(id).filter(|palette| palette.selectable)
 }
+
+/// The id of the former default, [`mercury_b2`]: every profile that has saved its settings holds it
+/// in `appearance.palette_light` and `palette_dark`, although nobody ever chose it (it never
+/// shipped). `resolve` shows the default for it without a note; it cannot be chosen.
+pub const RETIRED_DEFAULT_ID: &str = mercury_b2::ID;
 
 /// The palette of a new or upgraded profile, and of any stored id this version cannot show:
 /// [`signal`]. Its id is [`mercury_settings::DEFAULT_PALETTE`], which `tests/palettes.rs` checks.

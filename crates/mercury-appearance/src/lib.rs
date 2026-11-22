@@ -7,6 +7,7 @@
 //! supply, is Slint syntax or a Slint type (Slint's royalty-free licence does not permit
 //! distributing an application that exposes its APIs; see `SPEC.md` §2).
 //!
+//! - [`app_icon`]: the colours of the Dock icon for a palette (the Sun in its accent on a dark plate).
 //! - [`colour`]: hex forms, compositing, mixing, WCAG contrast.
 //! - [`oklab`]: perceptual colour distance, for telling tab-group colours apart.
 //! - [`palette`] and [`palettes`]: a palette is a table of the chrome's colour roles for the
@@ -23,6 +24,7 @@
 #![deny(missing_docs)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
 
+pub mod app_icon;
 pub mod colour;
 pub mod contrast;
 pub mod group_colour;
@@ -33,6 +35,7 @@ pub mod palette;
 pub mod palettes;
 pub mod resolve;
 
+pub use app_icon::AppIconColours;
 pub use colour::Colour;
 pub use contrast::{EXEMPT, Measurement, Minimum, RULES, Rule, Violation, check, measure};
 pub use group_colour::{GroupColour, PRESETS, Preset, Swatch, auto_colour, tab_shade};

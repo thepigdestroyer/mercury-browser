@@ -318,7 +318,7 @@ fn a_palette_that_cannot_be_chosen_is_not_used_even_when_the_file_names_it() {
 
 #[test]
 fn the_palettes_that_were_not_chosen_fall_back_to_signal_with_one_note_each() {
-    for id in ["mercury-b2", "graphite", "midnight", "hermes"] {
+    for id in ["graphite", "midnight", "hermes"] {
         let appearance = settings(|a| a.palette_dark = id.to_owned());
         let (resolved, repairs) = resolve(&appearance);
         assert_eq!(resolved.palette_light.id, "signal", "{id}");
@@ -330,6 +330,42 @@ fn the_palettes_that_were_not_chosen_fall_back_to_signal_with_one_note_each() {
             repairs[0].reason
         );
     }
+}
+
+#[test]
+fn a_stored_mercury_b2_quietly_shows_signal_and_is_kept() {
+    // The former default: what every profile that has saved its settings holds. No note per
+    // field, and nothing is rewritten (a downgrade and an upgrade lose nothing).
+    let both = settings(|a| {
+        a.palette_light = "mercury-b2".to_owned();
+        a.palette_dark = "mercury-b2".to_owned();
+    });
+    let before = both.clone();
+    let (resolved, repairs) = resolve(&both);
+    assert_eq!(resolved.palette_light.id, "signal");
+    assert_eq!(resolved.palette_dark.id, "signal");
+    assert!(repairs.is_empty(), "{repairs:?}");
+    assert_eq!(both, before, "the stored value is kept");
+    assert_eq!(palettes::RETIRED_DEFAULT_ID, "mercury-b2");
+    assert!(palettes::find_selectable("mercury-b2").is_none());
+
+    // One scheme holding it and the other a real choice: Signal and the choice, still no note.
+    let mixed = settings(|a| {
+        a.palette_light = "mercury-b2".to_owned();
+        a.palette_dark = "abyss".to_owned();
+    });
+    let (resolved, repairs) = resolve(&mixed);
+    assert_eq!(resolved.palette_light.id, "signal");
+    assert_eq!(resolved.palette_dark.id, "abyss");
+    assert!(repairs.is_empty(), "{repairs:?}");
+
+    // Genuinely unknown ids keep their note, one per field that holds one.
+    let unknown = settings(|a| {
+        a.palette_light = "mercury-b2".to_owned();
+        a.palette_dark = "tangerine".to_owned();
+    });
+    let (_, repairs) = resolve(&unknown);
+    assert_eq!(fields(&repairs), ["appearance.palette_dark"]);
 }
 
 #[test]

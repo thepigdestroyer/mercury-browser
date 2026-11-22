@@ -65,11 +65,16 @@ fn hermes_cannot_be_chosen_by_hand_but_the_gate_can_ask_for_it() {
     let (look, notes) = Look::from_appearance(&appearance("hermes", "hermes"));
     assert_eq!(ids(&look), ("signal", "signal"));
     assert_eq!(notes.len(), 2, "{notes:?}");
-    for id in ["mercury-b2", "graphite", "midnight"] {
+    // One note per field that holds it.
+    for id in ["graphite", "midnight"] {
         let (look, notes) = Look::from_appearance(&appearance(id, id));
         assert_eq!(ids(&look), ("signal", "signal"), "{id}");
         assert_eq!(notes.len(), 2, "{id}: {notes:?}");
     }
+    // The former default, held by every saved profile, is a quiet alias of Signal.
+    let (look, notes) = Look::from_appearance(&appearance("mercury-b2", "mercury-b2"));
+    assert_eq!(ids(&look), ("signal", "signal"));
+    assert!(notes.is_empty(), "{notes:?}");
 
     let hermes = Look::hermes_roomy();
     assert_eq!(ids(&hermes), ("hermes", "hermes"));

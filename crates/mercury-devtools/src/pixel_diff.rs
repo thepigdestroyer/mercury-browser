@@ -145,6 +145,20 @@ impl fmt::Display for Report {
     }
 }
 
+/// Pixels to leave out of a comparison: wherever the same-named pictures of two other folders
+/// differ (`with` and `without` a thing, for example a drawn mark), grown by `grow` pixels on
+/// every side. The pictures of `with` and `without` are rendered from the *after* code, so the
+/// mask is exactly what that code draws, not a rectangle someone typed in.
+#[derive(Debug, Clone, Copy)]
+pub struct Mask<'a> {
+    /// The folder with the thing drawn.
+    pub with: &'a Path,
+    /// The folder without it.
+    pub without: &'a Path,
+    /// How many pixels around each differing pixel are also ignored (edge antialiasing).
+    pub grow: usize,
+}
+
 /// Compares every `*.png` of `before` with the one at the same relative path in `after`.
 pub fn compare_dirs(before: &Path, after: &Path, tolerance: u8) -> Result<Report, Error> {
     compare(before, after, tolerance, None)
@@ -158,6 +172,18 @@ pub fn compare(
     after: &Path,
     tolerance: u8,
     diffs: Option<&Path>,
+) -> Result<Report, Error> {
+    compare_masked(before, after, tolerance, diffs, None)
+}
+
+/// Like [`compare`], leaving out the pixels of `mask` (see [`Mask`]). A file that has no picture
+/// of the same name and size in both mask folders is compared whole.
+pub fn compare_masked(
+    before: &Path,
+    after: &Path,
+    tolerance: u8,
+    diffs: Option<&Path>,
+    mask: Option<Mask<'_>>,
 ) -> Result<Report, Error> {
     let (before_files, after_files) = if before.is_file() && after.is_file() {
         let name = PathBuf::from(after.file_name().unwrap_or_default());
@@ -202,7 +228,11 @@ pub fn compare(
                 let old = locate(before, relative);
                 let new = locate(after, relative);
                 let (old_image, new_image) = (read(&old)?, read(&new)?);
-                let outcome = compare_images(&old_image, &new_image, tolerance);
+                let ignore = match mask {
+                    Some(mask) => ignore_plane(&mask, relative, &old_image)?,
+                    None => None,
+                };
+                let outcome = compare_images(&old_image, &new_image, tolerance, ignore.as_deref());
                 if let (Some(directory), Outcome::Differs { .. }) = (diffs, &outcome) {
                     write_diff(&directory.join(relative), &old_image, &new_image, tolerance)?;
                 }
@@ -253,7 +283,45 @@ fn read(path: &Path) -> Result<Image, Error> {
     png::decode(&data).map_err(|error| Error(format!("{}: {error}", path.display())))
 }
 
-fn compare_images(before: &Image, after: &Image, tolerance: u8) -> Outcome {
+/// Which pixels of a picture the mask leaves out, row by row, or `None` when the mask has no
+/// usable pair of pictures for it.
+fn ignore_plane(
+    mask: &Mask<'_>,
+    relative: &Path,
+    like: &Image,
+) -> Result<Option<Vec<bool>>, Error> {
+    let (with, without) = (mask.with.join(relative), mask.without.join(relative));
+    if !with.is_file() || !without.is_file() {
+        return Ok(None);
+    }
+    let (with, without) = (read(&with)?, read(&without)?);
+    let same_size = |other: &Image| (other.width, other.height) == (like.width, like.height);
+    if !same_size(&with) || !same_size(&without) {
+        return Ok(None);
+    }
+    let (width, height) = (like.width, like.height);
+    let mut plane = vec![false; width * height];
+    for y in 0..height {
+        for x in 0..width {
+            if largest_delta(with.pixel(x, y), without.pixel(x, y)) == 0 {
+                continue;
+            }
+            for yy in y.saturating_sub(mask.grow)..(y + mask.grow + 1).min(height) {
+                for xx in x.saturating_sub(mask.grow)..(x + mask.grow + 1).min(width) {
+                    plane[yy * width + xx] = true;
+                }
+            }
+        }
+    }
+    Ok(Some(plane))
+}
+
+fn compare_images(
+    before: &Image,
+    after: &Image,
+    tolerance: u8,
+    ignore: Option<&[bool]>,
+) -> Outcome {
     if (before.width, before.height) != (after.width, after.height) {
         return Outcome::SizeChanged {
             before: (before.width, before.height),
@@ -265,6 +333,9 @@ fn compare_images(before: &Image, after: &Image, tolerance: u8) -> Outcome {
     let mut bounds = (usize::MAX, usize::MAX, 0, 0);
     for y in 0..before.height {
         for x in 0..before.width {
+            if ignore.is_some_and(|plane| plane[y * before.width + x]) {
+                continue;
+            }
             let delta = largest_delta(before.pixel(x, y), after.pixel(x, y));
             if delta > tolerance {
                 pixels += 1;
@@ -317,7 +388,10 @@ fn write_diff(path: &Path, before: &Image, after: &Image, tolerance: u8) -> Resu
 }
 
 const USAGE: &str = "usage: pixel-diff <before> <after> [--tolerance N] [--write-diffs <dir>]\n  \
-     <before> and <after> are two folders of PNG files, or two PNG files\n";
+     [--ignore-where <with> <without> [--grow N]]\n  \
+     <before> and <after> are two folders of PNG files, or two PNG files;\n  \
+     --ignore-where leaves out the pixels (grown by N, default 2) where the same-named pictures of\n  \
+     the folders <with> and <without> differ\n";
 
 /// Runs the command line `arguments` (without the program name) and returns the exit status and
 /// the text for standard output and standard error.
@@ -325,6 +399,8 @@ pub fn run(arguments: &[String]) -> (i32, String, String) {
     let mut paths = Vec::new();
     let mut tolerance = 0u8;
     let mut diffs = None;
+    let mut ignore_where: Option<(PathBuf, PathBuf)> = None;
+    let mut grow = 2usize;
     let mut rest = arguments.iter();
     while let Some(argument) = rest.next() {
         match argument.as_str() {
@@ -336,6 +412,16 @@ pub fn run(arguments: &[String]) -> (i32, String, String) {
                 Some(directory) => diffs = Some(PathBuf::from(directory)),
                 None => return usage("--write-diffs takes a folder"),
             },
+            "--ignore-where" => match (rest.next(), rest.next()) {
+                (Some(with), Some(without)) => {
+                    ignore_where = Some((PathBuf::from(with), PathBuf::from(without)));
+                }
+                _ => return usage("--ignore-where takes two folders"),
+            },
+            "--grow" => match rest.next().map(|value| value.parse::<usize>()) {
+                Some(Ok(value)) => grow = value,
+                _ => return usage("--grow takes a number"),
+            },
             "-h" | "--help" => return (0, USAGE.to_owned(), String::new()),
             flag if flag.starts_with("--") => return usage(&format!("unknown option {flag}")),
             path => paths.push(PathBuf::from(path)),
@@ -344,7 +430,12 @@ pub fn run(arguments: &[String]) -> (i32, String, String) {
     let [before, after] = paths.as_slice() else {
         return usage("give exactly two paths");
     };
-    match compare(before, after, tolerance, diffs.as_deref()) {
+    let mask = ignore_where.as_ref().map(|(with, without)| Mask {
+        with,
+        without,
+        grow,
+    });
+    match compare_masked(before, after, tolerance, diffs.as_deref(), mask) {
         Ok(report) => {
             let status = i32::from(!report.is_identical());
             (status, format!("{report}\n"), String::new())

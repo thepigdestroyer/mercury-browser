@@ -431,6 +431,7 @@ pub(crate) fn system_theme_changed() {
         let _slint = crate::callback_scope::InSlintCallback::enter();
         if let Some(handle) = HANDLE.with(|current| current.borrow().upgrade()) {
             window::refresh(&handle);
+            handle.push_dock_icon(false); // themes: "Follow the system" also moves the Dock icon
         }
     });
 }
@@ -616,6 +617,31 @@ impl SettingsHandle {
         };
         component.global::<ChromePalette>().set_theme(theme);
         self.push_look(component, &look, notes);
+        self.push_dock_icon(false); // themes
+    }
+
+    /// Makes the Dock icon the one of the palette and scheme now shown (macOS; `dock_icon.rs`).
+    /// With `force` the icon is set again even if it is the one in place: once the event loop runs.
+    fn push_dock_icon(&self, force: bool) {
+        #[cfg(target_os = "macos")]
+        {
+            let (theme, (look, _notes)) = {
+                let settings = self.settings.borrow();
+                (
+                    settings.appearance.theme,
+                    shipped_look(&settings.appearance),
+                )
+            };
+            let dark = match theme {
+                Theme::Light => false,
+                Theme::Dark => true,
+                // As the chrome does: dark when the system's scheme is not known.
+                Theme::System => self.system_color_scheme() != slint::language::ColorScheme::Light,
+            };
+            crate::dock_icon::follow(&look, dark, force);
+        }
+        #[cfg(not(target_os = "macos"))]
+        let _ = force;
     }
 
     /// Gives `component` a look: its colours and sizes. The notes (a palette id this version
@@ -678,6 +704,8 @@ impl SettingsHandle {
                         .borrow_mut()
                         .set_color_scheme(color_scheme_from_winit(reported));
                 }
+                // themes: the event loop runs and the window exists: set the Dock icon again.
+                self.push_dock_icon(true);
             }
             None if attempts_left == 0 => {
                 log::warn!("settings: the window never appeared; its title bar keeps its theme");
@@ -1005,9 +1033,9 @@ pub(crate) mod tests {
             "the stored value is never rewritten"
         );
 
-        // The palettes that stay in the code but are not offered (hermes, mercury-b2, graphite,
-        // midnight) cannot be switched on by editing the file.
-        for id in ["hermes", "mercury-b2", "graphite", "midnight"] {
+        // The palettes that stay in the code but are not offered (hermes, graphite, midnight)
+        // cannot be switched on by editing the file.
+        for id in ["hermes", "graphite", "midnight"] {
             handle.update(|settings| settings.appearance.palette_light = id.to_owned());
             assert_eq!(
                 window.global::<ChromePalette>().get_window_background(),
@@ -1015,6 +1043,35 @@ pub(crate) mod tests {
                 "{id}"
             );
         }
+    }
+
+    #[test]
+    fn a_profile_that_still_holds_the_old_default_shows_signal_without_a_note() {
+        init_slint();
+        let handle = SettingsHandle::start(None);
+        let window = mercury_ui::SettingsWindow::new().expect("a window");
+        apply_chrome_theme(&window);
+
+        // `mercury-b2` was the default, so every profile that has saved its settings holds it.
+        handle.update(|settings| {
+            settings.appearance.palette_light = "mercury-b2".to_owned();
+            settings.appearance.palette_dark = "mercury-b2".to_owned();
+            settings.appearance.theme = Theme::Light;
+        });
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            SIGNAL.0
+        );
+        handle.update(|settings| settings.appearance.theme = Theme::Dark);
+        assert_eq!(
+            window.global::<ChromePalette>().get_window_background(),
+            SIGNAL.1
+        );
+        assert!(
+            handle.look_notes_logged.borrow().is_empty(),
+            "no warning at launch for the retired default"
+        );
+        assert_eq!(handle.settings().appearance.palette_light, "mercury-b2");
     }
 
     #[test]

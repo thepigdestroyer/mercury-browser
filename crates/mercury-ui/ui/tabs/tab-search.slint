@@ -72,6 +72,8 @@ component TabSearchRowView inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
                 heavy: true;
+                // On the highlighted row (the fill accent itself) an accent disc would vanish.
+                inverted: root.highlighted;
             }
         }
 

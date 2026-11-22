@@ -16,7 +16,7 @@ use std::path::PathBuf;
 use std::rc::Rc;
 
 use mercury_appearance::palette::{Role, Scheme};
-use mercury_appearance::{Metrics, Palette, palettes};
+use mercury_appearance::{Colour, Metrics, Palette, palettes};
 use mercury_ui::{
     BrowserTab, ChromePalette, ChromeTheme, Look, MainWindow, TabAudioState, TabSearchRow,
     apply_look,
@@ -109,23 +109,25 @@ fn in_tab(pixels: &Pixels, from: u32, width: u32, colour: (u8, u8, u8)) -> usize
         .count()
 }
 
-/// The pixels of the whole window that are exactly `colour`.
-fn in_window(pixels: &Pixels, colour: (u8, u8, u8)) -> usize {
-    pixels
-        .as_slice()
-        .iter()
-        .filter(|pixel| (pixel.r, pixel.g, pixel.b) == colour)
-        .count()
-}
-
-/// Pixels that differ between two renderings of the same window.
-fn whole_difference(a: &Pixels, b: &Pixels) -> usize {
-    assert_eq!((a.width(), a.height()), (b.width(), b.height()));
-    a.as_slice()
-        .iter()
-        .zip(b.as_slice())
-        .filter(|(left, right)| left != right)
-        .count()
+/// The top left corner of the highlighted row of the all-tabs list: the first line with a run of
+/// `selected` pixels as wide as a row, and where that run starts.
+fn selected_row(pixels: &Pixels, selected: (u8, u8, u8)) -> (u32, u32) {
+    let is_selected = |x: u32, y: u32| {
+        let pixel = at(pixels, x, y);
+        (pixel.r, pixel.g, pixel.b) == selected
+    };
+    for y in 100..pixels.height() {
+        let count = (0..pixels.width()).filter(|&x| is_selected(x, y)).count();
+        if count >= 200 {
+            // The row is 44 px high: its middle line has the row's own left edge (no corner).
+            let middle = y + 22;
+            let left = (0..pixels.width())
+                .find(|&x| is_selected(x, middle))
+                .expect("the row is filled at its middle");
+            return (left, y);
+        }
+    }
+    panic!("no highlighted row found");
 }
 
 fn rgb(palette: &Palette, scheme: Scheme, role: Role) -> (u8, u8, u8) {
@@ -212,31 +214,76 @@ fn check(palette: Option<&'static Palette>, theme: ChromeTheme, scheme: Scheme, 
         "{name}: a tab with an icon does not show the mark"
     );
 
-    // The all-tabs list (tab search): a row without an icon shows the mark, a row with an icon
-    // does not.
-    let row = |icon: Option<&Image>| {
-        ModelRc::new(VecModel::from(vec![TabSearchRow {
-            id: 1,
+    // The all-tabs list (tab search): two rows without an icon, the first highlighted (as the
+    // list opens) and the second not. The highlighted row is filled with `item-selected`, which is
+    // the fill accent, so its mark is inverted: the disc is `item-selected-text`. The other row
+    // shows the accent disc on the popup. A row with an icon shows no disc at all.
+    let rows = |first_icon: Option<&Image>| {
+        let row = |id: i32, icon: Option<&Image>| TabSearchRow {
+            id,
             title: "Same title".into(),
             url: "https://site.test/".into(),
             has_icon: icon.is_some(),
             icon: icon.cloned().unwrap_or_default(),
             ..Default::default()
-        }]))
+        };
+        ModelRc::new(VecModel::from(vec![row(1, first_icon), row(2, None)]))
     };
+    window.window().set_size(LogicalSize::new(1400.0, 400.0));
     window.invoke_show_tab_search();
-    window.set_tab_search_rows(row(None));
-    let placeholder = window.window().take_snapshot().expect("the window renders");
-    save(&placeholder, &format!("tab-placeholder-search-{name}.png"));
-    window.set_tab_search_rows(row(Some(&page_icon())));
-    let with_icon = window.window().take_snapshot().expect("the window renders");
+    window.set_tab_search_rows(rows(None));
+    let list = window.window().take_snapshot().expect("the window renders");
+    save(&list, &format!("tab-placeholder-search-{name}.png"));
+
+    let selected = rgb(owner, scheme, Role::ItemSelected);
+    let on_selected = rgb(owner, scheme, Role::ItemSelectedText);
+    let popup = rgb(owner, scheme, Role::PopupBackground);
+    let row = selected_row(&list, selected);
+    // The icon box of a row: 10 px of padding, 18 px wide; 13 px down in a 44 px row; rows 46 px apart.
+    let icon_box = |index: u32| (row.0 + 10, row.1 + 13 + index * 46);
+    let count_in = |pixels: &Pixels, (left, top): (u32, u32), colour| {
+        (top..top + 18)
+            .flat_map(|y| (left..left + 18).map(move |x| (x, y)))
+            .filter(|&(x, y)| {
+                let pixel = at(pixels, x, y);
+                (pixel.r, pixel.g, pixel.b) == colour
+            })
+            .count()
+    };
     assert!(
-        in_window(&placeholder, accent) >= in_window(&with_icon, accent) + MARK_MIN,
-        "{name}: a row of the all-tabs list without an icon shows the mark in the accent"
+        count_in(&list, icon_box(0), on_selected) > MARK_MIN,
+        "{name}: the mark's disc is drawn on the highlighted row of the all-tabs list, in the colour of text on it"
     );
     assert!(
-        whole_difference(&placeholder, &with_icon) > 10,
-        "{name}: the row with an icon looks different"
+        count_in(&list, icon_box(1), accent) > MARK_MIN,
+        "{name}: the mark's disc is drawn in the accent on a row that is not highlighted"
+    );
+    if palette.is_some() {
+        // Visible: the disc against what is behind it, 3:1 as a graphic.
+        let ratio = |a: (u8, u8, u8), b: (u8, u8, u8)| {
+            let colour = |c: (u8, u8, u8)| {
+                Colour::hex(u32::from(c.0) << 16 | u32::from(c.1) << 8 | u32::from(c.2))
+            };
+            colour(a).contrast_ratio(colour(b))
+        };
+        assert!(
+            ratio(on_selected, selected) >= 3.0,
+            "{name}: disc on the highlighted row"
+        );
+        assert!(ratio(accent, popup) >= 3.0, "{name}: disc on the popup");
+    }
+
+    // With a favicon, the first row shows the icon and no disc.
+    window.set_tab_search_rows(rows(Some(&page_icon())));
+    let with_icon = window.window().take_snapshot().expect("the window renders");
+    assert_eq!(
+        count_in(&with_icon, icon_box(0), on_selected),
+        0,
+        "{name}: a row with an icon does not show the mark"
+    );
+    assert!(
+        count_in(&with_icon, icon_box(0), (30, 136, 229)) > 100,
+        "{name}: a row with an icon shows it"
     );
     window.hide().expect("the main window can be hidden");
 }

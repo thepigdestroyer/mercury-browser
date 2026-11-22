@@ -224,3 +224,46 @@ fn report_how_far_apart_the_palettes_are() {
         }
     }
 }
+
+/// `MercuryMark` (`mercury-ui/ui/theme/mercury-mark.slint`) draws a disc in `primary-button-background`
+/// with an M in `primary-button-text`, on the surfaces below, and on a selected row inverted (the disc
+/// is `item-selected-text`, the M `item-selected`). Pinned here so that a palette edit cannot make the
+/// mark unreadable or let its disc melt into what it sits on without a test failing.
+#[test]
+fn the_mercury_mark_is_legible_on_every_surface_it_is_drawn_on_in_every_selectable_palette() {
+    let surfaces = [
+        Role::WindowBackground,  // an inactive tab, the pinned tabs
+        Role::TabActive,         // the active tab
+        Role::TabHover,          // a hovered tab
+        Role::ContentBackground, // the new-tab page and About
+        Role::PopupBackground,   // a row of the all-tabs list that is not highlighted
+        Role::SheetBackground,
+    ];
+    let mut checked = 0;
+    for palette in palettes::selectable() {
+        for scheme in Scheme::ALL {
+            let name = format!("{} {}", palette.id, scheme.name());
+            let disc = palette.colour(scheme, Role::PrimaryButtonBackground);
+            let m = palette.colour(scheme, Role::PrimaryButtonText);
+            let contrast = |a: Colour, b: Colour| a.contrast_ratio(b);
+            assert!(contrast(m, disc) >= 4.5, "{name}: the M on the disc");
+            for surface in surfaces {
+                let ratio = contrast(disc, palette.colour(scheme, surface));
+                assert!(
+                    ratio >= 3.0,
+                    "{name}: the disc on {} is {ratio:.2}:1",
+                    surface.slint_name()
+                );
+                checked += 1;
+            }
+            // On the highlighted row of the all-tabs list.
+            let selected = palette.colour(scheme, Role::ItemSelected);
+            let on_selected = palette.colour(scheme, Role::ItemSelectedText);
+            assert!(
+                contrast(on_selected, selected) >= 4.5,
+                "{name}: the inverted mark on a selected row"
+            );
+        }
+    }
+    assert_eq!(checked, 4 * 2 * surfaces.len());
+}
