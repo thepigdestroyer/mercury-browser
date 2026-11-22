@@ -29,6 +29,7 @@ image.workspace = true
 libc.workspace = true
 log.workspace = true
 # settings-ui: the key panel of the Tab groups section (`src/settings/groups_panel.rs`).
+# hub-ring: the group swatches and tab shades of the ring's rows (`src/hub_ring.rs`).
 mercury-appearance = { path = "../../crates/mercury-appearance" }
 mercury-downloads = { path = "../../crates/mercury-downloads" }
 mercury-filter-lists = { path = "../../crates/mercury-filter-lists" }
@@ -41,8 +42,6 @@ mercury-pdfium = { path = "../../crates/mercury-pdfium" }
 # the proxy of this run, shared by Servo and the other HTTP clients (downloads, PDF re-fetch).
 mercury-proxy = { path = "../../crates/mercury-proxy" }
 # passwords-ui
-# hub-ring lane: the group swatches and tab shades of the ring's rows (`src/hub_ring.rs`).
-mercury-appearance = { path = "../../crates/mercury-appearance" }
 mercury-password-manager = { path = "../../crates/mercury-password-manager" }
 mercury-passwords = { path = "../../crates/mercury-passwords" }
 mercury-settings = { path = "../../crates/mercury-settings" }
