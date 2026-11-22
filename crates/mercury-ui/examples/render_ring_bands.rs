@@ -8,33 +8,53 @@
 //!
 //! `cargo run --release -p mercury-ui --features test-support --example render_ring_bands -- <output directory>`
 
+#[cfg(not(feature = "test-support"))]
+fn main() {
+    eprintln!("render_ring_bands needs `--features test-support` (the fixtures)");
+}
+
+#[cfg(feature = "test-support")]
 #[path = "../tests/ring_bands_scenes/mod.rs"]
 mod scenes;
 
+#[cfg(feature = "test-support")]
 use std::error::Error;
+#[cfg(feature = "test-support")]
 use std::path::PathBuf;
 
+#[cfg(feature = "test-support")]
 use mercury_ui::FlagKind;
+#[cfg(feature = "test-support")]
 use mercury_ui::ring_bands::fixtures::{generated, mockup_groups, mockup_tabs};
+#[cfg(feature = "test-support")]
 use scenes::{Params, Scene, save};
+#[cfg(feature = "test-support")]
 use slint::ComponentHandle;
+#[cfg(feature = "test-support")]
 use slint::LogicalPosition;
+#[cfg(feature = "test-support")]
 use slint::platform::{PointerEventButton, WindowEvent};
 
 /// The tab "Reading: tab 5" of the mockup (the hovered tab of `ring-open`).
+#[cfg(feature = "test-support")]
 const READING_5: i32 = 101 + 5 + 4 + 4;
 /// "Tram 28 timetable", the one match of the search frame.
+#[cfg(feature = "test-support")]
 const TRAM: i32 = 101 + 5 + 2;
+#[cfg(feature = "test-support")]
 const LISBON: i32 = 2;
 
+#[cfg(feature = "test-support")]
 fn point(x: f32, y: f32) -> LogicalPosition {
     LogicalPosition::new(x, y)
 }
 
+#[cfg(feature = "test-support")]
 fn mockup(dark: bool, params: Params) -> Scene {
     Scene::new(&mockup_groups(dark), &mockup_tabs(dark), params)
 }
 
+#[cfg(feature = "test-support")]
 fn main() -> Result<(), Box<dyn Error>> {
     let output = PathBuf::from(
         std::env::args()

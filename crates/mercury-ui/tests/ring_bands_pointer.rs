@@ -480,3 +480,110 @@ mod background {
         assert_eq!(s.window.get_hovered_tab(), -1);
     }
 }
+
+mod drag_state {
+    use super::*;
+
+    fn start_drag(s: &Scene) -> (f32, f32) {
+        let from = s.tab_point(0);
+        s.move_to(from);
+        s.press_at(from, PointerEventButton::Left);
+        s.move_to((from.0 + 12.0, from.1));
+        from
+    }
+
+    #[test]
+    fn drag_source_names_the_tab_the_component_is_dragging() {
+        let s = scene(true);
+        assert_eq!(s.window.get_drag_source(), -1);
+        let from = s.tab_point(0);
+        s.move_to(from);
+        s.press_at(from, PointerEventButton::Left);
+        assert_eq!(s.window.get_drag_source(), -1, "a press is no drag yet");
+        s.move_to((from.0 + 3.0, from.1));
+        assert_eq!(
+            s.window.get_drag_source(),
+            -1,
+            "3 px is under the threshold"
+        );
+        s.move_to((from.0 + 12.0, from.1));
+        assert_eq!(s.window.get_drag_source(), s.tab_id(0));
+        assert_eq!(
+            s.window.get_dragging_tab(),
+            -1,
+            "dragging-tab stays the host's input"
+        );
+
+        let over = s.tab_point(7);
+        s.move_to(over);
+        s.release_at(over, PointerEventButton::Left);
+        assert_eq!(s.window.get_drag_source(), -1, "a drop ends it");
+
+        start_drag(&s);
+        assert_eq!(s.window.get_drag_source(), s.tab_id(0));
+        s.move_to((258.0, 258.0));
+        s.release_at((258.0, 258.0), PointerEventButton::Left);
+        assert_eq!(
+            s.window.get_drag_source(),
+            -1,
+            "a cancelled release ends it"
+        );
+    }
+
+    #[test]
+    fn cancel_drag_ends_a_drag_without_a_drop() {
+        let s = scene(true);
+        start_drag(&s);
+        s.take();
+        assert_eq!(s.window.get_drag_source(), s.tab_id(0));
+
+        s.window.invoke_cancel_drag();
+        let log = s.take();
+        assert_eq!(log, ["drag-cancelled:"], "{log:?}");
+        assert_eq!(s.window.get_drag_source(), -1);
+
+        // The release that follows is nothing: no drop, no second cancel, no click.
+        let over = s.tab_point(7);
+        s.move_to(over);
+        s.release_at(over, PointerEventButton::Left);
+        let log = s.take();
+        assert_eq!(starts(&log, "drop"), 0, "{log:?}");
+        assert_eq!(starts(&log, "drag-cancelled"), 0, "{log:?}");
+        assert_eq!(starts(&log, "activated"), 0, "{log:?}");
+        assert_eq!(starts(&log, "drag-started"), 0, "{log:?}");
+    }
+
+    #[test]
+    fn cancel_drag_with_no_drag_is_silent_and_drops_a_pending_press() {
+        let s = scene(true);
+        s.window.invoke_cancel_drag();
+        assert!(s.take().is_empty());
+
+        let at = s.tab_point(4);
+        s.move_to(at);
+        s.press_at(at, PointerEventButton::Left);
+        s.take();
+        s.window.invoke_cancel_drag();
+        s.release_at(at, PointerEventButton::Left);
+        let log = s.take();
+        assert_eq!(
+            starts(&log, "activated"),
+            0,
+            "a cancelled press is no click: {log:?}"
+        );
+        assert_eq!(starts(&log, "drag-cancelled"), 0, "{log:?}");
+    }
+
+    #[test]
+    fn making_the_ring_inert_cancels_a_live_drag() {
+        let s = scene(true);
+        start_drag(&s);
+        s.take();
+        s.window.set_interactive(false);
+        // Change handlers run after the property is set, on the next pass of the event loop.
+        slint::platform::update_timers_and_animations();
+        s.leave();
+        assert_eq!(s.take(), ["drag-cancelled:"]);
+        assert_eq!(s.window.get_drag_source(), -1);
+    }
+}
