@@ -449,13 +449,13 @@ fn step(cx: &mut JSContext, element: &Element, increment: bool) {
 /// The value one step above or below `now` for an ARIA slider, within `[minimum, maximum]`.
 ///
 /// ARIA has no step: the step is 1 (the default of `<input type=range>`), or a tenth of the range
-/// when the range is smaller than 1. A range that is empty or inverted does not move.
+/// when the range is 1 or smaller (a 0 to 1 slider moves in tenths, not from one end to the other). A range that is empty or inverted does not move.
 fn aria_next_value(now: f64, minimum: f64, maximum: f64, increment: bool) -> f64 {
     let range = maximum - minimum;
     if range.is_nan() || range <= 0.0 || now.is_nan() {
         return now;
     }
-    let step = if range >= 1.0 { 1.0 } else { range / 10.0 };
+    let step = if range > 1.0 { 1.0 } else { range / 10.0 };
     let next = if increment { now + step } else { now - step };
     // Round away the noise of binary fractions (0.1 + 0.2).
     let next = (next * 1e9).round() / 1e9;
