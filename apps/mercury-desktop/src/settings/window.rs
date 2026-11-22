@@ -154,6 +154,7 @@ pub(crate) fn fill(window: &SettingsWindow, settings: &Settings, save_problem: O
 
     window.set_experimental_web_features(settings.web.experimental_web_features);
     window.set_gpu_canvas(settings.web.gpu_canvas);
+    window.set_swipe_navigation(settings.web.swipe_navigation); // gestures
 }
 
 pub(crate) fn fill_text_fields(window: &SettingsWindow, settings: &Settings) {

@@ -61,6 +61,8 @@ pub struct ServoWebView {
     /// Where script results (the media probe, the find script's answers) are reported, as
     /// events of this web view's tab.
     browser_event_sender: Sender<TabEvent>,
+    // gestures: the wheel events sent, whose answers the delegate reports
+    wheel_ledger: Rc<crate::wheel_ledger::WheelLedger>,
 }
 
 /// What a tab's web view shares with its delegate.
@@ -75,6 +77,8 @@ pub(crate) struct TabParts {
     pub(crate) geolocation: Option<Rc<WebViewGeolocation>>,
     // media session
     pub(crate) browser_event_sender: Sender<TabEvent>,
+    // gestures
+    pub(crate) wheel_ledger: Rc<crate::wheel_ledger::WheelLedger>,
 }
 
 impl ServoWebView {
@@ -93,6 +97,7 @@ impl ServoWebView {
             clipboard,
             geolocation,
             browser_event_sender,
+            wheel_ledger,
         } = parts;
         Self {
             inner,
@@ -106,6 +111,7 @@ impl ServoWebView {
             clipboard,
             geolocation,
             browser_event_sender,
+            wheel_ledger,
         }
     }
 
@@ -280,12 +286,14 @@ impl TalariaWebView for ServoWebView {
 
     fn scroll(&mut self, delta_x: f32, delta_y: f32, x: f32, y: f32) -> Result<(), Self::Error> {
         let delta = wheel_delta(delta_x, delta_y, self.scale_factor.get());
-        let _event_id = self
+        let event_id = self
             .inner
             .notify_input_event(InputEvent::Wheel(WheelEvent::new(
                 delta,
                 self.web_view_point(x, y),
             )));
+        // gestures: the answer says whether the page cancelled the scroll
+        self.wheel_ledger.sent(event_id);
 
         Ok(())
     }

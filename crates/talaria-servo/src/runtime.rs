@@ -622,6 +622,8 @@ fn firefox_compatible_user_agent(servo_user_agent: &str) -> String {
 }
 
 struct BrowserDelegate {
+    /// gestures: the tab's wheel events awaiting Servo's answer; shared with its `ServoWebView`.
+    wheel_ledger: Rc<crate::wheel_ledger::WheelLedger>,
     tab_id: TabId,
     browser_event_sender: Sender<TabEvent>,
     frame_ready: FrameReadySignal,
@@ -684,8 +686,10 @@ fn new_tab_delegate(
         geolocation,
         // media session
         browser_event_sender: browser_event_sender.clone(),
+        wheel_ledger: crate::wheel_ledger::WheelLedger::new(), // gestures
     };
     let delegate = Rc::new(BrowserDelegate {
+        wheel_ledger: Rc::clone(&parts.wheel_ledger), // gestures
         tab_id,
         browser_event_sender: browser_event_sender.clone(),
         frame_ready: parts.frame_ready.clone(),
@@ -930,6 +934,20 @@ impl servo::WebViewDelegate for BrowserDelegate {
         // history
         if let Some(event) = crate::history_events::page_committed(&entries, current) {
             self.send_browser_event(event);
+        }
+    }
+
+    // gestures: only wheel events are reported; the answers to every other input are ignored.
+    fn notify_input_event_handled(
+        &self,
+        _web_view: servo::WebView,
+        event_id: servo::InputEventId,
+        result: servo::InputEventResult,
+    ) {
+        if self.wheel_ledger.answered(event_id) {
+            self.send_browser_event(BrowserEvent::WheelHandled {
+                prevented: crate::wheel_ledger::wheel_prevented(result),
+            });
         }
     }
 

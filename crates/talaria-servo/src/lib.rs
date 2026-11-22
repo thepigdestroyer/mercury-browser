@@ -39,6 +39,7 @@ mod site_data;
 // text lane (txt-1): the engine's text input state as a browser event.
 mod text_messages;
 mod web_view;
+mod wheel_ledger; // gestures
 // site security
 mod certificate_exceptions;
 mod resources;

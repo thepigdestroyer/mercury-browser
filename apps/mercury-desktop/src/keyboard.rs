@@ -22,11 +22,14 @@ pub(crate) fn connect_native_keyboard_input(
     window: &MainWindow,
     controller: Rc<RefCell<BrowserController>>,
     web_view_focused: Rc<Cell<bool>>,
-    _settings: &Rc<crate::settings::SettingsHandle>, // input-hooks
+    settings: &Rc<crate::settings::SettingsHandle>, // input-hooks
 ) {
     let weak_window = window.as_weak();
     let mut modifiers = ModifiersState::empty();
     let mut shortcut_keys = ShortcutKeys::default();
+    // gestures: the two-finger swipe, and its settings switch
+    let mut swipe_state = crate::swipe::SwipeState::new();
+    let swipe_enabled = crate::swipe::follow_settings(settings);
     // txt-1: `ime.rs` holds the composition state and queues commands itself (text from the
     // system's emoji picker and dictation arrives outside this handler).
     attach_ime(window, &controller, &web_view_focused);
@@ -119,6 +122,19 @@ pub(crate) fn connect_native_keyboard_input(
                     ));
                     window.window().request_redraw();
                     return EventResult::PreventDefault;
+                }
+                // gestures: the wheel's phase, for the two-finger swipe. The event is never
+                // consumed: the page and Slint still get it. Pinch (above) is input-hooks'.
+                WindowEvent::MouseWheel { delta, phase, .. } => {
+                    crate::swipe::on_wheel(
+                        &window,
+                        &controller,
+                        &mut swipe_state,
+                        &swipe_enabled,
+                        delta,
+                        *phase,
+                        modifiers,
+                    );
                 }
                 // The user left window fullscreen through the system (for example Ctrl+Cmd+F)
                 // while a page is fullscreen: let the page leave too, so the chrome returns.

@@ -236,6 +236,8 @@ pub struct WebSettings {
     pub gpu_canvas: bool,
     /// What happens when a link, a typed address or a page leads to a PDF file.
     pub pdf: PdfAction,
+    /// Whether a two-finger swipe on the trackpad goes back and forward (gestures lane).
+    pub swipe_navigation: bool,
 }
 
 impl Default for WebSettings {
@@ -244,6 +246,7 @@ impl Default for WebSettings {
             experimental_web_features: true,
             gpu_canvas: true,
             pdf: PdfAction::default(),
+            swipe_navigation: true,
         }
     }
 }

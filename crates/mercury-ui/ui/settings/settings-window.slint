@@ -175,6 +175,7 @@ export component SettingsWindow inherits Window {
     // Advanced
     in-out property <bool> experimental-web-features;
     in-out property <bool> gpu-canvas;
+    in-out property <bool> swipe-navigation; // gestures
     in-out property <string> language;
     in-out property <string> language-problem;
 
@@ -817,6 +818,15 @@ export component SettingsWindow inherits Window {
                             checked <=> root.gpu-canvas;
                             toggled => {
                                 root.toggled("gpu-canvas", self.checked);
+                            }
+                        }
+
+                        // gestures: applies at once; macOS trackpads only
+                        CheckBox {
+                            text: "Swipe with two fingers to go back and forward";
+                            checked <=> root.swipe-navigation;
+                            toggled => {
+                                root.toggled("swipe-navigation", self.checked);
                             }
                         }
 

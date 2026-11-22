@@ -85,6 +85,7 @@ pub(crate) fn apply_toggle(settings: &mut Settings, name: &str, on: bool) -> boo
         "offer-to-save-passwords" => &mut settings.passwords.offer_to_save,
         "experimental-web-features" => &mut settings.web.experimental_web_features,
         "gpu-canvas" => &mut settings.web.gpu_canvas,
+        "swipe-navigation" => &mut settings.web.swipe_navigation, // gestures
         _ => return false,
     };
     *field = on;
@@ -339,6 +340,7 @@ mod tests {
                 s.web.experimental_web_features
             }),
             ("gpu-canvas", |s| s.web.gpu_canvas),
+            ("swipe-navigation", |s| s.web.swipe_navigation), // gestures
             ("https-only", |s| s.privacy.https_only), // site-security
         ] {
             for value in [true, false] {
