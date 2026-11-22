@@ -706,6 +706,7 @@ mod tests {
     fn the_connected_sections_edit_the_browsers_groups_through_a_real_window() {
         use mercury_ui::TabGroupsUi;
         use mercury_ui::settings_sections::section;
+        use slint::Model;
         use talaria_core::BrowserController;
 
         init_slint();
