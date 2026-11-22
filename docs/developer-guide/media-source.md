@@ -48,7 +48,7 @@ MERCURY_DEV_MSE=1 ./target/release/mercury-browser http://127.0.0.1:<port>/pages
 
 ## The test pages
 
-`tests/pages/mse-{basic,split-av,switch,seek,remove,quota,object-url}.html` exercise the DOM against the fixtures of `crates/mercury-mse-testkit/fixtures/` (8 s at 25 fps, red for the first 4 s and blue for the last 4 s, a key frame every 2 s). Each prints one `PASS` or `FAIL` line per check and writes the totals into `document.title`, which ends with `(done)` when the page has finished.
+`tests/pages/mse-{basic,split-av,switch,seek,remove,quota,object-url,abort,underrun,tracks,quality}.html` exercise the DOM against the fixtures of `crates/mercury-mse-testkit/fixtures/` (8 s at 25 fps, red for the first 4 s and blue for the last 4 s, a key frame every 2 s). Each prints one `PASS` or `FAIL` line per check and writes the totals into `document.title`, which ends with `(done)` when the page has finished.
 
 **They have not been run** (the screen was locked while they were written). When the screen is free:
 
@@ -74,20 +74,37 @@ The `MediaSource`, `SourceBuffer` and `SourceBufferList` objects, their WebIDL a
 
 A page cannot make MSE use more than its quota: every stored frame is charged its coded bytes plus a fixed 256 bytes of bookkeeping (`FRAME_OVERHEAD_BYTES`), so a stream of tiny frames hits `QuotaExceededError` long before it uses many times the quota in heap; the first `appendBuffer` is checked on its length before the DOM copies it, and again frame batch by frame batch while it is parsed; all source buffers of all MediaSources in a content process share one budget (1 GiB, `servo-media-gstreamer/mercury_mse.rs`); a MediaSource may hold at most 4 source buffers (real players use two); codec configuration records are capped at 64 KiB and `pssh` boxes at 1 MiB per initialization segment.
 
+## The two blockers of round 1, and how round 2 closes them
+
+Both must also hold **in a window** (`tests/pages/mse-abort.html`, `mse-underrun.html`) before `dom_media_source_enabled` leaves `PINNED_OFF`; the logic behind them is tested without one in `crates/mercury-mse` (`serial_*`, `stall_*`).
+
+1. **A stale completion event after `abort()`.** `abort()` cannot recall an `AppendDone` that is already queued for the script task, so an append that followed it in the same task used to end early. Every accepted `append` and `remove` now returns an `OpId` (never reused in a backend) and `AppendDone`, `AppendError` and `RemoveDone` carry it. A `SourceBuffer` keeps an `OpTracker` (`crates/mercury-mse/src/op_tracker.rs`): `begin(op)` when the call is accepted, `retire()` on `abort()`, removal of the buffer and `close()`, `finish(op)` when an event arrives; the DOM drops an event whose `finish` is false. `InitSegment` carries no `OpId`: an init segment parsed before the abort already took effect.
+2. **Underrun.** `GstPlay` raises no buffering message for an `appsrc` source, so the DOM decides from the position: the player reports the position every **100 ms** for a MediaSource (500 ms for every other player), and the element asks a `StallGuard` (`crates/mercury-mse/src/stall_guard.rs`) after every readiness update. The guard enters a stall when the page is playing, not seeking, not ended and the backend's readiness is at most `HAVE_CURRENT_DATA` (which needs less than max(100 ms, two frame durations) of data ahead, so it fires before the clock runs out); it leaves when the readiness is `HAVE_FUTURE_DATA` or more or the source ended, never sooner than 250 ms after its last change. During a stall the element keeps the pipeline paused (`update_media_state` reads `media_source_stalled()`); the page's `paused` attribute is not touched. The guard rides the media element's own events: `waiting` and `playing` come from the readiness change (`change_ready_state`), not from the guard, which owns only the pause, the resume and the hysteresis. A paused pipeline reports no position, so a guard that refused a change for its hysteresis gets a re-check 260 ms later (one short thread that queues a media element task).
+
+Two defects of Servo 0.8's `htmlmediaelement.rs` had to be fixed for this to work and are marked `Mercury (MED-1b)`: `update_media_state()` paused an element that was playing and could play on (so a video froze when its buffer fell from `HAVE_ENOUGH_DATA` to `HAVE_FUTURE_DATA`), and `waiting` fired only when the element had an error.
+
+## Tracks and `getVideoPlaybackQuality()`
+
+* **Track lists (informational).** `SourceBuffer.audioTracks` and `videoTracks` and the element's lists get one `AudioTrack` or `VideoTrack` per track of an initialization segment (`dom/mse/tracks.rs`): `id` is the container's track id, `kind` is `"main"` for the default track and empty otherwise, `label` and `language` come from the segment, the default (or first) track is `enabled`/`selected`. The same object is in both lists and `addtrack` fires at each; a later init segment with the same id (a quality switch) keeps the track, so the count does not change; `removeSourceBuffer` removes the tracks with `removetrack`. With one track per kind (round 1), **toggling `enabled` or `selected` changes the flag and fires `change`, and nothing plays differently**: the player ignores the request. `SourceBuffer.textTracks` stays absent until WebVTT (MED-3).
+* **`HTMLVideoElement.getVideoPlaybackQuality()`** returns a `VideoPlaybackQuality` (`creationTime`, `totalVideoFrames`, `droppedVideoFrames`, `corruptedVideoFrames`). The player (`Player::video_playback_quality`) reads the `stats` of the video sink: total is the frames it rendered plus the frames it dropped, dropped is what its QoS dropped; `corruptedVideoFrames` is always 0. A new source starts at zero (a new player). The interface and method are behind `dom_media_source_enabled` like the rest of MSE, and work for every `<video>` when it is on.
+
+## Hand-off for encrypted content (EA15)
+
+`InitSegment::pssh` holds every `pssh` box of the `moov`, raw, capped at 1 MiB; `InitInfo::protected` is true when `pssh` is present or a track is protected. There is no decryptor before MED-5: no `encrypted` event, no `MediaKeys`. The surface the EA15 lane starts from is those two fields and `MseEvent::InitSegment`; item 3 of round 2 tests the cases (a clear segment with `pssh` plays and says `protected`, a segment with a protected track fails the append with `AppendErrorKind::Unsupported`).
+
+## Checking it
+
+The four pages of round 2 (`mse-abort`, `mse-underrun`, `mse-tracks`, `mse-quality`) are in the same set as the seven of round 1; `crates/talaria-servo/tests/mse_engine.rs` runs them in a real engine (`#[ignore]`: it needs a GL context that may hang while the screen is locked; one test for the four pages, because Servo starts once per process). The runner for the whole set (pages, WPT, dash.js, Shaka, hls.js) is described in `docs/developer-guide/mse-testing.md`.
+
 ## Blockers for turning the preference on
 
-These two known defects must be fixed (and run in a window) before `dom_media_source_enabled` leaves `PINNED_OFF`:
-
-1. A stale `AppendDone` that is already queued when the page calls `abort()` and then appends again in the same task ends the new append early.
-2. `waiting` at the end of the buffer has no underrun signal (it depends on `PositionChanged` every 500 ms and the player's state events).
-
-The element's always-compiled hooks (a lookup of the media source object URL store on every media load, and the `media_source` field) run with the preference off; they are cheap lookups and are listed in `third_party/servo-script/MERCURY.md`.
+The two blockers above are closed in code and in the pure logic's tests, **not yet run in a window**. The element's always-compiled hooks (a lookup of the media source object URL store on every media load, and the `media_source` field) run with the preference off; they are cheap lookups and are listed in `third_party/servo-script/MERCURY.md`.
 
 ## What is still missing
 
 1. Run the pages and the DOM in a window; run WPT `media-source/` with the preference on (start from the expectations of Servo pull request #47269); run dash.js, Shaka and hls.js on local fixtures; then YouTube and Twitch by hand; then flip the pin.
 2. `canPlayType` and `mediaCapabilities` for MSE types, `powerEfficient`, HEVC, AC-3, E-AC-3, MP3, FLAC, Vorbis, MPEG-TS and raw audio streams, with fixtures for each; AV1 on a real M-series Mac.
-3. `getVideoPlaybackQuality()` (dash.js and Shaka read it), `ManagedMediaSource`, `BufferedChangeEvent`, `MediaSourceHandle`, MSE in workers, `SourceBuffer.textTracks` and the contents of `audioTracks` and `videoTracks`.
-4. Stall detection at the end of the buffer (`waiting` is driven by the position updates every 500 ms and the player's state changes, not by an underrun signal), a stale `AppendDone` that arrives after `abort()` and a new append in the same task, A/V sync and quality switches on real DASH content, long-run memory and the quota numbers tuned on real players.
+3. `ManagedMediaSource`, `BufferedChangeEvent`, `MediaSourceHandle`, MSE in workers, `SourceBuffer.textTracks`, and selecting between several audio tracks (one track per kind plays).
+4. A/V sync and quality switches on real DASH content, long-run memory and the quota numbers tuned on real players.
 5. Encrypted Media (the `pssh` boxes are already extracted raw), forced mute and autoplay (EA3, EA4), the Linux build of the new crates.
 6. Drop Mercury's DOM carry when a Servo release has MSE (servo/servo#44403).

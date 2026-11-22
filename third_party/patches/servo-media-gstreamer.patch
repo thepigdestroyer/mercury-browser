@@ -344,7 +344,42 @@ diff --git a/player.rs b/player.rs
          let time = time * 1_000_000_000.;
          self.player
              .seek(gstreamer::ClockTime::from_nseconds(time as u64));
-@@ -401,6 +437,24 @@
+@@ -384,7 +420,23 @@
+             .map_err(|_| PlayerError::SetStreamFailed)
+     }
+
++    /// Mercury: (MED-1b) `(total, dropped)` frames of the video sink (the `stats` of `GstBaseSink`:
++    /// frames rendered and frames dropped by its QoS), for `getVideoPlaybackQuality()`.
++    pub fn video_playback_quality(&self) -> Option<(u64, u64)> {
++        let stats = self
++            .video_sink
++            .property::<Option<gstreamer::Structure>>("stats")?;
++        let rendered = stats.get::<u64>("rendered").ok()?;
++        let dropped = stats.get::<u64>("dropped").ok()?;
++        Some((rendered.saturating_add(dropped), dropped))
++    }
++
+     fn set_audio_track(&mut self, stream_index: i32, enabled: bool) -> Result<(), PlayerError> {
++        // Mercury: (MED-1b) the track lists of a MediaSource are informational (one track per kind
++        // plays): choosing a track changes nothing.
++        if self.stream_type == StreamType::MediaSource {
++            return Ok(());
++        }
+         self.player
+             .set_audio_track(stream_index)
+             .map_err(|_| PlayerError::SetTrackFailed)?;
+@@ -393,6 +445,10 @@
+     }
+
+     fn set_video_track(&mut self, stream_index: i32, enabled: bool) -> Result<(), PlayerError> {
++        // Mercury: (MED-1b) see `set_audio_track`.
++        if self.stream_type == StreamType::MediaSource {
++            return Ok(());
++        }
+         self.player
+             .set_video_track(stream_index)
+             .map_err(|_| PlayerError::SetTrackFailed)?;
+@@ -401,6 +457,24 @@
      }
  }
 
@@ -369,15 +404,15 @@ diff --git a/player.rs b/player.rs
  macro_rules! notify(
      ($observer:expr_2021, $event:expr_2021) => {
          $observer.lock().unwrap().send($event)
-@@ -454,6 +508,28 @@
+@@ -454,8 +528,30 @@
      /// Whether to enable download buffering. This is only enabled heuristically for some media,
      /// because it causes issues in certain situations. See <https://github.com/servo/servo/issues/23241>.
      download_buffering_enabled: AtomicBool,
 +    /// Mercury: (MED-1) the MediaSource backend whose frame feed a `StreamType::MediaSource` player
 +    /// plays (set by `connect_media_source`, which comes before `setup`; read by `source-setup`).
 +    media_source: Mutex<Option<Arc<dyn MediaSourceBackend>>>,
-+}
-+
+ }
+
 +/// Mercury: servo/servo#49889 (EA0 backport).
 +/// downloadbuffer keeps the download in the user cache directory and it will
 +/// make the whole pipeline fail if it can't be accessed.
@@ -395,10 +430,12 @@ diff --git a/player.rs b/player.rs
 +            false
 +        },
 +    }
- }
-
++}
++
  impl GStreamerPlayer {
-@@ -486,6 +562,7 @@
+     #[allow(clippy::too_many_arguments)]
+     pub fn new(
+@@ -486,6 +582,7 @@
              stream_type,
              render: Arc::new(Mutex::new(GStreamerRender::new(gl_context))),
              download_buffering_enabled: AtomicBool::new(false),
@@ -406,7 +443,7 @@ diff --git a/player.rs b/player.rs
          }
      }
 
-@@ -509,9 +586,19 @@
+@@ -509,9 +606,19 @@
          let signal_adapter = gstreamer_play::PlaySignalAdapter::new_sync_emit(&player);
          let pipeline = player.pipeline();
 
@@ -429,7 +466,24 @@ diff --git a/player.rs b/player.rs
          {
              // Set player to perform progressive downloading. This will make the
              // player store the downloaded media in a local temporary file for
-@@ -627,6 +714,9 @@
+@@ -544,9 +651,14 @@
+         // Set max size for the player buffer.
+         pipeline.set_property("buffer-size", MAX_BUFFER_SIZE);
+
+-        // Set player position interval update to 0.5 seconds.
++        // Set player position interval update to 0.5 seconds. Mercury: (MED-1b) 100 ms for a MediaSource,
++        // whose element reads the position to decide about an underrun (`StallGuard`, decision D4).
+         let mut config = player.config();
+-        config.set_position_update_interval(500u32);
++        config.set_position_update_interval(if self.stream_type == StreamType::MediaSource {
++            100u32
++        } else {
++            500u32
++        });
+         player
+             .set_config(config)
+             .map_err(|e| PlayerError::Backend(e.to_string()))?;
+@@ -627,6 +739,9 @@
                  })?;
                  "servosrc://".to_value()
              },
@@ -439,7 +493,7 @@ diff --git a/player.rs b/player.rs
          };
          player.set_property("uri", &uri);
 
-@@ -652,6 +742,9 @@
+@@ -652,6 +767,9 @@
              last_metadata: None,
              cat: gstreamer::DebugCategory::get("servoplayer").unwrap(),
              enough_data: Arc::new(AtomicBool::new(false)),
@@ -449,7 +503,7 @@ diff --git a/player.rs b/player.rs
          })));
 
          let inner = self.inner.borrow();
-@@ -668,11 +761,30 @@
+@@ -668,11 +786,30 @@
              let _ = notify!(observer, PlayerEvent::Error(error.to_string()));
          });
 
@@ -482,7 +536,7 @@ diff --git a/player.rs b/player.rs
 
              let state = match play_state {
                  gstreamer_play::PlayState::Buffering => Some(PlaybackState::Buffering),
-@@ -701,7 +813,7 @@
+@@ -701,7 +838,7 @@
          });
 
          // Handle `media-info-updated` signal.
@@ -491,7 +545,7 @@ diff --git a/player.rs b/player.rs
          let observer = self.observer.clone();
          signal_adapter.connect_media_info_updated(move |_, info| {
              let Ok(metadata) = metadata_from_media_info(info) else {
-@@ -708,6 +820,9 @@
+@@ -708,6 +845,9 @@
                  return;
              };
 
@@ -501,7 +555,7 @@ diff --git a/player.rs b/player.rs
              let mut inner = inner_clone.lock().unwrap();
 
              if inner.last_metadata.as_ref() == Some(&metadata) {
-@@ -730,7 +845,20 @@
+@@ -730,7 +870,20 @@
                  }
              }
 
@@ -522,7 +576,7 @@ diff --git a/player.rs b/player.rs
              gstreamer::info!(
                  inner.cat,
                  obj = &inner.player,
-@@ -739,13 +867,35 @@
+@@ -739,13 +892,35 @@
              );
              let _ = notify!(observer, PlayerEvent::MetadataUpdated(metadata));
 
@@ -559,7 +613,7 @@ diff --git a/player.rs b/player.rs
          let observer = self.observer.clone();
          signal_adapter.connect_duration_changed(move |_, duration| {
              let duration = duration.map(|duration| {
-@@ -755,6 +905,9 @@
+@@ -755,6 +930,9 @@
                  )
              });
 
@@ -569,7 +623,7 @@ diff --git a/player.rs b/player.rs
              let mut inner = inner_clone.lock().unwrap();
              if let Some(ref mut metadata) = inner.last_metadata &&
                  metadata.duration != duration
-@@ -822,7 +975,7 @@
+@@ -822,7 +1000,7 @@
          };
 
          let (receiver, error_handler_id) = {
@@ -578,7 +632,7 @@ diff --git a/player.rs b/player.rs
              let inner = inner.lock().unwrap();
              let pipeline = inner.player.pipeline();
 
-@@ -835,6 +988,7 @@
+@@ -835,6 +1013,7 @@
              pipeline.connect("source-setup", false, move |args| {
                  let source = args[1].get::<gstreamer::Element>().unwrap();
 
@@ -586,7 +640,7 @@ diff --git a/player.rs b/player.rs
                  let mut inner = inner_clone.lock().unwrap();
                  let source = match inner.stream_type {
                      StreamType::Seekable => {
-@@ -852,10 +1006,11 @@
+@@ -852,10 +1031,11 @@
                          let observer_ = observer.clone();
                          let observer__ = observer.clone();
                          let observer___ = observer.clone();
@@ -599,7 +653,7 @@ diff --git a/player.rs b/player.rs
                          servosrc.set_callbacks(
                              gstreamer_app::AppSrcCallbacks::builder()
                                  .need_data(move |_, _| {
-@@ -876,6 +1031,9 @@
+@@ -876,6 +1056,9 @@
                                      let _ = notify!(observer__, PlayerEvent::EnoughData);
                                  })
                                  .seek_data(move |_, offset| {
@@ -609,7 +663,7 @@ diff --git a/player.rs b/player.rs
                                      let (ret, ack_channel) = if servosrc_.set_seek_offset(offset) {
                                          let _ = notify!(
                                              observer___,
-@@ -912,6 +1070,25 @@
+@@ -912,6 +1095,25 @@
                          });
                          PlayerSource::Stream(media_stream_src)
                      },
@@ -635,10 +689,17 @@ diff --git a/player.rs b/player.rs
                  };
 
                  inner.set_src(source);
-@@ -1019,6 +1196,29 @@
+@@ -1019,6 +1221,36 @@
      fn render_use_gl(&self) -> bool {
          self.render.lock().unwrap().is_gl()
      }
++
++    // Mercury: (MED-1b) `(total, dropped)` frames of the video sink; `None` before the pipeline exists.
++    fn video_playback_quality(&self) -> Option<(u64, u64)> {
++        let inner = self.inner.borrow();
++        let inner = inner.as_ref()?.lock().unwrap();
++        inner.video_playback_quality()
++    }
 +
 +    // Mercury: (MED-1) Connects the player to the MediaSource backend whose frames it plays, and builds
 +    // the pipeline (`uri=mercury-mse://<id>`; `source-setup` attaches the feed). It must be the first call.
@@ -665,7 +726,7 @@ diff --git a/player.rs b/player.rs
  }
 
  impl MediaInstance for GStreamerPlayer {
-@@ -1057,5 +1257,41 @@
+@@ -1057,5 +1289,41 @@
                  tx_ack,
              });
          let _ = rx_ack.recv();

@@ -56,3 +56,7 @@ or Servo gives capture its own preference.
    `weakReferenceable` for `MediaSource` (the backend's event callback holds a weak reference). The Rust side is
    `third_party/servo-script/dom/mse/`; see `third_party/servo-script/MERCURY.md`. Drop when a Servo release has
    its own MSE (servo/servo#44403).
+7. **`getVideoPlaybackQuality()`** (MED-1b, Mercury's own): new `webidls/VideoPlaybackQuality.webidl`, a
+   partial interface in `webidls/HTMLVideoElement.webidl`, `codegen/Bindings.conf` (`cx` for
+   `GetVideoPlaybackQuality` in the `HTMLVideoElement` entry), all behind `dom_media_source_enabled`.
+   Drop when a Servo release has it.

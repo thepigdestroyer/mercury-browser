@@ -17,7 +17,15 @@ diff --git a/Cargo.toml b/Cargo.toml
 diff --git a/codegen/Bindings.conf b/codegen/Bindings.conf
 --- a/codegen/Bindings.conf
 +++ b/codegen/Bindings.conf
-@@ -935,6 +935,17 @@
+@@ -853,6 +853,7 @@
+
+ 'HTMLVideoElement': {
+     'weakReferenceable': True,
++    'cx': ['GetVideoPlaybackQuality'], # Mercury: (MED-1b)
+ },
+
+ 'IDBCursor': {
+@@ -935,6 +936,17 @@
      'cx': ['GetMetadata'],
  },
 
@@ -83,6 +91,20 @@ diff --git a/webidls/HTMLMediaElement.webidl b/webidls/HTMLMediaElement.webidl
 
  [Exposed=Window, Abstract]
  interface HTMLMediaElement : HTMLElement {
+diff --git a/webidls/HTMLVideoElement.webidl b/webidls/HTMLVideoElement.webidl
+--- a/webidls/HTMLVideoElement.webidl
++++ b/webidls/HTMLVideoElement.webidl
+@@ -18,3 +18,10 @@
+   [Pref="media_testing_enabled"]
+   attribute EventHandler onpostershown;
+ };
++
++// Mercury: (MED-1b) https://w3c.github.io/media-playback-quality/#dom-htmlvideoelement-getvideoplaybackquality
++// (lane med-1b, decision D5), behind `dom_media_source_enabled`.
++partial interface HTMLVideoElement {
++  [Pref="dom_media_source_enabled"]
++  VideoPlaybackQuality getVideoPlaybackQuality();
++};
 diff --git a/webidls/MediaDevices.webidl b/webidls/MediaDevices.webidl
 --- a/webidls/MediaDevices.webidl
 +++ b/webidls/MediaDevices.webidl
@@ -373,3 +395,22 @@ diff --git a/webidls/URL.webidl b/webidls/URL.webidl
    static undefined revokeObjectURL(DOMString url);
 
    USVString toJSON();
+diff --git a/webidls/VideoPlaybackQuality.webidl b/webidls/VideoPlaybackQuality.webidl
+new file mode 100644
+--- /dev/null
++++ b/webidls/VideoPlaybackQuality.webidl
+@@ -0,0 +1,14 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++
++// Mercury: (MED-1b) written by Mercury from the Media Playback Quality specification (lane med-1b,
++// decision D5), behind `dom_media_source_enabled` like the rest of Media Source Extensions.
++// https://w3c.github.io/media-playback-quality/#videoplaybackquality
++
++[Exposed=Window, Pref="dom_media_source_enabled"]
++interface VideoPlaybackQuality {
++  readonly attribute DOMHighResTimeStamp creationTime;
++  readonly attribute unsigned long totalVideoFrames;
++  readonly attribute unsigned long droppedVideoFrames;
++  readonly attribute unsigned long corruptedVideoFrames;
++};

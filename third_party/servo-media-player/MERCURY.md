@@ -23,6 +23,10 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
    a crate they already depend on. A vendored crate depending on a workspace member is the direction the
    vendoring rules allow (`make servo-patches-check` and `cargo fmt --all` accept it). Not in upstream.
 
+3. **`lib.rs`: `Player::video_playback_quality`** (lane med-1b): `(total, dropped)` video frames of the player,
+   for `HTMLVideoElement.getVideoPlaybackQuality()`; the default body returns `None`, so the dummy backend
+   compiles unchanged. Drop when Servo has its own.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

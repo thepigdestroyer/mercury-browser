@@ -266,6 +266,31 @@ element in `crates/mercury-mse-gst` feeds the player. The DOM calls `MediaSource
    `SourceBufferList.webidl`, `URL.webidl` (the overload), `HTMLMediaElement.webidl` (the union),
    `Bindings.conf` (`cx` lists and `weakReferenceable` for `MediaSource`).
 
+### MED-1b (22 Nov 2026): the two blockers, `getVideoPlaybackQuality`, track lists
+
+7. **`dom/mse/` (Mercury's own files):** `stall.rs` (the `StallGuard` of `crates/mercury-mse`, its clock and a
+   "re-check queued" flag, kept on the `MediaSource` so the element struct gets no field), `tracks.rs`
+   (the contents of `SourceBuffer.audioTracks`/`videoTracks` and of the element's lists: `AudioTrack` and
+   `VideoTrack` per `TrackInfo`, `addtrack`/`removetrack`; lists are rebuilt with `clear` and `add` because the
+   upstream lists have no `remove`), `videoplaybackquality.rs` (the `VideoPlaybackQuality` object). In the
+   carried files: `sourcebuffer.rs` keeps an `OpTracker` and takes the `OpId` of every completion event
+   (`operation_finished(op)`, `operation_failed(op)`), `mediasource.rs` passes it, calls
+   `init_received`/`remove_tracks`, owns the `StallState`. `mediaelement.rs`: `media_source_update_ready_state`
+   now ends in `media_source_check_stall` (the guard, the pipeline pause and resume through
+   `update_media_state`, a 260 ms re-check thread when the guard's 250 ms hysteresis refused a change),
+   `media_source_stalled`, `player_video_playback_quality`.
+8. **`htmlmediaelement.rs`, hunks marked `Mercury (MED-1b)` (`grep -n "MED-1b"`):** in `update_media_state`
+   (about lines 506-530) the pipeline is not resumed while `media_source_stalled()`, and an element that is
+   playing and may play on is no longer paused (published: `else if is_playing && pause()` paused it whenever it
+   was called while playing); in `change_ready_state` (about line 1127) the `waiting` condition read
+   `!self.error.get().is_none()` and now reads `self.error.get().is_none()`. **Drop both when Servo fixes them**
+   (check at B1); if only the second is fixed nothing doubles, because the guard fires no events.
+9. **`htmlvideoelement.rs`:** `GetVideoPlaybackQuality` (one method) and its `use` line, `Mercury (MED-1b)`.
+10. **`servo-script-bindings`:** `VideoPlaybackQuality.webidl`, the `getVideoPlaybackQuality()` partial in
+    `HTMLVideoElement.webidl`, `Bindings.conf` (`cx` for `GetVideoPlaybackQuality`), all behind
+    `dom_media_source_enabled`. **Drop when** Servo 0.9 has `getVideoPlaybackQuality`, track list content on
+    `SourceBuffer` or Igalia's MSE (servo/servo#44403).
+
 **Not run in a window** (the screen was locked): the DOM compiles and its pure logic is tested in
 `crates/mercury-mse`; the pages `tests/pages/mse-*.html` are written and unrun. Dropped when a Servo release
 has its own MSE (servo/servo#44403) and Mercury moves to it.

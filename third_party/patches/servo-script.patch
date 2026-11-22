@@ -1316,7 +1316,38 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          }
      }
 
-@@ -1332,7 +1352,15 @@
+@@ -483,7 +503,12 @@
+             .as_ref()
+             .is_some_and(|player| !player.lock().unwrap().paused());
+
+-        if self.is_potentially_playing() && !is_playing {
++        // Mercury (MED-1b): the underrun guard of a MediaSource keeps the pipeline paused until its
++        // hysteresis has passed, and an element that is playing and may play on is left alone (as
++        // published, this paused it whenever it was called while playing, which a readiness that moves
++        // between HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA does all the time).
++        let stalled = self.media_source_stalled();
++        if self.is_potentially_playing() && !stalled && !is_playing {
+             if let Some(ref player) = *self.player.borrow() {
+                 let player = player.lock().unwrap();
+
+@@ -498,6 +523,7 @@
+                 }
+             }
+         } else if is_playing &&
++            (stalled || !self.is_potentially_playing()) && // Mercury (MED-1b)
+             let Some(ref player) = *self.player.borrow() &&
+             let Err(error) = player.lock().unwrap().pause()
+         {
+@@ -1098,7 +1124,7 @@
+                 // > to fire an event named waiting at the element.
+                 if was_potentially_playing &&
+                     !self.ended_playback(LoopCondition::Included) &&
+-                    !self.error.get().is_none() &&
++                    self.error.get().is_none() && // Mercury (MED-1b): published as `!..is_none()`
+                     !self.is_paused_for_user_interaction() &&
+                     !self.is_paused_for_in_band_content()
+                 {
+@@ -1332,7 +1358,15 @@
          // then the load failed.
          // Note that the resource fetch algorithm itself takes care
          // of the cleanup in case of failure itself.
@@ -1333,7 +1364,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
      }
 
      /// <https://html.spec.whatwg.org/multipage/#concept-media-load-algorithm>
-@@ -1641,8 +1669,23 @@
+@@ -1641,8 +1675,23 @@
 
      /// <https://html.spec.whatwg.org/multipage/#concept-media-load-resource>
      fn resource_fetch_algorithm(&self, cx: &JSContext, resource: Resource) {
@@ -1357,7 +1388,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              self.resource_selection_algorithm_failure_steps(cx);
              return;
          }
-@@ -1703,9 +1746,13 @@
+@@ -1703,9 +1752,13 @@
                  // Steps 5.remote.2-5.remote.8
                  self.fetch_request(cx, None, None);
              },
@@ -1371,7 +1402,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                          SrcObject::Blob(blob) => {
                              let blob_url = URL::CreateObjectURL(&self.global(), blob);
                              *self.blob_url.borrow_mut() =
-@@ -1793,10 +1840,14 @@
+@@ -1793,10 +1846,14 @@
              }));
      }
 
@@ -1387,7 +1418,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
      /// <https://html.spec.whatwg.org/multipage/#potentially-playing>
      fn is_potentially_playing(&self) -> bool {
          // > A media element is said to be potentially playing when
-@@ -2199,6 +2250,10 @@
+@@ -2199,6 +2256,10 @@
          // Step 11. Set the current playback position to the new playback position.
          self.current_playback_position.set(time);
 
@@ -1398,7 +1429,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          if let Some(ref player) = *self.player.borrow() &&
              let Err(error) = player.lock().unwrap().seek(time)
          {
-@@ -2262,6 +2317,8 @@
+@@ -2262,6 +2323,8 @@
                  if let Some(ref src_object) = *self.src_object.borrow() {
                      match src_object {
                          SrcObject::MediaStream(_) => StreamType::Stream,
@@ -1407,7 +1438,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                          _ => StreamType::Seekable,
                      }
                  } else {
-@@ -2268,6 +2325,8 @@
+@@ -2268,6 +2331,8 @@
                      return Err(());
                  }
              },
@@ -1416,7 +1447,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              _ => StreamType::Seekable,
          };
 
-@@ -2329,19 +2388,39 @@
+@@ -2329,19 +2394,39 @@
              Box::new(window.get_player_context()),
          );
 
@@ -1460,7 +1491,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              {
                  warn!("Could not set download buffering: {error:?}");
              }
-@@ -2386,6 +2465,9 @@
+@@ -2386,6 +2471,9 @@
          }
 
          *self.player.borrow_mut() = None;
@@ -1470,7 +1501,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          self.video_renderer.lock().unwrap().reset();
          *self.event_handler.borrow_mut() = None;
 
-@@ -2557,6 +2639,12 @@
+@@ -2557,6 +2645,12 @@
          cx: &mut JSContext,
          metadata: &servo_media::player::metadata::Metadata,
      ) {
@@ -1483,7 +1514,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          // The following steps should be run once on the initial `metadata` signal from the media
          // engine.
          if self.ready_state.get() != ReadyState::HaveNothing {
-@@ -2797,6 +2885,12 @@
+@@ -2797,6 +2891,12 @@
      }
 
      fn playback_duration_changed(&self, duration: Option<Duration>) {
@@ -1496,7 +1527,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          let duration = duration.map_or(f64::INFINITY, |duration| duration.as_secs_f64());
 
          if self.duration.get() == duration {
-@@ -2958,16 +3052,22 @@
+@@ -2958,16 +3058,22 @@
 
      fn playback_state_changed(&self, cx: &mut JSContext, state: &PlaybackState) {
          let mut media_session_playback_state = MediaSessionPlaybackState::None_;
@@ -1521,7 +1552,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                      self.change_ready_state(cx, ReadyState::HaveEnoughData);
                  }
              },
-@@ -2990,6 +3090,11 @@
+@@ -2990,6 +3096,11 @@
      }
 
      fn seekable(&self) -> TimeRangesContainer {
@@ -1533,7 +1564,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          let mut seekable = TimeRangesContainer::default();
          if let Some(ref player) = *self.player.borrow() {
              let ranges = player.lock().unwrap().seekable();
-@@ -3374,19 +3479,23 @@
+@@ -3374,19 +3485,23 @@
      }
 
      /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
@@ -1561,7 +1592,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          *self.src_object.borrow_mut() = value.map(|value| value.into());
          self.media_element_load_algorithm(cx);
      }
-@@ -3608,7 +3717,12 @@
+@@ -3608,7 +3723,12 @@
      /// <https://html.spec.whatwg.org/multipage/#dom-media-buffered>
      fn Buffered(&self, cx: &mut JSContext) -> DomRoot<TimeRanges> {
          let mut buffered = TimeRangesContainer::default();
@@ -1575,7 +1606,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              let ranges = player.lock().unwrap().buffered();
              for range in ranges {
                  let _ = buffered.add(range.start, range.end);
-@@ -3885,6 +3999,10 @@
+@@ -3885,6 +4005,10 @@
  enum Resource {
      Object,
      Url(ServoUrl),
@@ -1586,7 +1617,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  }
 
  #[derive(Debug, MallocSizeOf, PartialEq)]
-@@ -4418,7 +4536,11 @@
+@@ -4418,7 +4542,11 @@
              },
              PlayerEvent::NeedData => element.playback_need_data(),
              PlayerEvent::PositionChanged(position) => {
@@ -1611,6 +1642,26 @@ diff --git a/dom/html/embedded_content/htmlvideoelement.rs b/dom/html/embedded_c
  use script_bindings::error::Fallible;
  use servo_media::player::video::VideoFrame;
  use servo_url::ServoUrl;
+@@ -45,6 +47,7 @@
+ use crate::dom::element::{AttributeMutation, Element};
+ use crate::dom::globalscope::GlobalScope;
+ use crate::dom::html::htmlmediaelement::{HTMLMediaElement, NetworkState, ReadyState};
++use crate::dom::mse::videoplaybackquality::VideoPlaybackQuality; // Mercury (MED-1b)
+ use crate::dom::node::virtualmethods::VirtualMethods;
+ use crate::dom::node::{Node, NodeDamage, NodeTraits};
+ use crate::dom::performance::performanceresourcetiming::InitiatorType;
+@@ -425,6 +428,11 @@
+     // For testing purposes only. This is not an event from
+     // https://html.spec.whatwg.org/multipage/#dom-video-poster
+     event_handler!(postershown, GetOnpostershown, SetOnpostershown);
++
++    // Mercury (MED-1b): <https://w3c.github.io/media-playback-quality/#dom-htmlvideoelement-getvideoplaybackquality>
++    fn GetVideoPlaybackQuality(&self, cx: &mut JSContext) -> DomRoot<VideoPlaybackQuality> {
++        VideoPlaybackQuality::for_element(cx, self.global().as_window(), &self.htmlmediaelement)
++    }
+ }
+
+ impl VirtualMethods for HTMLVideoElement {
 diff --git a/dom/html/form_controls/input_type/text_input_widget.rs b/dom/html/form_controls/input_type/text_input_widget.rs
 --- a/dom/html/form_controls/input_type/text_input_widget.rs
 +++ b/dom/html/form_controls/input_type/text_input_widget.rs
@@ -2349,7 +2400,7 @@ diff --git a/dom/mse/mediaelement.rs b/dom/mse/mediaelement.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/mediaelement.rs
-@@ -0,0 +1,269 @@
+@@ -0,0 +1,390 @@
 +// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 +// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 +
@@ -2364,9 +2415,16 @@ new file mode 100644
 +// these functions read and set, so no upstream item had to change its visibility.
 +
 +// Mercury (MED-1): the MSE contract types the element reads from the backend.
-+use servo_media::player::mse::{ElementReadyState, EosError, InitInfo, TrackKind};
++use servo_media::player::mse::{
++    ElementReadyState, EosError, InitInfo, MediaSourceReadyState as BackendReadyState, StallAction,
++    StallInput, TrackKind,
++};
 +
 +use super::*;
++
++/// How long after a stall check that wanted to change state and could not (the guard keeps 250 ms
++/// between two transitions) the element looks again.
++const STALL_RECHECK_MS: u64 = 260;
 +
 +impl HTMLMediaElement {
 +    //
@@ -2416,6 +2474,14 @@ new file mode 100644
 +        }
 +    }
 +
++    /// `(total, dropped)` video frames of the element's player (lane med-1b, decision D5), for
++    /// `getVideoPlaybackQuality()`. `None` without a player or when the backend does not count.
++    pub(crate) fn player_video_playback_quality(&self) -> Option<(u64, u64)> {
++        let player = self.player.borrow();
++        let player = player.as_ref()?.lock().unwrap();
++        player.video_playback_quality()
++    }
++
 +    /// The backend learns every playback position (coded frame eviction, readiness).
 +    pub(super) fn media_source_position_changed(&self, position: f64) {
 +        if let Some(media_source) = self.media_source.get() {
@@ -2456,6 +2522,112 @@ new file mode 100644
 +    /// `change_ready_state`. Called on every initialization segment, append, removal, eviction,
 +    /// position and seek. A no-op without a MediaSource.
 +    pub(crate) fn media_source_update_ready_state(&self, cx: &mut JSContext) {
++        self.media_source_apply_ready_state(cx);
++        self.media_source_check_stall();
++    }
++
++    /// Whether the underrun guard has paused the pipeline (decision D4 of lane med-1b). The upstream
++    /// `update_media_state` reads it: while it is true the pipeline is not resumed, whatever the
++    /// readiness says, until the guard's hysteresis has passed.
++    pub(super) fn media_source_stalled(&self) -> bool {
++        self.media_source
++            .get()
++            .is_some_and(|media_source| media_source.stall().borrow().guard.is_stalled())
++    }
++
++    /// The underrun decision (lane med-1b, decision D4): asks the `StallGuard` what to do with the
++    /// position, the readiness and the state of playback, and has `update_media_state` pause or resume
++    /// the pipeline when the stall begins or ends. The `waiting` and `playing` events come from the
++    /// readiness change that goes with it (`change_ready_state`); the page's `paused` is not touched.
++    /// Called after every readiness update: position updates (every 100 ms for a MediaSource player),
++    /// appends, removals, seeks, end of stream.
++    fn media_source_check_stall(&self) {
++        let Some(media_source) = self.media_source.get() else {
++            return;
++        };
++        let backend = media_source.backend();
++        let position = self.current_playback_position.get();
++        let ready = backend.element_ready_state(position);
++        let ended = backend.ready_state() == BackendReadyState::Ended;
++        let playing = !self.paused.get() &&
++            self.error.get().is_none() &&
++            self.network_state.get() != NetworkState::Empty &&
++            self.ready_state.get() != ReadyState::HaveNothing &&
++            !self.ended_playback(LoopCondition::Included);
++        let seeking = self.seeking.get();
++
++        let (action, was_stalled, is_stalled, wants_recheck) = {
++            let mut state = media_source.stall().borrow_mut();
++            let was_stalled = state.guard.is_stalled();
++            let input = StallInput {
++                position,
++                ready,
++                playing,
++                seeking,
++                ended,
++                now_ms: state.now_ms(),
++            };
++            let action = state.guard.update(input);
++            let is_stalled = state.guard.is_stalled();
++            // The guard keeps a quarter of a second between two transitions: when it wants to change
++            // state and refused for that reason, nothing may be left waiting for the next position
++            // update (the pipeline is paused during a stall, so none comes).
++            let wants_change = if is_stalled {
++                ready >= ElementReadyState::HaveFutureData || ended
++            } else {
++                playing && !seeking && !ended && ready <= ElementReadyState::HaveCurrentData
++            };
++            let wants_recheck =
++                action == StallAction::None && wants_change && !state.recheck_pending;
++            if wants_recheck {
++                state.recheck_pending = true;
++            }
++            (action, was_stalled, is_stalled, wants_recheck)
++        };
++
++        if action != StallAction::None || was_stalled != is_stalled {
++            // Pauses the pipeline during a stall and resumes it when the stall is over (a seek ends
++            // it without an action).
++            self.update_media_state();
++        }
++        if wants_recheck {
++            self.schedule_media_source_stall_recheck();
++        }
++    }
++
++    /// Looks at the stall again once the guard's hysteresis has passed.
++    fn schedule_media_source_stall_recheck(&self) {
++        let this = Trusted::new(self);
++        let generation_id = self.generation_id.get();
++        let task_source = self
++            .owner_global()
++            .task_manager()
++            .media_element_task_source()
++            .to_sendable();
++        let spawned = std::thread::Builder::new()
++            .name("MseStallRecheck".to_owned())
++            .spawn(move || {
++                std::thread::sleep(std::time::Duration::from_millis(STALL_RECHECK_MS));
++                task_source.queue(task!(media_source_stall_recheck: move |cx| {
++                    let this = this.root();
++                    if generation_id != this.generation_id.get() {
++                        return;
++                    }
++                    if let Some(media_source) = this.media_source.get() {
++                        media_source.stall().borrow_mut().recheck_pending = false;
++                    }
++                    this.media_source_update_ready_state(cx);
++                }));
++            });
++        if spawned.is_err() {
++            warn!("Could not start the MediaSource stall re-check thread");
++            if let Some(media_source) = self.media_source.get() {
++                media_source.stall().borrow_mut().recheck_pending = false;
++            }
++        }
++    }
++
++    fn media_source_apply_ready_state(&self, cx: &mut JSContext) {
 +        let Some(media_source) = self.media_source.get() else {
 +            return;
 +        };
@@ -2623,7 +2795,7 @@ diff --git a/dom/mse/mediasource.rs b/dom/mse/mediasource.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/mediasource.rs
-@@ -0,0 +1,659 @@
+@@ -0,0 +1,677 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -2670,6 +2842,7 @@ new file mode 100644
 +use crate::dom::html::htmlmediaelement::HTMLMediaElement;
 +use crate::dom::mse::sourcebuffer::SourceBuffer;
 +use crate::dom::mse::sourcebufferlist::SourceBufferList;
++use crate::dom::mse::stall::StallState;
 +use crate::dom::timeranges::TimeRangesContainer;
 +use crate::dom::window::Window;
 +
@@ -2731,6 +2904,11 @@ new file mode 100644
 +    #[conditional_malloc_size_of]
 +    #[no_trace]
 +    event_handler: RefCell<Option<Arc<Mutex<MediaSourceEventHandler>>>>,
++
++    /// The underrun decision of the element this media source is attached to (lane med-1b, D4).
++    #[ignore_malloc_size_of = "mercury-mse"]
++    #[no_trace]
++    stall: RefCell<StallState>,
 +}
 +
 +impl MediaSource {
@@ -2747,6 +2925,7 @@ new file mode 100644
 +            has_ever_been_attached: Cell::new(false),
 +            backend,
 +            event_handler: Default::default(),
++            stall: RefCell::new(StallState::new()),
 +        }
 +    }
 +
@@ -2825,6 +3004,11 @@ new file mode 100644
 +
 +    pub(crate) fn media_element(&self) -> Option<DomRoot<HTMLMediaElement>> {
 +        self.media_element.get()
++    }
++
++    /// The element's underrun state. Do not hold the borrow across a call into the element.
++    pub(crate) fn stall(&self) -> &RefCell<StallState> {
++        &self.stall
 +    }
 +
 +    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
@@ -2964,6 +3148,9 @@ new file mode 100644
 +                let Some(source_buffer) = self.source_buffer(id) else {
 +                    return;
 +                };
++                // Steps 4 and 5 (lane med-1b, D6): the tracks of the segment join the source buffer's
++                // and the element's track lists, with an `addtrack` event each.
++                source_buffer.init_received(cx, &init);
 +                // Step 6. If the active track flag equals true, then add this SourceBuffer to
 +                // activeSourceBuffers. The first initialization segment with an audio or video track
 +                // enables the default track of its kind, which sets the flag.
@@ -2980,18 +3167,20 @@ new file mode 100644
 +                }
 +            },
 +            // The buffer append algorithm's steps 7 to 9 (and the range removal algorithm's 4 to 6).
-+            MseEvent::AppendDone { id } | MseEvent::RemoveDone { id } => {
++            // The source buffer drops an event whose operation is not the one it is waiting for (one
++            // queued before `abort()` or the removal of the buffer).
++            MseEvent::AppendDone { id, op } | MseEvent::RemoveDone { id, op } => {
 +                if let Some(source_buffer) = self.source_buffer(id) {
-+                    source_buffer.operation_finished();
++                    source_buffer.operation_finished(op);
 +                }
 +                self.media_data_changed(cx);
 +            },
 +            // The append error algorithm's steps 1 to 4; step 5 (the end of stream with "decode")
 +            // arrives as `SourceEnded`.
-+            MseEvent::AppendError { id, kind } => {
++            MseEvent::AppendError { id, op, kind } => {
 +                warn!("An append to MSE source buffer {id} failed: {kind:?}");
 +                if let Some(source_buffer) = self.source_buffer(id) {
-+                    source_buffer.operation_failed();
++                    source_buffer.operation_failed(op);
 +                }
 +            },
 +            MseEvent::DurationChanged(duration) => {
@@ -3192,8 +3381,9 @@ new file mode 100644
 +        // algorithm, set updating to false and queue `abort` and `updateend`.
 +        source_buffer.abort_pending();
 +
-+        // Steps 3 to 8, and their video and text track equivalents, remove the tracks of the source
-+        // buffer from the media element (the track lists are not populated).
++        // Steps 3 to 8, and their video track equivalents, remove the tracks of the source buffer
++        // from the media element's lists and its own (lane med-1b, D6), with `removetrack` events.
++        source_buffer.remove_tracks(cx);
 +        source_buffer.detach();
 +
 +        // Step 9. If sourceBuffer is in activeSourceBuffers, then remove sourceBuffer from
@@ -3287,7 +3477,7 @@ diff --git a/dom/mse/mod.rs b/dom/mse/mod.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/mod.rs
-@@ -0,0 +1,17 @@
+@@ -0,0 +1,21 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -3305,11 +3495,15 @@ new file mode 100644
 +pub(crate) mod mediasource;
 +pub(crate) mod sourcebuffer;
 +pub(crate) mod sourcebufferlist;
++// Mercury: (MED-1b) the underrun state, the track lists' contents and `getVideoPlaybackQuality`.
++pub(crate) mod stall;
++pub(crate) mod tracks;
++pub(crate) mod videoplaybackquality;
 diff --git a/dom/mse/sourcebuffer.rs b/dom/mse/sourcebuffer.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/sourcebuffer.rs
-@@ -0,0 +1,527 @@
+@@ -0,0 +1,581 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -3322,21 +3516,23 @@ new file mode 100644
 +// `MediaSourceBackend`, mapping `MseError` to the DOMException the specification names.
 +//
 +// Left out on purpose (listed in `third_party/servo-script/MERCURY.md`): `textTracks` (this Servo's
-+// `TextTrackList` needs a media element), and the contents of `audioTracks` and `videoTracks`.
++// `TextTrackList` needs a media element). The contents of `audioTracks` and `videoTracks` come from the
++// initialization segments (`tracks.rs`, lane med-1b).
 +
-+use std::cell::Cell;
++use std::cell::{Cell, RefCell};
 +
 +use dom_struct::dom_struct;
 +use js::context::JSContext;
 +use script_bindings::reflector::reflect_dom_object;
 +use servo_media::player::mse::{
-+    AppendMode as BackendAppendMode, MediaSourceReadyState as BackendReadyState, MseError,
-+    SourceBufferId,
++    AppendMode as BackendAppendMode, InitInfo, MediaSourceReadyState as BackendReadyState,
++    MseError, OpId, OpTracker, SourceBufferId,
 +};
 +use stylo_atoms::Atom;
 +
 +use crate::dom::audio::audiotracklist::AudioTrackList;
 +use crate::dom::bindings::buffer_source::get_buffer_source_copy;
++use crate::dom::bindings::codegen::Bindings::HTMLMediaElementBinding::HTMLMediaElementMethods;
 +use crate::dom::bindings::codegen::Bindings::SourceBufferBinding::{
 +    AppendMode, SourceBufferMethods,
 +};
@@ -3350,8 +3546,10 @@ new file mode 100644
 +use crate::dom::bindings::str::DOMString;
 +use crate::dom::eventtarget::EventTarget;
 +use crate::dom::mse::mediasource::{MediaSource, dom_error, ranges_to_container};
++use crate::dom::mse::tracks::{self, TrackLists};
 +use crate::dom::timeranges::TimeRanges;
 +use crate::dom::videotracklist::VideoTrackList;
++use crate::dom::window::Window;
 +
 +/// <https://w3c.github.io/media-source/#sourcebuffer>
 +#[dom_struct]
@@ -3393,6 +3591,13 @@ new file mode 100644
 +
 +    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-videotracks>
 +    video_tracks: Dom<VideoTrackList>,
++
++    /// Which append or removal the backend's next completion event must belong to (lane med-1b, D3):
++    /// `abort()` and the removal of the buffer retire it, so an event that was already queued for an
++    /// operation the page has abandoned cannot end the next one early.
++    #[ignore_malloc_size_of = "mercury-mse"]
++    #[no_trace]
++    op_tracker: RefCell<OpTracker>,
 +}
 +
 +fn to_backend_mode(mode: AppendMode) -> BackendAppendMode {
@@ -3428,6 +3633,7 @@ new file mode 100644
 +            append_window_end: Cell::new(f64::INFINITY),
 +            audio_tracks: Dom::from_ref(audio_tracks),
 +            video_tracks: Dom::from_ref(video_tracks),
++            op_tracker: RefCell::new(OpTracker::new()),
 +        }
 +    }
 +
@@ -3479,6 +3685,7 @@ new file mode 100644
 +    /// Detaches this source buffer from its media source, which the specification describes as
 +    /// removing it from the `sourceBuffers` attribute. The backend has already dropped its half.
 +    pub(crate) fn detach(&self) {
++        self.op_tracker.borrow_mut().retire();
 +        self.updating.set(false);
 +        self.active.set(false);
 +        self.media_source.set(None);
@@ -3487,6 +3694,8 @@ new file mode 100644
 +    /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer> step 2: the append
 +    /// that was running ends with `abort` and `updateend` events.
 +    pub(crate) fn abort_pending(&self) {
++        // Whatever the backend still has in flight for this buffer is stale from now on (D3).
++        self.op_tracker.borrow_mut().retire();
 +        if !self.updating.get() {
 +            return;
 +        }
@@ -3495,11 +3704,48 @@ new file mode 100644
 +        self.queue_event(Atom::from("updateend"));
 +    }
 +
-+    /// The backend finished an append: the buffer append algorithm's steps 7 to 9 (and the same
-+    /// steps of the range removal algorithm). Ignored when no append is pending (it was aborted or
-+    /// the buffer removed while the event was in flight).
-+    pub(crate) fn operation_finished(&self) {
-+        if !self.updating.get() {
++    /// An initialization segment was parsed: the tracks it declares join `audioTracks` and
++    /// `videoTracks` (and the media element's lists), once per id (decision D6 of lane med-1b).
++    pub(crate) fn init_received(&self, cx: &mut JSContext, init: &InitInfo) {
++        self.with_track_lists(cx, |cx, window, lists| {
++            tracks::apply_init(cx, window, init, lists)
++        });
++    }
++
++    /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer> steps 3 to 8: the
++    /// tracks of this buffer leave the media element's lists and its own. Call before `detach`.
++    pub(crate) fn remove_tracks(&self, cx: &mut JSContext) {
++        self.with_track_lists(cx, |cx, window, lists| {
++            tracks::remove_all(cx, window, lists)
++        });
++    }
++
++    fn with_track_lists(
++        &self,
++        cx: &mut JSContext,
++        run: impl FnOnce(&mut JSContext, &Window, &TrackLists<'_>),
++    ) {
++        let element = self
++            .media_source
++            .get()
++            .and_then(|media_source| media_source.media_element());
++        let element_lists = element.map(|element| (element.AudioTracks(cx), element.VideoTracks(cx)));
++        let global = self.global();
++        let lists = TrackLists {
++            own_audio: &self.audio_tracks,
++            own_video: &self.video_tracks,
++            element_audio: element_lists.as_ref().map(|(audio, _)| &**audio),
++            element_video: element_lists.as_ref().map(|(_, video)| &**video),
++        };
++        run(cx, global.as_window(), &lists);
++    }
++
++    /// The backend finished the append or removal `op`: the buffer append algorithm's steps 7 to 9 (and
++    /// the same steps of the range removal algorithm). Ignored when `op` is not the operation that is
++    /// pending: it was aborted (and the page may have appended again since) or the buffer removed
++    /// while the event was in flight.
++    pub(crate) fn operation_finished(&self, op: OpId) {
++        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
 +            return;
 +        }
 +        // Step 7. Set the updating attribute to false.
@@ -3512,8 +3758,8 @@ new file mode 100644
 +
 +    /// <https://w3c.github.io/media-source/#dfn-append-error> steps 2 to 4 (the end of stream with a
 +    /// decode error, step 5, comes as the backend's `SourceEnded` event).
-+    pub(crate) fn operation_failed(&self) {
-+        if !self.updating.get() {
++    pub(crate) fn operation_failed(&self, op: OpId) {
++        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
 +            return;
 +        }
 +        // Step 2. Set the updating attribute to false.
@@ -3738,9 +3984,10 @@ new file mode 100644
 +            .append(self.id, bytes)
 +            .map_err(dom_error);
 +        media_source.note_ready_state(before);
-+        result?;
++        let op = result?;
 +
-+        // Step 3. Set the updating attribute to true.
++        // Step 3. Set the updating attribute to true. The completion event that carries `op` ends it.
++        self.op_tracker.borrow_mut().begin(op);
 +        self.updating.set(true);
 +
 +        // Step 4. Queue a task to fire an event named updatestart at this SourceBuffer object.
@@ -3813,10 +4060,11 @@ new file mode 100644
 +            .remove(self.id, *start, end)
 +            .map_err(dom_error);
 +        media_source.note_ready_state(before);
-+        result?;
++        let op = result?;
 +
 +        // Range removal step 1 and 2. Set updating to true and queue `updatestart`; step 5 and 6 come
-+        // with the backend's `RemoveDone` event.
++        // with the backend's `RemoveDone` event for `op`.
++        self.op_tracker.borrow_mut().begin(op);
 +        self.updating.set(true);
 +        self.queue_event(Atom::from("updatestart"));
 +        Ok(())
@@ -4003,6 +4251,461 @@ new file mode 100644
 +        GetOnremovesourcebuffer,
 +        SetOnremovesourcebuffer
 +    );
++}
+diff --git a/dom/mse/stall.rs b/dom/mse/stall.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/stall.rs
+@@ -0,0 +1,33 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++
++// Mercury: (MED-1b) the state the element keeps for the underrun decision of decision D4 of lane
++// med-1b: the pure `StallGuard` of `crates/mercury-mse`, a clock for its hysteresis, and whether a
++// delayed re-check is already queued. It lives on the `MediaSource` (a media element attaches one
++// MediaSource for its whole life), so the upstream element struct gets no new field.
++
++use std::time::Instant;
++
++use servo_media::player::mse::StallGuard;
++
++pub(crate) struct StallState {
++    pub(crate) guard: StallGuard,
++    /// A re-check task is queued (the guard wanted to change state and had to wait out its hysteresis).
++    pub(crate) recheck_pending: bool,
++    epoch: Instant,
++}
++
++impl StallState {
++    pub(crate) fn new() -> StallState {
++        StallState {
++            guard: StallGuard::new(),
++            recheck_pending: false,
++            epoch: Instant::now(),
++        }
++    }
++
++    /// The monotonic clock the guard's hysteresis reads, in milliseconds.
++    pub(crate) fn now_ms(&self) -> u64 {
++        self.epoch.elapsed().as_millis() as u64
++    }
++}
+diff --git a/dom/mse/tracks.rs b/dom/mse/tracks.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/tracks.rs
+@@ -0,0 +1,315 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++
++// Mercury: (MED-1b) the contents of `SourceBuffer.audioTracks` and `videoTracks` and of the media
++// element's lists (decision D6 of lane med-1b). One `AudioTrack` or `VideoTrack` per track of an
++// initialization segment (id, kind, label and language from `TrackInfo`; enabled or selected when it is
++// the default), the same object in the source buffer's list and in the element's list, an `addtrack`
++// event at each list, `removetrack` when the source buffer is removed. The lists are informational: the
++// pipeline plays one track per kind (decision D3 of round 1), so toggling `enabled` or `selected` changes
++// the flag and fires `change` and nothing else (the player ignores the request for a MediaSource).
++//
++// The track lists of this Servo have `add` and `clear` and no `remove`, and the shared files are not
++// ours to change, so a removal or a replacement rebuilds the list from the tracks that stay.
++
++use servo_media::player::mse::{InitInfo, TrackInfo, TrackKind};
++use stylo_atoms::Atom;
++
++use crate::dom::audio::audiotrack::AudioTrack;
++use crate::dom::audio::audiotracklist::AudioTrackList;
++use crate::dom::bindings::codegen::Bindings::AudioTrackBinding::AudioTrackMethods;
++use crate::dom::bindings::codegen::Bindings::VideoTrackBinding::VideoTrackMethods;
++use crate::dom::bindings::codegen::UnionTypes::VideoTrackOrAudioTrackOrTextTrack;
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::root::DomRoot;
++use crate::dom::bindings::str::DOMString;
++use crate::dom::event::Event;
++use crate::dom::eventtarget::EventTarget;
++use crate::dom::trackevent::TrackEvent;
++use crate::dom::videotrack::VideoTrack;
++use crate::dom::videotracklist::VideoTrackList;
++use crate::dom::window::Window;
++use js::context::JSContext;
++
++/// The two lists a track of an initialization segment goes into, for one kind.
++pub(crate) struct TrackLists<'a> {
++    pub(crate) own_audio: &'a AudioTrackList,
++    pub(crate) own_video: &'a VideoTrackList,
++    pub(crate) element_audio: Option<&'a AudioTrackList>,
++    pub(crate) element_video: Option<&'a VideoTrackList>,
++}
++
++/// The kind attribute of a track: "main" for the default track of its kind, empty otherwise (the
++/// initialization segment carries no role).
++fn kind_of(info: &TrackInfo) -> DOMString {
++    if info.default {
++        DOMString::from_static("main")
++    } else {
++        DOMString::new()
++    }
++}
++
++/// The "initialization segment received" algorithm's track steps, for the tracks of `init`: a track
++/// the buffer already has (same id) stays, or is replaced without an event when its kind, label or
++/// language changed (a quality switch keeps the count); a new one is created, added to both lists and
++/// announced with `addtrack`.
++pub(crate) fn apply_init(
++    cx: &mut JSContext,
++    window: &Window,
++    init: &InitInfo,
++    lists: &TrackLists<'_>,
++) {
++    for info in &init.tracks {
++        match info.kind {
++            TrackKind::Audio => apply_audio(cx, window, info, lists),
++            TrackKind::Video => apply_video(cx, window, info, lists),
++            TrackKind::Text => {}
++        }
++    }
++}
++
++/// `removeSourceBuffer` steps 3 to 8: the buffer's tracks leave the element's lists and its own, each
++/// removal announced with `removetrack`.
++pub(crate) fn remove_all(cx: &mut JSContext, window: &Window, lists: &TrackLists<'_>) {
++    for track in audio_tracks(lists.own_audio) {
++        if let Some(element) = lists.element_audio {
++            remove_audio(cx, window, element, &track);
++        }
++        remove_audio(cx, window, lists.own_audio, &track);
++    }
++    for track in video_tracks(lists.own_video) {
++        if let Some(element) = lists.element_video {
++            remove_video(cx, window, element, &track);
++        }
++        remove_video(cx, window, lists.own_video, &track);
++    }
++}
++
++fn audio_tracks(list: &AudioTrackList) -> Vec<DomRoot<AudioTrack>> {
++    (0..list.len())
++        .filter_map(|index| list.item(index))
++        .collect()
++}
++
++fn video_tracks(list: &VideoTrackList) -> Vec<DomRoot<VideoTrack>> {
++    (0..list.len())
++        .filter_map(|index| list.item(index))
++        .collect()
++}
++
++fn find_audio(list: &AudioTrackList, id: &DOMString) -> Option<DomRoot<AudioTrack>> {
++    audio_tracks(list)
++        .into_iter()
++        .find(|track| track.id() == *id)
++}
++
++fn find_video(list: &VideoTrackList, id: &DOMString) -> Option<DomRoot<VideoTrack>> {
++    video_tracks(list)
++        .into_iter()
++        .find(|track| track.id() == *id)
++}
++
++/// Rebuilds `list` with `tracks`; `replace` swaps one of them for another at the same place.
++fn rebuild_audio(
++    list: &AudioTrackList,
++    tracks: Vec<DomRoot<AudioTrack>>,
++    replace: Option<(&AudioTrack, &DomRoot<AudioTrack>)>,
++) {
++    list.clear();
++    for track in tracks {
++        match replace {
++            Some((old, new)) if &*track == old => list.add(new),
++            _ => list.add(&track),
++        }
++    }
++}
++
++fn rebuild_video(
++    list: &VideoTrackList,
++    tracks: Vec<DomRoot<VideoTrack>>,
++    replace: Option<(&VideoTrack, &DomRoot<VideoTrack>)>,
++) {
++    // `VideoTrackList::add` deselects a selected track it is given (the list keeps one selected): add
++    // unselected, then restore.
++    list.clear();
++    for track in tracks {
++        let track = match replace {
++            Some((old, new)) if &*track == old => new.clone(),
++            _ => track,
++        };
++        let selected = track.selected();
++        track.set_selected(false);
++        list.add(&track);
++        track.set_selected(selected);
++    }
++}
++
++fn announce_audio(
++    cx: &mut JSContext,
++    window: &Window,
++    name: Atom,
++    list: &AudioTrackList,
++    track: &DomRoot<AudioTrack>,
++) {
++    let event = TrackEvent::new(
++        cx,
++        window,
++        name,
++        false,
++        false,
++        &Some(VideoTrackOrAudioTrackOrTextTrack::AudioTrack(track.clone())),
++    );
++    event
++        .upcast::<Event>()
++        .fire(cx, list.upcast::<EventTarget>());
++}
++
++fn announce_video(
++    cx: &mut JSContext,
++    window: &Window,
++    name: Atom,
++    list: &VideoTrackList,
++    track: &DomRoot<VideoTrack>,
++) {
++    let event = TrackEvent::new(
++        cx,
++        window,
++        name,
++        false,
++        false,
++        &Some(VideoTrackOrAudioTrackOrTextTrack::VideoTrack(track.clone())),
++    );
++    event
++        .upcast::<Event>()
++        .fire(cx, list.upcast::<EventTarget>());
++}
++
++/// A track belongs to one list in this Servo (`track_list`, which `enabled = ...` goes through); the
++/// element's list is the one that reports `change` for it, so it gets the track last.
++fn repoint_audio(lists: &TrackLists<'_>) {
++    if let Some(element) = lists.element_audio {
++        for track in audio_tracks(element) {
++            track.add_track_list(element);
++        }
++    }
++}
++
++fn repoint_video(lists: &TrackLists<'_>) {
++    if let Some(element) = lists.element_video {
++        for track in video_tracks(element) {
++            track.add_track_list(element);
++        }
++    }
++}
++
++fn remove_audio(
++    cx: &mut JSContext,
++    window: &Window,
++    list: &AudioTrackList,
++    track: &DomRoot<AudioTrack>,
++) {
++    let rest: Vec<_> = audio_tracks(list)
++        .into_iter()
++        .filter(|other| **other != **track)
++        .collect();
++    if rest.len() == list.len() {
++        return;
++    }
++    rebuild_audio(list, rest, None);
++    announce_audio(cx, window, Atom::from("removetrack"), list, track);
++}
++
++fn remove_video(
++    cx: &mut JSContext,
++    window: &Window,
++    list: &VideoTrackList,
++    track: &DomRoot<VideoTrack>,
++) {
++    let rest: Vec<_> = video_tracks(list)
++        .into_iter()
++        .filter(|other| **other != **track)
++        .collect();
++    if rest.len() == list.len() {
++        return;
++    }
++    rebuild_video(list, rest, None);
++    announce_video(cx, window, Atom::from("removetrack"), list, track);
++}
++
++fn apply_audio(cx: &mut JSContext, window: &Window, info: &TrackInfo, lists: &TrackLists<'_>) {
++    let id = DOMString::from(info.id.to_string());
++    let kind = kind_of(info);
++    let label = DOMString::from(info.label.clone());
++    let language = DOMString::from(info.language.clone());
++
++    if let Some(existing) = find_audio(lists.own_audio, &id) {
++        if existing.kind() == kind && existing.Label() == label && existing.Language() == language {
++            return;
++        }
++        let track = AudioTrack::new(cx, window, id, kind, label, language, None);
++        track.set_enabled(existing.enabled());
++        rebuild_audio(
++            lists.own_audio,
++            audio_tracks(lists.own_audio),
++            Some((&existing, &track)),
++        );
++        if let Some(element) = lists.element_audio {
++            rebuild_audio(element, audio_tracks(element), Some((&existing, &track)));
++        }
++        repoint_audio(lists);
++        return;
++    }
++
++    let track = AudioTrack::new(cx, window, id, kind, label, language, None);
++    let enable = info.default || lists.own_audio.enabled_index().is_none();
++    track.set_enabled(enable);
++    lists.own_audio.add(&track);
++    announce_audio(cx, window, Atom::from("addtrack"), lists.own_audio, &track);
++    if let Some(element) = lists.element_audio {
++        element.add(&track);
++        announce_audio(cx, window, Atom::from("addtrack"), element, &track);
++    }
++    repoint_audio(lists);
++}
++
++fn apply_video(cx: &mut JSContext, window: &Window, info: &TrackInfo, lists: &TrackLists<'_>) {
++    let id = DOMString::from(info.id.to_string());
++    let kind = kind_of(info);
++    let label = DOMString::from(info.label.clone());
++    let language = DOMString::from(info.language.clone());
++
++    if let Some(existing) = find_video(lists.own_video, &id) {
++        if existing.kind() == kind && existing.Label() == label && existing.Language() == language {
++            return;
++        }
++        let track = VideoTrack::new(cx, window, id, kind, label, language, None);
++        track.set_selected(existing.selected());
++        rebuild_video(
++            lists.own_video,
++            video_tracks(lists.own_video),
++            Some((&existing, &track)),
++        );
++        if let Some(element) = lists.element_video {
++            rebuild_video(element, video_tracks(element), Some((&existing, &track)));
++        }
++        repoint_video(lists);
++        return;
++    }
++
++    let track = VideoTrack::new(cx, window, id, kind, label, language, None);
++    // The element's list keeps one selected video track: the first one that gets there.
++    let select = (info.default || lists.own_video.selected_index().is_none())
++        && lists
++            .element_video
++            .is_none_or(|element| element.selected_index().is_none());
++    lists.own_video.add(&track);
++    if let Some(element) = lists.element_video {
++        element.add(&track);
++    }
++    track.set_selected(select);
++    announce_video(cx, window, Atom::from("addtrack"), lists.own_video, &track);
++    if let Some(element) = lists.element_video {
++        announce_video(cx, window, Atom::from("addtrack"), element, &track);
++    }
++    repoint_video(lists);
++}
+diff --git a/dom/mse/videoplaybackquality.rs b/dom/mse/videoplaybackquality.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/videoplaybackquality.rs
+@@ -0,0 +1,92 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++
++// Mercury: (MED-1b) `VideoPlaybackQuality` and `HTMLVideoElement.getVideoPlaybackQuality()` (decision D5
++// of lane med-1b): total and dropped frames of the video sink of the element's player, which dash.js and
++// Shaka read for their bitrate decisions. Written by Mercury; the interface and the method are behind
++// `dom_media_source_enabled` (the interface is part of the Media Source Extensions specification).
++// <https://w3c.github.io/media-playback-quality/>
++
++use dom_struct::dom_struct;
++use js::context::JSContext;
++use script_bindings::reflector::{Reflector, reflect_dom_object};
++
++use crate::dom::bindings::codegen::Bindings::PerformanceBinding::PerformanceMethods;
++use crate::dom::bindings::codegen::Bindings::VideoPlaybackQualityBinding::VideoPlaybackQualityMethods;
++use crate::dom::bindings::num::Finite;
++use crate::dom::bindings::reflector::DomGlobal;
++use crate::dom::bindings::root::DomRoot;
++use crate::dom::html::htmlmediaelement::HTMLMediaElement;
++use crate::dom::window::Window;
++
++/// <https://w3c.github.io/media-playback-quality/#videoplaybackquality>
++#[dom_struct]
++pub(crate) struct VideoPlaybackQuality {
++    reflector_: Reflector,
++    creation_time: Finite<f64>,
++    total_video_frames: u32,
++    dropped_video_frames: u32,
++    corrupted_video_frames: u32,
++}
++
++impl VideoPlaybackQuality {
++    fn new_inherited(
++        creation_time: Finite<f64>,
++        total_video_frames: u32,
++        dropped_video_frames: u32,
++    ) -> VideoPlaybackQuality {
++        VideoPlaybackQuality {
++            reflector_: Reflector::new(),
++            creation_time,
++            total_video_frames,
++            dropped_video_frames,
++            // Nothing in the pipeline tells a corrupted frame from a good one.
++            corrupted_video_frames: 0,
++        }
++    }
++
++    /// The counters of `element`'s player now: `getVideoPlaybackQuality()` of a video element.
++    /// <https://w3c.github.io/media-playback-quality/#dom-htmlvideoelement-getvideoplaybackquality>
++    pub(crate) fn for_element(
++        cx: &mut JSContext,
++        window: &Window,
++        element: &HTMLMediaElement,
++    ) -> DomRoot<VideoPlaybackQuality> {
++        let (total, dropped) = element.player_video_playback_quality().unwrap_or((0, 0));
++        let creation_time = element.global().performance(cx).Now();
++        let total = u32::try_from(total).unwrap_or(u32::MAX);
++        // Dropped frames are a part of the total.
++        let dropped = u32::try_from(dropped).unwrap_or(u32::MAX).min(total);
++        reflect_dom_object(
++            cx,
++            Box::new(VideoPlaybackQuality::new_inherited(
++                creation_time,
++                total,
++                dropped,
++            )),
++            window,
++        )
++    }
++}
++
++impl VideoPlaybackQualityMethods<crate::DomTypeHolder> for VideoPlaybackQuality {
++    /// <https://w3c.github.io/media-playback-quality/#dom-videoplaybackquality-creationtime>
++    fn CreationTime(&self) -> Finite<f64> {
++        self.creation_time
++    }
++
++    /// <https://w3c.github.io/media-playback-quality/#dom-videoplaybackquality-totalvideoframes>
++    fn TotalVideoFrames(&self) -> u32 {
++        self.total_video_frames
++    }
++
++    /// <https://w3c.github.io/media-playback-quality/#dom-videoplaybackquality-droppedvideoframes>
++    fn DroppedVideoFrames(&self) -> u32 {
++        self.dropped_video_frames
++    }
++
++    /// <https://w3c.github.io/media-playback-quality/#dom-videoplaybackquality-corruptedvideoframes>
++    fn CorruptedVideoFrames(&self) -> u32 {
++        self.corrupted_video_frames
++    }
 +}
 diff --git a/dom/navigator/navigator.rs b/dom/navigator/navigator.rs
 --- a/dom/navigator/navigator.rs

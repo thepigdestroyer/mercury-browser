@@ -78,6 +78,12 @@ path dependencies on both crates. Everything new is in `mercury_mse.rs`; the hoo
    reported, so the element's seek ends), and given to `GstPlay` only after the player's lock is released
    (`run_seek_decision`). Hunks are marked `Mercury: (MED-1)`.
 
+10. **`player.rs` (MED-1b, marked `Mercury: (MED-1b)`):** the position update interval is 100 ms for
+    `StreamType::MediaSource` (the element's `StallGuard` reads it; 500 ms for every other player);
+    `set_audio_track`/`set_video_track` do nothing for a MediaSource player (its track lists are
+    informational); `PlayerInner::video_playback_quality` and the `Player` method read the video sink's
+    `stats` (`rendered`, `dropped`) for `getVideoPlaybackQuality()`.
+
 Tested by `mercury-mse` and `mercury-mse-gst`'s own suites (light pool, no Servo). The Servo-side glue
 compiles (`cargo check -p servo-media-gstreamer`) and has **not been run in a window** (the screen was locked);
 `tests/pages/mse-*.html` and `docs/developer-guide/media-source.md` say how to run it. Dropped when a Servo
