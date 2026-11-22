@@ -144,6 +144,7 @@ path = [
   "tests/pages/webgl2-textures.html",
   "THIRD-PARTY-NOTICES.md",
   "crates/talaria-servo/resources/adblock/manifest.json",
+  "crates/talaria-servo/resources/hsts_preload.manifest.json",
   "tests/filter-lists/brave-unbreak.txt",
   "tests/pages/blocklists.html",
   "tests/pages/blocklists/__utm.gif",
@@ -205,3 +206,14 @@ path = [
 ]
 SPDX-FileCopyrightText = "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)"
 SPDX-License-Identifier = "MPL-2.0"
+
+# The HSTS preload list: the host names of Chromium's net/http/transport_security_state_static.json
+# (BSD-3-Clause), compiled into the executable (see THIRD-PARTY-NOTICES.md, "Bundled data"). Its
+# manifest, hsts_preload.manifest.json, is Mercury's own record of where the data came from (dates,
+# hashes, counts), so it sits in the PolyForm list above, like adblock/manifest.json.
+[[annotations]]
+path = [
+  "crates/talaria-servo/resources/hsts_preload.fstmap",
+]
+SPDX-FileCopyrightText = "The Chromium Authors"
+SPDX-License-Identifier = "BSD-3-Clause"

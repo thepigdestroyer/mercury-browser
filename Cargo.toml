@@ -53,6 +53,8 @@ accname = "=0.30.12"
 adblock = "=0.13.5"
 ash = "0.38"
 backtrace = "0.3.77"
+# hsts-preload (crates/mercury-devtools): decodes Gitiles' base64 form of Chromium's HSTS list.
+base64 = "0.22"
 content-security-policy = "0.9"
 core-foundation = "0.10"
 dirs = "7.0"
@@ -60,6 +62,8 @@ dpi = "0.1"
 # sh-pages: the page text is decoded with the charset the server or the page names.
 encoding_rs = "0.8"
 euclid = "0.22"
+# hsts-preload: the map format Servo reads for its HSTS preload list (already in the lock through servo-net).
+fst = "0.4"
 futures-util = "0.3.34"
 getrandom = "0.4"
 gleam = "0.15"
