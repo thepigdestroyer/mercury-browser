@@ -859,6 +859,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn notify_page_title_changed(&self, web_view: servo::WebView, title: Option<String>) {
+        // A title read in flight is older than this notification.
+        self.page_feedback.title_notified();
         self.send_browser_event(BrowserEvent::PageTitleChanged {
             title: title.clone(),
         });
