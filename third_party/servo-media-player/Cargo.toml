@@ -45,6 +45,7 @@ version = "0.1"
 # (the reverse would be formatted by `cargo fmt --all`; see docs/developer-guide/vendored-patches.md).
 [dependencies.mercury-mse]
 path = "../../crates/mercury-mse"
+version = ">=0.2.0"
 
 [dependencies.serde]
 version = "1.0.228"

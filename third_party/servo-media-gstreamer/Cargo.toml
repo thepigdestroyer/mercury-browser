@@ -81,14 +81,17 @@ features = ["v1_18"]
 [dependencies.log]
 version = "0.4.32"
 
-# Mercury: (MED-1) Mercury's Media Source Extensions backend (crates/mercury-mse) and its GStreamer
+# Mercury: (MED-1) the version requirement is open so that `cargo deny` sees no wildcard path dependency and a
+# release bump of the workspace version needs no edit here. Mercury's Media Source Extensions backend (crates/mercury-mse) and its GStreamer
 # source element (crates/mercury-mse-gst), workspace members with no Servo dependency. See
 # `mercury_mse.rs` and the hooks in `player.rs`.
 [dependencies.mercury-mse]
 path = "../../crates/mercury-mse"
+version = ">=0.2.0"
 
 [dependencies.mercury-mse-gst]
 path = "../../crates/mercury-mse-gst"
+version = ">=0.2.0"
 
 [dependencies.servo-base]
 version = "=0.8.0"
