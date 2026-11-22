@@ -6,7 +6,9 @@ members = [
     "crates/mercury-appearance",
     "crates/mercury-credits",
     "crates/mercury-devtools",
+    "crates/mercury-dnr",
     "crates/mercury-downloads",
+    "crates/mercury-extensions",
     "crates/mercury-filter-lists",
     "crates/mercury-iconset",
     "crates/mercury-import",
@@ -64,6 +66,8 @@ objc2-foundation = { version = "0.3.2", default-features = false }
 pdfium-render = { version = "=0.9.5", default-features = false, features = ["pdfium_8125", "thread_safe"] }
 percent-encoding = "2.3"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "stream"] }
+# ext-4 (declarativeNetRequest `regexFilter`): every pattern is compiled with a size limit.
+regex = "1.13"
 resvg = { version = "0.48", default-features = false }
 rusqlite = { version = "0.38", features = ["bundled"] }
 rustls = { version = "0.23", default-features = false, features = ["aws_lc_rs", "std"] }
@@ -106,6 +110,9 @@ thiserror = "2"
 tokio = "1.54.1"
 url = "2.5"
 zeroize = "1.9"
+# ext-4 (mercury-extensions): the .crx / .xpi archive. Only the deflate codec (miniz_oxide through
+# flate2) and stored entries: no bzip2, zstd, xz, ppmd or AES, which a package has no use for.
+zip = { version = "9", default-features = false, features = ["deflate-flate2"] }
 
 # The vendored crates (third_party/vendor.toml; `mercury-servo-patches vendor` adds entries here).
 # Never make them workspace members or path dependencies: `cargo fmt --all` formats both, and

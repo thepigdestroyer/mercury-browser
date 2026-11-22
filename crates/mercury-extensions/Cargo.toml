@@ -1,0 +1,40 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-extensions"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Browser extensions, the parts that need no engine (EE32, EE33): reading and verifying .crx (CRX3)
+# and .xpi packages, the manifest, the update-check model, and the permission and security model as
+# data plus checks. Everything here treats a package as untrusted input: size caps, no path
+# traversal, signatures checked before anything is used, no panic on malformed data. Nothing
+# touches the network: the shell supplies a transport.
+[dependencies]
+# RSA and ECDSA signature primitives for the XPI chains (already in the graph through rustls and crx3).
+aws-lc-rs = "1"
+# COSE_Sign for `META-INF/cose.sig`.
+coset = "0.4"
+# PKCS#7 SignedData for `META-INF/mozilla.rsa`, and X.509 certificates.
+cms = "0.3.0-rc.2"
+x509-cert = "0.3"
+# CRX3 header, key ids and signature verification.
+crx3 = "2"
+# Chromium's update protocol (update2 and Omaha 4 JSON), as typed requests and responses.
+omaha = "0.2"
+# `@match` / host-permission patterns.
+webextension_pattern = "0.3"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+url.workspace = true
+zip = { workspace = true }
+# zip's `deflate-flate2` leaves the backend to the caller: the pure-Rust one (miniz_oxide), as in the lock already.
+flate2 = { version = "1.1", default-features = false, features = ["rust_backend"] }
+
+[dev-dependencies]
+tempfile.workspace = true
