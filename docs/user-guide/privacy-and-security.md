@@ -58,7 +58,7 @@ The icon before the address says how the page was loaded:
 - **A circled "i":** neither a padlock nor a warning. It marks **Page on this computer** (plain HTTP to `localhost` or another loopback address such as `127.0.0.1`), **File on this computer**, and **Mercury Browser page** (one of Mercury's own error pages).
 - **Nothing:** a new tab.
 
-Click the icon for **site information**: the permissions the site has been given (each with **Reset**), the cookies and site data it holds (with **Clear**), and any exception you made for the site.
+Click the icon for **site information**: the permissions the site has been given (each with **Reset**), the cookies and site data it holds (with **Clear**), any exception you made for the site, and, for a web page, whether its images are shown or blocked (see [Images on one site](#images-on-one-site)).
 
 ### HTTPS-only mode
 
@@ -84,11 +84,23 @@ What **Continue anyway** accepts is narrow:
 
 Continue only for devices you control. An exception means Mercury trusts whoever holds that certificate's key when you visit that name.
 
+## Images on one site
+
+You can turn images off for one site, for a page that loads slowly, costs data or is full of pictures you don't want. Open **site information** (the icon before the address) and press **Block** in the **Images** row, or choose **View → Block Images on This Site**. The row says **Blocked** or **Shown**, and the other button turns them back on (**View → Show Images on This Site**). Mercury then loads the page again, because pictures already drawn would stay.
+
+- **What is blocked.** Every image the page and the frames inside it ask for, from the load of the page on (while a tab goes to the site from another one, the images of that navigation are judged by the site it goes to; an automated count of this is on the hands-on list, not yet run): pictures in the page, in its style sheets, video posters and SVG images, including those from other sites (a picture from a content network is blocked too). Mercury answers each request itself, so the picture is not downloaded. Text, scripts, style sheets, fonts, video and frames are not touched.
+- **The tab icon goes too.** Pages ask for their icon as an image, and Mercury cannot tell it from the others, so a site with images off shows the default tab icon.
+- **Which site.** The exact host of the page in the tab: blocking `mail.example.com` does not blank `maps.example.com`, and `example.com` is not `www.example.com`. The port and `http` against `https` make no difference. Only web pages have a site: the row and the menu items are not there for a new tab, a file or one of Mercury's own pages.
+- **A page that is open elsewhere.** The choice applies to every tab and window showing the site, from the next load of each. Only the page you changed is reloaded for you.
+- **Where it is kept.** In `site-images.json` in the profile (see below), so it lasts across runs. A damaged file is moved aside and images are on everywhere; a file written by a newer Mercury is read as empty and left alone. At most 1,000 sites can have images off.
+- **Not here yet.** A switch for all sites, a list of the sites in Settings and a choice for private windows.
+
 ## What Mercury stores
 
 | What | Where |
 | --- | --- |
 | Settings | `~/Library/Application Support/Mercury Browser/Default/settings.json` |
+| The sites whose images are turned off | `site-images.json` in the same profile |
 | History, bookmarks and the downloads list | `places.sqlite` in the same profile |
 | Open and recently closed tabs (addresses and titles), for restoring them | `session.json` in the same profile, with `session.previous.json` and `session.recovery.json` |
 | Updated filter lists (only after an update has downloaded a newer version) | the `filter-lists` folder in the same profile |
@@ -151,6 +163,8 @@ Not used:
 - **Proxies that ask for a password.** Mercury cannot prompt for one; the page fails with a connection error. A user name and password in `http_proxy` (`http://user:password@host:port`) do work.
 
 Mercury sends plain `http://` addresses through the proxy with `CONNECT` as well, so a proxy that allows `CONNECT` only to port 443 refuses them. Mercury writes a warning to its log at start when the system asks for something it does not use.
+
+**View source** fetches the page again with the same three proxy settings, and never goes around a proxy that applies to the address: if the proxy cannot fetch it, the source page says so. Unlike the pages, that fetch sends a plain `http://` address to the proxy as an ordinary proxy request, not with `CONNECT`.
 
 ## Reporting a security problem
 

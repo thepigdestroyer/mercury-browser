@@ -123,6 +123,18 @@ pub(crate) fn connect_site_security_callbacks(
         refresh_site_info(&window, &exception_controller.borrow());
     });
 
+    // sh-pages: the popover's "Images" row turns images off or on for the active site.
+    let images_controller = Rc::clone(&controller);
+    let images_window = window.as_weak();
+    window.on_site_images_toggle(move || {
+        let _slint = crate::callback_scope::InSlintCallback::enter();
+        let Some(window) = images_window.upgrade() else {
+            return;
+        };
+        let blocked = crate::site_images::active_site_blocks_images(&images_controller.borrow());
+        crate::site_images::set_active_site_images(&window, &images_controller, !blocked);
+    });
+
     let back_controller = Rc::clone(&controller);
     let back_window = window.as_weak();
     window.on_https_only_go_back(move || {
@@ -175,6 +187,7 @@ fn refresh_site_info(window: &MainWindow, controller: &BrowserController) {
         });
     }
     window.set_site_info(site_info(controller, &url, summary));
+    crate::site_images::sync_popover(window, controller); // sh-pages: the "Images" row
 }
 
 fn site_info(

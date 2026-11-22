@@ -54,6 +54,10 @@ use crate::certificate_exceptions::{AcceptedHosts, mercury_protocols};
 use crate::site_information::{self, SiteDataSummary};
 use crate::site_security::{TabHttpsUpgrades, probe_error_page};
 use talaria_core::HttpsPolicy;
+// sh-pages: view source and images per site
+use crate::site_images::SiteImagesHandle;
+use crate::view_source::ViewSourceConfig;
+use mercury_view_source::ProxyConfig;
 
 type WakeCallback = dyn Fn() + Send + Sync + 'static;
 
@@ -120,6 +124,11 @@ pub struct RuntimeOptions {
     pub http_disk_cache_dir: Option<PathBuf>,
     /// Whether pages get `navigator.geolocation`, and where positions come from.
     pub geolocation: GeolocationSetup,
+    // sh-pages
+    /// Run pages in the browser's own process instead of content processes. For tests that start
+    /// the engine inside a test binary, which cannot be a content process (the engine tests of
+    /// `tests/view_source_engine.rs`); the application never sets it.
+    pub single_process: bool,
 }
 
 impl Default for RuntimeOptions {
@@ -133,6 +142,7 @@ impl Default for RuntimeOptions {
             system_proxy: None,
             http_disk_cache_dir: None,
             geolocation: GeolocationSetup::Off,
+            single_process: false, // sh-pages
         }
     }
 }
@@ -158,6 +168,11 @@ pub struct ServoRuntime {
     // site security
     /// Hosts whose invalid certificate the user accepted, until the browser takes them.
     accepted_certificates: AcceptedHosts,
+    // sh-pages
+    /// The sites whose images are refused, shared with every tab's delegate.
+    site_images: SiteImagesHandle,
+    /// HTTPS-only mode as the `view-source:` fetch reads it (a copy of the tabs' policy).
+    view_source_https: crate::view_source::SharedHttpsPolicy,
 }
 
 impl ServoRuntime {
@@ -184,18 +199,33 @@ impl ServoRuntime {
             .http_disk_cache_dir
             .as_deref()
             .map(repair_http_disk_cache);
-        let options = mercury_options(runtime_options.config_dir.clone());
+        let mut options = mercury_options(runtime_options.config_dir.clone());
+        options.multiprocess &= !runtime_options.single_process; // sh-pages
         let multiprocess_enabled = options.multiprocess;
         let sandbox_enabled = options.sandbox;
         let preferences = mercury_preferences(&runtime_options);
         let user_agent = preferences.user_agent.clone(); // downloads
         // site security: certificate exceptions from Mercury's certificate page
         let accepted_certificates = AcceptedHosts::default();
+        // sh-pages: `view-source:`; its fetch goes through the proxy the engine uses
+        let view_source_https = crate::view_source::SharedHttpsPolicy::default();
+        let mut registry = mercury_protocols(&accepted_certificates);
+        crate::view_source::register(
+            &mut registry,
+            ViewSourceConfig {
+                proxy: ProxyConfig {
+                    http: preferences.network_http_proxy_uri.clone(),
+                    https: preferences.network_https_proxy_uri.clone(),
+                    no_proxy: preferences.network_http_no_proxy.clone(),
+                },
+                https_policy: Arc::clone(&view_source_https),
+            },
+        );
         let inner = ServoBuilder::default()
             .opts(options)
             .preferences(preferences)
             .event_loop_waker(Box::new(event_loop_waker))
-            .protocol_registry(mercury_protocols(&accepted_certificates))
+            .protocol_registry(registry)
             .build();
         inner.setup_logging();
         log_proxy_settings(runtime_options.system_proxy.as_ref());
@@ -257,6 +287,8 @@ impl ServoRuntime {
             after_engine_cleanup,
             switches,
             accepted_certificates,
+            site_images: SiteImagesHandle::default(), // sh-pages
+            view_source_https,                        // sh-pages
         }
     }
 
@@ -268,6 +300,11 @@ impl ServoRuntime {
         if *self.page_tabs.https_policy.borrow() != *policy {
             self.page_tabs.https_policy.replace(policy.clone());
         }
+        // sh-pages: the `view-source:` fetch applies the same mode to the addresses it requests.
+        *self
+            .view_source_https
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy.clone();
     }
 
     /// The hosts whose invalid certificate the user accepted since the last call (ASCII).
@@ -293,6 +330,13 @@ impl ServoRuntime {
         self.switches.clone()
     }
 
+    // sh-pages
+    /// The sites whose images are refused; the handle shares its state with every tab's
+    /// delegate, so keep the clone and replace the set through it.
+    pub fn site_images(&self) -> SiteImagesHandle {
+        self.site_images.clone()
+    }
+
     // blocklists
     /// Where compiled filter-list engines are handed to the content blocker.
     pub fn filter_engine_slot(&self) -> crate::FilterEngineSlot {
@@ -313,7 +357,12 @@ impl ServoRuntime {
         browser_event_sender: Sender<TabEvent>,
     ) -> Result<ServoWebView, ServoWebViewError> {
         let initial_url = Url::parse(initial_url)?;
-        let (delegate, parts) = new_tab_delegate(&self.page_tabs, tab_id, &browser_event_sender);
+        let (delegate, parts) = new_tab_delegate(
+            &self.page_tabs,
+            tab_id,
+            &browser_event_sender,
+            &self.site_images, // sh-pages
+        );
 
         let inner = WebViewBuilder::new(&self.inner, rendering_context)
             .url(initial_url)
@@ -462,6 +511,10 @@ struct BrowserServoDelegate {
 
 impl servo::ServoDelegate for BrowserServoDelegate {
     fn load_web_resource(&self, load: servo::WebResourceLoad) {
+        // sh-pages: a load without a web view never loads a `view-source:` address.
+        let Some(load) = crate::view_source::refuse_view_source_without_web_view(load) else {
+            return;
+        };
         // openurl: a load without a web view (a worker's, say) never reads local files either.
         let Some(load) = crate::openurl::refuse_local_file_load(None, None, load) else {
             return;
@@ -670,6 +723,10 @@ struct BrowserDelegate {
     document_request_listener: SharedDocumentRequestListener,
     // site security
     https_upgrades: TabHttpsUpgrades,
+    // sh-pages: shared by every tab's delegate
+    site_images: SiteImagesHandle,
+    // sh-pages: the page this tab's image loads belong to while it navigates
+    navigating_page: crate::site_images::NavigatingPage,
 }
 
 /// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
@@ -677,6 +734,7 @@ fn new_tab_delegate(
     shared: &Rc<PageTabs>,
     tab_id: TabId,
     browser_event_sender: &Sender<TabEvent>,
+    site_images: &SiteImagesHandle, // sh-pages
 ) -> (Rc<BrowserDelegate>, TabParts) {
     let page_feedback = PageFeedback::new(tab_id, browser_event_sender.clone());
     // geolocation: one per tab, shared by Servo, the delegate, `DocumentStarts` and the web view
@@ -722,6 +780,8 @@ fn new_tab_delegate(
         last_document_request: RefCell::new(None), // downloads
         document_request_listener: Rc::clone(&shared.document_request_listener), // downloads
         https_upgrades: TabHttpsUpgrades::new(Rc::clone(&shared.https_policy)),
+        site_images: site_images.clone(), // sh-pages
+        navigating_page: crate::site_images::NavigatingPage::default(), // sh-pages
     });
     (delegate, parts)
 }
@@ -841,6 +901,11 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn load_web_resource(&self, web_view: servo::WebView, load: servo::WebResourceLoad) {
+        // sh-pages: a `view-source:` address loads only as the tab's own page, never as a frame
+        // or a resource.
+        let Some(load) = crate::view_source::refuse_embedded_view_source(load) else {
+            return;
+        };
         // openurl: a web page's frames and resources never come from local files.
         let Some(load) =
             crate::openurl::refuse_local_file_load(Some(self.tab_id), web_view.url(), load)
@@ -853,12 +918,26 @@ impl servo::WebViewDelegate for BrowserDelegate {
         }) else {
             return;
         };
+        // sh-pages: images per site, after the HTTPS-only step and before content blocking. The
+        // page is the main-frame document this tab loads last (`web_view.url()` lags behind a
+        // cross-site navigation until the new document is active).
+        self.navigating_page.note_load(
+            load.request().is_for_main_frame,
+            load.request().url.as_url(),
+        );
+        let page = self.navigating_page.page(web_view.url());
+        let Some(load) = crate::site_images::refuse_blocked_image(&self.site_images, page, load)
+        else {
+            return;
+        };
         self.note_document_request(&web_view, &load.request); // downloads
         self.content_blocker
             .handle_web_resource_load(Some(&web_view), load);
     }
 
     fn notify_url_changed(&self, web_view: servo::WebView, url: Url) {
+        // sh-pages: the new document is active; `web_view.url()` is the page again.
+        self.navigating_page.settle();
         // dialogs: user info is left out; after a sign-in it holds the password.
         log::debug!(
             "tab {}: address changed to {}",
@@ -1009,7 +1088,12 @@ impl servo::WebViewDelegate for BrowserDelegate {
         };
 
         let (browser_event_sender, event_receiver) = mpsc::channel::<TabEvent>();
-        let (delegate, parts) = new_tab_delegate(&page_tabs, tab_id, &browser_event_sender);
+        let (delegate, parts) = new_tab_delegate(
+            &page_tabs,
+            tab_id,
+            &browser_event_sender,
+            &self.site_images, // sh-pages: the opener's handle is the runtime's
+        );
         let scale_factor = parent.hidpi_scale_factor();
         let inner = request
             .builder(parent.rendering_context())

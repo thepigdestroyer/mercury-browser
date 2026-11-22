@@ -80,6 +80,7 @@ mod shutdown;
 mod tab_close;
 // tabs
 mod signals;
+mod site_images; // sh-pages
 // site-security
 mod site_security;
 #[cfg(target_os = "macos")]
@@ -88,6 +89,7 @@ mod tab_snapshots; // tab-snapshots lane
 mod tab_strip; // tabs-plus
 mod tab_switch_frame;
 mod ui_sync;
+mod view_source; // sh-pages
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
     // (1) Before the content-process branch, so that content processes report their crashes
@@ -210,6 +212,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     settings::prepare_controller(&settings, &mut controller.borrow_mut(), &options.urls);
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
     profile_data::start(&profile, &mut controller.borrow_mut()); // history lane
+    // sh-pages: the sites whose images are off, read once from the profile, before any page loads
+    if let Some(paths) = &profile.paths {
+        site_images::init(&paths.root);
+    }
     import_ui::configure(
         options.is_automated(),
         options.import_from.as_deref(),
@@ -239,6 +245,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         ),
     )?;
     accessibility::install(&window); // a11y-1: the page's tree hangs from the "Page content" node
+    // sh-pages: the engine learns which sites have their images off, before any page is created
+    if !engine::with_runtime(site_images::attach_engine) {
+        log::warn!("the engine was not reachable: images stay on for every site");
+    }
     // blocklists: builds the content blocker's engine off the UI thread and updates the lists.
     filter_lists::start(&options, &profile, &settings);
     // settings-ui

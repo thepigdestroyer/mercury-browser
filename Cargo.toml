@@ -24,6 +24,7 @@ members = [
     "crates/mercury-store",
     "crates/mercury-tab-snapshots",
     "crates/mercury-ui",
+    "crates/mercury-view-source",
     "crates/talaria-core",
     "crates/talaria-servo",
 ]
@@ -53,6 +54,8 @@ content-security-policy = "0.9"
 core-foundation = "0.10"
 dirs = "7.0"
 dpi = "0.1"
+# sh-pages: the page text is decoded with the charset the server or the page names.
+encoding_rs = "0.8"
 euclid = "0.22"
 futures-util = "0.3.34"
 getrandom = "0.4"
@@ -114,6 +117,14 @@ surfman = "0.14"
 tempfile = "3.27"
 thiserror = "2"
 tokio = "1.54.1"
+# sh-pages: view source highlights HTML, JavaScript and CSS with tree-sitter (MIT, C core; the
+# grammars depend only on tree-sitter-language, so they work with core 0.27). `tree-sitter` itself
+# is a dev-dependency of mercury-view-source (it parses the generated pages in tests).
+tree-sitter = "0.27"
+tree-sitter-css = "0.25"
+tree-sitter-highlight = "0.27"
+tree-sitter-html = "0.23"
+tree-sitter-javascript = "0.25"
 url = "2.5"
 zeroize = "1.9"
 
