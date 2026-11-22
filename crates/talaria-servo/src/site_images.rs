@@ -6,9 +6,11 @@
 //! the page goes on loading.
 //!
 //! `runtime.rs` calls `refuse_blocked_image` from `BrowserDelegate::load_web_resource`, with the
-//! tab's own address as `page` (the top-level page, never a frame's: a third-party frame on a
-//! blocked site loses its images too, and a frame of another site on an allowed page keeps
-//! them). The set itself is `talaria_core::SiteImages`; the desktop owns the file and pushes the
+//! tab's top-level page as `page` (never a frame's: a third-party frame on a blocked site loses
+//! its images too, and a frame of another site on an allowed page keeps them). While the tab
+//! navigates, that page is the last main-frame document load, not `web_view.url()` (see
+//! [`NavigatingPage`]). Loads that name no web view (`BrowserServoDelegate::load_web_resource`:
+//! workers, say) are not judged: they belong to no tab's page. The set itself is `talaria_core::SiteImages`; the desktop owns the file and pushes the
 //! set here with [`SiteImagesHandle::replace`].
 //!
 //! What the guard cannot tell apart: `Destination::Image` is also the destination of a page's
@@ -45,6 +47,45 @@ impl SiteImagesHandle {
     pub(crate) fn refuses(&self, destination: Destination, page: Option<&Url>) -> bool {
         matches!(destination, Destination::Image)
             && self.images.borrow().blocks_image_load(page, true)
+    }
+}
+
+/// The page a tab's loads belong to while it navigates: the address of the last main-frame
+/// document load the delegate saw, until the engine reports the new address.
+///
+/// `WebView::url()` is the back-forward list entry, and it changes only when the new document's
+/// pipeline is activated. An image the new document asks for before then (the parser's prefetch
+/// starts as soon as the first bytes arrive) would be judged by the page being left, so a
+/// navigation from `b.test` to a site with images off would load its first images. The delegate
+/// records each main-frame document load here when it starts, so that the images of that
+/// navigation are judged by the site it goes to; `settle` is called when the address has
+/// changed and `web_view.url()` is right again.
+///
+/// A main-frame load that never commits (a download, a `204`, a cancelled load) leaves its
+/// address here until the tab's address next changes; a late image of the page that stays is
+/// then judged by the site that was refused. That errs on the side of the user's choice, and is
+/// accepted.
+#[derive(Debug, Default)]
+pub(crate) struct NavigatingPage {
+    last_document: RefCell<Option<Url>>,
+}
+
+impl NavigatingPage {
+    /// A load starts: a main-frame document load becomes the page of what follows.
+    pub(crate) fn note_load(&self, is_for_main_frame: bool, url: &Url) {
+        if is_for_main_frame {
+            self.last_document.replace(Some(url.clone()));
+        }
+    }
+
+    /// The tab's address changed: `web_view.url()` says where the tab is.
+    pub(crate) fn settle(&self) {
+        self.last_document.replace(None);
+    }
+
+    /// The page to judge an image load by: the navigation in progress, else `current`.
+    pub(crate) fn page(&self, current: Option<Url>) -> Option<Url> {
+        self.last_document.borrow().clone().or(current)
     }
 }
 
@@ -105,6 +146,55 @@ mod tests {
         assert!(!handle.refuses(Destination::Image, Some(&url("https://example.org/"))));
         assert!(!handle.refuses(Destination::Image, Some(&url("https://cdn.example.com/")),));
         assert!(!handle.refuses(Destination::Image, Some(&url("about:blank"))));
+    }
+
+    #[test]
+    fn the_images_of_a_cross_site_navigation_are_judged_by_the_site_it_goes_to() {
+        let handle = handle_with(&["a.test"]);
+        let navigating = NavigatingPage::default();
+        let on_b = url("https://b.test/start");
+        let a = url("https://a.test/article");
+        let refused = |current: &Url| {
+            handle.refuses(
+                Destination::Image,
+                navigating.page(Some(current.clone())).as_ref(),
+            )
+        };
+
+        // On `b.test`, whose images are on.
+        assert!(!refused(&on_b));
+        // The tab starts a navigation to `a.test`: `web_view.url()` still says `b.test`, but the
+        // images the new document asks for first are `a.test`'s and are refused.
+        navigating.note_load(true, &a);
+        assert!(
+            refused(&on_b),
+            "an early image of the blocked site was let through"
+        );
+        // The address changes: `web_view.url()` is `a.test`.
+        navigating.settle();
+        assert!(refused(&a));
+        // And back to `b.test`: the first images of that navigation are `b.test`'s.
+        let back = url("https://b.test/back");
+        navigating.note_load(true, &back);
+        assert!(!refused(&a), "images of the allowed site were refused");
+        navigating.settle();
+        assert!(!refused(&back));
+    }
+
+    #[test]
+    fn a_frames_document_does_not_change_the_page() {
+        let handle = handle_with(&["a.test"]);
+        let navigating = NavigatingPage::default();
+        let on_b = url("https://b.test/");
+
+        navigating.note_load(false, &url("https://a.test/frame"));
+
+        assert_eq!(navigating.page(Some(on_b.clone())), Some(on_b.clone()));
+        assert!(!handle.refuses(Destination::Image, navigating.page(Some(on_b)).as_ref()));
+        // A tab that has no address yet (a pop-up) is judged by its first document.
+        assert_eq!(navigating.page(None), None);
+        navigating.note_load(true, &url("https://a.test/popup"));
+        assert!(handle.refuses(Destination::Image, navigating.page(None).as_ref()));
     }
 
     #[test]
