@@ -12,16 +12,28 @@
 // these functions read and set, so no upstream item had to change its visibility.
 
 // Mercury (MED-1): the MSE contract types the element reads from the backend.
+use servo_media::player::mse::media_state::{
+    MediaStateAction, WaitingInputs, forward_position, media_state_action, waiting_fires,
+};
+use servo_media::player::mse::stall_controller::{
+    ElementSnapshot, PipelineChange, highest_buffered_end,
+};
 use servo_media::player::mse::{
-    ElementReadyState, EosError, InitInfo, MediaSourceReadyState as BackendReadyState, StallAction,
-    StallInput, TrackKind,
+    ElementReadyState, EosError, InitInfo, MediaSourceReadyState as BackendReadyState, TrackKind,
 };
 
 use super::*;
 
-/// How long after a stall check that wanted to change state and could not (the guard keeps 250 ms
-/// between two transitions) the element looks again.
-const STALL_RECHECK_MS: u64 = 260;
+/// The element's `readyState` in the contract's type (the same five names).
+fn element_ready_state(state: ReadyState) -> ElementReadyState {
+    match state {
+        ReadyState::HaveNothing => ElementReadyState::HaveNothing,
+        ReadyState::HaveMetadata => ElementReadyState::HaveMetadata,
+        ReadyState::HaveCurrentData => ElementReadyState::HaveCurrentData,
+        ReadyState::HaveFutureData => ElementReadyState::HaveFutureData,
+        ReadyState::HaveEnoughData => ElementReadyState::HaveEnoughData,
+    }
+}
 
 impl HTMLMediaElement {
     //
@@ -79,11 +91,50 @@ impl HTMLMediaElement {
         player.video_playback_quality()
     }
 
-    /// The backend learns every playback position (coded frame eviction, readiness).
+    /// The backend learns every playback position (coded frame eviction, readiness), except while a
+    /// seek is pending: the player still reports the position from before the seek, and the backend
+    /// already knows the target (`media_source_seeking`). A stale position would make the data around
+    /// the target of a backward seek look old enough to evict (review finding 2).
     pub(super) fn media_source_position_changed(&self, position: f64) {
-        if let Some(media_source) = self.media_source.get() {
+        if let Some(media_source) = self.media_source.get() &&
+            let Some(position) = forward_position(self.seeking.get(), position)
+        {
             media_source.backend().set_position(position);
         }
+    }
+
+    /// What `update_media_state` does to the player (`media_state_action` of `mercury-mse`). The
+    /// MediaSource rule (a playing element that may play on is left alone, the guard's pause is not
+    /// undone) applies only while a MediaSource is attached; a plain `<video>` or `<audio>` keeps the
+    /// published behaviour until F6 of `sdd/deferred-hands-on.md` (a plain media window check) has
+    /// passed.
+    pub(super) fn media_state_decision(&self, is_playing: bool) -> MediaStateAction {
+        media_state_action(
+            self.is_potentially_playing(),
+            is_playing,
+            self.media_source_stalled(),
+            self.media_source.get().is_some(),
+        )
+    }
+
+    /// The `waiting` condition of the "ready state change" steps (`waiting_fires` of `mercury-mse`),
+    /// for every media element: Servo 0.8 tested `!error.is_none()` where the specification says there
+    /// is no error.
+    pub(super) fn media_waiting_fires(
+        &self,
+        old: ReadyState,
+        new: ReadyState,
+        was_potentially_playing: bool,
+    ) -> bool {
+        waiting_fires(&WaitingInputs {
+            old: element_ready_state(old),
+            new: element_ready_state(new),
+            was_potentially_playing,
+            ended_playback: self.ended_playback(LoopCondition::Included),
+            has_error: self.error.get().is_some(),
+            paused_for_user_interaction: self.is_paused_for_user_interaction(),
+            paused_for_in_band_content: self.is_paused_for_in_band_content(),
+        })
     }
 
     /// The MediaSource's seeking algorithm, run by the seek algorithm once the new playback position is
@@ -129,71 +180,52 @@ impl HTMLMediaElement {
     pub(super) fn media_source_stalled(&self) -> bool {
         self.media_source
             .get()
-            .is_some_and(|media_source| media_source.stall().borrow().guard.is_stalled())
+            .is_some_and(|media_source| media_source.stall().borrow().controller.is_stalled())
     }
 
-    /// The underrun decision (lane med-1b, decision D4): asks the `StallGuard` what to do with the
-    /// position, the readiness and the state of playback, and has `update_media_state` pause or resume
-    /// the pipeline when the stall begins or ends. The `waiting` and `playing` events come from the
-    /// readiness change that goes with it (`change_ready_state`); the page's `paused` is not touched.
-    /// Called after every readiness update: position updates (every 100 ms for a MediaSource player),
-    /// appends, removals, seeks, end of stream.
+    /// The underrun decision (lane med-1b, decision D4): hands the element's raw facts to the
+    /// `StallController` of `mercury-mse`, which builds the guard's input and answers what to do. The
+    /// element keeps only the player calls (`update_media_state` pauses the pipeline when the stall
+    /// begins and resumes it when it ends) and the re-check timer. The `waiting` and `playing` events
+    /// come from the readiness change that goes with it (`change_ready_state`); the page's `paused` is
+    /// not touched. Called after every readiness update: position updates (every 100 ms for a
+    /// MediaSource player), appends, removals, seeks, end of stream.
     fn media_source_check_stall(&self) {
         let Some(media_source) = self.media_source.get() else {
             return;
         };
         let backend = media_source.backend();
         let position = self.current_playback_position.get();
-        let ready = backend.element_ready_state(position);
-        let ended = backend.ready_state() == BackendReadyState::Ended;
-        let playing = !self.paused.get() &&
-            self.error.get().is_none() &&
-            self.network_state.get() != NetworkState::Empty &&
-            self.ready_state.get() != ReadyState::HaveNothing &&
-            !self.ended_playback(LoopCondition::Included);
-        let seeking = self.seeking.get();
-
-        let (action, was_stalled, is_stalled, wants_recheck) = {
-            let mut state = media_source.stall().borrow_mut();
-            let was_stalled = state.guard.is_stalled();
-            let input = StallInput {
-                position,
-                ready,
-                playing,
-                seeking,
-                ended,
-                now_ms: state.now_ms(),
-            };
-            let action = state.guard.update(input);
-            let is_stalled = state.guard.is_stalled();
-            // The guard keeps a quarter of a second between two transitions: when it wants to change
-            // state and refused for that reason, nothing may be left waiting for the next position
-            // update (the pipeline is paused during a stall, so none comes).
-            let wants_change = if is_stalled {
-                ready >= ElementReadyState::HaveFutureData || ended
-            } else {
-                playing && !seeking && !ended && ready <= ElementReadyState::HaveCurrentData
-            };
-            let wants_recheck =
-                action == StallAction::None && wants_change && !state.recheck_pending;
-            if wants_recheck {
-                state.recheck_pending = true;
-            }
-            (action, was_stalled, is_stalled, wants_recheck)
+        // Every fact is read before the controller is borrowed: nothing below calls into the element
+        // while the borrow is held.
+        let snapshot = ElementSnapshot {
+            position,
+            backend_ready: backend.element_ready_state(position),
+            element_ready: element_ready_state(self.ready_state.get()),
+            paused: self.paused.get(),
+            has_error: self.error.get().is_some(),
+            network_empty: self.network_state.get() == NetworkState::Empty,
+            ended_playback: self.ended_playback(LoopCondition::Included),
+            seeking: self.seeking.get(),
+            source_ended: backend.ready_state() == BackendReadyState::Ended,
+            highest_buffered_end: highest_buffered_end(&backend.element_buffered()),
+            now_ms: media_source.stall().borrow().now_ms(),
         };
+        let step = media_source.stall().borrow_mut().controller.step(snapshot);
 
-        if action != StallAction::None || was_stalled != is_stalled {
-            // Pauses the pipeline during a stall and resumes it when the stall is over (a seek ends
-            // it without an action).
+        if step.pipeline != PipelineChange::Keep {
+            // Pauses the pipeline during a stall and resumes it when the stall is over (a seek or a
+            // page pause ends it without an action).
             self.update_media_state();
         }
-        if wants_recheck {
-            self.schedule_media_source_stall_recheck();
+        if let Some(delay_ms) = step.recheck_in_ms {
+            self.schedule_media_source_stall_recheck(delay_ms);
         }
     }
 
-    /// Looks at the stall again once the guard's hysteresis has passed.
-    fn schedule_media_source_stall_recheck(&self) {
+    /// Looks at the stall again once the guard's hysteresis has passed (`delay_ms` is the controller's
+    /// answer: the rest of the hysteresis plus a margin).
+    fn schedule_media_source_stall_recheck(&self, delay_ms: u64) {
         let this = Trusted::new(self);
         let generation_id = self.generation_id.get();
         let task_source = self
@@ -204,14 +236,14 @@ impl HTMLMediaElement {
         let spawned = std::thread::Builder::new()
             .name("MseStallRecheck".to_owned())
             .spawn(move || {
-                std::thread::sleep(std::time::Duration::from_millis(STALL_RECHECK_MS));
+                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
                 task_source.queue(task!(media_source_stall_recheck: move |cx| {
                     let this = this.root();
                     if generation_id != this.generation_id.get() {
                         return;
                     }
                     if let Some(media_source) = this.media_source.get() {
-                        media_source.stall().borrow_mut().recheck_pending = false;
+                        media_source.stall().borrow_mut().controller.recheck_fired();
                     }
                     this.media_source_update_ready_state(cx);
                 }));
@@ -219,7 +251,7 @@ impl HTMLMediaElement {
         if spawned.is_err() {
             warn!("Could not start the MediaSource stall re-check thread");
             if let Some(media_source) = self.media_source.get() {
-                media_source.stall().borrow_mut().recheck_pending = false;
+                media_source.stall().borrow_mut().controller.recheck_fired();
             }
         }
     }

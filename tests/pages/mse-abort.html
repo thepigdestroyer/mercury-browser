@@ -19,7 +19,7 @@
 </head>
 <body>
 <h1>MSE abort</h1>
-<p class="note">abort() between two appends in one task, abort on an idle buffer, removal and remove() after an abort.</p>
+<p class="note">abort() between two appends in one task, abort on an idle buffer, removal, remove() after an abort, and abort() during a remove() (InvalidStateError).</p>
 <div id="sum">running</div>
 <video id="v" width="320" height="180" muted playsinline></video>
 <div id="out"></div>
@@ -209,6 +209,37 @@ if (typeof MediaSource === "undefined") {
       check("the remove completes with exactly one update after the abort",
         counts.update === before.update + 1 && counts.abort === before.abort + 1, JSON.stringify(counts));
       check("updating is false at the end", sb.updating === false);
+    }
+
+    // abort() while a removal is running is an InvalidStateError and changes nothing (abort() step 3,
+    // review finding 1). The removal is running for the page until its update event is handled, even when
+    // the backend's worker has finished it long before: the second shape holds the script thread for
+    // 150 ms after remove() so the worker is done and the completion event is already queued.
+    for (const [shape, spin] of [["straight after remove()", 0], ["after the worker finished the removal", 150]]) {
+      for (let round = 1; round <= 3; round++) {
+        const label = "abort() " + shape + ", round " + round;
+        const { mediaSource } = await openSource();
+        const sb = mediaSource.addSourceBuffer(H264_LOW);
+        const counts = watch(sb);
+        await append(sb, f.init);
+        await append(sb, f.segments[0]);
+        const before = { ...counts };
+        sb.remove(0, 1);
+        if (spin) { const t0 = performance.now(); while (performance.now() - t0 < spin) { /* hold the script thread */ } }
+        let thrown = null;
+        try { sb.abort(); } catch (error) { thrown = error && error.name; }
+        check(label + ": throws InvalidStateError", thrown === "InvalidStateError", thrown);
+        check(label + ": updating is still true", sb.updating === true);
+        await until(() => counts.updateend >= before.updateend + 1, 8000, "the removal's updateend");
+        await sleep(300);
+        check(label + ": the removal completes with one update and one updateend",
+          counts.update === before.update + 1 && counts.updateend === before.updateend + 1, JSON.stringify(counts));
+        check(label + ": no abort and no error event", counts.abort === before.abort && counts.error === 0, JSON.stringify(counts));
+        check(label + ": updating is false at the end", sb.updating === false);
+        let again = null;
+        try { sb.abort(); } catch (error) { again = error && error.name; }
+        check(label + ": abort() works again once the removal is done", again === null, again);
+      }
     }
   })().then(() => finish(), error => finish(error));
 }

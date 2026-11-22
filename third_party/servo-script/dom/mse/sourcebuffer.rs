@@ -18,9 +18,10 @@ use std::cell::{Cell, RefCell};
 use dom_struct::dom_struct;
 use js::context::JSContext;
 use script_bindings::reflector::reflect_dom_object;
+use servo_media::player::mse::source_buffer_ops::{AbortRefused, SbEvent, SourceBufferOps};
 use servo_media::player::mse::{
     AppendMode as BackendAppendMode, InitInfo, MediaSourceReadyState as BackendReadyState,
-    MseError, OpId, OpTracker, SourceBufferId,
+    MseError, OpId, SourceBufferId,
 };
 use stylo_atoms::Atom;
 
@@ -57,15 +58,6 @@ pub(crate) struct SourceBuffer {
     /// The backend's handle of this source buffer.
     id: SourceBufferId,
 
-    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
-    ///
-    /// The JavaScript-visible flag. It follows the specification's tasks: set when an append or a
-    /// removal is accepted, cleared by the task that handles the backend's `AppendDone`,
-    /// `AppendError` or `RemoveDone` (and by `abort()` and removal), so a page never sees it false
-    /// before the `update` and `updateend` events are queued. The backend keeps its own flag for its
-    /// own checks.
-    updating: Cell<bool>,
-
     /// Whether this source buffer belongs in `activeSourceBuffers`, which the specification derives
     /// from the enabled and selected tracks: set by the first initialization segment that has an audio
     /// or video track.
@@ -86,12 +78,26 @@ pub(crate) struct SourceBuffer {
     /// <https://w3c.github.io/media-source/#dom-sourcebuffer-videotracks>
     video_tracks: Dom<VideoTrackList>,
 
-    /// Which append or removal the backend's next completion event must belong to (lane med-1b, D3):
-    /// `abort()` and the removal of the buffer retire it, so an event that was already queued for an
-    /// operation the page has abandoned cannot end the next one early.
+    /// The operation state of this buffer (lane med-1b, D3 and review findings 1 and 5): which append
+    /// or removal is pending, the `updating` attribute, and the events each transition queues. Pure
+    /// code in `crates/mercury-mse` (`source_buffer_ops.rs`, tested there); this object only maps the
+    /// events it returns to tasks.
+    ///
+    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
+    ///
+    /// `updating` follows the specification's tasks: true from the accepted `appendBuffer()` or
+    /// `remove()` until the task that handles the backend's `AppendDone`, `AppendError` or
+    /// `RemoveDone` (or `abort()` or removal retires the operation), so a page never sees it false
+    /// before the `update` and `updateend` events are queued, and a removal the backend's worker has
+    /// finished is still running for the page until its event is handled.
     #[ignore_malloc_size_of = "mercury-mse"]
     #[no_trace]
-    op_tracker: RefCell<OpTracker>,
+    ops: RefCell<SourceBufferOps>,
+}
+
+/// `abort()` step 3: the state machine refused with the reason to put in the exception.
+fn abort_refused(refused: AbortRefused) -> Error {
+    Error::InvalidState(Some(refused.reason.into()))
 }
 
 fn to_backend_mode(mode: AppendMode) -> BackendAppendMode {
@@ -119,7 +125,6 @@ impl SourceBuffer {
             eventtarget: EventTarget::new_inherited(),
             media_source: MutNullableDom::new(Some(media_source)),
             id,
-            updating: Cell::new(false),
             active: Cell::new(false),
             mode: Cell::new(AppendMode::Segments),
             timestamp_offset: Cell::new(0.),
@@ -127,7 +132,7 @@ impl SourceBuffer {
             append_window_end: Cell::new(f64::INFINITY),
             audio_tracks: Dom::from_ref(audio_tracks),
             video_tracks: Dom::from_ref(video_tracks),
-            op_tracker: RefCell::new(OpTracker::new()),
+            ops: RefCell::new(SourceBufferOps::new()),
         }
     }
 
@@ -164,7 +169,7 @@ impl SourceBuffer {
     }
 
     pub(crate) fn updating(&self) -> bool {
-        self.updating.get()
+        self.ops.borrow().updating()
     }
 
     /// Whether this source buffer belongs in `activeSourceBuffers`.
@@ -179,23 +184,17 @@ impl SourceBuffer {
     /// Detaches this source buffer from its media source, which the specification describes as
     /// removing it from the `sourceBuffers` attribute. The backend has already dropped its half.
     pub(crate) fn detach(&self) {
-        self.op_tracker.borrow_mut().retire();
-        self.updating.set(false);
+        self.ops.borrow_mut().detach();
         self.active.set(false);
         self.media_source.set(None);
     }
 
     /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer> step 2: the append
-    /// that was running ends with `abort` and `updateend` events.
+    /// that was running ends with `abort` and `updateend` events. Whatever the backend still has in
+    /// flight for this buffer is stale from now on (D3).
     pub(crate) fn abort_pending(&self) {
-        // Whatever the backend still has in flight for this buffer is stale from now on (D3).
-        self.op_tracker.borrow_mut().retire();
-        if !self.updating.get() {
-            return;
-        }
-        self.updating.set(false);
-        self.queue_event(Atom::from("abort"));
-        self.queue_event(Atom::from("updateend"));
+        let events = self.ops.borrow_mut().abort_pending();
+        self.queue_sb_events(events);
     }
 
     /// An initialization segment was parsed: the tracks it declares join `audioTracks` and
@@ -239,29 +238,18 @@ impl SourceBuffer {
     /// pending: it was aborted (and the page may have appended again since) or the buffer removed
     /// while the event was in flight.
     pub(crate) fn operation_finished(&self, op: OpId) {
-        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
-            return;
-        }
-        // Step 7. Set the updating attribute to false.
-        self.updating.set(false);
-        // Step 8. Queue a task to fire an event named update at this SourceBuffer object.
-        self.queue_event(Atom::from("update"));
-        // Step 9. Queue a task to fire an event named updateend at this SourceBuffer object.
-        self.queue_event(Atom::from("updateend"));
+        // Steps 7 to 9: `updating` becomes false, then `update` and `updateend` are queued (nothing
+        // for a stale event).
+        let events = self.ops.borrow_mut().finished(op);
+        self.queue_sb_events(events);
     }
 
     /// <https://w3c.github.io/media-source/#dfn-append-error> steps 2 to 4 (the end of stream with a
     /// decode error, step 5, comes as the backend's `SourceEnded` event).
     pub(crate) fn operation_failed(&self, op: OpId) {
-        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
-            return;
-        }
-        // Step 2. Set the updating attribute to false.
-        self.updating.set(false);
-        // Step 3. Queue a task to fire an event named error at this SourceBuffer object.
-        self.queue_event(Atom::from("error"));
-        // Step 4. Queue a task to fire an event named updateend at this SourceBuffer object.
-        self.queue_event(Atom::from("updateend"));
+        // Step 2. `updating` becomes false. Steps 3 and 4: `error` and `updateend` are queued.
+        let events = self.ops.borrow_mut().failed(op);
+        self.queue_sb_events(events);
     }
 
     /// The specification tests for removal from `sourceBuffers` in almost every method.
@@ -275,12 +263,19 @@ impl SourceBuffer {
 
     /// The `updating` check the specification makes at the top of most methods.
     fn require_not_updating(&self) -> ErrorResult {
-        if self.updating.get() {
+        if self.updating() {
             return Err(Error::InvalidState(Some(
                 "The source buffer is still updating".into(),
             )));
         }
         Ok(())
+    }
+
+    /// Queues one task per event, in order (the events the state machine returned for a transition).
+    fn queue_sb_events(&self, events: impl IntoIterator<Item = SbEvent>) {
+        for event in events {
+            self.queue_event(Atom::from(event.name()));
+        }
     }
 
     fn queue_event(&self, name: Atom) {
@@ -327,7 +322,7 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
 
     /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
     fn Updating(&self) -> bool {
-        self.updating.get()
+        self.updating()
     }
 
     /// <https://w3c.github.io/media-source/#dom-sourcebuffer-buffered>
@@ -481,11 +476,9 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
         let op = result?;
 
         // Step 3. Set the updating attribute to true. The completion event that carries `op` ends it.
-        self.op_tracker.borrow_mut().begin(op);
-        self.updating.set(true);
-
         // Step 4. Queue a task to fire an event named updatestart at this SourceBuffer object.
-        self.queue_event(Atom::from("updatestart"));
+        let started = self.ops.borrow_mut().begin_append(op);
+        self.queue_sb_events([started]);
 
         // Step 5. The buffer append algorithm runs on the backend; its `AppendDone` or `AppendError`
         // event ends the operation (`operation_finished`, `operation_failed`).
@@ -495,14 +488,20 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
     /// <https://w3c.github.io/media-source/#dom-sourcebuffer-abort>
     fn Abort(&self) -> ErrorResult {
         // Step 1. Removed from sourceBuffers: InvalidStateError. Step 2. The parent is not "open":
-        // InvalidStateError. Step 3 (the range removal algorithm running) never holds on the script
-        // thread: the backend completes a removal before its event.
+        // InvalidStateError.
         let media_source = self.require_attached()?;
         if media_source.backend().ready_state() != BackendReadyState::Open {
             return Err(Error::InvalidState(Some(
                 "The media source is not open".into(),
             )));
         }
+
+        // Step 3. If the range removal algorithm is running, InvalidStateError. It is running for the
+        // page from `remove()` until the `RemoveDone` event is handled here, which can be later than
+        // the moment the backend's worker finished the removal: the page's `updating` is what decides,
+        // so this is asked of the state machine and not of the backend (review finding 1). It is asked
+        // before the backend's `abort`, so that a refused call changes nothing.
+        self.ops.borrow().check_abort().map_err(abort_refused)?;
 
         // Steps 4 to 7 (abort the append, reset the parser state, the append window defaults) are the
         // backend's.
@@ -512,7 +511,8 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
             .map_err(dom_error)?;
 
         // Step 4.2 to 4.4. If updating, set it to false and queue `abort` and `updateend`.
-        self.abort_pending();
+        let events = self.ops.borrow_mut().abort().map_err(abort_refused)?;
+        self.queue_sb_events(events);
         self.append_window_start.set(0.);
         self.append_window_end.set(f64::INFINITY);
         Ok(())
@@ -557,10 +557,10 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
         let op = result?;
 
         // Range removal step 1 and 2. Set updating to true and queue `updatestart`; step 5 and 6 come
-        // with the backend's `RemoveDone` event for `op`.
-        self.op_tracker.borrow_mut().begin(op);
-        self.updating.set(true);
-        self.queue_event(Atom::from("updatestart"));
+        // with the backend's `RemoveDone` event for `op`. The removal is "running" (`abort()` throws)
+        // until that event is handled.
+        let started = self.ops.borrow_mut().begin_remove(op);
+        self.queue_sb_events([started]);
         Ok(())
     }
 

@@ -161,7 +161,12 @@ if (typeof MediaSource === "undefined") {
     info("playing " + resumeMs + " ms after the append was started");
     check("playing fires within 1000 ms of the next append", resumeMs <= 1000, resumeMs);
     const resumedAt = video.currentTime;
-    await sleep(1200);
+    // `playing` comes from the readiness change; the guard resumes the pipeline only after its 250 ms
+    // hysteresis (the recheck runs up to 260 ms later), so currentTime can still be flat when `playing`
+    // fires. Recorded, not asserted (docs/developer-guide/media-source.md, review finding 6).
+    await sleep(300);
+    info("currentTime at playing " + resumedAt.toFixed(3) + ", 300 ms later " + video.currentTime.toFixed(3) + " (playing may precede the resumed pipeline by up to 260 ms)");
+    await sleep(900);
     check("currentTime advances after the resume", video.currentTime > resumedAt + 0.4, resumedAt + " -> " + video.currentTime);
     check("no second waiting while data is available", waiting === 1, waiting);
 

@@ -33,6 +33,7 @@ use script_bindings::weakref::WeakRef;
 use servo_base::generic_channel::{self};
 use servo_config::pref;
 use servo_media::player::audio::AudioRenderer;
+use servo_media::player::mse::media_state::MediaStateAction; // Mercury (MED-1b)
 use servo_media::player::video::{VideoFrame, VideoFrameRenderer};
 use servo_media::player::{PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, StreamType};
 use servo_media::{ClientContextId, ServoMedia, SupportsMediaType};
@@ -503,12 +504,14 @@ impl HTMLMediaElement {
             .as_ref()
             .is_some_and(|player| !player.lock().unwrap().paused());
 
-        // Mercury (MED-1b): the underrun guard of a MediaSource keeps the pipeline paused until its
-        // hysteresis has passed, and an element that is playing and may play on is left alone (as
-        // published, this paused it whenever it was called while playing, which a readiness that moves
-        // between HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA does all the time).
-        let stalled = self.media_source_stalled();
-        if self.is_potentially_playing() && !stalled && !is_playing {
+        // Mercury (MED-1b): `media_state_decision` is `media_state_action` of mercury-mse. With a
+        // MediaSource attached the underrun guard keeps the pipeline paused until its hysteresis has
+        // passed, and an element that is playing and may play on is left alone (as published, this
+        // paused it whenever it was called while playing, which a readiness that moves between
+        // HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA does all the time). Without one it is the published
+        // decision, unchanged, until F6 (plain media in a window) has passed: MERCURY.md item 8.
+        let action = self.media_state_decision(is_playing);
+        if action == MediaStateAction::Play {
             if let Some(ref player) = *self.player.borrow() {
                 let player = player.lock().unwrap();
 
@@ -522,8 +525,7 @@ impl HTMLMediaElement {
                     error!("Could not play media: {error:?}");
                 }
             }
-        } else if is_playing &&
-            (stalled || !self.is_potentially_playing()) && // Mercury (MED-1b)
+        } else if action == MediaStateAction::Pause && // Mercury (MED-1b)
             let Some(ref player) = *self.player.borrow() &&
             let Err(error) = player.lock().unwrap().pause()
         {
@@ -1122,12 +1124,9 @@ impl HTMLMediaElement {
                 // > to fire an event named timeupdate at the element,
                 // > and queue a media element task given the media element
                 // > to fire an event named waiting at the element.
-                if was_potentially_playing &&
-                    !self.ended_playback(LoopCondition::Included) &&
-                    self.error.get().is_none() && // Mercury (MED-1b): published as `!..is_none()`
-                    !self.is_paused_for_user_interaction() &&
-                    !self.is_paused_for_in_band_content()
-                {
+                // Mercury (MED-1b): the condition is `waiting_fires` of mercury-mse (published as
+                // `!self.error.get().is_none()`, so it fired only for an element with an error).
+                if self.media_waiting_fires(old, new, was_potentially_playing) {
                     self.queue_media_element_task_to_fire_event(atom!("timeupdate"));
                     self.queue_media_element_task_to_fire_event(atom!("waiting"));
                 }

@@ -268,23 +268,40 @@ element in `crates/mercury-mse-gst` feeds the player. The DOM calls `MediaSource
 
 ### MED-1b (22 Nov 2026): the two blockers, `getVideoPlaybackQuality`, track lists
 
-7. **`dom/mse/` (Mercury's own files):** `stall.rs` (the `StallGuard` of `crates/mercury-mse`, its clock and a
-   "re-check queued" flag, kept on the `MediaSource` so the element struct gets no field), `tracks.rs`
+7. **`dom/mse/` (Mercury's own files):** `stall.rs` (the `StallController` of `crates/mercury-mse`, which owns
+   the guard and the "re-check pending" flag, and a clock for it, kept on the `MediaSource` so the element
+   struct gets no field), `tracks.rs`
    (the contents of `SourceBuffer.audioTracks`/`videoTracks` and of the element's lists: `AudioTrack` and
    `VideoTrack` per `TrackInfo`, `addtrack`/`removetrack`; lists are rebuilt with `clear` and `add` because the
    upstream lists have no `remove`), `videoplaybackquality.rs` (the `VideoPlaybackQuality` object). In the
-   carried files: `sourcebuffer.rs` keeps an `OpTracker` and takes the `OpId` of every completion event
-   (`operation_finished(op)`, `operation_failed(op)`), `mediasource.rs` passes it, calls
-   `init_received`/`remove_tracks`, owns the `StallState`. `mediaelement.rs`: `media_source_update_ready_state`
-   now ends in `media_source_check_stall` (the guard, the pipeline pause and resume through
-   `update_media_state`, a 260 ms re-check thread when the guard's 250 ms hysteresis refused a change),
-   `media_source_stalled`, `player_video_playback_quality`.
-8. **`htmlmediaelement.rs`, hunks marked `Mercury (MED-1b)` (`grep -n "MED-1b"`):** in `update_media_state`
-   (about lines 506-530) the pipeline is not resumed while `media_source_stalled()`, and an element that is
-   playing and may play on is no longer paused (published: `else if is_playing && pause()` paused it whenever it
-   was called while playing); in `change_ready_state` (about line 1127) the `waiting` condition read
-   `!self.error.get().is_none()` and now reads `self.error.get().is_none()`. **Drop both when Servo fixes them**
-   (check at B1); if only the second is fixed nothing doubles, because the guard fires no events.
+   carried files: `sourcebuffer.rs` keeps a `SourceBufferOps` (the pure operation state of
+   `crates/mercury-mse/src/source_buffer_ops.rs`: pending operation, `updating`, the events of each
+   transition, `abort()` refused while a removal is pending) and maps its `SbEvent`s to tasks; it takes the
+   `OpId` of every completion event (`operation_finished(op)`, `operation_failed(op)`); `mediasource.rs`
+   passes it, calls `init_received`/`remove_tracks`, owns the `StallState`. `mediaelement.rs`:
+   `media_source_update_ready_state` now ends in `media_source_check_stall` (the raw element facts go to
+   `StallController::step`; the DOM keeps the pipeline pause and resume through `update_media_state` and a
+   re-check thread for the delay the controller returns, at most 260 ms), `media_source_stalled`,
+   `media_source_position_changed` (drops the player's position while seeking: `forward_position`),
+   `media_state_decision` and `media_waiting_fires` (the two decisions of item 8, from
+   `crates/mercury-mse/src/media_state.rs`), `player_video_playback_quality`.
+8. **`htmlmediaelement.rs`, hunks marked `Mercury (MED-1b)` (`grep -n "MED-1b"`):** a `use` line for
+   `MediaStateAction`; in `update_media_state` (about lines 500-535) the play and pause branches test
+   `media_state_decision(is_playing)` (`media_state_action` of `mercury-mse`) instead of the published
+   conditions: with a MediaSource attached the pipeline is not resumed while `media_source_stalled()`, and an
+   element that is playing and may play on is no longer paused (published: `else if is_playing && pause()`
+   paused it whenever it was called while playing). **This first hunk is gated on a MediaSource being
+   attached:** without one `media_state_action(.., media_source_attached = false)` is the published decision
+   byte for byte (a table test compares all 16 inputs), so a plain `<video>`/`<audio>` is unchanged. **F6
+   (`sdd/deferred-hands-on.md` section F, item F6: pause, resume, seek, loop, ended and a stalled network source
+   on a plain file, in a window) is the gate for removing the gate** (pass `true` instead of
+   `media_source.get().is_some()` in `media_state_decision`). In `change_ready_state` (about line 1120) the
+   `waiting` condition is `media_waiting_fires(old, new, was_potentially_playing)` (`waiting_fires` of
+   `mercury-mse`); published, it tested `!self.error.get().is_none()`, so `waiting` fired only for an element
+   with an error. This second hunk is the specified behaviour and is **not** gated; `waiting_fires` has table
+   tests over every input, plain media included. **Drop both at B1 if Servo has fixed them itself** (check
+   then); if only the second is fixed nothing doubles, because the guard fires no events. They stay Mercury
+   patches: nothing is sent to Servo.
 9. **`htmlvideoelement.rs`:** `GetVideoPlaybackQuality` (one method) and its `use` line, `Mercury (MED-1b)`.
 10. **`servo-script-bindings`:** `VideoPlaybackQuality.webidl`, the `getVideoPlaybackQuality()` partial in
     `HTMLVideoElement.webidl`, `Bindings.conf` (`cx` for `GetVideoPlaybackQuality`), all behind

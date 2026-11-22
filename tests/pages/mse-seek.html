@@ -146,6 +146,14 @@ if (typeof MediaSource === "undefined") {
       await sleep(400);
       c = meanColour(); info("colour at 0.5 s: " + JSON.stringify(c));
       check("0.5 s is red", c === null || isRed(c));
+      // The player reports the position from before the seek until the seek is done; the element must
+      // not hand that stale position to the backend (review finding 2), or the data around the target of
+      // a backward seek can look old enough to evict. This page has no quota lever (the quota-bound proof
+      // is crates/mercury-mse/tests/position_gate_backward_seek.rs); it checks what a page can see.
+      const coversTarget = json => JSON.parse(json).some(([start, end]) => start <= 0.5 && end > 0.5);
+      check("the data at the target of the backward seek is still buffered (video.buffered)", coversTarget(ranges(video.buffered)), ranges(video.buffered));
+      check("the data at the target of the backward seek is still buffered (sourceBuffer.buffered)", coversTarget(ranges(sb.buffered)), ranges(sb.buffered));
+      check("the whole 8 s is still buffered after the backward seek", ranges(sb.buffered) === "[[0,8]]", ranges(sb.buffered));
       t = await seekTo(7.9);
       check("seek to 7.9 lands near 7.9", Math.abs(t - 7.9) < 0.5, t);
       video.currentTime = 100;

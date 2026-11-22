@@ -1241,7 +1241,15 @@ diff --git a/dom/html/embedded_content/htmlcanvaselement.rs b/dom/html/embedded_
 diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_content/htmlmediaelement.rs
 --- a/dom/html/embedded_content/htmlmediaelement.rs
 +++ b/dom/html/embedded_content/htmlmediaelement.rs
-@@ -58,7 +58,8 @@
+@@ -33,6 +33,7 @@
+ use servo_base::generic_channel::{self};
+ use servo_config::pref;
+ use servo_media::player::audio::AudioRenderer;
++use servo_media::player::mse::media_state::MediaStateAction; // Mercury (MED-1b)
+ use servo_media::player::video::{VideoFrame, VideoFrameRenderer};
+ use servo_media::player::{PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, StreamType};
+ use servo_media::{ClientContextId, ServoMedia, SupportsMediaType};
+@@ -58,7 +59,8 @@
  use crate::dom::bindings::codegen::Bindings::URLBinding::URLMethods;
  use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
  use crate::dom::bindings::codegen::UnionTypes::{
@@ -1251,7 +1259,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  };
  use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
  use crate::dom::bindings::inheritance::Castable;
-@@ -87,6 +88,7 @@
+@@ -87,6 +89,7 @@
  use crate::dom::mediafragmentparser::MediaFragmentParser;
  use crate::dom::medialist::MediaList;
  use crate::dom::mediastream::MediaStream;
@@ -1259,7 +1267,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  use crate::dom::node::virtualmethods::VirtualMethods;
  use crate::dom::node::{Node, NodeDamage, NodeTraits, UnbindContext};
  use crate::dom::performance::performanceresourcetiming::InitiatorType;
-@@ -124,20 +126,31 @@
+@@ -124,20 +127,31 @@
  /// instead of strict equality. (Unit is second)
  const SEEK_POSITION_THRESHOLD: f64 = 0.5;
 
@@ -1295,7 +1303,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          }
      }
  }
-@@ -287,6 +300,12 @@
+@@ -287,6 +301,12 @@
      /// <https://html.spec.whatwg.org/multipage/#list-of-newly-introduced-cues>
      newly_introduced_cues: DomRefCell<Vec<Dom<TextTrackCue>>>,
      shadow_tree: DomRefCell<Option<ShadowTree>>,
@@ -1308,7 +1316,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  }
 
  /// <https://html.spec.whatwg.org/multipage/#dom-media-networkstate>
-@@ -456,6 +475,7 @@
+@@ -456,6 +476,7 @@
              position_when_time_marches_on_ran: Default::default(),
              newly_introduced_cues: Default::default(),
              shadow_tree: Default::default(),
@@ -1316,38 +1324,48 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          }
      }
 
-@@ -483,7 +503,12 @@
+@@ -483,7 +504,14 @@
              .as_ref()
              .is_some_and(|player| !player.lock().unwrap().paused());
 
 -        if self.is_potentially_playing() && !is_playing {
-+        // Mercury (MED-1b): the underrun guard of a MediaSource keeps the pipeline paused until its
-+        // hysteresis has passed, and an element that is playing and may play on is left alone (as
-+        // published, this paused it whenever it was called while playing, which a readiness that moves
-+        // between HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA does all the time).
-+        let stalled = self.media_source_stalled();
-+        if self.is_potentially_playing() && !stalled && !is_playing {
++        // Mercury (MED-1b): `media_state_decision` is `media_state_action` of mercury-mse. With a
++        // MediaSource attached the underrun guard keeps the pipeline paused until its hysteresis has
++        // passed, and an element that is playing and may play on is left alone (as published, this
++        // paused it whenever it was called while playing, which a readiness that moves between
++        // HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA does all the time). Without one it is the published
++        // decision, unchanged, until F6 (plain media in a window) has passed: MERCURY.md item 8.
++        let action = self.media_state_decision(is_playing);
++        if action == MediaStateAction::Play {
              if let Some(ref player) = *self.player.borrow() {
                  let player = player.lock().unwrap();
 
-@@ -498,6 +523,7 @@
+@@ -497,7 +525,7 @@
+                     error!("Could not play media: {error:?}");
                  }
              }
-         } else if is_playing &&
-+            (stalled || !self.is_potentially_playing()) && // Mercury (MED-1b)
+-        } else if is_playing &&
++        } else if action == MediaStateAction::Pause && // Mercury (MED-1b)
              let Some(ref player) = *self.player.borrow() &&
              let Err(error) = player.lock().unwrap().pause()
          {
-@@ -1098,7 +1124,7 @@
+@@ -1096,12 +1124,9 @@
+                 // > to fire an event named timeupdate at the element,
+                 // > and queue a media element task given the media element
                  // > to fire an event named waiting at the element.
-                 if was_potentially_playing &&
-                     !self.ended_playback(LoopCondition::Included) &&
+-                if was_potentially_playing &&
+-                    !self.ended_playback(LoopCondition::Included) &&
 -                    !self.error.get().is_none() &&
-+                    self.error.get().is_none() && // Mercury (MED-1b): published as `!..is_none()`
-                     !self.is_paused_for_user_interaction() &&
-                     !self.is_paused_for_in_band_content()
-                 {
-@@ -1332,7 +1358,15 @@
+-                    !self.is_paused_for_user_interaction() &&
+-                    !self.is_paused_for_in_band_content()
+-                {
++                // Mercury (MED-1b): the condition is `waiting_fires` of mercury-mse (published as
++                // `!self.error.get().is_none()`, so it fired only for an element with an error).
++                if self.media_waiting_fires(old, new, was_potentially_playing) {
+                     self.queue_media_element_task_to_fire_event(atom!("timeupdate"));
+                     self.queue_media_element_task_to_fire_event(atom!("waiting"));
+                 }
+@@ -1332,7 +1357,15 @@
          // then the load failed.
          // Note that the resource fetch algorithm itself takes care
          // of the cleanup in case of failure itself.
@@ -1364,7 +1382,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
      }
 
      /// <https://html.spec.whatwg.org/multipage/#concept-media-load-algorithm>
-@@ -1641,8 +1675,23 @@
+@@ -1641,8 +1674,23 @@
 
      /// <https://html.spec.whatwg.org/multipage/#concept-media-load-resource>
      fn resource_fetch_algorithm(&self, cx: &JSContext, resource: Resource) {
@@ -1388,7 +1406,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              self.resource_selection_algorithm_failure_steps(cx);
              return;
          }
-@@ -1703,9 +1752,13 @@
+@@ -1703,9 +1751,13 @@
                  // Steps 5.remote.2-5.remote.8
                  self.fetch_request(cx, None, None);
              },
@@ -1402,7 +1420,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                          SrcObject::Blob(blob) => {
                              let blob_url = URL::CreateObjectURL(&self.global(), blob);
                              *self.blob_url.borrow_mut() =
-@@ -1793,10 +1846,14 @@
+@@ -1793,10 +1845,14 @@
              }));
      }
 
@@ -1418,7 +1436,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
      /// <https://html.spec.whatwg.org/multipage/#potentially-playing>
      fn is_potentially_playing(&self) -> bool {
          // > A media element is said to be potentially playing when
-@@ -2199,6 +2256,10 @@
+@@ -2199,6 +2255,10 @@
          // Step 11. Set the current playback position to the new playback position.
          self.current_playback_position.set(time);
 
@@ -1429,7 +1447,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          if let Some(ref player) = *self.player.borrow() &&
              let Err(error) = player.lock().unwrap().seek(time)
          {
-@@ -2262,6 +2323,8 @@
+@@ -2262,6 +2322,8 @@
                  if let Some(ref src_object) = *self.src_object.borrow() {
                      match src_object {
                          SrcObject::MediaStream(_) => StreamType::Stream,
@@ -1438,7 +1456,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                          _ => StreamType::Seekable,
                      }
                  } else {
-@@ -2268,6 +2331,8 @@
+@@ -2268,6 +2330,8 @@
                      return Err(());
                  }
              },
@@ -1447,7 +1465,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              _ => StreamType::Seekable,
          };
 
-@@ -2329,19 +2394,39 @@
+@@ -2329,19 +2393,39 @@
              Box::new(window.get_player_context()),
          );
 
@@ -1491,7 +1509,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              {
                  warn!("Could not set download buffering: {error:?}");
              }
-@@ -2386,6 +2471,9 @@
+@@ -2386,6 +2470,9 @@
          }
 
          *self.player.borrow_mut() = None;
@@ -1501,7 +1519,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          self.video_renderer.lock().unwrap().reset();
          *self.event_handler.borrow_mut() = None;
 
-@@ -2557,6 +2645,12 @@
+@@ -2557,6 +2644,12 @@
          cx: &mut JSContext,
          metadata: &servo_media::player::metadata::Metadata,
      ) {
@@ -1514,7 +1532,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          // The following steps should be run once on the initial `metadata` signal from the media
          // engine.
          if self.ready_state.get() != ReadyState::HaveNothing {
-@@ -2797,6 +2891,12 @@
+@@ -2797,6 +2890,12 @@
      }
 
      fn playback_duration_changed(&self, duration: Option<Duration>) {
@@ -1527,7 +1545,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          let duration = duration.map_or(f64::INFINITY, |duration| duration.as_secs_f64());
 
          if self.duration.get() == duration {
-@@ -2958,16 +3058,22 @@
+@@ -2958,16 +3057,22 @@
 
      fn playback_state_changed(&self, cx: &mut JSContext, state: &PlaybackState) {
          let mut media_session_playback_state = MediaSessionPlaybackState::None_;
@@ -1552,7 +1570,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                      self.change_ready_state(cx, ReadyState::HaveEnoughData);
                  }
              },
-@@ -2990,6 +3096,11 @@
+@@ -2990,6 +3095,11 @@
      }
 
      fn seekable(&self) -> TimeRangesContainer {
@@ -1564,7 +1582,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          let mut seekable = TimeRangesContainer::default();
          if let Some(ref player) = *self.player.borrow() {
              let ranges = player.lock().unwrap().seekable();
-@@ -3374,19 +3485,23 @@
+@@ -3374,19 +3484,23 @@
      }
 
      /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
@@ -1578,11 +1596,11 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                  SrcObject::MediaStream(stream) => {
 -                    MediaStreamOrBlob::MediaStream(DomRoot::from_ref(stream))
 +                    MediaStreamOrMediaSourceOrBlob::MediaStream(DomRoot::from_ref(stream))
-+                },
+                 },
 +                // Mercury (MED-1)
 +                SrcObject::MediaSource(media_source) => {
 +                    MediaStreamOrMediaSourceOrBlob::MediaSource(DomRoot::from_ref(media_source))
-                 },
++                },
              })
      }
 
@@ -1592,7 +1610,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          *self.src_object.borrow_mut() = value.map(|value| value.into());
          self.media_element_load_algorithm(cx);
      }
-@@ -3608,7 +3723,12 @@
+@@ -3608,7 +3722,12 @@
      /// <https://html.spec.whatwg.org/multipage/#dom-media-buffered>
      fn Buffered(&self, cx: &mut JSContext) -> DomRoot<TimeRanges> {
          let mut buffered = TimeRangesContainer::default();
@@ -1606,7 +1624,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              let ranges = player.lock().unwrap().buffered();
              for range in ranges {
                  let _ = buffered.add(range.start, range.end);
-@@ -3885,6 +4005,10 @@
+@@ -3885,6 +4004,10 @@
  enum Resource {
      Object,
      Url(ServoUrl),
@@ -1617,7 +1635,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  }
 
  #[derive(Debug, MallocSizeOf, PartialEq)]
-@@ -4418,7 +4542,11 @@
+@@ -4418,7 +4541,11 @@
              },
              PlayerEvent::NeedData => element.playback_need_data(),
              PlayerEvent::PositionChanged(position) => {
@@ -2400,7 +2418,7 @@ diff --git a/dom/mse/mediaelement.rs b/dom/mse/mediaelement.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/mediaelement.rs
-@@ -0,0 +1,390 @@
+@@ -0,0 +1,422 @@
 +// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 +// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 +
@@ -2415,16 +2433,28 @@ new file mode 100644
 +// these functions read and set, so no upstream item had to change its visibility.
 +
 +// Mercury (MED-1): the MSE contract types the element reads from the backend.
++use servo_media::player::mse::media_state::{
++    MediaStateAction, WaitingInputs, forward_position, media_state_action, waiting_fires,
++};
++use servo_media::player::mse::stall_controller::{
++    ElementSnapshot, PipelineChange, highest_buffered_end,
++};
 +use servo_media::player::mse::{
-+    ElementReadyState, EosError, InitInfo, MediaSourceReadyState as BackendReadyState, StallAction,
-+    StallInput, TrackKind,
++    ElementReadyState, EosError, InitInfo, MediaSourceReadyState as BackendReadyState, TrackKind,
 +};
 +
 +use super::*;
 +
-+/// How long after a stall check that wanted to change state and could not (the guard keeps 250 ms
-+/// between two transitions) the element looks again.
-+const STALL_RECHECK_MS: u64 = 260;
++/// The element's `readyState` in the contract's type (the same five names).
++fn element_ready_state(state: ReadyState) -> ElementReadyState {
++    match state {
++        ReadyState::HaveNothing => ElementReadyState::HaveNothing,
++        ReadyState::HaveMetadata => ElementReadyState::HaveMetadata,
++        ReadyState::HaveCurrentData => ElementReadyState::HaveCurrentData,
++        ReadyState::HaveFutureData => ElementReadyState::HaveFutureData,
++        ReadyState::HaveEnoughData => ElementReadyState::HaveEnoughData,
++    }
++}
 +
 +impl HTMLMediaElement {
 +    //
@@ -2482,11 +2512,50 @@ new file mode 100644
 +        player.video_playback_quality()
 +    }
 +
-+    /// The backend learns every playback position (coded frame eviction, readiness).
++    /// The backend learns every playback position (coded frame eviction, readiness), except while a
++    /// seek is pending: the player still reports the position from before the seek, and the backend
++    /// already knows the target (`media_source_seeking`). A stale position would make the data around
++    /// the target of a backward seek look old enough to evict (review finding 2).
 +    pub(super) fn media_source_position_changed(&self, position: f64) {
-+        if let Some(media_source) = self.media_source.get() {
++        if let Some(media_source) = self.media_source.get() &&
++            let Some(position) = forward_position(self.seeking.get(), position)
++        {
 +            media_source.backend().set_position(position);
 +        }
++    }
++
++    /// What `update_media_state` does to the player (`media_state_action` of `mercury-mse`). The
++    /// MediaSource rule (a playing element that may play on is left alone, the guard's pause is not
++    /// undone) applies only while a MediaSource is attached; a plain `<video>` or `<audio>` keeps the
++    /// published behaviour until F6 of `sdd/deferred-hands-on.md` (a plain media window check) has
++    /// passed.
++    pub(super) fn media_state_decision(&self, is_playing: bool) -> MediaStateAction {
++        media_state_action(
++            self.is_potentially_playing(),
++            is_playing,
++            self.media_source_stalled(),
++            self.media_source.get().is_some(),
++        )
++    }
++
++    /// The `waiting` condition of the "ready state change" steps (`waiting_fires` of `mercury-mse`),
++    /// for every media element: Servo 0.8 tested `!error.is_none()` where the specification says there
++    /// is no error.
++    pub(super) fn media_waiting_fires(
++        &self,
++        old: ReadyState,
++        new: ReadyState,
++        was_potentially_playing: bool,
++    ) -> bool {
++        waiting_fires(&WaitingInputs {
++            old: element_ready_state(old),
++            new: element_ready_state(new),
++            was_potentially_playing,
++            ended_playback: self.ended_playback(LoopCondition::Included),
++            has_error: self.error.get().is_some(),
++            paused_for_user_interaction: self.is_paused_for_user_interaction(),
++            paused_for_in_band_content: self.is_paused_for_in_band_content(),
++        })
 +    }
 +
 +    /// The MediaSource's seeking algorithm, run by the seek algorithm once the new playback position is
@@ -2532,71 +2601,52 @@ new file mode 100644
 +    pub(super) fn media_source_stalled(&self) -> bool {
 +        self.media_source
 +            .get()
-+            .is_some_and(|media_source| media_source.stall().borrow().guard.is_stalled())
++            .is_some_and(|media_source| media_source.stall().borrow().controller.is_stalled())
 +    }
 +
-+    /// The underrun decision (lane med-1b, decision D4): asks the `StallGuard` what to do with the
-+    /// position, the readiness and the state of playback, and has `update_media_state` pause or resume
-+    /// the pipeline when the stall begins or ends. The `waiting` and `playing` events come from the
-+    /// readiness change that goes with it (`change_ready_state`); the page's `paused` is not touched.
-+    /// Called after every readiness update: position updates (every 100 ms for a MediaSource player),
-+    /// appends, removals, seeks, end of stream.
++    /// The underrun decision (lane med-1b, decision D4): hands the element's raw facts to the
++    /// `StallController` of `mercury-mse`, which builds the guard's input and answers what to do. The
++    /// element keeps only the player calls (`update_media_state` pauses the pipeline when the stall
++    /// begins and resumes it when it ends) and the re-check timer. The `waiting` and `playing` events
++    /// come from the readiness change that goes with it (`change_ready_state`); the page's `paused` is
++    /// not touched. Called after every readiness update: position updates (every 100 ms for a
++    /// MediaSource player), appends, removals, seeks, end of stream.
 +    fn media_source_check_stall(&self) {
 +        let Some(media_source) = self.media_source.get() else {
 +            return;
 +        };
 +        let backend = media_source.backend();
 +        let position = self.current_playback_position.get();
-+        let ready = backend.element_ready_state(position);
-+        let ended = backend.ready_state() == BackendReadyState::Ended;
-+        let playing = !self.paused.get() &&
-+            self.error.get().is_none() &&
-+            self.network_state.get() != NetworkState::Empty &&
-+            self.ready_state.get() != ReadyState::HaveNothing &&
-+            !self.ended_playback(LoopCondition::Included);
-+        let seeking = self.seeking.get();
-+
-+        let (action, was_stalled, is_stalled, wants_recheck) = {
-+            let mut state = media_source.stall().borrow_mut();
-+            let was_stalled = state.guard.is_stalled();
-+            let input = StallInput {
-+                position,
-+                ready,
-+                playing,
-+                seeking,
-+                ended,
-+                now_ms: state.now_ms(),
-+            };
-+            let action = state.guard.update(input);
-+            let is_stalled = state.guard.is_stalled();
-+            // The guard keeps a quarter of a second between two transitions: when it wants to change
-+            // state and refused for that reason, nothing may be left waiting for the next position
-+            // update (the pipeline is paused during a stall, so none comes).
-+            let wants_change = if is_stalled {
-+                ready >= ElementReadyState::HaveFutureData || ended
-+            } else {
-+                playing && !seeking && !ended && ready <= ElementReadyState::HaveCurrentData
-+            };
-+            let wants_recheck =
-+                action == StallAction::None && wants_change && !state.recheck_pending;
-+            if wants_recheck {
-+                state.recheck_pending = true;
-+            }
-+            (action, was_stalled, is_stalled, wants_recheck)
++        // Every fact is read before the controller is borrowed: nothing below calls into the element
++        // while the borrow is held.
++        let snapshot = ElementSnapshot {
++            position,
++            backend_ready: backend.element_ready_state(position),
++            element_ready: element_ready_state(self.ready_state.get()),
++            paused: self.paused.get(),
++            has_error: self.error.get().is_some(),
++            network_empty: self.network_state.get() == NetworkState::Empty,
++            ended_playback: self.ended_playback(LoopCondition::Included),
++            seeking: self.seeking.get(),
++            source_ended: backend.ready_state() == BackendReadyState::Ended,
++            highest_buffered_end: highest_buffered_end(&backend.element_buffered()),
++            now_ms: media_source.stall().borrow().now_ms(),
 +        };
++        let step = media_source.stall().borrow_mut().controller.step(snapshot);
 +
-+        if action != StallAction::None || was_stalled != is_stalled {
-+            // Pauses the pipeline during a stall and resumes it when the stall is over (a seek ends
-+            // it without an action).
++        if step.pipeline != PipelineChange::Keep {
++            // Pauses the pipeline during a stall and resumes it when the stall is over (a seek or a
++            // page pause ends it without an action).
 +            self.update_media_state();
 +        }
-+        if wants_recheck {
-+            self.schedule_media_source_stall_recheck();
++        if let Some(delay_ms) = step.recheck_in_ms {
++            self.schedule_media_source_stall_recheck(delay_ms);
 +        }
 +    }
 +
-+    /// Looks at the stall again once the guard's hysteresis has passed.
-+    fn schedule_media_source_stall_recheck(&self) {
++    /// Looks at the stall again once the guard's hysteresis has passed (`delay_ms` is the controller's
++    /// answer: the rest of the hysteresis plus a margin).
++    fn schedule_media_source_stall_recheck(&self, delay_ms: u64) {
 +        let this = Trusted::new(self);
 +        let generation_id = self.generation_id.get();
 +        let task_source = self
@@ -2607,14 +2657,14 @@ new file mode 100644
 +        let spawned = std::thread::Builder::new()
 +            .name("MseStallRecheck".to_owned())
 +            .spawn(move || {
-+                std::thread::sleep(std::time::Duration::from_millis(STALL_RECHECK_MS));
++                std::thread::sleep(std::time::Duration::from_millis(delay_ms));
 +                task_source.queue(task!(media_source_stall_recheck: move |cx| {
 +                    let this = this.root();
 +                    if generation_id != this.generation_id.get() {
 +                        return;
 +                    }
 +                    if let Some(media_source) = this.media_source.get() {
-+                        media_source.stall().borrow_mut().recheck_pending = false;
++                        media_source.stall().borrow_mut().controller.recheck_fired();
 +                    }
 +                    this.media_source_update_ready_state(cx);
 +                }));
@@ -2622,7 +2672,7 @@ new file mode 100644
 +        if spawned.is_err() {
 +            warn!("Could not start the MediaSource stall re-check thread");
 +            if let Some(media_source) = self.media_source.get() {
-+                media_source.stall().borrow_mut().recheck_pending = false;
++                media_source.stall().borrow_mut().controller.recheck_fired();
 +            }
 +        }
 +    }
@@ -3524,9 +3574,10 @@ new file mode 100644
 +use dom_struct::dom_struct;
 +use js::context::JSContext;
 +use script_bindings::reflector::reflect_dom_object;
++use servo_media::player::mse::source_buffer_ops::{AbortRefused, SbEvent, SourceBufferOps};
 +use servo_media::player::mse::{
 +    AppendMode as BackendAppendMode, InitInfo, MediaSourceReadyState as BackendReadyState,
-+    MseError, OpId, OpTracker, SourceBufferId,
++    MseError, OpId, SourceBufferId,
 +};
 +use stylo_atoms::Atom;
 +
@@ -3563,15 +3614,6 @@ new file mode 100644
 +    /// The backend's handle of this source buffer.
 +    id: SourceBufferId,
 +
-+    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
-+    ///
-+    /// The JavaScript-visible flag. It follows the specification's tasks: set when an append or a
-+    /// removal is accepted, cleared by the task that handles the backend's `AppendDone`,
-+    /// `AppendError` or `RemoveDone` (and by `abort()` and removal), so a page never sees it false
-+    /// before the `update` and `updateend` events are queued. The backend keeps its own flag for its
-+    /// own checks.
-+    updating: Cell<bool>,
-+
 +    /// Whether this source buffer belongs in `activeSourceBuffers`, which the specification derives
 +    /// from the enabled and selected tracks: set by the first initialization segment that has an audio
 +    /// or video track.
@@ -3592,12 +3634,26 @@ new file mode 100644
 +    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-videotracks>
 +    video_tracks: Dom<VideoTrackList>,
 +
-+    /// Which append or removal the backend's next completion event must belong to (lane med-1b, D3):
-+    /// `abort()` and the removal of the buffer retire it, so an event that was already queued for an
-+    /// operation the page has abandoned cannot end the next one early.
++    /// The operation state of this buffer (lane med-1b, D3 and review findings 1 and 5): which append
++    /// or removal is pending, the `updating` attribute, and the events each transition queues. Pure
++    /// code in `crates/mercury-mse` (`source_buffer_ops.rs`, tested there); this object only maps the
++    /// events it returns to tasks.
++    ///
++    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
++    ///
++    /// `updating` follows the specification's tasks: true from the accepted `appendBuffer()` or
++    /// `remove()` until the task that handles the backend's `AppendDone`, `AppendError` or
++    /// `RemoveDone` (or `abort()` or removal retires the operation), so a page never sees it false
++    /// before the `update` and `updateend` events are queued, and a removal the backend's worker has
++    /// finished is still running for the page until its event is handled.
 +    #[ignore_malloc_size_of = "mercury-mse"]
 +    #[no_trace]
-+    op_tracker: RefCell<OpTracker>,
++    ops: RefCell<SourceBufferOps>,
++}
++
++/// `abort()` step 3: the state machine refused with the reason to put in the exception.
++fn abort_refused(refused: AbortRefused) -> Error {
++    Error::InvalidState(Some(refused.reason.into()))
 +}
 +
 +fn to_backend_mode(mode: AppendMode) -> BackendAppendMode {
@@ -3625,7 +3681,6 @@ new file mode 100644
 +            eventtarget: EventTarget::new_inherited(),
 +            media_source: MutNullableDom::new(Some(media_source)),
 +            id,
-+            updating: Cell::new(false),
 +            active: Cell::new(false),
 +            mode: Cell::new(AppendMode::Segments),
 +            timestamp_offset: Cell::new(0.),
@@ -3633,7 +3688,7 @@ new file mode 100644
 +            append_window_end: Cell::new(f64::INFINITY),
 +            audio_tracks: Dom::from_ref(audio_tracks),
 +            video_tracks: Dom::from_ref(video_tracks),
-+            op_tracker: RefCell::new(OpTracker::new()),
++            ops: RefCell::new(SourceBufferOps::new()),
 +        }
 +    }
 +
@@ -3670,7 +3725,7 @@ new file mode 100644
 +    }
 +
 +    pub(crate) fn updating(&self) -> bool {
-+        self.updating.get()
++        self.ops.borrow().updating()
 +    }
 +
 +    /// Whether this source buffer belongs in `activeSourceBuffers`.
@@ -3685,23 +3740,17 @@ new file mode 100644
 +    /// Detaches this source buffer from its media source, which the specification describes as
 +    /// removing it from the `sourceBuffers` attribute. The backend has already dropped its half.
 +    pub(crate) fn detach(&self) {
-+        self.op_tracker.borrow_mut().retire();
-+        self.updating.set(false);
++        self.ops.borrow_mut().detach();
 +        self.active.set(false);
 +        self.media_source.set(None);
 +    }
 +
 +    /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer> step 2: the append
-+    /// that was running ends with `abort` and `updateend` events.
++    /// that was running ends with `abort` and `updateend` events. Whatever the backend still has in
++    /// flight for this buffer is stale from now on (D3).
 +    pub(crate) fn abort_pending(&self) {
-+        // Whatever the backend still has in flight for this buffer is stale from now on (D3).
-+        self.op_tracker.borrow_mut().retire();
-+        if !self.updating.get() {
-+            return;
-+        }
-+        self.updating.set(false);
-+        self.queue_event(Atom::from("abort"));
-+        self.queue_event(Atom::from("updateend"));
++        let events = self.ops.borrow_mut().abort_pending();
++        self.queue_sb_events(events);
 +    }
 +
 +    /// An initialization segment was parsed: the tracks it declares join `audioTracks` and
@@ -3745,29 +3794,18 @@ new file mode 100644
 +    /// pending: it was aborted (and the page may have appended again since) or the buffer removed
 +    /// while the event was in flight.
 +    pub(crate) fn operation_finished(&self, op: OpId) {
-+        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
-+            return;
-+        }
-+        // Step 7. Set the updating attribute to false.
-+        self.updating.set(false);
-+        // Step 8. Queue a task to fire an event named update at this SourceBuffer object.
-+        self.queue_event(Atom::from("update"));
-+        // Step 9. Queue a task to fire an event named updateend at this SourceBuffer object.
-+        self.queue_event(Atom::from("updateend"));
++        // Steps 7 to 9: `updating` becomes false, then `update` and `updateend` are queued (nothing
++        // for a stale event).
++        let events = self.ops.borrow_mut().finished(op);
++        self.queue_sb_events(events);
 +    }
 +
 +    /// <https://w3c.github.io/media-source/#dfn-append-error> steps 2 to 4 (the end of stream with a
 +    /// decode error, step 5, comes as the backend's `SourceEnded` event).
 +    pub(crate) fn operation_failed(&self, op: OpId) {
-+        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
-+            return;
-+        }
-+        // Step 2. Set the updating attribute to false.
-+        self.updating.set(false);
-+        // Step 3. Queue a task to fire an event named error at this SourceBuffer object.
-+        self.queue_event(Atom::from("error"));
-+        // Step 4. Queue a task to fire an event named updateend at this SourceBuffer object.
-+        self.queue_event(Atom::from("updateend"));
++        // Step 2. `updating` becomes false. Steps 3 and 4: `error` and `updateend` are queued.
++        let events = self.ops.borrow_mut().failed(op);
++        self.queue_sb_events(events);
 +    }
 +
 +    /// The specification tests for removal from `sourceBuffers` in almost every method.
@@ -3781,12 +3819,19 @@ new file mode 100644
 +
 +    /// The `updating` check the specification makes at the top of most methods.
 +    fn require_not_updating(&self) -> ErrorResult {
-+        if self.updating.get() {
++        if self.updating() {
 +            return Err(Error::InvalidState(Some(
 +                "The source buffer is still updating".into(),
 +            )));
 +        }
 +        Ok(())
++    }
++
++    /// Queues one task per event, in order (the events the state machine returned for a transition).
++    fn queue_sb_events(&self, events: impl IntoIterator<Item = SbEvent>) {
++        for event in events {
++            self.queue_event(Atom::from(event.name()));
++        }
 +    }
 +
 +    fn queue_event(&self, name: Atom) {
@@ -3833,7 +3878,7 @@ new file mode 100644
 +
 +    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-updating>
 +    fn Updating(&self) -> bool {
-+        self.updating.get()
++        self.updating()
 +    }
 +
 +    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-buffered>
@@ -3987,11 +4032,9 @@ new file mode 100644
 +        let op = result?;
 +
 +        // Step 3. Set the updating attribute to true. The completion event that carries `op` ends it.
-+        self.op_tracker.borrow_mut().begin(op);
-+        self.updating.set(true);
-+
 +        // Step 4. Queue a task to fire an event named updatestart at this SourceBuffer object.
-+        self.queue_event(Atom::from("updatestart"));
++        let started = self.ops.borrow_mut().begin_append(op);
++        self.queue_sb_events([started]);
 +
 +        // Step 5. The buffer append algorithm runs on the backend; its `AppendDone` or `AppendError`
 +        // event ends the operation (`operation_finished`, `operation_failed`).
@@ -4001,14 +4044,20 @@ new file mode 100644
 +    /// <https://w3c.github.io/media-source/#dom-sourcebuffer-abort>
 +    fn Abort(&self) -> ErrorResult {
 +        // Step 1. Removed from sourceBuffers: InvalidStateError. Step 2. The parent is not "open":
-+        // InvalidStateError. Step 3 (the range removal algorithm running) never holds on the script
-+        // thread: the backend completes a removal before its event.
++        // InvalidStateError.
 +        let media_source = self.require_attached()?;
 +        if media_source.backend().ready_state() != BackendReadyState::Open {
 +            return Err(Error::InvalidState(Some(
 +                "The media source is not open".into(),
 +            )));
 +        }
++
++        // Step 3. If the range removal algorithm is running, InvalidStateError. It is running for the
++        // page from `remove()` until the `RemoveDone` event is handled here, which can be later than
++        // the moment the backend's worker finished the removal: the page's `updating` is what decides,
++        // so this is asked of the state machine and not of the backend (review finding 1). It is asked
++        // before the backend's `abort`, so that a refused call changes nothing.
++        self.ops.borrow().check_abort().map_err(abort_refused)?;
 +
 +        // Steps 4 to 7 (abort the append, reset the parser state, the append window defaults) are the
 +        // backend's.
@@ -4018,7 +4067,8 @@ new file mode 100644
 +            .map_err(dom_error)?;
 +
 +        // Step 4.2 to 4.4. If updating, set it to false and queue `abort` and `updateend`.
-+        self.abort_pending();
++        let events = self.ops.borrow_mut().abort().map_err(abort_refused)?;
++        self.queue_sb_events(events);
 +        self.append_window_start.set(0.);
 +        self.append_window_end.set(f64::INFINITY);
 +        Ok(())
@@ -4063,10 +4113,10 @@ new file mode 100644
 +        let op = result?;
 +
 +        // Range removal step 1 and 2. Set updating to true and queue `updatestart`; step 5 and 6 come
-+        // with the backend's `RemoveDone` event for `op`.
-+        self.op_tracker.borrow_mut().begin(op);
-+        self.updating.set(true);
-+        self.queue_event(Atom::from("updatestart"));
++        // with the backend's `RemoveDone` event for `op`. The removal is "running" (`abort()` throws)
++        // until that event is handled.
++        let started = self.ops.borrow_mut().begin_remove(op);
++        self.queue_sb_events([started]);
 +        Ok(())
 +    }
 +
@@ -4256,31 +4306,29 @@ diff --git a/dom/mse/stall.rs b/dom/mse/stall.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/stall.rs
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,31 @@
 +// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 +// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 +
 +// Mercury: (MED-1b) the state the element keeps for the underrun decision of decision D4 of lane
-+// med-1b: the pure `StallGuard` of `crates/mercury-mse`, a clock for its hysteresis, and whether a
-+// delayed re-check is already queued. It lives on the `MediaSource` (a media element attaches one
-+// MediaSource for its whole life), so the upstream element struct gets no new field.
++// med-1b: the pure `StallController` of `crates/mercury-mse` (it owns the guard, the hysteresis and the
++// "re-check pending" bookkeeping, and takes the element's raw facts) and a clock for it. It lives on the
++// `MediaSource` (a media element attaches one MediaSource for its whole life), so the upstream element
++// struct gets no new field.
 +
 +use std::time::Instant;
 +
-+use servo_media::player::mse::StallGuard;
++use servo_media::player::mse::stall_controller::StallController;
 +
 +pub(crate) struct StallState {
-+    pub(crate) guard: StallGuard,
-+    /// A re-check task is queued (the guard wanted to change state and had to wait out its hysteresis).
-+    pub(crate) recheck_pending: bool,
++    pub(crate) controller: StallController,
 +    epoch: Instant,
 +}
 +
 +impl StallState {
 +    pub(crate) fn new() -> StallState {
 +        StallState {
-+            guard: StallGuard::new(),
-+            recheck_pending: false,
++            controller: StallController::new(),
 +            epoch: Instant::now(),
 +        }
 +    }

@@ -2,26 +2,24 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 
 // Mercury: (MED-1b) the state the element keeps for the underrun decision of decision D4 of lane
-// med-1b: the pure `StallGuard` of `crates/mercury-mse`, a clock for its hysteresis, and whether a
-// delayed re-check is already queued. It lives on the `MediaSource` (a media element attaches one
-// MediaSource for its whole life), so the upstream element struct gets no new field.
+// med-1b: the pure `StallController` of `crates/mercury-mse` (it owns the guard, the hysteresis and the
+// "re-check pending" bookkeeping, and takes the element's raw facts) and a clock for it. It lives on the
+// `MediaSource` (a media element attaches one MediaSource for its whole life), so the upstream element
+// struct gets no new field.
 
 use std::time::Instant;
 
-use servo_media::player::mse::StallGuard;
+use servo_media::player::mse::stall_controller::StallController;
 
 pub(crate) struct StallState {
-    pub(crate) guard: StallGuard,
-    /// A re-check task is queued (the guard wanted to change state and had to wait out its hysteresis).
-    pub(crate) recheck_pending: bool,
+    pub(crate) controller: StallController,
     epoch: Instant,
 }
 
 impl StallState {
     pub(crate) fn new() -> StallState {
         StallState {
-            guard: StallGuard::new(),
-            recheck_pending: false,
+            controller: StallController::new(),
             epoch: Instant::now(),
         }
     }
