@@ -1343,8 +1343,8 @@ mod accessibility {
         );
         assert_eq!(
             element(&rig.window, "PDF document, page 1 of 3").accessible_role(),
-            Some(AccessibleRole::Main),
-            "the page area says where it is"
+            Some(AccessibleRole::Region),
+            "the page area says where it is (a region: the window's one `main` is the web page)"
         );
     }
 
