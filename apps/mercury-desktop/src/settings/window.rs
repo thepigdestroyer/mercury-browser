@@ -588,7 +588,10 @@ mod tests {
         assert_eq!(downloads.accessible_role(), Some(AccessibleRole::Tab));
         downloads.invoke_accessible_default_action();
 
-        assert_eq!(window.get_section(), 4); // settings-ui: Tab groups sits at 2
+        assert_eq!(
+            window.get_section(),
+            mercury_ui::settings_sections::section::DOWNLOADS
+        );
         assert_eq!(downloads.accessible_item_selected(), Some(true));
     }
 

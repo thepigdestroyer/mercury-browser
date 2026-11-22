@@ -15,7 +15,7 @@ use mercury_appearance::keymap::LetterKey;
 use mercury_appearance::panels::key_panel::{GroupInput, KeyPanel, KeyboardFacts};
 use mercury_appearance::panels::layout_panel::layout_panel;
 use mercury_settings::{AppearanceSettings, GroupKeySettings};
-use mercury_ui::settings_sections::{appearance, tab_groups};
+use mercury_ui::settings_sections::{appearance, section, tab_groups};
 use mercury_ui::{
     BrowserTab, ChromePalette, ChromeTheme, MainWindow, SearchEngineRow, SettingsWindow,
 };
@@ -247,7 +247,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                 &output.join(format!("settings-{scheme_name}-{index}-{section}.png")),
             )?;
         }
-        window.set_section(0);
+        window.set_section(section::GENERAL);
         window.set_editor_open(true);
         window.set_editor_name("Broken engine".into());
         window.set_editor_url("https://search.example/find".into());
@@ -269,14 +269,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     window.set_forced_color_scheme(ColorScheme::Unknown);
     window.set_system_color_scheme(ColorScheme::Dark);
     window.show()?;
-    window.set_section(3);
+    window.set_section(section::PRIVACY);
     render(
         window.window(),
         1560,
         1240,
         &output.join("settings-system-dark-privacy.png"),
     )?;
-    window.set_section(0);
+    window.set_section(section::GENERAL);
     window.set_editor_open(true);
     window.set_editor_name("Plain engine".into());
     window.set_editor_url("http://search.example/find".into());
