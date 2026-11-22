@@ -6,9 +6,11 @@
 //!
 //! `cargo run --release -p mercury-ui --example render_import -- <output directory>`
 
+use std::cell::Cell;
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::time::Duration;
 
 use mercury_ui::{ImportPage, ImportProfileRow, ImportSummaryLine, ImportWindow};
 use slint::language::ColorScheme;
@@ -18,12 +20,30 @@ use slint::{ComponentHandle, ModelRc, PhysicalSize, VecModel};
 
 const SCALE: f32 = 2.0;
 
+thread_local! {
+    /// The platform's clock. Slint times its animations by `duration_since_start`; with the wall
+    /// clock a picture taken a few milliseconds earlier or later shows a different frame of an
+    /// animation, so each rendering step moves this clock by a fixed amount instead.
+    static CLOCK: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+}
+
+/// How far the clock moves before each drawing step.
+const STEP: Duration = Duration::from_millis(100);
+
 struct HeadlessPlatform;
 
 impl Platform for HeadlessPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
     }
+
+    fn duration_since_start(&self) -> Duration {
+        CLOCK.with(Cell::get)
+    }
+}
+
+fn advance_clock() {
+    CLOCK.with(|clock| clock.set(clock.get() + STEP));
 }
 
 fn render(window: &slint::Window, path: &Path) -> Result<(), Box<dyn Error>> {
@@ -33,6 +53,7 @@ fn render(window: &slint::Window, path: &Path) -> Result<(), Box<dyn Error>> {
     window.set_size(PhysicalSize::new(1120, 960));
     // Let layouts and bindings settle.
     for _ in 0..3 {
+        advance_clock();
         slint::platform::update_timers_and_animations();
         window.request_redraw();
         let _ = window.take_snapshot();

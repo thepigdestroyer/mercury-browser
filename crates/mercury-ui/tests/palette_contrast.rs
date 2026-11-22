@@ -11,8 +11,9 @@
 //! not read on it, so everything on it must take `item-selected-text`. Set `MERCURY_UI_RENDER_DIR`
 //! to also save each rendering as a PNG.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::Duration;
 
 use mercury_ui::{
     AboutWindow, BookmarkMenuRow, BookmarkRowKind, BookmarksManager, ChromePalette, ChromeTheme,
@@ -28,6 +29,11 @@ thread_local! {
     /// The windows the platform has made on this thread, oldest first, so that a test can reach
     /// the software window behind a component it has built.
     static WINDOWS: RefCell<Vec<Rc<MinimalSoftwareWindow>>> = const { RefCell::new(Vec::new()) };
+
+    /// The platform's clock. Slint times its animations (the rows fade) by `duration_since_start`;
+    /// with the wall clock a picture taken a few milliseconds earlier or later shows a different
+    /// frame, so each drawing step moves this clock by a fixed amount instead.
+    static CLOCK: Cell<Duration> = const { Cell::new(Duration::ZERO) };
 }
 
 struct SoftwarePlatform;
@@ -38,6 +44,17 @@ impl Platform for SoftwarePlatform {
         WINDOWS.with(|windows| windows.borrow_mut().push(window.clone()));
         Ok(window)
     }
+
+    fn duration_since_start(&self) -> Duration {
+        CLOCK.with(Cell::get)
+    }
+}
+
+/// How far the clock moves before each drawing step.
+const STEP: Duration = Duration::from_millis(100);
+
+fn advance_clock() {
+    CLOCK.with(|clock| clock.set(clock.get() + STEP));
 }
 
 /// Sets the platform for this thread. Slint keeps it per thread, so each test (which runs on its
@@ -404,6 +421,7 @@ impl Screen {
         let mut pixels = vec![PremultipliedRgbaColor::default(); self.width * self.height];
         // Twice: the first drawing settles the layout.
         for _ in 0..2 {
+            advance_clock();
             slint::platform::update_timers_and_animations();
             self.window.request_redraw();
             self.window.draw_if_needed(|renderer| {
