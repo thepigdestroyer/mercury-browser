@@ -16,31 +16,50 @@ use std::sync::OnceLock;
 
 use servo::{PrefValue, Preferences};
 
-/// The environment variable that turns Media Source Extensions on for development (`MERCURY_DEV_MSE=1`).
-/// MSE is Mercury's own backend (`crates/mercury-mse`), written but not yet run in a window, so the
-/// preference `dom_media_source_enabled` stays pinned off for everyone; this switch is the only way
-/// to turn it on, until the lane that runs the pages (`tests/pages/mse-*.html`) flips the pin.
+/// Whether Media Source Extensions (`dom_media_source_enabled`) are on for everyone. **Round 2b of lane
+/// med-1b flips this to `true`** in one commit, once the window run has met the flip conditions F1 to F7
+/// of `.superpowers/sdd/lane-med-1b-brief.md` (section 8.D). Until then MSE is off by default and
+/// `MERCURY_DEV_MSE=1` is the development door. The preference is not in [`PINNED_OFF`]: it is always
+/// set explicitly by [`mse_enabled`], so a change of Servo's default cannot move it.
+pub(crate) const MSE_ON_BY_DEFAULT: bool = false;
+
+/// The environment variable that overrides [`MSE_ON_BY_DEFAULT`]: `1` turns Media Source Extensions on
+/// (development, before the flip), `0` turns them off (the support off switch, after it). Anything
+/// else, or nothing, leaves the default.
 pub(crate) const DEV_MSE_ENV: &str = "MERCURY_DEV_MSE";
 
-/// Whether `value`, the content of [`DEV_MSE_ENV`], asks for MSE: exactly `1`.
-fn dev_mse_from(value: Option<&str>) -> bool {
-    value == Some("1")
+/// What `value`, the content of [`DEV_MSE_ENV`], asks for: exactly `1` is `Some(true)`, exactly `0` is
+/// `Some(false)`, anything else is no request.
+fn dev_mse_from(value: Option<&str>) -> Option<bool> {
+    match value {
+        Some("1") => Some(true),
+        Some("0") => Some(false),
+        _ => None,
+    }
+}
+
+/// Whether MSE is on, given the product default and the request of [`DEV_MSE_ENV`].
+pub(crate) fn mse_enabled(on_by_default: bool, requested: Option<bool>) -> bool {
+    requested.unwrap_or(on_by_default)
 }
 
 /// [`DEV_MSE_ENV`], read once per process.
-fn dev_mse_requested() -> bool {
-    static REQUESTED: OnceLock<bool> = OnceLock::new();
+fn dev_mse_requested() -> Option<bool> {
+    static REQUESTED: OnceLock<Option<bool>> = OnceLock::new();
     *REQUESTED.get_or_init(|| {
         let requested = dev_mse_from(std::env::var(DEV_MSE_ENV).ok().as_deref());
-        if requested {
-            // Decision (review of lane med-1, S6): the switch works in release builds too, because the
-            // owner runs the pages in the same release build the lanes use; the pinned preference is the
-            // product default and this is a development door. It is loud so that it is never on by
-            // accident, and it goes when the preference is flipped (the pin is then removed).
-            log::warn!(
+        // Decision (review of lane med-1, S6): the switch works in release builds too, because the
+        // owner runs the pages in the same release build the lanes use. It is loud whenever it
+        // changes the default, so that it is never on (or off) by accident.
+        match requested {
+            Some(true) if !MSE_ON_BY_DEFAULT => log::warn!(
                 "{DEV_MSE_ENV}=1: Media Source Extensions are ON. They are unfinished and unreviewed; \
                  this is for development only"
-            );
+            ),
+            Some(false) if MSE_ON_BY_DEFAULT => {
+                log::warn!("{DEV_MSE_ENV}=0: Media Source Extensions are OFF")
+            },
+            _ => {},
         }
         requested
     })
@@ -68,8 +87,8 @@ fn stylo_prefs_list() -> String {
 /// default nor the experimental-features list can turn one on by accident. The lane that makes a
 /// feature work removes its line here (and turns the preference on in [`apply`]).
 const PINNED_OFF: &[&str] = &[
-    // Media (R14a section 3.1), by the lane that implements each.
-    "dom_media_source_enabled",
+    // Media (R14a section 3.1), by the lane that implements each. `dom_media_source_enabled` is
+    // not here: `mse_enabled` sets it explicitly (see `MSE_ON_BY_DEFAULT`).
     "dom_media_capabilities_enabled",
     "dom_eme_enabled",
     "dom_picture_in_picture_enabled",
@@ -100,16 +119,14 @@ pub(crate) fn apply(preferences: &mut Preferences) {
     apply_with(preferences, dev_mse_requested());
 }
 
-/// [`apply`] with the development switch for Media Source Extensions given (`dev_mse`).
-fn apply_with(preferences: &mut Preferences, dev_mse: bool) {
+/// [`apply`] with the request of [`DEV_MSE_ENV`] given (`dev_mse`).
+fn apply_with(preferences: &mut Preferences, dev_mse: Option<bool>) {
     for name in PINNED_OFF {
         preferences.set_value(name, PrefValue::Bool(false));
     }
-    // The development switch (see [`DEV_MSE_ENV`]) is the one exception to the pin above, and only
-    // for `dom_media_source_enabled`: the MSE DOM is compiled in either way.
-    if dev_mse {
-        preferences.dom_media_source_enabled = true;
-    }
+    // Media Source Extensions: the product default, or what [`DEV_MSE_ENV`] asks. The MSE DOM is
+    // compiled in either way.
+    preferences.dom_media_source_enabled = mse_enabled(MSE_ON_BY_DEFAULT, dev_mse);
     // Global Privacy Control (owner decision O-18): on for every site. Nothing reads it before the
     // network lane's header and `navigator.globalPrivacyControl` (EC25), which then need no edit
     // of the Servo crates.
@@ -141,9 +158,9 @@ mod tests {
     use super::*;
 
     // The tests run with the development switch off whatever the environment of the test run says
-    // (this shadows `super::apply`, which reads `MERCURY_DEV_MSE`); the switch has its own tests below.
+    // (this shadows `super::apply`, which reads `MERCURY_DEV_MSE`; no request means the product default); the switch has its own tests below.
     fn apply(preferences: &mut Preferences) {
-        apply_with(preferences, false);
+        apply_with(preferences, None);
     }
 
     fn applied() -> Preferences {
@@ -263,55 +280,69 @@ mod tests {
     }
 
     #[test]
-    fn media_source_is_off_by_default_and_pinned() {
+    fn media_source_follows_the_product_default() {
         assert!(Preferences::exists("dom_media_source_enabled"));
-        assert!(PINNED_OFF.contains(&"dom_media_source_enabled"));
+        // Not a pin: `mse_enabled` sets it, so that the flip is one constant.
+        assert!(!PINNED_OFF.contains(&"dom_media_source_enabled"));
         assert!(!Preferences::default().dom_media_source_enabled);
-        assert!(!applied().dom_media_source_enabled);
+        let mut preferences = Preferences::default();
+        apply_with(&mut preferences, None);
+        assert_eq!(preferences.dom_media_source_enabled, MSE_ON_BY_DEFAULT);
     }
 
     #[test]
-    fn the_development_switch_turns_media_source_on_and_nothing_else() {
+    fn mse_enabled_is_the_request_or_else_the_default() {
+        for default in [false, true] {
+            assert_eq!(mse_enabled(default, None), default);
+            assert!(mse_enabled(default, Some(true)));
+            assert!(!mse_enabled(default, Some(false)));
+        }
+    }
+
+    #[test]
+    fn the_switch_turns_media_source_on_or_off_and_nothing_else() {
         let mut on = Preferences::default();
-        apply_with(&mut on, true);
+        apply_with(&mut on, Some(true));
         assert!(on.dom_media_source_enabled);
+        let mut off = Preferences::default();
+        apply_with(&mut off, Some(false));
+        assert!(!off.dom_media_source_enabled);
         // A value set before does not matter either way.
-        let mut set_before = Preferences::default();
-        set_before.set_value("dom_media_source_enabled", PrefValue::Bool(true));
-        apply_with(&mut set_before, false);
-        assert!(!set_before.dom_media_source_enabled);
-        // Every other pin holds with the switch on.
-        for name in PINNED_OFF {
-            if *name != "dom_media_source_enabled" {
-                assert_eq!(on.get_value(name), PrefValue::Bool(false), "{name}");
+        for before in [false, true] {
+            for request in [None, Some(true), Some(false)] {
+                let mut set_before = Preferences::default();
+                set_before.set_value("dom_media_source_enabled", PrefValue::Bool(before));
+                apply_with(&mut set_before, request);
+                assert_eq!(
+                    set_before.dom_media_source_enabled,
+                    mse_enabled(MSE_ON_BY_DEFAULT, request),
+                    "before {before}, request {request:?}"
+                );
             }
         }
-        // And nothing else differs from the default launch.
-        let off = applied();
-        assert_eq!(
-            on.get_value("dom_media_source_enabled"),
-            PrefValue::Bool(true)
-        );
-        assert_eq!(
-            off.get_value("dom_media_source_enabled"),
-            PrefValue::Bool(false)
-        );
+        // Every pin holds with the switch on.
+        for name in PINNED_OFF {
+            assert_eq!(on.get_value(name), PrefValue::Bool(false), "{name}");
+        }
+        // And nothing else differs between the two.
         on.dom_media_source_enabled = false;
         assert!(on.diff(&off).is_empty());
     }
 
     #[test]
-    fn only_a_one_turns_the_development_switch_on() {
-        assert!(dev_mse_from(Some("1")));
+    fn only_a_one_or_a_zero_is_a_request() {
+        assert_eq!(dev_mse_from(Some("1")), Some(true));
+        assert_eq!(dev_mse_from(Some("0")), Some(false));
         for value in [
             None,
             Some(""),
-            Some("0"),
             Some("true"),
             Some("yes"),
             Some(" 1"),
+            Some("01"),
+            Some("2"),
         ] {
-            assert!(!dev_mse_from(value), "{value:?}");
+            assert_eq!(dev_mse_from(value), None, "{value:?}");
         }
     }
 
