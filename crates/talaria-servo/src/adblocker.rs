@@ -510,8 +510,9 @@ mod tests {
         source_url: &str,
         third_party: Option<bool>,
     ) -> Verdict {
-        // `fetch` and XHR: adblock 0.13.5 applies a `$removeparam` rule that names no resource type to
-        // `xmlhttprequest` requests only (checked with the engine itself), so this is the type that gets rewritten.
+        // `fetch` and XHR. adblock 0.13.5 applies a `$removeparam` rule that names no resource type to documents,
+        // sub-documents and `xmlhttprequest` requests (`filters/network.rs`), so this is one type that gets
+        // rewritten; `a_typeless_removeparam_rewrites_..._and_not_...` pins the others.
         blocker.verdict_for(url, source_url, "xmlhttprequest", "GET", false, third_party)
     }
 
@@ -520,6 +521,50 @@ mod tests {
             compiled(&["||example.com^$removeparam=utm_source"]),
             EngineSwitches::default(),
         )
+    }
+
+    /// A `$removeparam` rule that names no resource type is for documents, sub-documents and `fetch`/XHR; an
+    /// image, a script, a style sheet, a font or a media request is left alone (net-1 review, minor 7; the first
+    /// version of this test used `script` and failed, which is how the engine's rule was found). Mercury never
+    /// rewrites the page being opened (the main frame), but a frame that a script or a link navigated is a
+    /// document that is not the main frame (D17), and a sub-document is a frame too.
+    #[test]
+    fn a_typeless_removeparam_rewrites_documents_frames_and_xhr_and_not_images_or_scripts() {
+        let blocker = removeparam_blocker();
+        let url = "https://example.com/page?utm_source=news&id=7";
+        let verdict_of = |resource_type: &str, is_for_main_frame: bool| {
+            blocker.verdict_for(
+                url,
+                "https://news.example/",
+                resource_type,
+                "GET",
+                is_for_main_frame,
+                None,
+            )
+        };
+        let stripped = || Verdict::Rewrite(Url::parse("https://example.com/page?id=7").unwrap());
+
+        for rewritten in ["xmlhttprequest", "subdocument", "document"] {
+            assert_eq!(verdict_of(rewritten, false), stripped(), "{rewritten}");
+        }
+        for left_alone in [
+            "image",
+            "script",
+            "stylesheet",
+            "font",
+            "media",
+            "object",
+            "other",
+            "xslt",
+        ] {
+            assert_eq!(
+                verdict_of(left_alone, false),
+                Verdict::Allow,
+                "{left_alone}"
+            );
+        }
+        // The page being opened is never rewritten, whatever the rule says.
+        assert_eq!(verdict_of("document", true), Verdict::Allow);
     }
 
     #[test]
