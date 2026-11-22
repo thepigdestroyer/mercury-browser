@@ -75,6 +75,7 @@ nav:
       - Architecture: developer-guide/architecture.md
       - Servo integration: developer-guide/servo-integration.md
       - Saved logins: developer-guide/passwords.md
+      - Passkeys and security keys: developer-guide/passkeys.md
       - Camera and microphone: developer-guide/media-capture.md
       - PDF viewer: developer-guide/pdf.md
       - Testing and quality: developer-guide/testing.md

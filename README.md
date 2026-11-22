@@ -94,6 +94,7 @@ flowchart TB
 | `crates/mercury-store` | History and bookmarks in SQLite, with search and address-bar suggestions |
 | `crates/mercury-settings` | Settings, search engines and their keywords |
 | `crates/mercury-passwords` | Saved logins in the macOS Keychain, a password generator, CSV import and export |
+| `crates/mercury-passkeys` | Passkeys: Mercury's built-in manager (Keychain storage, a software authenticator), USB security keys and credential-exchange import and export; not connected to the engine yet |
 | `crates/mercury-password-manager` | The password manager's logic between the Keychain crate and the Settings window: the list, editing, CSV import and export, the Touch ID gate, manual fill and saving HTTP sign-ins |
 | `crates/mercury-downloads` | The download engine: fetching files, resuming after an interruption, stopping cleanly at quit |
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |

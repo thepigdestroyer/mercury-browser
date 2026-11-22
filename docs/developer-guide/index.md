@@ -40,6 +40,7 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `crates/mercury-pdfium` | The PDFium backend of the viewer and the helper process's entry point (`mercury-browser --pdf-worker`); PDFium is loaded at run time from a prebuilt library ([details](pdf.md)) |
 | `crates/mercury-store` | History, bookmarks and the downloads list in SQLite, with search and address-bar suggestions |
 | `crates/mercury-passwords` | Saved logins in the macOS Keychain, a password generator, CSV import and export ([details](passwords.md)) |
+| `crates/mercury-passkeys` | Passkeys and security keys: the built-in manager, USB keys, credential-exchange import and export ([details](passkeys.md)) |
 | `crates/mercury-password-manager` | The logic between `mercury-passwords` and the interface: the list in Settings, editing, the authentication gate before a password is shown or copied, manual fill, saving HTTP sign-ins ([details](passwords.md#the-password-manager-in-the-browser)) |
 | `crates/mercury-downloads` | The download engine: fetching files, resuming after an interruption, stopping cleanly at quit |
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |
