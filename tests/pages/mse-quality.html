@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSE quality</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 16px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 12px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #sum { font: bold 18px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 14px/1.45 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+  video { background: #202020; display: block; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>MSE quality</h1>
+<p class="note">getVideoPlaybackQuality(): total frames grow with playback, dropped is not above total, zero after a new source.</p>
+<div id="sum">running</div>
+<video id="v" width="320" height="180" muted playsinline></video>
+<div id="out"></div>
+<!--
+  Mercury test page for Media Source Extensions (lane med-1b, round 2). getVideoPlaybackQuality (decision D5).
+  NOT RUN yet: it is run centrally in a window (scripts/dev/mse-window-run.sh pages, or by hand). It needs a
+  browser started with MERCURY_DEV_MSE=1 (the preference dom_media_source_enabled is off otherwise) and the
+  fixtures of crates/mercury-mse-testkit/fixtures served by scripts/serve-tests.sh under /mse-fixtures/
+  (override with ?fixtures=<base url>). Every check prints one line that starts with PASS or FAIL (INFO
+  lines only print a value); the result is also in document.title, which ends with "(done)" when the page
+  has finished. See docs/developer-guide/media-source.md.
+  The fixtures are 8 s at 25 fps, red for the first 4 s and blue for the last 4 s, a key frame every 2 s.
+-->
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const BASE = params.get("fixtures") || "/mse-fixtures/";
+const TITLE = "MSE quality";
+const out = document.getElementById("out");
+const video = document.getElementById("v");
+let passed = 0, failed = 0;
+function line(cls, text) { const d = document.createElement("div"); d.className = "line " + cls; d.textContent = text; out.appendChild(d); }
+function check(name, ok, detail) {
+  if (ok) { passed++; line("pass", "PASS " + name); } else { failed++; line("fail", "FAIL " + name + (detail !== undefined ? ": " + detail : "")); }
+  return ok;
+}
+function info(text) { line("info", "INFO " + text); }
+function finish(error) {
+  if (error) { failed++; line("fail", "FAIL the page stopped: " + (error && error.stack || error)); }
+  const text = passed + " PASS, " + failed + " FAIL";
+  document.getElementById("sum").textContent = text;
+  document.title = TITLE + ": " + text + " (done)";
+}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function once(target, name, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { target.removeEventListener(name, handler); reject(new Error("timeout waiting for " + name)); }, ms || 10000);
+    const handler = event => { clearTimeout(timer); resolve(event); };
+    target.addEventListener(name, handler, { once: true });
+  });
+}
+async function until(predicate, ms, what) {
+  const end = performance.now() + (ms || 10000);
+  while (!predicate()) { if (performance.now() > end) throw new Error("timeout waiting for " + what); await sleep(50); }
+}
+async function bytes(path) {
+  const response = await fetch(BASE + path);
+  if (!response.ok) throw new Error(path + ": HTTP " + response.status);
+  return new Uint8Array(await response.arrayBuffer());
+}
+// Fragmented MP4: the initialization segment is everything before the first styp (or moof), each media
+// segment starts at a styp (or at a moof that no styp precedes).
+function splitMp4(b) {
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let init = null, current = -1, previous = ""; const segments = [];
+  for (let p = 0; p + 8 <= b.length;) {
+    let size = view.getUint32(p);
+    const type = String.fromCharCode(b[p + 4], b[p + 5], b[p + 6], b[p + 7]);
+    if (size === 1) size = Number(view.getBigUint64(p + 8)); else if (size === 0) size = b.length - p;
+    if (size < 8) break;
+    if (type === "styp" || (type === "moof" && previous !== "styp")) {
+      if (init === null) init = b.subarray(0, p); else segments.push(b.subarray(current, p));
+      current = p;
+    }
+    previous = type; p += size;
+  }
+  if (current >= 0) segments.push(b.subarray(current));
+  return { init, segments };
+}
+async function fixture(path) { return splitMp4(await bytes(path)); }
+const H264_LOW = 'video/mp4; codecs="avc1.42C00C"', H264_HIGH = 'video/mp4; codecs="avc1.42C01E"', AAC = 'audio/mp4; codecs="mp4a.40.2"';
+async function openSource() {
+  const mediaSource = new MediaSource();
+  const url = URL.createObjectURL(mediaSource);
+  video.src = url;
+  await once(mediaSource, "sourceopen");
+  return { mediaSource, url };
+}
+async function append(sourceBuffer, data) {
+  sourceBuffer.appendBuffer(data);
+  await once(sourceBuffer, "updateend");
+}
+function ranges(timeRanges) { const r = []; for (let i = 0; i < timeRanges.length; i++) r.push([+timeRanges.start(i).toFixed(3), +timeRanges.end(i).toFixed(3)]); return JSON.stringify(r); }
+function meanColour() {
+  try {
+    const canvas = document.createElement("canvas"); canvas.width = 16; canvas.height = 9;
+    const context = canvas.getContext("2d"); context.drawImage(video, 0, 0, 16, 9);
+    const data = context.getImageData(0, 0, 16, 9).data; let r = 0, b = 0;
+    for (let i = 0; i < data.length; i += 4) { r += data[i]; b += data[i + 2]; }
+    return { r: r / 144, b: b / 144 };
+  } catch (error) { return null; }
+}
+const isRed = c => c && c.r > c.b + 60, isBlue = c => c && c.b > c.r + 60;
+if (typeof MediaSource === "undefined") {
+  check("MediaSource exists (start the browser with MERCURY_DEV_MSE=1)", false);
+  finish();
+} else if (typeof video.getVideoPlaybackQuality !== "function") {
+  check("HTMLVideoElement.getVideoPlaybackQuality exists", false);
+  finish();
+} else {
+  (async () => {
+    const FPS = 25;
+    const f = await fixture("fmp4/video-h264-low.mp4");
+    function quality() {
+      const q = video.getVideoPlaybackQuality();
+      return { creation: q.creationTime, total: q.totalVideoFrames, dropped: q.droppedVideoFrames, corrupted: q.corruptedVideoFrames, object: q };
+    }
+
+    const q0 = quality();
+    check("getVideoPlaybackQuality returns the four fields as numbers",
+      [q0.creation, q0.total, q0.dropped, q0.corrupted].every(v => typeof v === "number" && isFinite(v)), JSON.stringify([q0.creation, q0.total, q0.dropped, q0.corrupted]));
+    check("an element with no source has played no frames", q0.total === 0 && q0.dropped === 0, q0.total);
+    check("the object is a VideoPlaybackQuality", typeof VideoPlaybackQuality === "function" && q0.object instanceof VideoPlaybackQuality);
+
+    const { mediaSource } = await openSource();
+    const sb = mediaSource.addSourceBuffer(H264_LOW);
+    await append(sb, f.init);
+    for (const s of f.segments) await append(sb, s);
+    mediaSource.endOfStream();
+    await until(() => video.readyState >= 4, 5000, "HAVE_ENOUGH_DATA");
+    video.play().catch(error => info("play() rejected: " + error));
+
+    await until(() => video.currentTime >= 3, 10000, "currentTime >= 3");
+    const q1 = quality(), t1 = video.currentTime;
+    info("at " + t1.toFixed(2) + " s: total " + q1.total + ", dropped " + q1.dropped + ", corrupted " + q1.corrupted);
+    check("total grows with playback", q1.total > 0, q1.total);
+    check("total is within 10% of the frames played", Math.abs(q1.total - t1 * FPS) <= 0.1 * t1 * FPS + 1, q1.total + " vs " + (t1 * FPS).toFixed(1));
+    check("dropped is not above total", q1.dropped <= q1.total, q1.dropped + " > " + q1.total);
+    check("corrupted is zero", q1.corrupted === 0, q1.corrupted);
+
+    await until(() => video.currentTime >= t1 + 1.5, 6000, "1.5 s more of playback");
+    const q2 = quality(), t2 = video.currentTime;
+    check("total keeps growing", q2.total > q1.total, q1.total + " -> " + q2.total);
+    check("the growth matches the time played (within 10%)", Math.abs((q2.total - q1.total) - (t2 - t1) * FPS) <= 0.1 * (t2 - t1) * FPS + 2, (q2.total - q1.total) + " vs " + ((t2 - t1) * FPS).toFixed(1));
+    check("creationTime moves forward", q2.creation > q1.creation, q1.creation + " -> " + q2.creation);
+    check("dropped is not above total later either", q2.dropped <= q2.total);
+    check("the counters never go down", q2.dropped >= q1.dropped);
+
+    await until(() => video.ended, 12000, "ended");
+    const q3 = quality();
+    info("at the end: total " + q3.total + ", dropped " + q3.dropped + " (200 frames in the clip)");
+    check("the total at the end is within 10% of 200 frames", Math.abs(q3.total - 200) <= 20, q3.total);
+
+    // A new source starts the counters again.
+    const next = await openSource();
+    const q4 = quality();
+    check("zero frames after a new source", q4.total === 0 && q4.dropped === 0, q4.total + " " + q4.dropped);
+    next.mediaSource.addSourceBuffer(H264_LOW);
+  })().then(() => finish(), error => finish(error));
+}
+</script>
+</body>
+</html>

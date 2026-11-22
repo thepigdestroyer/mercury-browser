@@ -1,0 +1,217 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSE abort</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 16px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 12px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #sum { font: bold 18px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 14px/1.45 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+  video { background: #202020; display: block; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>MSE abort</h1>
+<p class="note">abort() between two appends in one task, abort on an idle buffer, removal and remove() after an abort.</p>
+<div id="sum">running</div>
+<video id="v" width="320" height="180" muted playsinline></video>
+<div id="out"></div>
+<!--
+  Mercury test page for Media Source Extensions (lane med-1b, round 2). The first blocker of round 1: a completion event queued before abort() must not end the next append.
+  NOT RUN yet: it is run centrally in a window (scripts/dev/mse-window-run.sh pages, or by hand). It needs a
+  browser started with MERCURY_DEV_MSE=1 (the preference dom_media_source_enabled is off otherwise) and the
+  fixtures of crates/mercury-mse-testkit/fixtures served by scripts/serve-tests.sh under /mse-fixtures/
+  (override with ?fixtures=<base url>). Every check prints one line that starts with PASS or FAIL (INFO
+  lines only print a value); the result is also in document.title, which ends with "(done)" when the page
+  has finished. See docs/developer-guide/media-source.md.
+  The fixtures are 8 s at 25 fps, red for the first 4 s and blue for the last 4 s, a key frame every 2 s.
+-->
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const BASE = params.get("fixtures") || "/mse-fixtures/";
+const TITLE = "MSE abort";
+const out = document.getElementById("out");
+const video = document.getElementById("v");
+let passed = 0, failed = 0;
+function line(cls, text) { const d = document.createElement("div"); d.className = "line " + cls; d.textContent = text; out.appendChild(d); }
+function check(name, ok, detail) {
+  if (ok) { passed++; line("pass", "PASS " + name); } else { failed++; line("fail", "FAIL " + name + (detail !== undefined ? ": " + detail : "")); }
+  return ok;
+}
+function info(text) { line("info", "INFO " + text); }
+function finish(error) {
+  if (error) { failed++; line("fail", "FAIL the page stopped: " + (error && error.stack || error)); }
+  const text = passed + " PASS, " + failed + " FAIL";
+  document.getElementById("sum").textContent = text;
+  document.title = TITLE + ": " + text + " (done)";
+}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function once(target, name, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { target.removeEventListener(name, handler); reject(new Error("timeout waiting for " + name)); }, ms || 10000);
+    const handler = event => { clearTimeout(timer); resolve(event); };
+    target.addEventListener(name, handler, { once: true });
+  });
+}
+async function until(predicate, ms, what) {
+  const end = performance.now() + (ms || 10000);
+  while (!predicate()) { if (performance.now() > end) throw new Error("timeout waiting for " + what); await sleep(50); }
+}
+async function bytes(path) {
+  const response = await fetch(BASE + path);
+  if (!response.ok) throw new Error(path + ": HTTP " + response.status);
+  return new Uint8Array(await response.arrayBuffer());
+}
+// Fragmented MP4: the initialization segment is everything before the first styp (or moof), each media
+// segment starts at a styp (or at a moof that no styp precedes).
+function splitMp4(b) {
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let init = null, current = -1, previous = ""; const segments = [];
+  for (let p = 0; p + 8 <= b.length;) {
+    let size = view.getUint32(p);
+    const type = String.fromCharCode(b[p + 4], b[p + 5], b[p + 6], b[p + 7]);
+    if (size === 1) size = Number(view.getBigUint64(p + 8)); else if (size === 0) size = b.length - p;
+    if (size < 8) break;
+    if (type === "styp" || (type === "moof" && previous !== "styp")) {
+      if (init === null) init = b.subarray(0, p); else segments.push(b.subarray(current, p));
+      current = p;
+    }
+    previous = type; p += size;
+  }
+  if (current >= 0) segments.push(b.subarray(current));
+  return { init, segments };
+}
+async function fixture(path) { return splitMp4(await bytes(path)); }
+const H264_LOW = 'video/mp4; codecs="avc1.42C00C"', H264_HIGH = 'video/mp4; codecs="avc1.42C01E"', AAC = 'audio/mp4; codecs="mp4a.40.2"';
+async function openSource() {
+  const mediaSource = new MediaSource();
+  const url = URL.createObjectURL(mediaSource);
+  video.src = url;
+  await once(mediaSource, "sourceopen");
+  return { mediaSource, url };
+}
+async function append(sourceBuffer, data) {
+  sourceBuffer.appendBuffer(data);
+  await once(sourceBuffer, "updateend");
+}
+function ranges(timeRanges) { const r = []; for (let i = 0; i < timeRanges.length; i++) r.push([+timeRanges.start(i).toFixed(3), +timeRanges.end(i).toFixed(3)]); return JSON.stringify(r); }
+function meanColour() {
+  try {
+    const canvas = document.createElement("canvas"); canvas.width = 16; canvas.height = 9;
+    const context = canvas.getContext("2d"); context.drawImage(video, 0, 0, 16, 9);
+    const data = context.getImageData(0, 0, 16, 9).data; let r = 0, b = 0;
+    for (let i = 0; i < data.length; i += 4) { r += data[i]; b += data[i + 2]; }
+    return { r: r / 144, b: b / 144 };
+  } catch (error) { return null; }
+}
+const isRed = c => c && c.r > c.b + 60, isBlue = c => c && c.b > c.r + 60;
+if (typeof MediaSource === "undefined") {
+  check("MediaSource exists (start the browser with MERCURY_DEV_MSE=1)", false);
+  finish();
+} else {
+  (async () => {
+    function watch(sb) {
+      const counts = { updatestart: 0, update: 0, updateend: 0, abort: 0, error: 0 };
+      for (const name of Object.keys(counts)) sb.addEventListener(name, () => counts[name]++);
+      return counts;
+    }
+    const f = await fixture("fmp4/video-h264-low.mp4");
+
+    // The blocker: an append, abort(), and another append in ONE task. The completion event of the first
+    // append may already be queued when abort() runs; it must not end the second append.
+    for (let round = 1; round <= 5; round++) {
+      const { mediaSource } = await openSource();
+      const sb = mediaSource.addSourceBuffer(H264_LOW);
+      const counts = watch(sb);
+      await append(sb, f.init);
+      const before = { ...counts };
+      let bufferedAtUpdate = null, updatingAtUpdate = null, coversAtUpdate = null;
+      sb.addEventListener("update", () => {
+        bufferedAtUpdate = ranges(sb.buffered); updatingAtUpdate = sb.updating;
+        coversAtUpdate = JSON.parse(bufferedAtUpdate).some(([start, end]) => start <= 2.5 && end >= 3.5);
+      });
+      sb.appendBuffer(f.segments[0]);
+      sb.abort();
+      sb.appendBuffer(f.segments[1]);
+      check("round " + round + ": updating is true after the second appendBuffer", sb.updating === true);
+      // Give a stale completion every chance to arrive and clear `updating`: sample it while waiting.
+      let clearedEarly = false;
+      for (let i = 0; i < 60 && counts.update === before.update; i++) {
+        if (!sb.updating && counts.update === before.update) clearedEarly = true;
+        await sleep(0);
+      }
+      // The abort's own updateend is queued too: wait for both.
+      await until(() => counts.updateend >= before.updateend + 2, 8000, "the second append's updateend");
+      check("round " + round + ": updating stayed true until the second append's update event", !clearedEarly);
+      check("round " + round + ": the first append ended with one abort event", counts.abort === before.abort + 1, counts.abort - before.abort);
+      check("round " + round + ": one update event for the second append", counts.update === before.update + 1, counts.update - before.update);
+      check("round " + round + ": two updatestart and two updateend events (abort and the second append)",
+        counts.updatestart === before.updatestart + 2 && counts.updateend === before.updateend + 2,
+        (counts.updatestart - before.updatestart) + " " + (counts.updateend - before.updateend));
+      check("round " + round + ": updating is false after updateend", sb.updating === false);
+      check("round " + round + ": the second append's data is buffered when update fires (2 to 4 s)", coversAtUpdate === true, bufferedAtUpdate);
+      check("round " + round + ": updating was false inside the update handler", updatingAtUpdate === false, updatingAtUpdate);
+      await sleep(200);
+      check("round " + round + ": no late event after updateend", counts.update === before.update + 1 && counts.error === 0, JSON.stringify(counts));
+    }
+
+    // abort() when nothing is updating fires nothing.
+    {
+      const { mediaSource } = await openSource();
+      const sb = mediaSource.addSourceBuffer(H264_LOW);
+      const counts = watch(sb);
+      await append(sb, f.init);
+      const before = { ...counts };
+      sb.abort();
+      await sleep(200);
+      check("abort() on an idle buffer fires no event", JSON.stringify(counts) === JSON.stringify(before), JSON.stringify(counts));
+    }
+
+    // Removing a source buffer in the middle of an append: abort and updateend, never update, nothing later.
+    {
+      const { mediaSource } = await openSource();
+      const sb = mediaSource.addSourceBuffer(H264_LOW);
+      const counts = watch(sb);
+      await append(sb, f.init);
+      const before = { ...counts };
+      sb.appendBuffer(f.segments[0]);
+      mediaSource.removeSourceBuffer(sb);
+      check("updating is false right after removeSourceBuffer", sb.updating === false);
+      await sleep(500);
+      check("removal in the middle of an append: one abort, one updateend, no update",
+        counts.abort === before.abort + 1 && counts.update === before.update && counts.updateend === before.updateend + 1,
+        JSON.stringify(counts));
+      check("the media source has no source buffer left", mediaSource.sourceBuffers.length === 0, mediaSource.sourceBuffers.length);
+    }
+
+    // A remove() racing an abort() of the same buffer's earlier append.
+    {
+      const { mediaSource } = await openSource();
+      const sb = mediaSource.addSourceBuffer(H264_LOW);
+      const counts = watch(sb);
+      await append(sb, f.init);
+      await append(sb, f.segments[0]);
+      const before = { ...counts };
+      sb.appendBuffer(f.segments[1]);
+      sb.abort();
+      sb.remove(0, 1);
+      check("updating is true after remove() that follows an abort()", sb.updating === true);
+      await until(() => counts.updateend >= before.updateend + 2, 8000, "the remove's updateend");
+      await sleep(300);
+      check("the remove completes with exactly one update after the abort",
+        counts.update === before.update + 1 && counts.abort === before.abort + 1, JSON.stringify(counts));
+      check("updating is false at the end", sb.updating === false);
+    }
+  })().then(() => finish(), error => finish(error));
+}
+</script>
+</body>
+</html>
