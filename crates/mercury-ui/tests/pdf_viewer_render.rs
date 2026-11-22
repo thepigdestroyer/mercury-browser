@@ -364,6 +364,12 @@ impl Fixture {
     }
 
     fn click(&self, x: f32, y: f32) {
+        self.tap(x, y);
+        self.settle();
+    }
+
+    /// A press and release at `x`, `y`, with no redraw.
+    fn tap(&self, x: f32, y: f32) {
         let position = LogicalPosition::new(x, y);
         self.window
             .dispatch_event(WindowEvent::PointerMoved { position });
@@ -375,7 +381,48 @@ impl Fixture {
             position,
             button: PointerEventButton::Left,
         });
+    }
+
+    /// Taps along the rows `ys`, every few pixels, until `hit` says the tap did what is looked
+    /// for; returns where. What each tap recorded is dropped before the next. Where a control sits
+    /// depends on the width of its text, and so on the system's fonts, so the test finds it by
+    /// its effect instead of writing its position down.
+    fn find_by_tapping(
+        &self,
+        ys: impl Iterator<Item = u32>,
+        hit: impl Fn(&Self) -> bool,
+    ) -> Option<(f32, f32)> {
         self.settle();
+        for y in ys {
+            for x in (2..AREA_WIDTH as u32).step_by(4) {
+                let (x, y) = (x as f32, y as f32);
+                self.tap(x, y);
+                if hit(self) {
+                    return Some((x, y));
+                }
+                self.calls.borrow_mut().clear();
+            }
+        }
+        None
+    }
+
+    /// Finds where a tap makes the control call `name` (the call is left to be taken), in the row
+    /// of the toolbar's buttons or in the page area below it.
+    fn find_calling(&self, name: &str, below_toolbar: bool) -> (f32, f32) {
+        let top = if below_toolbar {
+            TOOLBAR_HEIGHT as u32
+        } else {
+            20
+        };
+        let bottom = if below_toolbar {
+            (TOOLBAR_HEIGHT + AREA_HEIGHT) as u32
+        } else {
+            21
+        };
+        self.find_by_tapping((top..bottom).step_by(6), |fixture| {
+            *fixture.calls.borrow() == [name]
+        })
+        .unwrap_or_else(|| panic!("no tap made a control call {name:?}"))
     }
 
     fn scroll(&self, x: f32, y: f32, delta_x: f32, delta_y: f32) {
@@ -448,27 +495,29 @@ fn the_pdf_viewer_renders_and_answers_keys_clicks_and_the_model() {
     );
     let _ = fixture.take_calls();
 
-    // The toolbar's buttons answer clicks (positions read off the rendering: the strip is 40
-    // px high, so every button's middle is at y = 20).
-    for (x, name) in [
-        (405.0, "zoom out"),
-        (484.0, "zoom in"),
-        (549.0, "fit width"),
-        (617.0, "fit page"),
-        (694.0, "rotate"),
-        (748.0, "find"),
-        (831.0, "save a copy"),
-        (933.0, "open externally"),
+    // The toolbar's buttons answer clicks (the strip is 40 px high, so every button's middle is
+    // at y = 20); each is found along that row, left to right.
+    let mut buttons = Vec::new();
+    for name in [
+        "zoom out",
+        "zoom in",
+        "fit width",
+        "fit page",
+        "rotate",
+        "find",
+        "save a copy",
+        "open externally",
     ] {
-        fixture.click(x, 20.0);
-        assert_eq!(fixture.take_calls(), vec![name], "the button at x = {x}");
+        buttons.push(fixture.find_calling(name, false));
+        assert_eq!(fixture.take_calls(), vec![name], "the button {name:?}");
     }
     // A disabled button answers nothing.
     fixture.model().set_can_save_copy(false);
     fixture.model().set_can_zoom_in(false);
     fixture.settle();
-    fixture.click(831.0, 20.0);
-    fixture.click(484.0, 20.0);
+    let (zoom_in, save_a_copy) = (buttons[1], buttons[6]);
+    fixture.click(save_a_copy.0, save_a_copy.1);
+    fixture.click(zoom_in.0, zoom_in.1);
     assert_eq!(fixture.take_calls(), Vec::<String>::new());
     fixture.model().set_can_save_copy(true);
     fixture.model().set_can_zoom_in(true);
@@ -529,7 +578,9 @@ fn the_pdf_viewer_renders_and_answers_keys_clicks_and_the_model() {
     // The page field: clicking it takes the keyboard (so browser shortcuts that move the text
     // cursor leave it alone), a typed number goes to the page, and Return gives the keyboard back.
     assert!(!harness.get_text_input_focused());
-    fixture.click(309.0, 20.0);
+    let page_field = fixture
+        .find_by_tapping(20..21, |fixture| fixture.harness.get_text_input_focused())
+        .expect("a tap in the toolbar takes the keyboard for the page field");
     assert!(harness.get_text_input_focused());
     fixture.key("5");
     fixture.key(Key::Return);
@@ -539,7 +590,7 @@ fn the_pdf_viewer_renders_and_answers_keys_clicks_and_the_model() {
         "the keyboard is back in the pages"
     );
     // Escape drops what was typed.
-    fixture.click(309.0, 20.0);
+    fixture.click(page_field.0, page_field.1);
     fixture.key("9");
     fixture.key(Key::Escape);
     assert_eq!(fixture.take_calls(), Vec::<String>::new());
@@ -594,10 +645,23 @@ fn the_pdf_viewer_renders_and_answers_keys_clicks_and_the_model() {
     );
     // "Open" waits for a password (clicking it elsewhere takes the keyboard from the field, as any
     // click outside a field does); Return or "Open" sends it, and the field is emptied.
-    fixture.click(658.0, 311.0);
-    assert_eq!(fixture.take_calls(), Vec::<String>::new());
-    fixture.click(500.0, 270.0);
-    assert!(harness.get_text_input_focused());
+    assert!(
+        fixture
+            .find_by_tapping(
+                (TOOLBAR_HEIGHT as u32..(TOOLBAR_HEIGHT + AREA_HEIGHT) as u32).step_by(6),
+                |fixture| !fixture.calls.borrow().is_empty()
+            )
+            .is_none(),
+        "nothing in the prompt does anything while there is no password"
+    );
+    fixture.click(2.0, TOOLBAR_HEIGHT + 2.0);
+    assert!(!harness.get_text_input_focused());
+    fixture
+        .find_by_tapping(
+            (TOOLBAR_HEIGHT as u32..(TOOLBAR_HEIGHT + AREA_HEIGHT) as u32).step_by(6),
+            |fixture| fixture.harness.get_text_input_focused(),
+        )
+        .expect("a tap in the prompt takes the keyboard for the password field");
     for letter in "secret".chars() {
         fixture.key(letter.to_string());
     }
@@ -606,7 +670,7 @@ fn the_pdf_viewer_renders_and_answers_keys_clicks_and_the_model() {
     for letter in "again".chars() {
         fixture.key(letter.to_string());
     }
-    fixture.click(658.0, 311.0);
+    fixture.find_calling("password again", true);
     assert_eq!(fixture.take_calls(), vec!["password again"]);
     model.set_message("That password is not right.".into());
     fixture.save("pdf-password-wrong-dark");
@@ -620,16 +684,13 @@ fn the_pdf_viewer_renders_and_answers_keys_clicks_and_the_model() {
     model.set_state(PdfViewState::Error);
     model.set_message("The PDF viewer stopped working on this file.".into());
     fixture.save("pdf-error-light");
-    for (x, name) in [
-        (405.0, "save a copy"),
-        (535.0, "open externally"),
-        (655.0, "try again"),
-    ] {
-        fixture.click(x, 283.0);
+    for name in ["save a copy", "open externally", "try again"] {
+        // Below the toolbar, which has buttons of the same names.
+        fixture.find_calling(name, true);
         assert_eq!(
             fixture.take_calls(),
             vec![name],
-            "the error button at x = {x}"
+            "the error button {name:?}"
         );
     }
     harness

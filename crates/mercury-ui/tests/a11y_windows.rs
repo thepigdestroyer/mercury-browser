@@ -111,6 +111,9 @@ fn about_window(media_line: &str) -> AboutWindow {
     );
     window.set_credit_line("Began as a fork of Hermes Browser by Kayk Caputo.".into());
     a11y::open_window(&window, 380.0, 420.0);
+    // The window opens as tall as its content wants: 420 px where the system's font fits the
+    // lines in that, more where it does not.
+    a11y::open_window(&window, 380.0, window.get_wanted_height());
     window
 }
 
