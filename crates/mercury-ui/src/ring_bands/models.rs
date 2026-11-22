@@ -82,3 +82,60 @@ impl RingBandsModels {
         ModelRc::from(Rc::clone(&self.flags))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use slint::Model;
+
+    use super::*;
+    use crate::ring_bands::{RingOptions, fixtures};
+    use crate::ring_geometry::{ApproxMetrics, RingSpec};
+
+    fn data(n_groups: usize, n_tabs: usize) -> RingBandsData {
+        let (groups, tabs) = fixtures::generated(n_groups, n_tabs, false);
+        RingBandsData::new(
+            RingSpec::default(),
+            &groups,
+            &tabs,
+            &RingOptions::default(),
+            &ApproxMetrics,
+        )
+    }
+
+    #[test]
+    fn a_new_set_of_models_is_empty() {
+        let models = RingBandsModels::new();
+        assert_eq!(models.groups().row_count(), 0);
+        assert_eq!(models.label_glyphs().row_count(), 0);
+        assert_eq!(models.flags().row_count(), 0);
+    }
+
+    #[test]
+    fn update_fills_every_model_from_the_data_in_place() {
+        let models = RingBandsModels::new();
+        let tabs_before = models.tabs();
+        let big = data(3, 9);
+        models.update(&big);
+        assert_eq!(tabs_before.row_count(), 9);
+        assert_eq!(models.groups().row_count(), 3);
+        assert_eq!(models.segments().row_count(), 9);
+        assert_eq!(models.lifted_segments().row_count(), 9);
+        assert_eq!(models.segment_labels().row_count(), 9);
+        assert_eq!(models.label_bands().row_count(), 3);
+        assert_eq!(models.label_glyphs().row_count(), big.label_glyphs.len());
+        assert_eq!(models.flags().row_count(), big.flags.len());
+        assert_eq!(
+            models.segment_labels().row_data(4),
+            Some(big.segment_labels[4].clone())
+        );
+
+        models.update(&data(1, 2));
+        assert_eq!(
+            tabs_before.row_count(),
+            2,
+            "the old handle follows the update"
+        );
+        assert_eq!(models.groups().row_count(), 1);
+        assert_eq!(models.label_bands().row_count(), 1);
+    }
+}
