@@ -137,6 +137,10 @@ impl Rig {
         window.on_tab_activated(move |id| push(&heard, format!("tab-activated({id})")));
         let heard = Rc::clone(&log);
         window.on_tab_hovered(move |id| push(&heard, format!("tab-hovered({id})")));
+        let heard = Rc::clone(&log);
+        window.on_drag_started(move |id| push(&heard, format!("drag-started({id})")));
+        let heard = Rc::clone(&log);
+        window.on_drag_cancelled(move || push(&heard, "drag-cancelled".to_string()));
 
         a11y::open_window(&window, AREA.0, AREA.1);
         let rig = Self {
@@ -1017,4 +1021,31 @@ fn a_short_title_gives_a_narrow_box_against_the_side_nearest_the_dial() {
             assert!(edge.abs() < 0.01, "{corner:?} tab {id}: {edge}");
         }
     }
+}
+
+/// No drag of a segment survives the fan: Escape in the middle of one cancels it.
+#[test]
+fn escape_cancels_a_segment_drag_with_the_fan() {
+    let rig = Rig::new(DialCorner::BottomRight);
+    rig.open();
+    let segment = rig.fan.borrow().data.segments[9].clone();
+    let at = (BOX_ORIGIN.0 + segment.mid_x, BOX_ORIGIN.1 + segment.mid_y);
+    rig.press(at.0, at.1);
+    rig.drag_to(at, (at.0 + 20.0, at.1 + 20.0));
+    let started = rig.events();
+    assert!(
+        started.iter().any(|line| line.starts_with("drag-started(")),
+        "the segment is being dragged: {started:?}"
+    );
+
+    rig.key(Key::Escape);
+    assert!(!rig.window.get_expanded());
+    let heard = rig.events();
+    assert!(
+        heard.iter().any(|line| line == "drag-cancelled"),
+        "Escape ended the drag: {heard:?}"
+    );
+    // The release that follows is not a drop.
+    rig.release(at.0 + 20.0, at.1 + 20.0);
+    assert!(rig.events().iter().all(|line| line != "toggled(true)"));
 }

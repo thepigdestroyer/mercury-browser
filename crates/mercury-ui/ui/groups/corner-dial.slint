@@ -242,9 +242,13 @@ export component CornerDial inherits Rectangle {
         root.toggled(root.expanded);
         if root.expanded {
             dial-focus.focus();
+        } else {
+            ring.cancel-drag();
         }
     }
     function close() {
+        // No drag of a segment survives the fan (RingBands fires `drag-cancelled` if one was live).
+        ring.cancel-drag();
         if root.expanded {
             root.expanded = false;
             root.toggled(false);
@@ -270,6 +274,13 @@ export component CornerDial inherits Rectangle {
     changed expanded => {
         if root.expanded && !root.suppressed {
             dial-focus.focus();
+        }
+    }
+
+    // However the fan went away (a drag of the dial, `suppressed`, the host clearing `expanded`).
+    changed fan-open => {
+        if !root.fan-open {
+            ring.cancel-drag();
         }
     }
 
