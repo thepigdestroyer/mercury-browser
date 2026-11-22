@@ -3,10 +3,18 @@ import { Palette } from "std-widgets.slint";
 import { DownloadsButton, DownloadsPopover, DownloadsPanel, QuitDownloadsPrompt, DownloadOfferBar, DownloadsPalette, DownloadRow, DownloadAction } from "downloads/downloads.slint"; // downloads-ui lane
 export { DownloadsPalette, DownloadRow, DownloadAction }
 import { ChromePalette } from "theme/chrome-palette.slint";
-export { ChromePalette, ChromeTheme } from "theme/chrome-palette.slint";
+export { ChromeColors, ChromePalette, ChromeTheme } from "theme/chrome-palette.slint";
+// theme-plumbing: the chrome's sizes (Rust pushes them: src/theme)
+import { ChromeMetrics } from "theme/chrome-metrics.slint";
+export { ChromeMetrics } from "theme/chrome-metrics.slint";
 // ring-geometry: the tab-group rows and arc shapes (Rust fills them: src/ring_geometry)
 export { ArcGlyph, ArcSeg, GroupRow, TabRow } from "groups/models.slint";
 export { KeyChip, KeyMetrics, KeyRingSeg, KeySwitcherPreview, KeyTile } from "groups/key-switcher.slint"; // key-switcher (the KeySwitcher component is imported where it is embedded: only Window components get generated code)
+// ring-bands
+export { RingBandsPreview, RingDropTarget, RingHit, RingHitKind } from "groups/ring-bands.slint";
+export { FlagKind, FlagPin } from "groups/flags.slint";
+export { RingTextMeasure } from "groups/ring-measure.slint";
+export { OrbitCard, OrbitChip, OrbitDragView, OrbitLevel, OrbitNeighbour, OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreview, OrbitPreviewCard, OrbitSun } from "orbit/orbit.slint"; // orbit-view
 // settings-ui
 import { SettingsNotice } from "settings/settings-notice.slint";
 export { SearchEngineRow, SettingsWindow } from "settings/settings-window.slint";
@@ -90,9 +98,9 @@ component ChromeButton inherits Rectangle {
     in property <string> accessible-name; // a11y-base: what a screen reader says instead of the glyph in `label`
     callback clicked;
 
-    width: 36px;
-    height: 34px;
-    border-radius: 7px;
+    width: ChromeMetrics.button-width;
+    height: ChromeMetrics.button-height;
+    border-radius: ChromeMetrics.button-radius;
     background: button-area.pressed && root.enabled
         ? ChromePalette.button-pressed
         : button-area.has-hover && root.enabled ? ChromePalette.button-hover : transparent;
@@ -105,7 +113,7 @@ component ChromeButton inherits Rectangle {
     Text {
         text: root.label;
         color: button-area.has-hover && root.enabled ? ChromePalette.button-label-hover : ChromePalette.button-label;
-        font-size: 17px;
+        font-size: ChromeMetrics.button-font-size;
         font-weight: 500;
         horizontal-alignment: center;
         vertical-alignment: center;
@@ -637,16 +645,16 @@ export component MainWindow inherits Window {
         spacing: 0px;
 
         Rectangle {
-            height: root.chrome-hidden ? 0px : 48px;
+            height: root.chrome-hidden ? 0px : ChromeMetrics.tab-row-height;
             visible: !root.chrome-hidden;
             background: ChromePalette.window-background;
 
             HorizontalLayout {
-                padding-left: 10px;
-                padding-right: 14px;
-                padding-top: 7px;
-                padding-bottom: 3px;
-                spacing: 8px;
+                padding-left: ChromeMetrics.tab-row-padding-left;
+                padding-right: ChromeMetrics.tab-row-padding-right;
+                padding-top: ChromeMetrics.tab-row-padding-top;
+                padding-bottom: ChromeMetrics.tab-row-padding-bottom;
+                spacing: ChromeMetrics.tab-row-spacing;
 
                 // tabs-plus: pinned tabs, dragging, the tab menu and the "all tabs" button
                 tab-strip := TabStrip {
@@ -676,8 +684,8 @@ export component MainWindow inherits Window {
                 }
 
                 ChromeButton {
-                    width: 34px;
-                    height: 34px;
+                    width: ChromeMetrics.new-tab-button-size;
+                    height: ChromeMetrics.new-tab-button-size;
                     label: "+";
                     accessible-name: "New tab"; // a11y-base
                     clicked => {
@@ -688,18 +696,18 @@ export component MainWindow inherits Window {
         }
 
         Rectangle {
-            height: root.chrome-hidden ? 0px : 60px;
+            height: root.chrome-hidden ? 0px : ChromeMetrics.toolbar-height;
             visible: !root.chrome-hidden;
             background: ChromePalette.toolbar-background;
             accessible-role: navigation; // a11y-base
             accessible-label: "Toolbar"; // a11y-base
 
             HorizontalLayout {
-                padding-left: 14px;
-                padding-right: 14px;
-                padding-top: 11px;
-                padding-bottom: 11px;
-                spacing: 8px;
+                padding-left: ChromeMetrics.toolbar-padding-x;
+                padding-right: ChromeMetrics.toolbar-padding-x;
+                padding-top: ChromeMetrics.toolbar-padding-y;
+                padding-bottom: ChromeMetrics.toolbar-padding-y;
+                spacing: ChromeMetrics.toolbar-spacing;
 
                 ChromeButton {
                     label: "‹";
@@ -739,8 +747,8 @@ export component MainWindow inherits Window {
 
                 address-box := Rectangle {
                     horizontal-stretch: 1;
-                    height: 38px;
-                    border-radius: 9px;
+                    height: ChromeMetrics.address-height;
+                    border-radius: ChromeMetrics.address-radius;
                     border-width: 1px;
                     border-color: address-input.has-focus ? ChromePalette.accent : ChromePalette.field-border;
                     background: ChromePalette.field-background;
@@ -782,7 +790,7 @@ export component MainWindow inherits Window {
                         height: parent.height;
                         text <=> root.address;
                         color: ChromePalette.text;
-                        font-size: 14px;
+                        font-size: ChromeMetrics.address-font-size;
                         vertical-alignment: center;
                         single-line: true;
                         accessible-label: "Address and search"; // a11y-base
@@ -945,7 +953,7 @@ export component MainWindow inherits Window {
 
         // bookmarks
         bookmarks-bar := BookmarksBar {
-            height: root.bookmarks-bar-shown && !root.chrome-hidden ? 34px : 0px;
+            height: root.bookmarks-bar-shown && !root.chrome-hidden ? ChromeMetrics.bookmarks-bar-height : 0px;
             visible: root.bookmarks-bar-shown && !root.chrome-hidden;
             items: root.bookmarks-bar-items;
             overflow: root.bookmarks-bar-overflow;
@@ -987,7 +995,7 @@ export component MainWindow inherits Window {
 
         // find: the find bar, a row of its own under the toolbar
         find-bar := FindBar {
-            height: root.find-open && !root.chrome-hidden ? 42px : 0px;
+            height: root.find-open && !root.chrome-hidden ? ChromeMetrics.find-bar-height : 0px;
             shown: root.find-open && !root.chrome-hidden;
             query <=> root.find-query;
             status: root.find-status;

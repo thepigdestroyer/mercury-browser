@@ -1,0 +1,95 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The sun of the Orbit overview (SPEC design/ui-final/SPEC.md §1 and §4.6): the window as a warm
+// disc with a halo, the profile name and "Window N · T tabs". It looks the same in the light and
+// the dark scheme, so its gradient stops and the two ink colours on it are literals here: the one
+// place of the Orbit files with colour literals (lane brief D15), because the sun is brand art and
+// not themed chrome. Radius 92, halo radius 133.4 (mockup orbit-1-overview).
+
+// The box is the halo's square (2 x 1.45 x radius), centred where the sun is; the parent places it.
+export component Sun inherits Rectangle {
+    in property <length> radius: 92px;
+    in property <string> title;
+    in property <string> subtitle;
+
+    private property <length> disc: 2 * root.radius;
+    private property <float> k: root.radius / 92px;
+    private property <length> glow: 0.72 * root.radius;
+
+    // The disc's colour at a fraction of its radius: gold in the middle, orange, then the red rim.
+    pure function disc-colour(u: float) -> color {
+        if u < 0.5 {
+            return #FFD76A.mix(#FFB547, 1 - u / 0.5);
+        }
+        if u < 0.85 {
+            return #FFB547.mix(#FF8A2F, 1 - (u - 0.5) / 0.35);
+        }
+        return #FF8A2F.mix(#EC5B27, 1 - (u - 0.85) / 0.15);
+    }
+
+    width: 2.9 * root.radius;
+    height: root.width;
+    accessible-role: text;
+    accessible-label: root.subtitle == "" ? root.title : "\{root.title}, \{root.subtitle}";
+
+    // The halo: opaque orange 35 % from 60 % of its radius, fading to nothing at its edge (the
+    // corner of the box is 1.414 x the radius, so the stops are scaled by 0.707).
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.width / 2;
+        background: @radial-gradient(circle, #FF9A3C00 0%, #FF9A3C00 20%, #FF9A3C59 42.4%, #FF9A3C00 70.7%);
+    }
+
+    // The disc: concentric solid circles from the rim inwards (the software renderer fills a
+    // rounded rectangle's gradient as a square, so the radial gradient is built from circles).
+    for i in 48: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.disc * (48 - i) / 48;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.disc-colour((48 - i) / 48);
+    }
+
+    // The bright focus up and to the left of the middle (the mockup's gradient is centred at 45 % and
+    // 40 %): translucent circles that add up towards their middle.
+    for j in 16: Rectangle {
+        x: (parent.width - root.disc) / 2 + 0.9 * root.radius - self.width / 2;
+        y: (parent.height - root.disc) / 2 + 0.8 * root.radius - self.width / 2;
+        width: 2 * root.glow * (16 - j) / 16;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: #FFF3C4.transparentize(0.86);
+    }
+
+    Text {
+        x: 0;
+        y: parent.height / 2 - 18px * root.k;
+        width: parent.width;
+        height: 24px * root.k;
+        text: root.title;
+        font-size: 19px * root.k;
+        font-weight: 800;
+        color: #1E1233;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+
+    Text {
+        x: 0;
+        y: parent.height / 2 + 12px * root.k;
+        width: parent.width;
+        height: 16px * root.k;
+        text: root.subtitle;
+        font-size: 11.5px * root.k;
+        font-weight: 600;
+        color: #5A2A12;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: none;
+    }
+}

@@ -1,0 +1,170 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The rows of the Orbit view (SPEC design/ui-final/SPEC.md §4.6). Rust (src/orbit_view/layout.rs and
+// data.rs) computes every position; Slint draws what it is given. All positions are in stage
+// coordinates (the whole window, origin top-left) and name a CENTRE unless said otherwise.
+//
+// Lane orbit-view (sdd/lane-orbit-view-brief.md): the field lists are what the Rust data builder
+// fills and the Slint view draws. A new field is an addition; Rust builds the rows with
+// `..Default::default()` so that an added field never breaks it.
+
+import { ArcGlyph, ArcSeg, GroupRow, TabRow } from "../groups/models.slint";
+import { FlagPin } from "../groups/flags.slint";
+
+export enum OrbitLevel {
+    groups,
+    group,
+    tab,
+}
+
+// One ring that `RingBands` draws: a planet (level 1), the centre ring (levels 2 and 3). The
+// arrays are the parallel arrays of ring_bands::RingBandsData, filled through a RingBandsModels the
+// builder keeps for this planet (the ModelRc identity stays across updates). The ring's box is a
+// `ring-size` square centred on (x, y); the arrays' coordinates are ring-local.
+export struct OrbitPlanet {
+    group: int,                 // GroupRow.id (-2: the loose planet)
+    name: string,
+    x: length,
+    y: length,
+    scale: float,               // 1.0 for few groups; the planets shrink with many
+    ring-size: length,
+    halo-radius: length,        // 103 x scale: the hover and drop halo
+    lit: bool,                  // hovered or focused: accent halo and tooltip
+    drop-lit: bool,             // a drag hovers it: the 3 px accent ring (move frame)
+    dimmed: bool,               // another planet is lit at level 2 (they slide out and fade)
+    opacity: float,
+    hole-text: string,          // "2 min ago" (level 1), "10 tabs · 2 min ago" (level 2)
+    tooltip: string,            // "Research · click or pinch in to zoom"
+    tooltip-x: length,          // the tooltip card's top-left
+    tooltip-y: length,
+    accessible-label: string,   // "<name>, tab group, <n> tabs, key Option <K>"
+    // RingBands data of this one ring.
+    groups: [GroupRow],
+    tabs: [TabRow],
+    segments: [ArcSeg],
+    lifted-segments: [ArcSeg],
+    segment-labels: [string],
+    label-bands: [ArcSeg],
+    label-glyphs: [ArcGlyph],
+    flags: [FlagPin],
+    // Group-level badges (spinner, speaker, unread) at the bottom of the label band, ring-local.
+    badges: [FlagPin],
+    // The tab being dragged out of this ring (-1 for none): its slot is dashed.
+    dragging-tab: int,
+    // Where a dragged tab would land in this ring: the accent bar (move frame).
+    drop-bar: ArcSeg,
+    has-drop-bar: bool,
+}
+
+// A level-2 preview card (centre = its middle).
+export struct OrbitPreviewCard {
+    tab: int,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    scale: float,               // 1.04 while hovered
+    title: string,
+    host: string,
+    picture: image,
+    has-picture: bool,          // false: the placeholder (favicon letter, title, host)
+    letter: string,             // the favicon chip's letter
+    shade: color,               // the chip colour (the tab's shade)
+    current: bool,              // the active tab: 2 px accent outline
+    lit: bool,                  // hovered or focused
+    draggable: bool,            // false for a pinned tab
+    spoke-x1: length,           // 1 px spoke from the ring's outer edge to the card
+    spoke-y1: length,
+    spoke-x2: length,
+    spoke-y2: length,
+    flags: [FlagPin],           // card-local coordinates
+    accessible-label: string,   // "<title>, <group>, tab i of n" + states
+}
+
+// An "Other groups" chip (level 2).
+export struct OrbitChip {
+    group: int,
+    name: string,
+    key-label: string,
+    colour: color,
+    x: length,                  // top-left
+    y: length,
+    width: length,
+    height: length,
+    accessible-label: string,
+}
+
+// The previous or next tab's card at level 3 (half off the stage edge, dimmed).
+export struct OrbitNeighbour {
+    tab: int,
+    x: length,
+    y: length,
+    width: length,
+    height: length,
+    title: string,
+    picture: image,
+    has-picture: bool,
+    letter: string,
+    shade: color,
+    accessible-label: string,
+}
+
+// The level-3 card of the shown tab (980 x 660 at 1440 x 900).
+export struct OrbitCard {
+    tab: int,
+    visible: bool,
+    x: length,                  // top-left
+    y: length,
+    width: length,
+    height: length,
+    title: string,
+    host: string,
+    caption: string,            // "Research · tab 4 of 10"
+    picture: image,
+    has-picture: bool,
+    letter: string,
+    shade: color,
+    group-colour: color,
+    accessible-label: string,   // "Open <title>"
+}
+
+export struct OrbitSun {
+    x: length,
+    y: length,
+    radius: length,             // 92
+    title: string,              // the profile name
+    subtitle: string,           // "Window 1 · 40 tabs"
+    opacity: float,
+}
+
+// The dashed "New group" ring.
+export struct OrbitNewGroup {
+    x: length,
+    y: length,
+    radius: length,             // 50
+    lit: bool,
+    visible: bool,
+}
+
+// The drag in flight: the pill ghost and the dashed line from the source slot to it.
+export struct OrbitDragView {
+    active: bool,
+    ghost-x: length,            // the pill's centre
+    ghost-y: length,
+    ghost-text: string,
+    ghost-colour: color,
+    from-x: length,             // the source slot's mid-point, for the dashed line
+    from-y: length,
+    has-from: bool,
+}
+
+// The new-group popover (a plain name field and six colour dots).
+export struct OrbitPopover {
+    visible: bool,
+    x: length,                  // top-left
+    y: length,
+    name: string,
+    colours: [color],
+    colour-names: [string],
+    selected: int,
+}

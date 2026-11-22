@@ -1,0 +1,18 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// A window that is never shown: Rust sets `sample`, `font-size` and `font-weight` and reads `text-width`
+// to learn how wide the renderer's real font draws a string (src/ring_bands/metrics.rs). Slint 1.17
+// has no font-metrics API for Rust, so this is how the curved ring labels get measured advances.
+
+export component RingTextMeasure inherits Window {
+    in property <string> sample;
+    in property <length> font-size: 12px;
+    in property <int> font-weight: 400;
+    out property <length> text-width: label.preferred-width;
+
+    label := Text {
+        text: root.sample;
+        font-size: root.font-size;
+        font-weight: root.font-weight;
+    }
+}

@@ -1,0 +1,213 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The tab cards of the Orbit overview (SPEC design/ui-final/SPEC.md §4.6): `TabPicture` (the tab's
+// picture, or the placeholder of a tab that has none: the favicon letter, the title and the host),
+// `PreviewCard` (a level-2 preview: picture above a 28 px caption, flags, the outline of the current
+// tab, a lift while hovered, a `DragArea` for the tab) and the caption chip. Rust decides where a
+// card is and how big (src/orbit_view/layout.rs); this file draws it and reports the pointer.
+
+import { RingFlags } from "../groups/flags.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { OrbitPreviewCard } from "orbit-models.slint";
+
+// The favicon chip: the first letter of the title on the tab's shade.
+export component LetterChip inherits Rectangle {
+    in property <string> letter;
+    in property <color> shade;
+    in property <length> size: 16px;
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size * 0.28;
+    background: root.shade;
+
+    Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.letter;
+        font-size: root.size * 0.58;
+        font-weight: 800;
+        color: ChromePalette.primary-button-text;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+// The picture of a tab, filling its box (cropped to cover), or the placeholder.
+export component TabPicture inherits Rectangle {
+    in property <image> picture;
+    in property <bool> has-picture;
+    in property <string> letter;
+    in property <color> shade;
+    in property <string> title;
+    in property <string> host;
+    // 1 on a big card, less on a small one: the size of the placeholder's drawing.
+    in property <float> unit: 1;
+
+    clip: true;
+    background: ChromePalette.item-hover;
+
+    if root.has-picture: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.picture;
+        image-fit: cover;
+        accessible-role: none;
+    }
+
+    if !root.has-picture: VerticalLayout {
+        alignment: center;
+        spacing: 6px * root.unit;
+        padding: 8px;
+
+        HorizontalLayout {
+            alignment: center;
+            LetterChip {
+                letter: root.letter;
+                shade: root.shade;
+                size: 34px * root.unit;
+            }
+        }
+        Text {
+            text: root.title;
+            font-size: 13px * root.unit;
+            font-weight: 700;
+            color: ChromePalette.text;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+        Text {
+            text: root.host;
+            font-size: 11px * root.unit;
+            color: ChromePalette.text-muted;
+            horizontal-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+    }
+}
+
+// A level-2 preview card. The box is the card's size (times the hover lift) centred on the row's
+// (x, y).
+export component PreviewCard inherits Rectangle {
+    in property <OrbitPreviewCard> card;
+    in property <bool> animate-spinners: true;
+    in property <bool> reduce-motion: false;
+
+    callback clicked();
+    callback hover-changed(bool);
+    pure callback payload-for(string, int) -> data-transfer;
+    callback drag-source-started();
+    callback drag-source-finished(bool);
+
+    private property <length> caption: 28px;
+    private property <duration> lift: root.reduce-motion ? 0ms : 90ms;
+
+    width: root.card.width * root.card.scale;
+    height: root.card.height * root.card.scale;
+    x: root.card.x - root.width / 2;
+    y: root.card.y - root.height / 2;
+    animate width, height, x, y { duration: root.lift; }
+
+    // The lifted card has a shadow (the software renderer draws none) and the accent outline.
+    body := Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: 10px;
+        background: ChromePalette.popup-background;
+        drop-shadow-blur: root.card.lit ? 18px : 0px;
+        drop-shadow-color: ChromePalette.shadow;
+        drop-shadow-offset-y: 6px;
+        clip: true;
+
+        TabPicture {
+            x: 0;
+            y: 0;
+            width: parent.width;
+            height: parent.height - root.caption;
+            picture: root.card.picture;
+            has-picture: root.card.has-picture;
+            letter: root.card.letter;
+            shade: root.card.shade;
+            title: root.card.title;
+            host: root.card.host;
+            unit: 0.6;
+        }
+
+        Rectangle {
+            x: 0;
+            y: parent.height - root.caption;
+            width: parent.width;
+            height: root.caption;
+
+            LetterChip {
+                x: 8px;
+                y: (parent.height - self.height) / 2;
+                letter: root.card.letter;
+                shade: root.card.shade;
+                size: 16px;
+            }
+            Text {
+                x: 30px;
+                width: parent.width - 38px;
+                height: parent.height;
+                text: root.card.title;
+                font-size: 11.5px;
+                font-weight: 600;
+                color: ChromePalette.text;
+                vertical-alignment: center;
+                overflow: elide;
+                accessible-role: none;
+            }
+        }
+
+        // The outline is drawn last: the picture and the caption would cover a border of the body.
+        Rectangle {
+            width: parent.width;
+            height: parent.height;
+            border-radius: 10px;
+            border-width: root.card.current || root.card.lit ? 2px : 1px;
+            border-color: root.card.current || root.card.lit ? ChromePalette.accent : ChromePalette.popup-border;
+        }
+    }
+
+    // The flags (spinner, speaker, unread dot) sit at the card's top right, in card coordinates.
+    RingFlags {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        flags: root.card.flags;
+        animate-spinners: root.animate-spinners;
+        reduce-motion: root.reduce-motion;
+    }
+
+    DragArea {
+        width: parent.width;
+        height: parent.height;
+        enabled: root.card.draggable;
+        data: root.payload-for("tab", root.card.tab);
+        allow-move: true;
+        changed dragging => {
+            if self.dragging {
+                root.drag-source-started();
+            }
+        }
+        drag-finished(action) => {
+            root.drag-source-finished(action != DragAction.none);
+        }
+
+        TouchArea {
+            width: parent.width;
+            height: parent.height;
+            clicked => {
+                root.clicked();
+            }
+            changed has-hover => {
+                root.hover-changed(self.has-hover);
+            }
+        }
+    }
+}

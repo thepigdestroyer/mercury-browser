@@ -13,9 +13,12 @@
 //!   run through `scripts/ci/light-crates.sh`).
 //! - [`github_env`]: the variables `scripts/ci/github-env.sh` passes to later GitHub Actions
 //!   steps (`github-env`).
+//! - [`pixel_diff`]: compares two folders of PNG pictures pixel by pixel (`pixel-diff`), the gate
+//!   that a change to the interface draws what it drew before.
 
 pub mod colors;
 pub mod github_env;
 pub mod metadata;
+pub mod pixel_diff;
 pub mod png;
 pub mod serve;

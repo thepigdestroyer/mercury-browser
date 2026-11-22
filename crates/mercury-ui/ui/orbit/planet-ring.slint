@@ -1,0 +1,312 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// One group's ring in the Orbit overview (SPEC design/ui-final/SPEC.md §4.6): a planet at level 1,
+// the centre ring at levels 2 and 3. It draws the lit halo (hover), the drop ring (a drag is over
+// it), `RingBands` with the planet's arrays, the group badges, the hole text and the drop bar, and it
+// takes the pointer: a click on the halo or the hole, the ring's own events, the reorder `DragArea`
+// (the hole is the planet's handle) and the `DropArea` of the planet (lane brief D3 and D11).
+//
+// The box is a square centred on the planet's (x, y) of the row, as large as the halo or the ring
+// box, whichever is bigger. The parent gives the role (`button` for a planet) and the action.
+
+import { RingBands, RingDropTarget, RingHit } from "../groups/ring-bands.slint";
+import { RingFlags } from "../groups/flags.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { OrbitPlanet } from "orbit-models.slint";
+
+export component PlanetRing inherits Rectangle {
+    in property <OrbitPlanet> planet;
+    // false: draws only (level 3's huge ring).
+    in property <bool> interactive: true;
+    // true at level 1: the halo, the click on the hole and the drop ring.
+    in property <bool> halo-enabled: true;
+    // true at level 1: a drag from the hole reorders the groups.
+    in property <bool> reorderable: false;
+    in property <bool> accepts-drops: true;
+    in property <bool> query-active: false;
+    in property <int> focused-tab: -1;
+    in property <bool> reduce-motion: false;
+    in property <bool> animate-spinners: true;
+    // 1 at rest; the huge ring behind the level-3 card is dimmed.
+    in property <float> dim: 1;
+    // Bumped by the view to end a drag of this ring (a change handler calls `cancel-drag`).
+    in property <int> cancel-tick: 0;
+    // The tab this ring is dragging now (RingBands' own drag), -1 for none.
+    out property <int> drag-source <=> ring.drag-source;
+
+    // A click on the halo, the hole or a label band.
+    callback clicked();
+    // A click on a tab segment (its row id).
+    callback tab-clicked(int);
+    // The pointer is over the planet (halo, hole or ring) or left it.
+    callback hover-changed(bool);
+    // The tab under the pointer in the ring, -1 for none.
+    callback tab-hovered(int);
+    // The ring's own drag (RingBands): a tab left its slot; the moved point is in stage coordinates.
+    callback ring-drag-started(int);
+    callback ring-drag-moved(length, length);
+    callback ring-dropped(int, int);
+    callback ring-drag-cancelled();
+    // The ring started or ended its own drag: the dragged tab, -1 for none.
+    callback ring-drag-live(int);
+    // The pure hit tests of the ring, forwarded to Rust.
+    pure callback hit-test(length, length, int) -> RingHit;
+    pure callback drop-target(length, length, int) -> RingDropTarget;
+    // DragArea and DropArea: the payload of what is dragged from here and what a drop accepts.
+    pure callback payload-for(string, int) -> data-transfer;
+    pure callback payload-accepts(data-transfer, string, int, int) -> bool;
+    callback payload-dropped(data-transfer, string, int, int) -> bool;
+    // A drag started with the DragArea is over this planet (kind, id, stage x, stage y).
+    callback drag-over(string, int, length, length);
+    callback drag-source-started();
+    callback drag-source-finished(bool);
+
+    private property <length> cx: root.width / 2;
+    private property <length> cy: root.height / 2;
+    private property <length> ring-x: (root.width - root.planet.ring-size) / 2;
+    private property <length> ring-y: (root.height - root.planet.ring-size) / 2;
+    // The hole inside the tab band: the label band's outer radius is the halo's minus 11, and the
+    // tab band's inner edge 40 inside that, at scale 1.
+    // The centre ring has no halo (its row says 0): its hole is a quarter of the box then.
+    private property <length> hole-radius: max(10px, root.planet.halo-radius > 0px ? root.planet.halo-radius - 55px * root.planet.scale : root.planet.ring-size * 0.25);
+    private property <bool> over: halo-touch.over || hole-touch.has-hover || root.ring-hover;
+    private property <bool> ring-hover: ring.hovered-tab >= 0;
+    private property <bool> lit: root.halo-enabled && (root.planet.lit || root.over);
+    private property <bool> drop-lit: root.planet.drop-lit || drop-zone.has-drag;
+    private property <duration> fade: root.reduce-motion ? 0ms : 90ms;
+    private property <duration> slide: root.reduce-motion ? 0ms : 220ms;
+
+    x: root.planet.x - root.width / 2;
+    y: root.planet.y - root.height / 2;
+    width: max(2 * root.planet.halo-radius, root.planet.ring-size);
+    height: root.width;
+    opacity: root.planet.opacity * root.dim;
+    visible: root.planet.opacity > 0.01;
+    animate x, y { duration: root.slide; easing: ease-in-out; }
+    animate opacity { duration: root.slide; }
+
+    pure function in-halo(px: length, py: length) -> bool {
+        return sqrt(pow((px - root.cx) / 1px, 2) + pow((py - root.cy) / 1px, 2)) <= root.planet.halo-radius / 1px;
+    }
+
+    changed over => {
+        root.hover-changed(root.over);
+    }
+
+    // Ends a live drag of the ring exactly as a release outside every slot does (fires
+    // `ring-drag-cancelled`); does nothing when no drag is live.
+    public function cancel-drag() {
+        ring.cancel-drag();
+    }
+
+    changed cancel-tick => {
+        root.cancel-drag();
+    }
+
+    changed drag-source => {
+        root.ring-drag-live(root.drag-source);
+    }
+
+    // The lit halo (hover): accent at 14 % with a 2 px accent stroke, radius 103 at scale 1.
+    Rectangle {
+        x: root.cx - root.planet.halo-radius;
+        y: root.cy - root.planet.halo-radius;
+        width: 2 * root.planet.halo-radius;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: ChromePalette.accent;
+        background: ChromePalette.accent.transparentize(0.86);
+        visible: root.lit;
+        opacity: root.lit ? 1 : 0;
+        animate opacity { duration: root.fade; }
+    }
+
+    // The drop ring (a tab or a group is dragged over): 3 px accent at radius 97, just outside the
+    // label band.
+    Rectangle {
+        x: root.cx - 97px * root.planet.scale;
+        y: root.cy - 97px * root.planet.scale;
+        width: 194px * root.planet.scale;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 3px;
+        border-color: ChromePalette.accent;
+        visible: root.drop-lit;
+    }
+
+    // The halo's own pointer: a click on the ring's margin zooms in. Under the ring.
+    halo-touch := TouchArea {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        enabled: root.interactive && root.halo-enabled;
+        property <bool> over: false;
+
+        pointer-event(event) => {
+            if event.kind == PointerEventKind.move {
+                self.over = root.in-halo(self.mouse-x, self.mouse-y);
+            }
+        }
+        changed has-hover => {
+            if !self.has-hover {
+                self.over = false;
+            }
+        }
+        clicked => {
+            if root.in-halo(self.mouse-x, self.mouse-y) {
+                root.clicked();
+            }
+        }
+    }
+
+    ring := RingBands {
+        x: root.ring-x;
+        y: root.ring-y;
+        width: root.planet.ring-size;
+        height: root.planet.ring-size;
+        ring-size: root.planet.ring-size;
+        groups: root.planet.groups;
+        tabs: root.planet.tabs;
+        segments: root.planet.segments;
+        lifted-segments: root.planet.lifted-segments;
+        segment-labels: root.planet.segment-labels;
+        label-bands: root.planet.label-bands;
+        label-glyphs: root.planet.label-glyphs;
+        flags: root.planet.flags;
+        focused-tab: root.focused-tab;
+        dragging-tab: root.planet.dragging-tab;
+        interactive: root.interactive;
+        query-active: root.query-active;
+        accessible-name: root.planet.name;
+        reduce-motion: root.reduce-motion;
+        animate-spinners: root.animate-spinners;
+
+        hit-test(x, y, hovered) => {
+            return root.hit-test(x, y, hovered);
+        }
+        drop-target(x, y, dragging) => {
+            return root.drop-target(x, y, dragging);
+        }
+        tab-activated(id) => {
+            root.tab-clicked(id);
+        }
+        group-activated(id) => {
+            root.clicked();
+        }
+        tab-hovered(id) => {
+            root.tab-hovered(id);
+        }
+        background-pressed() => {
+            if root.halo-enabled {
+                root.clicked();
+            }
+        }
+        drag-started(id) => {
+            root.ring-drag-started(id);
+        }
+        drag-moved(x, y) => {
+            root.ring-drag-moved(root.x + root.ring-x + x, root.y + root.ring-y + y);
+        }
+        drop(group, slot) => {
+            root.ring-dropped(group, slot);
+        }
+        drag-cancelled() => {
+            root.ring-drag-cancelled();
+        }
+    }
+
+    // The group badges (spinner, speaker, unread dot) at the bottom of the label band.
+    RingFlags {
+        x: root.ring-x;
+        y: root.ring-y;
+        width: root.planet.ring-size;
+        height: root.planet.ring-size;
+        flags: root.planet.badges;
+        animate-spinners: root.animate-spinners;
+        reduce-motion: root.reduce-motion;
+    }
+
+    // The accent bar at the insertion slot of the move frame.
+    if root.planet.has-drop-bar: Path {
+        x: root.ring-x;
+        y: root.ring-y;
+        width: root.planet.ring-size;
+        height: root.planet.ring-size;
+        viewbox-width: root.planet.ring-size / 1px;
+        viewbox-height: root.planet.ring-size / 1px;
+        commands: root.planet.drop-bar.commands;
+        fill: ChromePalette.accent;
+        accessible-role: none;
+    }
+
+    // The hole is the planet's handle: a click zooms in, a drag reorders the groups.
+    hole-drag := DragArea {
+        x: root.cx - root.hole-radius;
+        y: root.cy - root.hole-radius;
+        width: 2 * root.hole-radius;
+        height: self.width;
+        enabled: root.reorderable && root.interactive;
+        data: root.payload-for("group", root.planet.group);
+        allow-move: true;
+        changed dragging => {
+            if self.dragging {
+                root.drag-source-started();
+            }
+        }
+        drag-finished(action) => {
+            root.drag-source-finished(action != DragAction.none);
+        }
+
+        hole-touch := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            enabled: root.interactive && root.halo-enabled;
+            clicked => {
+                root.clicked();
+            }
+        }
+    }
+
+    Text {
+        x: root.cx - root.hole-radius;
+        y: root.cy - root.hole-radius;
+        width: 2 * root.hole-radius;
+        height: self.width;
+        text: root.planet.hole-text;
+        font-size: max(8px, 11px * root.planet.scale);
+        color: ChromePalette.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: word-wrap;
+        accessible-role: none;
+    }
+
+    // What a drag started elsewhere may drop here: a tab (it moves to this group) or a group (it
+    // moves to this place in the order). The circle of the halo, not its square.
+    drop-zone := DropArea {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        enabled: root.interactive && root.accepts-drops;
+
+        can-drop(event) => {
+            if root.in-halo(event.position.x, event.position.y)
+                && root.payload-accepts(event.data, "group", root.planet.group, -1) {
+                root.drag-over("group", root.planet.group, root.x + event.position.x, root.y + event.position.y);
+                return DragAction.move;
+            }
+            return DragAction.none;
+        }
+        dropped(event) => {
+            if root.in-halo(event.position.x, event.position.y)
+                && root.payload-accepts(event.data, "group", root.planet.group, -1)
+                && root.payload-dropped(event.data, "group", root.planet.group, -1) {
+                return DragAction.move;
+            }
+            return DragAction.none;
+        }
+    }
+}
