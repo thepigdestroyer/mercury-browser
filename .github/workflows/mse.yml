@@ -104,7 +104,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          cargo test --locked --release \
+          cargo test --locked --release --no-fail-fast \
             -p mercury-mse -p mercury-mse-testkit -p mercury-mse-gst \
             -- --nocapture 2>&1 | tee mse-test.log
 
@@ -175,8 +175,8 @@ jobs:
         env:
           RUST_TEST_THREADS: "2"
         run: |
-          cargo test --locked --release -p mercury-mse -p mercury-mse-testkit
-          crates/mercury-mse-gst/test.sh test --locked --release -p mercury-mse-gst
+          cargo test --locked --release --no-fail-fast -p mercury-mse -p mercury-mse-testkit
+          crates/mercury-mse-gst/test.sh test --locked --release --no-fail-fast -p mercury-mse-gst
 
       # Record-only: what VideoToolbox and the AV1 routes do on a real (virtual) M1. The result is
       # read from the log of the run; it decides nothing here. A hung step ends at its time limit.
