@@ -16,7 +16,7 @@ use gstreamer::prelude::*;
 use common::fakefeed::FakeFeed;
 use common::rig::{Options, Rig, Shape, watchdog};
 use common::sinks::{Colour, Recorded};
-use mercury_mse::TrackKind;
+use mercury_mse::{MediaSourceBackend, TrackKind};
 
 const LIMIT: Duration = Duration::from_secs(40);
 
@@ -307,5 +307,66 @@ fn a_known_kind_is_not_a_late_track() {
             .filter(|pad| pad.direction() == gstreamer::PadDirection::Src)
             .count();
         assert_eq!(pads, 2, "one pad per kind");
+    });
+}
+
+/// The same through the real backend (item 1's model): the video source buffer is complete and playing
+/// when an audio source buffer is added, initialized and filled. The backend lists the new track, wakes
+/// the feed, and serves it from the playback position, not from zero.
+#[test]
+fn the_real_backend_serves_a_late_audio_source_buffer_from_the_position() {
+    require!(
+        "avdec_h264",
+        "avdec_aac",
+        "playbin3",
+        "videoconvert",
+        "appsrc"
+    );
+    watchdog("late-real", 90, || {
+        let source = common::real::RealSource::new();
+        let video = common::real::load("h264-low");
+        let audio = common::real::load("aac");
+        let vid = source.add(&video.mime);
+        source.append_stream(vid, &video, &mercury_mse_testkit::ChunkPlan::Whole);
+        let rig = Rig::new(
+            source.feed(),
+            Options {
+                sync: true,
+                ..Options::default()
+            },
+        );
+        rig.play();
+        rig.wait_until(LIMIT, "a second of video", |rig| {
+            rig.video_stats().lock().unwrap().count() >= 25
+        });
+        let position = rig.position().expect("a position").nseconds();
+        // The element tells the backend the position on every update; the late track starts there.
+        source.backend.set_position(position as f64 / 1e9);
+        let aid = source.add(&audio.mime);
+        source.append_stream(aid, &audio, &mercury_mse_testkit::ChunkPlan::Whole);
+        source.end_of_stream();
+        rig.wait_eos(LIMIT);
+        let (video, audio) = (rig.video_stats(), rig.audio_stats());
+        let (video, audio) = (video.lock().unwrap(), audio.lock().unwrap());
+        let first = audio.arrivals.first().and_then(|a| a.pts).unwrap_or(0);
+        let offsets = av_offsets_ms(&video, &audio, 5);
+        let worst = offsets.iter().fold(0.0f64, |w, o| w.max(o.abs()));
+        eprintln!(
+            "real backend late audio: joined at {} ms, first audio pts {} ms, {} buffers ({:.2} s), worst offset {worst:.1} ms",
+            position / 1_000_000,
+            first / 1_000_000,
+            audio.count(),
+            audio.total_seconds()
+        );
+        assert!(
+            audio.count() > 0,
+            "the late audio source buffer never played"
+        );
+        assert!(
+            first + 50_000_000 >= position,
+            "the late track started at {first}, before the position {position}"
+        );
+        assert!(worst < 80.0, "A/V offset {worst:.1} ms");
+        assert!((198..=202).contains(&video.count()));
     });
 }
