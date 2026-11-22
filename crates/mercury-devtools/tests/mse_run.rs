@@ -61,6 +61,9 @@ impl Rig {
         let stub = rig.path("stub-browser.sh");
         write(&stub, STUB);
         fs::set_permissions(&stub, fs::Permissions::from_mode(0o755)).unwrap();
+        // The first start of a new script can take a second or two on macOS (the system scans
+        // it); start it once here so that no test's watchdog counts that.
+        let _ = std::process::Command::new(&stub).arg("--warm-up").output();
         rig
     }
 
@@ -220,7 +223,7 @@ reason = "names a file that does not exist"
     rig.canned("media-source_d.html", "#hang\n");
     rig.canned("media-source_e.html", "#crash\n");
     let mut config = rig.config();
-    config.timeout = Duration::from_secs(2);
+    config.timeout = Duration::from_secs(6);
     let data = with_stub_env(&rig, || rig.run(&config)).expect("the run completes");
 
     assert_eq!(outcome(&data, "mse-basic.html"), Outcome::Pass);
@@ -360,7 +363,7 @@ fn a_lock_during_a_test_is_an_interruption_and_not_a_failure() {
     rig.canned("pages_mse-basic.html", "#hang\n");
     let mut config = rig.config();
     config.phases = vec![Phase::Pages];
-    config.timeout = Duration::from_secs(1);
+    config.timeout = Duration::from_secs(4);
     // preflight and the check before the first test see an unlocked screen; the check after
     // its timeout sees the lock.
     config.ioreg = Some(rig.ioreg(2));
