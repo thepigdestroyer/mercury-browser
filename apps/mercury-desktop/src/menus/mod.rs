@@ -127,6 +127,9 @@ pub(crate) fn sync(controller: &BrowserController) {
         // session
         can_reopen_closed_tab: crate::session::can_reopen_closed_tab(),
         can_restore_previous_session: crate::session::can_restore_previous_session(),
+        // macos-1
+        can_share_page: crate::platform::share::share_item(state.url(), state.page_title())
+            .is_some(),
     };
     STATE.with(|menu_state| {
         if *menu_state.snapshot.borrow() != snapshot {
@@ -215,6 +218,10 @@ fn run_command(
         // tabs-plus
         MenuCommand::TabStrip(command) => {
             crate::tab_strip::run_strip_command(window, controller, command);
+        }
+        // macos-1
+        MenuCommand::Platform(command) => {
+            crate::platform::run_menu_command(command, window, controller);
         }
     }
 }

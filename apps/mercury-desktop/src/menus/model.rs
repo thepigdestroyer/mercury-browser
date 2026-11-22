@@ -30,6 +30,8 @@ pub(crate) enum MenuCommand {
     // tabs-plus
     /// Pinning and "close other tabs" for the active tab (`tab_strip.rs`).
     TabStrip(crate::tab_strip::TabStripCommand),
+    // macos-1: Share and Look Up (`platform/`).
+    Platform(crate::platform::PlatformCommand),
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -402,6 +404,7 @@ const fn key(key: char, modifiers: Modifiers) -> Option<KeyEquivalent> {
 
 /// The macOS menu bar, top to bottom. The first menu is the application menu.
 pub(crate) fn menu_bar() -> Vec<Menu> {
+    use crate::platform::PlatformCommand;
     use crate::tab_strip::TabStripCommand;
     use MenuCommand::*;
     use MenuItem::{BookmarksBarFolder, Separator, Services, TabList};
@@ -443,6 +446,8 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                     key('l', CMD),
                     Shortcut(A::FocusAddressBar),
                 ),
+                // macos-1: the system share sheet.
+                action("Share…", None, Platform(PlatformCommand::SharePage)),
                 Separator,
                 action("Close Tab", key('w', CMD), Shortcut(A::CloseTab)),
                 // tabs-plus
@@ -472,6 +477,13 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 action("Copy", key('c', CMD), Edit(EditCommand::Copy)),
                 action("Paste", key('v', CMD), Edit(EditCommand::Paste)),
                 action("Select All", key('a', CMD), Edit(EditCommand::SelectAll)),
+                Separator,
+                // macos-1: the dictionary popover for the selection.
+                action(
+                    "Look Up Selection",
+                    key('d', CONTROL_CMD),
+                    Platform(PlatformCommand::LookUp),
+                ),
                 Separator,
                 // find: the find bar (find in page runs as a script in the page).
                 action("Find…", key('f', CMD), Shortcut(A::Find)),
@@ -596,6 +608,8 @@ pub(crate) const fn is_available(command: MenuCommand) -> bool {
         Stop => false,
         // tabs-plus
         TabStrip(_) => true,
+        // macos-1
+        Platform(_) => true,
     }
 }
 
@@ -645,6 +659,9 @@ pub(crate) struct MenuSnapshot {
     pub(crate) can_reopen_closed_tab: bool,
     /// The last run's session was kept and not yet restored.
     pub(crate) can_restore_previous_session: bool,
+    // macos-1
+    /// The active tab shows a page the share sheet may be given.
+    pub(crate) can_share_page: bool,
 }
 
 pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: EditTarget) -> bool {
@@ -667,6 +684,9 @@ pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: Ed
         // session
         Shortcut(ShortcutAction::ReopenClosedTab) => snapshot.can_reopen_closed_tab,
         Shortcut(ShortcutAction::RestorePreviousSession) => snapshot.can_restore_previous_session,
+        // macos-1: the page (or a PDF) has the selection; the address bar has its own Look Up.
+        Platform(crate::platform::PlatformCommand::SharePage) => snapshot.can_share_page,
+        Platform(crate::platform::PlatformCommand::LookUp) => edit == EditTarget::Page,
         Edit(command) => match edit {
             EditTarget::AddressBar => true,
             EditTarget::Page => {
@@ -1028,6 +1048,56 @@ mod tests {
         };
         assert!(is_enabled(reopen, &something, EditTarget::None));
         assert!(is_enabled(restore, &something, EditTarget::None));
+    }
+
+    // macos-1
+    #[test]
+    fn share_is_enabled_only_for_a_sharable_page() {
+        use crate::platform::PlatformCommand::SharePage;
+        let share = MenuCommand::Platform(SharePage);
+        let file = menu_bar()
+            .into_iter()
+            .find(|menu| menu.title == "File")
+            .expect("a File menu");
+        assert!(file.items.iter().any(|item| matches!(
+            item,
+            MenuItem::Action { title: "Share…", key: None, command } if *command == share
+        )));
+        assert!(!is_enabled(
+            share,
+            &MenuSnapshot::default(),
+            EditTarget::None
+        ));
+        let sharable = MenuSnapshot {
+            can_share_page: true,
+            ..MenuSnapshot::default()
+        };
+        assert!(is_enabled(share, &sharable, EditTarget::None));
+    }
+
+    #[test]
+    fn look_up_is_enabled_only_while_the_page_has_focus() {
+        use crate::platform::PlatformCommand::LookUp;
+        let look_up = MenuCommand::Platform(LookUp);
+        let edit = menu_bar()
+            .into_iter()
+            .find(|menu| menu.title == "Edit")
+            .expect("an Edit menu");
+        let item = edit.items.iter().find_map(|item| match *item {
+            MenuItem::Action {
+                title,
+                key,
+                command,
+            } if command == look_up => Some((title, key)),
+            _ => None,
+        });
+        let (title, key) = item.expect("a Look Up item in the Edit menu");
+        assert_eq!(title, "Look Up Selection");
+        assert_eq!(key.map(|key| key.mac_label()).as_deref(), Some("⌃⌘D"));
+        let snapshot = MenuSnapshot::default();
+        assert!(is_enabled(look_up, &snapshot, EditTarget::Page));
+        assert!(!is_enabled(look_up, &snapshot, EditTarget::AddressBar));
+        assert!(!is_enabled(look_up, &snapshot, EditTarget::None));
     }
 
     #[test]

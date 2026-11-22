@@ -57,6 +57,7 @@ mod page_tabs;
 mod pdf; // pdf-viewer lane
 // passwords-ui
 mod passwords;
+mod platform; // macos-1
 #[cfg(target_os = "macos")]
 mod platform_macos;
 mod post_run;
@@ -192,6 +193,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     macos_terminate::end_the_run_in_order_on_terminate_requests();
     // openurl: links and files from other apps, from here on; queued until the window exists.
     openurl::receive_from_other_apps(options.is_automated());
+    // macos-1: Services and the Dock menu, on the same delegate.
+    platform::install(options.is_automated());
 
     let window = MainWindow::new()?;
     if let Some((width, height)) = options.window_size {
@@ -238,6 +241,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     settings::connect(&settings, &window, &controller);
     // openurl
     openurl::attach(&window, Rc::clone(&controller), options.is_automated());
+    // macos-1: share, Look Up, the Dock menu, the login item.
+    platform::attach(&window, Rc::clone(&controller), options.is_automated());
     let handoff = openurl::listen_for_second_launches(&profile);
     sync_ui(&window, &controller.borrow());
     connect_ui_callbacks(
