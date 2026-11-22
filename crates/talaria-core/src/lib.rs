@@ -16,6 +16,8 @@ mod input;
 mod media;
 // openurl
 mod navigation_policy;
+// omnibox-core
+mod omnibox;
 // passwords
 mod login_fill;
 mod page_icon;
@@ -66,6 +68,13 @@ pub use input::{
 pub use media::{
     MediaMetadata, MediaPlaybackState, MediaPosition, MediaProbe, MediaSessionAction, MediaState,
     TabAudio,
+};
+// omnibox-core
+pub use omnibox::{
+    AtCandidate, CompletionMode, EngineEntry, MAX_PASTE_BYTES, MAX_PASTE_URLS, OpenIn, OpenTab,
+    Paste, Platform, REMOTE_SUGGEST_ENGINE_IDS, ReturnKeys, ReturnResolution, ReturnTarget,
+    SWITCH_TO_TAB_ROWS, Scope, ScopeNames, SearchModes, TabCompletion, TabMatch, Typed,
+    paste_and_go, remote_suggestions_allowed, return_plan, switch_to_tab_matches,
 };
 // passwords
 pub use login_fill::LoginFill;

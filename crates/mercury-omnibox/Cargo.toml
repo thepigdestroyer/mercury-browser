@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-omnibox"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The address bar's answers that need no engine and no interface: a calculator, unit conversion and
+# time-zone conversion, as a result model the suggestion popup shows. Pure: the clock and the local
+# zone come in through `Context`; nothing reads the machine or the network.
+[dependencies]
+# Time-zone arithmetic. Zones are built from the bundled IANA data (`jiff-tzdb`), never from the
+# machine's /usr/share/zoneinfo, so an answer is the same on every Mac. Both are MIT OR Unlicense;
+# the IANA tz database is public domain. Both are already in Cargo.lock.
+jiff = { version = "0.2.45", default-features = false, features = ["std"] }
+jiff-tzdb = "0.1.10"

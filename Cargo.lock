@@ -6053,6 +6053,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-omnibox"
+version = "0.2.0"
+dependencies = [
+ "jiff",
+ "jiff-tzdb",
+]
+
+[[package]]
 name = "mercury-password-manager"
 version = "0.2.0"
 dependencies = [

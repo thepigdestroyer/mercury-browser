@@ -10,6 +10,7 @@ members = [
     "crates/mercury-filter-lists",
     "crates/mercury-iconset",
     "crates/mercury-import",
+    "crates/mercury-omnibox",
     "crates/mercury-password-manager",
     "crates/mercury-passwords",
     "crates/mercury-pdf",
