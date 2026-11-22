@@ -13,8 +13,8 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use reqwest::header::{
-    ACCEPT, ACCEPT_LANGUAGE, CONTENT_ENCODING, CONTENT_TYPE, COOKIE, HeaderValue, LOCATION,
-    USER_AGENT,
+    ACCEPT, ACCEPT_LANGUAGE, CONTENT_ENCODING, CONTENT_TYPE, COOKIE, HeaderName, HeaderValue,
+    LOCATION, USER_AGENT,
 };
 use reqwest::redirect::Policy;
 use reqwest::{Client, Response, StatusCode};
@@ -33,6 +33,9 @@ use crate::{MAX_REDIRECTS, MAX_SHOWN_BYTES};
 /// `third_party/servo-script/navigation.rs` (line 272).
 const DOCUMENT_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8";
 
+/// Global Privacy Control, <https://privacycg.github.io/gpc-spec/>.
+const SEC_GPC: HeaderName = HeaderName::from_static("sec-gpc");
+
 /// The `Accept-Language` header when [`FetchOptions::accept_language`] is empty.
 ///
 /// The engine sends one language, the system's (`sys_locale`) or the `intl_locale_override`
@@ -43,11 +46,13 @@ const DOCUMENT_ACCEPT: &str = "text/html,application/xhtml+xml,application/xml;q
 const DEFAULT_ACCEPT_LANGUAGE: &str = "en-US";
 
 /// The `Cookie` header text for a URL, asked for every hop of a redirect chain; `None` sends no
-/// cookie. Set-Cookie of a response is never stored.
+/// cookie. The second argument is the addresses the fetch has already been through (empty for
+/// the first hop), so that the answer can tell a cross-site redirect. Set-Cookie of a response is
+/// never stored.
 ///
 /// The engine glue (`talaria-servo/src/view_source.rs`, `engine_cookies`) is the one place that
 /// says what the engine would send for a top-level GET of the address.
-pub type CookieLookup = Arc<dyn Fn(&Url) -> Option<String> + Send + Sync>;
+pub type CookieLookup = Arc<dyn Fn(&Url, &[Url]) -> Option<String> + Send + Sync>;
 
 /// What the browser's own rules say about an address before it is requested.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -83,6 +88,9 @@ pub struct FetchOptions {
     pub user_agent: String,
     /// The cookies the engine would send; `None` sends none.
     pub cookies: Option<CookieLookup>,
+    /// Send `Sec-GPC: 1` (Global Privacy Control), as the engine does on every request when the
+    /// setting is on.
+    pub sec_gpc: bool,
     /// The proxy.
     pub proxy: ProxyConfig,
     /// Sent as `Accept-Language`: the engine's. Empty sends `en-US`.
@@ -169,6 +177,7 @@ async fn fetch_chain(
     let mut current = apply_policy(options, url.target().clone())?;
     let mut redirects = 0;
     let mut seen_https = false;
+    let mut earlier: Vec<Url> = Vec::new();
     loop {
         let mut request = client
             .get(current.clone())
@@ -177,7 +186,12 @@ async fn fetch_chain(
         if let Some(user_agent) = &headers.user_agent {
             request = request.header(USER_AGENT, user_agent.clone());
         }
-        if let Some(cookie) = cookie_for_hop(options.cookies.as_ref(), seen_https, &current) {
+        if options.sec_gpc {
+            request = request.header(SEC_GPC, HeaderValue::from_static("1"));
+        }
+        if let Some(cookie) =
+            cookie_for_hop(options.cookies.as_ref(), seen_https, &current, &earlier)
+        {
             request = request.header(COOKIE, cookie);
         }
         let response = request
@@ -195,7 +209,8 @@ async fn fetch_chain(
         redirects += 1;
         // The body of a redirect is never read: dropping the response closes the connection.
         drop(response);
-        current = apply_policy(options, next)?;
+        let next = apply_policy(options, next)?;
+        earlier.push(std::mem::replace(&mut current, next));
     }
 }
 
@@ -252,11 +267,12 @@ fn cookie_for_hop(
     lookup: Option<&CookieLookup>,
     seen_https: bool,
     hop: &Url,
+    earlier: &[Url],
 ) -> Option<HeaderValue> {
     if seen_https && hop.scheme() == "http" {
         return None;
     }
-    let text = lookup?(hop)?;
+    let text = lookup?(hop, earlier)?;
     if text.is_empty() {
         return None;
     }
@@ -585,7 +601,7 @@ mod tests {
 
     fn lookup(counter: &Arc<AtomicUsize>) -> CookieLookup {
         let counter = Arc::clone(counter);
-        Arc::new(move |hop: &Url| {
+        Arc::new(move |hop: &Url, _: &[Url]| {
             counter.fetch_add(1, Ordering::SeqCst);
             Some(format!("host={}", hop.host_str().unwrap_or_default()))
         })
@@ -596,7 +612,7 @@ mod tests {
         let asked = Arc::new(AtomicUsize::new(0));
         let lookup = lookup(&asked);
         let cookie = |seen_https: bool, hop: &str| {
-            cookie_for_hop(Some(&lookup), seen_https, &url(hop))
+            cookie_for_hop(Some(&lookup), seen_https, &url(hop), &[])
                 .map(|value| String::from_utf8_lossy(value.as_bytes()).into_owned())
         };
         assert_eq!(
@@ -615,24 +631,28 @@ mod tests {
         // After any https hop, an http hop gets nothing and the lookup is not even asked.
         assert_eq!(cookie(true, "http://a.test/"), None);
         assert_eq!(asked.load(Ordering::SeqCst), 3);
-        assert_eq!(cookie_for_hop(None, false, &url("http://a.test/")), None);
+        assert_eq!(
+            cookie_for_hop(None, false, &url("http://a.test/"), &[]),
+            None
+        );
     }
 
     #[test]
     fn an_empty_or_unusable_cookie_is_not_sent() {
-        let empty: CookieLookup = Arc::new(|_: &Url| Some(String::new()));
-        let bad: CookieLookup = Arc::new(|_: &Url| Some("a=b\r\nInjected: 1".to_owned()));
-        let none: CookieLookup = Arc::new(|_: &Url| None);
+        let empty: CookieLookup = Arc::new(|_: &Url, _: &[Url]| Some(String::new()));
+        let bad: CookieLookup =
+            Arc::new(|_: &Url, _: &[Url]| Some("a=b\r\nInjected: 1".to_owned()));
+        let none: CookieLookup = Arc::new(|_: &Url, _: &[Url]| None);
         let hop = url("https://a.test/");
-        assert!(cookie_for_hop(Some(&empty), false, &hop).is_none());
-        assert!(cookie_for_hop(Some(&bad), false, &hop).is_none());
-        assert!(cookie_for_hop(Some(&none), false, &hop).is_none());
+        assert!(cookie_for_hop(Some(&empty), false, &hop, &[]).is_none());
+        assert!(cookie_for_hop(Some(&bad), false, &hop, &[]).is_none());
+        assert!(cookie_for_hop(Some(&none), false, &hop, &[]).is_none());
     }
 
     #[test]
     fn a_cookie_value_is_marked_sensitive() {
-        let lookup: CookieLookup = Arc::new(|_: &Url| Some("a=b".to_owned()));
-        let value = cookie_for_hop(Some(&lookup), false, &url("https://a.test/")).unwrap();
+        let lookup: CookieLookup = Arc::new(|_: &Url, _: &[Url]| Some("a=b".to_owned()));
+        let value = cookie_for_hop(Some(&lookup), false, &url("https://a.test/"), &[]).unwrap();
         assert!(value.is_sensitive());
     }
 

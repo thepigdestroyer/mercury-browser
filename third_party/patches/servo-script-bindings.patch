@@ -17,7 +17,31 @@ diff --git a/Cargo.toml b/Cargo.toml
 diff --git a/codegen/Bindings.conf b/codegen/Bindings.conf
 --- a/codegen/Bindings.conf
 +++ b/codegen/Bindings.conf
-@@ -935,6 +935,17 @@
+@@ -871,8 +871,9 @@
+     'cx': ['Cmp', 'Databases', 'DeleteDatabase', 'Open'],
+ },
+
++# Mercury: the five query methods (Item 4, IndexedDB: IDBIndex.get, getKey, getAll, getAllKeys, count).
+ 'IDBIndex': {
+-    'cx': ['KeyPath', 'OpenCursor', 'OpenKeyCursor'],
++    'cx': ['KeyPath', 'Get', 'GetKey', 'GetAll', 'GetAllKeys', 'Count', 'OpenCursor', 'OpenKeyCursor'],
+ },
+
+ 'IDBKeyRange': {
+@@ -918,6 +919,12 @@
+     'cx': ['Blur', 'Focus'],
+ },
+
++# Mercury: Web Locks (servo/servo#47981). `realm` like StorageManager's promise methods; the pull request
++# had `cx`.
++'LockManager': {
++    'realm': ['Request', 'Request_', 'Query'],
++},
++
+ 'MediaDevices': {
+     'realm': ['GetUserMedia'],
+     'cx': ['EnumerateDevices'],
+@@ -935,6 +942,17 @@
      'cx': ['GetMetadata'],
  },
 
@@ -35,6 +59,29 @@ diff --git a/codegen/Bindings.conf b/codegen/Bindings.conf
  'MediaStreamTrack': {
      'cx': ['Clone'],
  },
+@@ -975,9 +993,10 @@
+     'realm': ['Disable', 'Enable', 'GetState', 'SetHeaderValue'],
+ },
+
++# Mercury: 'Locks' (Web Locks, servo/servo#47981).
+ 'Navigator': {
+     'cx': ['Bluetooth', 'Credentials', 'Clipboard', 'Geolocation', 'Gpu', 'MimeTypes', 'Languages', 'SendBeacon', 'ServiceWorker', 'Servo',
+-        'Storage', 'Plugins', 'UserActivation', 'WakeLock', 'Xr', 'MediaDevices', 'MediaSession', 'Permissions', 'GetGamepads'],
++        'Storage', 'Plugins', 'UserActivation', 'WakeLock', 'Xr', 'MediaDevices', 'MediaSession', 'Permissions', 'GetGamepads', 'Locks'],
+ },
+
+ 'WakeLock': {
+@@ -1520,8 +1539,9 @@
+     'realm': ['CreateImageBitmap', 'CreateImageBitmap_', 'Fetch'],
+ },
+
++# Mercury: 'Locks' (Web Locks, servo/servo#47981).
+ 'WorkerNavigator': {
+-    'cx': ['Gpu', 'Languages', 'Storage', 'Permissions'],
++    'cx': ['Gpu', 'Languages', 'Storage', 'Permissions', 'Locks'],
+ },
+
+ 'Worklet': {
 diff --git a/codegen/codegen.py b/codegen/codegen.py
 --- a/codegen/codegen.py
 +++ b/codegen/codegen.py
@@ -83,6 +130,49 @@ diff --git a/webidls/HTMLMediaElement.webidl b/webidls/HTMLMediaElement.webidl
 
  [Exposed=Window, Abstract]
  interface HTMLMediaElement : HTMLElement {
+diff --git a/webidls/IDBIndex.webidl b/webidls/IDBIndex.webidl
+--- a/webidls/IDBIndex.webidl
++++ b/webidls/IDBIndex.webidl
+@@ -15,14 +15,17 @@
+   readonly attribute boolean multiEntry;
+   readonly attribute boolean unique;
+
+-  // [NewObject] IDBRequest get(any query);
+-  // [NewObject] IDBRequest getKey(any query);
+-  // [NewObject] IDBRequest getAll(optional any queryOrOptions,
+-  //                               optional [EnforceRange] unsigned long count);
+-  // [NewObject] IDBRequest getAllKeys(optional any queryOrOptions,
+-  //                                   optional [EnforceRange] unsigned long count);
++  // Mercury: get, getKey, getAll, getAllKeys and count were commented out; enabled as in
++  // LunarWerxs/servo pr/indexeddb 4b07849e2 (author L0garithmic, MPL-2.0). IDBObjectStore.webidl
++  // spells the first parameter `query` as well.
++  [NewObject, Throws] IDBRequest get(any query);
++  [NewObject, Throws] IDBRequest getKey(any query);
++  [NewObject, Throws] IDBRequest getAll(optional any query,
++                                optional [EnforceRange] unsigned long count);
++  [NewObject, Throws] IDBRequest getAllKeys(optional any query,
++                                    optional [EnforceRange] unsigned long count);
+   // [NewObject] IDBRequest getAllRecords(optional IDBGetAllOptions options = {});
+-  // [NewObject] IDBRequest count(optional any query);
++  [NewObject, Throws] IDBRequest count(optional any query);
+
+   [NewObject, Throws] IDBRequest openCursor(optional any query,
+                                     optional IDBCursorDirection direction = "next");
+diff --git a/webidls/IDBRequest.webidl b/webidls/IDBRequest.webidl
+--- a/webidls/IDBRequest.webidl
++++ b/webidls/IDBRequest.webidl
+@@ -12,8 +12,9 @@
+ interface IDBRequest : EventTarget {
+   [Throws] readonly attribute any result;
+   [Throws] readonly attribute DOMException? error;
+-  // readonly attribute (IDBObjectStore or IDBIndex or IDBCursor)? source;
+-  readonly attribute IDBObjectStore? source;
++  // Mercury: the union of the specification; it was `IDBObjectStore? source`, so the request of an
++  // index query or of a cursor reported an object store.
++  readonly attribute (IDBObjectStore or IDBIndex or IDBCursor)? source;
+   readonly attribute IDBTransaction? transaction;
+   readonly attribute IDBRequestReadyState readyState;
+
 diff --git a/webidls/MediaDevices.webidl b/webidls/MediaDevices.webidl
 --- a/webidls/MediaDevices.webidl
 +++ b/webidls/MediaDevices.webidl
@@ -170,6 +260,25 @@ diff --git a/webidls/MediaStreamTrack.webidl b/webidls/MediaStreamTrack.webidl
 +    "live",
 +    "ended"
 +};
+diff --git a/webidls/Navigator.webidl b/webidls/Navigator.webidl
+--- a/webidls/Navigator.webidl
++++ b/webidls/Navigator.webidl
+@@ -72,6 +72,15 @@
+   readonly attribute unsigned long long hardwareConcurrency;
+ };
+
++// Mercury: Global Privacy Control. Always present, false while the signal is off (the specification
++// asks for exactly that, so that a page can tell "no signal" from "no support").
++// https://privacycg.github.io/gpc-spec/#js-dom
++[Exposed=(Window,Worker)]
++interface mixin NavigatorGPC {
++  readonly attribute boolean globalPrivacyControl;
++};
++Navigator includes NavigatorGPC;
++
+ // https://w3c.github.io/clipboard-apis/#navigator-interface
+ partial interface Navigator {
+   [SecureContext, SameObject, Pref="dom_async_clipboard_enabled"] readonly attribute Clipboard clipboard;
 diff --git a/webidls/RTCDataChannel.webidl b/webidls/RTCDataChannel.webidl
 --- a/webidls/RTCDataChannel.webidl
 +++ b/webidls/RTCDataChannel.webidl
@@ -373,3 +482,80 @@ diff --git a/webidls/URL.webidl b/webidls/URL.webidl
    static undefined revokeObjectURL(DOMString url);
 
    USVString toJSON();
+diff --git a/webidls/WebLock.webidl b/webidls/WebLock.webidl
+new file mode 100644
+--- /dev/null
++++ b/webidls/WebLock.webidl
+@@ -0,0 +1,60 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// https://w3c.github.io/web-locks/#api
++//
++// Mercury: carried from servo/servo pull request #47981 (draft, by xbwwj, Xubai Wang, branch
++// `weblocks`, head commit a900121b, `components/script_bindings/webidls/WebLock.webidl`), MPL-2.0.
++// The pull request has no `Pref`: here the interfaces and the `locks` attribute are behind
++// `dom_web_locks_enabled` (Mercury keeps it off until `tests/pages/compat-locks.html` has run in a
++// real window), `[SameObject]` is the specification's, and the two methods are `[NewObject]`.
++
++[SecureContext]
++interface mixin NavigatorLocks {
++  [SameObject, Pref="dom_web_locks_enabled"] readonly attribute LockManager locks;
++};
++Navigator includes NavigatorLocks;
++WorkerNavigator includes NavigatorLocks;
++
++[SecureContext, Exposed=(Window,Worker), Pref="dom_web_locks_enabled"]
++interface LockManager {
++  [NewObject]
++  Promise<any> request(DOMString name,
++                       LockGrantedCallback callback);
++  [NewObject]
++  Promise<any> request(DOMString name,
++                       LockOptions options,
++                       LockGrantedCallback callback);
++
++  [NewObject]
++  Promise<LockManagerSnapshot> query();
++};
++
++callback LockGrantedCallback = Promise<any> (Lock? lock);
++
++enum LockMode { "shared", "exclusive" };
++
++dictionary LockOptions {
++  LockMode mode = "exclusive";
++  boolean ifAvailable = false;
++  boolean steal = false;
++  AbortSignal signal;
++};
++
++dictionary LockManagerSnapshot {
++  sequence<LockInfo> held;
++  sequence<LockInfo> pending;
++};
++
++dictionary LockInfo {
++  DOMString name;
++  LockMode mode;
++  DOMString clientId;
++};
++
++[SecureContext, Exposed=(Window,Worker), Pref="dom_web_locks_enabled"]
++interface Lock {
++  readonly attribute DOMString name;
++  readonly attribute LockMode mode;
++};
+diff --git a/webidls/WorkerNavigator.webidl b/webidls/WorkerNavigator.webidl
+--- a/webidls/WorkerNavigator.webidl
++++ b/webidls/WorkerNavigator.webidl
+@@ -9,6 +9,8 @@
+ WorkerNavigator includes NavigatorLanguage;
+ WorkerNavigator includes NavigatorOnLine;
+ WorkerNavigator includes NavigatorConcurrentHardware;
++// Mercury: Global Privacy Control (the mixin is defined in Navigator.webidl).
++WorkerNavigator includes NavigatorGPC;
+
+ // https://w3c.github.io/permissions/#navigator-and-workernavigator-extension
+

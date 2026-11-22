@@ -11,8 +11,8 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use mercury_view_source::{
-    FetchError, HopPolicy, HopVerdict, MAX_REDIRECTS, MAX_SHOWN_BYTES, SourceBody, SourceDocument,
-    SourceKind, ViewSourceUrl, fetch_source,
+    CookieLookup, FetchError, HopPolicy, HopVerdict, MAX_REDIRECTS, MAX_SHOWN_BYTES, SourceBody,
+    SourceDocument, SourceKind, ViewSourceUrl, fetch_source,
 };
 use support::{
     Reply, Server, chunked, closed_port, html, ok, options, options_with_cookies, redirect,
@@ -400,6 +400,67 @@ async fn the_request_carries_the_engines_headers_and_nothing_else() {
         names,
         ["accept", "accept-language", "cookie", "host", "user-agent"]
     );
+}
+
+#[tokio::test]
+async fn global_privacy_control_is_sent_when_it_is_on_and_only_then() {
+    let server = Server::always(|| html("x"));
+    let mut on = options();
+    on.sec_gpc = true;
+    fetch_source(&server.source("/"), &on).await.unwrap();
+    fetch_source(&server.source("/"), &options()).await.unwrap();
+
+    let seen = server.seen();
+    assert_eq!(seen[0].header("sec-gpc"), Some("1"));
+    assert_eq!(seen[1].header("sec-gpc"), None);
+}
+
+#[tokio::test]
+async fn global_privacy_control_goes_with_every_hop_of_a_redirect_chain() {
+    let server = Server::start(|seen| match seen.path() {
+        "/a" => redirect(302, "/b"),
+        _ => html("end"),
+    });
+    let mut on = options();
+    on.sec_gpc = true;
+    fetch_source(&server.source("/a"), &on).await.unwrap();
+    let seen = server.seen();
+    assert_eq!(seen.len(), 2);
+    assert!(
+        seen.iter()
+            .all(|request| request.header("sec-gpc") == Some("1"))
+    );
+}
+
+#[tokio::test]
+async fn the_cookie_lookup_is_told_the_addresses_the_fetch_has_been_through() {
+    let server = Server::start(|seen| match seen.path() {
+        "/a" => redirect(302, "/b"),
+        "/b" => redirect(302, "/c"),
+        _ => html("end"),
+    });
+    let chains = Arc::new(std::sync::Mutex::new(Vec::<(String, Vec<String>)>::new()));
+    let log = Arc::clone(&chains);
+    let lookup: CookieLookup = Arc::new(move |url: &Url, earlier: &[Url]| {
+        log.lock().unwrap().push((
+            url.path().to_owned(),
+            earlier.iter().map(|hop| hop.path().to_owned()).collect(),
+        ));
+        None
+    });
+    let mut with_lookup = options();
+    with_lookup.cookies = Some(lookup);
+    fetch_source(&server.source("/a"), &with_lookup)
+        .await
+        .unwrap();
+
+    let chains = chains.lock().unwrap().clone();
+    let expected: Vec<(String, Vec<String>)> = vec![
+        ("/a".to_owned(), vec![]),
+        ("/b".to_owned(), vec!["/a".to_owned()]),
+        ("/c".to_owned(), vec!["/a".to_owned(), "/b".to_owned()]),
+    ];
+    assert_eq!(chains, expected);
 }
 
 #[tokio::test]

@@ -271,6 +271,11 @@ only the `Set-Cookie` of responses and adds a global setter message; it is *cons
   `servo-net-traits`' `RequestClient::browser_initiated_navigation`, set by `navigation.rs` for loads that did not come from a script
   (net-1 review, finding 2). The ancestor chain is not looked at: `a.test` inside `b.test` inside `a.test` is judged same-site
   (finding 9, a known gap; it needs the ancestor list of the document).
+- **For the browser's own requests:** `mercury_cookies::cookies_for_browser_navigation(policy, jar, url, earlier_hops)` (a public
+  function; the module is `pub`) is the cookie lookup of a `GET` that the browser makes as a top-level navigation outside the
+  engine's fetch, with the same rules (`cookies_allowed`, `cookie_may_be_sent`, expired cookies dropped first). `view-source:`
+  (`talaria-servo/src/view_source.rs`, train 23) uses it for every hop of its re-fetch and sends `Sec-GPC: 1` itself when
+  `NetPolicy::global_privacy_control()` says so. Tested in `talaria-servo` (`a_cookie_of_another_site_is_not_sent_and_samesite_follows_the_chain`).
 - **Blocked means:** no `Cookie` header (also not one the caller put in the header map), the `Set-Cookie` is ignored (at every
   redirect hop), `document.cookie` reads `""` and writes are dropped, the same for the WebSocket handshake, and the `*Async`
   `cookieStore` messages answer "no cookie" while blocking is on (the pref `dom_cookiestore_enabled` is pinned off anyway). The

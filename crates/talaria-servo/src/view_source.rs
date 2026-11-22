@@ -148,12 +148,14 @@ fn check_request(method: &Method, address: &str) -> Result<ViewSourceUrl, Box<Re
 fn fetch_options(
     user_agent: String,
     cookies: CookieLookup,
+    sec_gpc: bool,
     proxy: ProxyConfig,
     policy: HopPolicy,
 ) -> FetchOptions {
     FetchOptions {
         user_agent,
         cookies: Some(cookies),
+        sec_gpc,
         proxy,
         // The one language the engine sends (`net_traits::set_default_accept_language`).
         accept_language: net_traits::get_current_locale().0.clone(),
@@ -281,6 +283,8 @@ use std::sync::RwLock;
 use net::cookie_storage::CookieStorage;
 use net::fetch::methods::should_request_be_blocked_due_to_a_bad_port;
 use net::hsts::HstsList;
+use net::mercury_cookies::cookies_for_browser_navigation;
+use net::net_policy::NetPolicy;
 use servo::protocol_handler::{
     DoneChannel, FetchContext, HttpStatus, ProtocolHandler, ProtocolRegistry, Request,
     ResourceFetchTiming, Response, ResponseBody,
@@ -340,9 +344,16 @@ impl ProtocolHandler for ViewSourceHandler {
         // jar. The future outlives `context`, so it holds a clone of the engine's state.
         let state = Arc::clone(&context.state);
         let cookie_state = Arc::clone(&state);
-        let cookies: CookieLookup = Arc::new(move |address: &url::Url| {
-            engine_cookies(&mut cookie_state.cookie_jar.write(), address)
+        let cookies: CookieLookup = Arc::new(move |address: &url::Url, earlier: &[url::Url]| {
+            engine_cookies(
+                &cookie_state.net_policy,
+                &mut cookie_state.cookie_jar.write(),
+                address,
+                earlier,
+            )
         });
+        // Global Privacy Control, as the engine sends it on every request while the setting is on.
+        let sec_gpc = state.net_policy.global_privacy_control();
         // HTTPS-only mode, the HSTS upgrade and the bad-port block, for every address.
         let https_policy = Arc::clone(&self.https_policy);
         let policy: HopPolicy = Arc::new(move |address: &url::Url| {
@@ -354,6 +365,7 @@ impl ProtocolHandler for ViewSourceHandler {
         let options = fetch_options(
             context.user_agent.clone(),
             cookies,
+            sec_gpc,
             self.proxy.clone(),
             policy,
         );
@@ -376,23 +388,22 @@ impl ProtocolHandler for ViewSourceHandler {
     }
 }
 
-/// The `Cookie` header text the engine sends for a top-level `GET` of `url`: the same two steps as
-/// `set_request_cookies` in `third_party/servo-net/http_loader.rs` (expired cookies of the host
-/// are dropped first, then the jar's `cookies_for_url` for an HTTP request). This is the one
-/// place the re-fetch asks the jar, so that what is sent stays what the engine sends.
-///
-/// Merge note for the train that merges `lane/net-1`: NET-1 keeps `cookies_for_url` as "every
-/// matching cookie" and adds `cookies_for_request(url, source, &may_send)`, whose filter applies
-/// the network policy (blocked cookies, third-party blocking, SameSite) and which also sets
-/// `Sec-GPC: 1` when the policy says so. Switch this function to `cookies_for_request` with the
-/// site context of a top-level user navigation to `url` (as NET-1's `note_main_frame` does), and
-/// add `Sec-GPC` to `FetchOptions`. The test
-/// `the_lookup_is_what_the_engine_sends_for_a_top_level_get` must then also show that a cookie
-/// the policy refuses is not in the answer.
-fn engine_cookies(jar: &mut CookieStorage, url: &url::Url) -> Option<String> {
-    let url = ServoUrl::from(url.clone());
-    jar.remove_expired_cookies_for_url(&url);
-    jar.cookies_for_url(&url, CookieSource::HTTP)
+/// The `Cookie` header text the engine would send for a `GET` of `url` that the browser makes as
+/// a top-level navigation of its own (a typed address): the network policy's cookie rules for
+/// that request (blocked cookies, third-party blocking, SameSite) over the engine's jar, through
+/// `net::mercury_cookies::cookies_for_browser_navigation` (NET-1), which also drops expired
+/// cookies of the host first, as `set_request_cookies` does. `earlier` are the addresses of the
+/// redirect chain so far: one of another site makes the request cross-site, so `SameSite=Strict`
+/// cookies are not sent after it. This is the one place the re-fetch asks the jar, so that what is
+/// sent stays what the engine sends.
+fn engine_cookies(
+    policy: &NetPolicy,
+    jar: &mut CookieStorage,
+    url: &url::Url,
+    earlier: &[url::Url],
+) -> Option<String> {
+    let earlier: Vec<ServoUrl> = earlier.iter().cloned().map(ServoUrl::from).collect();
+    cookies_for_browser_navigation(policy, jar, &ServoUrl::from(url.clone()), &earlier)
 }
 
 /// What the browser's rules make of an address before the fetch requests it, in the order the
@@ -651,7 +662,7 @@ mod tests {
     fn a_fetch_gets_the_engines_user_agent_cookies_and_proxy_and_the_limits_of_the_handler() {
         let asked = Arc::new(std::sync::Mutex::new(Vec::new()));
         let log = Arc::clone(&asked);
-        let cookies: CookieLookup = Arc::new(move |url: &Url| {
+        let cookies: CookieLookup = Arc::new(move |url: &Url, _: &[Url]| {
             log.lock().expect("a lock").push(url.as_str().to_owned());
             Some("a=b".to_owned())
         });
@@ -661,8 +672,9 @@ mod tests {
             no_proxy: "localhost,.internal".to_owned(),
         };
         let policy: HopPolicy = Arc::new(|url: &Url| HopVerdict::Go(url.clone()));
-        let options = fetch_options("Mercury/1".to_owned(), cookies, proxy.clone(), policy);
+        let options = fetch_options("Mercury/1".to_owned(), cookies, true, proxy.clone(), policy);
         assert_eq!(options.user_agent, "Mercury/1");
+        assert!(options.sec_gpc);
         assert!(
             !options.accept_language.is_empty(),
             "the engine's one language"
@@ -735,7 +747,8 @@ mod tests {
         fn is_send<T: Send>(_: &T) {}
         let options = fetch_options(
             "Mercury/1".to_owned(),
-            Arc::new(|_: &Url| None),
+            Arc::new(|_: &Url, _: &[Url]| None),
+            false,
             ProxyConfig::default(),
             Arc::new(|url: &Url| HopVerdict::Go(url.clone())),
         );
@@ -871,6 +884,18 @@ mod tests {
         jar.cookies_for_url(&url, CookieSource::HTTP)
     }
 
+    fn lookup(policy: &NetPolicy, jar: &mut CookieStorage, address: &str) -> Option<String> {
+        engine_cookies(policy, jar, &url::Url::parse(address).expect("a URL"), &[])
+    }
+
+    /// The policy Mercury ships: third-party cookies blocked and SameSite enforced.
+    fn shipped_policy() -> NetPolicy {
+        let policy = NetPolicy::new();
+        policy.set_block_third_party_cookies(true);
+        policy.set_same_site_enforcement(true);
+        policy
+    }
+
     #[test]
     fn the_lookup_is_what_the_engine_sends_for_a_top_level_get() {
         let setup = [
@@ -889,12 +914,69 @@ mod tests {
         ] {
             let mut for_engine = jar_with(&setup);
             let mut for_us = jar_with(&setup);
+            // With no rule on (`NetPolicy::new()` is Servo 0.8) it is exactly what the engine sends.
             assert_eq!(
-                engine_cookies(&mut for_us, &url::Url::parse(address).expect("a URL")),
+                lookup(&NetPolicy::new(), &mut for_us, address),
                 the_engine_sends(&mut for_engine, address),
                 "{address}"
             );
+            // A top-level navigation is first party and same-site, so the shipped policy changes
+            // nothing for it either.
+            let mut shipped = jar_with(&setup);
+            assert_eq!(
+                lookup(&shipped_policy(), &mut shipped, address),
+                the_engine_sends(&mut jar_with(&setup), address),
+                "{address} with the shipped policy"
+            );
         }
+    }
+
+    #[test]
+    fn a_cookie_of_another_site_is_not_sent_and_samesite_follows_the_chain() {
+        let setup = [
+            ("sid=a; Path=/", "https://shop.test/", false),
+            (
+                "strict=s; Path=/; SameSite=Strict",
+                "https://shop.test/",
+                false,
+            ),
+            ("lax=l; Path=/; SameSite=Lax", "https://shop.test/", false),
+            ("track=t; Path=/", "https://tracker.test/", false),
+        ];
+        let policy = shipped_policy();
+        let mut jar = jar_with(&setup);
+        let shop = url::Url::parse("https://shop.test/").expect("a URL");
+
+        // Typed address: the shop's cookies, `Strict` and `Lax` included, and not the tracker's.
+        let sent = engine_cookies(&policy, &mut jar, &shop, &[]).expect("cookies");
+        for name in ["sid=a", "strict=s", "lax=l"] {
+            assert!(sent.contains(name), "{sent}");
+        }
+        assert!(
+            !sent.contains("track=t"),
+            "a third-party cookie was sent: {sent}"
+        );
+
+        // A redirect from the tracker to the shop is cross-site: `Strict` stays home, `Lax` goes
+        // (a top-level GET), and the tracker's cookie is still not sent.
+        let from_tracker = [url::Url::parse("https://tracker.test/r").expect("a URL")];
+        let sent = engine_cookies(&policy, &mut jar, &shop, &from_tracker).expect("cookies");
+        assert!(sent.contains("sid=a") && sent.contains("lax=l"), "{sent}");
+        assert!(
+            !sent.contains("strict=s"),
+            "a Strict cookie crossed sites: {sent}"
+        );
+        assert!(!sent.contains("track=t"), "{sent}");
+
+        // A redirect inside the site is still same-site.
+        let inside = [url::Url::parse("http://shop.test/").expect("a URL")];
+        let sent = engine_cookies(&policy, &mut jar, &shop, &inside).expect("cookies");
+        assert!(sent.contains("strict=s"), "{sent}");
+
+        // With SameSite not enforced, `Strict` goes after the cross-site hop too (Servo 0.8).
+        let servo_08 = NetPolicy::new();
+        let sent = engine_cookies(&servo_08, &mut jar, &shop, &from_tracker).expect("cookies");
+        assert!(sent.contains("strict=s"), "{sent}");
     }
 
     #[test]
@@ -914,14 +996,15 @@ mod tests {
             .expect("cookies");
         assert!(unpurged.contains("old=d"), "{unpurged}");
 
-        let sent = engine_cookies(&mut jar, &secure).expect("cookies");
+        let policy = shipped_policy();
+        let sent = engine_cookies(&policy, &mut jar, &secure, &[]).expect("cookies");
         assert!(sent.contains("sid=a") && sent.contains("sec=c"), "{sent}");
         assert!(
             !sent.contains("old=d"),
             "an expired cookie was sent: {sent}"
         );
         // A `Secure` cookie is not sent over `http`.
-        let sent = engine_cookies(&mut jar, &plain).expect("cookies");
+        let sent = engine_cookies(&policy, &mut jar, &plain, &[]).expect("cookies");
         assert!(sent.contains("sid=a") && !sent.contains("sec=c"), "{sent}");
     }
 

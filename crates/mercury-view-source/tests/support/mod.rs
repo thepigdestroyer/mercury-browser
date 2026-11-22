@@ -370,6 +370,7 @@ pub fn options() -> FetchOptions {
     FetchOptions {
         user_agent: "MercuryTest/1.0".to_owned(),
         cookies: None,
+        sec_gpc: false,
         proxy: ProxyConfig::default(),
         accept_language: String::new(),
         policy: None,
@@ -385,7 +386,7 @@ pub fn options_with_cookies(
 ) -> (FetchOptions, Arc<Mutex<Vec<Url>>>) {
     let asked = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&asked);
-    let lookup: CookieLookup = Arc::new(move |url: &Url| {
+    let lookup: CookieLookup = Arc::new(move |url: &Url, _earlier: &[Url]| {
         log.lock()
             .unwrap_or_else(PoisonError::into_inner)
             .push(url.clone());

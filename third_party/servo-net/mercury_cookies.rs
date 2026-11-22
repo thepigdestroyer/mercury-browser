@@ -38,8 +38,11 @@ use net_traits::request::{Request, RequestBuilder};
 use servo_url::ServoUrl;
 
 use crate::cookie::ServoCookie;
+use crate::cookie_storage::CookieStorage;
 use crate::http_loader::HttpState;
-use crate::net_policy::{NetPolicy, Party, RequestParts, RequestSites, site_key_of_origin};
+use crate::net_policy::{
+    NetPolicy, Party, RequestParts, RequestSites, site_key_of_origin, site_key_of_url,
+};
 
 /// What the cookie rules need to know about one request, a WebSocket handshake or a document.
 #[derive(Clone, Debug)]
@@ -184,6 +187,42 @@ pub(crate) fn accept_set_cookie(
             context.same_site || context.sites.top_level_navigation
         },
     }
+}
+
+/// The `Cookie` header text for a `GET` that the **browser** makes for a top-level page of its own, outside the
+/// engine's fetch (the `view-source:` page re-fetches the address it shows): a top-level navigation, first
+/// party by construction, with no initiator, exactly the context `RequestContext::of_request` builds for such a
+/// request. `earlier_hops` are the addresses the request has already been through (redirects): one of another
+/// site makes the request cross-site, as for the engine's own redirects, so `Strict` cookies stay home.
+/// Blocked cookies and every other rule of the policy apply as they do to a page load; the answer is `None`
+/// when there is nothing to send.
+pub fn cookies_for_browser_navigation(
+    policy: &NetPolicy,
+    cookie_jar: &mut CookieStorage,
+    url: &ServoUrl,
+    earlier_hops: &[ServoUrl],
+) -> Option<String> {
+    let site = site_key_of_url(url);
+    let context = RequestContext {
+        same_site: earlier_hops
+            .iter()
+            .all(|hop| site_key_of_url(hop) == site),
+        safe_method: true,
+        sites: RequestSites {
+            top_level: Some(site.clone()),
+            request: site,
+            initiator: None,
+            top_level_navigation: true,
+            party: Party::First,
+        },
+    };
+    if !policy.cookies_allowed(&context.sites) {
+        return None;
+    }
+    cookie_jar.remove_expired_cookies_for_url(url);
+    cookie_jar.cookies_for_request(url, CookieSource::HTTP, &|cookie| {
+        cookie_may_be_sent(policy, &context, cookie)
+    })
 }
 
 /// `document.cookie` read: the cookie string the document may see, or `None`. A third-party document (or one
