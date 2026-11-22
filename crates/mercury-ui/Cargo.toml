@@ -19,6 +19,10 @@ slint.workspace = true
 # `ChromePalette` and `ChromeMetrics` globals hold. Engine-free, like this crate.
 mercury-appearance = { path = "../mercury-appearance" }
 
+# corner-dial: `src/corner_dial` speaks the settings crate's `DialCorner`, so there is no second copy of
+# the four corner names. Already in the build through `mercury-appearance`.
+mercury-settings = { path = "../mercury-settings" }
+
 # Only for rendering without a display: `examples/render_settings.rs` (the settings window),
 # `examples/render_controls.rs` (the page-control popups), `examples/render_tabs.rs` (the
 # pop-up indicator), `examples/render_bookmarks.rs` (the bookmarks bar, star popover and
@@ -35,6 +39,8 @@ mercury-appearance = { path = "../mercury-appearance" }
 [dev-dependencies]
 i-slint-backend-testing.workspace = true
 image.workspace = true
+# corner-dial: `tests/corner_dial_state.rs` pins the corner names against the serde output.
+serde_json.workspace = true
 slint = { workspace = true, features = ["renderer-software", "software-renderer-systemfonts"] }
 talaria-core = { path = "../talaria-core" }
 
