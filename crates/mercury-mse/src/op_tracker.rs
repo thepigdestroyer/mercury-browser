@@ -21,6 +21,8 @@ use crate::api::OpId;
 #[derive(Clone, Debug, Default)]
 pub struct OpTracker {
     pending: Option<OpId>,
+    /// Whether the pending operation is a range removal. `false` when nothing is pending.
+    remove: bool,
 }
 
 impl OpTracker {
@@ -28,14 +30,23 @@ impl OpTracker {
         OpTracker::default()
     }
 
-    /// The backend accepted an append or a remove: it is the pending operation (replacing any other).
+    /// The backend accepted an append: it is the pending operation (replacing any other).
     pub fn begin(&mut self, op: OpId) {
         self.pending = Some(op);
+        self.remove = false;
+    }
+
+    /// The backend accepted a remove: it is the pending operation (replacing any other). The
+    /// specification's `abort()` must not touch it (see [`OpTracker::pending_is_remove`]).
+    pub fn begin_remove(&mut self, op: OpId) {
+        self.pending = Some(op);
+        self.remove = true;
     }
 
     /// `abort()`, removal of the buffer or `close()`: nothing is pending, whatever is in flight is stale.
     pub fn retire(&mut self) {
         self.pending = None;
+        self.remove = false;
     }
 
     /// A completion event for `op` arrived. `true` when it completes the pending operation (which is
@@ -43,6 +54,7 @@ impl OpTracker {
     pub fn finish(&mut self, op: OpId) -> bool {
         if self.pending == Some(op) {
             self.pending = None;
+            self.remove = false;
             true
         } else {
             false
@@ -52,5 +64,12 @@ impl OpTracker {
     /// The operation that is pending, if any.
     pub fn pending(&self) -> Option<OpId> {
         self.pending
+    }
+
+    /// Whether the pending operation is a range removal: the specification's range removal algorithm
+    /// "is running" from `remove()` until the event that ends it was handled, whether or not the
+    /// backend's worker has already finished the work.
+    pub fn pending_is_remove(&self) -> bool {
+        self.pending.is_some() && self.remove
     }
 }

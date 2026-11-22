@@ -3,9 +3,10 @@
 
 //! Operation serials of lane med-1b (decision D3), against a real `MseBackend` (real worker thread,
 //! real parser): the completion events carry the `OpId` that `append` and `remove` returned, a stale
-//! event (one already queued when `abort()` ran) is told apart from the event of the next append, and a
-//! model of the DOM's `SourceBuffer` (an `OpTracker` and an `updating` flag, driven by random operations)
-//! never lets a stale event through nor loses an accepted operation (item 1, `core`).
+//! event (one already queued when `abort()` ran) is told apart from the event of the next append, and
+//! `SourceBufferOps` (the operation state machine the DOM's `SourceBuffer` uses), driven by random
+//! operations against the real backend, never lets a stale event through, loses an accepted operation or
+//! lets `abort()` through during a removal, whichever of the worker and the page's task is first.
 //!
 //! Replay one random sequence with `MSE_SERIAL_SEED=n`.
 
@@ -17,8 +18,10 @@ use std::sync::{Arc, Condvar, Mutex, Weak};
 use std::time::{Duration, Instant};
 
 use mercury_mse::api::{
-    AllDecoders, EventSink, Limits, MediaSourceBackend, MseEvent, OpId, SourceBufferId,
+    AllDecoders, EventSink, Limits, MediaSourceBackend, MediaSourceReadyState, MseEvent, OpId,
+    SourceBufferId,
 };
+use mercury_mse::source_buffer_ops::{SbEvent, SourceBufferOps};
 use mercury_mse::{MseBackend, OpTracker};
 use model_support::{Rng, WAIT, load};
 
@@ -271,21 +274,24 @@ fn serial_an_aborted_append_that_never_finished_emits_nothing_for_its_id() {
 }
 
 // ----------------------------------------------------------------------------------------------
-// The random walk: a model of the DOM's SourceBuffer
+// The random walk: the DOM's SourceBuffer is `SourceBufferOps`, the backend is the real one
+//
+// The walk plays the DOM the way the shipped code does (`abort()`: `check_abort`, the backend's
+// `abort`, then `abort`; `removeSourceBuffer()`: the backend, then `abort_pending` and `detach`) with
+// every operation of the page, including `abort()` right after `remove()` (finding 1 of the review of
+// round 2a: the old walk skipped it, and the DOM answered it from the worker's busy flag).
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-enum Pending {
-    Nothing,
+enum Kind {
     Append,
     Remove,
 }
 
 struct Buf {
     id: SourceBufferId,
-    tracker: OpTracker,
-    pending: Pending,
-    /// The operation the model began last and that was not completed or retired since.
-    latest: Option<OpId>,
+    ops: SourceBufferOps,
+    /// The operation the walk began last and that was not completed or retired since.
+    latest: Option<(OpId, Kind)>,
     next_piece: usize,
 }
 
@@ -296,6 +302,12 @@ struct Stats {
     unknown_buffer: usize,
     appends: usize,
     removes: usize,
+    /// `abort()` calls that retired a pending append.
+    aborted_appends: usize,
+    /// `abort()` calls refused because a removal was pending, and how many of those found the worker
+    /// already finished (its `RemoveDone` queued, not yet handled).
+    refused_aborts: usize,
+    refused_worker_done: usize,
 }
 
 struct Dom {
@@ -337,23 +349,18 @@ impl Dom {
         )
     }
 
-    fn began(&mut self, buf: usize, op: OpId, kind: Pending) {
+    fn began(&mut self, buf: usize, op: OpId, kind: Kind) {
         if let Some(last) = self.last_op {
             assert!(op > last, "{}: {op} is not after {last}", self.ctx());
         }
         self.last_op = Some(op);
         self.issued.insert(op);
-        let b = &mut self.bufs[buf];
-        b.tracker.begin(op);
-        b.latest = Some(op);
-        b.pending = kind;
-    }
-
-    fn retire(&mut self, buf: usize) {
-        let b = &mut self.bufs[buf];
-        b.tracker.retire();
-        b.latest = None;
-        b.pending = Pending::Nothing;
+        let event = match kind {
+            Kind::Append => self.bufs[buf].ops.begin_append(op),
+            Kind::Remove => self.bufs[buf].ops.begin_remove(op),
+        };
+        assert_eq!(event, SbEvent::UpdateStart, "{}", self.ctx());
+        self.bufs[buf].latest = Some((op, kind));
     }
 
     fn append(&mut self, rng: &mut Rng) {
@@ -370,7 +377,7 @@ impl Dom {
         let id = self.bufs[i].id;
         if let Ok(op) = self.backend.append(id, data) {
             self.stats.appends += 1;
-            self.began(i, op, Pending::Append);
+            self.began(i, op, Kind::Append);
             if rng.chance(40) {
                 // Let the worker finish and post the event before the page runs its next task.
                 self.queue
@@ -384,7 +391,7 @@ impl Dom {
         let id = self.bufs[i].id;
         if let Ok(op) = self.backend.remove(id, 0.0, 1.0) {
             self.stats.removes += 1;
-            self.began(i, op, Pending::Remove);
+            self.began(i, op, Kind::Remove);
             if rng.chance(40) {
                 self.queue
                     .wait_for_completion_of(op, Duration::from_millis(5));
@@ -392,17 +399,63 @@ impl Dom {
         }
     }
 
+    /// The page's `abort()`, as the DOM runs it.
     fn abort(&mut self, rng: &mut Rng) {
         if self.bufs.is_empty() {
             return;
         }
         let i = rng.below(self.bufs.len());
-        // The range removal algorithm cannot be aborted: the page's abort() throws without effect.
-        if self.bufs[i].pending == Pending::Remove {
+        let id = self.bufs[i].id;
+        let was = self.bufs[i].latest;
+        let ctx = self.ctx();
+        // Step 2: an append error ends the stream ("decode"), and abort() then throws before anything.
+        if self.backend.ready_state() != MediaSourceReadyState::Open {
             return;
         }
-        if self.backend.abort(self.bufs[i].id).is_ok() {
-            self.retire(i);
+        match self.bufs[i].ops.check_abort() {
+            Err(refused) => {
+                // The range removal algorithm is running: whether or not the worker finished it.
+                assert!(
+                    matches!(was, Some((_, Kind::Remove))),
+                    "{ctx}: abort() refused ({refused}) with {was:?} pending"
+                );
+                assert!(self.bufs[i].ops.updating(), "{ctx}");
+                assert_eq!(self.bufs[i].ops.abort(), Err(refused), "{ctx}");
+                assert!(
+                    self.bufs[i].ops.updating(),
+                    "{ctx}: a refused abort() changed updating"
+                );
+                assert_eq!(self.bufs[i].ops.pending(), was.map(|w| w.0), "{ctx}");
+                self.stats.refused_aborts += 1;
+                if !self.backend.updating(id) {
+                    self.stats.refused_worker_done += 1;
+                }
+            }
+            Ok(()) => {
+                assert!(
+                    !matches!(was, Some((_, Kind::Remove))),
+                    "{ctx}: abort() allowed during a removal"
+                );
+                if let Err(error) = self.backend.abort(id) {
+                    // The worker's append error ended the stream between the check and the call: the
+                    // page's abort() throws on step 2 and nothing else happens.
+                    assert_ne!(
+                        self.backend.ready_state(),
+                        MediaSourceReadyState::Open,
+                        "{ctx}: the backend refused an abort() the DOM allowed: {error}"
+                    );
+                    return;
+                }
+                let events = self.bufs[i].ops.abort().expect("abort() was checked");
+                let want: &[SbEvent] = if was.is_some() {
+                    self.stats.aborted_appends += 1;
+                    &[SbEvent::Abort, SbEvent::UpdateEnd]
+                } else {
+                    &[]
+                };
+                assert_eq!(events, want, "{ctx}");
+                self.bufs[i].latest = None;
+            }
         }
     }
 
@@ -412,15 +465,29 @@ impl Dom {
         }
         let i = rng.below(self.bufs.len());
         if self.backend.remove_source_buffer(self.bufs[i].id).is_ok() {
-            self.retire(i);
+            let ctx = self.ctx();
+            let was = self.bufs[i].latest;
+            let events = self.bufs[i].ops.abort_pending();
+            self.bufs[i].ops.detach();
+            let want: &[SbEvent] = if was.is_some() {
+                &[SbEvent::Abort, SbEvent::UpdateEnd]
+            } else {
+                &[]
+            };
+            assert_eq!(
+                events, want,
+                "{ctx}: removeSourceBuffer with {was:?} pending"
+            );
+            assert!(!self.bufs[i].ops.updating(), "{ctx}");
             self.bufs.remove(i);
         }
     }
 
     fn close_and_reopen(&mut self) {
         self.backend.close();
-        for i in 0..self.bufs.len() {
-            self.retire(i);
+        for buf in &mut self.bufs {
+            buf.ops.detach();
+            assert!(!buf.ops.updating());
         }
         self.bufs.clear();
         self.backend.open();
@@ -432,8 +499,7 @@ impl Dom {
         {
             self.bufs.push(Buf {
                 id,
-                tracker: OpTracker::new(),
-                pending: Pending::Nothing,
+                ops: SourceBufferOps::new(),
                 latest: None,
                 next_piece: 0,
             });
@@ -442,9 +508,23 @@ impl Dom {
 
     fn pick_idle(&self, rng: &mut Rng) -> Option<usize> {
         let idle: Vec<usize> = (0..self.bufs.len())
-            .filter(|i| self.bufs[*i].pending == Pending::Nothing)
+            .filter(|i| !self.bufs[*i].ops.updating())
             .collect();
         (!idle.is_empty()).then(|| idle[rng.below(idle.len())])
+    }
+
+    /// `updating` is exactly "an operation is pending", and the walk's own record agrees.
+    fn check_invariants(&self) {
+        let ctx = self.ctx();
+        for buf in &self.bufs {
+            assert_eq!(buf.ops.updating(), buf.ops.pending().is_some(), "{ctx}");
+            assert_eq!(buf.ops.pending(), buf.latest.map(|l| l.0), "{ctx}");
+            assert_eq!(
+                buf.ops.pending_is_remove(),
+                matches!(buf.latest, Some((_, Kind::Remove))),
+                "{ctx}"
+            );
+        }
     }
 
     /// The page's task for one queued event.
@@ -462,34 +542,49 @@ impl Dom {
             return;
         };
         let latest = self.bufs[i].latest;
-        if self.bufs[i].tracker.finish(op) {
-            // An accepted completion is the latest accepted operation, once, of the right sort.
-            assert_eq!(
-                latest,
-                Some(op),
-                "{ctx}: accepted {event:?}, latest is {latest:?}"
-            );
-            assert!(self.accepted.insert(op), "{ctx}: {op} accepted twice");
-            let want = self.bufs[i].pending;
-            let got = match event {
-                MseEvent::RemoveDone { .. } => Pending::Remove,
-                _ => Pending::Append,
-            };
-            assert_eq!(want, got, "{ctx}: {event:?} completes a {want:?}");
-            self.bufs[i].pending = Pending::Nothing;
-            self.bufs[i].latest = None;
-            assert!(
-                !self.backend.updating(id),
-                "{ctx}: updating is still true after the accepted {event:?}"
-            );
-            self.stats.accepted += 1;
-        } else {
+        let (events, kind, want) = match event {
+            MseEvent::AppendError { .. } => (
+                self.bufs[i].ops.failed(op),
+                Kind::Append,
+                [SbEvent::Error, SbEvent::UpdateEnd],
+            ),
+            MseEvent::RemoveDone { .. } => (
+                self.bufs[i].ops.finished(op),
+                Kind::Remove,
+                [SbEvent::Update, SbEvent::UpdateEnd],
+            ),
+            _ => (
+                self.bufs[i].ops.finished(op),
+                Kind::Append,
+                [SbEvent::Update, SbEvent::UpdateEnd],
+            ),
+        };
+        if events.is_empty() {
             assert_ne!(
-                latest,
+                latest.map(|l| l.0),
                 Some(op),
                 "{ctx}: the event for the pending operation was refused: {event:?}"
             );
             self.stats.stale += 1;
+        } else {
+            // An accepted completion is the latest accepted operation, once, of the right sort.
+            assert_eq!(events, want, "{ctx}: {event:?}");
+            assert_eq!(
+                latest,
+                Some((op, kind)),
+                "{ctx}: accepted {event:?}, latest is {latest:?}"
+            );
+            assert!(self.accepted.insert(op), "{ctx}: {op} accepted twice");
+            self.bufs[i].latest = None;
+            assert!(
+                !self.bufs[i].ops.updating(),
+                "{ctx}: updating is still true after the accepted {event:?}"
+            );
+            assert!(
+                !self.backend.updating(id),
+                "{ctx}: the backend is still updating after the accepted {event:?}"
+            );
+            self.stats.accepted += 1;
         }
     }
 
@@ -508,7 +603,7 @@ impl Dom {
         let deadline = Instant::now() + WAIT;
         loop {
             self.process(usize::MAX);
-            if self.bufs.iter().all(|b| b.pending == Pending::Nothing) {
+            if self.bufs.iter().all(|b| !b.ops.updating()) {
                 return;
             }
             assert!(
@@ -517,7 +612,7 @@ impl Dom {
                 self.ctx(),
                 self.bufs
                     .iter()
-                    .map(|b| (b.id, b.pending, b.latest))
+                    .map(|b| (b.id, b.latest))
                     .collect::<Vec<_>>()
             );
             self.queue.wait_for_any(Duration::from_millis(20));
@@ -580,6 +675,7 @@ fn serial_random_operations_never_let_a_stale_event_through() {
                     dom.process(n);
                 }
             }
+            dom.check_invariants();
         }
         let stats = dom.finish();
         total.accepted += stats.accepted;
@@ -587,6 +683,9 @@ fn serial_random_operations_never_let_a_stale_event_through() {
         total.unknown_buffer += stats.unknown_buffer;
         total.appends += stats.appends;
         total.removes += stats.removes;
+        total.aborted_appends += stats.aborted_appends;
+        total.refused_aborts += stats.refused_aborts;
+        total.refused_worker_done += stats.refused_worker_done;
     }
     eprintln!("serial random walk: {total:?}");
     if std::env::var("MSE_SERIAL_SEED").is_err() {
@@ -598,6 +697,16 @@ fn serial_random_operations_never_let_a_stale_event_through() {
             "too few stale events were exercised: {total:?}"
         );
         assert!(total.removes > 1_000, "{total:?}");
+        assert!(total.aborted_appends > 100, "{total:?}");
+        // abort() right after remove(), with the worker done and with the RemoveDone still unhandled.
+        assert!(
+            total.refused_aborts > 100,
+            "too few abort()s during a removal were exercised: {total:?}"
+        );
+        assert!(
+            total.refused_worker_done > 20,
+            "too few of them found the worker already finished: {total:?}"
+        );
     }
 }
 

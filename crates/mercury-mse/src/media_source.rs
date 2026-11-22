@@ -664,8 +664,14 @@ impl MediaSource {
     }
 
     /// `abort()`: an append in progress ends silently (the DOM fires `abort` and `updateend` itself and
-    /// the worker's result becomes stale), the parser state is reset, the append window is reset. The
-    /// range removal algorithm cannot be aborted.
+    /// the worker's result becomes stale), the parser state is reset, the append window is reset.
+    ///
+    /// Step 3, "if the range removal algorithm is running, throw an InvalidStateError", holds for the
+    /// page from `remove()` until its `RemoveDone` has been handled, which is longer than this model's
+    /// `busy` flag lasts: the worker clears `busy` and only then posts the event. So the refusal below is
+    /// a second line of defence that sees only the part where the worker is still at work; the DOM
+    /// decides step 3 with `source_buffer_ops::SourceBufferOps::check_abort`, which also covers the time
+    /// between the worker finishing and the DOM handling `RemoveDone`, before it calls this.
     pub fn abort(&mut self, id: SourceBufferId) -> Result<(), MseError> {
         let i = self.live_index(id)?;
         if self.ready_state != MediaSourceReadyState::Open {
@@ -817,6 +823,8 @@ impl MediaSource {
     }
 
     /// The worker's part of `remove`: coded frame removal, then `RemoveDone` with `updating` false.
+    /// `busy` is clear from here on, before the DOM has handled `RemoveDone`: the page's range removal
+    /// algorithm is still running until then (see [`MediaSource::abort`]).
     pub fn run_remove(&mut self, id: SourceBufferId, generation: u64, start: Ns, end: Option<Ns>) {
         let Some(i) = self.index(id) else { return };
         if self.buffers[i].removed

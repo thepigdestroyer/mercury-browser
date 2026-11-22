@@ -430,8 +430,10 @@ fn c13_remove_cannot_be_aborted_and_checks_its_arguments() {
     rig.remove_ok(id, 0.0, f64::INFINITY);
     assert!(rig.backend.buffered(id).is_empty());
 
-    // abort() while a removal runs: park the worker in the `RemoveDone`-less phase is not possible (the
-    // removal is one step), so this checks the other direction: remove in the ended state reopens.
+    // abort() while a removal runs is the DOM's decision (it is refused from `remove()` until the page
+    // handled `RemoveDone`, which this backend cannot see once the worker is done): it is tested with
+    // the real backend in `ops_backend.rs` and `serial_backend.rs`. Here: remove in the ended state
+    // reopens.
     rig.append_ok(id, &good.media[0].bytes);
     rig.backend.end_of_stream(None).unwrap();
     rig.remove_ok(id, 0.0, 1.0);

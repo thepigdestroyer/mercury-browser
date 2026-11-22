@@ -127,3 +127,30 @@ fn serial_property_the_tracker_matches_a_model() {
         }
     }
 }
+
+// ----------------------------------------------------------------------------------------------
+// The kind of the pending operation (med-1b review fix, finding 1)
+
+#[test]
+fn serial_the_tracker_knows_whether_the_pending_operation_is_a_removal() {
+    let mut t = OpTracker::new();
+    assert!(!t.pending_is_remove());
+    t.begin_remove(OpId(1));
+    assert!(t.pending_is_remove());
+    assert_eq!(t.pending(), Some(OpId(1)));
+    // A removal is retired like any operation, and its kind goes with it.
+    t.retire();
+    assert!(!t.pending_is_remove());
+    t.begin_remove(OpId(2));
+    assert!(t.finish(OpId(2)));
+    assert!(!t.pending_is_remove());
+    // A newer append replaces a removal, kind included; and the other way round.
+    t.begin_remove(OpId(3));
+    t.begin(OpId(4));
+    assert!(!t.pending_is_remove());
+    t.begin_remove(OpId(5));
+    assert!(t.pending_is_remove());
+    // A stale event does not touch the kind.
+    assert!(!t.finish(OpId(4)));
+    assert!(t.pending_is_remove());
+}
