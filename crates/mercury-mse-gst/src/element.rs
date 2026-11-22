@@ -103,10 +103,14 @@ mod imp {
 
         fn pad_templates() -> &'static [gst::PadTemplate] {
             static TEMPLATES: LazyLock<Vec<gst::PadTemplate>> = LazyLock::new(|| {
-                let video: gst::Caps = "video/x-h264; video/x-vp8; video/x-vp9; video/x-av1"
-                    .parse()
-                    .expect("static caps");
-                let audio: gst::Caps = "audio/mpeg; audio/x-opus".parse().expect("static caps");
+                let video: gst::Caps =
+                    "video/x-h264; video/x-h265; video/x-vp8; video/x-vp9; video/x-av1"
+                        .parse()
+                        .expect("static caps");
+                let audio: gst::Caps =
+                    "audio/mpeg; audio/x-opus; audio/x-ac3; audio/x-eac3; audio/x-flac; audio/x-vorbis"
+                        .parse()
+                        .expect("static caps");
                 vec![
                     gst::PadTemplate::new(
                         "video_%u",

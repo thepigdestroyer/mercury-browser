@@ -9,16 +9,30 @@
 //! * AAC: `audio/mpeg, mpegversion=4, stream-format=raw, codec_data=<AudioSpecificConfig>`
 //! * Opus: `audio/x-opus, rate, channels, channel-mapping-family` (and, for families above 0, the stream
 //!   and channel mapping) read from `OpusHead`
+//! * HEVC (lane med-1b, D7): `video/x-h265, stream-format=hvc1|hev1, alignment=au, codec_data=<hvcC>`; the
+//!   stream format follows the codec string (`hev1.` or `hvc1.`)
+//! * AC-3: `audio/x-ac3, framed=true`; E-AC-3: `audio/x-eac3, framed=true`
+//! * MP3: `audio/mpeg, mpegversion=1, layer=3, parsed=true`
+//! * FLAC: `audio/x-flac, framed=true, streamheader=[fLaC, STREAMINFO, ...]` from the metadata blocks
+//! * Vorbis: `audio/x-vorbis, streamheader=[identification, comment, setup]` from the Xiph-laced
+//!   `CodecPrivate`
 //!
 //! Width, height, rate and channel count are added when the container gave them (non-zero). Nothing here
 //! needs a running pipeline, only an initialised GStreamer.
 
 use gstreamer as gst;
-use mercury_mse::{CodecConfig, TrackConfig, TrackKind};
+use mercury_mse::{CodecConfig, CodecId, TrackConfig, TrackKind};
 
 /// The smallest `avcC` there is: version, three profile bytes, `lengthSizeMinusOne`, an SPS count, a PPS
 /// count.
 const AVCC_MIN: usize = 7;
+
+/// The fixed part of an `hvcC` (22 bytes) and the array count that follows it.
+const HVCC_MIN: usize = 23;
+
+/// A FLAC STREAMINFO block is 34 bytes; each metadata block has a 4-byte header.
+const FLAC_STREAMINFO_LEN: usize = 34;
+const FLAC_BLOCK_HEADER: usize = 4;
 
 /// The smallest `av1C`: marker/version, profile/level, flags, delay.
 const AV1C_MIN: usize = 4;
@@ -65,12 +79,43 @@ pub fn caps_for(config: &TrackConfig) -> Result<gst::Caps, String> {
                 .field("codec_data", gst::Buffer::from_slice(asc.clone()))
         }
         CodecConfig::Opus { head } => opus_caps(head, config)?,
-        CodecConfig::Hevc { .. } | CodecConfig::Other { .. } => {
-            return Err(format!(
-                "{:?} is not fed to GStreamer in this round",
-                config.codec.id()
-            ));
+        CodecConfig::Hevc { hvcc } => {
+            if hvcc.len() < HVCC_MIN || hvcc[0] != 1 {
+                return Err(format!(
+                    "the hvcC of the HEVC track is not usable ({} bytes)",
+                    hvcc.len()
+                ));
+            }
+            // `hev1` keeps the parameter sets in the stream as well; anything else is `hvc1`.
+            let format = if config.codec_string.starts_with("hev1") {
+                "hev1"
+            } else {
+                "hvc1"
+            };
+            gst::Caps::builder("video/x-h265")
+                .field("stream-format", format)
+                .field("alignment", "au")
+                .field("codec_data", gst::Buffer::from_slice(hvcc.clone()))
         }
+        CodecConfig::Other {
+            codec,
+            config: bytes,
+        } => match codec {
+            CodecId::Ac3 => gst::Caps::builder("audio/x-ac3").field("framed", true),
+            CodecId::Eac3 => gst::Caps::builder("audio/x-eac3").field("framed", true),
+            CodecId::Mp3 => gst::Caps::builder("audio/mpeg")
+                .field("mpegversion", 1i32)
+                .field("layer", 3i32)
+                .field("parsed", true),
+            CodecId::Flac => gst::Caps::builder("audio/x-flac")
+                .field("framed", true)
+                .field("streamheader", flac_stream_headers(bytes)?),
+            CodecId::Vorbis => gst::Caps::builder("audio/x-vorbis")
+                .field("streamheader", vorbis_stream_headers(bytes)?),
+            other => {
+                return Err(format!("{other:?} has no caps in an `Other` configuration"));
+            }
+        },
     };
 
     match config.kind {
@@ -95,6 +140,80 @@ pub fn caps_for(config: &TrackConfig) -> Result<gst::Caps, String> {
         TrackKind::Text => {}
     }
     Ok(builder.build())
+}
+
+/// A header buffer for a `streamheader` field: the bytes with the `HEADER` flag.
+fn header_buffer(bytes: &[u8]) -> gst::Buffer {
+    let mut buffer = gst::Buffer::from_slice(bytes.to_vec());
+    buffer
+        .get_mut()
+        .expect("a new buffer is writable")
+        .set_flags(gst::BufferFlags::HEADER);
+    buffer
+}
+
+/// The FLAC `streamheader`: the `fLaC` marker, then each metadata block with its 4-byte header, the way
+/// GStreamer's own demuxers build it. `blocks` is what the parsers hand over: the metadata blocks with
+/// STREAMINFO first and the marker removed. A truncated block, a first block that is not a 34-byte
+/// STREAMINFO or nothing after the last block's declared end is refused.
+fn flac_stream_headers(blocks: &[u8]) -> Result<gst::Array, String> {
+    let mut headers = vec![header_buffer(b"fLaC")];
+    let mut rest = blocks;
+    let mut first = true;
+    loop {
+        if rest.len() < FLAC_BLOCK_HEADER {
+            return Err("the FLAC metadata blocks are truncated".to_owned());
+        }
+        let last = rest[0] & 0x80 != 0;
+        let kind = rest[0] & 0x7F;
+        let length = usize::from(rest[1]) << 16 | usize::from(rest[2]) << 8 | usize::from(rest[3]);
+        let total = FLAC_BLOCK_HEADER + length;
+        if rest.len() < total {
+            return Err("a FLAC metadata block is truncated".to_owned());
+        }
+        if first && (kind != 0 || length != FLAC_STREAMINFO_LEN) {
+            return Err("the first FLAC metadata block is not a STREAMINFO".to_owned());
+        }
+        first = false;
+        headers.push(header_buffer(&rest[..total]));
+        rest = &rest[total..];
+        // The last-block flag ends the list; a configuration that stops without it is still taken
+        // whole (an MP4 `dfLa` always sets it, a hand-built one may not).
+        if last || rest.is_empty() {
+            return Ok(gst::Array::new(headers));
+        }
+    }
+}
+
+/// The three Vorbis header packets of a Matroska `CodecPrivate` (Xiph lacing: a count byte that is 2, the
+/// sizes of the first two packets in 255-runs, then the packets), as a `streamheader`.
+fn vorbis_stream_headers(private: &[u8]) -> Result<gst::Array, String> {
+    let bad = || "the Vorbis CodecPrivate is not three Xiph-laced header packets".to_owned();
+    if private.first() != Some(&2) {
+        return Err(bad());
+    }
+    let mut at = 1;
+    let mut sizes = [0usize; 2];
+    for size in &mut sizes {
+        loop {
+            let byte = *private.get(at).ok_or_else(bad)?;
+            at += 1;
+            *size = size.checked_add(usize::from(byte)).ok_or_else(bad)?;
+            if byte != 255 {
+                break;
+            }
+        }
+    }
+    let first_end = at.checked_add(sizes[0]).ok_or_else(bad)?;
+    let second_end = first_end.checked_add(sizes[1]).ok_or_else(bad)?;
+    if sizes[0] == 0 || sizes[1] == 0 || second_end >= private.len() {
+        return Err(bad());
+    }
+    Ok(gst::Array::new([
+        header_buffer(&private[at..first_end]),
+        header_buffer(&private[first_end..second_end]),
+        header_buffer(&private[second_end..]),
+    ]))
 }
 
 /// `audio/x-opus` caps from an `OpusHead`, as GStreamer's `gst_codec_utils_opus_create_caps` builds them

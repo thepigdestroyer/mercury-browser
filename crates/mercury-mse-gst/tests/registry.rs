@@ -12,7 +12,7 @@ use mercury_mse::{CodecId, TrackKind, TypeSupport};
 use mercury_mse_gst::{GstTypeSupport, MSE_URI_SCHEME, decoder_caps};
 
 #[test]
-fn the_codecs_of_this_round_have_decoders() {
+fn the_codecs_of_round_one_have_decoders() {
     common::env::init();
     let support = GstTypeSupport;
     for (codec, element) in [
@@ -33,6 +33,63 @@ fn the_codecs_of_this_round_have_decoders() {
     }
 }
 
+/// D7: each new codec is accepted when the registry has a decoder that takes it. The elements are the
+/// ones the shipped plugin list (libav and vorbis) provides; any of the listed names will do.
+#[test]
+fn the_new_codecs_have_decoders_in_the_bundle() {
+    common::env::init();
+    let support = GstTypeSupport;
+    for (codec, elements) in [
+        (CodecId::Hevc, &["avdec_h265", "vtdec", "vtdec_hw"][..]),
+        (CodecId::Ac3, &["avdec_ac3", "a52dec"][..]),
+        (CodecId::Eac3, &["avdec_eac3"][..]),
+        (
+            CodecId::Mp3,
+            &["avdec_mp3", "avdec_mp3float", "mpg123audiodec"][..],
+        ),
+        (CodecId::Flac, &["avdec_flac", "flacdec"][..]),
+        (CodecId::Vorbis, &["vorbisdec"][..]),
+    ] {
+        let present: Vec<&str> = elements
+            .iter()
+            .copied()
+            .filter(|name| gst::ElementFactory::find(name).is_some())
+            .collect();
+        if present.is_empty() {
+            common::env::skip_or_fail(elements[0]);
+            continue;
+        }
+        assert!(
+            support.has_decoder(codec.kind(), codec),
+            "{codec:?} has {present:?} but GstTypeSupport says no"
+        );
+    }
+}
+
+/// The answer comes from the registry, not from a list: a codec whose decoder this registry lacks is
+/// refused. `libgstflac` and `libgstmpg123` are not loaded here, and the Dolby decoders are libav's, so
+/// the only refusal that can be forced is the wrong kind and an uninitialised GStreamer elsewhere; what
+/// this checks is that the answer for each new codec is a plain bool for its own kind only.
+#[test]
+fn a_new_codec_is_only_offered_for_its_own_kind() {
+    common::env::init();
+    let support = GstTypeSupport;
+    for codec in [
+        CodecId::Hevc,
+        CodecId::Ac3,
+        CodecId::Eac3,
+        CodecId::Mp3,
+        CodecId::Flac,
+        CodecId::Vorbis,
+    ] {
+        let other = match codec.kind() {
+            TrackKind::Video => TrackKind::Audio,
+            _ => TrackKind::Video,
+        };
+        assert!(!support.has_decoder(other, codec), "{codec:?} as {other:?}");
+    }
+}
+
 #[test]
 fn a_kind_that_does_not_match_the_codec_is_refused() {
     common::env::init();
@@ -42,19 +99,23 @@ fn a_kind_that_does_not_match_the_codec_is_refused() {
 }
 
 #[test]
-fn the_codecs_decision_d4_leaves_out_have_no_decoder_here() {
-    common::env::init();
-    let support = GstTypeSupport;
+fn every_codec_has_decoder_caps() {
     for codec in [
+        CodecId::H264,
         CodecId::Hevc,
+        CodecId::Vp8,
+        CodecId::Vp9,
+        CodecId::Av1,
+        CodecId::Aac,
+        CodecId::Opus,
         CodecId::Mp3,
         CodecId::Flac,
         CodecId::Vorbis,
         CodecId::Ac3,
         CodecId::Eac3,
     ] {
-        assert!(decoder_caps(codec).is_none(), "{codec:?}");
-        assert!(!support.has_decoder(codec.kind(), codec), "{codec:?}");
+        common::env::init();
+        assert!(decoder_caps(codec).is_some(), "{codec:?}");
     }
 }
 

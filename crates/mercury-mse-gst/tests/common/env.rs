@@ -30,6 +30,9 @@ const PLUGIN_FILES: &[&str] = &[
     "libgstvpx.dylib",
     "libgstvideoparsersbad.dylib",
     "libgstlibav.dylib",
+    // Mercury's list also has libgstvorbis (vorbisdec) and libgstogg; flac, mpg123 and a52dec are not in
+    // it, so FLAC, MP3 and AC-3 play through libav (`avdec_flac`, `avdec_mp3`, `avdec_ac3`) as in the app.
+    "libgstvorbis.dylib",
     // Not in Mercury's list yet (EA0 adds dav1d); the AV1 tests need it.
     "libgstdav1d.dylib",
     // Test only.
@@ -154,6 +157,7 @@ fn scratch_dir() -> PathBuf {
 fn pin_software_decoders() {
     for name in [
         "avdec_h264",
+        "avdec_h265",
         "avdec_aac",
         "vp9dec",
         "vp8dec",

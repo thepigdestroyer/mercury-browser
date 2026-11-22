@@ -6,7 +6,7 @@
 mod common;
 
 use gstreamer as gst;
-use mercury_mse::{CodecConfig, TrackConfig, TrackKind};
+use mercury_mse::{CodecConfig, CodecId, TrackConfig, TrackKind};
 use mercury_mse_gst::caps::{caps_for, stream_type};
 
 fn init() {
@@ -210,18 +210,254 @@ fn bad_opus_heads_are_refused() {
     }
 }
 
+fn other(kind: TrackKind, codec: CodecId, config: Vec<u8>) -> TrackConfig {
+    track(kind, CodecConfig::Other { codec, config })
+}
+
+/// The smallest usable `hvcC`: the 22 fixed bytes and an array count of zero.
+fn hvcc() -> Vec<u8> {
+    let mut record = vec![1, 1, 0x60, 0, 0, 0, 0x90, 0, 0, 0, 0, 0, 93];
+    record.extend_from_slice(&[0xF0, 0, 0xFC, 0xFD, 0xF8, 0xF8, 0, 0, 0x0F, 0]);
+    assert_eq!(record.len(), 23);
+    record
+}
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+/// The table of D7: the configuration the parsers hand over (section 6 of the med-1b brief) against the
+/// caps string `MseSrc` gives GStreamer.
 #[test]
-fn codecs_left_for_later_have_no_caps() {
+fn caps_table_of_the_new_codecs() {
     init();
-    let config = track(TrackKind::Video, CodecConfig::Hevc { hvcc: vec![1; 30] });
-    assert!(caps_for(&config).unwrap_err().contains("Hevc"));
-    let config = track(
+    let mut hevc = track(TrackKind::Video, CodecConfig::Hevc { hvcc: hvcc() });
+    hevc.codec_string = "hvc1.1.6.L93.B0".to_owned();
+    hevc.width = 1280;
+    hevc.height = 720;
+    let mut hev1 = hevc.clone();
+    hev1.codec_string = "hev1.1.6.L93.B0".to_owned();
+    let mut ac3 = other(TrackKind::Audio, CodecId::Ac3, vec![0x10, 0x3D, 0x40]);
+    ac3.sample_rate = 48_000;
+    ac3.channels = 6;
+    let mut eac3 = other(
         TrackKind::Audio,
-        CodecConfig::Other {
-            codec: mercury_mse::CodecId::Flac,
-            config: vec![],
-        },
+        CodecId::Eac3,
+        vec![0x06, 0x00, 0x20, 0x00],
     );
+    eac3.sample_rate = 48_000;
+    eac3.channels = 2;
+    let mut mp3 = other(TrackKind::Audio, CodecId::Mp3, vec![]);
+    mp3.sample_rate = 44_100;
+    mp3.channels = 2;
+    // A WebM AC-3 track has no configuration, no rate and no channel count: the caps say less.
+    let bare_ac3 = other(TrackKind::Audio, CodecId::Ac3, vec![]);
+
+    let hvcc_hex = hex(&hvcc());
+    let table: Vec<(&str, TrackConfig, String)> = vec![
+        (
+            "HEVC hvc1",
+            hevc,
+            format!(
+                "video/x-h265, stream-format=(string)hvc1, alignment=(string)au, codec_data=(buffer){hvcc_hex}, width=(int)1280, height=(int)720"
+            ),
+        ),
+        (
+            "HEVC hev1",
+            hev1,
+            format!(
+                "video/x-h265, stream-format=(string)hev1, alignment=(string)au, codec_data=(buffer){hvcc_hex}, width=(int)1280, height=(int)720"
+            ),
+        ),
+        (
+            "AC-3",
+            ac3,
+            "audio/x-ac3, framed=(boolean)true, rate=(int)48000, channels=(int)6".to_owned(),
+        ),
+        (
+            "E-AC-3",
+            eac3,
+            "audio/x-eac3, framed=(boolean)true, rate=(int)48000, channels=(int)2".to_owned(),
+        ),
+        (
+            "MP3",
+            mp3,
+            "audio/mpeg, mpegversion=(int)1, layer=(int)3, parsed=(boolean)true, rate=(int)44100, channels=(int)2"
+                .to_owned(),
+        ),
+        (
+            "AC-3 without configuration",
+            bare_ac3,
+            "audio/x-ac3, framed=(boolean)true".to_owned(),
+        ),
+    ];
+    for (name, config, expected) in table {
+        let caps = caps_for(&config).unwrap_or_else(|e| panic!("{name}: {e}"));
+        assert_eq!(caps.to_string(), expected, "{name}");
+    }
+}
+
+#[test]
+fn an_unusable_hvcc_is_refused() {
+    init();
+    let mut short = hvcc();
+    short.truncate(22);
+    for record in [vec![], short, {
+        let mut wrong_version = hvcc();
+        wrong_version[0] = 2;
+        wrong_version
+    }] {
+        let config = track(TrackKind::Video, CodecConfig::Hevc { hvcc: record });
+        assert!(caps_for(&config).unwrap_err().contains("hvcC"));
+    }
+}
+
+/// A metadata block: the header byte (last flag and type), a 24-bit length, the payload.
+fn flac_block(last: bool, kind: u8, payload: &[u8]) -> Vec<u8> {
+    let mut block = vec![(u8::from(last) << 7) | kind];
+    block.extend_from_slice(&(payload.len() as u32).to_be_bytes()[1..]);
+    block.extend_from_slice(payload);
+    block
+}
+
+fn header_bytes(array: &gst::Array) -> Vec<Vec<u8>> {
+    array
+        .iter()
+        .map(|value| {
+            let buffer = value.get::<gst::Buffer>().expect("a buffer");
+            assert!(
+                buffer.flags().contains(gst::BufferFlags::HEADER),
+                "header buffers carry the HEADER flag"
+            );
+            buffer.map_readable().unwrap().as_slice().to_vec()
+        })
+        .collect()
+}
+
+#[test]
+fn flac_caps_carry_the_marker_and_every_metadata_block() {
+    init();
+    let streaminfo = flac_block(false, 0, &[7u8; 34]);
+    let comment = flac_block(true, 4, b"\x00\x00\x00\x00\x00\x00\x00\x00");
+    let mut blocks = streaminfo.clone();
+    blocks.extend_from_slice(&comment);
+    let mut config = other(TrackKind::Audio, CodecId::Flac, blocks);
+    config.sample_rate = 44_100;
+    config.channels = 2;
+    let caps = caps_for(&config).unwrap();
+    let s = caps.structure(0).unwrap();
+    assert_eq!(s.name(), "audio/x-flac");
+    assert!(s.get::<bool>("framed").unwrap());
+    assert_eq!(s.get::<i32>("rate").unwrap(), 44_100);
+    assert_eq!(s.get::<i32>("channels").unwrap(), 2);
+    let headers = header_bytes(&s.get::<gst::Array>("streamheader").unwrap());
+    assert_eq!(headers, vec![b"fLaC".to_vec(), streaminfo, comment]);
+
+    // A single STREAMINFO is enough; the last-block flag may be missing in a hand-built configuration.
+    let only = flac_block(false, 0, &[1u8; 34]);
+    let config = other(TrackKind::Audio, CodecId::Flac, only.clone());
+    let caps = caps_for(&config).unwrap();
+    let headers = header_bytes(
+        &caps
+            .structure(0)
+            .unwrap()
+            .get::<gst::Array>("streamheader")
+            .unwrap(),
+    );
+    assert_eq!(headers, vec![b"fLaC".to_vec(), only]);
+}
+
+#[test]
+fn bad_flac_configurations_are_refused() {
+    init();
+    let streaminfo = flac_block(true, 0, &[7u8; 34]);
+    let mut truncated = streaminfo.clone();
+    truncated.truncate(20);
+    let wrong_first = flac_block(true, 4, &[0u8; 34]);
+    let short_streaminfo = flac_block(true, 0, &[0u8; 33]);
+    let mut second_cut = flac_block(false, 0, &[7u8; 34]);
+    second_cut.extend_from_slice(&[0x84, 0, 0, 200, 1, 2]);
+    for blocks in [
+        vec![],
+        vec![0x80, 0],
+        truncated,
+        wrong_first,
+        short_streaminfo,
+        second_cut,
+    ] {
+        let config = other(TrackKind::Audio, CodecId::Flac, blocks.clone());
+        assert!(caps_for(&config).is_err(), "{blocks:?}");
+    }
+}
+
+/// `CodecPrivate` of a Vorbis track: Xiph lacing of the three header packets.
+fn xiph(packets: [&[u8]; 3]) -> Vec<u8> {
+    let mut out = vec![2];
+    for packet in &packets[..2] {
+        let mut left = packet.len();
+        while left >= 255 {
+            out.push(255);
+            left -= 255;
+        }
+        out.push(left as u8);
+    }
+    for packet in packets {
+        out.extend_from_slice(packet);
+    }
+    out
+}
+
+#[test]
+fn vorbis_caps_carry_the_three_headers() {
+    init();
+    let (id, comment, setup) = (vec![1u8; 30], vec![3u8; 300], vec![5u8; 1000]);
+    let mut config = other(
+        TrackKind::Audio,
+        CodecId::Vorbis,
+        xiph([&id, &comment, &setup]),
+    );
+    config.sample_rate = 44_100;
+    config.channels = 2;
+    let caps = caps_for(&config).unwrap();
+    let s = caps.structure(0).unwrap();
+    assert_eq!(s.name(), "audio/x-vorbis");
+    assert_eq!(s.get::<i32>("rate").unwrap(), 44_100);
+    let headers = header_bytes(&s.get::<gst::Array>("streamheader").unwrap());
+    // The 300-byte comment packet is laced as 255 + 45.
+    assert_eq!(headers, vec![id, comment, setup]);
+}
+
+#[test]
+fn bad_vorbis_configurations_are_refused() {
+    init();
+    let good = xiph([&[1u8; 30], &[3u8; 20], &[5u8; 100]]);
+    let mut wrong_count = good.clone();
+    wrong_count[0] = 1;
+    let mut truncated = good.clone();
+    truncated.truncate(good.len() - 101);
+    let mut zero_size = good.clone();
+    zero_size[1] = 0;
+    for private in [
+        vec![],
+        vec![2],
+        vec![2, 255],
+        wrong_count,
+        truncated,
+        zero_size,
+        // Sizes that overflow what is there.
+        vec![2, 255, 255, 255, 1, 2, 3],
+    ] {
+        let config = other(TrackKind::Audio, CodecId::Vorbis, private.clone());
+        assert!(caps_for(&config).is_err(), "{private:?}");
+    }
+}
+
+#[test]
+fn an_other_configuration_of_a_codec_with_its_own_variant_is_refused() {
+    init();
+    let config = other(TrackKind::Video, CodecId::H264, vec![1, 2, 3]);
+    assert!(caps_for(&config).is_err());
+    let config = other(TrackKind::Audio, CodecId::Aac, vec![0x11, 0x88]);
     assert!(caps_for(&config).is_err());
 }
 
