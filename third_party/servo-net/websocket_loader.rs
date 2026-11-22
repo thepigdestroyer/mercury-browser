@@ -28,7 +28,7 @@ use net_traits::{CookieSource, MessageData, WebSocketDomAction, WebSocketNetwork
 use profile_traits::generic_callback::GenericCallback as ProfileGenericCallback;
 use servo_base::generic_channel::CallbackSetter;
 use servo_url::ServoUrl;
-use tokio::net::TcpStream;
+// Mercury: no `tokio::net::TcpStream` import: the socket comes from `mercury_ws::connect_tcp` (EC23a).
 use tokio::select;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio_rustls::TlsConnector;
@@ -40,8 +40,10 @@ use tungstenite::{ClientRequestBuilder, Message};
 use crate::async_runtime::spawn_task;
 use crate::connector::TlsConfig;
 use crate::cookie::ServoCookie;
-use crate::hosts::replace_host;
+// Mercury: `hosts::replace_host` is applied inside `mercury_ws::connect_tcp`, on the direct path only (EC23a).
 use crate::http_loader::HttpState;
+// Mercury: WebSockets through the proxy, and the network policy in the handshake (EC23a, EC5, EC6, EC25).
+use crate::mercury_ws::{self, ResponseCookies};
 
 /// Create a Request object for the initial HTTP request.
 /// This request contains `Origin`, `Sec-WebSocket-Protocol`, `Authorization`,
@@ -101,11 +103,13 @@ pub fn create_handshake_request(
         headers.insert("Sec-WebSocket-Protocol", HeaderValue::from_str(&protocols)?);
     }
 
-    let mut cookie_jar = http_state.cookie_jar.write();
-    cookie_jar.remove_expired_cookies_for_url(&request.url);
-    if let Some(cookie_list) = cookie_jar.cookies_for_url(&request.url, CookieSource::HTTP) {
+    // Mercury: the cookies go through the network policy (third-party blocking, SameSite; EC5, EC6) and the
+    // handshake says `Sec-GPC: 1` when the policy asks for it (EC25); see mercury_ws.rs. Servo attached every
+    // cookie of the URL here.
+    if let Some(cookie_list) = mercury_ws::handshake_cookie_header(&http_state, &request) {
         headers.insert("Cookie", HeaderValue::from_str(&cookie_list)?);
     }
+    mercury_ws::add_global_privacy_control(&http_state, &mut headers);
 
     if request.url.password().is_some() || request.url.username() != "" {
         headers.typed_insert(Authorization::basic(
@@ -125,6 +129,8 @@ fn process_ws_response(
     response: &Response,
     resource_url: &ServoUrl,
     protocols: &[String],
+    // Mercury: what the network policy lets this answer store (EC5, EC6; mercury_ws.rs).
+    cookies: &ResponseCookies,
 ) -> Result<Option<String>, Error> {
     trace!("processing websocket http response for {}", resource_url);
     let mut protocol_in_use = None;
@@ -149,6 +155,10 @@ fn process_ws_response(
             let Some(cookie) =
                 ServoCookie::from_cookie_string(s, resource_url, CookieSource::HTTP)
         {
+            // Mercury: third-party blocking and the SameSite storage rules (EC5, EC6).
+            if !cookies.accepts(http_state, &cookie) {
+                continue;
+            }
             jar.push(cookie, resource_url, CookieSource::HTTP);
         }
     }
@@ -314,11 +324,9 @@ pub(crate) async fn start_websocket(
     let dom_receiver = setup_dom_listener(dom_action_receiver, initiated_close.clone());
 
     let url = client.url();
-    let host = replace_host(url.host_str().expect("URL has no host"));
-    let mut net_url = client.url().into_url();
-    net_url
-        .set_host(Some(&host))
-        .map_err(|e| Error::Url(UrlError::UnableToConnect(e.to_string())))?;
+    // Mercury: the name is not mapped here any more (`hosts::replace_host`): `mercury_ws::connect_tcp` maps it
+    // on the direct path only, as HTTP does, and a proxy is asked for the name the page used (EC23a).
+    let net_url = client.url().into_url();
 
     let domain = net_url
         .host()
@@ -327,7 +335,9 @@ pub(crate) async fn start_websocket(
         .port_or_known_default()
         .ok_or_else(|| Error::Url(UrlError::UnableToConnect("Unknown port".into())))?;
 
-    let try_socket = TcpStream::connect((&*domain.to_string(), port)).await;
+    // Mercury: through the proxy when HTTP would use one (EC23a); `https` here is a `wss` socket.
+    let try_socket =
+        mercury_ws::connect_tcp(&domain.to_string(), port, url.scheme() == "https").await;
     let socket = try_socket.map_err(Error::Io)?;
     let connector = TlsConnector::from(Arc::new(tls_config));
 
@@ -350,7 +360,9 @@ pub(crate) async fn start_websocket(
     let (stream, response) =
         client_async_tls_with_connector_and_config(builder, socket, Some(connector), None).await?;
 
-    let protocol_in_use = process_ws_response(&http_state, &response, &url, protocols)?;
+    // Mercury: the policy decides which cookies of the answer are stored (EC5, EC6).
+    let cookies = ResponseCookies::of_request(&http_state, client);
+    let protocol_in_use = process_ws_response(&http_state, &response, &url, protocols, &cookies)?;
 
     if !initiated_close.load(Ordering::SeqCst) {
         if resource_event_sender

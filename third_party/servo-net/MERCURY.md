@@ -221,16 +221,128 @@ Servo's own API cannot express (the recorded failure).
 in `url` 2.5.8) instead of the versions the published crate ships. As a generated file it carries no `Mercury:`
 comment and is listed under `unmarked` in `third_party/vendor.toml`.
 
+### 5. The network policy: third-party cookies blocked, SameSite, Global Privacy Control (EC5, EC6, EC25) — `net_policy.rs` (new), `mercury_cookies.rs` (new), `http_loader.rs`, `resource_thread.rs`, `cookie_storage.rs`, `cookie.rs`, `lib.rs`
+
+Made by lane net-1 (owner decision O-18: "Standard + GPC on + third-party cookies blocked"). New files are PolyForm
+Noncommercial and copy nothing from another project; the rules come from the specifications (RFC 6265bis, the Fetch
+standard, <https://privacycg.github.io/gpc-spec/>). Servo 0.8 has no cookie policy at all: it sends every cookie to every
+request and accepts every `Set-Cookie`. PR #44469 (the only upstream work) compares `request.origin` with the URL's origin, covers
+only the `Set-Cookie` of responses and adds a global setter message; it is *considered, not carried*.
+
+- **What:** `net_policy.rs` is one handle, `NetPolicy` (an `Arc`, cheap to clone). `NetPolicy::new()` behaves exactly as Servo
+  0.8 in every method; `NetPolicy::process()` is the one process-wide instance both `HttpState`s (public and private) use and
+  Mercury configures (`talaria-servo/src/net_policy.rs`). It has the switches (`block_third_party_cookies`,
+  `same_site_enforcement`, `same_site_lax_default`, `global_privacy_control`, `referrer_cap`), per-site allow lists
+  (`allow_third_party_cookies_on`, `set_mixed_content_allowed_on`) and a counter. `sites_of_request(&Request)` (and
+  `sites_of_builder` for a WebSocket) says which site a request is for and whether it is first or third party, in this order: the
+  client's network partition key (**script fills it for every document, every worker and worklet from the document that created
+  it, and every nested-frame navigation from its parent document**: `servo-script` `Window::request_client`,
+  `GlobalScope::network_partition_key`, `WorkerGlobalScopeInit.network_partition_key`, `ScriptThread::network_partition_key_of_load`);
+  a top-level navigation (mode `Navigate`, destination `Document`, no initiator, a client that is not nested: the destination
+  alone is not enough, because a frame navigated by a script or a link is fetched as `Document` too); otherwise unknown, which
+  counts as third party for every decision. **The policy keeps no record of what a web view loads.** The first version recorded
+  the site of every top-level navigation when it *started* and used it for requests without a key; a page could start a navigation
+  to a tracker, let it be cancelled or answered 204, and its workers and frames were then first party to the tracker (net-1 review,
+  finding 1). Third party means that the **scheme-less registrable domain** differs (`SiteKey`; an IP literal or a single label is
+  its own key; an opaque origin has none). `mercury_cookies.rs` has the cookie rules: `cookies_allowed`, `cookie_may_be_sent` and
+  `accept_set_cookie` (SameSite: Strict only on a same-site request, Lax also on a top-level navigation with a safe method,
+  `SameSite=None` needs `Secure`; Lax-by-default stays off, `network_cookie_samesite_lax_default`), and the document and WebSocket
+  helpers. A navigation from an opaque origin counts as the user's own (and so same-site) only when the **browser** started it:
+  `servo-net-traits`' `RequestClient::browser_initiated_navigation`, set by `navigation.rs` for loads that did not come from a script
+  (net-1 review, finding 2). The ancestor chain is not looked at: `a.test` inside `b.test` inside `a.test` is judged same-site
+  (finding 9, a known gap; it needs the ancestor list of the document).
+- **Blocked means:** no `Cookie` header (also not one the caller put in the header map), the `Set-Cookie` is ignored (at every
+  redirect hop), `document.cookie` reads `""` and writes are dropped, the same for the WebSocket handshake, and the `*Async`
+  `cookieStore` messages answer "no cookie" while blocking is on (the pref `dom_cookiestore_enabled` is pinned off anyway). The
+  embedder messages (`Embedder*`: Mercury's site information, downloads, the PDF viewer) stay unfiltered. A `Partitioned` cookie in
+  a third-party context is blocked like every other until NET-2 (CHIPS).
+- **Global Privacy Control:** `Sec-GPC: 1` goes on every request that reaches `http_network_or_cache_fetch` (preflights and
+  redirect hops included) and on the WebSocket handshake, from `net_policy.global_privacy_control()`.
+- **Hook lines (upstream 0.8.0 line numbers, about):** `http_loader.rs` 101-106 (imports), 133 (`HttpState.net_policy`), 172-195
+  (`request_authentication`, EC29 below), 359-425 (`set_request_cookies`, `set_cookie_for_url` and `set_cookies_from_headers` take
+  a rule closure), 1534 (`Sec-GPC` after the User-Agent insert and the `note_main_frame` call), 1554-1575 (the cookie check before
+  `set_request_cookies`, in place of the "XXXManishearth ... content blocking" comment), 2482 (the `Set-Cookie` check at step 15
+  of `http_network_fetch`); `resource_thread.rs` 68 (imports), 229 and 246 (the two `HttpState` literals take
+  `NetPolicy::process()`), 485-615 (the four `*Async` guards and the two document arms); `cookie_storage.rs` 221-308
+  (`cookies_for_request` and `cookies_data_for_request`, the old methods delegate); `cookie.rs` 223 and 380 (the two "TODO"
+  comments about same-site become pointers to `mercury_cookies.rs`); `lib.rs` (the `mod` lines of the lane).
+- **Why:** third-party cookies are the main cross-site tracking channel; a browser that says "Standard" has to block them (O-18).
+  SameSite is enforced because the same hooks decide it at no extra cost.
+- **Known gaps:** third-party `localStorage`, IndexedDB and Cache Storage stay unpartitioned (EC8); the ancestor chain is not
+  part of the SameSite test; no Lax-by-default and no 2-minute POST allowance; a nested frame whose parent document is in
+  another script thread (cross-process frames) has no key for its navigation request and gets no cookies until its own
+  document exists.
+- **Tested by:** `tests/net_policy.rs` (the party matrix, nested navigations and workers with and without a key, navigations that
+  are started and never finished, the allow list, `new()` = Servo's behaviour) and `tests/cookie_policy.rs` (real loopback servers:
+  third-party `Set-Cookie` not stored, stored cookie not sent, first party works, per-site allow, a frame judged by its parent's
+  key and a keyless one by nothing, a cross-site redirect hop, a top-level navigation answered 204, turned into a download or
+  redirected into a 204 does not make the tracker first party for the page's workers and frames, the `*Async` messages,
+  `document.cookie`, SameSite Strict/Lax/None, a script navigation from an opaque origin (GET and POST) is not a typed address,
+  `Sec-GPC` on a request, a preflight and a redirect hop and absent when off, and a guard test that fails if
+  `set_request_cookies` or `set_cookies_from_headers` is called outside the policy check). The mutation run (hooks forced open)
+  and its result are in `.superpowers/sdd/lane-net-1-report.md`.
+- **Drop when:** Servo has a cookie policy of its own (the Storage Access / third-party cookie work upstream); then keep only
+  what its API cannot express.
+
+### 6. The request path: frame identity, the rewrite hook, the referrer cap, mixed content (EC38, EC37, EC14, EC17) — `fetch/methods.rs`, `request_interceptor.rs`, `embedder.rs`, `mercury_rewrite.rs` (new), `mercury_mixed_content.rs` (new)
+
+- **What:** (a) `intercept_request` (`request_interceptor.rs`) gets the policy and fills the three new `WebResourceRequest` fields
+  (`top_level_site`, `initiator_origin`, `is_third_party`) from `sites_of_request`; `is_for_main_frame` is now true only for a
+  top-level navigation and `url` is the current hop's URL. (b) A `WebResourceResponseMsg::Rewrite` answer is applied by
+  `mercury_rewrite::apply`: all or nothing; the scheme must stay (HSTS may upgrade it afterwards); the origin must stay unless the
+  request is a top-level `GET` navigation; the user name and password may not change; header changes refuse the Fetch standard's
+  forbidden request-header names plus `Authorization`, `Proxy-Authorization` and the `Sec-` and `Proxy-` prefixes; refusals are
+  logged at `warn` with the reason only. `main_fetch` applies HSTS a second time after the interceptor and reads `current_url` and
+  `current_scheme` after it. (c) The referrer policy goes through `cap_referrer_policy`: with the cap on, `unsafe-url`,
+  `no-referrer-when-downgrade` and `origin-when-cross-origin` become `strict-origin-when-cross-origin`; stricter policies are never
+  loosened. (d) Mixed content (`should_request_be_blocked_as_mixed_content` and its response twin) lacks step 1.3 of the
+  specification ("the user agent has been instructed to allow mixed content"): `mercury_mixed_content` lifts the block on a site the
+  user allowed and sends one `NetToEmbedderMsg::Mercury(.., NetMsg::MixedContentBlocked)` per blocked request. The auto-upgrade of
+  images, audio and video to `https` (step 6) still happens on an allowed site.
+  After a rewrite that changed the URL, `main_fetch` runs the bad-port check and the Content Security Policy check again for the
+  new URL (`network_error_after_rewrite`; they ran on the old one), and `mercury_rewrite::is_top_level_document` is the one
+  definition of "top-level document" that the network policy's "top-level navigation" builds on (net-1 review, minors 6 and 8).
+- **Hook lines:** `fetch/methods.rs` 504 (request-level mixed content), 525 (`cap_referrer_policy`), 543-568 (the interceptor call
+  with the policy, HSTS and `current_url` after it), 704-732 (response-level mixed content); `request_interceptor.rs`
+  (the signature, `FrameIdentity::of`, the `Rewrite` arm); `embedder.rs` 41 (the `NetToEmbedderMsg::Mercury` variant).
+- **Why:** the content blocker needs the third-party flag and the frame without guessing (EC38), `$removeparam` needs a rewrite
+  point (EC37, first user: Mercury's existing filter engine), the referrer cap is Firefox's and Brave's design (EC14), and a blocked
+  mixed-content load has to be reported (EC17; Mercury counts them per tab, no UI yet).
+- **Tested by:** `tests/mercury_request_path.rs` (28 tests, interceptor round trip with the fields for first-party, third-party,
+  main-frame, nested and worker requests, the rewrite rules, HSTS after a rewrite, the referrer table, mixed content allowed and
+  blocked) and the 17 unit tests in `mercury_rewrite.rs`.
+- **Drop when:** Servo has frame identity and a rewrite point (items a and b), and implements step 1.3 of mixed content (d).
+
+### 7. WebSockets through the proxy and sign-in prompts for `fetch` and XHR (EC23a, EC29) — `mercury_ws.rs` (new), `mercury_auth.rs` (new), `websocket_loader.rs`, `connector.rs`, `http_loader.rs`
+
+- **What:** (a) `websocket_loader.rs` connected with a bare `TcpStream::connect`, so WebSockets went around the system proxy.
+  `mercury_ws::connect_tcp(host, port, tls)` asks the same `ProxyConnector` as HTTP (`CONNECT host:port`, proxy basic auth,
+  `no_proxy`) and connects directly when the matcher says so; `ProxyConnector::new` is `pub(crate)` (the only edit in `connector.rs`,
+  0.8.0 line 634). The host-file mapping happens on the direct path. The handshake's `Cookie` header and the `Set-Cookie` of the 101
+  answer follow the policy of item 5, and `Sec-GPC` is added. (b) `HttpState::request_authentication` returned `None` for every
+  request that is not a navigation. `mercury_auth::subresource_prompt_allowed` lets a 401 prompt when the request is a `fetch` or
+  XHR (destination none) from a document of the web view's top-level site to its own origin, with a web view id; `AuthLimiter` (in the
+  policy) allows one prompt in flight per (web view, origin) and 60 s of silence after a refusal; a 407 and everything else get the
+  response back as before. No realm line in the prompt (it needs a change of `PageRequestKind` in Mercury).
+- **Tested by:** `tests/mercury_ws.rs` (a local WebSocket server behind a fake `CONNECT` proxy: the proxy sees the tunnel, `no_proxy`
+  skips it, no proxy changes nothing, the handshake's `Sec-GPC` and cookies) and `tests/mercury_auth.rs` (the decision matrix and the
+  limiter with a fake clock; a `PromptGuard` that is dropped with its fetch future silences the pair instead of leaving it "in
+  flight" for good).
+- **Drop when:** Servo sends WebSockets through its proxy and prompts for non-navigation 401s itself.
+
+**`Cargo.lock` of this crate** (listed as `unmarked` in `third_party/vendor.toml`, a lock file takes no comments) now records `servo-net-traits` and `servo-embedder-traits` as path packages without a registry source or checksum, because `make test-servo-net` patches the vendored copies in (see below).
+
 ## Running the tests
 
 `servo-net` is a vendored dependency with dev-dependencies, so `cargo test -p servo-net` from the
 workspace root does not work (cargo refuses a package that is not a workspace member). The root `Cargo.toml`
 lists `third_party/servo-net` under `exclude`, as it does `third_party/gaol`, so cargo accepts the crate's own
 manifest, and `make test-servo-net` runs the crate's whole `main` target on its own `Cargo.lock`, against the
-published sibling crates (not Mercury's vendored copies and not Mercury's `Cargo.lock`; Mercury's K0 changes to
-`servo-embedder-traits` and `servo-config` are not in this build, and `servo-net` is the only crate Mercury changes in
-a way that matters to these tests; the others it links against are byte-identical to the published ones, except
-`servo-default-resources`, which Mercury patches only to stop it registering the default resource reader, and
+published sibling crates, **except `servo-net-traits` and `servo-embedder-traits`**, which the Makefile patches in
+from `third_party/` with `--config 'patch.crates-io.<crate>.path=...'` (net-1: the lane's code uses the document cookie
+messages, the request fields and the rewrite type that Mercury adds to them; `Cargo.lock` of `servo-net` records the two
+path packages). It is not Mercury's `Cargo.lock`: the other crates it links against are byte-identical to the published
+ones, except `servo-default-resources`, which Mercury patches only to stop it registering the default resource reader, and
 the tests need that reader registered). `make test` runs it, so do the full gates, and the
 CI job "Vendored servo-net tests" does. Two tests fail on the unpatched crate as well and are skipped by
 name: `fetch::test_file` (it reads `../../components/net/tests/test.css`, which exists only in Servo's

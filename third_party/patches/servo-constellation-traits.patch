@@ -4,7 +4,15 @@
 diff --git a/from_script_message.rs b/from_script_message.rs
 --- a/from_script_message.rs
 +++ b/from_script_message.rs
-@@ -47,8 +47,8 @@
+@@ -21,6 +21,7 @@
+ use http::{HeaderMap, Method};
+ use malloc_size_of_derive::MallocSizeOf;
+ use net_traits::policy_container::PolicyContainer;
++use net_traits::pub_domains::Site;
+ use net_traits::request::{Destination, InsecureRequestsPolicy, Referrer, RequestBody};
+ use net_traits::{ReferrerPolicy, ResourceThreads};
+ use paint_api::CrossProcessPaintApi;
+@@ -47,8 +48,8 @@
 
  use crate::structured_data::{BroadcastChannelMsg, StructuredSerializedData};
  use crate::{
@@ -15,7 +23,19 @@ diff --git a/from_script_message.rs b/from_script_message.rs
  };
 
  pub type ScriptToConstellationSender =
-@@ -873,6 +873,11 @@
+@@ -583,6 +584,11 @@
+     pub webgl_chan: Option<WebGLChan>,
+     /// Whether or not Servo is online.
+     pub online: bool,
++    // Mercury: the top-level site of the document (or worker) that created the worker, for the network
++    // partition key of the worker's own requests. Without it the network layer cannot tell a worker's
++    // first-party request from a third-party one (net-1 review, finding 1).
++    /// The network partition key of the creator.
++    pub network_partition_key: Option<Site>,
+ }
+
+ /// Message delivered to a worker event loop to run animation frame callbacks.
+@@ -873,6 +879,11 @@
      /// aggregate lock count and notify the provider only when the count transitions from N to 0.
      /// <https://w3c.github.io/screen-wake-lock/#dfn-release-wake-lock>
      ReleaseWakeLock(WakeLockType),

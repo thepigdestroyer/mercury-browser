@@ -66,6 +66,9 @@ use crate::filemanager_thread::FileManager;
 use crate::hsts::{self, HstsList};
 use crate::http_cache::{HttpCache, HttpCacheAssignment};
 use crate::http_loader::{HttpState, http_redirect_fetch};
+// Mercury: the cookie rules of the network policy, and the policy handle of both `HttpState`s.
+use crate::mercury_cookies;
+use crate::net_policy::NetPolicy;
 use crate::protocols::ProtocolRegistry;
 use crate::request_interceptor::RequestInterceptor;
 use crate::websocket_loader::create_handshake_request;
@@ -227,6 +230,8 @@ fn create_http_states(
         )),
         override_manager,
         embedder_proxy: embedder_proxy.clone(),
+        // Mercury: the one policy of this process, which Mercury configures (net_policy.rs).
+        net_policy: NetPolicy::process(),
     };
 
     let override_manager = CertificateErrorOverrideManager::new();
@@ -244,6 +249,8 @@ fn create_http_states(
         )),
         override_manager,
         embedder_proxy,
+        // Mercury: the same policy as the public state: a private window blocks what a normal one does.
+        net_policy: NetPolicy::process(),
     };
 
     (Arc::new(http_state), Arc::new(private_http_state))
@@ -483,6 +490,12 @@ impl ResourceChannelManager {
                 return true;
             },
             CoreResourceMsg::DeleteCookieAsync(cookie_store_id, url, name) => {
+                // Mercury: `cookieStore` messages carry no site, so they are answered as if no cookie
+                // existed while third-party blocking is on (EC5, decisions D5 and D7).
+                if mercury_cookies::async_cookie_messages_refused(http_state) {
+                    self.send_cookie_response(cookie_store_id, CookieData::Delete(Ok(())));
+                    return true;
+                }
                 http_state
                     .cookie_jar
                     .write()
@@ -523,6 +536,11 @@ impl ResourceChannelManager {
                 }
             },
             CoreResourceMsg::SetCookieForUrlAsync(cookie_store_id, url, cookie, source) => {
+                // Mercury: answered as if the write were ignored while third-party blocking is on (EC5, D5, D7).
+                if mercury_cookies::async_cookie_messages_refused(http_state) {
+                    self.send_cookie_response(cookie_store_id, CookieData::Set(Ok(())));
+                    return true;
+                }
                 self.resource_manager.set_cookie_for_url(
                     &url,
                     cookie.into_inner().to_owned(),
@@ -536,6 +554,27 @@ impl ResourceChannelManager {
                 cookie_jar.remove_expired_cookies_for_url(&url);
                 consumer.send_or_ignore(cookie_jar.cookies_for_url(&url, source));
             },
+            // Mercury: `document.cookie`, judged by the network policy (EC5, EC6; mercury_cookies.rs). The
+            // messages above carry no site and stay for WebDriver and tests.
+            // The web view id of the message is not used: the document's own partition key is the only
+            // source of its top-level site.
+            CoreResourceMsg::GetCookieStringForDocument(url, partition_key, _web_view_id, consumer, source) => {
+                consumer.send_or_ignore(mercury_cookies::document_cookie_string(
+                    http_state,
+                    &url,
+                    &partition_key,
+                    source,
+                ));
+            },
+            CoreResourceMsg::SetCookiesForDocument(url, partition_key, _web_view_id, cookies, source) => {
+                mercury_cookies::store_document_cookies(
+                    http_state,
+                    &url,
+                    &partition_key,
+                    cookies,
+                    source,
+                );
+            },
             CoreResourceMsg::GetCookiesForUrl(url, consumer, source) => {
                 let mut cookie_jar = http_state.cookie_jar.write();
                 cookie_jar.remove_expired_cookies_for_url(&url);
@@ -546,6 +585,11 @@ impl ResourceChannelManager {
                 consumer.send_or_ignore(cookies);
             },
             CoreResourceMsg::GetCookieDataForUrlAsync(cookie_store_id, url, name) => {
+                // Mercury: answered as if no cookie existed while third-party blocking is on (EC5, D5, D7).
+                if mercury_cookies::async_cookie_messages_refused(http_state) {
+                    self.send_cookie_response(cookie_store_id, CookieData::Get(None));
+                    return true;
+                }
                 let mut cookie_jar = http_state.cookie_jar.write();
                 cookie_jar.remove_expired_cookies_for_url(&url);
                 let cookie = cookie_jar
@@ -556,6 +600,11 @@ impl ResourceChannelManager {
                 self.send_cookie_response(cookie_store_id, CookieData::Get(cookie));
             },
             CoreResourceMsg::GetAllCookieDataForUrlAsync(cookie_store_id, url, name) => {
+                // Mercury: answered as if no cookie existed while third-party blocking is on (EC5, D5, D7).
+                if mercury_cookies::async_cookie_messages_refused(http_state) {
+                    self.send_cookie_response(cookie_store_id, CookieData::GetAll(vec![]));
+                    return true;
+                }
                 let mut cookie_jar = http_state.cookie_jar.write();
                 cookie_jar.remove_expired_cookies_for_url(&url);
                 let cookies = cookie_jar

@@ -201,6 +201,83 @@ The `js` dependency (package `mozjs`) is `=0.27.0` instead of `=0.26.13`, with a
 SpiderMonkey's security fixes); the same line is changed in `servo-script-bindings` and `servo-script-webcrypto`. See
 `third_party/servo-script-webcrypto/MERCURY.md`. Drop at the bump that contains it (B1).
 
+## Changes: network, storage and web-compat (lane net-1, 21 Nov 2026)
+
+### 12. `document.cookie` goes through the network policy (EC5, EC6) — `dom/document/document.rs`
+
+`Document::GetCookie` and `SetCookie` (0.8.0 lines about 6805 and 6827) send the two new messages
+`GetCookieStringForDocument` / `SetCookiesForDocument` (see `servo-net-traits/MERCURY.md`) with `determine_the_network_partition_key()` and
+the window's web view id, instead of `GetCookieStringForUrl` / `SetCookiesForUrl`. One import line (47) and the sends. Tested by
+`servo-net/tests/cookie_policy.rs` (the resource thread's side). Drop when Servo filters `document.cookie` by site itself.
+
+### 13. `navigator.globalPrivacyControl` (EC25) — `dom/navigator/navigator.rs`, `dom/workers/workernavigator.rs`
+
+A `NavigatorGPC` mixin (`Navigator.webidl`, no `Pref`: the attribute is always there and reads `false` when the signal is off, as the
+specification says; <https://privacycg.github.io/gpc-spec/>) included by `Navigator` and `WorkerNavigator`; both implement it as
+`pref!(privacy_gpc_enabled)`. Mercury sets the preference and the network policy's header switch from one place
+(`talaria-servo/src/net_policy.rs`), so the header and the attribute agree. Tested by `talaria-servo`'s `net_policy` tests (the
+agreement) and, in a window, `tests/pages/compat-locks.html` and `net-cookies.html` (they print the attribute; not run here).
+Drop when Servo ships the attribute.
+
+### 14. The Web Locks API (ED4) — new `dom/weblock/` (`mod.rs`, `lock.rs`, `lockmanager.rs`), `dom/mod.rs`, `dom/abort/abortsignal.rs`, `tasks/task_manager.rs`, `tasks/task_source.rs`, `dom/navigator/navigator.rs`, `dom/workers/workernavigator.rs`
+
+Carried from servo/servo#47981 (xbwwj, draft, MPL-2.0; the files keep the upstream header and name the source), reworked because the
+draft does not work as written: a lock was never released and the promise of `request()` never settled, `ifAvailable` was inverted,
+`steal` told nobody, the argument checks never all ran, `as_window()` panicked in a worker and an abort after the grant still rejected
+the promise. `LockManager`, `Lock` and `navigator.locks` carry `Pref="dom_web_locks_enabled"`; **Mercury pins that preference off**
+(`talaria-servo/src/engine_prefs.rs`) until `tests/pages/compat-locks.html` has run in a window, so nothing is exposed yet. A lock is
+released when its window, worker or process goes away (see `servo-storage/MERCURY.md`). The hook lines in upstream files:
+`dom/mod.rs` 360, `dom/abort/abortsignal.rs` 21-223 (`AbortAlgorithm::AbortLockRequest`; one hunk of the draft did not apply and was
+redone by hand), `tasks/task_manager.rs` 169 and `tasks/task_source.rs` 58, 91 (a task source for locks), the two navigators. Tested
+by 8 unit tests in `dom/weblock/mod.rs` (they need this crate to compile; run with `cargo test --release -p servo-script --lib
+weblock`) and the storage tests. Drop at the Servo bump that contains PR #47981.
+
+### 15. IndexedDB: index queries, multiEntry, no panics (ED3) — `dom/indexeddb/{idbcursor,idbdatabase,idbfactory,idbindex,idbobjectstore,idbopendbrequest,idbrequest,idbtransaction,key}.rs`
+
+WhatsApp Web hangs at "Loading your chats" partly on IndexedDB (servo/servo#47893). Sources, all MPL-2.0: LunarWerxs `pr/indexeddb`
+commit `860d2eff1` (no panic in `clear_upgrade_transaction`, applied as it is; the fork's branches are written with an AI assistant,
+so this is unreviewed upstream-adjacent code); LunarWerxs `4b07849e2`, `098e8a02c` and `c609fcd06` hand-ported onto 0.8's `idbindex.rs`,
+`idbcursor.rs` and `idbrequest.rs` (they are stacked on that branch's own cursor code and do not apply; `223fd9c09` and `8ba38afaa`
+are already in 0.8); servo/servo#45559 (skyz1, open) hand-ported into `key.rs` for multiEntry key extraction. What it does:
+`IDBIndex.get`, `getKey`, `getAll`, `getAllKeys` and `count` (the IDL lines are uncommented), `get`/`getKey` require a key
+(`DataError`), index cursors keep their position and ask through their index (in 0.8 an index cursor walked the store's keys),
+multiEntry indexes, `IDBRequest.source` as the `(IDBObjectStore or IDBIndex or IDBCursor)?` union, and every backend failure on
+the paths that were `unwrap()`/`expect()` becomes a DOM exception (`QuotaExceededError`, `AbortError`, `ConstraintError`, else
+`OperationError`; the backend's details are logged, not handed to the page) instead of a panic of the content process.
+**Limits (ED3 is partial; net-1 review, finding 3).** 0.8's SQLite backend creates the index tables but writes only what Mercury now
+sends for *unique* indexes (below), and it cannot evaluate key paths (values are opaque structured-clone blobs), so the records of
+an index are **derived in script from the whole object store**. A query (`get`, `getAll`, `count`, ...) asks the backend for the whole
+store once and reads and sorts every value: linear in the size of the store. An index cursor derives its records on its first step and
+keeps them (`IDBCursor::index_snapshot`, dropped when a request writes to the store, `IDBObjectStore::write_generation`); later steps
+ask the backend for an empty range and read the kept records, so a full walk is one scan and not one per step (it still compares
+keys from the start of the list on every step, which is cheap next to reading values). The cost is paid on the script thread and grows with the number of
+records (every value is read and every key extracted); nothing has been measured, because nothing was run in a window, so the
+size at which a large store (WhatsApp's) makes a query or the first step of a cursor visibly slow is not known. **Unique indexes are enforced
+on `put`/`add`/`cursor.update`**: the script sends the keys of the value in each unique index with the put and the backend refuses a
+duplicate (`ConstraintError`; `servo-storage/MERCURY.md`, "Unique indexes"), except that it does not see records that existed before
+the index (no backfill) or before this change. A real index writer for non-unique indexes and a backfill are not done.
+`IDBTransaction.commit()` already exists in 0.8 and is unchanged apart from its failure paths. Tested by the unit tests in `key.rs`
+(`index_keys_of`, error mapping), `idbindex.rs` (`build_index_records`: order, multiEntry, unique, no value copies) and `idbcursor.rs`
+(the kept records and their generation, the empty range), the engine tests in `servo-storage` (`unique_index_rows.rs`), and the page
+`tests/pages/compat-indexeddb.html`, which replays the WhatsApp sequence (not run in a window).
+Drop when upstream completes IndexedDB indexes (servo#47893's gaps).
+
+### 16. The network partition key of nested navigations, workers and worklets (EC5, EC6) — `navigation.rs`, `event_loop/script_thread.rs`, `dom/globalscope/globalscope.rs`, `dom/window/window.rs`, `dom/workers/{workerglobalscope,dedicatedworkerglobalscope,sharedworkerglobalscope}.rs`, `dom/worklet/worklet.rs`
+
+- **What:** every `RequestClient` now carries the top-level site (the network partition key) of the page it belongs to. A document's
+  already did; a **worker's** is the creator's (`WorkerGlobalScopeInit.network_partition_key`, filled in
+  `prepare_workerscope_init`, stored in `WorkerGlobalScope`, read by `GlobalScope::request_client`), a **worklet's** module fetch takes
+  the document's, and the navigation request of a **nested frame** takes its parent document's
+  (`ScriptThread::network_partition_key_of_load`; `None` for a top-level load and for a parent that is not in this script thread).
+  `InProgressLoad::request_builder` takes the key and sets `RequestClient::browser_initiated_navigation` (false for a load that came from a
+  script, true for the browser's own: a typed address, a reload, a traversal, WebDriver).
+- **Why:** the network policy used to guess the top-level site of such a request from a record of what the web view had started
+  to load, which a page could poison (net-1 review, finding 1), and could not tell a typed address from a script navigation that
+  starts from an opaque origin (finding 2).
+- **Tested by:** compiling this crate; the network side in `servo-net/tests` (`net_policy.rs`, `cookie_policy.rs`). Nothing here has been run in a
+  window: a worker's first-party request carrying its cookie, a nested frame's navigation and a sandboxed script navigation are open items.
+- **Drop when:** Servo fills the partition key of nested navigations and workers itself.
+
 ## Warnings
 
 Cargo does not cap lints for path dependencies, so compiling this crate in

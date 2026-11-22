@@ -1,0 +1,494 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>LOCKS RUNNING</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 18px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 16px 20px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #summary { font: bold 20px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 15px/1.5 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+  iframe { width: 0; height: 0; border: 0; }
+</style>
+</head>
+<body>
+<!--
+  Mercury test page for Web Locks (ED4, servo/servo#47981 in the storage thread): navigator.locks in a
+  window and in workers, shared by all of them through the storage thread. The verdict is the title of
+  the page: LOCKS PASS n when every check passed, LOCKS FAIL n for n failed checks, and LOCKS OFF when
+  navigator.locks does not exist, which is what Mercury ships until this page has run (the preference
+  dom_web_locks_enabled is pinned off in talaria-servo/src/engine_prefs.rs: the integrator turns it on
+  for the run, and turns the pin off again for good once the page has passed). Every line starts with
+  PASS, FAIL or INFO.
+
+  It needs a secure context with a real origin: open it from the test server, not from file:// (a
+  file: page has an opaque origin and locks are refused there on purpose, with a SecurityError):
+    scripts/serve-tests.sh            (prints the address)
+    mercury-browser http://127.0.0.1:<port>/pages/compat-locks.html
+  It runs by itself and takes under a minute. A step that waits for something that never happens fails
+  after its own time-out, so a lock that is never released shows as FAIL, not as a page that hangs.
+
+  What it checks, window first:
+    - a request resolves with its callback's value; the lock is exclusive by default
+    - two requests for one name run one after the other, in order; shared requests overlap; a waiting
+      exclusive request is not passed by one that comes later
+    - ifAvailable answers null when the lock is taken and takes it when it is free
+    - query() lists held and pending locks with their mode and a client id
+    - steal takes the lock and rejects the old holder's promise with an AbortError
+    - an AbortSignal removes a waiting request (AbortError) and a signal that is aborted already
+      rejects at once; the aborted request is not left in the queue
+    - the combinations the specification refuses (a name that starts with "-", steal with ifAvailable,
+      steal with shared, a signal with ifAvailable) are a NotSupportedError
+    - a callback that throws, or returns a rejected promise, rejects the request and frees the lock
+  Then the workers, the way WhatsApp Web uses them: a dedicated worker calls
+  self.navigator.locks.request(name, {steal: true}, ...) as the first thing it does, before it has a
+  message handler, and a second worker plays a second tab:
+    - the first worker is granted the lock; the second waits (it is not granted) until the first
+      releases it, and is granted it then (workers share the lock through the storage thread)
+    - a request from the window, and a steal from the window, reach a lock a worker holds
+    - the lock is released when the worker that holds it is terminated, and when the iframe that holds
+      it is removed (the window goes away): the request that waits for it is granted
+  navigator.globalPrivacyControl is printed as INFO in the window and in a worker (the Global Privacy
+  Control attribute, no part of this verdict).
+  The workers are made from Blob URLs (this page has no script file of its own); a worker that cannot
+  start shows as FAIL "worker failed", which is a problem of Blob workers, not of locks.
+  Not covered: a content process that dies (needs multi-process mode), two tabs in one window.
+-->
+<h1>Web Locks</h1>
+<p class="note">PASS means the behaviour is the specification's. Every wait has its own time-out.</p>
+<div id="summary">running</div>
+<div id="results"></div>
+<script>
+  "use strict";
+  const results = document.getElementById("results");
+  const summary = document.getElementById("summary");
+  let passes = 0;
+  let failures = 0;
+  const workers = [];
+
+  function line(kind, text) {
+    const item = document.createElement("div");
+    item.className = "line " + kind;
+    item.textContent = kind.toUpperCase() + "  " + text;
+    results.appendChild(item);
+    if (kind === "pass") passes++;
+    if (kind === "fail") failures++;
+  }
+
+  function describe(error) {
+    if (error && error.name) return error.name + ": " + error.message;
+    return String(error);
+  }
+
+  function pass(label) {
+    line("pass", label);
+  }
+
+  function expect(label, ok, detail) {
+    line(ok ? "pass" : "fail", label + (ok || detail === undefined ? "" : " (" + detail + ")"));
+  }
+
+  function expectEqual(label, actual, expected) {
+    const same = actual === expected;
+    line(same ? "pass" : "fail",
+         label + " = " + JSON.stringify(actual) + (same ? "" : " (expected " + JSON.stringify(expected) + ")"));
+  }
+
+  const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+  function deferred() {
+    let resolve;
+    let reject;
+    const promise = new Promise((a, b) => { resolve = a; reject = b; });
+    return { promise, resolve, reject };
+  }
+
+  // Rejects with an Error after ms, so that a step that waits for something that never comes fails.
+  function within(promise, ms, label) {
+    let timer;
+    const timeout = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error("timed out after " + ms + " ms: " + label)), ms);
+    });
+    return Promise.race([promise, timeout]).finally(() => clearTimeout(timer));
+  }
+
+  // Resolves when predicate() is true; rejects after ms.
+  function waitUntil(predicate, ms, label) {
+    const started = Date.now();
+    return new Promise((resolve, reject) => {
+      const tick = () => {
+        let ok = false;
+        try { ok = predicate(); } catch (error) { reject(error); return; }
+        if (ok) resolve();
+        else if (Date.now() - started > ms) reject(new Error("timed out after " + ms + " ms: " + label));
+        else setTimeout(tick, 20);
+      };
+      tick();
+    });
+  }
+
+  // The rejection of a promise, or null when it did not reject.
+  async function rejection(promise) {
+    try {
+      await promise;
+      return null;
+    } catch (error) {
+      return error;
+    }
+  }
+
+  // A step is one named group of checks. A throw (a time-out, an exception) is one FAIL for the step.
+  async function step(label, body) {
+    try {
+      await body();
+    } catch (error) {
+      line("fail", label + ": " + describe(error));
+    }
+  }
+
+  // A lock that the page holds until release() is called; started resolves when its callback runs.
+  function holdLock(name, options) {
+    const started = deferred();
+    const gate = deferred();
+    const outcome = navigator.locks.request(name, options || {}, async (lock) => {
+      started.resolve(lock);
+      await gate.promise;
+      return "held " + name;
+    });
+    return { started: started.promise, outcome, release: () => gate.resolve() };
+  }
+
+  // ----- workers: the source of both is workerMain, told apart by the worker's name -----
+
+  // The code of a worker. "holder" asks with steal first, like WhatsApp Web; "second" asks plainly and
+  // waits its turn like a second tab. Both keep the lock until the page sends "release".
+  function workerMain() {
+    const role = self.name;
+    const post = (kind, detail) => postMessage({ kind: kind, detail: detail });
+    let release = null;
+    let request;
+    try {
+      // The first statement of the worker: no message handler exists yet.
+      request = self.navigator.locks.request("compat-locks-worker", role === "holder" ? { steal: true } : {}, (lock) => {
+        post("granted", lock.name + ":" + lock.mode);
+        return new Promise((resolve) => { release = resolve; });
+      });
+    } catch (error) {
+      post("error", String(error));
+      return;
+    }
+    request.then((value) => post("finished", String(value)), (error) => post("lost", error.name));
+    self.onmessage = (event) => {
+      if (event.data === "release" && release) release("released by " + role);
+      if (event.data === "gpc") post("gpc", String(self.navigator.globalPrivacyControl));
+    };
+    post("asked", "");
+  }
+
+  function spawn(role) {
+    const url = URL.createObjectURL(new Blob(["(" + workerMain.toString() + ")();"], { type: "text/javascript" }));
+    const worker = new Worker(url, { name: role });
+    const handle = { role, worker, url, inbox: [] };
+    worker.onmessage = (event) => handle.inbox.push(event.data);
+    worker.onerror = (event) => handle.inbox.push({ kind: "error", detail: event.message });
+    workers.push(handle);
+    return handle;
+  }
+
+  function has(handle, kind) {
+    return handle.inbox.some((message) => message.kind === kind);
+  }
+
+  function detail(handle, kind) {
+    const message = handle.inbox.find((entry) => entry.kind === kind);
+    return message ? message.detail : undefined;
+  }
+
+  async function waitFor(handle, kind, ms, label) {
+    await waitUntil(() => has(handle, kind) || has(handle, "error"), ms, label);
+    if (has(handle, "error") && !has(handle, kind)) {
+      throw new Error(handle.role + " worker failed: " + detail(handle, "error"));
+    }
+  }
+
+  function stop(handle) {
+    handle.worker.terminate();
+    URL.revokeObjectURL(handle.url);
+  }
+
+  // ----- the checks -----
+
+  async function windowChecks() {
+    await step("a request resolves with its callback's value", async () => {
+      const value = await within(
+        navigator.locks.request("compat-basic", async (lock) => lock.name + ":" + lock.mode), 10000, "basic");
+      expectEqual("request resolves with the callback's result", value, "compat-basic:exclusive");
+      const plain = await within(navigator.locks.request("compat-basic", () => 42), 10000, "plain value");
+      expectEqual("a callback that returns a plain value resolves the request with it", plain, 42);
+    });
+
+    await step("exclusive locks run one after the other, in order", async () => {
+      const order = [];
+      const gate = deferred();
+      const first = navigator.locks.request("compat-order", async () => {
+        order.push("first-start");
+        await gate.promise;
+        order.push("first-end");
+      });
+      const second = navigator.locks.request("compat-order", async () => {
+        order.push("second-start");
+        order.push("second-end");
+      });
+      await sleep(300);
+      expectEqual("the second request waits while the first holds the lock", order.join(","), "first-start");
+      gate.resolve();
+      await within(Promise.all([first, second]), 10000, "order");
+      expectEqual("the second request runs after the first ended", order.join(","),
+                  "first-start,first-end,second-start,second-end");
+    });
+
+    await step("shared locks overlap and exclude an exclusive request", async () => {
+      const started = [];
+      const gate = deferred();
+      const callback = (who) => async () => { started.push(who); await gate.promise; };
+      const a = navigator.locks.request("compat-shared", { mode: "shared" }, callback("a"));
+      const b = navigator.locks.request("compat-shared", { mode: "shared" }, callback("b"));
+      await waitUntil(() => started.length === 2, 10000, "both shared requests start");
+      pass("two shared requests hold the lock together");
+      let exclusiveRan = false;
+      const exclusive = navigator.locks.request("compat-shared", async () => { exclusiveRan = true; });
+      await sleep(300);
+      expect("an exclusive request waits for the shared holders", !exclusiveRan);
+      // A shared request that comes after the waiting exclusive one does not pass it.
+      let lateRan = false;
+      const late = navigator.locks.request("compat-shared", { mode: "shared" }, async () => { lateRan = true; });
+      await sleep(300);
+      expect("a shared request behind a waiting exclusive one waits too", !lateRan);
+      gate.resolve();
+      await within(Promise.all([a, b, exclusive, late]), 10000, "shared");
+      expect("the exclusive request ran after the shared holders", exclusiveRan);
+      expect("and the late shared request after it", lateRan);
+    });
+
+    await step("ifAvailable", async () => {
+      const holder = holdLock("compat-available");
+      await within(holder.started, 10000, "holder starts");
+      const seen = await within(
+        navigator.locks.request("compat-available", { ifAvailable: true }, async (lock) => lock === null ? "null" : "lock"),
+        10000, "ifAvailable while held");
+      expectEqual("ifAvailable runs the callback with null while the lock is held", seen, "null");
+      holder.release();
+      await within(holder.outcome, 10000, "holder ends");
+      const free = await within(
+        navigator.locks.request("compat-available", { ifAvailable: true }, async (lock) => lock === null ? "null" : "lock"),
+        10000, "ifAvailable while free");
+      expectEqual("ifAvailable takes a free lock", free, "lock");
+    });
+
+    await step("query()", async () => {
+      const holder = holdLock("compat-query");
+      await within(holder.started, 10000, "holder starts");
+      const waiting = navigator.locks.request("compat-query", { mode: "shared" }, async () => "queried");
+      await sleep(300);
+      const snapshot = await within(navigator.locks.query(), 10000, "query");
+      const held = snapshot.held.filter((info) => info.name === "compat-query");
+      const pending = snapshot.pending.filter((info) => info.name === "compat-query");
+      expectEqual("query() lists the held lock", held.length, 1);
+      expectEqual("its mode", held.length ? held[0].mode : null, "exclusive");
+      expectEqual("it has a client id", held.length ? typeof held[0].clientId : null, "string");
+      expectEqual("query() lists the waiting request", pending.length, 1);
+      expectEqual("its mode", pending.length ? pending[0].mode : null, "shared");
+      holder.release();
+      await within(Promise.all([holder.outcome, waiting]), 10000, "query ends");
+    });
+
+    await step("steal", async () => {
+      const victim = holdLock("compat-steal");
+      await within(victim.started, 10000, "victim starts");
+      const victimError = rejection(victim.outcome); // attached now, so that the rejection is never unhandled
+      const stolen = await within(
+        navigator.locks.request("compat-steal", { steal: true }, async (lock) => "stolen " + lock.name), 10000, "steal");
+      expectEqual("steal runs its callback at once", stolen, "stolen compat-steal");
+      const error = await within(victimError, 10000, "victim is rejected");
+      expectEqual("the old holder's promise is rejected with", error && error.name, "AbortError");
+      victim.release();
+    });
+
+    await step("abort signals", async () => {
+      const holder = holdLock("compat-abort");
+      await within(holder.started, 10000, "holder starts");
+      const controller = new AbortController();
+      let ran = false;
+      const waiting = navigator.locks.request("compat-abort", { signal: controller.signal }, async () => { ran = true; });
+      await sleep(200);
+      controller.abort();
+      const error = await within(rejection(waiting), 10000, "aborted request is rejected");
+      expectEqual("a waiting request is rejected with", error && error.name, "AbortError");
+      holder.release();
+      await within(holder.outcome, 10000, "holder ends");
+      const next = await within(navigator.locks.request("compat-abort", async () => "next"), 10000,
+                                "a request after the abort");
+      expectEqual("the lock is free for the next request", next, "next");
+      expect("the aborted request never ran", !ran);
+
+      const already = AbortSignal.abort();
+      const early = await within(
+        rejection(navigator.locks.request("compat-abort-early", { signal: already }, async () => "ran")), 10000,
+        "aborted signal");
+      expectEqual("a signal that is aborted already rejects with", early && early.name, "AbortError");
+    });
+
+    await step("arguments the specification refuses", async () => {
+      const cases = [
+        ["a name that starts with a hyphen", () => navigator.locks.request("-x", async () => {})],
+        ["steal with ifAvailable", () => navigator.locks.request("x", { steal: true, ifAvailable: true }, async () => {})],
+        ["steal with shared mode", () => navigator.locks.request("x", { steal: true, mode: "shared" }, async () => {})],
+        ["a signal with ifAvailable", () => navigator.locks.request(
+          "x", { signal: new AbortController().signal, ifAvailable: true }, async () => {})],
+        ["a signal with steal", () => navigator.locks.request(
+          "x", { signal: new AbortController().signal, steal: true }, async () => {})],
+      ];
+      for (const [label, call] of cases) {
+        const error = await within(rejection(call()), 10000, label);
+        expectEqual(label + " is rejected with", error && error.name, "NotSupportedError");
+      }
+    });
+
+    await step("a callback that fails frees the lock", async () => {
+      const thrown = await within(
+        rejection(navigator.locks.request("compat-throw", () => { throw new RangeError("boom"); })), 10000, "throws");
+      expect("a callback that throws rejects the request with that error", thrown instanceof RangeError,
+             thrown && describe(thrown));
+      const late = await within(
+        rejection(navigator.locks.request("compat-throw", async () => { throw new TypeError("late"); })), 10000,
+        "rejected promise");
+      expect("a callback that returns a rejected promise rejects the request with its reason",
+             late instanceof TypeError, late && describe(late));
+      const after = await within(navigator.locks.request("compat-throw", async () => "free"), 10000, "after the failures");
+      expectEqual("the lock is free after both", after, "free");
+    });
+  }
+
+  async function workerChecks() {
+    await step("the WhatsApp pattern and a second tab", async () => {
+      // The first worker asks with steal before it has a message handler.
+      const holder = spawn("holder");
+      await waitFor(holder, "granted", 15000, "the first worker is granted the lock");
+      expectEqual("a worker whose first statement steals a free lock is granted it", detail(holder, "granted"),
+                  "compat-locks-worker:exclusive");
+      holder.worker.postMessage("gpc");
+      await waitFor(holder, "gpc", 10000, "the worker answers a message after its lock request");
+      line("info", "navigator.globalPrivacyControl in the window = " + navigator.globalPrivacyControl +
+                   ", in a worker = " + detail(holder, "gpc"));
+
+      const second = spawn("second");
+      await waitFor(second, "asked", 15000, "the second worker asks");
+      await sleep(1500);
+      expect("the second worker waits while the first holds the lock", !has(second, "granted"));
+
+      holder.worker.postMessage("release");
+      await waitFor(second, "granted", 15000, "the second worker is granted the lock after the first releases it");
+      pass("the second worker is granted the lock when the first releases it");
+      expectEqual("the first worker's request resolved with its callback's result", detail(holder, "finished"),
+                  "released by holder");
+      second.worker.postMessage("release");
+      await waitFor(second, "finished", 10000, "the second worker finishes");
+      stop(holder);
+      stop(second);
+    });
+
+    await step("the window and a worker", async () => {
+      const holder = holdLock("compat-locks-worker");
+      await within(holder.started, 10000, "the window holds the lock");
+      const worker = spawn("second");
+      await waitFor(worker, "asked", 15000, "the worker asks");
+      await sleep(1000);
+      expect("a worker waits for a lock the window holds", !has(worker, "granted"));
+      holder.release();
+      await waitFor(worker, "granted", 15000, "the worker is granted the lock the window released");
+      pass("the worker is granted the lock when the window releases it");
+
+      // A steal from the window takes the lock the worker holds, and the worker is told.
+      const stolen = await within(
+        navigator.locks.request("compat-locks-worker", { steal: true }, async (lock) => "stolen " + lock.name), 15000,
+        "the window steals the worker's lock");
+      expectEqual("the window steals the lock a worker holds", stolen, "stolen compat-locks-worker");
+      await waitFor(worker, "lost", 15000, "the worker's request is rejected");
+      expectEqual("the worker's request is rejected with", detail(worker, "lost"), "AbortError");
+      stop(worker);
+    });
+
+    await step("a worker that goes away releases its lock", async () => {
+      const doomed = spawn("holder");
+      await waitFor(doomed, "granted", 15000, "the worker is granted the lock");
+      const waiting = spawn("second");
+      await waitFor(waiting, "asked", 15000, "the second worker asks");
+      await sleep(500);
+      expect("the second worker waits", !has(waiting, "granted"));
+      doomed.worker.terminate();
+      await waitFor(waiting, "granted", 30000, "the lock of a terminated worker is released");
+      pass("the lock of a terminated worker is released and granted to the worker that waits");
+      waiting.worker.postMessage("release");
+      stop(doomed);
+      stop(waiting);
+    });
+  }
+
+  async function windowTeardownChecks() {
+    await step("an iframe that goes away releases its lock", async () => {
+      const held = deferred();
+      const onMessage = (event) => { if (event.data === "compat-locks-frame-held") held.resolve(); };
+      window.addEventListener("message", onMessage);
+      const frame = document.createElement("iframe");
+      // srcdoc inherits this page's origin, so the frame's locks and the page's are one set of locks.
+      frame.srcdoc = "<script>navigator.locks.request('compat-locks-frame', function () {" +
+                     " parent.postMessage('compat-locks-frame-held', '*');" +
+                     " return new Promise(function () {}); }).catch(function () {});<\/script>";
+      document.body.appendChild(frame);
+      try {
+        await within(held.promise, 15000, "the iframe holds the lock");
+        const requested = navigator.locks.request("compat-locks-frame", async () => "after the frame");
+        await sleep(500);
+        frame.remove();
+        const value = await within(requested, 30000, "the lock of a removed iframe is released");
+        expectEqual("the lock of an iframe that was removed is released and granted to the page", value,
+                    "after the frame");
+      } finally {
+        window.removeEventListener("message", onMessage);
+        frame.remove();
+      }
+    });
+  }
+
+  async function main() {
+    if (typeof navigator.locks === "undefined") {
+      line("info", "navigator.locks is undefined: dom_web_locks_enabled is off (how Mercury ships it until this page has run)");
+      return "LOCKS OFF";
+    }
+    expect("navigator.locks is a LockManager", navigator.locks instanceof LockManager);
+    expect("the page is a secure context", window.isSecureContext, "open it from the test server, not file://");
+    line("info", "origin = " + location.origin);
+    await windowChecks();
+    await workerChecks();
+    await windowTeardownChecks();
+    for (const handle of workers) stop(handle);
+    return failures === 0 ? "LOCKS PASS " + passes : "LOCKS FAIL " + failures;
+  }
+
+  main().then((verdict) => {
+    summary.textContent = verdict + "  (" + passes + " passed, " + failures + " failed)";
+    document.title = verdict;
+  }, (error) => {
+    line("fail", "the page itself failed: " + describe(error));
+    summary.textContent = "LOCKS FAIL " + failures;
+    document.title = "LOCKS FAIL " + failures;
+  });
+</script>
+</body>
+</html>

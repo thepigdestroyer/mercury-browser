@@ -92,6 +92,7 @@ endif
 	test-capture-macos \
 	test-certificate-exceptions-macos \
 	test-servo-net \
+	test-servo-storage \
 	run \
 	run-debug \
 	run-release \
@@ -117,8 +118,9 @@ help:
 		'fmt' 'Format all Rust source files.' \
 		'fmt-check' 'Check Rust formatting without changing files.' \
 		'lint' 'Run Clippy and reject every warning.' \
-		'test' 'Run all workspace tests, the gaol shared-memory test and the vendored servo-net tests.' \
+		'test' 'Run all workspace tests, the gaol shared-memory test and the vendored servo-net and servo-storage tests.' \
 		'test-servo-net' 'Run the vendored servo-net tests (certificate exceptions among them; no engine build, no window).' \
+		'test-servo-storage' 'Run the vendored servo-storage tests (Web Locks, IndexedDB; no engine build, no window).' \
 		'qa' 'Run formatting, linting, and tests.' \
 		'qa-fast' 'Check formatting, lint and test the crates that need no engine.' \
 		'ci-tools' 'Download the pinned shellcheck, actionlint and cargo-deny.' \
@@ -259,22 +261,37 @@ test:
 	$(GSTREAMER_ENV) $(TEST_LIBRARY_PATH) "$(CARGO)" test $(CARGO_FLAGS) --workspace --all-features $(if $(TEST_ARGS),-- $(TEST_ARGS))
 	"$(CARGO)" test --target-dir target --manifest-path third_party/gaol/Cargo.toml --test shared-memory
 	"$(MAKE)" test-servo-net
+	"$(MAKE)" test-servo-storage
 
 # servo-net's own tests (third_party/servo-net/tests/main.rs, 450 tests run, the certificate-exception ones and the 30 unit tests of
 # Mercury's two lib files among them), part of `make test` and run by their own CI job. The crate is vendored, has dev-dependencies and is
 # excluded from the workspace (Cargo.toml), so cargo runs it on its own manifest and its own Cargo.lock,
-# like gaol: against the published sibling crates (Mercury's K0 changes to servo-embedder-traits and servo-config
-# are not in this build), not Mercury's vendored copies. `fonts/bundled_freetype` builds FreeType from source, as the
-# root build does, because Ubuntu 22.04's is too old for freetype-sys (it does nothing on macOS). Two tests fail
-# without any Mercury change and are skipped by name: `fetch::test_file` reads a path that exists only in Servo's
-# repository, and `filemanager_thread::test_filemanager` panics on the process-wide async runtime when it runs with
-# the others. No GStreamer and no window; the first build takes
-# about 11 minutes on 12 threads, the tests a few seconds. Set RUST_TEST_THREADS=2 on a shared machine.
+# like gaol: against the published sibling crates, except servo-net-traits and servo-embedder-traits,
+# which are patched in from third_party/ because servo-net's Mercury code uses the messages and request
+# fields they add (net-1: the document cookie messages, the frame identity and rewrite types). `fonts/bundled_freetype`
+# builds FreeType from source, as the root build does, because Ubuntu 22.04's is too old for freetype-sys (it does nothing
+# on macOS). Two tests fail without any Mercury change and are skipped by name: `fetch::test_file` reads a path that
+# exists only in Servo's repository, and `filemanager_thread::test_filemanager` panics on the process-wide async runtime
+# when it runs with the others. No GStreamer and no window; the first build takes about 11 minutes on 12 threads, the
+# tests a few seconds. Set RUST_TEST_THREADS=2 on a shared machine.
 test-servo-net:
 	"$(CARGO)" test --locked $(CARGO_FLAGS) --target-dir target \
 		--manifest-path third_party/servo-net/Cargo.toml \
+		--config 'patch.crates-io.servo-net-traits.path="third_party/servo-net-traits"' \
+		--config 'patch.crates-io.servo-embedder-traits.path="third_party/servo-embedder-traits"' \
 		--features test-util,devtools,fonts/bundled_freetype --test main -- \
 		--exact --skip fetch::test_file --skip filemanager_thread::test_filemanager
+
+# servo-storage's own tests (its unit tests, third_party/servo-storage/tests/main.rs: Web Locks, the IndexedDB schema facts, web
+# storage, cache storage, and tests/weblocks_ipc.rs: Web Locks over a real IPC channel), run like servo-net's: the crate has dev-dependencies and is excluded from the workspace,
+# so cargo runs it on its own manifest and Cargo.lock, against the published sibling crates except
+# servo-storage-traits, which is patched in from third_party/ (the Web Locks messages are Mercury's, net-1).
+# No GStreamer, no window.
+test-servo-storage:
+	"$(CARGO)" test --locked $(CARGO_FLAGS) --target-dir target \
+		--manifest-path third_party/servo-storage/Cargo.toml \
+		--config 'patch.crates-io.servo-storage-traits.path="third_party/servo-storage-traits"' \
+		--lib --tests
 
 qa:
 	"$(MAKE)" fmt-check

@@ -6,7 +6,8 @@ use std::cell::Cell;
 use std::path::Path;
 use std::rc::Rc;
 
-use servo::StorageType;
+// net: `NetPolicy`, the engine's network policy, which the third-party cookie switch sets.
+use servo::{NetPolicy, StorageType};
 
 use crate::session_data::run_contained;
 
@@ -42,14 +43,28 @@ pub struct EngineSwitches {
 struct SwitchState {
     content_blocking: Cell<bool>,
     clear_on_exit: Cell<ExitClearing>,
+    // net: the engine's network policy (the process's own, unless a test brings one); the third-party
+    // cookie switch is a setting of it, read by the network thread at every request.
+    net_policy: NetPolicy,
 }
 
 impl EngineSwitches {
     pub fn new(content_blocking: bool, clear_on_exit: ExitClearing) -> Self {
+        Self::with_net_policy(content_blocking, clear_on_exit, NetPolicy::process())
+    }
+
+    /// `new`, with the network policy that `set_block_third_party_cookies` changes (the tests give each
+    /// switch a policy of its own; the engine's is the process's).
+    pub(crate) fn with_net_policy(
+        content_blocking: bool,
+        clear_on_exit: ExitClearing,
+        net_policy: NetPolicy,
+    ) -> Self {
         Self {
             state: Rc::new(SwitchState {
                 content_blocking: Cell::new(content_blocking),
                 clear_on_exit: Cell::new(clear_on_exit),
+                net_policy,
             }),
         }
     }
@@ -66,6 +81,23 @@ impl EngineSwitches {
 
     pub fn content_blocking(&self) -> bool {
         self.state.content_blocking.get()
+    }
+
+    // net
+    /// Blocks (or stops blocking) the cookies of third-party requests, for every request from now on:
+    /// the network thread reads the setting at each one.
+    pub fn set_block_third_party_cookies(&self, enabled: bool) {
+        if self.state.net_policy.block_third_party_cookies() != enabled {
+            log::info!(
+                "third-party cookie blocking {}",
+                if enabled { "enabled" } else { "disabled" }
+            );
+        }
+        self.state.net_policy.set_block_third_party_cookies(enabled);
+    }
+
+    pub fn block_third_party_cookies(&self) -> bool {
+        self.state.net_policy.block_third_party_cookies()
     }
 
     /// What is cleared when the engine shuts down.
@@ -169,6 +201,26 @@ pub(crate) mod tests {
             }
             .clears_anything()
         );
+    }
+
+    #[test]
+    fn the_third_party_cookie_switch_is_live_for_every_clone_and_reaches_the_policy() {
+        let policy = NetPolicy::new();
+        let switches =
+            EngineSwitches::with_net_policy(true, ExitClearing::default(), policy.clone());
+        let held_by_the_engine = switches.clone();
+        assert!(!held_by_the_engine.block_third_party_cookies());
+
+        switches.set_block_third_party_cookies(true);
+        assert!(held_by_the_engine.block_third_party_cookies());
+        assert!(
+            policy.block_third_party_cookies(),
+            "the network thread's handle changed"
+        );
+
+        held_by_the_engine.set_block_third_party_cookies(false);
+        assert!(!switches.block_third_party_cookies());
+        assert!(!policy.block_third_party_cookies());
     }
 
     #[test]

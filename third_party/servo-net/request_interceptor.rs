@@ -2,15 +2,19 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use content_security_policy::Destination;
 use embedder_traits::{GenericEmbedderProxy, WebResourceRequest, WebResourceResponseMsg};
-use log::error;
+// Mercury: `debug` for the rewrite log lines (EC37); `Destination` is no longer used here, the main-frame test
+// moved to `mercury_rewrite::is_top_level_document` (D17).
+use log::{debug, error};
 use net_traits::http_status::HttpStatus;
 use net_traits::request::Request;
 use net_traits::response::{Response, ResponseBody};
 use net_traits::{NetworkError, ResourceFetchTimingContainer};
 
 use crate::embedder::NetToEmbedderMsg;
+// Mercury: frame identity and the rewrite hook (EC38, EC37); the policy that judges the request.
+use crate::mercury_rewrite::{self, FrameIdentity};
+use crate::net_policy::NetPolicy;
 
 #[derive(Clone)]
 pub struct RequestInterceptor {
@@ -27,17 +31,26 @@ impl RequestInterceptor {
         request: &mut Request,
         response: &mut Option<Response>,
         timing_info: &ResourceFetchTimingContainer,
+        // Mercury: the policy judges the request's frame identity and the rewrite (EC38, EC37).
+        policy: &NetPolicy,
     ) {
         let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
-        let is_for_main_frame = matches!(request.destination, Destination::Document);
+        // Mercury: the main-frame flag, the site, the initiator and the third-party flag of the request.
+        let identity = FrameIdentity::of(request, policy);
         let web_resource_request = WebResourceRequest {
             method: request.method.clone(),
-            url: request.url(),
+            // Mercury: the URL of this hop, not the first URL of the chain (the embedder must see what a
+            // rewrite would replace).
+            url: request.current_url(),
             headers: request.headers.clone(),
             destination: request.destination,
             referrer_url: request.referrer.to_url().cloned(),
-            is_for_main_frame,
+            is_for_main_frame: identity.is_for_main_frame,
             is_redirect: request.redirect_count > 0,
+            // Mercury: frame identity (EC38).
+            top_level_site: identity.top_level_site,
+            initiator_origin: identity.initiator_origin,
+            is_third_party: identity.is_third_party,
         };
 
         self.embedder_proxy
@@ -82,6 +95,25 @@ impl RequestInterceptor {
                     break;
                 },
                 WebResourceResponseMsg::DoNotIntercept => break,
+                // Mercury: change the request, then let it go on (EC37). Terminal like `DoNotIntercept`: the
+                // embedder is not asked again about this hop. A request whose answer is already decided (a
+                // block of an earlier check, or a response the embedder started) is left as it is.
+                WebResourceResponseMsg::Rewrite(rewrite) => {
+                    if response.is_some() {
+                        debug!(
+                            "Mercury: a rewrite of a request that is already answered is ignored"
+                        );
+                    } else if let Ok(applied) = mercury_rewrite::apply(request, rewrite, policy) {
+                        debug!(
+                            "Mercury: request rewritten (url changed: {}, origin changed: {}, headers set: {}, headers removed: {})",
+                            applied.url_changed,
+                            applied.origin_changed,
+                            applied.headers_set,
+                            applied.headers_removed
+                        );
+                    }
+                    break;
+                },
             }
         }
     }
