@@ -1,7 +1,8 @@
-// SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-// Mercury: new file (lane a11y-1, item 1). Not part of the published crate. It stays under this
-// crate's licence (see MERCURY.md): the glue that hangs a web page's AccessKit tree from one node of
+// Mercury: new file (lane a11y-1, item 1). Not part of the published crate. It is Mercury's own
+// code and copies no Slint source, so it is under Mercury's licence, PolyForm (see MERCURY.md); every
+// other file of this crate keeps its Slint notices. The glue that hangs a web page's AccessKit tree from one node of
 // the window's tree. The logic that decides *when* a subtree may be pushed is `mercury_a11y::graft`
 // (a Mercury crate, tested without winit); this file only calls it. The idea of a graft queue is
 // servoshell's (`ports/servoshell/desktop/gui.rs`, v0.8.0, MPL-2.0); no line of it is used.

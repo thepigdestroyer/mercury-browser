@@ -487,8 +487,11 @@ jobs:
       # runs them, one after the other, with the GStreamer libraries collected above. Until the first
       # run on a runner that renders, nothing has run them anywhere: read a failure here as a page or
       # a property to look at, not as a regression.
+      # continue-on-error: this step has never run, and a GitHub macOS runner may not give surfman a
+      # GL context at all. Remove the line after one green run.
       - name: Accessibility test pages
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
         run: make test-a11y-pages CARGO_FLAGS=--release
 
   scripts:

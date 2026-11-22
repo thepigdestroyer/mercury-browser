@@ -20,8 +20,9 @@
 //!   reports through [`activated`]);
 //! * [`Command::Graft`] the window's "Page content" node now hangs this tree, or nothing.
 //!
-//! The commands of one call are to be executed in order. The bridge never sees a node: it
-//! forwards or drops a whole [`TreeUpdate`] by the tab it came from, and counts the drops. What
+//! The commands of one call are to be executed in order. The bridge forwards or drops a whole
+//! [`TreeUpdate`] by the tab it came from, and counts the drops; it keeps only whether each node of
+//! the active tab is enabled, to decide [`Bridge::grants_activation`]. What
 //! may be pushed when (graft before subtree) is [`crate::graft`]'s part.
 //!
 //! [`attach`]: Bridge::attach
@@ -34,17 +35,32 @@
 //!
 //! Owner: item 1 (`graft`).
 
-use accesskit::{Action, TreeId, TreeUpdate};
+use std::collections::{HashMap, HashSet};
+
+use accesskit::{Action, ActionRequest, NodeId, TreeId, TreeUpdate};
 
 /// Whether an action of assistive technology counts as a user activation of the page (OD-5, D6 of
-/// the lane brief): the actions that do what a click does. Focus, scrolling, setting a value and
-/// the like do not: they are not a gesture, and a page must not be able to open a window after
-/// one. The action channel is the embedder's only; a page cannot send an action request.
+/// the lane brief): the actions that do what a click does, which is `Click` and nothing else.
+///
+/// The engine decides the same way (`accessibility_actions.rs` in `servo-script`: only an
+/// action that performs a click sets the window's activation, and `Click` is the one that always
+/// does). `Expand` and `Collapse` click only for some targets (a `<details>` is opened without
+/// one), `Increment` and `Decrement` never do, and the shell cannot tell which case it is in, so
+/// they grant nothing here. Focus, scrolling, setting a value and the like are not a gesture, and a
+/// page must not be able to open a window after one. The action channel is the embedder's only;
+/// a page cannot send an action request. Whether the target is still there and enabled is
+/// [`Bridge::grants_activation`].
 pub fn is_activating_action(action: Action) -> bool {
-    matches!(
-        action,
-        Action::Click | Action::Expand | Action::Collapse | Action::Increment | Action::Decrement
-    )
+    matches!(action, Action::Click)
+}
+
+/// What the bridge remembers about a node of the active page, to answer
+/// [`Bridge::grants_activation`]: no text, no value, no name.
+#[derive(Debug)]
+struct KnownNode {
+    /// Disabled, or hidden (which includes `inert`): the engine leaves such a target alone.
+    blocked: bool,
+    children: Vec<NodeId>,
 }
 
 /// What the shell does next. Executed in the order a call returned them.
@@ -87,6 +103,8 @@ pub struct Bridge {
     shown: Option<u64>,
     active: Option<Activation>,
     stats: BridgeStats,
+    /// The nodes of the active tab's trees (see [`KnownNode`]); empty while no tab is active.
+    known: HashMap<TreeId, HashMap<NodeId, KnownNode>>,
 }
 
 impl Bridge {
@@ -172,10 +190,65 @@ impl Bridge {
         }
         if self.active.is_some_and(|active| active.tab == tab) {
             self.stats.passed += 1;
+            self.remember(&update);
             Some(update)
         } else {
             self.stats.dropped_inactive += 1;
             None
+        }
+    }
+
+    /// Whether an action request earns the active page a user activation: the action is a click
+    /// ([`is_activating_action`]) and its target is a node of the active tab's page that is still
+    /// there, enabled and not hidden. The engine ignores any other target, so granting for it
+    /// would let a page that arranged a disabled or vanished control borrow a gesture.
+    pub fn grants_activation(&self, request: &ActionRequest) -> bool {
+        is_activating_action(request.action)
+            && self.active.is_some()
+            && self
+                .known
+                .get(&request.target_tree)
+                .and_then(|nodes| nodes.get(&request.target_node))
+                .is_some_and(|node| !node.blocked)
+    }
+
+    /// Records what [`Bridge::grants_activation`] needs from an update that is going on to the
+    /// window. A node that stopped being a child of its parent is forgotten with its subtree,
+    /// unless the update names it as a child again (a node moved to another parent).
+    fn remember(&mut self, update: &TreeUpdate) {
+        let nodes = self.known.entry(update.tree_id).or_default();
+        if update.tree.is_some() {
+            nodes.clear();
+        }
+        let mut orphans = Vec::new();
+        for (id, node) in &update.nodes {
+            let known = KnownNode {
+                blocked: node.is_disabled() || node.is_hidden(),
+                children: node.children().to_vec(),
+            };
+            if let Some(old) = nodes.insert(*id, known) {
+                orphans.extend(
+                    old.children
+                        .into_iter()
+                        .filter(|child| !node.children().contains(child)),
+                );
+            }
+        }
+        if orphans.is_empty() {
+            return;
+        }
+        let named: HashSet<NodeId> = update
+            .nodes
+            .iter()
+            .flat_map(|(_, node)| node.children().iter().copied())
+            .collect();
+        while let Some(id) = orphans.pop() {
+            if named.contains(&id) {
+                continue;
+            }
+            if let Some(gone) = nodes.remove(&id) {
+                orphans.extend(gone.children);
+            }
         }
     }
 
@@ -213,6 +286,7 @@ impl Bridge {
             return Vec::new();
         }
         let mut commands = Vec::new();
+        self.known.clear();
         if let Some(active) = self.active.take() {
             if !active_is_gone {
                 commands.push(Command::Deactivate(active.tab));

@@ -33,11 +33,11 @@ use std::time::Instant;
 
 use accesskit::{ActionRequest, Role};
 use i_slint_backend_winit::MercuryPageAccessibility;
-use mercury_a11y::bridge::{Bridge, Command, is_activating_action};
+use mercury_a11y::bridge::{Bridge, Command};
 use mercury_ui::MainWindow;
 use slint::ComponentHandle;
 use talaria_core::TabId;
-use talaria_servo::ServoWebView;
+use talaria_servo::{ServoRuntime, ServoWebView};
 
 /// The page node's role and label: what `main-window.slint` gives `web-view-focus`, and what the
 /// window looks for. `crates/mercury-ui/tests/a11y_page_node.rs` pins that exactly one such node
@@ -45,10 +45,16 @@ use talaria_servo::ServoWebView;
 pub(crate) const PAGE_ROLE: Role = Role::Main;
 pub(crate) const PAGE_LABEL: &str = "Page content";
 
+/// The most actions kept while the engine is busy.
+const MAX_QUEUED_ACTIONS: usize = 64;
+
 struct Shell {
     bridge: RefCell<Bridge>,
     /// Commands the bridge returned that the engine's pump has not executed yet.
     pending: RefCell<VecDeque<Command>>,
+    /// Actions that arrived while the engine was busy (it is, during its own pump); sent by the
+    /// next pump, in order. A press that does nothing is the worst failure for a screen reader user.
+    actions: RefCell<VecDeque<ActionRequest>>,
     window: slint::Weak<MainWindow>,
 }
 
@@ -69,6 +75,7 @@ pub(crate) fn install(window: &MainWindow) {
     let shell = Rc::new(Shell {
         bridge: RefCell::new(Bridge::new()),
         pending: RefCell::new(VecDeque::new()),
+        actions: RefCell::new(VecDeque::new()),
         window: window.as_weak(),
     });
     SHELL.with(|slot| *slot.borrow_mut() = Some(Rc::clone(&shell)));
@@ -110,7 +117,7 @@ pub(crate) fn tab_shown(web_views: &HashMap<TabId, ServoWebView>, tab: TabId) {
     with_shell(|shell| {
         let commands = shell.bridge.borrow_mut().tab_shown(tab.value());
         shell.queue(commands);
-        shell.run_pending(web_views);
+        shell.run_pending(web_views, None);
     });
 }
 
@@ -119,7 +126,7 @@ pub(crate) fn tab_hidden(web_views: &HashMap<TabId, ServoWebView>, tab: TabId) {
     with_shell(|shell| {
         let commands = shell.bridge.borrow_mut().tab_hidden(tab.value());
         shell.queue(commands);
-        shell.run_pending(web_views);
+        shell.run_pending(web_views, None);
     });
 }
 
@@ -128,14 +135,17 @@ pub(crate) fn tab_closed(web_views: &HashMap<TabId, ServoWebView>, tab: TabId) {
     with_shell(|shell| {
         let commands = shell.bridge.borrow_mut().tab_closed(tab.value());
         shell.queue(commands);
-        shell.run_pending(web_views);
+        shell.run_pending(web_views, None);
     });
 }
 
 /// Executes what the window asked for since the last pump (assistive technology attached or
 /// detached). Cheap when there is nothing.
-pub(crate) fn run_pending(web_views: &HashMap<TabId, ServoWebView>) {
-    with_shell(|shell| shell.run_pending(web_views));
+pub(crate) fn run_pending(
+    web_views: &HashMap<TabId, ServoWebView>,
+    runtime: Option<&ServoRuntime>,
+) {
+    with_shell(|shell| shell.run_pending(web_views, runtime));
 }
 
 impl Shell {
@@ -170,25 +180,46 @@ impl Shell {
 
     /// What assistive technology did to a node of the page. Not logged: it may carry text.
     fn forward_action(&self, request: ActionRequest) {
-        if is_activating_action(request.action)
-            && let Some(tab) = self.bridge.borrow().active_tab()
-        {
-            // OD-5: pressing with VoiceOver is the user's gesture on that page.
+        // OD-5, D6: pressing with VoiceOver is the user's gesture on that page, for a click on a
+        // target that is there and enabled (the bridge knows; the engine ignores any other).
+        let granted = {
+            let bridge = self.bridge.borrow();
+            bridge
+                .grants_activation(&request)
+                .then(|| bridge.active_tab())
+                .flatten()
+        };
+        if let Some(tab) = granted {
             crate::activation::note_user_activation(TabId::new(tab), Instant::now());
         }
+        let mut request = Some(request);
         let sent = crate::engine::with_runtime(|runtime| {
-            runtime.forward_accessibility_action(request);
+            if let Some(request) = request.take() {
+                runtime.forward_accessibility_action(request);
+            }
         });
-        if !sent {
-            log::debug!(
-                "an accessibility action arrived while the engine was busy and was dropped"
-            );
+        if let (false, Some(request)) = (sent, request) {
+            // Kept for the next pump. The queue is bounded: a stuck engine must not grow it.
+            let mut actions = self.actions.borrow_mut();
+            if actions.len() >= MAX_QUEUED_ACTIONS {
+                actions.pop_front();
+                log::debug!("accessibility actions are piling up: the oldest was dropped");
+            }
+            actions.push_back(request);
+            drop(actions);
+            crate::engine::request_pump();
         }
     }
 
     /// Executes the queued commands in order. The engine's answer to an activation (the tab's
     /// tree id) goes back to the bridge, and the commands it returns run before the rest.
-    fn run_pending(&self, web_views: &HashMap<TabId, ServoWebView>) {
+    /// With `runtime` (the pump has it at hand), the actions kept while the engine was busy are sent
+    /// after the commands.
+    fn run_pending(
+        &self,
+        web_views: &HashMap<TabId, ServoWebView>,
+        runtime: Option<&ServoRuntime>,
+    ) {
         loop {
             let Some(command) = self.pending.borrow_mut().pop_front() else {
                 break;
@@ -215,6 +246,12 @@ impl Shell {
                         window.window().set_page_tree(tree);
                     }
                 }
+            }
+        }
+        if let Some(runtime) = runtime {
+            let queued: Vec<ActionRequest> = self.actions.borrow_mut().drain(..).collect();
+            for request in queued {
+                runtime.forward_accessibility_action(request);
             }
         }
     }

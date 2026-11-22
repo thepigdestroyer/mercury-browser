@@ -570,7 +570,7 @@ impl EngineState {
         }
         // a11y-1: what the window asked for since the last pump (assistive technology attached or
         // detached) is done with the web views at hand
-        crate::accessibility::run_pending(&self.web_views);
+        crate::accessibility::run_pending(&self.web_views, self.runtime.as_ref());
 
         if self.current_scale_factor != Some(scale_factor) {
             for web_view in self.web_views.values() {

@@ -29,12 +29,15 @@ which every change here must keep:
 - The application must show Slint's attribution (the AboutSlint widget or the
   "Made with Slint" badge), as Mercury already does for Slint as a whole.
 
-Mercury's changes to this crate stay under the same Slint licence; they are not
-relicensed under PolyForm or the MPL.
+Mercury's changes to the crate's existing files stay under the same Slint licence; they are not
+relicensed under PolyForm or the MPL. A **new** file that Mercury adds and that copies no Slint
+source (today only `mercury_graft.rs`) is Mercury's own code and carries the PolyForm header, as
+every new Mercury file does (`AGENTS.md`); it is linked into this crate, and it is not offered under
+Slint's licences or the GPL.
 
 ## Changes
 
-Changes made by lane a11y-1 (21 Nov 2026). The patch stays under the Slint licence.
+Changes made by lane a11y-1 (21 Nov 2026). The hook lines in the existing files stay under the Slint licence; the new file `mercury_graft.rs` is PolyForm (see "Licence").
 
 ### Grafting a web page's accessibility tree into the window's tree (EE1) — `accesskit.rs`, `lib.rs`, `winitwindowadapter.rs`, new `mercury_graft.rs`
 

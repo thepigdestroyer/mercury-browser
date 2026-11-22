@@ -470,7 +470,7 @@ diff --git a/accessibility/dom_adapter.rs b/accessibility/dom_adapter.rs
 new file mode 100644
 --- /dev/null
 +++ b/accessibility/dom_adapter.rs
-@@ -0,0 +1,891 @@
+@@ -0,0 +1,904 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -703,12 +703,25 @@ new file mode 100644
 +    })
 +}
 +
-+/// The flat-tree children of a node as the accessibility tree sees them: none for a frame element.
++/// Whether this element is an `<input>` or a `<textarea>` that draws its value in a user-agent
++/// widget (its shadow tree). Its value is a property of the control; the widget's text is the same
++/// value again, and for a password it is one bullet per character, which would give away the length.
++// Mercury: a11y-1 M1 (privacy): the widget of a text control is not part of the accessibility tree.
++fn is_text_control_widget(node: &ServoLayoutNode<'_>) -> bool {
++    node.as_html_element().is_some_and(|element| {
++        (*element.local_name() == local_name!("input") ||
++            *element.local_name() == local_name!("textarea")) &&
++            node.is_root_of_user_agent_widget()
++    })
++}
++
++/// The flat-tree children of a node as the accessibility tree sees them: none for a frame element
++/// and none for a text control's user-agent widget.
 +pub(super) fn flat_children<'a, 'dom>(
 +    node: &'a ServoLayoutNode<'dom>,
 +) -> impl Iterator<Item = ServoLayoutNode<'dom>> + 'a {
-+    let is_frame = is_frame_element(node);
-+    node.flat_tree_children().filter(move |_| !is_frame)
++    let none = is_frame_element(node) || is_text_control_widget(node);
++    node.flat_tree_children().filter(move |_| !none)
 +}
 +
 +/// A node of the layout DOM as `mercury-a11y` sees it: an element or a text node.

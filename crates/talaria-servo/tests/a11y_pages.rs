@@ -284,6 +284,8 @@ fn headless_servo_password_text_is_nowhere_in_the_tree() {
         let field = node(&page, Role::PasswordInput, label);
         assert_eq!(field.data().value(), None, "{label}");
         assert_eq!(field.data().numeric_value(), None, "{label}");
+        // No bullet child either: it would give away how many characters were typed.
+        assert_eq!(field.children().count(), 0, "{label} has descendants");
     }
     assert_eq!(
         node(&page, Role::PasswordInput, "Password")
@@ -694,9 +696,12 @@ fn headless_servo_state_changes_reach_the_tree() {
 // hidden content
 // ---------------------------------------------------------------------------------------------
 
+/// A hidden or `aria-hidden` subtree is still sent, flagged hidden: AccessKit's platform adapters do
+/// not expose a hidden node, so an assistive technology never reaches it. The test reads only the
+/// nodes an assistive technology can reach (`visible_text`, `has`).
 #[test]
 #[ignore = "starts a headless Servo: needs a GL context"]
-fn headless_servo_hidden_subtrees_are_absent() {
+fn headless_servo_hidden_subtrees_are_sent_flagged_hidden_and_never_visible() {
     let mut page = A11yPage::load_page("hidden-content.html");
     let text = visible_text(&page);
     assert!(

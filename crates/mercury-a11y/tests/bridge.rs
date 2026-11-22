@@ -473,21 +473,64 @@ fn a_long_generated_run_keeps_one_rule() {
     }
 }
 
-#[test]
-fn only_the_actions_that_click_count_as_a_user_activation() {
-    use accesskit::Action;
-    use mercury_a11y::bridge::is_activating_action;
+/// A document tree with a root, an enabled button (1), a disabled button (2), a hidden one (3), a
+/// slider (4) and a details summary (5).
+fn page(tree_id: TreeId) -> TreeUpdate {
+    let mut root = Node::new(Role::RootWebArea);
+    root.set_children(vec![NodeId(1), NodeId(2), NodeId(3), NodeId(4), NodeId(5)]);
+    let mut disabled = Node::new(Role::Button);
+    disabled.set_disabled();
+    let mut hidden = Node::new(Role::Button);
+    hidden.set_hidden();
+    TreeUpdate {
+        nodes: vec![
+            (NodeId(0), root),
+            (NodeId(1), Node::new(Role::Button)),
+            (NodeId(2), disabled),
+            (NodeId(3), hidden),
+            (NodeId(4), Node::new(Role::Slider)),
+            (NodeId(5), Node::new(Role::DisclosureTriangle)),
+        ],
+        tree: Some(Tree::new(NodeId(0))),
+        tree_id,
+        focus: NodeId(0),
+    }
+}
 
+fn request(action: accesskit::Action, tree_id: TreeId, node: u64) -> accesskit::ActionRequest {
+    accesskit::ActionRequest {
+        action,
+        target_tree: tree_id,
+        target_node: NodeId(node),
+        data: None,
+    }
+}
+
+/// An attached bridge whose tab A is active and has sent `page(tree(10))`.
+fn bridge_with_page() -> Bridge {
+    let mut bridge = Bridge::new();
+    bridge.attach();
+    bridge.tab_shown(A);
+    bridge.activated(A, Some(tree(9)));
+    assert!(bridge.update_from(A, page(tree(10))).is_some());
+    bridge
+}
+
+#[test]
+fn a_click_on_an_enabled_node_of_the_active_page_grants_activation() {
+    let bridge = bridge_with_page();
+    assert!(bridge.grants_activation(&request(accesskit::Action::Click, tree(10), 1)));
+}
+
+#[test]
+fn only_a_click_grants_activation_whatever_the_target() {
+    use accesskit::Action;
+    let bridge = bridge_with_page();
     for action in [
-        Action::Click,
         Action::Expand,
         Action::Collapse,
         Action::Increment,
         Action::Decrement,
-    ] {
-        assert!(is_activating_action(action), "{action:?}");
-    }
-    for action in [
         Action::Focus,
         Action::Blur,
         Action::SetValue,
@@ -495,11 +538,125 @@ fn only_the_actions_that_click_count_as_a_user_activation() {
         Action::ScrollIntoView,
         Action::ScrollUp,
         Action::ScrollDown,
-        Action::ScrollLeft,
-        Action::ScrollRight,
         Action::ShowContextMenu,
         Action::SetTextSelection,
     ] {
-        assert!(!is_activating_action(action), "{action:?}");
+        for node in [1, 4, 5] {
+            assert!(
+                !bridge.grants_activation(&request(action, tree(10), node)),
+                "{action:?} on {node}"
+            );
+        }
     }
+}
+
+#[test]
+fn a_click_on_a_disabled_hidden_or_missing_node_grants_nothing() {
+    use accesskit::Action;
+    let bridge = bridge_with_page();
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(10), 2)),
+        "disabled"
+    );
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(10), 3)),
+        "hidden"
+    );
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(10), 99)),
+        "unknown node"
+    );
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(11), 1)),
+        "unknown tree"
+    );
+}
+
+#[test]
+fn a_click_grants_nothing_when_no_page_is_active() {
+    use accesskit::Action;
+    let mut bridge = bridge_with_page();
+    bridge.tab_hidden(A);
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(10), 1)),
+        "hidden tab"
+    );
+    let mut bridge = bridge_with_page();
+    bridge.detach();
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(10), 1)),
+        "detached"
+    );
+    let mut bridge = bridge_with_page();
+    bridge.tab_shown(B);
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(10), 1)),
+        "switched away"
+    );
+}
+
+#[test]
+fn a_node_that_stops_being_enabled_or_is_removed_stops_granting() {
+    use accesskit::Action;
+    let mut bridge = bridge_with_page();
+    // The page disables button 1.
+    let mut disabled = Node::new(Role::Button);
+    disabled.set_disabled();
+    let changed = TreeUpdate {
+        nodes: vec![(NodeId(1), disabled)],
+        tree: None,
+        tree_id: tree(10),
+        focus: NodeId(0),
+    };
+    assert!(bridge.update_from(A, changed).is_some());
+    assert!(!bridge.grants_activation(&request(Action::Click, tree(10), 1)));
+    // The page removes button 5 (the root no longer lists it) and moves 4 under button 1.
+    let mut root = Node::new(Role::RootWebArea);
+    root.set_children(vec![NodeId(1), NodeId(2), NodeId(3)]);
+    let mut holder = Node::new(Role::GenericContainer);
+    holder.set_children(vec![NodeId(4)]);
+    let removed = TreeUpdate {
+        nodes: vec![(NodeId(0), root), (NodeId(1), holder)],
+        tree: None,
+        tree_id: tree(10),
+        focus: NodeId(0),
+    };
+    assert!(bridge.update_from(A, removed).is_some());
+    assert!(
+        !bridge.grants_activation(&request(Action::Click, tree(10), 5)),
+        "removed"
+    );
+    assert!(
+        bridge.grants_activation(&request(Action::Click, tree(10), 4)),
+        "a moved node is kept"
+    );
+}
+
+#[test]
+fn a_new_tree_for_the_same_id_forgets_the_old_nodes() {
+    use accesskit::Action;
+    let mut bridge = bridge_with_page();
+    let mut root = Node::new(Role::RootWebArea);
+    root.set_children(vec![NodeId(7)]);
+    let fresh = TreeUpdate {
+        nodes: vec![(NodeId(0), root), (NodeId(7), Node::new(Role::Button))],
+        tree: Some(Tree::new(NodeId(0))),
+        tree_id: tree(10),
+        focus: NodeId(0),
+    };
+    assert!(bridge.update_from(A, fresh).is_some());
+    assert!(!bridge.grants_activation(&request(Action::Click, tree(10), 1)));
+    assert!(bridge.grants_activation(&request(Action::Click, tree(10), 7)));
+}
+
+#[test]
+fn a_dropped_update_teaches_the_bridge_nothing() {
+    use accesskit::Action;
+    let mut bridge = Bridge::new();
+    bridge.attach();
+    bridge.tab_shown(A);
+    bridge.activated(A, Some(tree(9)));
+    // Tab B is not active: its page must not make a click on its node grant anything for A.
+    assert!(bridge.update_from(B, page(tree(20))).is_none());
+    assert!(!bridge.grants_activation(&request(Action::Click, tree(20), 1)));
 }

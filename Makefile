@@ -434,7 +434,7 @@ test-certificate-exceptions-macos:
 # thread (--test-threads=1). The GStreamer libraries are found as for `make test`: pass CARGO_FLAGS=--release
 # (the default under the disk guard) so that target/release/lib is the one that holds them.
 test-a11y-pages:
-	$(GSTREAMER_ENV) $(TEST_LIBRARY_PATH) "$(CARGO)" test $(CARGO_FLAGS) -p talaria-servo --test a11y_pages -- --ignored --test-threads=1
+	$(GSTREAMER_ENV) $(TEST_LIBRARY_PATH) "$(CARGO)" test $(CARGO_FLAGS) -p talaria-servo --test a11y_pages --test a11y_actions --test a11y_frames -- --ignored --test-threads=1
 
 run:
 	$(if $(COLLECT_GSTREAMER),$(GSTREAMER_ENV) "$(CARGO)" build --package "$(APP_PACKAGE)" --release)
