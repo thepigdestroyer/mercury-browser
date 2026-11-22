@@ -15,7 +15,6 @@ mod example;
 
 use std::collections::HashSet;
 use std::path::PathBuf;
-use std::time::Duration;
 
 use example::{CORNERS, ESSAY, HEIGHT, Params, Pixels, Scene, WIDTH, at, rgb, save, slug};
 use mercury_settings::DialCorner;
@@ -275,7 +274,7 @@ fn the_ring_ends_whole_and_then_fades_back_to_the_track() {
     };
     let scene = mockup(&params);
     scene.render().unwrap();
-    std::thread::sleep(Duration::from_millis(200));
+    example::advance_clock(200);
     scene.frame().unwrap();
     assert_eq!(
         ring_at(&scene.frame().unwrap(), &scene, 340.0),
@@ -296,7 +295,20 @@ fn the_ring_ends_whole_and_then_fades_back_to_the_track() {
         );
     }
 
-    std::thread::sleep(Duration::from_millis(600));
+    // Half way through the fade (mocked clock: exactly 200 of 400 ms) the ring is neither.
+    example::advance_clock(200);
+    let half = ring_at(&scene.frame().unwrap(), &scene, 340.0);
+    assert!(
+        half != accent(&scene) && half != track(&scene),
+        "200 ms into the fade the ring is between accent and track, got {half:?}"
+    );
+    assert!(
+        distance(half, accent(&scene)) < distance(accent(&scene), track(&scene))
+            && distance(half, track(&scene)) < distance(accent(&scene), track(&scene)),
+        "and closer to each than they are to one another: {half:?}"
+    );
+
+    example::advance_clock(400);
     let pixels = scene.frame().unwrap();
     for deg in [340.0, 180.0] {
         assert_eq!(

@@ -20,7 +20,7 @@
 //!
 //! `tests/corner_dial_render.rs` includes this file as a module and checks pixels of the same scenes.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
@@ -57,12 +57,28 @@ pub const CORNERS: [DialCorner; 4] = [
     DialCorner::TopRight,
 ];
 
+thread_local! {
+    /// The platform's clock, in milliseconds: it moves only by `advance_clock`, so an animation is
+    /// at the same point in every run (no wall-clock `sleep`).
+    static CLOCK_MS: Cell<u64> = const { Cell::new(0) };
+}
+
 struct HeadlessPlatform;
 
 impl Platform for HeadlessPlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
         Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
     }
+
+    fn duration_since_start(&self) -> Duration {
+        Duration::from_millis(CLOCK_MS.with(Cell::get))
+    }
+}
+
+/// Moves the clock of this thread's platform by `milliseconds` and runs the animations up to it.
+pub fn advance_clock(milliseconds: u64) {
+    CLOCK_MS.with(|clock| clock.set(clock.get() + milliseconds));
+    slint::platform::update_timers_and_animations();
 }
 
 /// Installs the headless software platform (once per process; a second call is ignored).
@@ -362,6 +378,31 @@ fn main() -> Res<()> {
     );
     std::fs::create_dir_all(&output)?;
 
+    // A page title far too long for the caption: its box is as wide as it can be, the text is elided,
+    // and the box stays in the window and off the dial. The first tab of the fan is the worst case
+    // (the nearest to the dial along the screen's edge); the last is the other.
+    let long = "A page title that is far too long for any caption, ".repeat(3);
+    let mut long_tabs = mockup_tabs(false);
+    for tab in &mut long_tabs {
+        tab.title = long.as_str().into();
+    }
+    for corner in CORNERS {
+        for (name, tab) in [("first", 101), ("last", 122)] {
+            let params = Params {
+                hovered: Some(tab),
+                ..Params::fanned(false, corner)
+            };
+            let scene = Scene::new(&mockup_groups(false), &long_tabs, &params)?;
+            save(
+                &scene.render()?,
+                &output.join(format!(
+                    "fanned-long-title-{name}-{}-light.png",
+                    slug(corner)
+                )),
+            )?;
+        }
+    }
+
     for dark in [false, true] {
         let theme = if dark { "dark" } else { "light" };
         let file = |scene: &str| output.join(format!("{scene}-{theme}.png"));
@@ -401,11 +442,11 @@ fn main() -> Res<()> {
         };
         let scene = mockup(&params)?;
         scene.render()?;
-        std::thread::sleep(Duration::from_millis(200));
+        advance_clock(200);
         scene.frame()?;
         scene.set_load(false, 0.9);
         scene.frame()?;
-        std::thread::sleep(Duration::from_millis(150));
+        advance_clock(150);
         save(&scene.frame()?, &file("fading"))?;
 
         let params = Params {

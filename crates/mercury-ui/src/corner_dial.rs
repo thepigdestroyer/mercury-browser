@@ -20,8 +20,19 @@
 //! 4. Set `on_place`, `on_clamp_drag`, `on_snap_corner` and `on_step_focus` once (they call
 //!    [`DialGeometry::centre`], [`DialGeometry::clamp_drag`], [`DialGeometry::snap`] and
 //!    [`step_focus`]); `on_hit_test` and `on_drop_target` call `fan.data.hit` and `.drop_target`.
-//! 5. On `corner-changed` save [`corner_name`] as the window's `dial_corner`; on `tab-hovered` set the
-//!    caption from [`DialFan::caption`]. The corner at start is [`effective_corner`].
+//! 5. On `corner-changed` save [`corner_name`] as the window's `dial_corner`; on `tab-hovered` **and
+//!    on `focus-moved`** (the arrow keys) set the caption from [`DialFan::caption`] for that tab id (the
+//!    component shows it while a tab is hovered or has the keyboard focus). The corner at start is
+//!    [`effective_corner`].
+//!
+//! # Who owns `expanded`
+//!
+//! `CornerDial.expanded` is an in-out property that the component also changes itself (a click,
+//! Space, Esc, a drag, `suppressed`), always followed by `toggled(bool)` (or `close-requested()` for
+//! Esc and a press outside). A one-way binding (`expanded: state.open`) is therefore replaced by the
+//! first of those. Either bind it two ways (`expanded <=> state.open`) or keep the host's state in
+//! step through `toggled` and `close-requested`, and set `expanded` from outside (⌘⇧E) as a plain
+//! assignment: the fan then takes the keyboard focus, so Esc and the arrows work at once.
 
 mod fan;
 mod geometry;
@@ -46,3 +57,10 @@ pub const DRAG_THRESHOLD: f32 = 6.0;
 pub const FAN_REACH: f32 = 380.0;
 /// The edge of the square `RingBands` box that holds the fan, centred on the dial.
 pub const FAN_BOX: f32 = 2.0 * (FAN_REACH + 4.0);
+/// The widest the hover caption gets: its text is elided beyond this. [`DialFan::caption`] places the
+/// box with this width and hands it to the component in `DialCaption.max-width`, so Rust and Slint
+/// have one number. (The box is as narrow as its text, up to this; 260 keeps the longest box clear of
+/// the dial for the first tab of any fan.)
+pub const CAPTION_MAX_WIDTH: f32 = 260.0;
+/// The height of the hover caption (`DialMetrics.caption-height` in `corner-dial.slint`).
+pub const CAPTION_HEIGHT: f32 = 30.0;

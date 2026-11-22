@@ -36,21 +36,47 @@ fn p(x: f32, y: f32) -> Point {
 /// The tie tolerance the contract names, in px.
 const TIE: f64 = 1e-4;
 
-/// The brute-force oracle: the nearest of the four resting centres by Euclidean distance, in f64;
-/// `current` when two or more are within `TIE` of the nearest.
-fn oracle(g: &DialGeometry, release: Point, current: DialCorner) -> DialCorner {
-    let distances: Vec<(DialCorner, f64)> = CORNERS
+/// The order in which a tie that does not include the current corner is settled (the contract).
+const TIE_ORDER: [DialCorner; 4] = [
+    DialCorner::TopLeft,
+    DialCorner::TopRight,
+    DialCorner::BottomLeft,
+    DialCorner::BottomRight,
+];
+
+/// The corners whose resting centre is within `TIE` of the nearest one, from squared distances (not
+/// the code under test's path: no `hypot`), in `TIE_ORDER`.
+fn tied_corners(g: &DialGeometry, release: Point) -> Vec<DialCorner> {
+    let squared: Vec<(DialCorner, f64)> = TIE_ORDER
         .iter()
         .map(|&c| {
             let centre = g.centre(c);
-            let d = (f64::from(release.x) - f64::from(centre.x))
-                .hypot(f64::from(release.y) - f64::from(centre.y));
-            (c, d)
+            let dx = f64::from(release.x) - f64::from(centre.x);
+            let dy = f64::from(release.y) - f64::from(centre.y);
+            (c, dx * dx + dy * dy)
         })
         .collect();
-    let best = distances.iter().map(|d| d.1).fold(f64::INFINITY, f64::min);
-    let near: Vec<_> = distances.iter().filter(|d| d.1 - best <= TIE).collect();
-    if near.len() > 1 { current } else { near[0].0 }
+    let best = squared
+        .iter()
+        .map(|d| d.1)
+        .fold(f64::INFINITY, f64::min)
+        .sqrt();
+    squared
+        .iter()
+        .filter(|d| d.1.sqrt() - best <= TIE)
+        .map(|d| d.0)
+        .collect()
+}
+
+/// The oracle: the tie set first, then the rule: the only corner of the set; else `current` if it is
+/// in the set; else the first of the set in `TIE_ORDER`.
+fn oracle(g: &DialGeometry, release: Point, current: DialCorner) -> DialCorner {
+    let tied = tied_corners(g, release);
+    if tied.contains(&current) {
+        current
+    } else {
+        tied[0]
+    }
 }
 
 /// `(i, j)` of an `(nx + 1) x (ny + 1)` grid over the area `[x0, x1] x [y0, y1]`.
@@ -229,25 +255,61 @@ fn off_the_axes_the_nearest_corner_is_the_quadrant_of_the_areas_middle() {
 }
 
 #[test]
-fn a_release_on_an_axis_keeps_the_current_corner() {
+fn a_release_on_an_axis_is_decided_between_the_two_tied_corners_only() {
     let g = DialGeometry::new(1440.0, 900.0);
-    for current in CORNERS {
-        // On the vertical axis (left and right centres are equally far), on the horizontal axis,
-        // and in the exact middle.
-        assert_eq!(g.snap(p(720.0, 100.0), current), current);
-        assert_eq!(g.snap(p(720.0, 800.0), current), current);
-        assert_eq!(g.snap(p(100.0, 450.0), current), current);
-        assert_eq!(g.snap(p(1300.0, 450.0), current), current);
+    let (tl, tr, bl, br) = (
+        DialCorner::TopLeft,
+        DialCorner::TopRight,
+        DialCorner::BottomLeft,
+        DialCorner::BottomRight,
+    );
+    // (release, the tied corners): on the vertical axis the left and the right centre are equally
+    // far, on the horizontal axis the top and the bottom one.
+    let cases = [
+        (p(720.0, 100.0), [tl, tr]),
+        (p(720.0, 800.0), [bl, br]),
+        (p(100.0, 450.0), [tl, bl]),
+        (p(1300.0, 450.0), [tr, br]),
+    ];
+    for (release, pair) in cases {
+        assert_eq!(tied_corners(&g, release), pair, "{release:?}");
+        for current in TIE_ORDER {
+            let got = g.snap(release, current);
+            if pair.contains(&current) {
+                assert_eq!(got, current, "{release:?}: a tied current corner is kept");
+            } else {
+                // A dial dropped at the top that came from the bottom goes to the top, not back.
+                assert_eq!(got, pair[0], "{release:?} from {current:?}");
+            }
+        }
+    }
+    // The exact middle: all four are tied, so the current corner is kept.
+    for current in TIE_ORDER {
         assert_eq!(g.snap(p(720.0, 450.0), current), current);
     }
     // A hair to either side of the axis is decided.
+    assert_eq!(g.snap(p(719.0, 100.0), br), tl);
+    assert_eq!(g.snap(p(721.0, 100.0), bl), tr);
+}
+
+#[test]
+fn coincident_centres_in_a_small_area_never_trap_the_dial() {
+    // 2000 x 90: the top two centres are the bottom two (the inset is 45): every release is a tie of
+    // two corners, and the dial still moves from the left to the right.
+    let g = DialGeometry::new(2000.0, 90.0);
     assert_eq!(
-        g.snap(p(719.0, 100.0), DialCorner::BottomRight),
-        DialCorner::TopLeft
+        g.centre(DialCorner::TopLeft),
+        g.centre(DialCorner::BottomLeft)
     );
-    assert_eq!(
-        g.snap(p(721.0, 100.0), DialCorner::BottomLeft),
-        DialCorner::TopRight
+    let right = g.snap(p(1900.0, 45.0), DialCorner::TopLeft);
+    assert!(
+        matches!(right, DialCorner::TopRight | DialCorner::BottomRight),
+        "{right:?}"
+    );
+    let left = g.snap(p(100.0, 45.0), DialCorner::BottomRight);
+    assert!(
+        matches!(left, DialCorner::TopLeft | DialCorner::BottomLeft),
+        "{left:?}"
     );
 }
 

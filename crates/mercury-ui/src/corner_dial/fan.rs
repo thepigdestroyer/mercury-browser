@@ -7,10 +7,13 @@
 //! relative to the box and the dial is at `(FAN_BOX / 2, FAN_BOX / 2)` in it. [`DialFan::origin`]
 //! says where that box lies in the overlay area.
 //!
-//! The caption (decision D15) is a 186 x 30 px box whose near corner is 24 px from the hovered
-//! segment's mid-point toward the dial in both axes (the mockup, for the bottom-right dial:
-//! top-left corner at mid-point + (24, 24)); in the other corners the box is mirrored so that it
-//! still lies on the dial's side of the point. It is clamped into the fan's box.
+//! The caption (decision D15) is a box of at most `CAPTION_MAX_WIDTH` x `CAPTION_HEIGHT` px (its
+//! text is elided beyond that) whose near corner is 24 px from the hovered segment's mid-point
+//! toward the dial in both axes (the mockup, for the bottom-right dial: top-left corner at
+//! mid-point + (24, 24)); in the other corners the box is mirrored so that it still lies on the
+//! dial's side of the point. It is placed with its widest size and clamped into the fan's box and
+//! into the overlay area, so that it never reaches past the window's edge; `DialCaption.right` tells
+//! the component to put a narrower box against the far edge instead of the near one.
 
 use mercury_settings::DialCorner;
 use slint::SharedString;
@@ -19,13 +22,9 @@ use crate::ring_bands::{RingBandsData, RingOptions};
 use crate::ring_geometry::{GlyphMetrics, Point};
 use crate::{DialCaption, GroupRow, TabRow};
 
-use super::FAN_BOX;
 use super::geometry::{DialGeometry, fan_spec};
+use super::{CAPTION_HEIGHT, CAPTION_MAX_WIDTH, FAN_BOX};
 
-/// Width of the caption box.
-const CAPTION_WIDTH: f32 = 186.0;
-/// Height of the caption box.
-const CAPTION_HEIGHT: f32 = 30.0;
 /// Distance from the hovered segment's mid-point to the caption's near corner, in x and in y.
 const CAPTION_OFFSET: f32 = 24.0;
 /// What the caption says for a tab that has neither a title nor a host.
@@ -39,6 +38,8 @@ pub struct DialFan {
     /// The top-left corner of the `RingBands` box in the overlay area (the dial's centre minus
     /// `FAN_BOX / 2` in both directions).
     pub origin: Point,
+    /// The overlay area the fan was built for (the caption is kept inside it).
+    pub area: DialGeometry,
 }
 
 impl DialFan {
@@ -55,6 +56,7 @@ impl DialFan {
             corner,
             data: RingBandsData::new(fan_spec(corner), groups, tabs, opts, metrics),
             origin: Point::new(centre.x - FAN_BOX / 2.0, centre.y - FAN_BOX / 2.0),
+            area: *geometry,
         }
     }
 
@@ -83,6 +85,8 @@ impl DialFan {
 
         let dial = FAN_BOX / 2.0;
         let (mid_x, mid_y) = (segment.mid_x, segment.mid_y);
+        // The box lies on the dial's side of the mid-point: to its right (and below it) when the
+        // mid-point is left of (above) the dial, else to its left (above it).
         let toward = |mid: f32, size: f32| {
             if mid < dial {
                 mid + CAPTION_OFFSET
@@ -90,12 +94,34 @@ impl DialFan {
                 mid - CAPTION_OFFSET - size
             }
         };
-        let x = toward(mid_x, CAPTION_WIDTH).clamp(0.0, FAN_BOX - CAPTION_WIDTH);
-        let y = toward(mid_y, CAPTION_HEIGHT).clamp(0.0, FAN_BOX - CAPTION_HEIGHT);
+        // The part of the fan's box that is inside the overlay area.
+        let low = |origin: f32| (-origin).max(0.0);
+        let high = |origin: f32, extent: f32| (extent - origin).min(FAN_BOX);
+        let place = |wanted: f32, size: f32, lo: f32, hi: f32| {
+            if hi - lo < size {
+                lo
+            } else {
+                wanted.clamp(lo, hi - size)
+            }
+        };
+        let x = place(
+            toward(mid_x, CAPTION_MAX_WIDTH),
+            CAPTION_MAX_WIDTH,
+            low(self.origin.x),
+            high(self.origin.x, self.area.width),
+        );
+        let y = place(
+            toward(mid_y, CAPTION_HEIGHT),
+            CAPTION_HEIGHT,
+            low(self.origin.y),
+            high(self.origin.y, self.area.height),
+        );
         Some(DialCaption {
             text: SharedString::from(text),
             x,
             y,
+            max_width: CAPTION_MAX_WIDTH,
+            right: mid_x >= dial,
         })
     }
 }

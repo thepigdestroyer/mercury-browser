@@ -25,7 +25,7 @@ use common::a11y;
 use i_slint_backend_testing::{AccessibleRole, ElementHandle, mock_elapsed_time};
 use mercury_settings::DialCorner;
 use mercury_ui::corner_dial::{
-    DialFan, DialGeometry, corner_from_slint, corner_to_slint, step_focus,
+    CAPTION_MAX_WIDTH, DialFan, DialGeometry, corner_from_slint, corner_to_slint, step_focus,
 };
 use mercury_ui::ring_bands::{RingBandsModels, RingOptions, fixtures};
 use mercury_ui::ring_geometry::{ApproxMetrics, Point};
@@ -620,6 +620,8 @@ fn the_caption_follows_the_hovered_tab() {
         text: "Reading · Essay on maps".into(),
         x: 500.0,
         y: 400.0,
+        max_width: 260.0,
+        ..Default::default()
     });
     // No tab hovered: no caption.
     assert!(rig.element("CornerDial::caption-box").is_none());
@@ -894,4 +896,125 @@ fn with_reduce_motion_the_load_ring_does_not_fade() {
     rig.window.set_loading(false);
     rig.frame();
     assert!(rig.element("CornerDial::full-ring").is_none(), "no fade");
+}
+
+/// A fan the host opened (⌘⇧E sets `expanded`) takes the keyboard focus, so Escape and the arrows
+/// work without a click.
+#[test]
+fn a_fan_opened_by_the_host_takes_the_keyboard_focus() {
+    let rig = Rig::new(DialCorner::BottomRight);
+    rig.window.set_expanded(true);
+    rig.advance(200);
+    assert!(
+        rig.events().is_empty(),
+        "the host's own change is not reported back"
+    );
+
+    rig.key(Key::RightArrow);
+    assert_eq!(
+        rig.window.get_focused_tab(),
+        101,
+        "the first arrow reaches the dial"
+    );
+    rig.key(Key::Escape);
+    assert!(!rig.window.get_expanded());
+    assert_eq!(rig.events(), ["toggled(false)", "close-requested"]);
+}
+
+/// The caption also shows the tab the keys have focused (the host sets it on `focus-moved`).
+#[test]
+fn the_caption_shows_for_the_keyboard_focused_tab_too() {
+    let rig = Rig::new(DialCorner::BottomRight);
+    rig.window.set_expanded(true);
+    rig.advance(200);
+    let caption = rig.fan.borrow().caption(101).expect("caption");
+    rig.window.set_caption(caption);
+    assert_eq!(rig.window.get_hovered_tab(), -1);
+    assert!(
+        rig.element("CornerDial::caption-box").is_none(),
+        "neither hovered nor focused: no caption"
+    );
+    rig.key(Key::RightArrow);
+    assert_eq!(rig.window.get_focused_tab(), 101);
+    assert!(rig.element("CornerDial::caption-box").is_some());
+}
+
+/// A title of any length: the box is at most `CAPTION_MAX_WIDTH` wide, its text is elided, and it lies
+/// inside the window and clear of the dial, for every tab of the fan in all four corners.
+#[test]
+fn a_long_title_never_overflows_the_window_or_covers_the_dial() {
+    let title = "A page title that is far too long for any caption, ".repeat(3);
+    let mut tabs = fixtures::mockup_tabs(false);
+    for tab in &mut tabs {
+        tab.title = title.as_str().into();
+    }
+    for corner in ALL_CORNERS {
+        let rig = Rig::new(corner);
+        *rig.fan.borrow_mut() = DialFan::new(
+            &DialGeometry::new(AREA.0, AREA.1),
+            corner,
+            &fixtures::mockup_groups(false),
+            &tabs,
+            &RingOptions::default(),
+            &ApproxMetrics,
+        );
+        rig.window.set_expanded(true);
+        rig.advance(200);
+        let (dx, dy) = rig.dial_centre();
+        let ids: Vec<i32> = rig.fan.borrow().data.tabs.iter().map(|t| t.id).collect();
+        for id in ids {
+            let caption = rig.fan.borrow().caption(id).expect("caption");
+            rig.window.set_caption(caption);
+            rig.window.set_hovered_tab(id);
+            rig.advance(1);
+            let handle = rig
+                .element("CornerDial::caption-box")
+                .expect("the caption is drawn");
+            let (position, size) = (handle.absolute_position(), handle.size());
+            let what = format!("{corner:?} tab {id}: at {position:?} size {size:?}");
+            assert!(size.width <= CAPTION_MAX_WIDTH + 0.01, "{what}");
+            assert!(
+                size.width > CAPTION_MAX_WIDTH - 0.01,
+                "a long title fills the widest box: {what}"
+            );
+            assert!(position.x >= 0.0 && position.y >= 0.0, "{what}");
+            assert!(position.x + size.width <= AREA.0, "{what}");
+            assert!(position.y + size.height <= AREA.1, "{what}");
+            let over_x = position.x < dx + 38.5 && position.x + size.width > dx - 38.5;
+            let over_y = position.y < dy + 38.5 && position.y + size.height > dy - 38.5;
+            assert!(!(over_x && over_y), "covers the dial: {what}");
+        }
+    }
+}
+
+/// A short title gives a narrow box, against the near edge of the widest box on either side.
+#[test]
+fn a_short_title_gives_a_narrow_box_against_the_side_nearest_the_dial() {
+    for corner in ALL_CORNERS {
+        let rig = Rig::new(corner);
+        rig.window.set_expanded(true);
+        rig.advance(200);
+        let ids: Vec<i32> = rig.fan.borrow().data.tabs.iter().map(|t| t.id).collect();
+        for id in ids {
+            let caption = rig.fan.borrow().caption(id).expect("caption");
+            let (x, right) = (caption.x, caption.right);
+            let origin = rig.fan.borrow().origin;
+            rig.window.set_caption(caption);
+            rig.window.set_hovered_tab(id);
+            rig.advance(1);
+            let handle = rig.element("CornerDial::caption-box").expect("drawn");
+            let (position, size) = (handle.absolute_position(), handle.size());
+            assert!(
+                size.width < CAPTION_MAX_WIDTH,
+                "{corner:?} tab {id}: {size:?}"
+            );
+            let widest_left = origin.x + x;
+            let edge = if right {
+                position.x + size.width - (widest_left + CAPTION_MAX_WIDTH)
+            } else {
+                position.x - widest_left
+            };
+            assert!(edge.abs() < 0.01, "{corner:?} tab {id}: {edge}");
+        }
+    }
 }

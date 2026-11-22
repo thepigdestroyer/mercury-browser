@@ -321,6 +321,8 @@ fn the_caption_and_the_scrim_are_not_read() {
         text: "Reading · Essay on maps".into(),
         x: 500.0,
         y: 400.0,
+        max_width: 260.0,
+        ..Default::default()
     });
     rig.window.set_hovered_tab(103);
     rig.advance(10);

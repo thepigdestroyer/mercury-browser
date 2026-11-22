@@ -9,7 +9,9 @@
 //! about the dial.
 
 use mercury_settings::DialCorner;
-use mercury_ui::corner_dial::{DialFan, DialGeometry, FAN_BOX, fan_start_deg};
+use mercury_ui::corner_dial::{
+    CAPTION_HEIGHT, CAPTION_MAX_WIDTH, DialFan, DialGeometry, FAN_BOX, fan_start_deg,
+};
 use mercury_ui::ring_bands::{RingBandsData, RingOptions, fixtures};
 use mercury_ui::ring_geometry::{ApproxMetrics, Point};
 use mercury_ui::{DialCaption, RingHitKind};
@@ -20,9 +22,6 @@ const CORNERS: [DialCorner; 4] = [
     DialCorner::BottomLeft,
     DialCorner::BottomRight,
 ];
-
-const CAPTION_WIDTH: f32 = 186.0;
-const CAPTION_HEIGHT: f32 = 30.0;
 
 /// "Essay on maps" in the group "Reading" (ids 101 to 122 in ring order: Research 101-105, Lisbon
 /// trip 106-109, Reading 110-115).
@@ -238,8 +237,17 @@ fn sixty_four_groups_and_two_hundred_tabs_build_with_parallel_arrays() {
 fn inside_the_box(caption: &DialCaption) -> bool {
     caption.x >= 0.0
         && caption.y >= 0.0
-        && caption.x + CAPTION_WIDTH <= FAN_BOX
+        && caption.x + CAPTION_MAX_WIDTH <= FAN_BOX
         && caption.y + CAPTION_HEIGHT <= FAN_BOX
+}
+
+/// The widest box of `caption` lies inside the overlay area the fan was built for.
+fn inside_the_window(fan: &DialFan, caption: &DialCaption) -> bool {
+    let (left, top) = (fan.origin.x + caption.x, fan.origin.y + caption.y);
+    left >= 0.0
+        && top >= 0.0
+        && left + caption.max_width <= fan.area.width
+        && top + CAPTION_HEIGHT <= fan.area.height
 }
 
 #[test]
@@ -302,13 +310,21 @@ fn in_every_corner_the_box_lies_on_the_dials_side_of_the_mid_point() {
             );
             let toward_x = if segment.mid_x < 384.0 { 1.0 } else { -1.0 };
             let toward_y = if segment.mid_y < 384.0 { 1.0 } else { -1.0 };
-            let unclamped_x = caption.x > 0.0 && caption.x + CAPTION_WIDTH < FAN_BOX;
-            let unclamped_y = caption.y > 0.0 && caption.y + CAPTION_HEIGHT < FAN_BOX;
+            // Not moved by the clamp into the window (and so into the fan's box).
+            let (left, top) = (fan.origin.x + caption.x, fan.origin.y + caption.y);
+            let unclamped_x = caption.x > 0.0
+                && caption.x + CAPTION_MAX_WIDTH < FAN_BOX
+                && left > 0.0
+                && left + CAPTION_MAX_WIDTH < fan.area.width;
+            let unclamped_y = caption.y > 0.0
+                && caption.y + CAPTION_HEIGHT < FAN_BOX
+                && top > 0.0
+                && top + CAPTION_HEIGHT < fan.area.height;
             if unclamped_x {
                 let near = if toward_x > 0.0 {
                     caption.x
                 } else {
-                    caption.x + CAPTION_WIDTH
+                    caption.x + CAPTION_MAX_WIDTH
                 };
                 assert!(
                     (near - segment.mid_x - 24.0 * toward_x).abs() < 1e-3,
@@ -396,4 +412,77 @@ fn a_tab_without_a_title_is_named_by_its_host_and_without_either_untitled() {
         fan.caption(110).expect("caption").text.as_str(),
         "Reading · Untitled"
     );
+}
+
+// ----- long titles: the box never leaves the window ------------------------------------------
+
+fn long_title_fan(corner: DialCorner, area: DialGeometry, title: &str) -> DialFan {
+    let mut tabs = fixtures::mockup_tabs(false);
+    for tab in &mut tabs {
+        tab.title = title.into();
+    }
+    DialFan::new(
+        &area,
+        corner,
+        &fixtures::mockup_groups(false),
+        &tabs,
+        &RingOptions::default(),
+        &ApproxMetrics,
+    )
+}
+
+#[test]
+fn the_caption_box_stays_inside_the_window_for_every_tab_corner_and_area() {
+    let title = "A page title that is far too long for any caption, ".repeat(3);
+    assert!(title.len() > 120);
+    for (w, h) in [
+        (1440.0, 900.0),
+        (1000.0, 700.0),
+        (460.0, 460.0),
+        (2000.0, 1200.0),
+    ] {
+        for corner in CORNERS {
+            let fan = long_title_fan(corner, DialGeometry::new(w, h), &title);
+            for segment in &fan.data.segments {
+                let caption = fan.caption(segment.tab).expect("caption");
+                assert_eq!(caption.max_width, CAPTION_MAX_WIDTH);
+                assert!(
+                    inside_the_box(&caption) && inside_the_window(&fan, &caption),
+                    "{w}x{h} {corner:?} tab {}: {caption:?} origin {:?}",
+                    segment.tab,
+                    fan.origin
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn the_widest_caption_box_never_covers_the_dial() {
+    // The dial and its ring cover a 77 px square around the centre (the fan box's middle).
+    let (lo, hi) = (FAN_BOX / 2.0 - 38.5, FAN_BOX / 2.0 + 38.5);
+    for corner in CORNERS {
+        let fan = long_title_fan(corner, area(), "x");
+        for segment in &fan.data.segments {
+            let caption = fan.caption(segment.tab).expect("caption");
+            let across_x = caption.x < hi && caption.x + CAPTION_MAX_WIDTH > lo;
+            let across_y = caption.y < hi && caption.y + CAPTION_HEIGHT > lo;
+            assert!(
+                !(across_x && across_y),
+                "{corner:?} tab {}: {caption:?} covers the dial",
+                segment.tab
+            );
+        }
+    }
+}
+
+#[test]
+fn right_says_which_side_of_the_widest_box_the_text_box_keeps() {
+    for corner in CORNERS {
+        let fan = mockup_fan(corner);
+        for segment in &fan.data.segments {
+            let caption = fan.caption(segment.tab).expect("caption");
+            assert_eq!(caption.right, segment.mid_x >= FAN_BOX / 2.0, "{corner:?}");
+        }
+    }
 }

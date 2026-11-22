@@ -82,7 +82,10 @@ impl DialGeometry {
         }
     }
 
-    /// The corner a release at `release` snaps to: the nearest resting centre; a tie keeps `current`.
+    /// The corner a release at `release` snaps to: the nearest resting centre. When two or more are
+    /// equally near (within `SNAP_TIE`: a release on an axis, or centres that coincide in a small
+    /// area) `current` is kept if it is one of them, else the first of them in the order top-left,
+    /// top-right, bottom-left, bottom-right.
     pub fn snap(&self, release: Point, current: DialCorner) -> DialCorner {
         if !release.x.is_finite() || !release.y.is_finite() {
             return current;
@@ -91,19 +94,21 @@ impl DialGeometry {
             let c = self.centre(corner);
             (f64::from(release.x) - f64::from(c.x)).hypot(f64::from(release.y) - f64::from(c.y))
         };
-        let mut nearest = (current, f64::INFINITY);
-        for corner in CORNERS {
-            let d = distance(corner);
-            if d < nearest.1 {
-                nearest = (corner, d);
-            }
-        }
-        let tied = CORNERS
+        let distances = CORNERS.map(|corner| (corner, distance(corner)));
+        let best = distances
             .iter()
-            .filter(|&&corner| distance(corner) - nearest.1 <= SNAP_TIE)
-            .count()
-            > 1;
-        if tied { current } else { nearest.0 }
+            .map(|&(_, d)| d)
+            .fold(f64::INFINITY, f64::min);
+        let mut near = distances
+            .iter()
+            .filter(|&&(_, d)| d - best <= SNAP_TIE)
+            .map(|&(corner, _)| corner);
+        let first = near.next().unwrap_or(current);
+        if first == current || near.any(|corner| corner == current) {
+            current
+        } else {
+            first
+        }
     }
 
     /// `p` moved to the nearest point where the whole dial is inside the area.

@@ -29,12 +29,17 @@ export struct DialPlacement {
     y: length,
 }
 
-// The hover caption "Group · Title"; x and y are the top-left corner of its box, in the fan box's
-// coordinates. An empty `text` means no caption.
+// The hover caption "Group · Title". `x` and `y` are the top-left corner of the widest box it can have,
+// in the fan box's coordinates (Rust placed it so that the box stays inside the window); the box is as
+// narrow as its text, up to `max-width`, and the text is elided beyond that. `right`: a box narrower than
+// `max-width` is put against the right edge of that widest box (the side nearest the dial) instead of the
+// left. An empty `text` means no caption. corner_dial::DialFan::caption fills all five.
 export struct DialCaption {
     text: string,
     x: length,
     y: length,
+    max-width: length,
+    right: bool,
 }
 
 // The dial's own numbers, named once (the mockup's `dialColour`, SPEC §4.5). Everything that
@@ -54,11 +59,33 @@ global DialMetrics {
     // The focus ring (SPEC §5): width, and the gap between it and the load ring.
     out property <length> focus-width: 2px;
     out property <length> focus-gap: 2px;
-    // The hover caption (mockup `tip`): 30 px high, radius 8, 12.5 px text, 12 px of padding.
+    // The hover caption (mockup `tip`): 30 px high (corner_dial::CAPTION_HEIGHT), radius 8, 12.5 px text,
+    // 12 px of padding, a 1 px border. Its width comes from Rust (`DialCaption.max-width`).
     out property <length> caption-height: 30px;
     out property <length> caption-radius: 8px;
     out property <length> caption-font-size: 12.5px;
     out property <length> caption-padding: 12px;
+    out property <length> caption-border: 1px;
+    // The planet (SPEC: a planet-style gradient; plain shapes here, see the planet's comment): a darker
+    // rim, and a lighter patch whose centre is at 35 % / 30 % of the planet and whose diameter is
+    // 0.8 of its radius.
+    out property <length> planet-rim: 4px;
+    out property <float> patch-centre-x: 0.35;
+    out property <float> patch-centre-y: 0.30;
+    out property <float> patch-diameter-share: 0.8;
+    out property <float> rim-darker: 0.25;
+    out property <float> patch-brighter: 0.6;
+    out property <float> patch-transparency: 0.55;
+    // The drop shadow (mockup `shadowDef`: dy 6, blur 12), the scrim (the palette's, 40 % more
+    // transparent: the mockup's 18 % over a 30 % light scrim) and the quarter ring that turns while the
+    // progress is unknown.
+    out property <length> shadow-offset-y: 6px;
+    out property <length> shadow-blur: 12px;
+    out property <float> scrim-transparency: 0.4;
+    out property <float> unknown-arc-share: 0.25;
+    // The favicon chip: its corner radius and the letter's size, as shares of its edge.
+    out property <float> chip-radius-share: 0.26;
+    out property <float> chip-letter-share: 0.62;
     // SPEC §7: the fan opens in 180 ms and closes in 140 ms; the slide to a corner takes 180 ms;
     // the load ring follows the progress in 120 ms and fades 400 ms after the load ends.
     out property <duration> fan-open-time: 180ms;
@@ -206,7 +233,7 @@ export component CornerDial inherits Rectangle {
     // The arc that turns once a second while the progress is unknown (a quarter of the ring).
     property <bool> spinning: root.loading && root.progress-unknown && root.animate-spinners && !root.reduce-motion;
     property <angle> arc-start: root.spinning ? Math.mod(animation-tick() / 1s, 1.0) * 360deg : 0deg;
-    property <float> arc-share: root.progress-unknown ? 0.25 : root.sweep;
+    property <float> arc-share: root.progress-unknown ? DialMetrics.unknown-arc-share : root.sweep;
     property <angle> arc-end: root.arc-start + root.arc-share * 360deg;
 
     // The component's own ways of changing `expanded`: each tells the host with `toggled`.
@@ -238,6 +265,14 @@ export component CornerDial inherits Rectangle {
         }
     }
 
+    // The host can open the fan too (⌘⇧E sets `expanded`): then the dial takes the keyboard focus, so
+    // that Esc and the arrow keys work without a click.
+    changed expanded => {
+        if root.expanded && !root.suppressed {
+            dial-focus.focus();
+        }
+    }
+
     changed suppressed => {
         if root.suppressed {
             root.dragging = false;
@@ -254,7 +289,7 @@ export component CornerDial inherits Rectangle {
         scrim := Rectangle {
             visible: root.fan-progress > 0.0;
             opacity: root.fan-progress;
-            background: ChromePalette.scrim.transparentize(0.4);
+            background: ChromePalette.scrim.transparentize(DialMetrics.scrim-transparency);
 
             TouchArea {
                 enabled: root.expanded;
@@ -331,20 +366,26 @@ export component CornerDial inherits Rectangle {
 
         // The hover caption, in the fan box's coordinates.
         caption-box := Rectangle {
-            x: root.cx - root.ring-size / 2 + root.caption.x;
+            // As narrow as the text, up to the width Rust placed it with; against the side of that
+            // widest box that Rust says (`right`: the one nearest the dial).
+            x: root.cx - root.ring-size / 2 + root.caption.x + (root.caption.right ? root.caption.max-width - self.width : 0px);
             y: root.cy - root.ring-size / 2 + root.caption.y;
-            width: caption-text.preferred-width + 2 * DialMetrics.caption-padding;
+            width: Math.min(caption-text.preferred-width + 2 * DialMetrics.caption-padding, root.caption.max-width);
             height: DialMetrics.caption-height;
-            visible: root.fan-progress > 0.0 && root.hovered-tab >= 0 && root.caption.text != "";
+            // Shown for the hovered tab and for the tab the keys have focused: the host sets the caption
+            // on `tab-hovered` and on `focus-moved`.
+            visible: root.fan-progress > 0.0 && (root.hovered-tab >= 0 || root.keyboard-tab >= 0) && root.caption.text != "" && root.caption.max-width > 0px;
             opacity: root.fan-progress;
             border-radius: DialMetrics.caption-radius;
-            border-width: 1px;
+            border-width: DialMetrics.caption-border;
             border-color: ChromePalette.popup-border;
             background: ChromePalette.popup-background;
 
             caption-text := Text {
                 x: DialMetrics.caption-padding;
                 y: (parent.height - self.height) / 2;
+                width: parent.width - 2 * DialMetrics.caption-padding;
+                overflow: elide;
                 text: root.caption.text;
                 color: ChromePalette.text;
                 font-size: DialMetrics.caption-font-size;
@@ -362,8 +403,8 @@ export component CornerDial inherits Rectangle {
             border-radius: self.width / 2;
             background: ChromePalette.popup-background;
             drop-shadow-color: ChromePalette.shadow;
-            drop-shadow-offset-y: 6px;
-            drop-shadow-blur: 12px;
+            drop-shadow-offset-y: DialMetrics.shadow-offset-y;
+            drop-shadow-blur: DialMetrics.shadow-blur;
 
             accessible-role: button;
             accessible-label: root.dial-label == "" ? "Tab dial" : root.dial-label;
@@ -472,16 +513,16 @@ export component CornerDial inherits Rectangle {
                 height: self.width;
                 border-radius: self.width / 2;
                 background: root.active-colour;
-                border-width: 4px;
-                border-color: root.active-colour.darker(0.25);
+                border-width: DialMetrics.planet-rim;
+                border-color: root.active-colour.darker(DialMetrics.rim-darker);
             }
             Rectangle {
-                x: (parent.width - 2 * DialMetrics.planet-radius) / 2 + 0.35 * 2 * DialMetrics.planet-radius - self.width / 2;
-                y: (parent.height - 2 * DialMetrics.planet-radius) / 2 + 0.30 * 2 * DialMetrics.planet-radius - self.height / 2;
-                width: 0.8 * DialMetrics.planet-radius;
+                x: (parent.width - 2 * DialMetrics.planet-radius) / 2 + DialMetrics.patch-centre-x * 2 * DialMetrics.planet-radius - self.width / 2;
+                y: (parent.height - 2 * DialMetrics.planet-radius) / 2 + DialMetrics.patch-centre-y * 2 * DialMetrics.planet-radius - self.height / 2;
+                width: DialMetrics.patch-diameter-share * DialMetrics.planet-radius;
                 height: self.width;
                 border-radius: self.width / 2;
-                background: root.active-colour.brighter(0.6).transparentize(0.55);
+                background: root.active-colour.brighter(DialMetrics.patch-brighter).transparentize(DialMetrics.patch-transparency);
             }
 
             // The favicon, or the first letter of the host on a chip.
@@ -499,13 +540,13 @@ export component CornerDial inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: DialMetrics.favicon-size;
                 height: DialMetrics.favicon-size;
-                border-radius: self.width * 0.26;
+                border-radius: self.width * DialMetrics.chip-radius-share;
                 background: ChromePalette.popup-background;
 
                 Text {
                     text: root.fallback-letter;
                     color: ChromePalette.text-secondary;
-                    font-size: parent.width * 0.62;
+                    font-size: parent.width * DialMetrics.chip-letter-share;
                     font-weight: 700;
                     horizontal-alignment: center;
                     vertical-alignment: center;
