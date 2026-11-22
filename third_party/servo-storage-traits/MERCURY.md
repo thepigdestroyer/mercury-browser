@@ -27,6 +27,16 @@ Changes made by lane net-1 (Web Locks, ED4).
 - **Tested by:** `servo-storage/tests/weblocks.rs` and the unit tests in `servo-storage/weblocks/mod.rs` (`make test-servo-storage`).
 - **Drop when:** the Servo bump that contains PR #47981 (or its successor).
 
+### The keys of a record in its unique indexes — `indexeddb.rs`
+
+- **What:** `AsyncReadWriteOperation::PutItem` gets `unique_index_keys: Vec<UniqueIndexKeys>` (new struct, `{ index_name, keys }`;
+  0.8.0 lines about 280 and 334): the script computes the keys of the value in each unique index of the store and sends them
+  with the put.
+- **Why:** the backend stores values as opaque structured-clone blobs and cannot evaluate a key path, so a unique index could not
+  be enforced (net-1 review, finding 3). The engine keeps the keys in `unique_index_data` (see `servo-storage/MERCURY.md`).
+- **Tested by:** `servo-storage` `indexeddb/engines/sqlite/unique_index_rows.rs` (the engine) and `servo-script`'s IndexedDB code.
+- **Drop when:** Servo maintains real index rows itself.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

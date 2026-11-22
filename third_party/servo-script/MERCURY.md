@@ -244,14 +244,39 @@ are already in 0.8); servo/servo#45559 (skyz1, open) hand-ported into `key.rs` f
 multiEntry indexes, `IDBRequest.source` as the `(IDBObjectStore or IDBIndex or IDBCursor)?` union, and every backend failure on
 the paths that were `unwrap()`/`expect()` becomes a DOM exception (`QuotaExceededError`, `AbortError`, `ConstraintError`, else
 `OperationError`; the backend's details are logged, not handed to the page) instead of a panic of the content process.
-`IDBTransaction.commit()` already exists in 0.8 and is unchanged apart from its failure paths.
-**Limit:** 0.8's SQLite backend creates the index tables but nothing ever writes them, and it cannot evaluate key paths (values are
-opaque structured-clone blobs), so the records of an index are derived **in script from the whole object store** on every query and
-every cursor step: linear in the store's size, and a unique index is not enforced on `put` (no `ConstraintError`). A real index
-writer needs a `PutItem` protocol change and edits of `servo-storage/indexeddb/engines/sqlite.rs`; see the report. Tested by the
-unit tests in `key.rs` (`index_keys_of`, error mapping) and `idbindex.rs` (`build_index_records`: order, multiEntry, unique, no value
-copies), and `servo-storage/tests/indexeddb_multientry.rs`; the page `tests/pages/compat-indexeddb.html` replays the WhatsApp
-sequence (not run in a window). Drop when upstream completes IndexedDB indexes (servo#47893's gaps).
+**Limits (ED3 is partial; net-1 review, finding 3).** 0.8's SQLite backend creates the index tables but writes only what Mercury now
+sends for *unique* indexes (below), and it cannot evaluate key paths (values are opaque structured-clone blobs), so the records of
+an index are **derived in script from the whole object store**. A query (`get`, `getAll`, `count`, ...) asks the backend for the whole
+store once and reads and sorts every value: linear in the size of the store. An index cursor derives its records on its first step and
+keeps them (`IDBCursor::index_snapshot`, dropped when a request writes to the store, `IDBObjectStore::write_generation`); later steps
+ask the backend for an empty range and read the kept records, so a full walk is one scan and not one per step (it still compares
+keys from the start of the list on every step, which is cheap next to reading values). The cost is paid on the script thread and grows with the number of
+records (every value is read and every key extracted); nothing has been measured, because nothing was run in a window, so the
+size at which a large store (WhatsApp's) makes a query or the first step of a cursor visibly slow is not known. **Unique indexes are enforced
+on `put`/`add`/`cursor.update`**: the script sends the keys of the value in each unique index with the put and the backend refuses a
+duplicate (`ConstraintError`; `servo-storage/MERCURY.md`, "Unique indexes"), except that it does not see records that existed before
+the index (no backfill) or before this change. A real index writer for non-unique indexes and a backfill are not done.
+`IDBTransaction.commit()` already exists in 0.8 and is unchanged apart from its failure paths. Tested by the unit tests in `key.rs`
+(`index_keys_of`, error mapping), `idbindex.rs` (`build_index_records`: order, multiEntry, unique, no value copies) and `idbcursor.rs`
+(the kept records and their generation, the empty range), the engine tests in `servo-storage` (`unique_index_rows.rs`), and the page
+`tests/pages/compat-indexeddb.html`, which replays the WhatsApp sequence (not run in a window).
+Drop when upstream completes IndexedDB indexes (servo#47893's gaps).
+
+### 16. The network partition key of nested navigations, workers and worklets (EC5, EC6) — `navigation.rs`, `event_loop/script_thread.rs`, `dom/globalscope/globalscope.rs`, `dom/window/window.rs`, `dom/workers/{workerglobalscope,dedicatedworkerglobalscope,sharedworkerglobalscope}.rs`, `dom/worklet/worklet.rs`
+
+- **What:** every `RequestClient` now carries the top-level site (the network partition key) of the page it belongs to. A document's
+  already did; a **worker's** is the creator's (`WorkerGlobalScopeInit.network_partition_key`, filled in
+  `prepare_workerscope_init`, stored in `WorkerGlobalScope`, read by `GlobalScope::request_client`), a **worklet's** module fetch takes
+  the document's, and the navigation request of a **nested frame** takes its parent document's
+  (`ScriptThread::network_partition_key_of_load`; `None` for a top-level load and for a parent that is not in this script thread).
+  `InProgressLoad::request_builder` takes the key and sets `RequestClient::browser_initiated_navigation` (false for a load that came from a
+  script, true for the browser's own: a typed address, a reload, a traversal, WebDriver).
+- **Why:** the network policy used to guess the top-level site of such a request from a record of what the web view had started
+  to load, which a page could poison (net-1 review, finding 1), and could not tell a typed address from a script navigation that
+  starts from an opaque origin (finding 2).
+- **Tested by:** compiling this crate; the network side in `servo-net/tests` (`net_policy.rs`, `cookie_policy.rs`). Nothing here has been run in a
+  window: a worker's first-party request carrying its cookie, a nested frame's navigation and a sandboxed script navigation are open items.
+- **Drop when:** Servo fills the partition key of nested navigations and workers itself.
 
 ## Warnings
 

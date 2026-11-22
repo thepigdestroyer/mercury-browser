@@ -13,6 +13,615 @@ diff --git a/Cargo.lock b/Cargo.lock
  dependencies = [
   "malloc_size_of_derive",
   "serde",
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -36,6 +36,12 @@
+ name = "main"
+ path = "tests/main.rs"
+
++# Mercury: Web Locks tests against a real IPC `GenericCallback` (net-1 review, finding 4). A target of its own,
++# because whether channels are IPC is decided once per process.
++[[test]]
++name = "weblocks_ipc"
++path = "tests/weblocks_ipc.rs"
++
+ [dependencies.libc]
+ version = "0.2"
+
+@@ -106,6 +112,13 @@
+     "v5",
+ ]
+
++# Mercury: the `multiprocess` feature of servo-base, for tests/weblocks_ipc.rs (net-1 review, finding 4). It only
++# adds the choice of IPC channels, which is made at run time from the options; the other test targets do not
++# make it.
++[dev-dependencies.servo-base]
++version = "=0.8.0"
++features = ["multiprocess"]
++
+ [dev-dependencies.profile]
+ version = "=0.8.0"
+ package = "servo-profile"
+diff --git a/indexeddb/engines/sqlite.rs b/indexeddb/engines/sqlite.rs
+--- a/indexeddb/engines/sqlite.rs
++++ b/indexeddb/engines/sqlite.rs
+@@ -13,7 +13,7 @@
+ use storage_traits::indexeddb::{
+     AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, AsyncSchemaOperation,
+     BackendError, CreateObjectResult, IndexedDBIndex, IndexedDBKeyRange, IndexedDBKeyType,
+-    IndexedDBRecord, IndexedDBTxnMode, KeyPath, PutItemResult,
++    IndexedDBRecord, IndexedDBTxnMode, KeyPath, PutItemResult, UniqueIndexKeys,
+ };
+
+ use crate::indexeddb::IndexedDBDescription;
+@@ -26,6 +26,8 @@
+ mod object_data_model;
+ mod object_store_index_model;
+ mod object_store_model;
++// Mercury: the rows of unique indexes (net-1 review, finding 3).
++mod unique_index_rows;
+
+ fn range_to_query(range: IndexedDBKeyRange) -> Condition {
+     // Special case for optimization
+@@ -241,6 +243,8 @@
+         value: Vec<u8>,
+         should_overwrite: bool,
+         key_generator_current_number: Option<i64>,
++        // Mercury: the record's keys in each unique index of the store (net-1 review, finding 3).
++        unique_index_keys: &[UniqueIndexKeys],
+     ) -> Result<PutItemResult, Error> {
+         let no_overwrite = !should_overwrite;
+         let serialized_key: Vec<u8> = encoding::serialize(&key);
+@@ -274,6 +278,8 @@
+                 params![next_key_generator_current_number, store.id],
+             )?;
+         }
++        // Mercury: the rows of the unique indexes; a second record with the same key fails here.
++        unique_index_rows::replace_rows(connection, store.id, &serialized_key, unique_index_keys)?;
+         Ok(PutItemResult::Key(key))
+     }
+
+@@ -282,6 +288,11 @@
+         store: object_store_model::Model,
+         key_range: IndexedDBKeyRange,
+     ) -> Result<(), Error> {
++        // Mercury: the rows of the unique indexes go with their records (net-1 review, finding 3).
++        if unique_index_rows::store_has_unique_index(connection, store.id)? {
++            let keys = Self::get_all_keys(connection, store.clone(), key_range.clone(), None)?;
++            unique_index_rows::remove_rows_of_records(connection, store.id, &keys)?;
++        }
+         let query = range_to_query(key_range);
+         let (sql, values) = sea_query::Query::delete()
+             .from_table(object_data_model::Column::Table)
+@@ -292,6 +303,10 @@
+     }
+
+     fn clear(connection: &Connection, store: object_store_model::Model) -> Result<(), Error> {
++        // Mercury: the rows of the unique indexes go with their records (net-1 review, finding 3).
++        if unique_index_rows::store_has_unique_index(connection, store.id)? {
++            unique_index_rows::remove_rows_of_store(connection, store.id)?;
++        }
+         connection.execute(
+             "DELETE FROM object_data WHERE object_store_id = ?",
+             params![store.id],
+@@ -440,6 +455,8 @@
+             |row| Ok(object_store_model::Model::try_from(row).unwrap()),
+         )?;
+
++        // Mercury: the rows of a unique index go with it (net-1 review, finding 3).
++        unique_index_rows::remove_rows_of_index(connection, object_store.id, &index_name)?;
+         // Delete the index if it exists
+         let _ = connection.execute(
+             "DELETE FROM object_store_index WHERE name = ? AND object_store_id = ?",
+@@ -554,6 +571,7 @@
+                         value,
+                         should_overwrite,
+                         key_generator_current_number,
++                        unique_index_keys,
+                     }) => {
+                         let (key, key_generator_current_number) = match key {
+                             Some(key) => (key, key_generator_current_number),
+@@ -585,7 +603,7 @@
+                             },
+                         };
+                         let _ = callback.send(
+-                            Self::put_item(
++                            unique_index_rows::put_item_atomically(
+                                 &connection,
+                                 object_store,
+                                 key,
+@@ -592,6 +610,7 @@
+                                 value,
+                                 should_overwrite,
+                                 key_generator_current_number,
++                                &unique_index_keys,
+                             )
+                             .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
+                         );
+@@ -1139,6 +1158,7 @@
+             vec![1, 2, 3],
+             true,
+             None,
++            &[],
+         )
+         .expect("Failed to insert item");
+
+@@ -1224,6 +1244,7 @@
+                             value: vec![1, 2, 3],
+                             should_overwrite: false,
+                             key_generator_current_number: None,
++                            unique_index_keys: vec![],
+                         }),
+                     },
+                     KvsOperation {
+@@ -1234,6 +1255,7 @@
+                             value: vec![4, 5, 6],
+                             should_overwrite: false,
+                             key_generator_current_number: None,
++                            unique_index_keys: vec![],
+                         }),
+                     },
+                     KvsOperation {
+@@ -1247,6 +1269,7 @@
+                             value: vec![7, 8, 9],
+                             should_overwrite: false,
+                             key_generator_current_number: None,
++                            unique_index_keys: vec![],
+                         }),
+                     },
+                     // Try to put a duplicate key without overwrite
+@@ -1258,6 +1281,7 @@
+                             value: vec![10, 11, 12],
+                             should_overwrite: false,
+                             key_generator_current_number: None,
++                            unique_index_keys: vec![],
+                         }),
+                     },
+                     KvsOperation {
+@@ -1268,6 +1292,7 @@
+                             value: vec![13, 14, 15],
+                             should_overwrite: true,
+                             key_generator_current_number: None,
++                            unique_index_keys: vec![],
+                         }),
+                     },
+                     KvsOperation {
+@@ -1384,6 +1409,7 @@
+                     vec![key as u8],
+                     false,
+                     None,
++                    &[],
+                 )
+                 .expect("Failed to seed object store");
+             }
+diff --git a/indexeddb/engines/sqlite/unique_index_rows.rs b/indexeddb/engines/sqlite/unique_index_rows.rs
+new file mode 100644
+--- /dev/null
++++ b/indexeddb/engines/sqlite/unique_index_rows.rs
+@@ -0,0 +1,422 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++// Mercury: the rows of unique indexes (net-1 review, finding 3). A new Mercury file; nothing in it is copied from
++// Servo or another project. The hooks are in `../sqlite.rs`; `servo-storage/MERCURY.md` lists them.
++
++//! The rows of the unique indexes of an object store.
++//!
++//! Servo 0.8's SQLite backend creates the tables `index_data` and `unique_index_data` but writes neither: it
++//! stores values as opaque structured-clone blobs and cannot evaluate a key path. Index queries are therefore
++//! answered by the script, which derives the records of an index from the whole object store (see
++//! `servo-script/dom/indexeddb/idbindex.rs`). A unique index cannot be enforced that way, because a put has to
++//! be refused when it is executed, in order with the other requests of its transaction.
++//!
++//! So the script sends the keys of the record in each unique index of the store with the put
++//! ([`UniqueIndexKeys`]), and this module keeps them in `unique_index_data`, whose primary key `(index_id,
++//! value)` makes a second record with the same key in the same index a constraint violation. The rows are
++//! replaced when a record is put again and removed when a record, a store or an index goes. Non-unique
++//! indexes have no rows: nothing needs them.
++//!
++//! What this does **not** do: a unique index created on a store that already has records does not see them
++//! (the script does not backfill the rows, so a duplicate of an old record is not caught), and neither does a
++//! record written before this module existed. A violation is reported as the SQLite error text
++//! `ConstraintViolation`, which the script turns into a `ConstraintError`.
++
++use rusqlite::{Connection, Error, OptionalExtension, params};
++use storage_traits::indexeddb::{IndexedDBKeyType, PutItemResult, UniqueIndexKeys};
++
++use super::{SqliteEngine, encoding, object_store_model};
++
++/// A lookup by record: deleting the rows of one record must not scan the table (a bulk load of N records
++/// would be O(N^2)). `CREATE INDEX IF NOT EXISTS` is cheap once it exists and adds the index to databases
++/// that were created before it.
++const LOOKUP_BY_RECORD: &str = "CREATE INDEX IF NOT EXISTS unique_index_data_by_record \
++     ON unique_index_data (object_store_id, object_data_key)";
++
++/// Whether the store has a unique index: only then are there rows to keep, and only then is a delete or a
++/// clear worth the extra work.
++pub(super) fn store_has_unique_index(connection: &Connection, store_id: i32) -> Result<bool, Error> {
++    connection.query_row(
++        "SELECT EXISTS(SELECT 1 FROM object_store_index WHERE object_store_id = ? AND unique_index = 1)",
++        params![store_id],
++        |row| row.get(0),
++    )
++}
++
++/// `SqliteEngine::put_item` inside one savepoint, so that a put that a unique index refuses leaves nothing
++/// behind: not the record, not a row, not the key generator's number. Without keys to keep there is nothing to
++/// refuse, and the put is exactly Servo's.
++pub(super) fn put_item_atomically(
++    connection: &Connection,
++    store: object_store_model::Model,
++    key: IndexedDBKeyType,
++    value: Vec<u8>,
++    should_overwrite: bool,
++    key_generator_current_number: Option<i64>,
++    unique_index_keys: &[UniqueIndexKeys],
++) -> Result<PutItemResult, Error> {
++    if unique_index_keys.is_empty() {
++        return SqliteEngine::put_item(
++            connection,
++            store,
++            key,
++            value,
++            should_overwrite,
++            key_generator_current_number,
++            unique_index_keys,
++        );
++    }
++    connection.execute_batch("SAVEPOINT mercury_put")?;
++    let result = SqliteEngine::put_item(
++        connection,
++        store,
++        key,
++        value,
++        should_overwrite,
++        key_generator_current_number,
++        unique_index_keys,
++    );
++    if result.is_ok() {
++        connection.execute_batch("RELEASE mercury_put")?;
++    } else {
++        // Undo, then release the savepoint itself; the put's own error is what the caller reports.
++        let _ = connection.execute_batch("ROLLBACK TO mercury_put; RELEASE mercury_put");
++    }
++    result
++}
++
++/// Replaces the rows of the record `serialized_key` of store `store_id` with the keys it has now. On a
++/// constraint violation the error is returned and the caller rolls the put back (see `put_item`).
++pub(super) fn replace_rows(
++    connection: &Connection,
++    store_id: i32,
++    serialized_key: &[u8],
++    unique_index_keys: &[UniqueIndexKeys],
++) -> Result<(), Error> {
++    if unique_index_keys.is_empty() {
++        // A store with no unique index (or an old caller) has no rows to keep or to replace.
++        return Ok(());
++    }
++    connection.execute(LOOKUP_BY_RECORD, [])?;
++    connection.execute(
++        "DELETE FROM unique_index_data WHERE object_store_id = ? AND object_data_key = ?",
++        params![store_id, serialized_key],
++    )?;
++    for entry in unique_index_keys {
++        let index_id: Option<i64> = connection
++            .query_row(
++                "SELECT id FROM object_store_index \
++                 WHERE object_store_id = ? AND name = ? AND unique_index = 1",
++                params![store_id, entry.index_name],
++                |row| row.get(0),
++            )
++            .optional()?;
++        // An index that is gone has nothing to check.
++        let Some(index_id) = index_id else {
++            continue;
++        };
++        let mut done: Vec<&IndexedDBKeyType> = Vec::new();
++        for key in &entry.keys {
++            // The members of a multiEntry key are distinct, but a caller that repeats one must not
++            // collide with itself.
++            if done.contains(&key) {
++                continue;
++            }
++            done.push(key);
++            connection.execute(
++                "INSERT INTO unique_index_data (index_id, value, object_store_id, object_data_key) \
++                 VALUES (?, ?, ?, ?)",
++                params![index_id, encoding::serialize(key), store_id, serialized_key],
++            )?;
++        }
++    }
++    Ok(())
++}
++
++/// Removes the rows of the records `serialized_keys` of store `store_id` (records that are deleted).
++pub(super) fn remove_rows_of_records(
++    connection: &Connection,
++    store_id: i32,
++    serialized_keys: &[Vec<u8>],
++) -> Result<(), Error> {
++    if serialized_keys.is_empty() {
++        return Ok(());
++    }
++    connection.execute(LOOKUP_BY_RECORD, [])?;
++    let mut statement = connection.prepare(
++        "DELETE FROM unique_index_data WHERE object_store_id = ? AND object_data_key = ?",
++    )?;
++    for key in serialized_keys {
++        statement.execute(params![store_id, key])?;
++    }
++    Ok(())
++}
++
++/// Removes every row of store `store_id` (`clear`).
++pub(super) fn remove_rows_of_store(connection: &Connection, store_id: i32) -> Result<(), Error> {
++    connection.execute(
++        "DELETE FROM unique_index_data WHERE object_store_id = ?",
++        params![store_id],
++    )?;
++    Ok(())
++}
++
++/// Removes the rows of the index `index_name` of store `store_id` (the index is deleted).
++pub(super) fn remove_rows_of_index(
++    connection: &Connection,
++    store_id: i32,
++    index_name: &str,
++) -> Result<(), Error> {
++    connection.execute(
++        "DELETE FROM unique_index_data WHERE index_id IN \
++         (SELECT id FROM object_store_index WHERE object_store_id = ? AND name = ?)",
++        params![store_id, index_name],
++    )?;
++    Ok(())
++}
++
++#[cfg(test)]
++mod tests {
++    use storage_traits::indexeddb::{IndexedDBKeyRange, KeyPath};
++
++    use super::super::create;
++    use super::*;
++
++    fn number(value: f64) -> IndexedDBKeyType {
++        IndexedDBKeyType::Number(value)
++    }
++
++    fn text(value: &str) -> IndexedDBKeyType {
++        IndexedDBKeyType::String(value.to_owned())
++    }
++
++    fn keys(index: &str, keys: Vec<IndexedDBKeyType>) -> Vec<UniqueIndexKeys> {
++        vec![UniqueIndexKeys {
++            index_name: index.to_owned(),
++            keys,
++        }]
++    }
++
++    /// An in-memory database with one store, `people`, and a unique index `by_email` (and a plain one,
++    /// `by_name`), made with the engine's own `create_tables`, `create_store` and `create_index`.
++    fn database() -> (Connection, object_store_model::Model) {
++        let connection = Connection::open_in_memory().unwrap();
++        create::create_tables(&connection).unwrap();
++        SqliteEngine::create_store(&connection, "people", None, false).unwrap();
++        SqliteEngine::create_index(
++            &connection,
++            "people",
++            "by_email".to_owned(),
++            KeyPath::String("email".to_owned()),
++            true,
++            false,
++        )
++        .unwrap();
++        SqliteEngine::create_index(
++            &connection,
++            "people",
++            "by_name".to_owned(),
++            KeyPath::String("name".to_owned()),
++            false,
++            false,
++        )
++        .unwrap();
++        let store = SqliteEngine::object_store_by_name(&connection, "people").unwrap();
++        (connection, store)
++    }
++
++    fn put(
++        connection: &Connection,
++        store: &object_store_model::Model,
++        key: f64,
++        value: u8,
++        unique_index_keys: &[UniqueIndexKeys],
++    ) -> Result<PutItemResult, Error> {
++        put_item_atomically(
++            connection,
++            store.clone(),
++            number(key),
++            vec![value],
++            true,
++            None,
++            unique_index_keys,
++        )
++    }
++
++    fn records(connection: &Connection, store: &object_store_model::Model) -> Vec<Vec<u8>> {
++        SqliteEngine::get_all_items(
++            connection,
++            store.clone(),
++            IndexedDBKeyRange::default(),
++            None,
++        )
++        .unwrap()
++    }
++
++    fn rows(connection: &Connection) -> i64 {
++        connection
++            .query_row("SELECT COUNT(*) FROM unique_index_data", [], |row| {
++                row.get(0)
++            })
++            .unwrap()
++    }
++
++    fn is_constraint_violation(error: &Error) -> bool {
++        // The text that the script maps to a ConstraintError is the Debug text of the SQLite error.
++        format!("{error:?}").contains("ConstraintViolation")
++    }
++
++    #[test]
++    fn a_second_record_with_the_same_unique_key_is_a_constraint_violation_and_changes_nothing() {
++        let (connection, store) = database();
++        put(&connection, &store, 1.0, 10, &keys("by_email", vec![text("a@x")])).unwrap();
++
++        let error = put(&connection, &store, 2.0, 20, &keys("by_email", vec![text("a@x")]))
++            .expect_err("the key is taken");
++        assert!(is_constraint_violation(&error), "{error:?}");
++
++        // The refused put left no record behind (the object_data write was rolled back with it).
++        assert_eq!(records(&connection, &store), vec![vec![10]]);
++        assert_eq!(rows(&connection), 1);
++    }
++
++    #[test]
++    fn putting_a_record_again_with_its_own_key_is_not_a_violation_and_replaces_its_rows() {
++        let (connection, store) = database();
++        put(&connection, &store, 1.0, 10, &keys("by_email", vec![text("a@x")])).unwrap();
++        // The same record, the same key: an update.
++        put(&connection, &store, 1.0, 11, &keys("by_email", vec![text("a@x")])).unwrap();
++        assert_eq!(records(&connection, &store), vec![vec![11]]);
++        assert_eq!(rows(&connection), 1);
++
++        // The record changes its key: the old key is free for another record.
++        put(&connection, &store, 1.0, 12, &keys("by_email", vec![text("b@x")])).unwrap();
++        put(&connection, &store, 2.0, 20, &keys("by_email", vec![text("a@x")])).unwrap();
++        assert_eq!(rows(&connection), 2);
++    }
++
++    #[test]
++    fn a_record_with_no_key_in_the_index_is_not_in_it() {
++        let (connection, store) = database();
++        // Two records without a key for the unique index do not collide with each other.
++        put(&connection, &store, 1.0, 10, &keys("by_email", vec![])).unwrap();
++        put(&connection, &store, 2.0, 20, &keys("by_email", vec![])).unwrap();
++        assert_eq!(rows(&connection), 0);
++        assert_eq!(records(&connection, &store).len(), 2);
++    }
++
++    #[test]
++    fn multientry_members_are_unique_across_records_and_a_repeated_member_does_not_collide_with_itself() {
++        let (connection, store) = database();
++        put(
++            &connection,
++            &store,
++            1.0,
++            10,
++            &keys("by_email", vec![text("red"), text("green"), text("red")]),
++        )
++        .unwrap();
++        assert_eq!(rows(&connection), 2);
++
++        // Another record that shares one member is refused as a whole.
++        let error = put(
++            &connection,
++            &store,
++            2.0,
++            20,
++            &keys("by_email", vec![text("blue"), text("green")]),
++        )
++        .expect_err("`green` is taken");
++        assert!(is_constraint_violation(&error), "{error:?}");
++        assert_eq!(rows(&connection), 2, "not even `blue` was kept");
++        assert_eq!(records(&connection, &store), vec![vec![10]]);
++
++        // A record with new members is fine.
++        put(
++            &connection,
++            &store,
++            3.0,
++            30,
++            &keys("by_email", vec![text("blue"), text("yellow")]),
++        )
++        .unwrap();
++        assert_eq!(rows(&connection), 4);
++    }
++
++    #[test]
++    fn the_unique_key_is_free_again_when_its_record_is_deleted_or_the_store_is_cleared() {
++        let (connection, store) = database();
++        put(&connection, &store, 1.0, 10, &keys("by_email", vec![text("a@x")])).unwrap();
++        put(&connection, &store, 2.0, 20, &keys("by_email", vec![text("b@x")])).unwrap();
++
++        SqliteEngine::delete_item(
++            &connection,
++            store.clone(),
++            IndexedDBKeyRange::only(number(1.0)),
++        )
++        .unwrap();
++        assert_eq!(rows(&connection), 1);
++        put(&connection, &store, 3.0, 30, &keys("by_email", vec![text("a@x")])).unwrap();
++
++        SqliteEngine::clear(&connection, store.clone()).unwrap();
++        assert_eq!(rows(&connection), 0);
++        put(&connection, &store, 4.0, 40, &keys("by_email", vec![text("a@x")])).unwrap();
++        put(&connection, &store, 5.0, 50, &keys("by_email", vec![text("b@x")])).unwrap();
++    }
++
++    #[test]
++    fn a_range_delete_removes_the_rows_of_every_record_in_the_range_and_only_those() {
++        let (connection, store) = database();
++        for n in 1..=5 {
++            put(
++                &connection,
++                &store,
++                f64::from(n),
++                n as u8,
++                &keys("by_email", vec![text(&format!("k{n}"))]),
++            )
++            .unwrap();
++        }
++        SqliteEngine::delete_item(
++            &connection,
++            store.clone(),
++            IndexedDBKeyRange::new(Some(number(2.0)), Some(number(4.0)), false, false),
++        )
++        .unwrap();
++        assert_eq!(rows(&connection), 2);
++        // k2..k4 are free, k1 and k5 are not.
++        put(&connection, &store, 6.0, 60, &keys("by_email", vec![text("k3")])).unwrap();
++        assert!(
++            put(&connection, &store, 7.0, 70, &keys("by_email", vec![text("k5")])).is_err()
++        );
++    }
++
++    #[test]
++    fn deleting_the_index_drops_its_rows_and_a_put_for_a_deleted_index_checks_nothing() {
++        let (connection, store) = database();
++        put(&connection, &store, 1.0, 10, &keys("by_email", vec![text("a@x")])).unwrap();
++        SqliteEngine::delete_index(&connection, "people", "by_email".to_owned()).unwrap();
++        assert_eq!(rows(&connection), 0);
++        // A put that still names the index (a request already in flight) is not an error and writes no row.
++        put(&connection, &store, 2.0, 20, &keys("by_email", vec![text("a@x")])).unwrap();
++        put(&connection, &store, 3.0, 30, &keys("by_email", vec![text("a@x")])).unwrap();
++        assert_eq!(rows(&connection), 0);
++    }
++
++    #[test]
++    fn a_non_unique_index_is_never_enforced_even_if_named() {
++        let (connection, store) = database();
++        put(&connection, &store, 1.0, 10, &keys("by_name", vec![text("Ann")])).unwrap();
++        put(&connection, &store, 2.0, 20, &keys("by_name", vec![text("Ann")])).unwrap();
++        assert_eq!(rows(&connection), 0);
++    }
++
++    #[test]
++    fn a_put_with_no_unique_keys_touches_no_rows() {
++        let (connection, store) = database();
++        put(&connection, &store, 1.0, 10, &keys("by_email", vec![text("a@x")])).unwrap();
++        // A store with no unique index sends nothing: the rows of other records are not touched.
++        put(&connection, &store, 2.0, 20, &[]).unwrap();
++        assert_eq!(rows(&connection), 1);
++    }
++}
 diff --git a/lib.rs b/lib.rs
 --- a/lib.rs
 +++ b/lib.rs
@@ -74,32 +683,33 @@ diff --git a/storage_thread.rs b/storage_thread.rs
      )
  }
 
-diff --git a/tests/indexeddb_multientry.rs b/tests/indexeddb_multientry.rs
+diff --git a/tests/indexeddb_schema_facts.rs b/tests/indexeddb_schema_facts.rs
 new file mode 100644
 --- /dev/null
-+++ b/tests/indexeddb_multientry.rs
-@@ -0,0 +1,325 @@
++++ b/tests/indexeddb_schema_facts.rs
+@@ -0,0 +1,326 @@
 +// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 +// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-+// Mercury: tests for the index tables of the IndexedDB SQLite store and multiEntry. This is a new
-+// Mercury file; nothing in it is copied from Servo or another project. It includes Servo's own
-+// `create.rs` (MPL-2.0) as a module, unchanged, so that the tests run against the real schema.
++// Mercury: facts about the index tables of the IndexedDB SQLite store. This is a new Mercury file; nothing in it
++// is copied from Servo or another project. It includes Servo's own `create.rs` (MPL-2.0) as a module, unchanged,
++// so that the facts are checked against the real schema.
 +
-+//! What the SQLite schema of the IndexedDB store allows for the records of an index, and what a
-+//! SQLite failure looks like to the code that maps it to a DOMException.
++//! **What these tests are, and are not.** They pin facts about SQLite and about Servo's schema (that a unique
++//! index's primary key refuses a repeated member, that the Debug text of a constraint failure names
++//! `ConstraintViolation`, ...), written as SQL by hand. They call no Mercury code and are **not** evidence that
++//! IndexedDB's multiEntry or unique indexes work. That evidence is:
 +//!
-+//! Servo 0.8's engine never writes `index_data` or `unique_index_data`: it creates and clears them
-+//! (`delete_store`) but nothing inserts a row, because it stores values as opaque structured-clone
-+//! blobs and cannot evaluate a key path. The records of an index are derived in script from the
-+//! records of the object store (`IDBIndex::records_for` in `servo-script`, whose own tests cover
-+//! multiEntry expansion, ordering and unique indexes). These tests pin the properties of the schema
-+//! that a writer for real index rows will rely on, so that nobody has to guess them:
++//! - the unit tests of `indexeddb/engines/sqlite/unique_index_rows.rs`, which put records through the engine's
++//!   own `put_item`, `delete_item`, `clear` and `delete_index` (unique keys, multiEntry members, rollback of a
++//!   refused put);
++//! - the unit tests of `key.rs` and `idbindex.rs` in `servo-script` (key extraction, multiEntry expansion,
++//!   ordering).
 +//!
-+//! - `index_data` holds several rows for one record (one per member of a multiEntry key), and
-+//!   several records may share a member;
-+//! - `unique_index_data` holds one row per member too, and refuses a member that another record
-+//!   already has;
-+//! - the rows of a record must be deleted before the record (a foreign key), as `delete_store` does;
++//! The facts, which the writer in `unique_index_rows.rs` relies on:
++//!
++//! - `index_data` holds several rows for one record (one per member of a multiEntry key), and several records
++//!   may share a member;
++//! - `unique_index_data` holds one row per member too, and refuses a member that another record already has;
 +//! - both tables are therefore usable for multiEntry as they are: no migration is needed;
 +//! - the Debug text of a SQLite constraint failure names `ConstraintViolation`, which
 +//!   `map_backend_error_to_request_error` in `servo-script` turns into a ConstraintError.
@@ -411,8 +1021,8 @@ diff --git a/tests/main.rs b/tests/main.rs
 
  mod cache_storage;
  mod client_storage;
-+// Mercury: the multiEntry rows of the IndexedDB item (tests/indexeddb_multientry.rs, item 4).
-+mod indexeddb_multientry;
++// Mercury: facts about the index tables of the IndexedDB store (tests/indexeddb_schema_facts.rs, item 4).
++mod indexeddb_schema_facts;
  mod storage_thread;
 +// Mercury: Web Locks (tests/weblocks.rs).
 +mod weblocks;
@@ -931,11 +1541,205 @@ new file mode 100644
 +        vec![("x".to_owned(), "a".to_owned())]
 +    );
 +}
+diff --git a/tests/weblocks_ipc.rs b/tests/weblocks_ipc.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/weblocks_ipc.rs
+@@ -0,0 +1,189 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++// Mercury: tests of the Web Locks thread against a real IPC channel (net-1 review, finding 4). A new Mercury file;
++// nothing in it is copied from Servo or another project.
++
++//! The Web Locks thread with a **real** `GenericCallback`: an `ipc_channel` pair, not a closure.
++//!
++//! `tests/weblocks.rs` runs in one process, where a client's callback is a closure and sending to it cannot fail,
++//! and the unit tests in `weblocks/mod.rs` use a fake client that the test makes unreachable. Neither shows that a
++//! callback whose receiving end is gone (a content process that died) makes `GenericCallback::send` fail, which is
++//! how the storage thread learns that a holder is dead. This binary asks for the IPC variant
++//! (`opts.force_ipc`, which needs the `multiprocess` feature of `servo-base`: a dev-dependency of this crate), so
++//! it is a test target of its own: the choice is made once per process, before the first channel is made.
++//!
++//! The "process" that dies is simulated by dropping the `GenericReceiver` that the client's callback sends to. The
++//! end-to-end case, a real content process killed while it holds a lock, still needs `--multiprocess` in a window.
++
++use std::sync::Once;
++use std::time::{Duration, Instant};
++
++use profile::mem as profile_mem;
++use servo_base::generic_channel::{GenericCallback, GenericReceiver, GenericSender};
++use servo_config::opts::{Opts, initialize_options};
++use servo_default_resources as _;
++use servo_url::{ImmutableOrigin, ServoUrl};
++use storage::WebLocksThreadFactory;
++use storage_traits::weblocks::{
++    LockEventMsg, LockManagerSnapshotMsg, LockModeMsg, LockRequest, LockRequestId,
++    WebLocksThreadMsg,
++};
++
++const PROBE_INTERVAL: Duration = Duration::from_millis(50);
++const LONG: Duration = Duration::from_secs(10);
++const SHORT: Duration = Duration::from_millis(300);
++
++fn use_ipc() {
++    static ONCE: Once = Once::new();
++    ONCE.call_once(|| {
++        initialize_options(Opts {
++            force_ipc: true,
++            ..Opts::default()
++        });
++    });
++}
++
++fn start() -> GenericSender<WebLocksThreadMsg> {
++    use_ipc();
++    <GenericSender<WebLocksThreadMsg> as WebLocksThreadFactory>::with_probe_interval(
++        profile_mem::Profiler::create(),
++        "web-locks-ipc-test".to_owned(),
++        PROBE_INTERVAL,
++    )
++}
++
++fn origin() -> ImmutableOrigin {
++    ServoUrl::parse("https://example.test/").unwrap().origin()
++}
++
++/// A client whose callback is an IPC channel: the storage thread sends to `callback`, the test reads `events`.
++struct IpcClient {
++    id: String,
++    callback: GenericCallback<LockEventMsg>,
++    events: GenericReceiver<LockEventMsg>,
++}
++
++impl IpcClient {
++    fn new(id: &str) -> IpcClient {
++        let (callback, events) =
++            GenericCallback::<LockEventMsg>::new_blocking().expect("an IPC callback");
++        IpcClient {
++            id: id.to_owned(),
++            callback,
++            events,
++        }
++    }
++
++    fn request(&self, storage: &GenericSender<WebLocksThreadMsg>, name: &str) {
++        storage
++            .send(WebLocksThreadMsg::Request(
++                LockRequest {
++                    id: LockRequestId::next(),
++                    client_id: self.id.clone(),
++                    name: name.to_owned(),
++                    mode: LockModeMsg::Exclusive,
++                    callback: self.callback.clone(),
++                    if_available: false,
++                    steal: false,
++                },
++                origin(),
++            ))
++            .unwrap();
++    }
++
++    fn expect_granted(&self, name: &str) {
++        // A waiting client is probed every interval: the probes come before the grant.
++        match self.next_other_than_probe(LONG) {
++            Some(LockEventMsg::Granted(Some(lock))) => assert_eq!(lock.name, name),
++            Some(other) => panic!("expected a grant of {name:?}, got {other:?}"),
++            None => panic!("expected a grant of {name:?}, got nothing in time"),
++        }
++    }
++
++    /// Reads what the storage thread sent, skipping probes, until `timeout` passes.
++    fn next_other_than_probe(&self, timeout: Duration) -> Option<LockEventMsg> {
++        let deadline = Instant::now() + timeout;
++        while let Some(left) = deadline.checked_duration_since(Instant::now()) {
++            match self.events.try_recv_timeout(left) {
++                Ok(LockEventMsg::Probe) => continue,
++                Ok(event) => return Some(event),
++                Err(_) => return None,
++            }
++        }
++        None
++    }
++}
++
++fn query(storage: &GenericSender<WebLocksThreadMsg>) -> LockManagerSnapshotMsg {
++    let (callback, receiver) =
++        GenericCallback::<LockManagerSnapshotMsg>::new_blocking().expect("an IPC callback");
++    storage
++        .send(WebLocksThreadMsg::Query(callback, origin()))
++        .unwrap();
++    match receiver.try_recv_timeout(LONG) {
++        Ok(snapshot) => snapshot,
++        Err(_) => panic!("the storage thread answers a query"),
++    }
++}
++
++/// A holder whose process dies (its receiver is dropped) loses its lock, and the request that waited for it is granted.
++#[test]
++fn a_lock_is_released_when_the_receiving_end_of_its_holders_callback_is_dropped() {
++    let storage = start();
++    let holder = IpcClient::new("holder");
++    let waiter = IpcClient::new("waiter");
++
++    holder.request(&storage, "x");
++    holder.expect_granted("x");
++    waiter.request(&storage, "x");
++    // While the holder lives, the waiter waits (probes of a live holder are answered by nobody and change nothing).
++    assert!(
++        waiter.next_other_than_probe(SHORT).is_none(),
++        "the lock is still held"
++    );
++
++    // The content process dies: nobody reads the holder's channel any more.
++    let IpcClient {
++        callback, events, ..
++    } = holder;
++    drop(events);
++
++    // The storage thread's next probe (every 50 ms while somebody waits) cannot send: the holder is dead.
++    waiter.expect_granted("x");
++    drop(callback);
++}
++
++/// `query()` does not list the lock of a holder that died, although nobody waits for it and no periodic probe runs.
++#[test]
++fn query_does_not_list_the_lock_of_a_dead_holder() {
++    let storage = start();
++    let holder = IpcClient::new("holder");
++    let alive = IpcClient::new("alive");
++    holder.request(&storage, "x");
++    holder.expect_granted("x");
++    alive.request(&storage, "y");
++    alive.expect_granted("y");
++
++    let snapshot = query(&storage);
++    let mut held: Vec<_> = snapshot.held.iter().map(|lock| lock.name.clone()).collect();
++    held.sort();
++    assert_eq!(held, ["x", "y"], "both holders are alive");
++
++    let IpcClient { events, .. } = holder;
++    drop(events);
++
++    // The first query after the death finds it out by probing; allow the channel a moment to report it.
++    let deadline = Instant::now() + LONG;
++    let held = loop {
++        let held: Vec<String> = query(&storage)
++            .held
++            .into_iter()
++            .map(|lock| lock.name)
++            .collect();
++        if held == ["y"] || Instant::now() > deadline {
++            break held;
++        }
++        std::thread::sleep(Duration::from_millis(20));
++    };
++    assert_eq!(held, ["y"], "the dead holder's lock is gone, the live one stays");
++}
 diff --git a/weblocks/mod.rs b/weblocks/mod.rs
 new file mode 100644
 --- /dev/null
 +++ b/weblocks/mod.rs
-@@ -0,0 +1,1095 @@
+@@ -0,0 +1,1141 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -1516,8 +2320,30 @@ new file mode 100644
 +        self.purge_dead();
 +    }
 +
++    /// Mercury: probes every client that holds a lock or has a request queued, whatever the lock, and drops the
++    /// ones that cannot be reached (net-1 review, finding 4). `query()` calls it, so a lock whose holder died is
++    /// not listed: the periodic probe runs only while somebody waits, which a `query()` alone does not.
++    pub(crate) fn probe_all(&mut self) {
++        for lock in self.held.values() {
++            if !lock.client.notify(LockEventMsg::Probe) {
++                self.dead.push(lock.client_id.clone());
++            }
++        }
++        for queue in self.queue_map.values() {
++            for request in queue {
++                if !request.client.notify(LockEventMsg::Probe) {
++                    self.dead.push(request.client_id.clone());
++                }
++            }
++        }
++        self.purge_dead();
++    }
++
 +    /// <https://www.w3.org/TR/web-locks/#snapshot-the-lock-state>
-+    pub(crate) fn snapshot_lock_state(&self) -> LockManagerSnapshotMsg {
++    pub(crate) fn snapshot_lock_state(&mut self) -> LockManagerSnapshotMsg {
++        // Mercury: a holder that died is not listed (see `probe_all`).
++        self.probe_all();
++
 +        // Step 1. skip assert
 +        // Step 2. Let pending be a new list.
 +        let mut pending = vec![];
@@ -1654,7 +2480,7 @@ new file mode 100644
 +        request(client, client_id, name, LockModeMsg::Shared).0
 +    }
 +
-+    fn held_names(manager: &LockManager<Fake>) -> Vec<(String, String)> {
++    fn held_names(manager: &mut LockManager<Fake>) -> Vec<(String, String)> {
 +        let mut held: Vec<_> = manager
 +            .snapshot_lock_state()
 +            .held
@@ -1679,7 +2505,7 @@ new file mode 100644
 +
 +        manager.release_lock("x", a.granted()[0].id);
 +        assert_eq!(b.granted().len(), 1, "b is granted when a releases");
-+        assert_eq!(held_names(&manager), vec![("x".into(), "b".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "b".into())]);
 +
 +        manager.release_lock("x", b.granted()[0].id);
 +        assert!(manager.is_idle());
@@ -1802,11 +2628,11 @@ new file mode 100644
 +        assert!(victim.was_stolen_from());
 +        assert_eq!(thief.granted().len(), 1, "the thief holds the lock at once");
 +        assert!(waiter.granted().is_empty(), "and the waiter is behind it");
-+        assert_eq!(held_names(&manager), vec![("x".into(), "thief".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "thief".into())]);
 +
 +        // The victim's callback finishes later and releases a lock it no longer has.
 +        manager.release_lock("x", victim.granted()[0].id);
-+        assert_eq!(held_names(&manager), vec![("x".into(), "thief".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "thief".into())]);
 +        assert!(
 +            waiter.granted().is_empty(),
 +            "the late release changed nothing"
@@ -1827,7 +2653,7 @@ new file mode 100644
 +        manager.request_lock(steal);
 +        assert!(a.was_stolen_from());
 +        assert!(b.was_stolen_from());
-+        assert_eq!(held_names(&manager), vec![("x".into(), "thief".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "thief".into())]);
 +    }
 +
 +    #[test]
@@ -1879,7 +2705,7 @@ new file mode 100644
 +        let (ask, id) = request(&a, "a", "x", LockModeMsg::Exclusive);
 +        manager.request_lock(ask);
 +        manager.abort_request("x", id);
-+        assert_eq!(held_names(&manager), vec![("x".into(), "a".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "a".into())]);
 +    }
 +
 +    #[test]
@@ -1889,7 +2715,7 @@ new file mode 100644
 +        manager.request_lock(exclusive(&a, "a", "x"));
 +        manager.request_lock(exclusive(&b, "b", "x"));
 +        manager.release_lock("x", LockId::next());
-+        assert_eq!(held_names(&manager), vec![("x".into(), "a".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "a".into())]);
 +        assert!(b.granted().is_empty());
 +    }
 +
@@ -1909,7 +2735,7 @@ new file mode 100644
 +        manager.release_client("gone");
 +
 +        assert_eq!(
-+            held_names(&manager),
++            held_names(&mut manager),
 +            vec![("x".into(), "waiter".into()), ("z".into(), "waiter".into())],
 +            "the waiter got both locks the other client held"
 +        );
@@ -1923,7 +2749,7 @@ new file mode 100644
 +        manager.request_lock(exclusive(&a, "a", "x"));
 +        manager.release_client("nobody");
 +        manager.release_client("b");
-+        assert_eq!(held_names(&manager), vec![("x".into(), "a".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "a".into())]);
 +        assert!(b.events.borrow().is_empty());
 +    }
 +
@@ -1941,7 +2767,7 @@ new file mode 100644
 +        manager.release_lock("x", holder.granted()[0].id);
 +
 +        assert!(dead.granted().is_empty());
-+        assert_eq!(held_names(&manager), vec![("x".into(), "next".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "next".into())]);
 +    }
 +
 +    #[test]
@@ -1958,7 +2784,7 @@ new file mode 100644
 +        manager.probe();
 +
 +        assert_eq!(
-+            held_names(&manager),
++            held_names(&mut manager),
 +            vec![("x".into(), "waiter".into()), ("y".into(), "waiter".into())]
 +        );
 +    }
@@ -1991,7 +2817,7 @@ new file mode 100644
 +        manager.request_lock(exclusive(&next, "next", "x"));
 +
 +        assert_eq!(next.granted().len(), 1);
-+        assert_eq!(held_names(&manager), vec![("x".into(), "next".into())]);
++        assert_eq!(held_names(&mut manager), vec![("x".into(), "next".into())]);
 +    }
 +
 +    #[test]
@@ -2017,6 +2843,30 @@ new file mode 100644
 +        assert_eq!(snapshot.pending.len(), 1);
 +        assert_eq!(snapshot.pending[0].mode, LockModeMsg::Shared);
 +        assert_eq!(snapshot.pending[0].client_id, "b");
++    }
++
++    #[test]
++    fn the_snapshot_does_not_list_the_locks_of_a_client_that_cannot_be_reached() {
++        let mut manager = LockManager::default();
++        let (dead, alive, waiter) = (Fake::new(), Fake::new(), Fake::new());
++        manager.request_lock(exclusive(&dead, "dead", "x"));
++        manager.request_lock(exclusive(&alive, "alive", "y"));
++        // `waiter` queues for `x`, behind the holder that is about to die.
++        manager.request_lock(exclusive(&waiter, "waiter", "x"));
++        dead.disconnect();
++
++        // No periodic probe has run (nobody waited for a second): the query itself finds out.
++        let snapshot = manager.snapshot_lock_state();
++        let held: Vec<(String, String)> = snapshot
++            .held
++            .iter()
++            .map(|lock| (lock.name.clone(), lock.client_id.clone()))
++            .collect();
++        // `dead` lost `x`, which went to the waiter; `alive` still has `y`.
++        assert!(held.contains(&("x".to_owned(), "waiter".to_owned())), "{held:?}");
++        assert!(held.contains(&("y".to_owned(), "alive".to_owned())), "{held:?}");
++        assert!(!held.iter().any(|(_, client)| client == "dead"), "{held:?}");
++        assert!(snapshot.pending.is_empty());
 +    }
 +
 +    #[test]

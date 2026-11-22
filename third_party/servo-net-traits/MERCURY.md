@@ -27,6 +27,17 @@ Changes made by lane net-1 (21 Nov 2026; third-party cookies and the request pat
 - **Drop when:** Servo filters `document.cookie` by site itself (PR #44469 is the only upstream work on it and does not
   cover it).
 
+### Who started a navigation — `request.rs`
+
+- **What:** `RequestClient` gets `browser_initiated_navigation: bool` (0.8.0 line about 234), set by
+  `servo-script/navigation.rs` for a load that did not come from a script (a typed address, a reload, a history traversal,
+  WebDriver) and false in every other client.
+- **Why:** the client's origin is opaque both for a typed address and for a script that navigates from a sandboxed frame or a
+  `data:` document, so the network policy could not tell them apart and sent `SameSite=Strict` cookies on both (net-1 review,
+  finding 2).
+- **Tested by:** `servo-net/tests/cookie_policy.rs` (`a_script_navigation_from_an_opaque_origin_is_not_a_typed_address`).
+- **Drop when:** Servo distinguishes user-initiated navigations from script ones in the request.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in
