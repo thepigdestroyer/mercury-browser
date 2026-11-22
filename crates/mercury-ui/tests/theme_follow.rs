@@ -187,3 +187,38 @@ fn a_crowded_strip_follows_the_minimum_width_and_the_list_button() {
     assert_eq!(tab("Docs").width, 120.0, "the narrowest tab is 120 px");
     assert_eq!(list().width, 36.0, "the all-tabs button is 36 px wide");
 }
+
+#[test]
+fn the_tab_row_follows_its_left_and_bottom_padding() {
+    let window = window();
+    with_tabs(&window);
+    let mail = || rect(&window, Role::Tab, "Mail");
+    assert_eq!((mail().x, mail().y, mail().height), (10.0, 7.0, 38.0));
+
+    sizes(&window).set_tab_row_padding_left(25.0);
+    assert_eq!(mail().x, 25.0, "25 px of padding left of the strip");
+
+    sizes(&window).set_tab_row_padding_bottom(10.0);
+    assert_eq!(
+        (mail().y, mail().height),
+        (7.0, 31.0),
+        "10 px of padding under the tabs leaves them 31 px high"
+    );
+}
+
+#[test]
+fn the_tab_row_follows_the_space_between_the_strip_and_the_new_tab_button() {
+    let window = window();
+    with_tabs(&window);
+    // A crowded strip fills its width, so its "all tabs" button is the strip's right end.
+    a11y::open_window(&window, 400.0, HEIGHT);
+    let gap = || {
+        let new_tab = rect(&window, Role::Button, "New tab");
+        let list = rect(&window, Role::Button, "Show all tabs");
+        new_tab.x - list.right()
+    };
+    assert_eq!(gap(), 8.0);
+
+    sizes(&window).set_tab_row_spacing(20.0);
+    assert_eq!(gap(), 20.0, "20 px between the strip and the button");
+}
