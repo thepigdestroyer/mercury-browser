@@ -48,7 +48,7 @@ make run ARGS="https://servo.org/" RUST_LOG="talaria_servo=debug,servo=info"
 
 The ad and tracker filter lists are data files, not compiled into the program. `make run`, `make run-debug`, `make build` and `make build-release` copy them to `target/<profile>/filter-lists` with the `mercury-filter-lists` tool, checking each file's SHA-256 against the manifest. A binary started without that step logs that it found no `filter-lists` folder.
 
-Build, lint and test in release mode, so that one set of compiled Servo artefacts serves all three: pass `CARGO_FLAGS=--release` to `make check`, `make lint` and `make test`, and use `--release` for any `cargo` command you run by hand. Crates that don't depend on Servo (`talaria-core`, `mercury-ui`, `mercury-settings`, `mercury-store`, `mercury-passwords`, `mercury-password-manager`, `mercury-downloads`, `mercury-import`, `mercury-filter-lists`, `mercury-site-security`, `mercury-tab-snapshots`, `mercury-devtools`, `mercury-release` and `mercury-servo-patches`) build and test in minutes on their own:
+Build, lint and test in release mode, so that one set of compiled Servo artefacts serves all three: pass `CARGO_FLAGS=--release` to `make check`, `make lint` and `make test`, and use `--release` for any `cargo` command you run by hand. Crates that don't depend on Servo (`talaria-core`, `mercury-ui`, `mercury-settings`, `mercury-store`, `mercury-passwords`, `mercury-password-manager`, `mercury-downloads`, `mercury-import`, `mercury-filter-lists`, `mercury-site-security`, `mercury-tab-snapshots`, `mercury-proxy`, `mercury-devtools`, `mercury-release` and `mercury-servo-patches`) build and test in minutes on their own:
 
 ```bash
 cargo test --release -p talaria-core -p mercury-ui
