@@ -17,11 +17,13 @@
 use std::sync::Arc;
 
 use gstreamer as gst;
+use gstreamer::prelude::*;
 use gstreamer_app as gst_app;
-use mercury_mse::{FeedItem, FeedState, FrameFeed, TrackKind};
+use gstreamer_audio::AudioClippingMeta;
+use mercury_mse::{CodecConfig, FeedItem, FeedState, FrameFeed, TrackConfig, TrackKind};
 
 use crate::buffers::buffer_for;
-use crate::caps::caps_for;
+use crate::caps::{caps_for, opus_pre_skip};
 use crate::element::MseSrc;
 use crate::shared::{Shared, State, index};
 
@@ -38,6 +40,37 @@ pub(crate) struct TrackOut {
     pub appsrc: gst_app::AppSrc,
     /// A configuration change seen in the feed, applied to the appsrc just before the next frame.
     pub pending_caps: Option<gst::Caps>,
+    /// The `OpusHead` the decoder was last configured with (Opus tracks only).
+    opus_head: Option<Vec<u8>>,
+    /// Samples (48 kHz) the next frame must have clipped off its start (decision D18): set when the
+    /// decoder is new, that is at the announcement and when the head changes; cleared by the push.
+    pre_skip: u32,
+}
+
+impl TrackOut {
+    /// A track that starts with `config` (the one its appsrc has as caps).
+    pub(crate) fn new(kind: TrackKind, appsrc: gst_app::AppSrc, config: &TrackConfig) -> Self {
+        let mut track = TrackOut {
+            kind,
+            appsrc,
+            pending_caps: None,
+            opus_head: None,
+            pre_skip: 0,
+        };
+        track.note_config(config);
+        track
+    }
+
+    /// A configuration the feed handed over: a new `OpusHead` is a new decoder, whose first samples are
+    /// the pre-skip. The same head again (the feed repeats it after a seek) is not.
+    fn note_config(&mut self, config: &TrackConfig) {
+        if let CodecConfig::Opus { head } = &config.codec
+            && self.opus_head.as_deref() != Some(head.as_slice())
+        {
+            self.opus_head = Some(head.clone());
+            self.pre_skip = opus_pre_skip(head).unwrap_or(0);
+        }
+    }
 }
 
 /// What `wait_for_work` found.
@@ -53,6 +86,8 @@ pub(crate) struct Feeder {
     tracks: Vec<TrackOut>,
     announced: bool,
     duration: Option<u64>,
+    /// Kinds whose late track could not be added (unusable configuration): not tried again.
+    refused: Vec<TrackKind>,
 }
 
 impl Feeder {
@@ -68,6 +103,7 @@ impl Feeder {
             tracks: Vec::new(),
             announced: false,
             duration: None,
+            refused: Vec::new(),
         }
     }
 
@@ -78,6 +114,8 @@ impl Feeder {
             if work.kick {
                 if !self.announced {
                     self.try_announce();
+                } else {
+                    self.sync_tracks();
                 }
                 self.sync_duration();
             }
@@ -149,6 +187,39 @@ impl Feeder {
         }
     }
 
+    /// Adds the tracks the feed has gained since the announcement (decision D17): a source buffer that
+    /// was added or initialized after the streams were announced. A kind that is already announced is
+    /// not a new track (a quality switch changes its configuration, which `pump` applies).
+    fn sync_tracks(&mut self) {
+        if self.tracks.is_empty() {
+            return;
+        }
+        for config in self.feed.tracks() {
+            let kind = config.kind;
+            if kind == TrackKind::Text
+                || self.refused.contains(&kind)
+                || self.tracks.iter().any(|track| track.kind == kind)
+            {
+                continue;
+            }
+            let Some(element) = self.element.upgrade() else {
+                return;
+            };
+            match element.add_track(&self.shared, &config, self.duration) {
+                Ok(Some(track)) => self.tracks.push(track),
+                Ok(None) => {}
+                Err(message) => {
+                    // The tracks that play go on: a late track that cannot is only left out.
+                    log::warn!(
+                        "mercury-mse-gst: the late {} track is not played: {message}",
+                        kind.name()
+                    );
+                    self.refused.push(kind);
+                }
+            }
+        }
+    }
+
     fn read_duration(&self) -> Option<u64> {
         // Infinity and absurd values mean "no duration" for GStreamer.
         self.feed
@@ -206,7 +277,10 @@ impl Feeder {
             for item in batch.items {
                 match item {
                     FeedItem::Config(config) => match caps_for(&config) {
-                        Ok(caps) => self.tracks[track].pending_caps = Some(caps),
+                        Ok(caps) => {
+                            self.tracks[track].pending_caps = Some(caps);
+                            self.tracks[track].note_config(&config);
+                        }
                         Err(message) => {
                             if let Some(element) = self.element.upgrade() {
                                 element.fail(&message);
@@ -214,7 +288,17 @@ impl Feeder {
                         }
                     },
                     FeedItem::Frame { frame, discont } => {
-                        let buffer = buffer_for(&frame, discont);
+                        let mut buffer = buffer_for(&frame, discont);
+                        let pre_skip = self.tracks[track].pre_skip;
+                        if pre_skip > 0 {
+                            let start = u64::from(pre_skip).default_format();
+                            let end = 0u64.default_format();
+                            AudioClippingMeta::add(
+                                buffer.get_mut().expect("a new buffer is writable"),
+                                start,
+                                end,
+                            );
+                        }
                         let _push = self.shared.push_locks[slot]
                             .lock()
                             .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -227,7 +311,7 @@ impl Feeder {
                             appsrc.set_caps(Some(&caps));
                         }
                         match appsrc.push_buffer(buffer) {
-                            Ok(_) => {}
+                            Ok(_) => self.tracks[track].pre_skip = 0,
                             Err(error) => {
                                 log::debug!(
                                     "mercury-mse-gst: push on the {} track refused: {error:?}",

@@ -59,12 +59,44 @@ mod imp {
         thread: Option<(JoinHandle<()>, ThreadId)>,
     }
 
+    /// What the first announcement fixed, for the tracks that come later: the numbering of the stream
+    /// ids, the group id every pad shares, and the streams announced so far.
+    struct Announced {
+        serial: u32,
+        group_id: gst::GroupId,
+        streams: Vec<(TrackKind, gst::Stream)>,
+    }
+
+    /// One track before its elements exist: caps and stream.
+    struct Plan {
+        config: TrackConfig,
+        caps: gst::Caps,
+        stream: gst::Stream,
+        stream_id: String,
+    }
+
+    /// The elements of one track.
+    struct Output {
+        kind: TrackKind,
+        appsrc: gst_app::AppSrc,
+        ghost: gst::GhostPad,
+        config: TrackConfig,
+    }
+
+    /// The stream collection that lists these streams.
+    fn collection_of(name: &str, streams: &[(TrackKind, gst::Stream)]) -> gst::StreamCollection {
+        gst::StreamCollection::builder(Some(name))
+            .streams(streams.iter().map(|(_, stream)| stream.clone()))
+            .build()
+    }
+
     #[derive(Default)]
     pub struct MseSrc {
         uri: Mutex<Option<String>>,
         attached: Mutex<Attached>,
         /// The appsrcs, for the seek handler (the feeder thread keeps its own handles).
         outputs: Mutex<Vec<gst_app::AppSrc>>,
+        announced: Mutex<Option<Announced>>,
     }
 
     #[glib::object_subclass]
@@ -238,12 +270,6 @@ mod imp {
             let group_id = gst::GroupId::next();
 
             // Everything that can fail first, so that nothing is half done.
-            struct Plan {
-                config: TrackConfig,
-                caps: gst::Caps,
-                stream: gst::Stream,
-                stream_id: String,
-            }
             let mut plans: Vec<Plan> = Vec::new();
             for config in configs {
                 if config.kind == TrackKind::Text {
@@ -259,135 +285,221 @@ mod imp {
                     );
                     continue;
                 }
-                let caps = caps_for(config)?;
-                let stream_id = format!("{}/{serial}/{}", obj.name(), config.kind.name());
-                let stream = gst::Stream::new(
-                    Some(&stream_id),
-                    Some(&caps),
-                    stream_type(config.kind),
-                    gst::StreamFlags::SELECT,
-                );
-                plans.push(Plan {
-                    config: config.clone(),
-                    caps,
-                    stream,
-                    stream_id,
-                });
+                plans.push(self.plan(serial, config)?);
             }
             if plans.is_empty() {
                 return Err("the source has no track GStreamer can play".to_owned());
             }
-            let collection = gst::StreamCollection::builder(Some(obj.name().as_str()))
-                .streams(plans.iter().map(|plan| plan.stream.clone()))
-                .build();
+            let streams: Vec<(TrackKind, gst::Stream)> = plans
+                .iter()
+                .map(|plan| (plan.config.kind, plan.stream.clone()))
+                .collect();
+            let collection = collection_of(obj.name().as_str(), &streams);
 
             let mut outputs = Vec::new();
             for plan in &plans {
-                let kind = plan.config.kind;
-                let appsrc = gst::ElementFactory::make("appsrc")
-                    .name(format!("{}-{serial}-{}", obj.name(), kind.name()))
-                    .build()
-                    .map_err(|error| format!("cannot create an appsrc: {error}"))?
-                    .downcast::<gst_app::AppSrc>()
-                    .map_err(|_| "appsrc is not an AppSrc".to_owned())?;
-                appsrc.set_format(gst::Format::Time);
-                appsrc.set_stream_type(gst_app::AppStreamType::Seekable);
-                appsrc.set_is_live(false);
-                appsrc.set_block(false);
-                appsrc.set_max_bytes(match kind {
-                    TrackKind::Audio => AUDIO_MAX_BYTES,
-                    _ => VIDEO_MAX_BYTES,
-                });
-                appsrc.set_property("max-time", MAX_TIME.nseconds());
-                appsrc.set_min_percent(MIN_PERCENT);
-                appsrc.set_caps(Some(&plan.caps));
-                appsrc.set_duration(duration.map(gst::ClockTime::from_nseconds));
-
-                // The callbacks only record and notify: they never call the feed.
-                let (need, enough, seek) =
-                    (Arc::clone(shared), Arc::clone(shared), Arc::clone(shared));
-                appsrc.set_callbacks(
-                    gst_app::AppSrcCallbacks::builder()
-                        .need_data(move |_, _| need.on_need_data(kind))
-                        .enough_data(move |_| enough.on_enough_data(kind))
-                        .seek_data(move |_, position| {
-                            seek.on_seek_data(kind, position);
-                            true
-                        })
-                        .build(),
-                );
-
-                let src_pad = appsrc
-                    .static_pad("src")
-                    .ok_or_else(|| "appsrc has no src pad".to_owned())?;
-                install_stream_probe(
-                    &src_pad,
-                    plan.stream_id.clone(),
+                outputs.push(self.make_output(
+                    shared,
+                    plan,
+                    serial,
                     group_id,
-                    plan.stream.clone(),
-                    collection.clone(),
-                );
-
-                obj.add(&appsrc)
-                    .map_err(|error| format!("cannot add the appsrc to the bin: {error}"))?;
-
-                let template_name = match kind {
-                    TrackKind::Audio => "audio_%u",
-                    _ => "video_%u",
-                };
-                let template = obj
-                    .pad_template(template_name)
-                    .ok_or_else(|| format!("no pad template {template_name}"))?;
-                let ghost = gst::GhostPad::builder_from_template(&template)
-                    .name(format!("{}_0", kind.name()))
-                    .query_function(|pad, parent, query| {
-                        MseSrc::catch_panic_pad_function(
-                            parent,
-                            || false,
-                            |this| this.src_query(pad, query),
-                        )
-                    })
-                    .event_function(|pad, parent, event| {
-                        MseSrc::catch_panic_pad_function(
-                            parent,
-                            || false,
-                            |this| this.src_event(pad, event),
-                        )
-                    })
-                    .build();
-                ghost
-                    .set_target(Some(&src_pad))
-                    .map_err(|error| format!("cannot target the ghost pad: {error}"))?;
-                ghost
-                    .set_active(true)
-                    .map_err(|error| format!("cannot activate the ghost pad: {error}"))?;
-                shared.mark_present(kind);
-                outputs.push((kind, appsrc, ghost));
+                    &collection,
+                    duration,
+                )?);
             }
-
-            *self.outputs.lock().unwrap() = outputs
-                .iter()
-                .map(|(_, appsrc, _)| appsrc.clone())
-                .collect();
+            *self.outputs.lock().unwrap() =
+                outputs.iter().map(|output| output.appsrc.clone()).collect();
+            for output in &outputs {
+                shared.mark_present(output.kind);
+            }
             // Pads out first (the pipeline links them while this runs), then the appsrcs start.
-            for (_, _, ghost) in &outputs {
-                obj.add_pad(ghost)
+            for output in &outputs {
+                obj.add_pad(&output.ghost)
                     .map_err(|error| format!("cannot add a pad: {error}"))?;
             }
             obj.no_more_pads();
             let mut tracks = Vec::new();
-            for (kind, appsrc, _) in outputs {
-                appsrc
+            for output in outputs {
+                output
+                    .appsrc
                     .sync_state_with_parent()
                     .map_err(|error| format!("cannot start the appsrc: {error}"))?;
-                tracks.push(TrackOut {
-                    kind,
-                    appsrc,
-                    pending_caps: None,
-                });
+                tracks.push(TrackOut::new(output.kind, output.appsrc, &output.config));
             }
+            *self.announced.lock().unwrap() = Some(Announced {
+                serial,
+                group_id,
+                streams,
+            });
             gst::info!(CAT, imp = self, "announced {} track(s)", tracks.len());
             Ok(tracks)
+        }
+
+        /// Adds the track of a kind the feed did not have when the streams were announced (a source
+        /// buffer added or initialized later: decision D17): one more appsrc, its pad, and a stream
+        /// collection that lists every track, so that `decodebin3` and `playbin3` see the update. Called
+        /// from the feeder thread. `Ok(None)` when the kind is already announced or nothing was announced.
+        pub(super) fn add_track(
+            &self,
+            shared: &Arc<Shared>,
+            config: &TrackConfig,
+            duration: Option<u64>,
+        ) -> Result<Option<TrackOut>, String> {
+            let obj = self.obj();
+            let (serial, group_id, mut streams) = {
+                let announced = self.announced.lock().unwrap();
+                let Some(announced) = announced.as_ref() else {
+                    return Ok(None);
+                };
+                (
+                    announced.serial,
+                    announced.group_id,
+                    announced.streams.clone(),
+                )
+            };
+            if config.kind == TrackKind::Text
+                || streams.iter().any(|(kind, _)| *kind == config.kind)
+            {
+                return Ok(None);
+            }
+            let plan = self.plan(serial, config)?;
+            streams.push((config.kind, plan.stream.clone()));
+            let collection = collection_of(obj.name().as_str(), &streams);
+            let output =
+                self.make_output(shared, &plan, serial, group_id, &collection, duration)?;
+            self.outputs.lock().unwrap().push(output.appsrc.clone());
+            shared.mark_present(output.kind);
+            obj.add_pad(&output.ghost)
+                .map_err(|error| format!("cannot add a pad: {error}"))?;
+            obj.no_more_pads();
+            output
+                .appsrc
+                .sync_state_with_parent()
+                .map_err(|error| format!("cannot start the appsrc: {error}"))?;
+            if let Some(announced) = self.announced.lock().unwrap().as_mut() {
+                announced.streams = streams;
+            }
+            gst::info!(CAT, imp = self, "added a late {} track", config.kind.name());
+            Ok(Some(TrackOut::new(
+                output.kind,
+                output.appsrc,
+                &output.config,
+            )))
+        }
+
+        /// The caps and the `GstStream` of one track, or why there are none.
+        fn plan(&self, serial: u32, config: &TrackConfig) -> Result<Plan, String> {
+            let caps = caps_for(config)?;
+            let stream_id = format!("{}/{serial}/{}", self.obj().name(), config.kind.name());
+            let stream = gst::Stream::new(
+                Some(&stream_id),
+                Some(&caps),
+                stream_type(config.kind),
+                gst::StreamFlags::SELECT,
+            );
+            Ok(Plan {
+                config: config.clone(),
+                caps,
+                stream,
+                stream_id,
+            })
+        }
+
+        /// The appsrc and the ghost pad of one planned track, added to the bin (the pad is not added
+        /// yet).
+        fn make_output(
+            &self,
+            shared: &Arc<Shared>,
+            plan: &Plan,
+            serial: u32,
+            group_id: gst::GroupId,
+            collection: &gst::StreamCollection,
+            duration: Option<u64>,
+        ) -> Result<Output, String> {
+            let obj = self.obj();
+            let kind = plan.config.kind;
+            let appsrc = gst::ElementFactory::make("appsrc")
+                .name(format!("{}-{serial}-{}", obj.name(), kind.name()))
+                .build()
+                .map_err(|error| format!("cannot create an appsrc: {error}"))?
+                .downcast::<gst_app::AppSrc>()
+                .map_err(|_| "appsrc is not an AppSrc".to_owned())?;
+            appsrc.set_format(gst::Format::Time);
+            appsrc.set_stream_type(gst_app::AppStreamType::Seekable);
+            appsrc.set_is_live(false);
+            appsrc.set_block(false);
+            appsrc.set_max_bytes(match kind {
+                TrackKind::Audio => AUDIO_MAX_BYTES,
+                _ => VIDEO_MAX_BYTES,
+            });
+            appsrc.set_property("max-time", MAX_TIME.nseconds());
+            appsrc.set_min_percent(MIN_PERCENT);
+            appsrc.set_caps(Some(&plan.caps));
+            appsrc.set_duration(duration.map(gst::ClockTime::from_nseconds));
+
+            // The callbacks only record and notify: they never call the feed.
+            let (need, enough, seek) = (Arc::clone(shared), Arc::clone(shared), Arc::clone(shared));
+            appsrc.set_callbacks(
+                gst_app::AppSrcCallbacks::builder()
+                    .need_data(move |_, _| need.on_need_data(kind))
+                    .enough_data(move |_| enough.on_enough_data(kind))
+                    .seek_data(move |_, position| {
+                        seek.on_seek_data(kind, position);
+                        true
+                    })
+                    .build(),
+            );
+
+            let src_pad = appsrc
+                .static_pad("src")
+                .ok_or_else(|| "appsrc has no src pad".to_owned())?;
+            install_stream_probe(
+                &src_pad,
+                plan.stream_id.clone(),
+                group_id,
+                plan.stream.clone(),
+                collection.clone(),
+            );
+
+            obj.add(&appsrc)
+                .map_err(|error| format!("cannot add the appsrc to the bin: {error}"))?;
+
+            let template_name = match kind {
+                TrackKind::Audio => "audio_%u",
+                _ => "video_%u",
+            };
+            let template = obj
+                .pad_template(template_name)
+                .ok_or_else(|| format!("no pad template {template_name}"))?;
+            let ghost = gst::GhostPad::builder_from_template(&template)
+                .name(format!("{}_0", kind.name()))
+                .query_function(|pad, parent, query| {
+                    MseSrc::catch_panic_pad_function(
+                        parent,
+                        || false,
+                        |this| this.src_query(pad, query),
+                    )
+                })
+                .event_function(|pad, parent, event| {
+                    MseSrc::catch_panic_pad_function(
+                        parent,
+                        || false,
+                        |this| this.src_event(pad, event),
+                    )
+                })
+                .build();
+            ghost
+                .set_target(Some(&src_pad))
+                .map_err(|error| format!("cannot target the ghost pad: {error}"))?;
+            ghost
+                .set_active(true)
+                .map_err(|error| format!("cannot activate the ghost pad: {error}"))?;
+            Ok(Output {
+                kind,
+                appsrc,
+                ghost,
+                config: plan.config.clone(),
+            })
         }
 
         /// Posts a stream error on the bus (the pipeline stops with it).
@@ -478,6 +590,15 @@ impl MseSrc {
         duration: Option<u64>,
     ) -> Result<Vec<TrackOut>, String> {
         self.imp().announce(shared, configs, duration)
+    }
+
+    pub(crate) fn add_track(
+        &self,
+        shared: &Arc<Shared>,
+        config: &TrackConfig,
+        duration: Option<u64>,
+    ) -> Result<Option<TrackOut>, String> {
+        self.imp().add_track(shared, config, duration)
     }
 
     pub(crate) fn fail(&self, message: &str) {

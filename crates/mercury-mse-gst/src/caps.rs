@@ -261,6 +261,16 @@ fn opus_caps(
     Ok(builder)
 }
 
+/// The pre-skip of an `OpusHead`, in samples at 48 kHz: how many samples the decoder produces before
+/// the audio starts (`None` for a head that is not usable). `opusdec` does not take it from the caps: it
+/// drops them when the first buffer carries a `GstAudioClippingMeta`, which the feeder adds.
+pub fn opus_pre_skip(head: &[u8]) -> Option<u32> {
+    if head.len() < OPUS_HEAD_MIN || &head[..8] != b"OpusHead" {
+        return None;
+    }
+    Some(u32::from(u16::from_le_bytes([head[10], head[11]])))
+}
+
 /// The `gst::StreamType` of a kind of track.
 pub fn stream_type(kind: TrackKind) -> gst::StreamType {
     match kind {

@@ -177,6 +177,27 @@ impl FakeFeed {
         self.finish(inner);
     }
 
+    /// Makes the track visible and serves it from the random access point at or before `position`, as
+    /// the real feed does for a track whose initialization segment arrived late: its first frames start
+    /// at the current position, not at zero.
+    pub fn show_track_from(&self, kind: TrackKind, position: Ns) {
+        let mut inner = self.lock();
+        if let Some(track) = inner.tracks[slot(kind)].as_mut() {
+            track.visible = true;
+            let covering = track
+                .frames
+                .iter()
+                .position(|(_, f, _)| f.pts + f.duration > position)
+                .unwrap_or(track.frames.len().saturating_sub(1));
+            track.cursor = track.frames[..=covering]
+                .iter()
+                .rposition(|(_, f, _)| f.keyframe)
+                .unwrap_or(0);
+            track.discont = true;
+        }
+        self.finish(inner);
+    }
+
     pub fn set_duration(&self, duration: Option<Ns>) {
         let mut inner = self.lock();
         inner.duration = duration;

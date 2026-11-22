@@ -120,6 +120,45 @@ impl Rig {
         }
     }
 
+    /// The control of T04 (decision D14): the same `playbin3`, decoders and sinks, with the file `path`
+    /// as the source instead of an `MseSrc`: no MSE in the pipeline at all.
+    pub fn control(path: &std::path::Path, options: Options) -> Rig {
+        super::env::init();
+        let id = COUNTER.fetch_add(1, Ordering::Relaxed);
+        let t0 = Instant::now();
+        let video = options.video.then(|| {
+            video_sink(
+                &format!("vsink{id}"),
+                t0,
+                options.sync,
+                options.colour,
+                None,
+            )
+        });
+        let audio = options
+            .audio
+            .then(|| audio_sink(&format!("asink{id}"), t0, options.sync, None));
+        let uri = glib::filename_to_uri(path, None).expect("a file URI");
+        let pipeline = gst::ElementFactory::make("playbin3")
+            .name(format!("playbin{id}"))
+            .property("uri", uri.as_str())
+            .build()
+            .expect("playbin3");
+        configure_playbin(&pipeline, video.as_ref(), audio.as_ref());
+        let bus = pipeline.bus().expect("a pipeline has a bus");
+        Rig {
+            pipeline,
+            video,
+            audio,
+            t0,
+            src: Arc::default(),
+            feed: super::fakefeed::FakeFeed::new(),
+            options,
+            bus_log: Mutex::default(),
+            bus,
+        }
+    }
+
     pub fn elapsed(&self) -> Duration {
         self.t0.elapsed()
     }
@@ -342,6 +381,18 @@ fn dump_bin(bin: &gst::Bin, depth: usize, out: &mut String) {
     }
 }
 
+/// Audio and video only: no text, no visualisation, no download or network buffering; our sinks.
+fn configure_playbin(playbin: &gst::Element, video: Option<&Sink>, audio: Option<&Sink>) {
+    playbin.set_property_from_str("flags", "video+audio");
+    match video {
+        Some(sink) => playbin.set_property("video-sink", &sink.element),
+        None => playbin.set_property_from_str("flags", "audio"),
+    }
+    if let Some(sink) = audio {
+        playbin.set_property("audio-sink", &sink.element);
+    }
+}
+
 fn build_playbin(
     id: u32,
     feed: &Arc<dyn FrameFeed>,
@@ -354,15 +405,7 @@ fn build_playbin(
         .property("uri", format!("{}://{id}", mercury_mse_gst::MSE_URI_SCHEME))
         .build()
         .expect("playbin3");
-    // Audio and video only: no text, no visualisation, no download or network buffering.
-    playbin.set_property_from_str("flags", "video+audio");
-    match video {
-        Some(sink) => playbin.set_property("video-sink", &sink.element),
-        None => playbin.set_property_from_str("flags", "audio"),
-    }
-    if let Some(sink) = audio {
-        playbin.set_property("audio-sink", &sink.element);
-    }
+    configure_playbin(&playbin, video, audio);
     let feed = Arc::clone(feed);
     let slot = Arc::clone(src);
     playbin.connect("source-setup", false, move |args| {
