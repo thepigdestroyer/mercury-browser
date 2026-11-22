@@ -1262,6 +1262,7 @@ mod tests {
         let tab = controller.borrow().active_tab_id();
         mark_engine_ready(&controller, tab);
         let state = TextInputState {
+            document: 1,
             sequence: 3,
             text: "hello".to_owned(),
             text_start: 0,

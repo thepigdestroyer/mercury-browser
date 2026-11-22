@@ -332,6 +332,11 @@ impl Controls {
 
         // txt-1: a composition belongs to the tab that started it; leaving the tab ends it.
         crate::ime::active_tab_changed(tab_id);
+        // txt-1: a password field has no input method and holds secure event input.
+        crate::secure_input::password_changed(
+            window,
+            state.text_input().is_some_and(|text| text.is_password),
+        );
         // Slint places the input method itself while one of its text fields has focus.
         if window.get_text_input_focused() {
             current.input_method_area = None;
@@ -1319,6 +1324,7 @@ mod tests {
             height: 600.0,
         };
         let text_state = |caret_rect| TextInputState {
+            document: 1,
             sequence: 1,
             text: "hello".to_owned(),
             text_start: 0,

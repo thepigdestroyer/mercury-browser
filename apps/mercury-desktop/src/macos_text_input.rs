@@ -55,7 +55,7 @@
 //!
 //! # Safety
 //!
-//! This is the only `unsafe` code of the lane. Each replacement is an `extern "C-unwind"`
+//! This is the `unsafe` code of the lane, besides the two Carbon calls of `secure_input.rs`. Each replacement is an `extern "C-unwind"`
 //! function with the exact signature of the method it replaces; none may unwind into AppKit, so
 //! the work that is not the original's is wrapped in `catch_unwind` and, if it panics, the
 //! original runs instead. Every object pointer AppKit passes is treated as possibly nil and
@@ -1059,6 +1059,7 @@ mod tests {
 
     fn state(sequence: u64, text: &str, text_start: u32, selection: (u32, u32)) -> TextInputState {
         TextInputState {
+            document: 1,
             sequence,
             text: text.to_owned(),
             text_start,
