@@ -8,6 +8,9 @@ pub use tab_rows::update_tab_rows;
 // ring-geometry
 pub mod ring_geometry;
 
+// ring-bands
+pub mod ring_bands;
+
 // theme-plumbing
 mod theme;
 pub use theme::{Look, apply_look};
