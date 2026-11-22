@@ -89,6 +89,7 @@ use crate::accessibility::{AccessibilityContext, AccessibilityDamageMap, Accessi
 use crate::context::{CachedImageOrError, ImageResolver, LayoutContext};
 use crate::display_list::{DisplayListBuilder, HitTest, PaintTimingHandler, StackingContextTree};
 use crate::dom::NodeExt;
+use crate::counter_walk::CounterState; // Mercury: ED5 (lane txt-1)
 use crate::query::{
     BoxAreaInclusion, find_character_offset_in_fragment_descendants, get_the_text_steps,
     process_box_area_request, process_box_areas_request, process_client_rect_request,
@@ -196,6 +197,9 @@ pub struct LayoutThread {
 
     /// The box tree.
     box_tree: RefCell<Option<Arc<BoxTree>>>,
+
+    /// Mercury: ED5 (lane txt-1). The table of the counter pass (`counters.rs`, `lists.rs`).
+    counters: CounterState,
 
     /// The fragment tree.
     fragment_tree: RefCell<Option<Rc<FragmentTree>>>,
@@ -906,6 +910,7 @@ impl LayoutThread {
             need_new_display_list: Cell::new(false),
             need_new_stacking_context_tree: Cell::new(false),
             box_tree: Default::default(),
+            counters: Default::default(), // Mercury: ED5
             fragment_tree: Default::default(),
             stacking_context_tree: Default::default(),
             paint_api: config.paint_api,
@@ -1351,6 +1356,8 @@ impl LayoutThread {
             parallelism_job_count_minimum: pref!(layout_parallelism_job_count_minimum) as usize,
             parallelism_job_size_minimum: pref!(layout_parallelism_job_size_minimum) as usize,
             device_size: reflow_request.viewport_details.device_size.cast_unit(),
+            // Mercury: ED5. The table of the last reflow until the counter pass replaces it.
+            counter_table: RwLock::new(self.counters.table()),
         };
 
         let restyle = reflow_request
@@ -1387,13 +1394,28 @@ impl LayoutThread {
         }
 
         let root_node = root_element.as_node();
-        let damage_from_environment = if device_has_changed {
+
+        // Mercury: ED5 (lane txt-1). The counter pass (`counters.rs`, `lists.rs`) runs after styling and
+        // before boxes are built, so that list markers and `counter()` show their numbers. When
+        // a box that is not rebuilt would show an old number, rebuild every box (as for the first
+        // layout) and lay everything out again (as for a change of device).
+        let counters_changed = crate::counter_walk::update_counters(
+            &self.counters,
+            &layout_context,
+            root_node,
+            dirty_root.layout_node(),
+            device_has_changed,
+        );
+        let damage_from_environment = if device_has_changed || counters_changed {
             LayoutDamage::Relayout
         } else {
             LayoutDamage::empty()
         };
 
         let mut box_tree = self.box_tree.borrow_mut();
+        if counters_changed {
+            *box_tree = None; // Mercury: ED5
+        }
         let mut layout_roots = Vec::new();
         let damage = {
             let box_tree = &mut *box_tree;

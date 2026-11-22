@@ -31,6 +31,40 @@ scaffold is in `servo-constellation-traits`, `servo-constellation` and `servo`.
   only itself, size) and `talaria-servo` `mercury_messages::tests` (serde round trip, wire format, size of `EmbedderMsg`).
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
+Changes made by lane txt-1 (text, 21 Nov 2026): input methods (EB11).
+
+### IME events: commit, marked text, insert text — `input_events.rs`
+
+- **What:** `ImeEvent` gains `Commit(String)` (**backport of servo/servo#49400**, merge commit `13fbe153e`, 5 Nov 2026: "can be
+  sent without an active composition") and Mercury's `SetMarkedText { text, selected, clauses, replacement }` and
+  `InsertText { text, replacement }`, with `ImeClause`, `ImeClauseKind` (`Raw`, `Converted`, `SelectedRaw`,
+  `SelectedConverted`) and `ImeReplacement { range, sequence }`; every range is in UTF-16 code units. `Composition(..)` and
+  `Dismissed` keep their meaning, so Servo's own tests and servoshell are unaffected.
+- **Why:** macOS gives the selected range, the clause attributes and a replacement range, and inserts text without a composition
+  (emoji picker, dictation, accent menu); winit 0.30 and the old events could not carry them. Composition in text controls and in
+  `contenteditable` (EB11) needs them.
+- **`Debug`:** `ImeEvent` has no derived `Debug` (`input_events.rs`: the derive is removed). Upstream logs whole messages at `debug`
+  level (`script_thread.rs`: "Handling event: {event:?}"), and a derived `Debug` prints the typed text, as `Commit`,
+  `SetMarkedText`, `InsertText` and `Composition` carry it. `impl Debug for ImeEvent` (in `mercury/text.rs`) prints the variant and
+  the length of its strings.
+- **Tested by:** `servo/tests/mercury_ime.rs` (see `servo/MERCURY.md`; `make engine-tests`), and `mercury/text.rs` for `Debug`.
+- **Drop when:** the `Commit` variant at the Servo bump that contains #49400 (B1); the rest stays (Mercury's feature).
+
+### The text lane's message and the text input state — new `mercury/text.rs` (the lane's own file of the scaffold)
+
+- **What:** `TextMsg::InputState(Box<TextInputState>)` (boxed: unboxed it would grow `EmbedderMsg`, and the size test in
+  `mercury/mod.rs` forbids that), `TextMsg::InputCleared(u64)` (nothing editable is focused in that document) and
+  `TextInputState { document, sequence, text, text_start, selection, marked, caret_rect, multiline, is_password }`. `document` is
+  the document's pipeline id, on every state and on the "cleared" message: a page and an iframe each send their own messages,
+  which reach the browser in either order when the focus moves between them, and a late "cleared" of the page must not hide the
+  frame's field (the browser clears only the state of the document named). The state is the text of the focused editable as a window of at most 4,096 UTF-16 units around the marked text or the
+  selection, never cutting a surrogate pair; **empty for a password field**. `TextWindow` (utf16/byte offset helpers, the window
+  rule, a caret rectangle estimate). `Debug` of both prints sizes and flags only, so the text of a page cannot reach a log.
+- **Why:** AppKit's accent menu, dictation corrections and reconversion ask the text field for its text and selection, and the
+  candidate window needs the caret rectangle; the browser process has neither without this message.
+- **Tested by:** 14 unit tests in `mercury/text.rs` (windowing, surrogate pairs, password, `Debug`, `same_content_as`).
+- **Drop when:** never needed upstream.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

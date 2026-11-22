@@ -276,6 +276,8 @@ pub(crate) mod geometry;
 pub(crate) use self::geometry::*;
 pub(crate) mod globalscope;
 pub(crate) use self::globalscope::*;
+// Mercury: new module (lane txt-1, EB7), the typed highlights of a document.
+pub(crate) mod highlights;
 pub(crate) mod html;
 pub(crate) use self::html::*;
 pub(crate) mod indexeddb;

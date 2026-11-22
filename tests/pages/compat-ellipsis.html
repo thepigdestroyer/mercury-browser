@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Mercury text-overflow compatibility</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html, body { margin: 0; background: #ffffff; color: #000000; }
+  body { padding: 10px 16px; font: 14px/1.3 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  h1 { margin: 0 0 4px; font-size: 20px; }
+  p.note { margin: 0 0 6px; font-size: 12px; color: #444444; }
+  #summary { font: bold 16px/1.4 Menlo, monospace; margin: 2px 0 8px; }
+  .row { display: flex; align-items: flex-start; gap: 14px; margin: 0 0 7px; }
+  .expect { width: 430px; flex: none; font: 12px/1.3 Menlo, monospace; color: #1a4f8b; }
+  .expect b { color: #000000; }
+  .stage { flex: none; }
+  .result { flex: 1; min-width: 0; font: 12px/1.3 Menlo, monospace; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+
+  /* The boxes under test: 260px wide with a border, so that the edge the text must stay inside of is
+     visible. They all print the same long text unless a row says otherwise. */
+  .clip { width: 260px; border: 1px solid #1a4f8b; background: #f4f8fc; color: #000000;
+          white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .title { font-size: 15px; font-weight: 600; line-height: 1.3; }
+  .nav { display: flex; width: 260px; border: 1px solid #1a4f8b; background: #f4f8fc; align-items: center; gap: 6px; }
+  .nav .icon { flex: none; width: 18px; text-align: center; }
+  .nav .label { flex: 1 1 auto; min-width: 0; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .nav .badge { flex: none; background: #b00000; color: #ffffff; border-radius: 8px; padding: 0 6px; font-size: 11px; }
+  .string { text-overflow: "[...]"; }
+  .two { text-overflow: clip ellipsis; }
+  .clipped { text-overflow: clip; }
+  .visible { overflow: visible; }
+  .auto { overflow: auto; }
+  .tiny { width: 8px; }
+  .inline { display: inline-block; width: auto; max-width: 260px; vertical-align: top; }
+  .cell-table { border-collapse: collapse; width: 260px; table-layout: fixed; }
+  .cell-table td { border: 1px solid #1a4f8b; background: #f4f8fc; padding: 0 4px;
+                   white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .outer p { margin: 0; white-space: nowrap; }
+  .nested a { padding: 0 6px; background: #ffe9a8; color: #000000; text-decoration: none; }
+</style>
+</head>
+<body>
+<!--
+  Mercury test page for text-overflow (lane txt-1, ED7): a hand-port of servo/servo#42394 (RichardTjokroutomo)
+  onto Servo 0.8's layout. It needs layout.css.text-overflow.enabled=true in talaria-servo's STYLO_PREFS;
+  without it the property is not parsed and every row below shows plain clipped text and a FAIL line.
+
+  Open it from a test server or file://, for example
+    mercury-browser --screenshot out.png --window-size 1100x900 file:///path/to/tests/pages/compat-ellipsis.html
+  Every row prints, in blue on the left, what the box must look like. Compare it with the box. The script
+  adds a line on the right per row that checks what a script can check: the computed value of
+  text-overflow, and whether the content really is wider than the box (scrollWidth > clientWidth), which
+  has to stay true when the text is elided, because pages use it to tell that a title is cut short.
+  What only a person can see (the "..." glyph, where it sits, that nothing is painted past it) is in the
+  blue text. The rows that must NOT show an ellipsis say so: overflow: visible, overflow: auto and a
+  block inside a block that has text-overflow (the property is not inherited).
+  Not run in a window at the time of writing: the session that added this page had a locked screen.
+-->
+<h1>text-overflow compatibility</h1>
+<p class="note">Each box is 260px wide. The blue text on the left is the expected look.</p>
+<div id="summary">running</div>
+
+<div class="row" id="r-title"
+     data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>1 YouTube-style title.</b> One line that ends in an ellipsis. No letter is cut in
+    half and nothing is drawn after the ellipsis.</div>
+  <div class="stage"><div class="clip title" id="t-title" title="How to build a browser from scratch in Rust: part 12, text rendering and layout">How to build a browser from scratch in Rust: part 12, text rendering and layout</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-nav" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>2 Nav label in a flex item with min-width: 0.</b> The label ends in an ellipsis and
+    the red badge "12" stays whole at the right edge.</div>
+  <div class="stage"><div class="nav"><span class="icon">&#x2302;</span><span class="label" id="t-nav">Notifications and account settings for the whole workspace</span><span class="badge">12</span></div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-rtl" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>3 Right-to-left line.</b> The text starts at the right edge and the ellipsis is
+    at the LEFT end, where the line ends. No letter is cut in half.</div>
+  <div class="stage"><div class="clip" dir="rtl" lang="he" id="t-rtl">זהו משפט ארוך מאוד שלא ייכנס בתוך הקופסה הצרה הזאת והוא ממשיך הלאה</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-mixed" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>3b Right-to-left block, English inside.</b> The ellipsis is at the left end of the
+    box. The English words are read left to right and the hidden ones are the ones at the left.</div>
+  <div class="stage"><div class="clip" dir="rtl" lang="he" id="t-mixed">שלום world this is a long mixed direction line that keeps going</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-string" data-text-overflow='"[...]"' data-overflows="true">
+  <div class="expect"><b>4 text-overflow: "[...]".</b> The line ends in the five characters [...] and not
+    in an ellipsis.</div>
+  <div class="stage"><div class="clip string" id="t-string">How to build a browser from scratch in Rust: part 12, text rendering and layout</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-visible" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>5 overflow: visible.</b> Must NOT elide: the whole text is drawn and runs out of the
+    box on the right. There is no ellipsis anywhere.</div>
+  <div class="stage"><div class="clip visible" id="t-visible">How to build a browser from scratch in Rust: part 12, text rendering and layout</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-clip" data-text-overflow="clip" data-overflows="true">
+  <div class="expect"><b>6 text-overflow: clip.</b> The text is cut at the box edge, in the middle of a letter
+    if that is where the edge is. No ellipsis.</div>
+  <div class="stage"><div class="clip clipped" id="t-clip">How to build a browser from scratch in Rust: part 12, text rendering and layout</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-two" data-text-overflow="clip ellipsis" data-overflows="true">
+  <div class="expect"><b>7 text-overflow: clip ellipsis.</b> Two values: left is clip, right is ellipsis. In a
+    left-to-right box the end is the right, so the line ends in an ellipsis.</div>
+  <div class="stage"><div class="clip two" id="t-two">How to build a browser from scratch in Rust: part 12, text rendering and layout</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-nested" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>8 Inline box with padding inside.</b> The link has a yellow background and 6px of
+    padding on both sides. The ellipsis sits right after the last kept letter, over the yellow if the cut
+    is inside the link, and is black (the colour of the block), not underlined.</div>
+  <div class="stage"><div class="clip nested" id="t-nested">Release notes for <a href="#">version 12.4.1 of the engine</a> and everything that changed since the previous one</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-inline-block" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>9 display: inline-block with max-width.</b> The box is 260px wide (the text is wider
+    than that) and ends in an ellipsis.</div>
+  <div class="stage"><div class="clip inline" id="t-inline-block">How to build a browser from scratch in Rust: part 12, text rendering and layout</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-cell" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>10 Table cell.</b> The cell is 260px, the text does not fit, and it ends in an
+    ellipsis inside the cell border.</div>
+  <div class="stage"><table class="cell-table"><tr><td id="t-cell">How to build a browser from scratch in Rust: part 12, text rendering and layout</td></tr></table></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-nested-block" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>11 Block inside a block with text-overflow.</b> The inner paragraph does not
+    inherit text-overflow, so it is NOT elided: the text is clipped by the outer box edge, no ellipsis.</div>
+  <div class="stage"><div class="clip outer" id="t-nested-block"><p>How to build a browser from scratch in Rust: part 12, text rendering and layout</p></div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-auto" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>12 overflow: auto.</b> Known limit of this port: a box the user can scroll is not elided
+    (layout cannot follow the scroll offset). The text is clipped and the box scrolls; no ellipsis.</div>
+  <div class="stage"><div class="clip auto" id="t-auto">How to build a browser from scratch in Rust: part 12, text rendering and layout</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-tiny" data-text-overflow="ellipsis" data-overflows="true">
+  <div class="expect"><b>13 A box 8px wide.</b> Not even the ellipsis fits: nothing of the text is kept, and
+    at most the start of an ellipsis shows inside the box. The page must not crash or hang.</div>
+  <div class="stage"><div class="clip tiny" id="t-tiny">How to build a browser</div></div>
+  <div class="result"></div>
+</div>
+
+<div class="row" id="r-fits" data-text-overflow="ellipsis" data-overflows="false">
+  <div class="expect"><b>14 Text that fits.</b> Shorter than the box: drawn whole, no ellipsis.</div>
+  <div class="stage"><div class="clip" id="t-fits">Short title</div></div>
+  <div class="result"></div>
+</div>
+
+<script>
+  "use strict";
+
+  const summary = document.getElementById("summary");
+  let passes = 0;
+  let failures = 0;
+
+  function say(row, kind, text) {
+    if (kind === "pass") {
+      passes++;
+    } else if (kind === "fail") {
+      failures++;
+    }
+    const result = row.querySelector(".result");
+    const item = document.createElement("div");
+    item.className = kind;
+    item.textContent = (kind === "pass" ? "PASS " : kind === "fail" ? "FAIL " : "INFO ") + text;
+    result.appendChild(item);
+  }
+
+  for (const row of document.querySelectorAll(".row")) {
+    const box = row.querySelector("[id^='t-']");
+    if (!box) {
+      continue;
+    }
+    const expectedValue = row.dataset.textOverflow;
+    const computed = getComputedStyle(box).textOverflow;
+    // Servo serializes the value as it was written, with the quotes of a string; accept the same
+    // value with or without them and with the two-value form.
+    const normalise = (value) => String(value).replace(/\s+/g, " ").trim();
+    if (normalise(computed) === normalise(expectedValue) || normalise(computed) === normalise(expectedValue).replace(/^"(.*)"$/, "'$1'")) {
+      say(row, "pass", "text-overflow is " + computed);
+    } else if (computed === undefined || computed === "" || (computed === "clip" && expectedValue !== "clip")) {
+      say(row, "fail", "text-overflow is " + JSON.stringify(computed) + ": the property is not parsed (layout.css.text-overflow.enabled is off?)");
+    } else {
+      say(row, "fail", "text-overflow is " + computed + ", expected " + expectedValue);
+    }
+
+    const expectedOverflow = row.dataset.overflows === "true";
+    const overflows = box.scrollWidth > box.clientWidth;
+    if (overflows === expectedOverflow) {
+      say(row, "pass", "scrollWidth " + box.scrollWidth + (overflows ? " > " : " <= ") + "clientWidth " + box.clientWidth);
+    } else {
+      say(row, "fail", "scrollWidth " + box.scrollWidth + " vs clientWidth " + box.clientWidth + ", expected content " + (expectedOverflow ? "wider" : "not wider") + " than the box");
+    }
+  }
+
+  // The title attribute of row 1 is what a page shows as a tooltip for a cut title.
+  say(document.getElementById("r-title"), "info", "title attribute: " + document.getElementById("t-title").title.length + " characters, all of the text");
+
+  summary.textContent = failures === 0 ? "PASS " + passes + " checks, compare the boxes with the blue text"
+                                        : "FAIL " + failures + " of " + (passes + failures) + " checks";
+  summary.className = failures === 0 ? "pass" : "fail";
+</script>
+</body>
+</html>

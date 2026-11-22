@@ -453,7 +453,7 @@ impl servo::ServoDelegate for BrowserServoDelegate {
 
     // engine messages: Mercury's lane messages that name no web view, or whose web view has gone.
     fn notify_mercury_message(&self, message: servo::MercuryEmbedderMsg) {
-        crate::mercury_messages::handle(None, message);
+        crate::mercury_messages::handle(None, message, &|_event| {});
     }
 }
 
@@ -1126,7 +1126,9 @@ impl servo::WebViewDelegate for BrowserDelegate {
         _web_view: servo::WebView,
         message: servo::MercuryEmbedderMsg,
     ) {
-        crate::mercury_messages::handle(Some(self.tab_id), message);
+        crate::mercury_messages::handle(Some(self.tab_id), message, &|event| {
+            self.send_browser_event(event);
+        });
     }
 
     // notifications: the notification UI is a later lane's; until then the title is logged, at
@@ -1634,7 +1636,8 @@ mod tests {
 
             assert_eq!(
                 preferences.stylo_prefs,
-                "layout.css.nth-child-of.enabled=true"
+                "layout.css.nth-child-of.enabled=true,layout.css.counters.enabled=true,\
+                 layout.css.text-overflow.enabled=true"
             );
             // Every name is one Stylo has (the engine ignores names it does not know).
             assert!(servo::prefs::apply_stylo_prefs(&preferences.stylo_prefs).is_empty());

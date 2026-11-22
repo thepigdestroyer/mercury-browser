@@ -15,7 +15,10 @@ use layout_api::QueryMsg;
 use script_bindings::domstring::TracedDOMString;
 use script_bindings::inheritance::Castable;
 use script_bindings::refcounted::Trusted;
-use servo_base::text::Utf16CodeUnits;
+// Mercury: `DomRoot` is used by `TextControlElement::value_text_node()` (EB11).
+use script_bindings::root::DomRoot;
+// Mercury: `RangeAny` and `Utf32CodeUnits` are used by the composition highlights (EB11).
+use servo_base::text::{RangeAny, Utf16CodeUnits, Utf32CodeUnits};
 
 use crate::dom::bindings::codegen::Bindings::HTMLFormElementBinding::SelectionMode;
 use crate::dom::bindings::error::{Error, ErrorResult};
@@ -50,6 +53,16 @@ pub(crate) trait TextControlElement {
     fn read_only_or_disabled(&self) -> bool;
     fn handle_text_content_changed(&self, cx: &mut JSContext);
     fn handle_key_reaction(&self, cx: &mut JSContext, action: KeyReaction);
+    // Mercury: push the IME highlights (the marked text and the selected clause) into the text run
+    // of the control's value; returns whether a text run took them (EB11).
+    fn push_composition_highlights(
+        &self,
+        composition: Option<RangeAny<Utf32CodeUnits>>,
+        selected: Option<RangeAny<Utf32CodeUnits>>,
+    ) -> bool;
+    // Mercury: the text node of the control's value in its UA shadow tree, for the caret
+    // rectangle of the IME (EB11).
+    fn value_text_node(&self) -> Option<DomRoot<crate::dom::characterdata::CharacterData>>;
 
     fn insert_content(&self, cx: &mut JSContext, text_content: &str) {
         self.text_input_mut().insert(text_content);
@@ -69,11 +82,97 @@ pub(crate) trait TextControlElement {
 
         let key_reaction = self.text_input_mut().perform_editing_action(action);
         if key_reaction == KeyReaction::Nothing {
+            // Mercury: starting a composition changes the IME state, not the text (EB11).
+            self.maybe_update_composition_highlights();
             return false;
         }
 
         self.handle_key_reaction(cx, key_reaction);
+        // Mercury: the marked text may have moved or ended (EB11).
+        self.maybe_update_composition_highlights();
         true // TODO: Return true if the action can have any effect.
+    }
+
+    // Mercury: the IME operations of a text control (EB11, the text lane). The document-level
+    // orchestration (composition events, the replacement range, the state message) is in
+    // `document/text_input_state.rs`; these are the parts that need the control.
+
+    /// Keep what layout paints for the composition equal to the control's: when the marked text or
+    /// the selected clause changed, push both to the text run and ask for a repaint.
+    fn maybe_update_composition_highlights(&self) {
+        let (composition, selected) = {
+            let mut text_input = self.text_input_mut();
+            let composition = text_input.composition_character_offsets();
+            let selected = text_input.composition_selected_character_offsets();
+            if composition == text_input.composition_for_layout &&
+                selected == text_input.composition_selected_for_layout
+            {
+                return;
+            }
+            text_input.composition_for_layout = composition;
+            text_input.composition_selected_for_layout = selected;
+            (composition, selected)
+        };
+        // If there is no text run yet, layout reads the composition when it builds one.
+        if self.push_composition_highlights(composition, selected) {
+            self.as_element()
+                .owner_window()
+                .layout()
+                .set_needs_new_display_list();
+        }
+    }
+
+    /// Replace the marked text (opening a composition at the selection if none is open) with
+    /// `text` and fire `beforeinput` and `input` (`insertCompositionText`, composing). Then put
+    /// the caret where the input method wants it. Returns whether the text was changed.
+    fn ime_update_marked_text(
+        &self,
+        cx: &mut JSContext,
+        text: &str,
+        caret: Option<u32>,
+        selected: Option<std::ops::Range<u32>>,
+    ) -> bool {
+        let handled = self
+            .perform_editing_action(cx, EditingAction::InsertCompositionText(text.to_owned()));
+        // The page may have ended the composition or changed the text in its `input` handler: the
+        // caret is only placed in a composition that is still open.
+        if self.text_input().is_composing() {
+            self.text_input_mut().set_composition_caret(caret, selected);
+            self.maybe_update_shared_selection();
+            self.maybe_update_composition_highlights();
+        }
+        handled
+    }
+
+    /// End the composition: replace the marked text with the final `text` (events as for an
+    /// update) and leave the caret after it. `compositionend` is the caller's.
+    fn ime_commit_composition(&self, cx: &mut JSContext, text: &str) {
+        self.perform_editing_action(cx, EditingAction::InsertCompositionText(text.to_owned()));
+        self.text_input_mut().end_composition(None);
+        self.maybe_update_shared_selection();
+        self.maybe_update_composition_highlights();
+    }
+
+    /// Insert `text` for the system (the emoji picker, dictation) as `insertText`, or, when the
+    /// caller selected the range to replace first, as `insertReplacementText`.
+    fn ime_insert_text(&self, cx: &mut JSContext, text: &str, replacing: bool) -> bool {
+        if !replacing {
+            return self.perform_editing_action(cx, EditingAction::InsertText(text.to_owned()));
+        }
+        let canceled =
+            self.fire_beforeinput_event(cx, Some(text), InputEventType::InsertReplacementText);
+        if canceled {
+            return false;
+        }
+        self.text_input_mut().insert(text);
+        self.handle_key_reaction(
+            cx,
+            KeyReaction::DispatchInput(
+                Some(text.to_owned()),
+                InputEventType::InsertReplacementText,
+            ),
+        );
+        true
     }
 
     /// Returns true if and only if the editing action should be canceled.
@@ -151,27 +250,21 @@ pub(crate) trait TextControlElement {
             .user_interaction_task_source()
             .queue(task!(fire_input_event: move |cx| {
                 let target = target.root();
-                let global = target.global();
-                let window = global.as_window();
-                let mut flags = InputEventFlags::BUBBLES;
-                if input_type.is_composing() {
-                    flags |= InputEventFlags::COMPOSING;
-                }
-                let event = InputEvent::new(
-                    cx,
-                    window,
-                    None,
-                    atom!("input"),
-                    flags,
-                    Some(window),
-                    0,
-                    data.map(DOMString::from),
-                    input_type.as_str().into(),
-                );
-                let event = event.upcast::<Event>();
-                event.set_composed(true);
-                event.fire(cx, &target);
+                // Mercury: the body of this task is `dispatch_input_event_now()`, which the
+                // composition updates also use (EB11).
+                dispatch_input_event_now(cx, &target, data, input_type);
             }));
+    }
+
+    // Mercury: fire the `input` event now, not in a task. Composition updates fire it in the
+    // same task as `beforeinput` and before `compositionend`, as browsers do (EB11).
+    fn fire_input_event_now(
+        &self,
+        cx: &mut JSContext,
+        data: Option<String>,
+        input_type: InputEventType,
+    ) {
+        dispatch_input_event_now(cx, self.as_element().upcast::<EventTarget>(), data, input_type);
     }
 
     /// <https://html.spec.whatwg.org/multipage/#dom-textarea/input-select>
@@ -547,4 +640,34 @@ pub(crate) trait TextControlElement {
             );
         self.maybe_update_shared_selection();
     }
+}
+
+// Mercury: the body of the `input` event task of `queue_input_event()`, so that a composition
+// update can fire the event synchronously too (EB11).
+fn dispatch_input_event_now(
+    cx: &mut JSContext,
+    target: &EventTarget,
+    data: Option<String>,
+    input_type: InputEventType,
+) {
+    let global = target.global();
+    let window = global.as_window();
+    let mut flags = InputEventFlags::BUBBLES;
+    if input_type.is_composing() {
+        flags |= InputEventFlags::COMPOSING;
+    }
+    let event = InputEvent::new(
+        cx,
+        window,
+        None,
+        atom!("input"),
+        flags,
+        Some(window),
+        0,
+        data.map(DOMString::from),
+        input_type.as_str().into(),
+    );
+    let event = event.upcast::<Event>();
+    event.set_composed(true);
+    event.fire(cx, target);
 }

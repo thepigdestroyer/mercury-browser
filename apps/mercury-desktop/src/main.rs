@@ -33,6 +33,7 @@ mod filter_lists; // blocklists
 mod find;
 mod geolocation;
 mod history_ui;
+mod ime; // txt-1: the IME composition state machine
 mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
@@ -41,7 +42,10 @@ mod macos_app_delegate;
 #[cfg(target_os = "macos")]
 mod macos_terminate;
 #[cfg(target_os = "macos")]
+mod macos_text_input; // txt-1: replacement ranges, emoji and dictation through winit's view
+#[cfg(target_os = "macos")]
 mod media_buffers;
+mod secure_input; // txt-1: no input method and secure event input in password fields
 // media-capture
 mod media_capture;
 #[cfg(target_os = "macos")]
@@ -343,6 +347,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // destroys the window and tears rendering down while the engine still runs.
     // `shut_down_engine` hides the window once it has taken the engine's state.
     let shown = window.show();
+    // txt-1: patches winit's view once the event loop has created it; `MERCURY_NATIVE_TEXT_INPUT=0`
+    // turns it off.
+    #[cfg(target_os = "macos")]
+    macos_text_input::install();
     post_run::prepare(post_run::RunEnd {
         window,
         timers,
