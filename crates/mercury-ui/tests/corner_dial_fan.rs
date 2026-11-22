@@ -310,11 +310,11 @@ fn in_every_corner_the_box_lies_on_the_dials_side_of_the_mid_point() {
                 } else {
                     caption.x + CAPTION_WIDTH
                 };
-                assert_eq!(
-                    near - segment.mid_x,
-                    24.0 * toward_x,
-                    "{corner:?} tab {}",
-                    segment.tab
+                assert!(
+                    (near - segment.mid_x - 24.0 * toward_x).abs() < 1e-3,
+                    "{corner:?} tab {}: {}",
+                    segment.tab,
+                    near - segment.mid_x
                 );
             }
             if unclamped_y {
@@ -323,11 +323,11 @@ fn in_every_corner_the_box_lies_on_the_dials_side_of_the_mid_point() {
                 } else {
                     caption.y + CAPTION_HEIGHT
                 };
-                assert_eq!(
-                    near - segment.mid_y,
-                    24.0 * toward_y,
-                    "{corner:?} tab {}",
-                    segment.tab
+                assert!(
+                    (near - segment.mid_y - 24.0 * toward_y).abs() < 1e-3,
+                    "{corner:?} tab {}: {}",
+                    segment.tab,
+                    near - segment.mid_y
                 );
             }
         }

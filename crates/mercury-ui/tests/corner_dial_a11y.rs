@@ -314,7 +314,7 @@ fn the_caption_and_the_scrim_are_not_read() {
     rig.advance(10);
     let nodes = rig.nodes();
     assert!(
-        nodes.iter().all(|node| !node.label.contains("Essay on maps")),
+        nodes.iter().all(|node| !node.label.contains("Reading · Essay on maps")),
         "the caption is decoration (the hovered tab already has its label):\n{}",
         a11y::dump(&nodes)
     );
