@@ -160,6 +160,15 @@ mod tests {
         let list = MercuryResources.read(Resource::HstsPreloadList);
         // `assert!` rather than `assert_eq!`: a failure must not print 1.9 MB of bytes.
         assert!(list == HSTS_PRELOAD_LIST, "not the compiled-in list");
+        // ... and that is the file the `hsts-preload` tool refreshes: its default output
+        // (`DEFAULT_DATA` in `mercury-devtools`, pinned to this path by that crate's
+        // `tests/hsts_data.rs`), read from disk by that path.
+        let refreshed = std::fs::read(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../crates/talaria-servo/resources/hsts_preload.fstmap"
+        ))
+        .expect("read the file the tool refreshes");
+        assert!(list == refreshed, "not the file the tool refreshes");
         // The header of an `fst` file: format version 3, as a little-endian u64.
         assert_eq!(list[..8], [3, 0, 0, 0, 0, 0, 0, 0]);
         assert!(list.len() > 1_000_000, "{} bytes", list.len());

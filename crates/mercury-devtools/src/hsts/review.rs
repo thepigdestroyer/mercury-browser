@@ -304,6 +304,45 @@ pub fn guard_refresh(
     Ok(())
 }
 
+/// The other half of the refresh guard: a refresh must not quietly turn `include_subdomains` off.
+/// Among the hosts that `old` and `new` have in common, the share that had the flag and lost it
+/// is compared with `max_flag_loss_percent` (exactly that share passes, one host more fails; hosts
+/// that were removed or are new, and flags gained, do not count). Returns a sentence with the
+/// numbers, the first hosts and the way out (`--allow-flag-loss`).
+pub fn guard_flag_loss(
+    old: &Preload,
+    new: &Preload,
+    max_flag_loss_percent: usize,
+) -> Result<(), String> {
+    let changes = diff(old, new);
+    let kept = old.len().saturating_sub(changes.removed.len()) as u64;
+    let lost: Vec<&Entry> = changes
+        .flag_changed
+        .iter()
+        .filter(|entry| !entry.include_subdomains)
+        .collect();
+    if (lost.len() as u64) * 100 <= (max_flag_loss_percent as u64) * kept {
+        return Ok(());
+    }
+    // Rounded up, so that the percentage shown is always above the limit it broke.
+    let lost_tenths = (lost.len() as u64 * 1_000).div_ceil(kept);
+    let examples: Vec<&str> = lost
+        .iter()
+        .take(3)
+        .map(|entry| entry.host.as_str())
+        .collect();
+    Err(format!(
+        "{} of the {} hosts that the new list shares with the file it would replace ({} %) lose \
+         include_subdomains (limit {max_flag_loss_percent} %), for example {}; Chromium's file \
+         may have changed shape, so look at `hsts-preload diff`, and pass --allow-flag-loss if \
+         that is intended",
+        thousands(lost.len()),
+        thousands(kept as usize),
+        tenths(lost_tenths),
+        examples.join(", ")
+    ))
+}
+
 /// What changed between two lists, each part in key order.
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct Diff {

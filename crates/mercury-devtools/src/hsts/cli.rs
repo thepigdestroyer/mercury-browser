@@ -26,7 +26,8 @@ use super::fstmap::{self, Preload};
 use super::manifest::{Date, Manifest, Source, sha256_hex};
 use super::review::{self, Limits};
 use super::{
-    CHROMIUM_FILE, CHROMIUM_HOST_URL, DEFAULT_MAX_SHRINK_PERCENT, DEFAULT_MIN_ENTRIES, source,
+    CHROMIUM_FILE, CHROMIUM_HOST_URL, DEFAULT_MAX_FLAG_LOSS_PERCENT, DEFAULT_MAX_SHRINK_PERCENT,
+    DEFAULT_MIN_ENTRIES, MAX_INPUT_BYTES, source,
 };
 
 /// How many lines of each kind `diff` shows unless `--limit` or `--all` says otherwise.
@@ -42,6 +43,7 @@ usage:
                      [--manifest <file.json>] [--source-url URL] [--ref REF]
                      [--retrieved YYYY-MM-DD] [--min-entries N]
                      [--max-shrink-percent N] [--allow-shrink]
+                     [--max-flag-loss-percent N] [--allow-flag-loss]
   hsts-preload check <file.fstmap> [--manifest <file.json>] [--min-entries N]
                      [--max-age-days N] [--today YYYY-MM-DD]
   hsts-preload diff <old.fstmap> <new.fstmap> [--limit N | --all]
@@ -50,11 +52,13 @@ usage:
 build   reads Chromium's transport_security_state_static.json (--base64 when it is
         the Gitiles download, which is base64; - reads standard input) and writes the
         data file and, next to it, its manifest (<name>.manifest.json unless
-        --manifest says otherwise). It writes nothing when the new list fails a
-        guard: fewer than --min-entries entries (default 100000), under 90 % of
-        entries including subdomains, a long-standing entry missing, or more than
-        --max-shrink-percent (default 10) fewer entries than the file it would
-        replace (--allow-shrink waives that one only).
+        --manifest says otherwise). It writes nothing when the input is over
+        100 MB or the new list fails a guard: fewer than --min-entries entries
+        (default 50000), under 90 % of entries including subdomains, a long-standing
+        entry missing, more than --max-shrink-percent (default 10) fewer entries than
+        the file it would replace (--allow-shrink waives that one only), or more than
+        --max-flag-loss-percent (default 1) of the hosts it shares with that file
+        losing include-subdomains (--allow-flag-loss waives that one only).
 check   says whether a data file is fit to ship (exit 0) or not (exit 1), and prints what
         it found. A manifest next to the file is read and compared; --max-age-days makes
         an older list a problem.
@@ -151,7 +155,7 @@ struct Grammar {
 
 const BUILD: Grammar = Grammar {
     command: "build",
-    flags: &["--base64", "--allow-shrink"],
+    flags: &["--base64", "--allow-shrink", "--allow-flag-loss"],
     options: &[
         "--input",
         "--output",
@@ -161,6 +165,7 @@ const BUILD: Grammar = Grammar {
         "--retrieved",
         "--min-entries",
         "--max-shrink-percent",
+        "--max-flag-loss-percent",
     ],
     positionals: &[],
 };
@@ -279,6 +284,23 @@ impl Args {
     }
 }
 
+/// Reads all of `reader`, but no more than [`MAX_INPUT_BYTES`]: an input over the cap is a
+/// problem that names it, and nothing past the cap is ever held in memory.
+fn read_capped(reader: &mut dyn Read, name: &str) -> Result<Vec<u8>, Failure> {
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_INPUT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|error| problem(format!("cannot read {name}: {error}")))?;
+    if bytes.len() as u64 > MAX_INPUT_BYTES {
+        return Err(problem(format!(
+            "{name} is larger than {MAX_INPUT_BYTES} bytes, far more than Chromium's list (about \
+             14 MB as base64); it is not the file this tool expects, so it was not read further"
+        )));
+    }
+    Ok(bytes)
+}
+
 fn read_file(path: &str) -> Result<Vec<u8>, Failure> {
     std::fs::read(path).map_err(|error| problem(format!("cannot read {path}: {error}")))
 }
@@ -368,6 +390,9 @@ fn build(
     let max_shrink = args
         .number("--max-shrink-percent")?
         .unwrap_or(DEFAULT_MAX_SHRINK_PERCENT);
+    let max_flag_loss = args
+        .number("--max-flag-loss-percent")?
+        .unwrap_or(DEFAULT_MAX_FLAG_LOSS_PERCENT);
     let output_path = Path::new(output);
     let manifest_path = args
         .option("--manifest")
@@ -387,13 +412,11 @@ fn build(
         input_name
     };
     let raw = if input_name == "-" {
-        let mut text = Vec::new();
-        input
-            .read_to_end(&mut text)
-            .map_err(|error| problem(format!("cannot read standard input: {error}")))?;
-        text
+        read_capped(input, "standard input")?
     } else {
-        read_file(input_name)?
+        let mut file = std::fs::File::open(input_name)
+            .map_err(|error| problem(format!("cannot read {input_name}: {error}")))?;
+        read_capped(&mut file, input_name)?
     };
     let input_sha256 = sha256_hex(&raw);
     let json = if args.flag("--base64") {
@@ -423,6 +446,12 @@ fn build(
         args.flag("--allow-shrink"),
     )
     .map_err(|why| problem(format!("refusing to replace {output}: {why}")))?;
+    if let Some(old) = &old
+        && !args.flag("--allow-flag-loss")
+    {
+        review::guard_flag_loss(old, &fresh, max_flag_loss)
+            .map_err(|why| problem(format!("refusing to replace {output}: {why}")))?;
+    }
     ensure_directory(output_path)?;
     ensure_directory(&manifest_path)?;
 

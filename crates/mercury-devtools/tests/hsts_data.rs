@@ -165,30 +165,16 @@ fn until_a_refresh_the_file_is_the_one_servo_publishes() {
 }
 
 #[test]
-fn the_tool_writes_the_file_the_browser_reads() {
-    // The browser's reader (`crates/talaria-servo/src/resources.rs`) compiles the file in and
-    // hands it to Servo for `Resource::HstsPreloadList`; the tool's default output is the same
-    // path. If either side moves, the tool would refresh a file nobody reads.
-    let path_in_crate = DEFAULT_DATA
-        .strip_prefix("crates/talaria-servo/")
-        .expect("the data file is in the talaria-servo crate");
-    assert_eq!(path_in_crate, "resources/hsts_preload.fstmap");
-
-    let resources = repository().join("crates/talaria-servo/src/resources.rs");
-    let source = std::fs::read_to_string(&resources)
-        .unwrap_or_else(|error| panic!("cannot read {resources:?}: {error}"));
-    assert!(
-        source.contains(path_in_crate),
-        "{resources:?} names {path_in_crate}"
+fn the_tools_default_output_is_the_file_the_browser_compiles_in() {
+    // The browser's reader compiles `crates/talaria-servo/resources/hsts_preload.fstmap` in, and
+    // its own test (`mercury_serves_its_own_hsts_preload_list`) compares the bytes Servo is
+    // served with the file at exactly that path. The tool's default output must be that path, or
+    // a refresh would rewrite a file nobody reads.
+    assert_eq!(
+        DEFAULT_DATA,
+        "crates/talaria-servo/resources/hsts_preload.fstmap"
     );
-    assert!(
-        source.contains("include_bytes!(\"../resources/hsts_preload.fstmap\")"),
-        "{resources:?} compiles the file in"
-    );
-    assert!(
-        source.contains("Resource::HstsPreloadList"),
-        "{resources:?} serves Resource::HstsPreloadList"
-    );
+    assert!(repository().join(DEFAULT_DATA).is_file());
 }
 
 #[test]

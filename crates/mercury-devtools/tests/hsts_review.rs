@@ -11,7 +11,7 @@ use fst::MapBuilder;
 use mercury_devtools::hsts::fstmap::{Preload, build};
 use mercury_devtools::hsts::manifest::{Date, FORMAT, Manifest, Source, sha256_hex};
 use mercury_devtools::hsts::review::{
-    Diff, Limits, Verdict, check, diff, guard_refresh, render_diff,
+    Diff, Limits, Verdict, check, diff, guard_flag_loss, guard_refresh, render_diff,
 };
 use mercury_devtools::hsts::{CANARIES, DEFAULT_MAX_SHRINK_PERCENT, Entry};
 use serde_json::{Value, json};
@@ -647,7 +647,7 @@ fn a_good_file_with_its_manifest_passes_and_says_how_old_it_is() {
 #[test]
 fn the_default_limits_are_the_shipped_constants() {
     let limits = Limits::default();
-    assert_eq!(limits.min_entries, 100_000);
+    assert_eq!(limits.min_entries, 50_000);
     assert_eq!(limits.min_include_percent, 90);
     assert_eq!(limits.max_age_days, None);
     // A small list fails the default minimum, which is the point of it.
@@ -660,7 +660,7 @@ fn the_default_limits_are_the_shipped_constants() {
         problems_of(&verdict)
     );
     assert!(
-        has(&verdict.problems, "100,000"),
+        has(&verdict.problems, "50,000"),
         "{}",
         problems_of(&verdict)
     );
@@ -700,15 +700,15 @@ fn a_file_that_cannot_be_opened_gives_exactly_one_problem() {
 fn a_breach_of_the_id_scheme_is_a_problem_and_the_file_is_not_a_rebuild() {
     // The values `fst` writes from a plain list of 0 and 1 flags: valid for Servo, not ours.
     let bytes = raw(&[
+        ("accounts.google.com", 1),
         ("dev", 1),
         ("dropbox.com", 1),
         ("github.com", 1),
-        ("google.com", 1),
     ]);
     let verdict = check(&bytes, None, today(), &small());
     assert_eq!(verdict.problems.len(), 1, "{}", problems_of(&verdict));
     assert!(
-        verdict.problems[0].contains("dropbox.com"),
+        verdict.problems[0].contains("the host \"dev\""),
         "{}",
         problems_of(&verdict)
     );
@@ -1124,7 +1124,7 @@ fn a_new_list_below_the_minimum_size_is_refused_with_the_numbers_and_the_way_out
     let new = open(&good_entries());
     let error = guard(None, &new, &Limits::default()).unwrap_err();
     assert!(error.contains("only 11 entries"), "{error}");
-    assert!(error.contains("minimum of 100,000"), "{error}");
+    assert!(error.contains("minimum of 50,000"), "{error}");
     assert!(error.contains("--min-entries"), "{error}");
     // A parameter, and the minimum itself passes.
     let limits = Limits {
@@ -1523,4 +1523,62 @@ fn render_diff_of_a_real_diff_keeps_key_order_and_the_total_in_the_header() {
          - x.example (included subdomains)\n\
          ~ b.example (now includes subdomains)\n"
     );
+}
+
+// ---------------------------------------------------------------- the flag-loss guard
+
+#[test]
+fn losing_the_flag_on_exactly_the_limit_share_of_shared_hosts_passes_and_one_more_fails() {
+    let old = open(&shaped(100, 100));
+    // One host of a hundred (1 %) passes at a limit of 1 %.
+    assert_eq!(guard_flag_loss(&old, &open(&shaped(100, 99)), 1), Ok(()));
+    // Two of a hundred do not, and the sentence has the numbers, the first hosts and the way out.
+    let error = guard_flag_loss(&old, &open(&shaped(100, 98)), 1).unwrap_err();
+    assert!(error.contains("2 of the 100 hosts"), "{error}");
+    assert!(error.contains("(2.0 %)"), "{error}");
+    assert!(error.contains("limit 1 %"), "{error}");
+    assert!(
+        error.contains("host-00094.test, host-00095.test"),
+        "{error}"
+    );
+    assert!(error.contains("--allow-flag-loss"), "{error}");
+    // The limit is a parameter: 0 % refuses a single host, 2 % lets two pass.
+    assert!(guard_flag_loss(&old, &open(&shaped(100, 99)), 0).is_err());
+    assert_eq!(guard_flag_loss(&old, &open(&shaped(100, 98)), 2), Ok(()));
+}
+
+#[test]
+fn only_flags_lost_on_shared_hosts_count_as_flag_loss() {
+    // Flags gained do not count.
+    let few_flags = open(&shaped(100, 50));
+    assert_eq!(
+        guard_flag_loss(&few_flags, &open(&shaped(100, 100)), 0),
+        Ok(())
+    );
+    // Neither do hosts that were removed (the new list is the first 60 entries) ...
+    let old = open(&shaped(100, 100));
+    let mut shrunk = shaped(100, 100);
+    shrunk.truncate(60);
+    assert_eq!(guard_flag_loss(&old, &open(&shrunk), 0), Ok(()));
+    // ... or hosts that are new, whatever their flag.
+    let mut grown = shaped(100, 100);
+    grown.extend((0..50).map(|number| entry(&format!("new-{number:02}.test"), false)));
+    assert_eq!(guard_flag_loss(&old, &open(&grown), 0), Ok(()));
+    // Two lists with no host in common have nothing to lose.
+    let a = open(&[entry("a.test", true)]);
+    let b = open(&[entry("b.test", false)]);
+    assert_eq!(guard_flag_loss(&a, &b, 0), Ok(()));
+}
+
+#[test]
+fn the_flag_loss_share_is_of_the_shared_hosts_not_of_all_of_them() {
+    // 100 hosts shared and 100 removed: one lost flag is 1 % of the shared hosts, which passes at
+    // a limit of 1 %; two are 2 % of them (and only 1 % of the old list's 200), which fails.
+    let old = open(&shaped(200, 200));
+    let mut new = shaped(100, 100);
+    new.last_mut().unwrap().include_subdomains = false;
+    assert_eq!(guard_flag_loss(&old, &open(&new), 1), Ok(()));
+    new.iter_mut().rev().nth(1).unwrap().include_subdomains = false;
+    let error = guard_flag_loss(&old, &open(&new), 1).unwrap_err();
+    assert!(error.contains("2 of the 100 hosts"), "{error}");
 }

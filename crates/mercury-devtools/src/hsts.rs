@@ -32,16 +32,31 @@ pub struct Entry {
 
 /// Hosts every refreshed list must contain with `include_subdomains` (long-standing preloads, and
 /// the TLD `dev`, so that a parse that drops TLD entries is caught). Each one is listed with the
-/// flag in the list Servo 0.8.0 ships, so the shipped file meets the rule itself; `paypal.com` is
-/// deliberately not here: that list has it (and `www.paypal.com`) without the flag.
-pub const CANARIES: [&str; 4] = ["google.com", "github.com", "dropbox.com", "dev"];
-/// A refreshed list with fewer entries is refused (the list Servo 0.8.0 shipped has 166,958).
-pub const DEFAULT_MIN_ENTRIES: usize = 100_000;
+/// flag both in the list Servo 0.8.0 ships and in Chromium's list of 22 Nov 2026, so the shipped
+/// file and a real refresh both meet the rule. Two hosts are deliberately not here: `paypal.com`
+/// is listed without the flag in both (as is `www.paypal.com`), and `google.com` itself is no
+/// longer listed in Chromium's file (only `accounts.google.com`, `mail.google.com` and the
+/// like, and the TLD `google`).
+pub const CANARIES: [&str; 4] = ["accounts.google.com", "github.com", "dropbox.com", "dev"];
+/// A refreshed list with fewer entries is refused. The live list of 22 Nov 2026 has 95,544
+/// entries and the older snapshot Servo 0.8.0 ships has 166,958, so this is about half the size
+/// of the list today: a truncated download or a half-parsed file falls under it, while Chromium
+/// would have to prune nearly half of its list again before an honest refresh does.
+pub const DEFAULT_MIN_ENTRIES: usize = 50_000;
 /// A refreshed list with more than this share fewer entries than the file it replaces is refused.
+/// (The first refresh breaks this on purpose: see `docs/developer-guide/releases.md`.)
 pub const DEFAULT_MAX_SHRINK_PERCENT: usize = 10;
+/// A refreshed list in which more than this share of the hosts it has in common with the file it
+/// replaces lose `include_subdomains` is refused. Today's Chromium list differs from Servo's
+/// snapshot in no flag at all, so one percent leaves room for a handful of honest changes and
+/// stops a parse that reads the flag wrongly for a slice of the list.
+pub const DEFAULT_MAX_FLAG_LOSS_PERCENT: usize = 1;
 /// A refreshed list in which fewer than this share of entries include subdomains is refused
-/// (the shipped list has 99.85 %).
+/// (the shipped list has 99.85 %, Chromium's of 22 Nov 2026 99.74 %).
 pub const MIN_INCLUDE_PERCENT: usize = 90;
+/// `build` refuses an input larger than this many bytes (Chromium's file is about 10.6 MB as
+/// JSON and 14.2 MB as Gitiles' base64), and the download script's `curl` has the same cap.
+pub const MAX_INPUT_BYTES: u64 = 100_000_000;
 /// Where the data file lives, relative to the repository root, and where `build` writes by default.
 pub const DEFAULT_DATA: &str = "crates/talaria-servo/resources/hsts_preload.fstmap";
 /// Chromium's file, relative to `src/`.

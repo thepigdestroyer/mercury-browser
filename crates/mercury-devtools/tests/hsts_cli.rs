@@ -13,9 +13,9 @@ use std::process::{Command, Stdio};
 
 use base64::Engine as _;
 use base64::engine::general_purpose::STANDARD;
-use mercury_devtools::hsts::CANARIES;
 use mercury_devtools::hsts::fstmap::Preload;
 use mercury_devtools::hsts::manifest::{Date, Manifest, sha256_hex};
+use mercury_devtools::hsts::{CANARIES, MAX_INPUT_BYTES, cli};
 use tempfile::TempDir;
 
 const BIN: &str = env!("CARGO_BIN_EXE_hsts-preload");
@@ -534,7 +534,7 @@ fn the_default_minimum_refuses_the_small_fixture() {
         "{}",
         outcome.err
     );
-    assert!(outcome.err.contains("100,000"), "{}", outcome.err);
+    assert!(outcome.err.contains("50,000"), "{}", outcome.err);
     assert_nothing_written(&work);
 }
 
@@ -638,6 +638,175 @@ fn max_shrink_percent_moves_the_limit() {
         1,
     );
     assert_done(&build(&work, &hosts(80), &["--max-shrink-percent", "25"]));
+}
+
+/// `hosts(count)` with the flag off on the `lose` hosts that follow the canaries.
+fn hosts_losing_flags(count: usize, lose: usize) -> Vec<(String, bool)> {
+    let mut list = hosts(count);
+    for entry in list.iter_mut().skip(CANARIES.len()).take(lose) {
+        entry.1 = false;
+    }
+    list
+}
+
+#[test]
+fn every_canary_is_required_and_the_message_names_it() {
+    for canary in CANARIES {
+        let work = Work::new();
+        let list: Vec<_> = hosts(40)
+            .into_iter()
+            .filter(|(host, _)| host != canary)
+            .collect();
+        let outcome = build(&work, &list, &[]);
+        assert_refused(&outcome, 1);
+        assert!(
+            outcome.err.contains(&format!("{canary} is missing")),
+            "{canary}: {}",
+            outcome.err
+        );
+        assert_nothing_written(&work);
+
+        let mut list = hosts(40);
+        list.iter_mut().find(|(host, _)| host == canary).unwrap().1 = false;
+        let outcome = build(&work, &list, &[]);
+        assert_refused(&outcome, 1);
+        assert!(
+            outcome
+                .err
+                .contains(&format!("{canary} is listed without include_subdomains")),
+            "{canary}: {}",
+            outcome.err
+        );
+        assert_nothing_written(&work);
+    }
+}
+
+#[test]
+fn a_list_shaped_like_chromiums_today_passes_the_canaries() {
+    // `google.com` itself is not in Chromium's file any more: `accounts.google.com`,
+    // `mail.google.com` and the like are, and the canary is one of those.
+    let work = Work::new();
+    let mut list = hosts(40);
+    list.push(("mail.google.com".to_string(), true));
+    assert!(!list.iter().any(|(host, _)| host == "google.com"));
+    assert_done(&build(&work, &list, &[]));
+    let built = work.preload("list.fstmap");
+    assert_eq!(built.get("google.com"), None);
+    assert_eq!(built.get("accounts.google.com"), Some(true));
+}
+
+#[test]
+fn losing_the_flag_on_more_than_one_percent_of_the_hosts_is_refused_and_leaves_the_file_alone() {
+    let work = Work::new();
+    assert_done(&build(&work, &hosts(200), &[]));
+    let data = work.read("list.fstmap");
+    let manifest = work.read("list.manifest.json");
+
+    // Three of 200 hosts (1.5 %) lose the flag.
+    let outcome = build(&work, &hosts_losing_flags(200, 3), &[]);
+    assert_refused(&outcome, 1);
+    assert!(
+        outcome.err.contains("lose include_subdomains"),
+        "{}",
+        outcome.err
+    );
+    assert!(outcome.err.contains("limit 1 %"), "{}", outcome.err);
+    assert!(outcome.err.contains("site000.example"), "{}", outcome.err);
+    assert!(outcome.err.contains("--allow-flag-loss"), "{}", outcome.err);
+    assert_eq!(work.read("list.fstmap"), data, "the file is as it was");
+    assert_eq!(work.read("list.manifest.json"), manifest);
+    // --allow-shrink waives a different rule.
+    let outcome = build(&work, &hosts_losing_flags(200, 3), &["--allow-shrink"]);
+    assert_refused(&outcome, 1);
+    assert_eq!(work.read("list.fstmap"), data);
+
+    // Exactly 1 % (two of 200) passes.
+    assert_done(&build(&work, &hosts_losing_flags(200, 2), &[]));
+    let built = work.preload("list.fstmap");
+    assert_eq!(built.get("site000.example"), Some(false));
+    assert_eq!(built.get("site002.example"), Some(true));
+}
+
+#[test]
+fn the_flag_loss_guard_has_an_override_and_a_limit() {
+    let work = Work::new();
+    assert_done(&build(&work, &hosts(400), &[]));
+    // Thirty of 400 shared hosts (7.5 %) lose the flag: the list still passes the 90 % rule.
+    let list = hosts_losing_flags(400, 30);
+    assert_refused(&build(&work, &list, &[]), 1);
+    assert_refused(&build(&work, &list, &["--max-flag-loss-percent", "5"]), 1);
+    assert_done(&build(&work, &list, &["--max-flag-loss-percent", "8"]));
+
+    // The override waives this rule alone: a missing canary is still refused.
+    assert_done(&build(&work, &hosts(400), &[]));
+    assert_done(&build(&work, &list, &["--allow-flag-loss"]));
+    let data = work.read("list.fstmap");
+    let without_canary: Vec<_> = hosts_losing_flags(400, 30)
+        .into_iter()
+        .filter(|(host, _)| host != CANARIES[3])
+        .collect();
+    assert_refused(&build(&work, &without_canary, &["--allow-flag-loss"]), 1);
+    assert_eq!(work.read("list.fstmap"), data);
+}
+
+fn arguments(words: &[&str]) -> Vec<String> {
+    words.iter().map(|word| (*word).to_string()).collect()
+}
+
+#[test]
+fn an_input_over_the_size_cap_is_refused_from_standard_input_and_from_a_file() {
+    let work = Work::new();
+    let output = work.path("list.fstmap");
+    let today = Date::parse("2026-11-22").unwrap();
+
+    // An endless standard input: only MAX_INPUT_BYTES + 1 bytes are ever read.
+    let (mut out, mut err) = (Vec::new(), Vec::new());
+    let status = cli::run(
+        &arguments(&[
+            "build",
+            "--input",
+            "-",
+            "--output",
+            &output,
+            "--min-entries",
+            "1",
+        ]),
+        &mut std::io::repeat(b' '),
+        &mut out,
+        &mut err,
+        today,
+    );
+    let err = String::from_utf8(err).unwrap();
+    assert_eq!(status, 1, "{err}");
+    assert!(
+        err.contains(&format!(
+            "standard input is larger than {MAX_INPUT_BYTES} bytes"
+        )),
+        "{err}"
+    );
+
+    // A (sparse) file one byte over the cap.
+    let big = work.path("big.json");
+    std::fs::File::create(&big)
+        .unwrap()
+        .set_len(MAX_INPUT_BYTES + 1)
+        .unwrap();
+    let outcome = run(&[
+        "build",
+        "--input",
+        &big,
+        "--output",
+        &output,
+        "--min-entries",
+        "1",
+    ]);
+    assert_refused(&outcome, 1);
+    assert!(
+        outcome.err.contains("big.json is larger than"),
+        "{}",
+        outcome.err
+    );
+    assert!(!work.exists("list.fstmap"), "{:?}", work.names());
 }
 
 #[test]
@@ -1337,7 +1506,27 @@ mod script {
 
     use mercury_devtools::hsts::DEFAULT_DATA;
 
-    const URL_MAIN: &str = "https://chromium.googlesource.com/chromium/src/+/main/net/http/transport_security_state_static.json?format=TEXT";
+    /// The commit the stub `curl` answers a `?format=JSON` request with.
+    const COMMIT: &str = "0123456789abcdef0123456789abcdef01234567";
+    const URL_RESOLVE_MAIN: &str =
+        "https://chromium.googlesource.com/chromium/src/+/main?format=JSON";
+    const URL_COMMIT: &str = "https://chromium.googlesource.com/chromium/src/+/0123456789abcdef0123456789abcdef01234567/net/http/transport_security_state_static.json?format=TEXT";
+    /// A `curl` that writes the `--output` file: Gitiles' commit answer (a `)]}'` line, then JSON)
+    /// for a `?format=JSON` URL, and a placeholder for anything else.
+    const STUB_CURL: &str = r##"out=
+last=
+while [ $# -gt 0 ]; do
+  case $1 in -o | --output) out=$2; shift ;; esac
+  last=$1
+  shift
+done
+if [ -n "$out" ]; then
+  case $last in
+    *format=JSON) printf '%s\n{\n  "commit": "0123456789abcdef0123456789abcdef01234567",\n  "tree": "x"\n}\n' ")]}'" > "$out" ;;
+    *) echo stub > "$out" ;;
+  esac
+fi
+"##;
 
     /// A temporary tree with the script at `scripts/dev/`, an empty placeholder where the data file
     /// is, and a `bin/` of stub `curl` and `cargo` programs that log their arguments (and the
@@ -1364,11 +1553,7 @@ mod script {
             std::fs::write(&data, b"").unwrap();
             let bin = root.join("bin");
             std::fs::create_dir_all(&bin).unwrap();
-            stub(
-                &bin,
-                "curl",
-                "out=\nwhile [ $# -gt 0 ]; do\n  case $1 in -o | --output) out=$2; shift ;; esac\n  shift\ndone\nif [ -n \"$out\" ]; then echo stub > \"$out\"; fi\n",
-            );
+            stub(&bin, "curl", STUB_CURL);
             stub(&bin, "cargo", "");
             Tree { dir }
         }
@@ -1503,32 +1688,53 @@ mod script {
             let tree = Tree::new();
             let (status, _, stderr) = tree.run(&[good]);
             assert_eq!(status, Some(0), "{good}: {stderr}");
-            assert_eq!(tree.calls("curl").len(), 1, "{good}");
+            assert_eq!(
+                tree.calls("curl").len(),
+                2,
+                "{good}: the commit, then the list"
+            );
         }
     }
 
     #[test]
-    fn the_normal_mode_calls_curl_once_for_the_exact_url_and_builds_from_its_download() {
+    fn the_normal_mode_resolves_the_ref_to_a_commit_downloads_that_commit_and_builds_from_it() {
         let tree = Tree::new();
         let (status, stdout, stderr) = tree.run(&[]);
         assert_eq!(status, Some(0), "{stderr}");
         let curl = tree.calls("curl");
-        assert_eq!(curl.len(), 1, "{curl:?}");
-        let (directory, arguments) = &curl[0];
+        assert_eq!(curl.len(), 2, "the commit, then the list: {curl:?}");
+        for (directory, arguments) in &curl {
+            assert_eq!(
+                Path::new(directory).canonicalize().unwrap(),
+                tree.root(),
+                "curl runs in the tree's root"
+            );
+            assert!(arguments.contains("--proto =https"), "{arguments}");
+            assert!(arguments.contains("--proto-redir =https"), "{arguments}");
+            assert!(
+                arguments.contains("--fail") && arguments.contains("--tlsv1.2"),
+                "{arguments}"
+            );
+            assert!(
+                arguments.contains("--max-filesize 100000000"),
+                "the download has a size cap: {arguments}"
+            );
+            assert!(!arguments.contains("http://"), "{arguments}");
+        }
+        let url_of = |arguments: &str| -> Vec<String> {
+            arguments
+                .split(' ')
+                .filter(|word| word.contains("://"))
+                .map(str::to_string)
+                .collect()
+        };
+        assert_eq!(url_of(&curl[0].1), [URL_RESOLVE_MAIN], "{}", curl[0].1);
         assert_eq!(
-            Path::new(directory).canonicalize().unwrap(),
-            tree.root(),
-            "curl runs in the tree's root"
+            url_of(&curl[1].1),
+            [URL_COMMIT],
+            "the list comes from the commit, not from the branch: {}",
+            curl[1].1
         );
-        assert!(arguments.contains("--proto =https"), "{arguments}");
-        assert!(
-            arguments.contains("--fail") && arguments.contains("--tlsv1.2"),
-            "{arguments}"
-        );
-        let words: Vec<&str> = arguments.split(' ').collect();
-        let urls: Vec<&&str> = words.iter().filter(|word| word.contains("://")).collect();
-        assert_eq!(urls, [&URL_MAIN], "no other host: {arguments}");
-        assert!(!arguments.contains("http://"), "{arguments}");
 
         let cargo = tree.calls("cargo");
         assert_eq!(cargo.len(), 3, "build, check, diff: {cargo:?}");
@@ -1536,9 +1742,9 @@ mod script {
         assert!(build.starts_with("run --locked --quiet --release -p mercury-devtools --bin hsts-preload -- build --base64 --input "), "{build}");
         assert!(
             build.contains(&format!(
-                " --ref main --source-url {URL_MAIN} --output {DEFAULT_DATA}"
+                " --ref {COMMIT} --source-url {URL_COMMIT} --output {DEFAULT_DATA}"
             )),
-            "{build}"
+            "the manifest records the commit: {build}"
         );
         assert!(
             cargo[1].1.ends_with(&format!("-- check {DEFAULT_DATA}")),
@@ -1564,19 +1770,80 @@ mod script {
     }
 
     #[test]
-    fn a_ref_goes_into_the_url_and_the_build() {
+    fn a_ref_is_resolved_and_the_commit_goes_into_the_url_and_the_build() {
         let tree = Tree::new();
         let (status, _, stderr) = tree.run(&["refs/tags/131.0.6778.1"]);
         assert_eq!(status, Some(0), "{stderr}");
-        let url = "https://chromium.googlesource.com/chromium/src/+/refs/tags/131.0.6778.1/net/http/transport_security_state_static.json?format=TEXT";
+        let curl = tree.calls("curl");
         assert!(
-            tree.calls("curl")[0].1.ends_with(url),
-            "{:?}",
-            tree.calls("curl")
+            curl[0].1.ends_with(
+                "https://chromium.googlesource.com/chromium/src/+/refs/tags/131.0.6778.1?format=JSON"
+            ),
+            "{curl:?}"
         );
+        assert!(curl[1].1.ends_with(URL_COMMIT), "{curl:?}");
         let build = &tree.calls("cargo")[0].1;
-        assert!(build.contains(" --ref refs/tags/131.0.6778.1 "), "{build}");
-        assert!(build.contains(&format!(" --source-url {url} ")), "{build}");
+        assert!(build.contains(&format!(" --ref {COMMIT} ")), "{build}");
+        assert!(
+            build.contains(&format!(" --source-url {URL_COMMIT} ")),
+            "{build}"
+        );
+    }
+
+    #[test]
+    fn an_answer_without_a_commit_stops_the_script_before_the_download_and_the_build() {
+        let tree = Tree::new();
+        stub(
+            &tree.dir.path().join("bin"),
+            "curl",
+            "out=\n\
+             while [ $# -gt 0 ]; do\n  case $1 in -o | --output) out=$2; shift ;; esac\n  shift\ndone\n\
+             if [ -n \"$out\" ]; then printf '%s\\n{\\n  \"tree\": \"x\"\\n}\\n' \")]}'\" > \"$out\"; fi\n",
+        );
+        let (status, _, stderr) = tree.run(&[]);
+        assert!(status.is_some_and(|code| code != 0), "{status:?}");
+        assert!(stderr.contains("no commit found for 'main'"), "{stderr}");
+        assert_eq!(tree.calls("curl").len(), 1, "{:?}", tree.calls("curl"));
+        assert!(tree.calls("cargo").is_empty(), "{:?}", tree.calls("cargo"));
+    }
+
+    #[test]
+    fn the_options_after_two_dashes_go_to_the_build_and_nowhere_else() {
+        let tree = Tree::new();
+        let (status, _, stderr) = tree.run(&[
+            "main",
+            "--",
+            "--min-entries",
+            "40000",
+            "--allow-shrink",
+            "--allow-flag-loss",
+        ]);
+        assert_eq!(status, Some(0), "{stderr}");
+        let cargo = tree.calls("cargo");
+        assert_eq!(cargo.len(), 3, "{cargo:?}");
+        assert!(
+            cargo[0].1.ends_with(&format!(
+                "--output {DEFAULT_DATA} --min-entries 40000 --allow-shrink --allow-flag-loss"
+            )),
+            "{}",
+            cargo[0].1
+        );
+        assert!(cargo[1].1.ends_with(&format!("-- check {DEFAULT_DATA}")));
+        assert!(!cargo[2].1.contains("--allow"), "{}", cargo[2].1);
+        // Not even a ref is needed before them, and a local copy takes them too.
+        let tree = Tree::new();
+        let input = tree.root().join("copy.json");
+        std::fs::write(&input, b"{}").unwrap();
+        let (status, _, stderr) =
+            tree.run(&["--from", input.to_str().unwrap(), "--", "--allow-shrink"]);
+        assert_eq!(status, Some(0), "{stderr}");
+        assert!(tree.calls("cargo")[0].1.ends_with("--allow-shrink"));
+        assert!(tree.calls("curl").is_empty());
+        // Without them the build line ends with the output.
+        let tree = Tree::new();
+        let (status, _, _) = tree.run(&[]);
+        assert_eq!(status, Some(0));
+        assert!(tree.calls("cargo")[0].1.ends_with(DEFAULT_DATA));
     }
 
     #[test]

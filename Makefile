@@ -328,8 +328,10 @@ servo-patches-check:
 # engine-free and reads the file only; HSTS_MAX_AGE_DAYS=N makes a list retrieved longer ago fail.
 HSTS_CHROMIUM_REF ?= main
 
+# HSTS_BUILD_ARGS go to `hsts-preload build`, e.g. HSTS_BUILD_ARGS="--allow-shrink --allow-flag-loss"
+# for a refresh that is meant to drop many hosts (the first one does: see releases.md).
 hsts-preload-refresh:
-	scripts/dev/update-hsts-preload.sh "$(HSTS_CHROMIUM_REF)"
+	scripts/dev/update-hsts-preload.sh "$(HSTS_CHROMIUM_REF)"$(if $(HSTS_BUILD_ARGS), -- $(HSTS_BUILD_ARGS))
 
 hsts-preload-check:
 	"$(CARGO)" run --locked --quiet $(CARGO_FLAGS) --package mercury-devtools --bin hsts-preload -- check crates/talaria-servo/resources/hsts_preload.fstmap$(if $(HSTS_MAX_AGE_DAYS), --max-age-days $(HSTS_MAX_AGE_DAYS))
