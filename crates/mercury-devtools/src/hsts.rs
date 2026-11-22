@@ -44,7 +44,8 @@ pub const CANARIES: [&str; 4] = ["accounts.google.com", "github.com", "dropbox.c
 /// would have to prune nearly half of its list again before an honest refresh does.
 pub const DEFAULT_MIN_ENTRIES: usize = 50_000;
 /// A refreshed list with more than this share fewer entries than the file it replaces is refused.
-/// (The first refresh breaks this on purpose: see `docs/developer-guide/releases.md`.)
+/// (The first refresh, on 22 Nov 2026, broke this on purpose and used `--allow-shrink`: see
+/// `docs/developer-guide/releases.md`.)
 pub const DEFAULT_MAX_SHRINK_PERCENT: usize = 10;
 /// A refreshed list in which more than this share of the hosts it has in common with the file it
 /// replaces lose `include_subdomains` is refused. Today's Chromium list differs from Servo's

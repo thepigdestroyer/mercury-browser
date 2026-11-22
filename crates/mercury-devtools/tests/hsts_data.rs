@@ -69,17 +69,16 @@ fn the_shipped_list_passes_the_check_with_its_manifest_and_the_default_limits() 
         verdict.problems,
         verdict.notes
     );
-    if manifest.source.retrieved.is_none() {
-        // The copy taken from Servo records no retrieval date, and the check says so.
-        assert!(
-            verdict
-                .notes
-                .iter()
-                .any(|note| note.starts_with("age unknown")),
-            "{:#?}",
-            verdict.notes
-        );
-    }
+    // The manifest has a retrieval date, so the check can say how old the list is (it never
+    // fails on age without `--max-age-days`).
+    assert!(
+        verdict
+            .notes
+            .iter()
+            .any(|note| note.contains(" old (retrieved ")),
+        "{:#?}",
+        verdict.notes
+    );
 }
 
 #[test]
@@ -132,36 +131,39 @@ fn the_manifest_is_written_the_way_the_tool_writes_it() {
 }
 
 #[test]
-fn until_a_refresh_the_file_is_the_one_servo_publishes() {
+fn the_manifest_names_the_chromium_commit_the_file_was_built_from() {
+    // The first refresh (22 Nov 2026) replaced the copy of Servo's file. A refreshed list names
+    // where it came from and what it read, and was written by this tool.
     let manifest = manifest();
-    if manifest.source.url.is_none() {
-        // The baseline: a copy of `servo-default-resources` 0.8.0, which the manifest says.
-        let servo =
-            repository().join("third_party/servo-default-resources/resources/hsts_preload.fstmap");
-        let published =
-            std::fs::read(&servo).unwrap_or_else(|error| panic!("cannot read {servo:?}: {error}"));
-        assert!(
-            shipped_bytes() == published.as_slice(),
-            "the manifest says this is Servo's file, but it differs from {servo:?}"
-        );
-        assert!(manifest.source.name.contains("servo-default-resources"));
-        assert!(manifest.source.retrieved.is_none());
-    } else {
-        // A refresh names where it came from and what it read.
-        let source = &manifest.source;
-        assert!(source.retrieved.is_some(), "a refreshed list has a date");
-        assert!(source.git_ref.is_some(), "a refreshed list names its ref");
-        assert!(
-            source.input_sha256.is_some(),
-            "a refreshed list hashes its input"
-        );
-        assert!(source.objects.is_some() && source.force_https.is_some());
-        assert!(
-            manifest.tool.starts_with("hsts-preload "),
-            "{}",
-            manifest.tool
-        );
-    }
+    let source = &manifest.source;
+    assert!(source.retrieved.is_some(), "a refreshed list has a date");
+    let commit = source
+        .git_ref
+        .as_deref()
+        .expect("a refreshed list names its ref");
+    assert!(
+        commit.len() == 40 && commit.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "the manifest records a Chromium commit, not a moving branch: {commit}"
+    );
+    let url = source
+        .url
+        .as_deref()
+        .expect("a refreshed list names its URL");
+    assert!(
+        url.starts_with("https://chromium.googlesource.com/chromium/src/+/")
+            && url.contains(commit),
+        "{url}"
+    );
+    assert!(
+        source.input_sha256.is_some(),
+        "a refreshed list hashes its input"
+    );
+    assert!(source.objects.is_some() && source.force_https.is_some());
+    assert!(
+        manifest.tool.starts_with("hsts-preload "),
+        "{}",
+        manifest.tool
+    );
 }
 
 #[test]
