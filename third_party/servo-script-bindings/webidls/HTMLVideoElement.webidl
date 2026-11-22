@@ -18,3 +18,10 @@ partial interface HTMLVideoElement {
   [Pref="media_testing_enabled"]
   attribute EventHandler onpostershown;
 };
+
+// Mercury: (MED-1b) https://w3c.github.io/media-playback-quality/#dom-htmlvideoelement-getvideoplaybackquality
+// (lane med-1b, decision D5), behind `dom_media_source_enabled`.
+partial interface HTMLVideoElement {
+  [Pref="dom_media_source_enabled"]
+  VideoPlaybackQuality getVideoPlaybackQuality();
+};

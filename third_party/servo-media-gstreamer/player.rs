@@ -420,7 +420,23 @@ impl PlayerInner {
             .map_err(|_| PlayerError::SetStreamFailed)
     }
 
+    /// Mercury: (MED-1b) `(total, dropped)` frames of the video sink (the `stats` of `GstBaseSink`:
+    /// frames rendered and frames dropped by its QoS), for `getVideoPlaybackQuality()`.
+    pub fn video_playback_quality(&self) -> Option<(u64, u64)> {
+        let stats = self
+            .video_sink
+            .property::<Option<gstreamer::Structure>>("stats")?;
+        let rendered = stats.get::<u64>("rendered").ok()?;
+        let dropped = stats.get::<u64>("dropped").ok()?;
+        Some((rendered.saturating_add(dropped), dropped))
+    }
+
     fn set_audio_track(&mut self, stream_index: i32, enabled: bool) -> Result<(), PlayerError> {
+        // Mercury: (MED-1b) the track lists of a MediaSource are informational (one track per kind
+        // plays): choosing a track changes nothing.
+        if self.stream_type == StreamType::MediaSource {
+            return Ok(());
+        }
         self.player
             .set_audio_track(stream_index)
             .map_err(|_| PlayerError::SetTrackFailed)?;
@@ -429,6 +445,10 @@ impl PlayerInner {
     }
 
     fn set_video_track(&mut self, stream_index: i32, enabled: bool) -> Result<(), PlayerError> {
+        // Mercury: (MED-1b) see `set_audio_track`.
+        if self.stream_type == StreamType::MediaSource {
+            return Ok(());
+        }
         self.player
             .set_video_track(stream_index)
             .map_err(|_| PlayerError::SetTrackFailed)?;
@@ -631,9 +651,14 @@ impl GStreamerPlayer {
         // Set max size for the player buffer.
         pipeline.set_property("buffer-size", MAX_BUFFER_SIZE);
 
-        // Set player position interval update to 0.5 seconds.
+        // Set player position interval update to 0.5 seconds. Mercury: (MED-1b) 100 ms for a MediaSource,
+        // whose element reads the position to decide about an underrun (`StallGuard`, decision D4).
         let mut config = player.config();
-        config.set_position_update_interval(500u32);
+        config.set_position_update_interval(if self.stream_type == StreamType::MediaSource {
+            100u32
+        } else {
+            500u32
+        });
         player
             .set_config(config)
             .map_err(|e| PlayerError::Backend(e.to_string()))?;
@@ -1195,6 +1220,13 @@ impl Player for GStreamerPlayer {
 
     fn render_use_gl(&self) -> bool {
         self.render.lock().unwrap().is_gl()
+    }
+
+    // Mercury: (MED-1b) `(total, dropped)` frames of the video sink; `None` before the pipeline exists.
+    fn video_playback_quality(&self) -> Option<(u64, u64)> {
+        let inner = self.inner.borrow();
+        let inner = inner.as_ref()?.lock().unwrap();
+        inner.video_playback_quality()
     }
 
     // Mercury: (MED-1) Connects the player to the MediaSource backend whose frames it plays, and builds

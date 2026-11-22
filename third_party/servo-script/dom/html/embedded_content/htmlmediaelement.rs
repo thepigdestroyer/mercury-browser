@@ -503,7 +503,12 @@ impl HTMLMediaElement {
             .as_ref()
             .is_some_and(|player| !player.lock().unwrap().paused());
 
-        if self.is_potentially_playing() && !is_playing {
+        // Mercury (MED-1b): the underrun guard of a MediaSource keeps the pipeline paused until its
+        // hysteresis has passed, and an element that is playing and may play on is left alone (as
+        // published, this paused it whenever it was called while playing, which a readiness that moves
+        // between HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA does all the time).
+        let stalled = self.media_source_stalled();
+        if self.is_potentially_playing() && !stalled && !is_playing {
             if let Some(ref player) = *self.player.borrow() {
                 let player = player.lock().unwrap();
 
@@ -518,6 +523,7 @@ impl HTMLMediaElement {
                 }
             }
         } else if is_playing &&
+            (stalled || !self.is_potentially_playing()) && // Mercury (MED-1b)
             let Some(ref player) = *self.player.borrow() &&
             let Err(error) = player.lock().unwrap().pause()
         {
@@ -1118,7 +1124,7 @@ impl HTMLMediaElement {
                 // > to fire an event named waiting at the element.
                 if was_potentially_playing &&
                     !self.ended_playback(LoopCondition::Included) &&
-                    !self.error.get().is_none() &&
+                    self.error.get().is_none() && // Mercury (MED-1b): published as `!..is_none()`
                     !self.is_paused_for_user_interaction() &&
                     !self.is_paused_for_in_band_content()
                 {

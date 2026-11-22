@@ -12,9 +12,16 @@
 // these functions read and set, so no upstream item had to change its visibility.
 
 // Mercury (MED-1): the MSE contract types the element reads from the backend.
-use servo_media::player::mse::{ElementReadyState, EosError, InitInfo, TrackKind};
+use servo_media::player::mse::{
+    ElementReadyState, EosError, InitInfo, MediaSourceReadyState as BackendReadyState, StallAction,
+    StallInput, TrackKind,
+};
 
 use super::*;
+
+/// How long after a stall check that wanted to change state and could not (the guard keeps 250 ms
+/// between two transitions) the element looks again.
+const STALL_RECHECK_MS: u64 = 260;
 
 impl HTMLMediaElement {
     //
@@ -64,6 +71,14 @@ impl HTMLMediaElement {
         }
     }
 
+    /// `(total, dropped)` video frames of the element's player (lane med-1b, decision D5), for
+    /// `getVideoPlaybackQuality()`. `None` without a player or when the backend does not count.
+    pub(crate) fn player_video_playback_quality(&self) -> Option<(u64, u64)> {
+        let player = self.player.borrow();
+        let player = player.as_ref()?.lock().unwrap();
+        player.video_playback_quality()
+    }
+
     /// The backend learns every playback position (coded frame eviction, readiness).
     pub(super) fn media_source_position_changed(&self, position: f64) {
         if let Some(media_source) = self.media_source.get() {
@@ -104,6 +119,112 @@ impl HTMLMediaElement {
     /// `change_ready_state`. Called on every initialization segment, append, removal, eviction,
     /// position and seek. A no-op without a MediaSource.
     pub(crate) fn media_source_update_ready_state(&self, cx: &mut JSContext) {
+        self.media_source_apply_ready_state(cx);
+        self.media_source_check_stall();
+    }
+
+    /// Whether the underrun guard has paused the pipeline (decision D4 of lane med-1b). The upstream
+    /// `update_media_state` reads it: while it is true the pipeline is not resumed, whatever the
+    /// readiness says, until the guard's hysteresis has passed.
+    pub(super) fn media_source_stalled(&self) -> bool {
+        self.media_source
+            .get()
+            .is_some_and(|media_source| media_source.stall().borrow().guard.is_stalled())
+    }
+
+    /// The underrun decision (lane med-1b, decision D4): asks the `StallGuard` what to do with the
+    /// position, the readiness and the state of playback, and has `update_media_state` pause or resume
+    /// the pipeline when the stall begins or ends. The `waiting` and `playing` events come from the
+    /// readiness change that goes with it (`change_ready_state`); the page's `paused` is not touched.
+    /// Called after every readiness update: position updates (every 100 ms for a MediaSource player),
+    /// appends, removals, seeks, end of stream.
+    fn media_source_check_stall(&self) {
+        let Some(media_source) = self.media_source.get() else {
+            return;
+        };
+        let backend = media_source.backend();
+        let position = self.current_playback_position.get();
+        let ready = backend.element_ready_state(position);
+        let ended = backend.ready_state() == BackendReadyState::Ended;
+        let playing = !self.paused.get() &&
+            self.error.get().is_none() &&
+            self.network_state.get() != NetworkState::Empty &&
+            self.ready_state.get() != ReadyState::HaveNothing &&
+            !self.ended_playback(LoopCondition::Included);
+        let seeking = self.seeking.get();
+
+        let (action, was_stalled, is_stalled, wants_recheck) = {
+            let mut state = media_source.stall().borrow_mut();
+            let was_stalled = state.guard.is_stalled();
+            let input = StallInput {
+                position,
+                ready,
+                playing,
+                seeking,
+                ended,
+                now_ms: state.now_ms(),
+            };
+            let action = state.guard.update(input);
+            let is_stalled = state.guard.is_stalled();
+            // The guard keeps a quarter of a second between two transitions: when it wants to change
+            // state and refused for that reason, nothing may be left waiting for the next position
+            // update (the pipeline is paused during a stall, so none comes).
+            let wants_change = if is_stalled {
+                ready >= ElementReadyState::HaveFutureData || ended
+            } else {
+                playing && !seeking && !ended && ready <= ElementReadyState::HaveCurrentData
+            };
+            let wants_recheck =
+                action == StallAction::None && wants_change && !state.recheck_pending;
+            if wants_recheck {
+                state.recheck_pending = true;
+            }
+            (action, was_stalled, is_stalled, wants_recheck)
+        };
+
+        if action != StallAction::None || was_stalled != is_stalled {
+            // Pauses the pipeline during a stall and resumes it when the stall is over (a seek ends
+            // it without an action).
+            self.update_media_state();
+        }
+        if wants_recheck {
+            self.schedule_media_source_stall_recheck();
+        }
+    }
+
+    /// Looks at the stall again once the guard's hysteresis has passed.
+    fn schedule_media_source_stall_recheck(&self) {
+        let this = Trusted::new(self);
+        let generation_id = self.generation_id.get();
+        let task_source = self
+            .owner_global()
+            .task_manager()
+            .media_element_task_source()
+            .to_sendable();
+        let spawned = std::thread::Builder::new()
+            .name("MseStallRecheck".to_owned())
+            .spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(STALL_RECHECK_MS));
+                task_source.queue(task!(media_source_stall_recheck: move |cx| {
+                    let this = this.root();
+                    if generation_id != this.generation_id.get() {
+                        return;
+                    }
+                    if let Some(media_source) = this.media_source.get() {
+                        media_source.stall().borrow_mut().recheck_pending = false;
+                    }
+                    this.media_source_update_ready_state(cx);
+                }));
+            });
+        if spawned.is_err() {
+            warn!("Could not start the MediaSource stall re-check thread");
+            if let Some(media_source) = self.media_source.get() {
+                media_source.stall().borrow_mut().recheck_pending = false;
+            }
+        }
+    }
+
+    fn media_source_apply_ready_state(&self, cx: &mut JSContext) {
         let Some(media_source) = self.media_source.get() else {
             return;
         };

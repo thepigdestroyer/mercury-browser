@@ -15,3 +15,7 @@
 pub(crate) mod mediasource;
 pub(crate) mod sourcebuffer;
 pub(crate) mod sourcebufferlist;
+// Mercury: (MED-1b) the underrun state, the track lists' contents and `getVideoPlaybackQuality`.
+pub(crate) mod stall;
+pub(crate) mod tracks;
+pub(crate) mod videoplaybackquality;

@@ -47,6 +47,7 @@ use crate::dom::element::attributes::storage::AttrRef;
 use crate::dom::element::{AttributeMutation, Element};
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::html::htmlmediaelement::{HTMLMediaElement, NetworkState, ReadyState};
+use crate::dom::mse::videoplaybackquality::VideoPlaybackQuality; // Mercury (MED-1b)
 use crate::dom::node::virtualmethods::VirtualMethods;
 use crate::dom::node::{Node, NodeDamage, NodeTraits};
 use crate::dom::performance::performanceresourcetiming::InitiatorType;
@@ -427,6 +428,11 @@ impl HTMLVideoElementMethods<crate::DomTypeHolder> for HTMLVideoElement {
     // For testing purposes only. This is not an event from
     // https://html.spec.whatwg.org/multipage/#dom-video-poster
     event_handler!(postershown, GetOnpostershown, SetOnpostershown);
+
+    // Mercury (MED-1b): <https://w3c.github.io/media-playback-quality/#dom-htmlvideoelement-getvideoplaybackquality>
+    fn GetVideoPlaybackQuality(&self, cx: &mut JSContext) -> DomRoot<VideoPlaybackQuality> {
+        VideoPlaybackQuality::for_element(cx, self.global().as_window(), &self.htmlmediaelement)
+    }
 }
 
 impl VirtualMethods for HTMLVideoElement {

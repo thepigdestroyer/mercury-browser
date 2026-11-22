@@ -44,6 +44,7 @@ use crate::dom::globalscope::GlobalScope;
 use crate::dom::html::htmlmediaelement::HTMLMediaElement;
 use crate::dom::mse::sourcebuffer::SourceBuffer;
 use crate::dom::mse::sourcebufferlist::SourceBufferList;
+use crate::dom::mse::stall::StallState;
 use crate::dom::timeranges::TimeRangesContainer;
 use crate::dom::window::Window;
 
@@ -105,6 +106,11 @@ pub(crate) struct MediaSource {
     #[conditional_malloc_size_of]
     #[no_trace]
     event_handler: RefCell<Option<Arc<Mutex<MediaSourceEventHandler>>>>,
+
+    /// The underrun decision of the element this media source is attached to (lane med-1b, D4).
+    #[ignore_malloc_size_of = "mercury-mse"]
+    #[no_trace]
+    stall: RefCell<StallState>,
 }
 
 impl MediaSource {
@@ -121,6 +127,7 @@ impl MediaSource {
             has_ever_been_attached: Cell::new(false),
             backend,
             event_handler: Default::default(),
+            stall: RefCell::new(StallState::new()),
         }
     }
 
@@ -199,6 +206,11 @@ impl MediaSource {
 
     pub(crate) fn media_element(&self) -> Option<DomRoot<HTMLMediaElement>> {
         self.media_element.get()
+    }
+
+    /// The element's underrun state. Do not hold the borrow across a call into the element.
+    pub(crate) fn stall(&self) -> &RefCell<StallState> {
+        &self.stall
     }
 
     /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
@@ -338,6 +350,9 @@ impl MediaSource {
                 let Some(source_buffer) = self.source_buffer(id) else {
                     return;
                 };
+                // Steps 4 and 5 (lane med-1b, D6): the tracks of the segment join the source buffer's
+                // and the element's track lists, with an `addtrack` event each.
+                source_buffer.init_received(cx, &init);
                 // Step 6. If the active track flag equals true, then add this SourceBuffer to
                 // activeSourceBuffers. The first initialization segment with an audio or video track
                 // enables the default track of its kind, which sets the flag.
@@ -354,18 +369,20 @@ impl MediaSource {
                 }
             },
             // The buffer append algorithm's steps 7 to 9 (and the range removal algorithm's 4 to 6).
-            MseEvent::AppendDone { id, .. } | MseEvent::RemoveDone { id, .. } => {
+            // The source buffer drops an event whose operation is not the one it is waiting for (one
+            // queued before `abort()` or the removal of the buffer).
+            MseEvent::AppendDone { id, op } | MseEvent::RemoveDone { id, op } => {
                 if let Some(source_buffer) = self.source_buffer(id) {
-                    source_buffer.operation_finished();
+                    source_buffer.operation_finished(op);
                 }
                 self.media_data_changed(cx);
             },
             // The append error algorithm's steps 1 to 4; step 5 (the end of stream with "decode")
             // arrives as `SourceEnded`.
-            MseEvent::AppendError { id, kind, .. } => {
+            MseEvent::AppendError { id, op, kind } => {
                 warn!("An append to MSE source buffer {id} failed: {kind:?}");
                 if let Some(source_buffer) = self.source_buffer(id) {
-                    source_buffer.operation_failed();
+                    source_buffer.operation_failed(op);
                 }
             },
             MseEvent::DurationChanged(duration) => {
@@ -566,8 +583,9 @@ impl MediaSourceMethods<crate::DomTypeHolder> for MediaSource {
         // algorithm, set updating to false and queue `abort` and `updateend`.
         source_buffer.abort_pending();
 
-        // Steps 3 to 8, and their video and text track equivalents, remove the tracks of the source
-        // buffer from the media element (the track lists are not populated).
+        // Steps 3 to 8, and their video track equivalents, remove the tracks of the source buffer
+        // from the media element's lists and its own (lane med-1b, D6), with `removetrack` events.
+        source_buffer.remove_tracks(cx);
         source_buffer.detach();
 
         // Step 9. If sourceBuffer is in activeSourceBuffers, then remove sourceBuffer from

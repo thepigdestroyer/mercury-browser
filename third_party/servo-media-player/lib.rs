@@ -153,4 +153,12 @@ pub trait Player: Send + MediaInstance {
             "this media backend cannot play a MediaSource".to_owned(),
         ))
     }
+    /// Mercury: (MED-1b) `(total, dropped)` video frames of this player so far, for
+    /// `HTMLVideoElement.getVideoPlaybackQuality()`: the frames the video sink rendered plus the ones
+    /// it dropped, and the ones it dropped (late, by its QoS). `None` when the backend does not count,
+    /// or there is no pipeline yet. A default body keeps the backends that do not (the dummy one)
+    /// compiling.
+    fn video_playback_quality(&self) -> Option<(u64, u64)> {
+        None
+    }
 }

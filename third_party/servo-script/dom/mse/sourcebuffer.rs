@@ -10,21 +10,23 @@
 // `MediaSourceBackend`, mapping `MseError` to the DOMException the specification names.
 //
 // Left out on purpose (listed in `third_party/servo-script/MERCURY.md`): `textTracks` (this Servo's
-// `TextTrackList` needs a media element), and the contents of `audioTracks` and `videoTracks`.
+// `TextTrackList` needs a media element). The contents of `audioTracks` and `videoTracks` come from the
+// initialization segments (`tracks.rs`, lane med-1b).
 
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
 use script_bindings::reflector::reflect_dom_object;
 use servo_media::player::mse::{
-    AppendMode as BackendAppendMode, MediaSourceReadyState as BackendReadyState, MseError,
-    SourceBufferId,
+    AppendMode as BackendAppendMode, InitInfo, MediaSourceReadyState as BackendReadyState,
+    MseError, OpId, OpTracker, SourceBufferId,
 };
 use stylo_atoms::Atom;
 
 use crate::dom::audio::audiotracklist::AudioTrackList;
 use crate::dom::bindings::buffer_source::get_buffer_source_copy;
+use crate::dom::bindings::codegen::Bindings::HTMLMediaElementBinding::HTMLMediaElementMethods;
 use crate::dom::bindings::codegen::Bindings::SourceBufferBinding::{
     AppendMode, SourceBufferMethods,
 };
@@ -38,8 +40,10 @@ use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
 use crate::dom::bindings::str::DOMString;
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::mse::mediasource::{MediaSource, dom_error, ranges_to_container};
+use crate::dom::mse::tracks::{self, TrackLists};
 use crate::dom::timeranges::TimeRanges;
 use crate::dom::videotracklist::VideoTrackList;
+use crate::dom::window::Window;
 
 /// <https://w3c.github.io/media-source/#sourcebuffer>
 #[dom_struct]
@@ -81,6 +85,13 @@ pub(crate) struct SourceBuffer {
 
     /// <https://w3c.github.io/media-source/#dom-sourcebuffer-videotracks>
     video_tracks: Dom<VideoTrackList>,
+
+    /// Which append or removal the backend's next completion event must belong to (lane med-1b, D3):
+    /// `abort()` and the removal of the buffer retire it, so an event that was already queued for an
+    /// operation the page has abandoned cannot end the next one early.
+    #[ignore_malloc_size_of = "mercury-mse"]
+    #[no_trace]
+    op_tracker: RefCell<OpTracker>,
 }
 
 fn to_backend_mode(mode: AppendMode) -> BackendAppendMode {
@@ -116,6 +127,7 @@ impl SourceBuffer {
             append_window_end: Cell::new(f64::INFINITY),
             audio_tracks: Dom::from_ref(audio_tracks),
             video_tracks: Dom::from_ref(video_tracks),
+            op_tracker: RefCell::new(OpTracker::new()),
         }
     }
 
@@ -167,6 +179,7 @@ impl SourceBuffer {
     /// Detaches this source buffer from its media source, which the specification describes as
     /// removing it from the `sourceBuffers` attribute. The backend has already dropped its half.
     pub(crate) fn detach(&self) {
+        self.op_tracker.borrow_mut().retire();
         self.updating.set(false);
         self.active.set(false);
         self.media_source.set(None);
@@ -175,6 +188,8 @@ impl SourceBuffer {
     /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer> step 2: the append
     /// that was running ends with `abort` and `updateend` events.
     pub(crate) fn abort_pending(&self) {
+        // Whatever the backend still has in flight for this buffer is stale from now on (D3).
+        self.op_tracker.borrow_mut().retire();
         if !self.updating.get() {
             return;
         }
@@ -183,11 +198,48 @@ impl SourceBuffer {
         self.queue_event(Atom::from("updateend"));
     }
 
-    /// The backend finished an append: the buffer append algorithm's steps 7 to 9 (and the same
-    /// steps of the range removal algorithm). Ignored when no append is pending (it was aborted or
-    /// the buffer removed while the event was in flight).
-    pub(crate) fn operation_finished(&self) {
-        if !self.updating.get() {
+    /// An initialization segment was parsed: the tracks it declares join `audioTracks` and
+    /// `videoTracks` (and the media element's lists), once per id (decision D6 of lane med-1b).
+    pub(crate) fn init_received(&self, cx: &mut JSContext, init: &InitInfo) {
+        self.with_track_lists(cx, |cx, window, lists| {
+            tracks::apply_init(cx, window, init, lists)
+        });
+    }
+
+    /// <https://w3c.github.io/media-source/#dom-mediasource-removesourcebuffer> steps 3 to 8: the
+    /// tracks of this buffer leave the media element's lists and its own. Call before `detach`.
+    pub(crate) fn remove_tracks(&self, cx: &mut JSContext) {
+        self.with_track_lists(cx, |cx, window, lists| {
+            tracks::remove_all(cx, window, lists)
+        });
+    }
+
+    fn with_track_lists(
+        &self,
+        cx: &mut JSContext,
+        run: impl FnOnce(&mut JSContext, &Window, &TrackLists<'_>),
+    ) {
+        let element = self
+            .media_source
+            .get()
+            .and_then(|media_source| media_source.media_element());
+        let element_lists = element.map(|element| (element.AudioTracks(cx), element.VideoTracks(cx)));
+        let global = self.global();
+        let lists = TrackLists {
+            own_audio: &self.audio_tracks,
+            own_video: &self.video_tracks,
+            element_audio: element_lists.as_ref().map(|(audio, _)| &**audio),
+            element_video: element_lists.as_ref().map(|(_, video)| &**video),
+        };
+        run(cx, global.as_window(), &lists);
+    }
+
+    /// The backend finished the append or removal `op`: the buffer append algorithm's steps 7 to 9 (and
+    /// the same steps of the range removal algorithm). Ignored when `op` is not the operation that is
+    /// pending: it was aborted (and the page may have appended again since) or the buffer removed
+    /// while the event was in flight.
+    pub(crate) fn operation_finished(&self, op: OpId) {
+        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
             return;
         }
         // Step 7. Set the updating attribute to false.
@@ -200,8 +252,8 @@ impl SourceBuffer {
 
     /// <https://w3c.github.io/media-source/#dfn-append-error> steps 2 to 4 (the end of stream with a
     /// decode error, step 5, comes as the backend's `SourceEnded` event).
-    pub(crate) fn operation_failed(&self) {
-        if !self.updating.get() {
+    pub(crate) fn operation_failed(&self, op: OpId) {
+        if !self.op_tracker.borrow_mut().finish(op) || !self.updating.get() {
             return;
         }
         // Step 2. Set the updating attribute to false.
@@ -426,9 +478,10 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
             .append(self.id, bytes)
             .map_err(dom_error);
         media_source.note_ready_state(before);
-        result?;
+        let op = result?;
 
-        // Step 3. Set the updating attribute to true.
+        // Step 3. Set the updating attribute to true. The completion event that carries `op` ends it.
+        self.op_tracker.borrow_mut().begin(op);
         self.updating.set(true);
 
         // Step 4. Queue a task to fire an event named updatestart at this SourceBuffer object.
@@ -501,10 +554,11 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
             .remove(self.id, *start, end)
             .map_err(dom_error);
         media_source.note_ready_state(before);
-        result?;
+        let op = result?;
 
         // Range removal step 1 and 2. Set updating to true and queue `updatestart`; step 5 and 6 come
-        // with the backend's `RemoveDone` event.
+        // with the backend's `RemoveDone` event for `op`.
+        self.op_tracker.borrow_mut().begin(op);
         self.updating.set(true);
         self.queue_event(Atom::from("updatestart"));
         Ok(())
