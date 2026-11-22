@@ -11,6 +11,7 @@ members = [
     "crates/mercury-filter-lists",
     "crates/mercury-iconset",
     "crates/mercury-import",
+    "crates/mercury-option-keys",
     "crates/mercury-password-manager",
     "crates/mercury-passwords",
     "crates/mercury-pdf",

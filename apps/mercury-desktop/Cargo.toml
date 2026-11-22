@@ -29,6 +29,8 @@ log.workspace = true
 mercury-downloads = { path = "../../crates/mercury-downloads" }
 mercury-filter-lists = { path = "../../crates/mercury-filter-lists" }
 mercury-import = { path = "../../crates/mercury-import" }
+# key-switcher: the state machine of the ⌥ group keys (`src/option_keys.rs` is the glue).
+mercury-option-keys = { path = "../../crates/mercury-option-keys" }
 # pdf-viewer: the PDF viewer's model and process protocol, and the PDFium backend with the helper process.
 mercury-pdf = { path = "../../crates/mercury-pdf" }
 mercury-pdfium = { path = "../../crates/mercury-pdfium" }

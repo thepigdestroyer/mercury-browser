@@ -1,0 +1,58 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The structs of the "Switch group" card (SPEC design/ui-final/SPEC.md §4.7). Rust
+// (`src/key_switcher*`) fills them; Slint only draws what it is given. FROZEN for the lane's
+// items: a change goes through the integrator (lane brief §2).
+
+// The inner measures of one tile (all lengths come from `key_switcher::layout`).
+export struct KeyMetrics {
+    tile-width: length,
+    tile-height: length,
+    // The side of the ring's square box; the ring's path commands are ring-local to it.
+    ring-size: length,
+    // The ring's centre in the tile.
+    ring-cx: length,
+    ring-cy: length,
+    // The halo (a circle ring in the group's tint) behind the ring.
+    halo-outer: length,
+    halo-width: length,
+    key-size: length,
+    key-y: length,
+    key-radius: length,
+    key-font: length,
+    name-y: length,
+    name-font: length,
+    count-y: length,
+    count-font: length,
+}
+
+// One tab segment of a tile's ring: a filled shape in the tab's shade.
+export struct KeyRingSeg {
+    commands: string,
+    shade: color,
+}
+
+// One group's tile. `group` is a `GroupRow.id`; `x` and `y` are from the tile area's top-left
+// (the card's `tiles-left` and `tiles-top`).
+export struct KeyTile {
+    group: int,
+    x: length,
+    y: length,
+    key-label: string,
+    name: string,
+    count-text: string,
+    accessible-label: string,
+    tint: color,
+    segments: [KeyRingSeg],
+    has-mark: bool,
+    mark-x: length,
+    mark-y: length,
+}
+
+// One numbered tab of the chosen group. `index` is the digit, 1 to 9.
+export struct KeyChip {
+    index: int,
+    title: string,
+    shade: color,
+    accessible-label: string,
+}

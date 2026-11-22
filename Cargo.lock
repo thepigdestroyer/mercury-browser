@@ -5954,6 +5954,7 @@ dependencies = [
  "mercury-downloads",
  "mercury-filter-lists",
  "mercury-import",
+ "mercury-option-keys",
  "mercury-password-manager",
  "mercury-passwords",
  "mercury-pdf",
@@ -6072,6 +6073,14 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "url",
+]
+
+[[package]]
+name = "mercury-option-keys"
+version = "0.2.0"
+dependencies = [
+ "mercury-appearance",
+ "mercury-settings",
 ]
 
 [[package]]

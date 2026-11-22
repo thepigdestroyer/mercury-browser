@@ -70,6 +70,10 @@ Desktop tests exercise event routing, bounded command dispatch, shortcuts, key c
 
 `crates/mercury-ui/tests/page_request_render.rs` and `render_menus.rs` render Mercury's Slint components with Slint's software renderer, so they can be checked without a window. The examples in `crates/mercury-ui/examples/` (`render_settings`, `render_controls`, `render_tabs`) render the settings window, the page controls and the tab strip to PNGs for review.
 
+### ⌥ group keys
+
+The state machine of the ⌥ group keys is the crate `mercury-option-keys` (no engine, no Slint, time passed in). `tests/machine.rs` has a test per line of its transition table, `tests/spec_table.rs` is an independent reading of the specification, with the five sentences of the design spec as named tests, and `tests/invariants.rs` is a deterministic fuzz of 240,000 events in three capture modes that checks twelve invariants after every call. The card itself is tested in `crates/mercury-ui`: `tests/key_switcher_tiles.rs` (layout, words and models), `key_switcher_render.rs` (software-renderer pictures in light and dark, and clicks), `key_switcher_card.rs` (the real model drawn by the real component) and `a11y_key_switcher.rs` (with `--features test-support`, the reading order frozen in `tests/a11y-snapshots/key-switcher-*.txt`). `apps/mercury-desktop/src/option_keys.rs` holds the winit glue. Nothing calls it yet.
+
 ### Accessibility of the interface
 
 Slint's `accessibility` feature is on (the workspace `Cargo.toml`), so VoiceOver, through AccessKit, can read and press Mercury's own windows: the tab strip, toolbar, address bar, menus, sheets and prompts, the history panel, and the Settings, Bookmarks, Import and About windows. A web page is not part of that yet: the page area is a single node, "Page content", whose description says that Mercury does not pass page content to assistive technology yet. The engine's own accessibility tree will be hung from that node later.

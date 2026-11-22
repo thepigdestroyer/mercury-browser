@@ -45,6 +45,7 @@ mod macos_terminate;
 mod macos_text_input; // txt-1: replacement ranges, emoji and dictation through winit's view
 #[cfg(target_os = "macos")]
 mod media_buffers;
+mod option_keys; // key-switcher
 mod secure_input; // txt-1: no input method and secure event input in password fields
 // media-capture
 mod media_capture;

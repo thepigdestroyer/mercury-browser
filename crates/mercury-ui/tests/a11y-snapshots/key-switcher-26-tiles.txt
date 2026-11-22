@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+button | Change keys | |
+list | Switch group | |
+list-item | Option A, Group A, 1 tab | | unselected, item 0 of 26
+list-item | Option B, Group B, 2 tabs | | unselected, item 1 of 26
+list-item | Option C, Group C, 3 tabs | | unselected, item 2 of 26
+list-item | Option D, Group D, 4 tabs | | unselected, item 3 of 26
+list-item | Option E, Group E, 1 tab | | unselected, item 4 of 26
+list-item | Option F, Group F, 2 tabs | | unselected, item 5 of 26
+list-item | Option G, Group G, 3 tabs | | unselected, item 6 of 26
+list-item | Option H, Group H, 4 tabs | | unselected, item 7 of 26
+list-item | Option I, Group I, 1 tab | | unselected, item 8 of 26
+list-item | Option J, Group J, 2 tabs | | unselected, item 9 of 26
+list-item | Option K, Group K, 3 tabs | | unselected, item 10 of 26
+list-item | Option L, Group L, 4 tabs | | unselected, item 11 of 26
+list-item | Option M, Group M, 1 tab | | unselected, item 12 of 26
+list-item | Option N, Group N, 2 tabs | | unselected, item 13 of 26
+list-item | Option O, Group O, 3 tabs | | unselected, item 14 of 26
+list-item | Option P, Group P, 4 tabs | | unselected, item 15 of 26
+list-item | Option Q, Group Q, 1 tab | | unselected, item 16 of 26
+list-item | Option R, Group R, 2 tabs | | unselected, item 17 of 26
+list-item | Option S, Group S, 3 tabs | | unselected, item 18 of 26
+list-item | Option T, Group T, 4 tabs | | unselected, item 19 of 26
+list-item | Option U, Group U, 1 tab | | unselected, item 20 of 26
+list-item | Option V, Group V, 2 tabs | | unselected, item 21 of 26
+list-item | Option W, Group W, 3 tabs | | unselected, item 22 of 26
+list-item | Option X, Group X, 4 tabs | | unselected, item 23 of 26
+list-item | Option Y, Group Y, 1 tab | | unselected, item 24 of 26
+list-item | Option Z, Group Z, 2 tabs | | unselected, item 25 of 26
+text | Tap a letter for a group, then 1–9 for one of its tabs. Release ⌥ to go there. | |
+text | Opens after ⌥ is held for 0.4 s on its own, so quick ⌥ + letter still types å, ß, ∂ in text fields. | |
