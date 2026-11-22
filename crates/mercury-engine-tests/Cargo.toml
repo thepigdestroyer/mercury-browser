@@ -1,0 +1,75 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+# Runs the tests that live in the vendored Servo crates and cannot run from there: `servo` and
+# `servo-layout` have dev-dependencies and are not workspace members, so cargo refuses
+# `cargo test -p servo`, and their own manifests resolve the published sibling crates instead of
+# Mercury's patched ones. This member has no code of its own: each [[test]] points at a test file
+# in third_party/, and the root `[patch.crates-io]` makes every dependency the vendored copy.
+# `make engine-tests` runs the Servo ones (a whole engine per test); the pure layout ones also
+# run in `make test`.
+
+[package]
+name = "mercury-engine-tests"
+description = "Test targets that run the vendored engine crates' tests against Mercury's patches"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+autotests = false
+
+[dev-dependencies]
+accesskit = "0.24"
+app_units = "0.7"
+dpi.workspace = true
+embedder_traits = { package = "servo-embedder-traits", version = "=0.8.0" }
+euclid.workspace = true
+layout = { package = "servo-layout", version = "=0.8.0" }
+layout_api = { package = "servo-layout-api", version = "=0.8.0" }
+paint_api = { package = "servo-paint-api", version = "=0.8.0" }
+servo = { workspace = true, features = ["media-gstreamer"] }
+servo-default-resources = "=0.8.0"
+servo_base = { package = "servo-base", version = "=0.8.0" }
+smallvec = "1.15"
+style = { package = "stylo", version = "0.23.0" }
+unicode-segmentation = "1.12"
+url.workspace = true
+webrender_api = "0.70"
+
+# The pure layout tests: no engine, no window. Part of `make test`.
+[[test]]
+name = "counter_styles"
+path = "../../third_party/servo-layout/tests/counter_styles.rs"
+
+[[test]]
+name = "counters"
+path = "../../third_party/servo-layout/tests/counters.rs"
+
+[[test]]
+name = "ellipsis"
+path = "../../third_party/servo-layout/tests/ellipsis.rs"
+
+[[test]]
+name = "highlights"
+path = "../../third_party/servo-layout/tests/highlights.rs"
+
+[[test]]
+name = "tables"
+path = "../../third_party/servo-layout/tests/tables.rs"
+
+[[test]]
+name = "text"
+path = "../../third_party/servo-layout/tests/text.rs"
+
+# The Servo tests: each builds a whole engine on a software rendering context (no window). They
+# are skipped by `cargo test`, `cargo clippy --all-targets` and `make test` (`test = false`) and run
+# by `make engine-tests`, which names them.
+[[test]]
+name = "input_methods"
+path = "../../third_party/servo/tests/input_methods.rs"
+test = false
+
+[[test]]
+name = "mercury_ime"
+path = "../../third_party/servo/tests/mercury_ime.rs"
+test = false

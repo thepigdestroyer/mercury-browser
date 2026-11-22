@@ -36,10 +36,13 @@ ifeq ($(shell uname -s),Darwin)
 GSTREAMER_ENV = gst_env="$$(scripts/macos/gstreamer.sh env)" && eval "$$gst_env" &&
 COLLECT_GSTREAMER = scripts/macos/collect-gstreamer.sh "$$MERCURY_GSTREAMER_PREFIX"
 TEST_LIBRARY_PATH = DYLD_FALLBACK_LIBRARY_PATH="$(CURDIR)/target/$(PROFILE_DIR)/lib"
+# The engine tests link the engine but not the app, so the GStreamer prefix (libz and the rest) is the library path.
+ENGINE_TESTS_LIBRARY_PATH = DYLD_FALLBACK_LIBRARY_PATH="$$MERCURY_GSTREAMER_PREFIX/lib"
 else
 GSTREAMER_ENV =
 COLLECT_GSTREAMER =
 TEST_LIBRARY_PATH =
+ENGINE_TESTS_LIBRARY_PATH =
 endif
 
 # blocklists: the filter lists are data files beside the executable, not compiled into it
@@ -80,6 +83,7 @@ endif
 	lint-scripts \
 	servo-patches-check \
 	vendored-tests \
+	engine-tests \
 	deny \
 	credits \
 	credits-check \
@@ -125,6 +129,7 @@ help:
 		'lint-scripts' 'Lint scripts/ (shellcheck), the workflows (actionlint), licence headers and vendored crates.' \
 		'servo-patches-check' 'Check that each crate in third_party/ is the published crate plus its exported patch.' \
 		'vendored-tests' 'Run the unit tests of the vendored Servo crates that need no engine (preferences, message types).' \
+		'engine-tests' 'Run the Servo IME tests of the vendored crates against a real engine, no window (needs GStreamer).' \
 		'deny' 'Check dependencies against the policy in deny.toml.' \
 		'credits' 'Write the credits page (the licence text of every crate in the app) to target/<profile>/credits.' \
 		'credits-check' 'Check that every crate in the app can be credited (needs the crate sources: make fetch).' \
@@ -331,7 +336,19 @@ vendored-tests:
 		-p servo-config \
 		-p stylo_static_prefs \
 		-p servo-embedder-traits \
+		-p servo-layout-api \
 		-p servo-constellation-traits
+
+# The Servo tests of lane txt-1 (EB11): IME sequences against a real engine on a software rendering
+# context, no window. `scripts/ci/engine-tests.sh` runs each test in its own process (Servo allows one engine per
+# process). `servo` and `servo-layout` have dev-dependencies and are not workspace members, so
+# cargo refuses `-p servo`; `crates/mercury-engine-tests` points its test targets at the vendored test
+# files instead and builds them against the patched copies. One test at a time: each builds an engine.
+# The second command runs the unit tests inside servo-script (IME composition, the text state flush).
+# Needs GStreamer (macOS: `make gstreamer-macos`). Not in `make test` (`test = false` on those targets).
+engine-tests:
+	$(GSTREAMER_ENV) CARGO="$(CARGO)" CARGO_FLAGS="$(CARGO_FLAGS)" scripts/ci/engine-tests.sh
+	$(GSTREAMER_ENV) $(ENGINE_TESTS_LIBRARY_PATH) "$(CARGO)" test --locked $(CARGO_FLAGS) -p servo-script --lib -- --test-threads=1
 
 deny:
 	@$(CI_TOOLS_PATH); export PATH; \

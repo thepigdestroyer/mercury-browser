@@ -76,12 +76,24 @@ impl ServoTest {
 
     /// Spin the Servo event loop until the provided callback returns `false`.
     pub fn spin(&self, callback: impl Fn() -> bool) {
+        // Mercury: a stuck engine (a panic on its constellation thread, a lost message) fails the
+        // test after two minutes instead of hanging the whole test run.
+        let deadline = std::time::Instant::now() + Duration::from_secs(120);
         while callback() {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the engine did not answer within two minutes"
+            );
             self.servo.spin_event_loop();
             std::thread::sleep(Duration::from_millis(1));
         }
     }
 }
+
+// Mercury: the patched `servo-default-resources` does not register its reader (the browser registers
+// its own, `talaria-servo/src/resources.rs`), so a test binary registers Servo's default one, or the
+// engine panics with "No resource reader registered" and the test hangs.
+embedder_traits::submit_resource_reader!(&servo_default_resources::DefaultResourceReader);
 
 #[derive(Default)]
 pub(crate) struct WebViewDelegateImpl {
@@ -100,6 +112,8 @@ pub(crate) struct WebViewDelegateImpl {
     pub(crate) input_event_result: RefCell<Option<InputEventResult>>,
     // Mercury: the text state messages of the text lane, in the order they arrived (EB11).
     pub(crate) text_states: RefCell<Vec<Option<servo::TextInputState>>>,
+    // Mercury: the document of each "nothing is focused" message (`None` in `text_states`).
+    pub(crate) text_cleared_documents: RefCell<Vec<u64>>,
 }
 
 #[allow(dead_code)] // Used by some tests and not others
@@ -194,10 +208,15 @@ impl WebViewDelegate for WebViewDelegateImpl {
 
     // Mercury: record the state messages of the text lane (EB11).
     fn notify_mercury_message(&self, _webview: WebView, message: servo::MercuryEmbedderMsg) {
-        if let servo::MercuryEmbedderMsg::Text(servo::TextMsg::InputState(state)) = message {
-            self.text_states
-                .borrow_mut()
-                .push(state.map(|state| *state));
+        match message {
+            servo::MercuryEmbedderMsg::Text(servo::TextMsg::InputState(state)) => {
+                self.text_states.borrow_mut().push(Some(*state));
+            },
+            servo::MercuryEmbedderMsg::Text(servo::TextMsg::InputCleared(document)) => {
+                self.text_states.borrow_mut().push(None);
+                self.text_cleared_documents.borrow_mut().push(document);
+            },
+            _ => {},
         }
     }
 }
