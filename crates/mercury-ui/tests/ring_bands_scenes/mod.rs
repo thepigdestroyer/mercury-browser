@@ -48,6 +48,8 @@ pub struct Params {
     pub held: bool,
     pub selected_group: Option<i32>,
     pub flag_size: f32,
+    /// No animation, so that a picture or a pixel is the settled state (the default of every scene).
+    pub reduce_motion: bool,
 }
 
 impl Params {
@@ -58,6 +60,7 @@ impl Params {
             held: false,
             selected_group: None,
             flag_size: 20.0,
+            reduce_motion: true,
         }
     }
 }
@@ -106,6 +109,7 @@ impl Scene {
         window.set_label_glyphs(models.label_glyphs());
         window.set_flags(models.flags());
         window.set_animate_spinners(false);
+        window.set_reduce_motion(params.reduce_motion);
         window.set_held(params.held);
         window.set_selected_group(params.selected_group.unwrap_or(-1));
         let for_hit = Rc::clone(&data);
@@ -138,6 +142,16 @@ impl Scene {
             .find(|seg| seg.tab == tab_id)
             .expect("a segment of that tab");
         (seg.mid_x, seg.mid_y)
+    }
+
+    /// One frame, at once: an animation that has just been started is at its beginning.
+    pub fn render_once(&self) -> Pixels {
+        slint::platform::update_timers_and_animations();
+        self.window.window().request_redraw();
+        self.window
+            .window()
+            .take_snapshot()
+            .expect("the window renders")
     }
 
     /// Draws the window at scale 2 after letting animations settle.

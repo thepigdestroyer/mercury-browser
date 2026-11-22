@@ -9,8 +9,10 @@
 //! - A state flag is as wide as `opts.flag_size` allows, but never wider than the tab's arc at its
 //!   own radius less 2 px. Under 8 px it is not drawn, except `capture` and `crashed`, which are
 //!   never hidden and stay at 8 px.
-//! - Held (⌥): no state flags and no current dot; the first nine tabs of `selected_group` get a
-//!   digit chip instead. Their number is the tab's position in its group on the ring.
+//! - Held (⌥): no state flags; the first nine tabs of `selected_group` get a digit chip instead
+//!   (their number is the tab's position in its group on the ring) and the current dot stays, as in
+//!   the mockup `ring-keys`. When the current tab has a chip, chip and dot sit at the insets of a
+//!   state flag and a dot (18 and 5 px) so that they do not touch.
 
 use slint::SharedString;
 
@@ -47,9 +49,6 @@ pub(super) fn flag_pins(model: &RingModel, tabs: &[TabRow], opts: &RingOptions) 
     if layout.tabs.len() != tabs.len() {
         return Vec::new();
     }
-    if opts.held && opts.selected_group.is_none() {
-        return Vec::new();
-    }
     let spec = &layout.spec;
     let inner = spec.inner_radius();
     let mut pins = Vec::new();
@@ -74,22 +73,25 @@ pub(super) fn flag_pins(model: &RingModel, tabs: &[TabRow], opts: &RingOptions) 
             }
         };
 
-        if opts.held {
-            if model.group_id(arc.group) != opts.selected_group || arc.index_in_group >= DIGIT_COUNT
-            {
-                continue;
-            }
-            let (radius, size) = place(STATE_INSET, DIGIT_SIZE);
-            if size >= MIN_FLAG_SIZE {
-                let label = SharedString::from((arc.index_in_group + 1).to_string());
-                pins.push(pin(FlagKind::Digit, radius, size, -1.0, label));
-            }
-            continue;
-        }
-
-        let state = state_kind(tab);
         let mut with_state = false;
-        if let Some(kind) = state {
+        if opts.held {
+            let in_selected = opts.selected_group.is_some()
+                && model.group_id(arc.group) == opts.selected_group
+                && arc.index_in_group < DIGIT_COUNT;
+            if in_selected {
+                let inset = if tab.active {
+                    STATE_INSET_WITH_DOT
+                } else {
+                    STATE_INSET
+                };
+                let (radius, size) = place(inset, DIGIT_SIZE);
+                if size >= MIN_FLAG_SIZE {
+                    let label = SharedString::from((arc.index_in_group + 1).to_string());
+                    pins.push(pin(FlagKind::Digit, radius, size, -1.0, label));
+                    with_state = true;
+                }
+            }
+        } else if let Some(kind) = state_kind(tab) {
             let inset = if tab.active {
                 STATE_INSET_WITH_DOT
             } else {
@@ -445,8 +447,14 @@ mod tests {
         assert_eq!(mockup_pins()[0].size, 8.0);
     }
 
+    fn digits_of(pins: &[FlagPin]) -> Vec<&FlagPin> {
+        pins.iter()
+            .filter(|pin| pin.kind == FlagKind::Digit)
+            .collect()
+    }
+
     #[test]
-    fn held_shows_digits_for_the_selected_group_and_nothing_else() {
+    fn held_shows_digits_for_the_selected_group_and_the_current_dot() {
         let (groups, mut tabs) = (mockup_groups(false), mockup_tabs(false));
         tabs[0].unread = true;
         let held = |selected_group| RingOptions {
@@ -457,9 +465,12 @@ mod tests {
         let model = model(&groups, &tabs);
         let inner = model.layout.spec.inner_radius();
 
-        // Reading (group 3) has six tabs, 110 to 115.
+        // Reading (group 3) has six tabs, 110 to 115; the current tab (101) is in Research.
         let pins = flag_pins(&model, &tabs, &held(Some(3)));
-        let digits: Vec<(i32, &str)> = pins.iter().map(|p| (p.tab, p.label.as_str())).collect();
+        let digits: Vec<(i32, &str)> = digits_of(&pins)
+            .iter()
+            .map(|p| (p.tab, p.label.as_str()))
+            .collect();
         assert_eq!(
             digits,
             vec![
@@ -471,23 +482,74 @@ mod tests {
                 (115, "6"),
             ]
         );
-        for pin in &pins {
-            assert_eq!(pin.kind, FlagKind::Digit);
+        for pin in digits_of(&pins) {
             assert_eq!(pin.size, 18.0);
             assert_eq!(pin.progress, -1.0);
             let flat = tabs.iter().position(|t| t.id == pin.tab).expect("a tab");
             let (along, sideways) = radius_and_sideways(&model, flat, pin);
-            assert!((along - (inner - 14.0)).abs() < TOLERANCE);
+            assert!(
+                (along - (inner - 14.0)).abs() < TOLERANCE,
+                "a lone chip is 14 px inside"
+            );
             assert!(sideways.abs() < TOLERANCE);
         }
+        // No state flag while held (tab 101 is unread, 102 is loading, 115 plays sound), and the
+        // current tab keeps its dot, alone, at 9 px.
+        assert_eq!(pins.len(), 7, "six chips and the current dot: {pins:?}");
+        let dots = pins_of(&pins, 101);
+        assert_eq!(dots.len(), 1);
+        assert_eq!(dots[0].kind, FlagKind::Current);
+        let (along, sideways) = radius_and_sideways(&model, 0, dots[0]);
+        assert!((along - (inner - 9.0)).abs() < TOLERANCE);
+        assert!(sideways.abs() < TOLERANCE);
+    }
 
-        // Research (5 tabs) holds the current tab and an unread one: still digits only.
-        let pins = flag_pins(&model, &tabs, &held(Some(1)));
-        assert_eq!(pins.len(), 5);
-        assert!(pins.iter().all(|p| p.kind == FlagKind::Digit));
+    #[test]
+    fn held_with_the_current_tab_in_the_selected_group_puts_chip_and_dot_at_18_and_5() {
+        let (groups, mut tabs) = (mockup_groups(false), mockup_tabs(false));
+        tabs[0].unread = true;
+        let opts = RingOptions {
+            held: true,
+            selected_group: Some(1),
+            ..RingOptions::default()
+        };
+        let model = model(&groups, &tabs);
+        let inner = model.layout.spec.inner_radius();
+        let pins = flag_pins(&model, &tabs, &opts);
+        // Research has five tabs: five chips and the dot; the unread state flag is not drawn.
+        assert_eq!(pins.len(), 6, "{pins:?}");
+        assert_eq!(digits_of(&pins).len(), 5);
+        let own = pins_of(&pins, 101);
+        assert_eq!(
+            own.iter().map(|p| p.kind).collect::<Vec<_>>(),
+            vec![FlagKind::Digit, FlagKind::Current],
+            "the chip before the dot"
+        );
+        let (chip, _) = radius_and_sideways(&model, 0, own[0]);
+        let (dot, _) = radius_and_sideways(&model, 0, own[1]);
+        assert!((chip - (inner - 18.0)).abs() < TOLERANCE, "chip at {chip}");
+        assert!((dot - (inner - 5.0)).abs() < TOLERANCE, "dot at {dot}");
+        // The two do not touch: gap between the circles along the radial line.
+        assert!((dot - own[1].size / 2.0) - (chip + own[0].size / 2.0) >= 0.0);
+        // The other chips of the group are at 14.
+        let (other, _) = radius_and_sideways(&model, 1, pins_of(&pins, 102)[0]);
+        assert!((other - (inner - 14.0)).abs() < TOLERANCE);
+    }
 
-        assert!(flag_pins(&model, &tabs, &held(None)).is_empty());
-        assert!(flag_pins(&model, &tabs, &held(Some(99))).is_empty());
+    #[test]
+    fn held_without_a_selected_group_still_shows_the_current_dot() {
+        let (groups, tabs) = (mockup_groups(false), mockup_tabs(false));
+        let model = model(&groups, &tabs);
+        for selected_group in [None, Some(99)] {
+            let opts = RingOptions {
+                held: true,
+                selected_group,
+                ..RingOptions::default()
+            };
+            let pins = flag_pins(&model, &tabs, &opts);
+            assert_eq!(pins.len(), 1, "{selected_group:?}: {pins:?}");
+            assert_eq!((pins[0].tab, pins[0].kind), (101, FlagKind::Current));
+        }
     }
 
     #[test]
@@ -499,7 +561,7 @@ mod tests {
             ..RingOptions::default()
         };
         let pins = pins_for(&groups, &tabs, &opts);
-        let labels: Vec<&str> = pins.iter().map(|p| p.label.as_str()).collect();
+        let labels: Vec<&str> = digits_of(&pins).iter().map(|p| p.label.as_str()).collect();
         assert_eq!(labels, ["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
     }
 
@@ -515,7 +577,7 @@ mod tests {
             ..RingOptions::default()
         };
         let pins = pins_for(&groups, &tabs, &opts);
-        let labels: Vec<&str> = pins.iter().map(|p| p.label.as_str()).collect();
+        let labels: Vec<&str> = digits_of(&pins).iter().map(|p| p.label.as_str()).collect();
         assert_eq!(labels, ["1", "2", "3"]);
     }
 

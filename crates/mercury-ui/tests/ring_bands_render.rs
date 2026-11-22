@@ -85,39 +85,53 @@ fn every_segment_of_the_rest_scene_is_its_shade_in_light_and_dark() {
 
 #[test]
 fn a_hovered_segment_is_lifted_with_a_popup_coloured_outline() {
+    // The samples sit at fixed radii on READING_5's centre line (the tab's angle is clear of the label
+    // text, which is only at r 209 and further; a different tab could put a glyph under a sample).
     for dark in [false, true] {
         let scene = Scene::new(&mockup_groups(dark), &mockup_tabs(dark), Params::hub(dark));
         let palette = scene.window.global::<ChromePalette>();
-        let background = palette.get_window_background();
-        let shade = colour(
-            scene
-                .data
-                .borrow()
-                .tabs
-                .iter()
-                .find(|t| t.id == READING_5)
-                .unwrap()
-                .shade,
-        );
-        let (ox, oy) = on_tab(&scene, READING_5, 195.0 + 5.0);
-        let (sx, sy) = on_tab(&scene, READING_5, 195.0 + 8.5);
-        let before = scene.render();
-        let tint = colour(
-            scene
-                .data
-                .borrow()
+        let (spec, shade, neighbour_shade, tint) = {
+            let data = scene.data.borrow();
+            let shade_of = |id: i32| colour(data.tabs.iter().find(|t| t.id == id).unwrap().shade);
+            let tint = data
                 .groups
                 .iter()
                 .find(|g| g.id == 3)
                 .expect("Reading")
-                .tint,
-        );
+                .tint;
+            (
+                data.model.layout.spec,
+                shade_of(READING_5),
+                shade_of(READING_5 - 1),
+                colour(tint),
+            )
+        };
+        let lifted_outer = spec.outer_radius() + spec.lift; // 205
+        // The lifted zone: label band at rest, the tab once lifted.
+        let (ox, oy) = on_tab(&scene, READING_5, spec.outer_radius() + spec.lift / 2.0);
+        // The centre of the 3 px outline round the lifted shape.
+        let (sx, sy) = on_tab(&scene, READING_5, lifted_outer);
+        // The outline's inner half lies ON the resting tab (the lifted shape keeps its inner edge): just
+        // inside the resting edge the tab has its shade at rest and the outline's colour once hovered.
+        // (Slint draws the stroke about 1 px inside its path, measured: the stroke spans r 162.75 to 165.75.)
+        let (ix, iy) = on_tab(&scene, READING_5, spec.inner_radius() + 0.25);
+        // The body of the tab, and a neighbour that must not change.
+        let (bx, by) = on_tab(&scene, READING_5, spec.radius);
+        let (nx, ny) = scene.mid_of(READING_5 - 1);
+
+        let before = scene.render();
         assert_eq!(
             rgb(at(&before, ox, oy)),
             tint,
-            "at rest the label band is there, not the tab"
+            "at rest the label band is there"
         );
-        let _ = background;
+        assert!(
+            within(rgb(at(&before, ix, iy)), shade, 8),
+            "at rest the tab's inner edge has its shade, got {:?}",
+            rgb(at(&before, ix, iy))
+        );
+        assert_eq!(rgb(at(&before, bx, by)), shade);
+        assert_eq!(rgb(at(&before, nx, ny)), neighbour_shade);
 
         scene.window.set_hovered_tab(READING_5);
         let after = scene.render();
@@ -126,21 +140,73 @@ fn a_hovered_segment_is_lifted_with_a_popup_coloured_outline() {
             &scene,
             &after,
         );
+        let popup = colour(palette.get_popup_background());
         assert_eq!(
             rgb(at(&after, ox, oy)),
             shade,
             "dark {dark}: the lifted part has the shade"
         );
         assert!(
-            within(
-                rgb(at(&after, sx, sy)),
-                colour(palette.get_popup_background()),
-                3
-            ),
+            within(rgb(at(&after, sx, sy)), popup, 3),
             "dark {dark}: the outline is popup-background, got {:?}",
             rgb(at(&after, sx, sy))
         );
+        assert!(
+            within(rgb(at(&after, ix, iy)), popup, 12),
+            "dark {dark}: the outline's inner half is on the tab, got {:?}",
+            rgb(at(&after, ix, iy))
+        );
+        assert_eq!(rgb(at(&after, bx, by)), shade, "the body keeps its shade");
+        assert_eq!(
+            rgb(at(&after, nx, ny)),
+            neighbour_shade,
+            "a neighbour does not change"
+        );
     }
+}
+
+#[test]
+fn the_lift_fades_in_over_90_ms_and_not_at_all_with_reduce_motion() {
+    let params = Params {
+        reduce_motion: false,
+        ..Params::hub(false)
+    };
+    let scene = Scene::new(&mockup_groups(false), &mockup_tabs(false), params);
+    let (shade, tint, spec) = {
+        let data = scene.data.borrow();
+        let shade = colour(data.tabs.iter().find(|t| t.id == READING_5).unwrap().shade);
+        let tint = colour(data.groups.iter().find(|g| g.id == 3).unwrap().tint);
+        (shade, tint, data.model.layout.spec)
+    };
+    let (ox, oy) = on_tab(&scene, READING_5, spec.outer_radius() + spec.lift / 2.0);
+    assert_eq!(rgb(at(&scene.render(), ox, oy)), tint);
+
+    scene.window.set_hovered_tab(READING_5);
+    // The frames just after the hover starts: printed (the first rendered frame of the headless
+    // software platform may already be past 90 ms), and the end state is asserted.
+    let mut frames = Vec::new();
+    for _ in 0..4 {
+        frames.push(rgb(at(&scene.render_once(), ox, oy)));
+        std::thread::sleep(std::time::Duration::from_millis(25));
+    }
+    eprintln!(
+        "lift fade, pixel at the lifted zone over the first frames: {frames:?} (rest {tint:?}, lifted {shade:?})"
+    );
+    std::thread::sleep(std::time::Duration::from_millis(300));
+    assert_eq!(
+        rgb(at(&scene.render(), ox, oy)),
+        shade,
+        "complete after 90 ms"
+    );
+
+    scene.window.set_hovered_tab(-1);
+    scene.window.set_reduce_motion(true);
+    scene.window.set_hovered_tab(READING_5);
+    assert_eq!(
+        rgb(at(&scene.render(), ox, oy)),
+        shade,
+        "reduce motion: at once"
+    );
 }
 
 #[test]
@@ -248,22 +314,77 @@ fn a_single_tab_ring_is_filled_all_the_way_round() {
 }
 
 #[test]
-fn sixty_tabs_and_64_groups_draw_every_segment() {
+fn sixty_tabs_and_64_groups_draw_every_segment_in_its_shade() {
     for (n_groups, n_tabs, name) in [(5, 60, "sixty-tabs-light"), (64, 64, "crowded-64-light")] {
         let (groups, tabs) = generated(n_groups, n_tabs, false);
         let scene = Scene::new(&groups, &tabs, Params::hub(false));
+        let started = std::time::Instant::now();
         let pixels = scene.render();
+        let elapsed = started.elapsed();
+        eprintln!("render time, {name}: {elapsed:?} (4 renders of the window incl. settling)");
+        assert!(elapsed.as_secs() < 30, "{name} took {elapsed:?}");
         out(name, &scene, &pixels);
         let data = scene.data.borrow();
         assert_eq!(data.segments.len(), n_tabs);
-        let background = scene
-            .window
-            .global::<ChromePalette>()
-            .get_window_background();
         for tab in &data.tabs {
             let (x, y) = scene.mid_of(tab.id);
-            let got = rgb(at(&pixels, x, y));
-            assert_ne!(got, colour(background), "{name}: tab {} is drawn", tab.id);
+            assert_eq!(
+                rgb(at(&pixels, x, y)),
+                colour(tab.shade),
+                "{name}: tab {} is drawn in its shade",
+                tab.id
+            );
+        }
+    }
+}
+
+#[test]
+fn every_glyph_centre_is_on_the_label_radius_and_the_ring_draws_there() {
+    // Rotation is not drawn by the software renderer, but the centres are: a dot (a `current` pin)
+    // is put at every glyph's (x, y) and must be on the label band's centre line.
+    use mercury_ui::FlagPin;
+    for (name, groups, tabs) in [("mockup", mockup_groups(false), mockup_tabs(false)), {
+        let (g, t) = generated(5, 60, false);
+        ("sixty", g, t)
+    }] {
+        let scene = Scene::new(&groups, &tabs, Params::hub(false));
+        let (glyphs, spec) = {
+            let data = scene.data.borrow();
+            (data.label_glyphs.clone(), data.model.layout.spec)
+        };
+        assert!(glyphs.len() > 20, "{name}: {} glyphs", glyphs.len());
+        let mut pins = Vec::new();
+        for glyph in &glyphs {
+            let radius = ((glyph.x - CENTRE.x).powi(2) + (glyph.y - CENTRE.y).powi(2)).sqrt();
+            assert!(
+                (radius - spec.label_radius()).abs() < 0.5,
+                "{name}: glyph {:?} at radius {radius}, label radius {}",
+                glyph.text,
+                spec.label_radius()
+            );
+            pins.push(FlagPin {
+                tab: -1,
+                kind: FlagKind::Current,
+                x: glyph.x,
+                y: glyph.y,
+                size: 3.0,
+                progress: -1.0,
+                label: Default::default(),
+            });
+        }
+        scene
+            .window
+            .set_flags(slint::ModelRc::new(slint::VecModel::from(pins)));
+        let pixels = scene.render();
+        out(&format!("glyph-centres-{name}-light"), &scene, &pixels);
+        let text = colour(scene.window.global::<ChromePalette>().get_text());
+        for glyph in &glyphs {
+            assert_eq!(
+                rgb(at(&pixels, glyph.x, glyph.y)),
+                text,
+                "{name}: the dot of glyph {:?} is drawn at its centre",
+                glyph.text
+            );
         }
     }
 }
@@ -338,4 +459,93 @@ fn the_real_hit_test_drives_hover_click_and_background_press() {
         button: PointerEventButton::Left,
     });
     assert_eq!(*log.borrow(), vec!["background".to_string()]);
+}
+
+fn mute_log(scene: &Scene) -> Rc<RefCell<Vec<i32>>> {
+    let log: Rc<RefCell<Vec<i32>>> = Rc::default();
+    let sink = Rc::clone(&log);
+    scene
+        .window
+        .on_tab_mute(move |id| sink.borrow_mut().push(id));
+    log
+}
+
+fn tap(scene: &Scene, x: f32, y: f32, move_first: bool) {
+    let position = LogicalPosition::new(x, y);
+    let window = scene.window.window();
+    if move_first {
+        window.dispatch_event(WindowEvent::PointerMoved { position });
+    }
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position,
+        button: PointerEventButton::Left,
+    });
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position,
+        button: PointerEventButton::Left,
+    });
+}
+
+#[test]
+fn a_press_on_a_speaker_mutes_with_or_without_a_move_before_it() {
+    for move_first in [true, false] {
+        let scene = Scene::new(
+            &mockup_groups(false),
+            &mockup_tabs(false),
+            Params::hub(false),
+        );
+        let log = mute_log(&scene);
+        let pin = scene
+            .data
+            .borrow()
+            .flags
+            .iter()
+            .find(|p| p.kind == FlagKind::Audible)
+            .cloned()
+            .expect("the mockup has a speaker");
+        tap(&scene, pin.x, pin.y, move_first);
+        assert_eq!(*log.borrow(), vec![pin.tab], "move first: {move_first}");
+        // A click on the tab itself is no mute.
+        log.borrow_mut().clear();
+        let (x, y) = scene.mid_of(pin.tab);
+        tap(&scene, x, y, move_first);
+        assert!(log.borrow().is_empty(), "move first: {move_first}");
+    }
+}
+
+#[test]
+fn a_speaker_on_a_crowded_ring_does_not_take_a_neighbours_click() {
+    let (groups, mut tabs) = generated(5, 60, false);
+    tabs[20].audible = true;
+    let scene = Scene::new(&groups, &tabs, Params::hub(false));
+    let log = mute_log(&scene);
+    let (pin, radius) = {
+        let data = scene.data.borrow();
+        let pin = data
+            .flags
+            .iter()
+            .find(|p| p.kind == FlagKind::Audible)
+            .cloned()
+            .expect("a speaker");
+        let radius = ((pin.x - CENTRE.x).powi(2) + (pin.y - CENTRE.y).powi(2)).sqrt();
+        (pin, radius)
+    };
+    assert!(
+        pin.size < 16.0,
+        "the flag is squeezed by the arc: {}",
+        pin.size
+    );
+    // The same radius on the two neighbouring tabs' centre lines.
+    let id = pin.tab;
+    for neighbour in [id - 1, id + 1] {
+        let (x, y) = on_tab(&scene, neighbour, radius);
+        tap(&scene, x, y, true);
+        assert!(
+            log.borrow().is_empty(),
+            "the click on tab {neighbour}'s line muted {:?}",
+            log.borrow()
+        );
+    }
+    tap(&scene, pin.x, pin.y, true);
+    assert_eq!(*log.borrow(), vec![id], "the speaker itself still mutes");
 }
