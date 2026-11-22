@@ -76,10 +76,10 @@ impl<'a> CounterSystem<'a> {
     /// A style with the initial value of every descriptor (`range: auto`).
     pub(crate) const fn new(algorithm: Algorithm<'a>) -> Self {
         let range = match algorithm {
-            Algorithm::Cyclic(_) |
-            Algorithm::Fixed { .. } |
-            Algorithm::Numeric(_) |
-            Algorithm::Cjk(_) => (i32::MIN, i32::MAX),
+            Algorithm::Cyclic(_)
+            | Algorithm::Fixed { .. }
+            | Algorithm::Numeric(_)
+            | Algorithm::Cjk(_) => (i32::MIN, i32::MAX),
             Algorithm::Alphabetic(_) | Algorithm::Symbolic(_) | Algorithm::Ethiopic => {
                 (1, i32::MAX)
             },
@@ -181,9 +181,9 @@ pub(crate) fn represent(system: &CounterSystem<'_>, value: i32) -> Option<String
         let used = initial.chars().count() + before.chars().count() + after.chars().count();
         if let Some(difference) = width.checked_sub(used) {
             let symbol_length = symbol.chars().count();
-            if difference > LENGTH_LIMIT ||
-                symbol_length > LENGTH_LIMIT ||
-                difference * symbol_length > LENGTH_LIMIT
+            if difference > LENGTH_LIMIT
+                || symbol_length > LENGTH_LIMIT
+                || difference * symbol_length > LENGTH_LIMIT
             {
                 return None;
             }
@@ -205,9 +205,9 @@ pub(crate) fn generate(system: &CounterSystem<'_>, value: i32) -> String {
     }
     // The fallback of `cjk-decimal` and of every style that falls back to it is `decimal`, so
     // this is at most two steps; a loop is not possible.
-    if system.fallback == Fallback::CjkDecimal &&
-        let Some(cjk_decimal) = predefined("cjk-decimal") &&
-        let Some(text) = represent(&cjk_decimal, value)
+    if system.fallback == Fallback::CjkDecimal
+        && let Some(cjk_decimal) = predefined("cjk-decimal")
+        && let Some(text) = represent(&cjk_decimal, value)
     {
         return text;
     }
@@ -258,10 +258,10 @@ fn symbolic(ordinal: i64, symbols: &[&str]) -> Option<String> {
     let symbol = symbols[((ordinal - 1) % count) as usize];
     let repeats = ordinal.div_ceil(count) as usize;
     let symbol_length = symbol.chars().count();
-    if symbol_length > 0 &&
-        (repeats > LENGTH_LIMIT ||
-            symbol_length > LENGTH_LIMIT ||
-            repeats * symbol_length > LENGTH_LIMIT)
+    if symbol_length > 0
+        && (repeats > LENGTH_LIMIT
+            || symbol_length > LENGTH_LIMIT
+            || repeats * symbol_length > LENGTH_LIMIT)
     {
         return None;
     }
@@ -326,9 +326,9 @@ fn additive(ordinal: i64, symbols: &[(u32, &str)]) -> Option<String> {
         let symbol_length = symbol.chars().count();
         if symbol_length > 0 {
             length += times as usize * symbol_length;
-            if times as usize > LENGTH_LIMIT ||
-                symbol_length > LENGTH_LIMIT ||
-                length > LENGTH_LIMIT
+            if times as usize > LENGTH_LIMIT
+                || symbol_length > LENGTH_LIMIT
+                || length > LENGTH_LIMIT
             {
                 return None;
             }
@@ -498,15 +498,15 @@ fn cjk_ideographic(mut ordinal: u32, data: &CjkData) -> String {
                 if data.informal {
                     match data.lang {
                         CjkLang::Chinese => {
-                            if unit_index == 1 &&
-                                (ordinal == 1 || (position > 4 && ordinal % 1000 == 1))
+                            if unit_index == 1
+                                && (ordinal == 1 || (position > 4 && ordinal % 1000 == 1))
                             {
                                 need_one = false;
                             }
                         },
                         CjkLang::Japanese => {
-                            if unit_index > 0 &&
-                                (unit_index != 3 || (position == 3 && ordinal == 1))
+                            if unit_index > 0
+                                && (unit_index != 3 || (position == 3 && ordinal == 1))
                             {
                                 need_one = false;
                             }

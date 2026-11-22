@@ -12,6 +12,7 @@ mod cell;
 mod context;
 // Mercury: lane txt-1 (ED5): the counter pass and the counter styles.
 mod counter_styles;
+mod counter_walk;
 mod counters;
 mod display_list;
 mod dom;

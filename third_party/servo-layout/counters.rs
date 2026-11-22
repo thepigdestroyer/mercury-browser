@@ -620,13 +620,13 @@ impl CounterTable {
             all.as_ref()
                 .map(|all| all.iter().map(|v| table.resolve(*v)).collect::<Vec<_>>())
         };
-        entry.list_item.map(|value| self.resolve(value)) ==
-            before.list_item.map(|value| other.resolve(value)) &&
-            entry.uses.len() == before.uses.len() &&
-            entry.uses.iter().zip(&before.uses).all(|(now, was)| {
-                self.name_list[now.name] == other.name_list[was.name] &&
-                    self.resolve(now.value) == other.resolve(was.value) &&
-                    resolve_all(self, &now.all) == resolve_all(other, &was.all)
+        entry.list_item.map(|value| self.resolve(value))
+            == before.list_item.map(|value| other.resolve(value))
+            && entry.uses.len() == before.uses.len()
+            && entry.uses.iter().zip(&before.uses).all(|(now, was)| {
+                self.name_list[now.name] == other.name_list[was.name]
+                    && self.resolve(now.value) == other.resolve(was.value)
+                    && resolve_all(self, &now.all) == resolve_all(other, &was.all)
             })
     }
 }

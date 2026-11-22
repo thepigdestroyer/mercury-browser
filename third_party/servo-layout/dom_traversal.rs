@@ -21,7 +21,8 @@ use crate::context::LayoutContext;
 use crate::dom::{BoxSlot, LayoutBox, NodeExt};
 use crate::flow::inline::SharedInlineStyles;
 // Mercury: ED5 (lane txt-1). `counter()` and `counters()` show the values of the counter pass.
-use crate::lists::{counter_value, counters_values, generate_counter_representation};
+use crate::counter_walk::{counter_value, counters_values};
+use crate::lists::generate_counter_representation;
 use crate::quotes::quotes_for_lang;
 use crate::replaced::ReplacedContents;
 use crate::style_ext::{Display, DisplayGeneratingBox, DisplayInside, DisplayOutside};

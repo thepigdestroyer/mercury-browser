@@ -89,7 +89,7 @@ use crate::accessibility::{AccessibilityContext, AccessibilityDamageMap, Accessi
 use crate::context::{CachedImageOrError, ImageResolver, LayoutContext};
 use crate::display_list::{DisplayListBuilder, HitTest, PaintTimingHandler, StackingContextTree};
 use crate::dom::NodeExt;
-use crate::lists::CounterState; // Mercury: ED5 (lane txt-1)
+use crate::counter_walk::CounterState; // Mercury: ED5 (lane txt-1)
 use crate::query::{
     BoxAreaInclusion, find_character_offset_in_fragment_descendants, get_the_text_steps,
     process_box_area_request, process_box_areas_request, process_client_rect_request,
@@ -1399,7 +1399,7 @@ impl LayoutThread {
         // before boxes are built, so that list markers and `counter()` show their numbers. When
         // a box that is not rebuilt would show an old number, rebuild every box (as for the first
         // layout) and lay everything out again (as for a change of device).
-        let counters_changed = crate::lists::update_counters(
+        let counters_changed = crate::counter_walk::update_counters(
             &self.counters,
             &layout_context,
             root_node,
