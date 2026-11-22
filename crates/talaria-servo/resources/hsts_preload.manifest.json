@@ -1,16 +1,16 @@
 {
-  "entries": 166958,
+  "entries": 95544,
   "format": "fst-map-v3; key = host name (lower-case ASCII); value = 2 * rank + include_subdomains",
-  "include_subdomains": 166708,
-  "output_sha256": "b94818a7e0c3515f9fd6a50af51e32019cbb50ee1015e1e56471fb3b06d72c42",
+  "include_subdomains": 95294,
+  "output_sha256": "2d83ab0439e84c373bc6118be43294224988726f5c7950615d890a8780d24e59",
   "source": {
-    "force_https": null,
-    "input_sha256": null,
-    "name": "servo-default-resources 0.8.0 (Servo commit 4e136d8ef31b7c4748fbfac606ca463f3efd7537, components/default-resources/resources/hsts_preload.fstmap, an earlier snapshot of Chromium's transport_security_state_static.json; its revision and date are not recorded)",
-    "objects": null,
-    "ref": null,
-    "retrieved": null,
-    "url": null
+    "force_https": 95544,
+    "input_sha256": "19fcfe4522a912b8e44e1373bdecc15a15af01059ec9144a78e24096a24481e7",
+    "name": "Chromium net/http/transport_security_state_static.json",
+    "objects": 95544,
+    "ref": "f87e0ffc32f5358a0cb05b1e10b8c1235c935a5e",
+    "retrieved": "2026-11-22",
+    "url": "https://chromium.googlesource.com/chromium/src/+/f87e0ffc32f5358a0cb05b1e10b8c1235c935a5e/net/http/transport_security_state_static.json?format=TEXT"
   },
-  "tool": "none: copied from servo-default-resources 0.8.0"
+  "tool": "hsts-preload 0.2.0"
 }
