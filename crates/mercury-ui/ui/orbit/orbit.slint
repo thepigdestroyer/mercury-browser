@@ -5,15 +5,77 @@
 // full size (level 3), the "New group" ring, the key hints and the new-group popover. Rust
 // (src/orbit_view) decides what is where and what a click means; this file draws and reports.
 //
-// SCAFFOLD of lane orbit-view (sdd/lane-orbit-view-brief.md): the properties and callbacks below are
-// the contract that the desktop glue (item 5) and layout-switch build on. Item 4 `view` fills the body
-// and may ADD properties and callbacks (drag and drop payloads, see brief §6 item 4); it does not
-// rename or remove one.
+// The properties and callbacks the lane scaffold named are the contract that the desktop glue
+// (item 5) and layout-switch build on; nothing was renamed or removed. ADDED by item 4 `view`:
+//   - `search-text` is `in-out` (it follows what the user types; Rust still sets it to clear it);
+//   - `focus-tab` (in): the tab the keyboard focus is on at level 2 (the centre ring's focus ring);
+//   - `public function focus-search()` (the machine's `FocusSearch`) and `focus-view()` (the
+//     overlay's key scope takes the keyboard focus when Orbit opens);
+//   - drag and drop payloads (brief D11): `pure payload-for(kind, id) -> data-transfer` (what a
+//     `DragArea` carries: kind "tab" or "group"; an empty `DataTransfer` makes it undraggable),
+//     `pure payload-accepts(data, kind, id, slot) -> bool` (what `DropArea.can-drop` asks; kind
+//     "group" for a planet, a chip and the centre ring, "new-group", "empty"; slot -1 = at the end),
+//     `payload-dropped(data, kind, id, slot) -> bool`;
+//   - `drag-over(kind, id, x, y)`: a `DragArea` drag is over a drop target, in stage coordinates
+//     (also the pointer position for the ghost);
+//   - `drag-source-started(kind, id)` / `drag-source-finished(accepted)`: a `DragArea` drag began and
+//     ended (kind "tab" for a preview, "group" for a planet);
+//   - `public function cancel-ring-drag()` (ends every ring's own drag; it also runs by itself on a
+//     level change) and `out property ring-drag-source` (the tab a ring is dragging, -1 for none);
+// The Command key reaches `key-pressed` as its second argument and Control as the fifth (Slint calls
+// the Command key `control` and the Control key `meta` on macOS).
 
 import { RingDropTarget, RingHit } from "../groups/ring-bands.slint";
 import { ChromePalette } from "../theme/chrome-palette.slint";
+import { PlanetRing } from "planet-ring.slint";
+import { LetterChip, PreviewCard, TabPicture } from "preview-card.slint";
+import { Sun } from "sun.slint";
 import { OrbitCard, OrbitChip, OrbitDragView, OrbitLevel, OrbitNeighbour, OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreviewCard, OrbitSun } from "orbit-models.slint";
 export { OrbitCard, OrbitChip, OrbitDragView, OrbitLevel, OrbitNeighbour, OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreviewCard, OrbitSun } from "orbit-models.slint";
+
+// A key of the footer hints: 22 px high, radius 6.
+component Keycap inherits Rectangle {
+    in property <string> label;
+
+    height: 22px;
+    width: max(22px, cap.preferred-width + 12px);
+    border-radius: 6px;
+    border-width: 1px;
+    border-color: ChromePalette.separator;
+    background: ChromePalette.item-hover;
+
+    cap := Text {
+        width: parent.width;
+        height: parent.height;
+        text: root.label;
+        font-size: 11.5px;
+        font-weight: 600;
+        color: ChromePalette.text-secondary;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
+
+// One hint: its keys, then what they do.
+component Hint inherits HorizontalLayout {
+    in property <[string]> keys;
+    in property <string> label;
+
+    spacing: 4px;
+    alignment: start;
+
+    for key in root.keys: Keycap {
+        label: key;
+    }
+    Text {
+        text: root.label;
+        font-size: 12px;
+        color: ChromePalette.text-secondary;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+}
 
 export component OrbitView inherits Rectangle {
     // What to draw (Rust: orbit_view::data::OrbitModels).
@@ -35,8 +97,10 @@ export component OrbitView inherits Rectangle {
     // "Orbit", then the group, then the tab.
     in property <[string]> crumbs;
     in property <string> search-placeholder: "Search tabs";
-    in property <string> search-text;
+    in-out property <string> search-text <=> field.text;
     in property <bool> query-active;
+    // The tab the keyboard focus is on at level 2 (draws the focus ring in the centre ring).
+    in property <int> focus-tab: -1;
     // The container's accessible label ("Orbit, every group", ...).
     in property <string> container-label: "Orbit";
     // A one-line notice (a drop that was refused), empty for none.
@@ -77,9 +141,1031 @@ export component OrbitView inherits Rectangle {
     // The pure hit tests of the planets' rings (group id first): forwarded to RingBandsData.
     pure callback ring-hit-test(int, length, length, int) -> RingHit;
     pure callback ring-drop-target(int, length, length, int) -> RingDropTarget;
+    // Drag and drop with DragArea and DropArea (see the list of additions above).
+    pure callback payload-for(string, int) -> data-transfer;
+    pure callback payload-accepts(data-transfer, string, int, int) -> bool;
+    callback payload-dropped(data-transfer, string, int, int) -> bool;
+    callback drag-over(string, int, length, length);
+    callback drag-source-started(string, int);
+    callback drag-source-finished(bool);
+
+    public function focus-search() {
+        field.focus();
+    }
+
+    public function focus-view() {
+        scope.focus();
+    }
+
+    // Ends the drag of every ring (the planets and the centre ring), as a release outside every slot
+    // does: `ring-drag-cancelled` fires for a ring that had a live drag, nothing else happens. Hosts
+    // call it on Esc and when Orbit closes. The rings end their drag in a change handler, which Slint
+    // runs before the next event or frame.
+    public function cancel-ring-drag() {
+        root.cancel-tick += 1;
+        root.ring-drag-source = -1;
+    }
+
+    // A level change while a ring is dragged cannot leave a ghost.
+    changed level => {
+        root.cancel-ring-drag();
+    }
+
+    // The tab a ring is dragging now (RingBands' own drag), -1 for none.
+    out property <int> ring-drag-source: -1;
+    private property <int> cancel-tick: 0;
+    private property <bool> l1: root.level == OrbitLevel.groups;
+    private property <bool> l2: root.level == OrbitLevel.group;
+    private property <bool> l3: root.level == OrbitLevel.tab;
+    private property <bool> pinch-live: false;
+    private property <duration> fade: root.reduce-motion ? 0ms : 90ms;
+    // The mockup's window is 1440 x 900; the ellipses shrink with a smaller one, never grow.
+    private property <float> ellipse-scale: min(1, min(root.width / 1440px, root.height / 900px));
+    private property <float> ellipse-cx: root.width / 1px / 2;
+    // The stage is the area between the title bar (48) and the footer strip (8): its middle.
+    private property <float> ellipse-cy: root.height / 1px / 2 + 20;
+    private property <float> ellipse-rx: (root.l2 ? 520 : 470) * root.ellipse-scale;
+    private property <float> ellipse-ry: (root.l2 ? 292 : 290) * root.ellipse-scale;
+    private property <string> group-name: root.crumbs.length > 1 ? root.crumbs[1] : "";
+    private property <length> chips-end: root.chips.length > 0 ? root.chips[root.chips.length - 1].x + root.chips[root.chips.length - 1].width : 0px;
+
+    animate pinch-progress { duration: root.pinch-live || root.reduce-motion ? 0ms : 160ms; easing: ease-out; }
 
     background: ChromePalette.window-background;
     accessible-role: none;
+
+    scope := FocusScope {
+        key-pressed(event) => {
+            if root.key-pressed(event.text, event.modifiers.control, event.modifiers.shift, event.modifiers.alt, event.modifiers.meta) {
+                return accept;
+            }
+            return reject;
+        }
+
+        gesture := ScaleRotateGestureHandler {
+            started => {
+                root.pinch-live = true;
+                root.pinch-started(self.center.x, self.center.y);
+            }
+            updated => {
+                root.pinch-progress = clamp((self.scale - 1) / 0.35, -1, 1);
+                root.pinch-updated(self.scale);
+            }
+            ended => {
+                root.pinch-live = false;
+                root.pinch-ended();
+            }
+            cancelled => {
+                root.pinch-live = false;
+                root.pinch-cancelled();
+            }
+
+            stage := Rectangle {
+                width: parent.width;
+                height: parent.height;
+                clip: true;
+                transform-scale: 1 + root.pinch-progress * 0.08;
+                accessible-role: list;
+                accessible-label: root.container-label;
+
+                // The title bar: the mark, "Orbit" and the breadcrumb, the search field, the way back.
+                Rectangle {
+                    x: 0;
+                    y: 0;
+                    width: parent.width;
+                    height: 48px;
+                    background: ChromePalette.toolbar-background;
+
+                    Rectangle {
+                        y: parent.height - 1px;
+                        width: parent.width;
+                        height: 1px;
+                        background: ChromePalette.toolbar-divider;
+                    }
+                    Rectangle {
+                        x: 87px;
+                        y: 9px;
+                        width: 30px;
+                        height: 30px;
+                        border-radius: 15px;
+                        border-width: 2px;
+                        border-color: ChromePalette.accent;
+                        background: ChromePalette.accent.transparentize(0.8);
+                    }
+                    HorizontalLayout {
+                        x: 126px;
+                        y: 0;
+                        height: 48px;
+                        spacing: 8px;
+                        alignment: start;
+
+                        for crumb[i] in root.crumbs: HorizontalLayout {
+                            spacing: 8px;
+
+                            if i > 0: Text {
+                                text: "›";
+                                font-size: 14px;
+                                color: ChromePalette.text-muted;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                            Text {
+                                text: crumb;
+                                font-size: 14px;
+                                font-weight: i == 0 || i == root.crumbs.length - 1 ? 700 : 400;
+                                color: i == 0 || i == root.crumbs.length - 1 ? ChromePalette.text : ChromePalette.text-secondary;
+                                vertical-alignment: center;
+                            }
+                        }
+                    }
+                    Rectangle {
+                        x: (parent.width - self.width) / 2;
+                        y: 9px;
+                        width: 360px;
+                        height: 30px;
+                        border-radius: 15px;
+                        border-width: 1px;
+                        border-color: field.has-focus ? ChromePalette.accent : ChromePalette.search-field-border;
+                        background: ChromePalette.search-field-background;
+
+                        Path {
+                            x: 13px;
+                            y: 8px;
+                            width: 14px;
+                            height: 14px;
+                            viewbox-width: 16;
+                            viewbox-height: 16;
+                            commands: "M2.5 7 A4.5 4.5 0 1 0 11.5 7 A4.5 4.5 0 1 0 2.5 7 M10.3 10.3 L13.5 13.5";
+                            stroke: ChromePalette.placeholder;
+                            stroke-width: 1.5px;
+                            accessible-role: none;
+                        }
+                        Text {
+                            x: 36px;
+                            height: parent.height;
+                            text: root.search-placeholder;
+                            font-size: 13px;
+                            color: ChromePalette.placeholder;
+                            vertical-alignment: center;
+                            visible: field.text == "";
+                            accessible-role: none;
+                        }
+                        field := TextInput {
+                            x: 36px;
+                            width: parent.width - 52px;
+                            height: parent.height;
+                            font-size: 13px;
+                            color: ChromePalette.text;
+                            vertical-alignment: center;
+                            single-line: true;
+                            accessible-label: "Search tabs";
+                            accessible-placeholder-text: root.search-placeholder;
+                            edited => {
+                                root.search-edited(self.text);
+                            }
+                            accepted => {
+                                root.key-pressed("\n", false, false, false, false);
+                            }
+                        }
+                    }
+                    Rectangle {
+                        x: parent.width - self.width - 16px;
+                        width: back-row.preferred-width;
+                        height: parent.height;
+                        accessible-role: button;
+                        accessible-label: "Back to the page";
+                        accessible-action-default => {
+                            root.back-clicked();
+                        }
+
+                        back-row := HorizontalLayout {
+                            spacing: 8px;
+                            alignment: center;
+
+                            Rectangle {
+                                width: 32px;
+                                height: parent.height;
+                                Keycap {
+                                    y: (parent.height - self.height) / 2;
+                                    width: 32px;
+                                    label: "esc";
+                                }
+                            }
+                            Text {
+                                text: "Back to the page";
+                                font-size: 12.5px;
+                                color: ChromePalette.text-secondary;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                        }
+                        TouchArea {
+                            clicked => {
+                                root.back-clicked();
+                            }
+                        }
+                    }
+                }
+
+                // The stage below the title bar. Its content keeps window coordinates (the inner box
+                // starts 48 px up), so the title bar comes first in the reading order and still
+                // covers what the huge ring of level 3 draws under it.
+                Rectangle {
+                    y: 48px;
+                    width: parent.width;
+                    height: parent.height - 48px;
+                    clip: true;
+
+                    Rectangle {
+                        y: -48px;
+                        width: root.width;
+                        height: root.height;
+
+                        // The orbits: the sun's ellipse and a second, faint one.
+                        Path {
+                            width: parent.width;
+                            height: parent.height;
+                            viewbox-width: self.width / 1px;
+                            viewbox-height: self.height / 1px;
+                            commands: "M \{root.ellipse-cx - root.ellipse-rx} \{root.ellipse-cy} A \{root.ellipse-rx} \{root.ellipse-ry} 0 1 0 \{root.ellipse-cx + root.ellipse-rx} \{root.ellipse-cy} A \{root.ellipse-rx} \{root.ellipse-ry} 0 1 0 \{root.ellipse-cx - root.ellipse-rx} \{root.ellipse-cy}";
+                            stroke: ChromePalette.separator;
+                            stroke-width: 1.5px;
+                            accessible-role: none;
+                        }
+                        Path {
+                            width: parent.width;
+                            height: parent.height;
+                            viewbox-width: self.width / 1px;
+                            viewbox-height: self.height / 1px;
+                            commands: "M \{root.ellipse-cx - 640 * root.ellipse-scale} \{root.ellipse-cy} A \{640 * root.ellipse-scale} \{400 * root.ellipse-scale} 0 1 0 \{root.ellipse-cx + 640 * root.ellipse-scale} \{root.ellipse-cy} A \{640 * root.ellipse-scale} \{400 * root.ellipse-scale} 0 1 0 \{root.ellipse-cx - 640 * root.ellipse-scale} \{root.ellipse-cy}";
+                            stroke: ChromePalette.separator;
+                            stroke-width: 1px;
+                            opacity: 0.6;
+                            accessible-role: none;
+                        }
+
+                        // Empty space: a click there, and a drag released there (a new group).
+                        backdrop := TouchArea {
+                            y: 48px;
+                            width: parent.width;
+                            height: parent.height - 48px;
+                            clicked => {
+                                root.backdrop-clicked();
+                            }
+                        }
+                        DropArea {
+                            y: 48px;
+                            width: parent.width;
+                            height: parent.height - 48px;
+                            can-drop(event) => {
+                                root.drag-over("empty", -1, event.position.x, 48px + event.position.y);
+                                if root.payload-accepts(event.data, "empty", -1, -1) {
+                                    return DragAction.move;
+                                }
+                                return DragAction.none;
+                            }
+                            dropped(event) => {
+                                if root.payload-accepts(event.data, "empty", -1, -1) && root.payload-dropped(event.data, "empty", -1, -1) {
+                                    return DragAction.move;
+                                }
+                                return DragAction.none;
+                            }
+                        }
+
+                        // The sun (level 1).
+                        Sun {
+                            x: root.sun.x - self.width / 2;
+                            y: root.sun.y - self.height / 2;
+                            radius: root.sun.radius;
+                            title: root.sun.title;
+                            subtitle: root.sun.subtitle;
+                            opacity: root.sun.opacity;
+                            visible: root.sun.opacity > 0.01;
+                        }
+
+                        // The spokes from the centre ring to the previews (level 2).
+                        for spoke in root.previews: Path {
+                            x: min(spoke.spoke-x1, spoke.spoke-x2);
+                            y: min(spoke.spoke-y1, spoke.spoke-y2);
+                            width: max(1px, abs(spoke.spoke-x2 - spoke.spoke-x1));
+                            height: max(1px, abs(spoke.spoke-y2 - spoke.spoke-y1));
+                            viewbox-width: self.width / 1px;
+                            viewbox-height: self.height / 1px;
+                            commands: "M \{(spoke.spoke-x1 - self.x) / 1px} \{(spoke.spoke-y1 - self.y) / 1px} L \{(spoke.spoke-x2 - self.x) / 1px} \{(spoke.spoke-y2 - self.y) / 1px}";
+                            stroke: spoke.shade.transparentize(0.6);
+                            stroke-width: 1.5px;
+                            accessible-role: none;
+                        }
+
+                        // The planets (level 1).
+                        for row in root.planets: PlanetRing {
+                            planet: row;
+                            halo-enabled: root.l1;
+                            interactive: root.l1;
+                            reorderable: root.l1 && row.group != -2;
+                            accepts-drops: root.l1;
+                    cancel-tick: root.cancel-tick;
+                            query-active: root.query-active;
+                            reduce-motion: root.reduce-motion;
+                            animate-spinners: root.animate-spinners;
+                            accessible-role: button;
+                            accessible-label: row.accessible-label;
+                            accessible-action-default => {
+                                root.planet-clicked(row.group);
+                            }
+
+                            clicked => {
+                                root.planet-clicked(row.group);
+                            }
+                            tab-clicked(id) => {
+                                root.planet-clicked(row.group);
+                            }
+                            hover-changed(over) => {
+                                root.planet-hovered(over ? row.group : -1);
+                            }
+                            ring-drag-started(tab) => {
+                                root.ring-drag-started(row.group, tab);
+                            }
+                            ring-drag-moved(x, y) => {
+                                root.ring-drag-moved(x, y);
+                            }
+                            ring-dropped(group, slot) => {
+                                root.ring-dropped(group, slot);
+                            }
+                            ring-drag-cancelled() => {
+                                root.ring-drag-cancelled();
+                            }
+                            ring-drag-live(source) => {
+                                root.ring-drag-source = source;
+                            }
+                            hit-test(x, y, hovered) => {
+                                return root.ring-hit-test(row.group, x, y, hovered);
+                            }
+                            drop-target(x, y, dragging) => {
+                                return root.ring-drop-target(row.group, x, y, dragging);
+                            }
+                            payload-for(kind, id) => {
+                                return root.payload-for(kind, id);
+                            }
+                            payload-accepts(data, kind, id, slot) => {
+                                return root.payload-accepts(data, kind, id, slot);
+                            }
+                            payload-dropped(data, kind, id, slot) => {
+                                return root.payload-dropped(data, kind, id, slot);
+                            }
+                            drag-over(kind, id, x, y) => {
+                                root.drag-over(kind, id, x, y);
+                            }
+                            drag-source-started() => {
+                                root.drag-source-started("group", row.group);
+                            }
+                            drag-source-finished(accepted) => {
+                                root.drag-source-finished(accepted);
+                            }
+                        }
+
+                        // The group's ring: in the middle at level 2 (it takes the pointer), huge and behind
+                        // the card at level 3 (it only draws).
+                        if root.has-centre && !root.l1: PlanetRing {
+                            planet: root.centre;
+                            // Not a constant `false`: Slint 1.17.1's remove_unused pass panics on it.
+                            halo-enabled: root.l1;
+                            interactive: root.l2;
+                            reorderable: false;
+                            accepts-drops: root.l2;
+                            focused-tab: root.focus-tab;
+                        dim: root.l3 ? 0.4 : 1;
+                        cancel-tick: root.cancel-tick;
+                            query-active: root.query-active;
+                            reduce-motion: root.reduce-motion;
+                            animate-spinners: root.animate-spinners;
+
+                            tab-clicked(id) => {
+                                root.preview-clicked(id);
+                            }
+                            tab-hovered(id) => {
+                                root.preview-hovered(id);
+                            }
+                            ring-drag-started(tab) => {
+                                root.ring-drag-started(root.centre.group, tab);
+                            }
+                            ring-drag-moved(x, y) => {
+                                root.ring-drag-moved(x, y);
+                            }
+                            ring-dropped(group, slot) => {
+                                root.ring-dropped(group, slot);
+                            }
+                            ring-drag-cancelled() => {
+                                root.ring-drag-cancelled();
+                            }
+                            ring-drag-live(source) => {
+                                root.ring-drag-source = source;
+                            }
+                            hit-test(x, y, hovered) => {
+                                return root.ring-hit-test(root.centre.group, x, y, hovered);
+                            }
+                            drop-target(x, y, dragging) => {
+                                return root.ring-drop-target(root.centre.group, x, y, dragging);
+                            }
+                            payload-for(kind, id) => {
+                                return root.payload-for(kind, id);
+                            }
+                            payload-accepts(data, kind, id, slot) => {
+                                return root.payload-accepts(data, kind, id, slot);
+                            }
+                            payload-dropped(data, kind, id, slot) => {
+                                return root.payload-dropped(data, kind, id, slot);
+                            }
+                            drag-over(kind, id, x, y) => {
+                                root.drag-over(kind, id, x, y);
+                            }
+                        }
+
+                        // The dashed "New group" ring (level 1): lit while a drag hovers it.
+                        if root.new-group.visible && root.l1: Rectangle {
+                            x: root.new-group.x - root.new-group.radius;
+                            y: root.new-group.y - root.new-group.radius;
+                            width: 2 * root.new-group.radius;
+                            height: self.width;
+                            accessible-role: button;
+                            accessible-label: "New group";
+                            accessible-action-default => {
+                                root.new-group-clicked();
+                            }
+                            property <bool> lit: root.new-group.lit || group-drop.has-drag;
+
+                            Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                border-radius: self.width / 2;
+                                background: parent.lit ? ChromePalette.accent.transparentize(0.86) : transparent;
+                            }
+                            Path {
+                                width: parent.width;
+                                height: parent.height;
+                                viewbox-width: 100;
+                                viewbox-height: 100;
+                                commands: "M50.00 0.00 A50 50 0 0 1 56.10 0.37 M61.13 1.25 A50 50 0 0 1 66.99 2.98 M71.69 4.95 A50 50 0 0 1 77.03 7.94 M81.17 10.91 A50 50 0 0 1 85.71 15.01 M89.09 18.83 A50 50 0 0 1 92.61 23.83 M95.05 28.31 A50 50 0 0 1 97.36 33.97 M98.75 38.87 A50 50 0 0 1 99.74 44.91 M100.00 50.00 A50 50 0 0 1 99.63 56.10 M98.75 61.13 A50 50 0 0 1 97.02 66.99 M95.05 71.69 A50 50 0 0 1 92.06 77.03 M89.09 81.17 A50 50 0 0 1 84.99 85.71 M81.17 89.09 A50 50 0 0 1 76.17 92.61 M71.69 95.05 A50 50 0 0 1 66.03 97.36 M61.13 98.75 A50 50 0 0 1 55.09 99.74 M50.00 100.00 A50 50 0 0 1 43.90 99.63 M38.87 98.75 A50 50 0 0 1 33.01 97.02 M28.31 95.05 A50 50 0 0 1 22.97 92.06 M18.83 89.09 A50 50 0 0 1 14.29 84.99 M10.91 81.17 A50 50 0 0 1 7.39 76.17 M4.95 71.69 A50 50 0 0 1 2.64 66.03 M1.25 61.13 A50 50 0 0 1 0.26 55.09 M0.00 50.00 A50 50 0 0 1 0.37 43.90 M1.25 38.87 A50 50 0 0 1 2.98 33.01 M4.95 28.31 A50 50 0 0 1 7.94 22.97 M10.91 18.83 A50 50 0 0 1 15.01 14.29 M18.83 10.91 A50 50 0 0 1 23.83 7.39 M28.31 4.95 A50 50 0 0 1 33.97 2.64 M38.87 1.25 A50 50 0 0 1 44.91 0.26";
+                                stroke: parent.lit ? ChromePalette.accent : ChromePalette.text-muted;
+                                stroke-width: 1.5px;
+                                accessible-role: none;
+                            }
+                            Path {
+                                x: parent.width / 2 - 8px;
+                                y: parent.height / 2 - 18px;
+                                width: 16px;
+                                height: 16px;
+                                viewbox-width: 16;
+                                viewbox-height: 16;
+                                commands: "M8 3 V13 M3 8 H13";
+                                stroke: parent.lit ? ChromePalette.accent : ChromePalette.text-muted;
+                                stroke-width: 2px;
+                                accessible-role: none;
+                            }
+                            Text {
+                                y: parent.height / 2 + 4px;
+                                width: parent.width;
+                                height: 20px;
+                                text: "New group";
+                                font-size: 12px;
+                                font-weight: 600;
+                                color: parent.lit ? ChromePalette.accent : ChromePalette.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.new-group-clicked();
+                                }
+                            }
+                            group-drop := DropArea {
+                                width: parent.width;
+                                height: parent.height;
+                                can-drop(event) => {
+                                    root.drag-over("new-group", -1, root.new-group.x - root.new-group.radius + event.position.x, root.new-group.y - root.new-group.radius + event.position.y);
+                                    if root.payload-accepts(event.data, "new-group", -1, -1) {
+                                        return DragAction.move;
+                                    }
+                                    return DragAction.none;
+                                }
+                                dropped(event) => {
+                                    if root.payload-accepts(event.data, "new-group", -1, -1) && root.payload-dropped(event.data, "new-group", -1, -1) {
+                                        return DragAction.move;
+                                    }
+                                    return DragAction.none;
+                                }
+                            }
+                        }
+
+                        // The previews of the group's tabs (level 2).
+                        for row in root.previews: PreviewCard {
+                            card: row;
+                            reduce-motion: root.reduce-motion;
+                            animate-spinners: root.animate-spinners;
+                            accessible-role: button;
+                            accessible-label: row.accessible-label;
+                            accessible-action-default => {
+                                root.preview-clicked(row.tab);
+                            }
+
+                            clicked => {
+                                root.preview-clicked(row.tab);
+                            }
+                            hover-changed(over) => {
+                                root.preview-hovered(over ? row.tab : -1);
+                            }
+                            payload-for(kind, id) => {
+                                return root.payload-for(kind, id);
+                            }
+                            drag-source-started() => {
+                                root.drag-source-started("tab", row.tab);
+                            }
+                            drag-source-finished(accepted) => {
+                                root.drag-source-finished(accepted);
+                            }
+                        }
+
+                        // The other groups (level 2): chips along the bottom, each a drop target.
+                        if root.l2 && root.chips.length > 0: Text {
+                            x: 30px;
+                            y: root.chips[0].y + (root.chips[0].height - self.height) / 2;
+                            height: 18px;
+                            text: "OTHER GROUPS";
+                            font-size: 10.5px;
+                            font-weight: 700;
+                            color: ChromePalette.text-muted;
+                            vertical-alignment: center;
+                            accessible-role: none;
+                        }
+                        for chip in root.chips: Rectangle {
+                            x: chip.x;
+                            y: chip.y;
+                            width: chip.width;
+                            height: chip.height;
+                            visible: root.l2;
+                            accessible-role: button;
+                            accessible-label: chip.accessible-label;
+                            accessible-action-default => {
+                                root.chip-clicked(chip.group);
+                            }
+                            property <bool> lit: chip-touch.has-hover || chip-drop.has-drag;
+
+                            Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                border-radius: 8px;
+                                background: parent.lit ? ChromePalette.item-hover : transparent;
+                                border-width: chip-drop.has-drag ? 2px : 0px;
+                                border-color: ChromePalette.accent;
+                            }
+                            HorizontalLayout {
+                                padding-left: 6px;
+                                padding-right: 8px;
+                                spacing: 6px;
+                                alignment: start;
+
+                                Rectangle {
+                                    width: 18px;
+                                    height: parent.height;
+                                    Rectangle {
+                                        y: (parent.height - self.height) / 2;
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 8px;
+                                        border-width: 3px;
+                                        border-color: chip.colour;
+                                    }
+                                }
+                                Text {
+                                    text: chip.name;
+                                    font-size: 12.5px;
+                                    color: ChromePalette.text-secondary;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                                Text {
+                                    text: chip.key-label;
+                                    font-size: 11px;
+                                    font-weight: 700;
+                                    color: ChromePalette.accent;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                            chip-touch := TouchArea {
+                                clicked => {
+                                    root.chip-clicked(chip.group);
+                                }
+                            }
+                            chip-drop := DropArea {
+                                width: parent.width;
+                                height: parent.height;
+                                can-drop(event) => {
+                                    root.drag-over("group", chip.group, parent.x + event.position.x, parent.y + event.position.y);
+                                    if root.payload-accepts(event.data, "group", chip.group, -1) {
+                                        return DragAction.move;
+                                    }
+                                    return DragAction.none;
+                                }
+                                dropped(event) => {
+                                    if root.payload-accepts(event.data, "group", chip.group, -1) && root.payload-dropped(event.data, "group", chip.group, -1) {
+                                        return DragAction.move;
+                                    }
+                                    return DragAction.none;
+                                }
+                            }
+                        }
+
+                        // The neighbours of the shown tab (level 3), half off the stage, dimmed.
+                        for near in root.neighbours: Rectangle {
+                            x: near.x;
+                            y: near.y;
+                            width: near.width;
+                            height: near.height;
+                            opacity: 0.6;
+                            visible: root.l3;
+                            border-radius: 12px;
+                            background: ChromePalette.popup-background;
+                            clip: true;
+                            accessible-role: button;
+                            accessible-label: near.accessible-label;
+                            accessible-action-default => {
+                                root.neighbour-clicked(near.tab);
+                            }
+
+                            TabPicture {
+                                y: 0;
+                                width: parent.width;
+                                height: parent.height - 30px;
+                                picture: near.picture;
+                                has-picture: near.has-picture;
+                                letter: near.letter;
+                                shade: near.shade;
+                                title: near.title;
+                                host: "";
+                                unit: 1;
+                            }
+                            Rectangle {
+                                y: parent.height - 30px;
+                                height: 30px;
+                                width: parent.width;
+                                LetterChip {
+                                    x: 10px;
+                                    y: (parent.height - self.height) / 2;
+                                    letter: near.letter;
+                                    shade: near.shade;
+                                    size: 16px;
+                                }
+                                Text {
+                                    x: 34px;
+                                    width: parent.width - 44px;
+                                    height: parent.height;
+                                    text: near.title;
+                                    font-size: 12px;
+                                    font-weight: 600;
+                                    color: ChromePalette.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    accessible-role: none;
+                                }
+                            }
+                            Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                border-radius: 12px;
+                                border-width: 1px;
+                                border-color: ChromePalette.popup-border;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.neighbour-clicked(near.tab);
+                                }
+                            }
+                        }
+
+                        // The shown tab almost full size (level 3): 2.5 px accent outline, a 40 px header.
+                        if root.card.visible && root.l3: Rectangle {
+                            x: root.card.x;
+                            y: root.card.y;
+                            width: root.card.width;
+                            height: root.card.height;
+                            border-radius: 16px;
+                            background: ChromePalette.popup-background;
+                            drop-shadow-blur: 30px;
+                            drop-shadow-color: ChromePalette.shadow;
+                            drop-shadow-offset-y: 10px;
+                            clip: true;
+                            accessible-role: button;
+                            accessible-label: root.card.accessible-label;
+                            accessible-action-default => {
+                                root.card-clicked();
+                            }
+
+                            TabPicture {
+                                y: 40px;
+                                width: parent.width;
+                                height: parent.height - 40px;
+                                picture: root.card.picture;
+                                has-picture: root.card.has-picture;
+                                letter: root.card.letter;
+                                shade: root.card.shade;
+                                title: root.card.title;
+                                host: root.card.host;
+                                unit: 1.8;
+                            }
+                            Rectangle {
+                                x: 0;
+                                y: 0;
+                                height: 40px;
+                                width: parent.width;
+                                background: ChromePalette.popup-background;
+
+                                LetterChip {
+                                    x: 16px;
+                                    y: (parent.height - self.height) / 2;
+                                    letter: root.card.letter;
+                                    shade: root.card.shade;
+                                    size: 24px;
+                                }
+                                title-text := Text {
+                                    x: 48px;
+                                    width: min(self.preferred-width, parent.width / 2);
+                                    height: parent.height;
+                                    text: root.card.title;
+                                    font-size: 16px;
+                                    font-weight: 700;
+                                    color: ChromePalette.text;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                    accessible-role: none;
+                                }
+                                Text {
+                                    x: title-text.x + title-text.width + 14px;
+                                    height: parent.height;
+                                    text: root.card.host;
+                                    font-size: 12.5px;
+                                    color: ChromePalette.text-muted;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                                Rectangle {
+                                    x: parent.width - 16px - 10px;
+                                    y: (parent.height - self.height) / 2;
+                                    width: 10px;
+                                    height: 10px;
+                                    border-radius: 5px;
+                                    background: root.card.group-colour;
+                                }
+                                Text {
+                                    x: parent.width - 16px - 10px - 8px - self.width;
+                                    width: self.preferred-width;
+                                    height: parent.height;
+                                    text: root.card.caption;
+                                    font-size: 12.5px;
+                                    color: ChromePalette.text-muted;
+                                    vertical-alignment: center;
+                                    accessible-role: none;
+                                }
+                            }
+                            Rectangle {
+                                width: parent.width;
+                                height: parent.height;
+                                border-radius: 16px;
+                                border-width: 2.5px;
+                                border-color: ChromePalette.accent;
+                            }
+                            TouchArea {
+                                clicked => {
+                                    root.card-clicked();
+                                }
+                            }
+                        }
+
+                        // The tooltip of the lit planet (level 1).
+                        for row in root.planets: Rectangle {
+                            x: row.tooltip-x;
+                            y: row.tooltip-y;
+                            width: tip.preferred-width + 24px;
+                            height: 30px;
+                            visible: root.l1 && row.lit && row.tooltip != "";
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: ChromePalette.popup-border;
+                            background: ChromePalette.popup-background;
+
+                            tip := Text {
+                                x: 12px;
+                                height: parent.height;
+                                text: row.tooltip;
+                                font-size: 12.5px;
+                                font-weight: 600;
+                                color: ChromePalette.text;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                        }
+
+                        // The drag in flight: a dotted accent line from the source slot to the ghost, and
+                        // the pill of the tab or group at the pointer.
+                        for step in 36: Rectangle {
+                            visible: root.drag.active && root.drag.has-from;
+                            x: root.drag.from-x + (root.drag.ghost-x - root.drag.from-x) * (step + 0.5) / 36 - 1.25px;
+                            y: root.drag.from-y + (root.drag.ghost-y - root.drag.from-y) * (step + 0.5) / 36 - 1.25px;
+                            width: 2.5px;
+                            height: 2.5px;
+                            border-radius: 1.25px;
+                            background: ChromePalette.accent;
+                        }
+                        if root.drag.active: Rectangle {
+                            x: root.drag.ghost-x - self.width / 2;
+                            y: root.drag.ghost-y - 12px;
+                            width: ghost-text.preferred-width + 24px;
+                            height: 24px;
+                            border-radius: 12px;
+                            background: root.drag.ghost-colour;
+                            drop-shadow-blur: 8px;
+                            drop-shadow-color: ChromePalette.shadow;
+                            drop-shadow-offset-y: 2px;
+
+                            ghost-text := Text {
+                                x: 12px;
+                                height: parent.height;
+                                text: root.drag.ghost-text;
+                                font-size: 11px;
+                                font-weight: 700;
+                                color: ChromePalette.primary-button-text;
+                                vertical-alignment: center;
+                                accessible-role: none;
+                            }
+                        }
+
+                        // The new-group popover: a name field and six colour dots.
+                        if root.popover.visible: Rectangle {
+                            x: root.popover.x;
+                            y: root.popover.y;
+                            width: 230px;
+                            height: 100px;
+                            border-radius: 10px;
+                            border-width: 1px;
+                            border-color: ChromePalette.popup-border;
+                            background: ChromePalette.popup-background;
+                            drop-shadow-blur: 18px;
+                            drop-shadow-color: ChromePalette.shadow;
+                            drop-shadow-offset-y: 4px;
+                            accessible-role: groupbox;
+                            accessible-label: "New group";
+
+                            Rectangle {
+                                x: 10px;
+                                y: 10px;
+                                width: parent.width - 20px;
+                                height: 32px;
+                                border-radius: 6px;
+                                border-width: 2px;
+                                border-color: ChromePalette.accent;
+                                background: ChromePalette.field-background;
+
+                                name-field := TextInput {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height;
+                                    text: root.popover.name;
+                                    font-size: 13px;
+                                    color: ChromePalette.text;
+                                    vertical-alignment: center;
+                                    single-line: true;
+                                    accessible-label: "Group name";
+                                    init => {
+                                        self.focus();
+                                        self.select-all();
+                                    }
+                                    edited => {
+                                        root.popover-name-edited(self.text);
+                                    }
+                                    accepted => {
+                                        root.popover-confirmed();
+                                    }
+                                }
+                            }
+                            for colour[i] in root.popover.colours: Rectangle {
+                                x: 14px + i * 33px;
+                                y: 58px;
+                                width: 24px;
+                                height: 24px;
+                                accessible-role: radio-button;
+                                accessible-label: i < root.popover.colour-names.length ? root.popover.colour-names[i] : "Colour";
+                                accessible-checkable: true;
+                                accessible-checked: i == root.popover.selected;
+                                accessible-action-default => {
+                                    root.popover-colour-chosen(i);
+                                }
+
+                                Rectangle {
+                                    x: 3px;
+                                    y: 3px;
+                                    width: 18px;
+                                    height: 18px;
+                                    border-radius: 9px;
+                                    background: colour;
+                                }
+                                Rectangle {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    border-radius: 12px;
+                                    border-width: i == root.popover.selected ? 2px : 0px;
+                                    border-color: ChromePalette.text;
+                                }
+                                TouchArea {
+                                    clicked => {
+                                        root.popover-colour-chosen(i);
+                                    }
+                                }
+                            }
+                        }
+
+                        // A refused drop: one line at the bottom.
+                        if root.notice != "": Rectangle {
+                            x: (parent.width - self.width) / 2;
+                            y: parent.height - 96px;
+                            width: notice-text.preferred-width + 32px;
+                            height: 32px;
+                            border-radius: 8px;
+                            border-width: 1px;
+                            border-color: ChromePalette.notice-border;
+                            background: ChromePalette.notice-background;
+
+                            notice-text := Text {
+                                x: 16px;
+                                height: parent.height;
+                                text: root.notice;
+                                font-size: 12.5px;
+                                color: ChromePalette.status-text;
+                                vertical-alignment: center;
+                            }
+                        }
+
+                        // The key hints, centred in the free part of the footer (level 2: right of the
+                        // "Other groups" chips).
+                        HorizontalLayout {
+                            x: root.l2 ? root.chips-end + 40px : 0px;
+                            y: parent.height - 34px;
+                            width: root.l2 ? parent.width - self.x - 40px : parent.width;
+                            height: 22px;
+                            spacing: 18px;
+                            alignment: center;
+
+                            if root.l1: Hint {
+                                keys: ["⏎"];
+                                label: "zoom in";
+                            }
+                            if root.l1: Hint {
+                                keys: ["⌘↑"];
+                                label: "zoom out";
+                            }
+                            if root.l1: Hint {
+                                keys: ["N"];
+                                label: "new group";
+                            }
+                            if root.l1: Hint {
+                                keys: ["/"];
+                                label: "search";
+                            }
+                            if root.l1: Hint {
+                                keys: ["esc"];
+                                label: "back to the page";
+                            }
+                            if root.l2: Hint {
+                                keys: ["←", "→"];
+                                label: "tab";
+                            }
+                            if root.l2: Hint {
+                                keys: ["⏎"];
+                                label: "open";
+                            }
+                            if root.l2: Hint {
+                                keys: ["⌘↑"];
+                                label: "zoom out";
+                            }
+                            if root.l3: Hint {
+                                keys: ["⏎"];
+                                label: "open the tab";
+                            }
+                            if root.l3: Hint {
+                                keys: ["←", "→"];
+                                label: "previous / next tab";
+                            }
+                            if root.l3: Hint {
+                                keys: ["⌘↑"];
+                                label: root.group-name == "" ? "zoom out" : "back to \{root.group-name}";
+                            }
+                        }
+
+                    }
+                }
+            }
+        }
+    }
 }
 
 // A 1440 x 900 window around one OrbitView with every property and callback forwarded, for the
@@ -104,8 +1190,9 @@ export component OrbitPreview inherits Window {
     in property <OrbitPopover> popover <=> view.popover;
     in property <[string]> crumbs <=> view.crumbs;
     in property <string> search-placeholder <=> view.search-placeholder;
-    in property <string> search-text <=> view.search-text;
+    in-out property <string> search-text <=> view.search-text;
     in property <bool> query-active <=> view.query-active;
+    in property <int> focus-tab <=> view.focus-tab;
     in property <string> container-label <=> view.container-label;
     in property <string> notice <=> view.notice;
     in-out property <float> pinch-progress <=> view.pinch-progress;
@@ -138,6 +1225,25 @@ export component OrbitPreview inherits Window {
     callback popover-cancelled <=> view.popover-cancelled;
     pure callback ring-hit-test <=> view.ring-hit-test;
     pure callback ring-drop-target <=> view.ring-drop-target;
+    pure callback payload-for <=> view.payload-for;
+    pure callback payload-accepts <=> view.payload-accepts;
+    callback payload-dropped <=> view.payload-dropped;
+    callback drag-over <=> view.drag-over;
+    callback drag-source-started <=> view.drag-source-started;
+    callback drag-source-finished <=> view.drag-source-finished;
+    out property <int> ring-drag-source <=> view.ring-drag-source;
+
+    public function focus-search() {
+        view.focus-search();
+    }
+
+    public function focus-view() {
+        view.focus-view();
+    }
+
+    public function cancel-ring-drag() {
+        view.cancel-ring-drag();
+    }
 
     view := OrbitView {
         width: parent.width;

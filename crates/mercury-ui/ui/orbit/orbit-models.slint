@@ -4,9 +4,8 @@
 // data.rs) computes every position; Slint draws what it is given. All positions are in stage
 // coordinates (the whole window, origin top-left) and name a CENTRE unless said otherwise.
 //
-// SCAFFOLD of lane orbit-view (sdd/lane-orbit-view-brief.md): the field lists are what items 2
-// (Rust fills them) and 4 (Slint draws them) build against. A new field is an addition the lead
-// makes; a worker names the missing field in its final message. Rust builds the rows with
+// Lane orbit-view (sdd/lane-orbit-view-brief.md): the field lists are what the Rust data builder
+// fills and the Slint view draws. A new field is an addition; Rust builds the rows with
 // `..Default::default()` so that an added field never breaks it.
 
 import { ArcGlyph, ArcSeg, GroupRow, TabRow } from "../groups/models.slint";
