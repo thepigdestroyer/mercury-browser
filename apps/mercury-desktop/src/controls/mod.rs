@@ -320,7 +320,6 @@ impl Controls {
                         tab_id,
                         id,
                         state.url(),
-                        &origin,
                         state.password_field_menu(), // passwords-ui
                         crate::view_source::can_view_source(controller), // sh-pages
                     )
@@ -650,7 +649,6 @@ fn open_popup(
     tab_id: TabId,
     id: ControlId,
     page_url: &str,
-    _origin: &str,
     password_field: Option<ControlId>,
     view_source: bool, // sh-pages: the page has a source to view
 ) -> Popup {
