@@ -1,0 +1,21 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frames: child</title>
+</head>
+<body>
+<h1>Child page</h1>
+<p>Text inside the frame.</p>
+<button id="child-button" type="button">Child button</button>
+<script>
+  window.pressed = 0;
+  document.getElementById("child-button").addEventListener("click", () => {
+    window.pressed += 1;
+    parent.postMessage("child-pressed", "*");
+  });
+</script>
+</body>
+</html>

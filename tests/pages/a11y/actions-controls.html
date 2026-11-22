@@ -1,0 +1,94 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Accessibility actions</title>
+<style>
+  html, body { margin: 0; background: #ffffff; }
+  body { padding: 16px; font: 16px/1.4 sans-serif; color: #000000; }
+  section { margin: 8px 0; }
+  #scroller { height: 100px; width: 200px; overflow: auto; border: 1px solid #000000; }
+  #scroller > div { height: 1000px; width: 600px; }
+  #deep { margin-top: 600px; }
+  #far { margin-top: 2000px; }
+</style>
+</head>
+<body>
+<h1>Actions</h1>
+<p>A screen reader reads the heading "Actions", then groups of controls: buttons, text fields, a
+slider and a spin button, a disclosure, a scroll area and a context target. Each control can be
+pressed, typed into, stepped, opened or scrolled to by the screen reader, and the page records what
+happened in <code>window.log</code> (events) and a few counters. The tests of
+<code>crates/talaria-servo/tests/a11y_actions.rs</code> press every action on it.</p>
+
+<section aria-label="Buttons">
+  <button id="press" type="button">Press me</button>
+  <button id="disabled-button" type="button" disabled>Disabled button</button>
+  <button id="gone" type="button">Soon gone</button>
+  <a id="link" href="#target">Go to target</a>
+  <label><input id="check" type="checkbox"> Subscribe</label>
+</section>
+
+<section aria-label="Text">
+  <input id="name" type="text" aria-label="Name" value="Ada Lovelace">
+  <input id="short" type="text" aria-label="Short" maxlength="5">
+  <input id="locked" type="text" aria-label="Locked" readonly value="fixed">
+  <input id="off" type="text" aria-label="Off" disabled value="unchanged">
+  <textarea id="notes" aria-label="Notes"></textarea>
+</section>
+
+<section aria-label="Numbers">
+  <input id="volume" type="range" aria-label="Volume" min="0" max="10" value="5">
+  <input id="count" type="number" aria-label="Count" min="0" max="10" value="1">
+  <div id="brightness" role="slider" tabindex="0" aria-label="Brightness"
+       aria-valuemin="0" aria-valuemax="10" aria-valuenow="3"></div>
+</section>
+
+<section aria-label="Disclosure">
+  <details id="more"><summary>More</summary><p>Hidden text</p></details>
+  <button id="menu" type="button" aria-expanded="false">Menu</button>
+  <select id="choice" aria-label="Choice"><option>One</option><option>Two</option></select>
+</section>
+
+<section aria-label="Scrolling">
+  <div id="scroller" role="region" tabindex="0" aria-label="Scroller">
+    <div><h3 id="deep">Deep heading</h3></div>
+  </div>
+  <h2 id="far">Far heading</h2>
+</section>
+
+<div id="context" role="group" tabindex="0" aria-label="Context target">Context target</div>
+
+<!-- Room to scroll: the page must be long enough after "Far heading" for it to reach any point. -->
+<div id="spacer" style="height: 3000px" aria-hidden="true"></div>
+
+<script>
+  // Every event of interest, recorded in order as "type:id" (capture phase: the events that do
+  // not bubble, focus, blur and toggle, are recorded too).
+  window.log = [];
+  for (const type of ['click', 'input', 'change', 'contextmenu', 'focus', 'blur', 'toggle']) {
+    document.addEventListener(type, (event) => {
+      const target = event.target;
+      window.log.push(type + ':' + (target.id || target.nodeName));
+    }, true);
+  }
+
+  // "Press me": counts presses and records whether the click counted as user activation while the
+  // handler ran (what a gated `window.open` or `requestFullscreen` would check).
+  window.pressed = 0;
+  window.activeDuringClick = null;
+  document.getElementById('press').addEventListener('click', () => {
+    window.pressed += 1;
+    window.activeDuringClick = navigator.userActivation.isActive;
+  });
+
+  // A disclosure button: the page flips aria-expanded itself, as a menu button does.
+  const menu = document.getElementById('menu');
+  menu.addEventListener('click', () => {
+    menu.setAttribute('aria-expanded', menu.getAttribute('aria-expanded') === 'true' ? 'false' : 'true');
+  });
+</script>
+</body>
+</html>

@@ -14,7 +14,7 @@ Mercury's own licensing is explained in `LICENSE` and `NOTICE` and summarised in
 The macOS application (`Mercury Browser.app`, Apple Silicon) and the Linux preview archive contain:
 
 - Mercury's own code, in files under the PolyForm Noncommercial License 1.0.0 or the MPL-2.0 (each file's SPDX header, or `REUSE.toml`).
-- About 890 Rust crates built into the executable: 15 of Mercury's own, 26 vendored under `third_party/` and 852 from crates.io, counted with `cargo tree -p mercury-desktop -e normal,build --target aarch64-apple-darwin` on 20 November 2026 (the tree of merge train 22; the 19 November count was 882 with 12, 25 and 845). The Linux target has 967 (15, 26 and 926), because it builds the Wayland, X11 and FreeType crates instead of the Apple framework crates. `cargo metadata` alone reports more, because it unifies the features of the whole workspace; the set must come from `cargo tree`.
+- About 896 Rust crates built into the executable: 16 of Mercury's own, 26 vendored under `third_party/` and 854 from crates.io (the counts of 20 November, plus `mercury-a11y`, `accname` and `a11y-dom` of lane a11y-1), counted with `cargo tree -p mercury-desktop -e normal,build --target aarch64-apple-darwin` on 20 November 2026 (the tree of merge train 22; the 19 November count was 882 with 12, 25 and 845). The Linux target has 969 (16, 26 and 928), because it builds the Wayland, X11 and FreeType crates instead of the Apple framework crates. `cargo metadata` alone reports more, because it unifies the features of the whole workspace; the set must come from `cargo tree`.
 - Native code that `-sys` crates compile into the executable: SpiderMonkey, ANGLE, AWS-LC, HarfBuzz, OTS, SQLite, zstd and others (the list is `credits.toml`, below).
 - On macOS only: the GStreamer libraries and plugins, FFmpeg, GLib and others, as separate dynamic libraries in `Contents/MacOS/lib`, and `libpdfium.dylib` (PDFium, the PDF viewer's library, built without V8 and without XFA) in the same folder.
 - Data files: the ad and tracker filter lists, Servo's default resources.
@@ -189,7 +189,7 @@ Mercury's own MPL-2.0 files are the Hermes-derived files and the files adapted f
 - **Publish the source of those files, with Mercury's changes, for each release.** The release tag in the public repository is the publication, and the credits page says so and links the tag. Do not delete a tag.
 - **The binary must say where the source is** (MPL-2.0 §3.2): **About, Source code** and the page's source section, both the tag of the version that was distributed (`menus/model.rs` and `crates/mercury-credits/src/page.rs`; a test ties the two). A build between releases has no tag yet, so its link says the page is not found.
 - **Keep proprietary logic out of MPL files.** New closed code goes in new files. The only way to move a Hermes-derived file out of MPL is to rewrite it from scratch (clean room).
-- A vendored Servo crate patched by Mercury stays MPL-2.0 and its changes are published with the tag (`third_party/patches/`, [Vendored patches](vendored-patches.md)). `i-slint-backend-winit` is the exception: Slint's licence, not MPL.
+- A vendored Servo crate patched by Mercury stays MPL-2.0 and its changes are published with the tag (`third_party/patches/`, [Vendored patches](vendored-patches.md)). `i-slint-backend-winit` is the exception: its existing files stay under Slint's licence, not MPL, and its one new file, `mercury_graft.rs`, is PolyForm like every new Mercury file.
 
 ## Before adding a component
 

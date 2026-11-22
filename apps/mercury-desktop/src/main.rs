@@ -17,6 +17,7 @@ use talaria_servo::{RuntimeOptions, record_browser_process_id, run_content_proce
 use ui_sync::sync_ui;
 
 mod about;
+mod accessibility; // a11y-1: the shown tab's page, read by assistive technology
 // activation (tabs lane)
 mod activation;
 mod bookmarks;
@@ -233,6 +234,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             &settings,
         ),
     )?;
+    accessibility::install(&window); // a11y-1: the page's tree hangs from the "Page content" node
     // blocklists: builds the content blocker's engine off the UI thread and updates the lists.
     filter_lists::start(&options, &profile, &settings);
     // settings-ui

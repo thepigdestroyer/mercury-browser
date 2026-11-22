@@ -1,0 +1,29 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frames: cross-origin</title>
+</head>
+<body>
+<h1>Cross-origin parent</h1>
+<p>A screen reader reads the heading "Cross-origin parent", then a frame called "Cross-origin
+frame" whose document comes from another origin (another loopback port, named in the "child"
+query parameter): the heading "Child page" and a button "Child button".</p>
+<script>
+  window.messages = [];
+  window.addEventListener("message", (event) => window.messages.push(String(event.data)));
+  const child = new URLSearchParams(location.search).get("child");
+  if (child) {
+    const frame = document.createElement("iframe");
+    frame.id = "frame";
+    frame.title = "Cross-origin frame";
+    frame.src = child;
+    frame.width = "400";
+    frame.height = "200";
+    document.body.append(frame);
+  }
+</script>
+</body>
+</html>

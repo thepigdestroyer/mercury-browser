@@ -20,4 +20,4 @@ text | Fast, lightweight and private by default | |
 text-input | Search or enter address | | placeholder "Search with DuckDuckGo or enter an address"
 button | Search | |
 text | Type an address or search with DuckDuckGo. | |
-main | Page content | Mercury doesn't pass web page content to assistive technology yet. |
+main | Page content | |

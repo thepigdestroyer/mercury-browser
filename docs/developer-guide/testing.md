@@ -78,7 +78,7 @@ The state machine of the ⌥ group keys is the crate `mercury-option-keys` (no e
 
 ### Accessibility of the interface
 
-Slint's `accessibility` feature is on (the workspace `Cargo.toml`), so VoiceOver, through AccessKit, can read and press Mercury's own windows: the tab strip, toolbar, address bar, menus, sheets and prompts, the history panel, and the Settings, Bookmarks, Import and About windows. A web page is not part of that yet: the page area is a single node, "Page content", whose description says that Mercury does not pass page content to assistive technology yet. The engine's own accessibility tree will be hung from that node later.
+Slint's `accessibility` feature is on (the workspace `Cargo.toml`), so VoiceOver, through AccessKit, can read and press Mercury's own windows: the tab strip, toolbar, address bar, menus, sheets and prompts, the history panel, and the Settings, Bookmarks, Import and About windows. A web page is part of that too: the page area is one node, "Page content" (role `main`, no description), and while an assistive technology is attached the engine's accessibility tree for the shown tab is hung from it (see "Accessibility of web pages" below).
 
 **What is checked.** `crates/mercury-ui/tests/a11y_*.rs` show each window or component on Slint's testing platform (no window, no display, no input) and read it the way an assistive technology does, through `ElementHandle`:
 
@@ -116,6 +116,27 @@ The leading `#` lines of a golden file (its licence lines and the command above)
 5. Slint 1.17 has no toolbar, dialog or heading role. The toolbar is a `navigation` landmark, the address bar a `search` landmark, the page a `main` landmark, a tab strip a `tab-list`, a menu or a list a `list`, and a sheet, prompt or popover a `groupbox` whose label is its heading (keyboard focus moves into it when it opens). Every landmark has a label. A window has one `main`: while a PDF is open the page area of the PDF viewer is a `region`, and the web view's "Page content" node (which stays in the tree under the viewer) has no description (`tests/a11y_pdf.rs`).
 6. Within one window state no two controls share both role and label; rows and tabs with an item index are exempt, and static text may repeat. What a page causes, such as a dialog, a prompt or a pop-up notice, names the page's origin in its label or description, as it does on screen. Some tests find a control by its label (the desktop tests look for "Retry" and "Dismiss"), so a label a test uses stays as it is.
 7. Toolbar buttons carry no shortcut text in their label or description: `shortcuts.rs` is the one source. Menu rows keep their shortcut as the description.
+
+### Accessibility of web pages
+
+The tree of a web page is built by the vendored Servo layout (`third_party/servo-layout/accessibility/`), from the answers of one engine-free crate, `crates/mercury-a11y` (roles, accessible names and descriptions on the `accname` crate, states, values, relations, the advertised actions, the order in which a page's trees may reach AccessKit, and the per-tab routing). The crate builds and tests in the light pool, without Servo:
+
+```bash
+cargo test --release -p mercury-a11y
+```
+
+- `tests/roles.rs`, `names.rs`, `states.rs`, `relations.rs` read tables written from the specifications (`tests/data/`) and a hand-built DOM (`mercury_a11y::testing::TestDom`, which can parse a small HTML string).
+- `tests/graft.rs` and `bridge.rs` feed exactly what the window's adapter would push into `accesskit_consumer::Tree`, which panics where AccessKit would, so an update that arrives before its graft is caught.
+- `tests/snapshot.rs` and `tests/snapshots/*.txt` pin the text format of a tree (`mercury_a11y::snapshot::dump`) and a golden of a hand-built page with iframes; bless with `MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-a11y --test snapshot`.
+- `crates/mercury-ui/tests/a11y_page_node.rs` checks that exactly one `main` node labelled "Page content" exists in every state of the main window.
+
+The tests that start a real headless Servo and read a live page's tree (`crates/talaria-servo/tests/a11y_pages.rs`, `a11y_actions.rs`, `a11y_frames.rs`, pages in `tests/pages/a11y/`) are named `headless_servo_<what>` and are `#[ignore]`d: they need a GL context, so `make test` skips them. Run them where Servo can render, one thread at a time:
+
+```bash
+make test-a11y-pages
+```
+
+The macOS CI job runs the same target. A person with VoiceOver does the last check (`hands-on-checklist.md`, "VoiceOver on web pages").
 8. A new component gets a headless test that finds its controls by role and label, presses each default action, runs `assert_labelled` in every state and compares its reading order with a golden file. A test file starts with `#![cfg(feature = "test-support")]` and `mod common;`.
 9. Edits to `main-window.slint` stay line-level and carry a `// a11y-base` comment, so the layout rewrite can find them and move them.
 10. A field that hides what is typed never hands its text on. Slint's std `LineEdit` binds `accessible-value` to its text, and AccessKit passes that on for a password field as well: macOS gives it unmasked to any program with accessibility access, as the value of a "secure text field". A password field is therefore a `SecretField` (`ui/passwords/secret-field.slint`) or a `RequestField` (`ui/dialogs/page-request-parts.slint`), which set `accessible-value` to nothing, and never a `LineEdit` with `input-type: password`. `tests/a11y_secrets.rs` fails for a password input type anywhere else, and `a11y_windows.rs` and `a11y_page_ui.rs` type into both components and read the value back. (A password the person asked to see, with Show in Settings > Passwords, is read aloud by design; a generated one too.)

@@ -3,6 +3,7 @@
 resolver = "3"
 members = [
     "apps/mercury-desktop",
+    "crates/mercury-a11y",
     "crates/mercury-appearance",
     "crates/mercury-credits",
     "crates/mercury-devtools",
@@ -37,6 +38,13 @@ license = "MPL-2.0 AND PolyForm-Noncommercial-1.0.0"
 [workspace.dependencies]
 # find: tests only (talaria-servo's dev-dependency), for the find-in-page script.
 boa_engine = { version = "0.20", default-features = false }
+# a11y-1: the page accessibility logic. `accname` and `a11y-dom` (MIT, one author, 0.30.12 of 17 Nov 2026) are
+# pinned exactly: they are one week old and release often; read the lane brief's decision D1 before moving them.
+a11y-dom = "=0.30.12"
+accesskit = "0.24"
+# The tree consumer AccessKit's own adapters use; the oracle of the a11y tests (already in the lock through Slint).
+accesskit_consumer = "0.38"
+accname = "=0.30.12"
 adblock = "=0.13.5"
 ash = "0.38"
 backtrace = "0.3.77"

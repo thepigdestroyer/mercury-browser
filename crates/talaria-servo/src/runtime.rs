@@ -18,6 +18,7 @@ use talaria_core::{BrowserEvent, LoadState, PageIcon, PointerCursor, TabEvent, T
 use talaria_core::{PageRequest, PageRequestKind};
 use url::Url;
 
+use crate::accessibility::AccessibilitySink; // a11y-1
 use crate::adblocker::ContentBlocker;
 use crate::clipboard::{ClipboardRead, TabClipboard, UserActivationCheck};
 use crate::document_starts::DocumentStarts;
@@ -358,6 +359,23 @@ impl ServoRuntime {
         self.page_tabs
             .document_started_listener
             .replace(Some(listener));
+    }
+
+    // a11y-1
+    /// Where every tab's accessibility tree updates go: called synchronously, inside
+    /// `spin_event_loop`, in the order the engine sent them, with the tab and the update (which
+    /// is the page's text: never print it). A tab sends none until it is told to build its tree
+    /// (`ServoWebView::set_page_accessible`).
+    pub fn set_accessibility_sink(&self, sink: AccessibilitySink) {
+        crate::accessibility::set_sink(sink);
+    }
+
+    // a11y-1
+    /// Sends an action request of assistive technology to the page it names (`target_tree` is
+    /// the tree id the engine gave: the web view's, the document's or an iframe's). A request
+    /// for a tree that is gone is ignored by the engine.
+    pub fn forward_accessibility_action(&self, request: servo::accesskit::ActionRequest) {
+        self.inner.forward_accessibility_action(request);
     }
 
     // media session
@@ -1129,6 +1147,17 @@ impl servo::WebViewDelegate for BrowserDelegate {
         crate::mercury_messages::handle(Some(self.tab_id), message);
     }
 
+    // a11y-1: a tree update of this tab's page (the web view's tree, the document's or an iframe's).
+    // It carries the page's text: handed on as it is, to the sink the window installed, and never
+    // printed.
+    fn notify_accessibility_tree_update(
+        &self,
+        _web_view: servo::WebView,
+        tree_update: servo::accesskit::TreeUpdate,
+    ) {
+        crate::accessibility::deliver(self.tab_id, tree_update);
+    }
+
     // notifications: the notification UI is a later lane's; until then the title is logged, at
     // debug level, and nothing of the page's other text (body, tag, icons) is.
     fn show_notification(&self, _web_view: servo::WebView, notification: servo::Notification) {
@@ -1587,7 +1616,7 @@ mod tests {
                 "dom_serviceworker_enabled",
                 "dom_webgpu_enabled",
                 "layout_css_container_queries_enabled",
-                "accessibility_enabled",
+                // a11y-1: `accessibility_enabled` is on now (`engine_prefs.rs`); its checks stay off.
                 "expensive_accessibility_test_assertions_enabled",
                 // The media-capture pin stays: the new switch above replaces it later.
                 "dom_webrtc_transceiver_enabled",
@@ -1602,6 +1631,19 @@ mod tests {
                     "{name} (experimental features: {enabled})"
                 );
             }
+        }
+    }
+
+    // a11y-1
+    #[test]
+    fn page_accessibility_is_on_whatever_the_experimental_switch_says() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+            assert!(preferences.accessibility_enabled, "{enabled}");
+            assert!(
+                !preferences.expensive_accessibility_test_assertions_enabled,
+                "{enabled}"
+            );
         }
     }
 

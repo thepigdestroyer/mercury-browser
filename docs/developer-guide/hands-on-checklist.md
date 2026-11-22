@@ -225,9 +225,8 @@ first try. Web pages are **not** expected to read yet: only Mercury's own interf
    bubble (`permission.html`) names the page as well.
 9. **The Settings window** (⌘,): the sections read as tabs, each control by its name, and each can be
    pressed or changed; the same for the About window.
-10. **A page.** With a page loaded, the VoiceOver cursor reaches "Page content" (main), whose help text
-    says that Mercury doesn't pass web page content to assistive technology yet. Nothing inside the
-    page is expected to read. Don't report that; do report a page area that cannot be reached at all.
+10. **A page.** With a page loaded, the VoiceOver cursor reaches "Page content" (main) and goes on into
+    the page: see "VoiceOver on web pages" below. Report a page area that cannot be reached at all.
 11. **A long list** (the known limit). Open History with more than a screenful of visits. The VoiceOver
     cursor should reach the visits on screen; it cannot reach the ones below, because the list builds
     only the rows on screen and VoiceOver has no way to scroll it (keyboard scrolling is a follow-up).
@@ -250,6 +249,35 @@ first try. Web pages are **not** expected to read yet: only Mercury's own interf
 
 Report what reads badly: for each, the element, what VoiceOver said, what it should have said, the macOS
 version and the commit. Wording that can be better is a finding as much as a crash.
+
+## VoiceOver on web pages
+
+The tree of a page is built from the page's own markup and sent to VoiceOver for the **shown tab only**
+(lane a11y-1). Everything is checked by tests without VoiceOver; nobody has yet heard it. Serve the test
+pages (`scripts/serve-tests.sh`) and open each; `tests/pages/a11y/` has pages that say in a visible line what
+VoiceOver should say.
+
+1. **Read a news-style page** (`headings-links-article.html`, then a real news site). Turn VoiceOver on,
+   interact with "Page content" (Control-Option-Shift-Down Arrow) and read on with Control-Option-Right Arrow:
+   headings say their level, links say "link" and their text, paragraphs read in order. Try the rotor
+   (Control-Option-U) for headings, links and landmarks.
+2. **A form** (`forms-login.html`, `forms-errors.html`, `states-controls.html`). Each control says its name,
+   its role and its state (checked, required, invalid, expanded, value). Type into a text field; press a
+   checkbox with Control-Option-Space and check that it changes. The password field must say "secure edit
+   text" and must not read what is typed.
+3. **A page with an iframe** (`frames-parent.html`, a page with an embedded video or map): the frame's content
+   is read in its place in the page, including a frame from another site.
+4. **A page with a dialog** (`dialog-alert.html`, and a page with a `<dialog>` or an ARIA dialog): the dialog is
+   read and can be dismissed.
+5. **Switch tabs** with VoiceOver on: the page of the tab you switch to is read, not the one you left; a tab you
+   are not looking at is never read.
+6. **Actions** (`actions-controls.html`): activate a button and a link with Control-Option-Space, scroll a long
+   page with VoiceOver's scroll commands, change a slider with Control-Option-Up/Down Arrow, and expand and
+   collapse a `<details>`.
+7. **Cost.** Quit VoiceOver and check that the page is as fast as before (the tree is built only while an
+   assistive technology is attached), and turn VoiceOver on and off again while the page is open.
+8. **Not expected yet** (do not report): reading by character, word or line inside a paragraph, the text caret
+   and selection, live regions, table and list navigation: they come with the next accessibility lane.
 
 ## Reporting
 

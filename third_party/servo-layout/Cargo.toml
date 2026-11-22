@@ -53,6 +53,17 @@ path = "tests/text.rs"
 version = "0.24.0"
 features = ["serde"]
 
+# Mercury: a11y-1: roles, names, states and relations are computed by `mercury-a11y`, which needs no engine; this crate only
+# adapts its DOM to `a11y-dom`'s traits and copies the result onto its accessibility nodes. See MERCURY.md.
+[dependencies.a11y-dom]
+version = "=0.30.12"
+
+# Mercury: a11y-1: `version` keeps cargo-deny's wildcard ban quiet for a path dependency of a crate that looks published; `>=` so a
+# workspace version bump does not break resolution.
+[dependencies.mercury-a11y]
+path = "../../crates/mercury-a11y"
+version = ">=0.2.0"
+
 [dependencies.app_units]
 version = "0.7"
 

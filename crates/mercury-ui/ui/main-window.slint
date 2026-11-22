@@ -1188,8 +1188,10 @@ export component MainWindow inherits Window {
                 focus-on-click: false;
                 focus-on-tab-navigation: false;
                 accessible-role: main; // a11y-base
+                // a11y-1: the desktop app finds the page node by this exact role and label
+                // (`apps/mercury-desktop/src/accessibility.rs`, `PAGE_LABEL`). Rename or translate it
+                // there too, or the web page stops being read; `a11y_page_node.rs` pins both.
                 accessible-label: "Page content"; // a11y-base
-                accessible-description: root.pdf-viewer-shown ? "" : "Mercury doesn't pass web page content to assistive technology yet."; // a11y-base: the page-accessibility lane deletes this line when it grafts the page's tree here
 
                 focus-gained => {
                     root.web-view-focus-changed(true);

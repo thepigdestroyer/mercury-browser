@@ -1,0 +1,23 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Payment errors</title>
+</head>
+<body>
+<h1>Payment</h1>
+<p>A screen reader reads the text field "Card number" as invalid, described by "Digits only." and
+with the error message "Enter 16 digits", then the required field "Expiry date", then the valid
+field "Cardholder".</p>
+<label for="card">Card number</label>
+<input id="card" aria-invalid="true" aria-describedby="card-help" aria-errormessage="card-error" required>
+<p id="card-help">Digits only.</p>
+<p id="card-error">Enter 16 digits</p>
+<label for="exp">Expiry date</label>
+<input id="exp" required aria-required="true" value="11/29">
+<label for="holder">Cardholder</label>
+<input id="holder" aria-invalid="false" value="Ada Lovelace">
+</body>
+</html>

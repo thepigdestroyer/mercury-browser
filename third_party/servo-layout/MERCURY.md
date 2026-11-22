@@ -30,6 +30,26 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   blink itself has not been seen in K0: no screen capture was possible in the integration session.
 - **Drop when:** the Servo bump that contains PR #48253 (B1).
 
+## Changes: page accessibility (lane a11y-1, 21 Nov 2026)
+
+### Roles, names, states, values, relations and iframes in the accessibility tree (EE2-EE4, EE7) — `accessibility/{accessibility_node,accessibility_tree,mod}.rs`, new `accessibility/{dom_adapter,semantics,frames}.rs`
+
+- **What:** upstream gives a node one of 16 HTML roles (35 ARIA roles through a safe list), a name for headings and links
+  only, and nothing else. `dom_adapter.rs` lets the engine-free crate `mercury-a11y` read the layout DOM
+  (`a11y_dom::{Document, Node, Rendering}` and `mercury_a11y::HostState` over `ServoLayoutNode`);
+  `semantics.rs` calls `mercury_a11y::compute` and copies the result onto the `AccessibilityNode` (keeping children,
+  bounds, transform and the hidden flag), maps relations to AccessKit node ids (unresolved ones are retried, never a
+  panic) and recomputes the nodes whose name depends on a node that changed; `frames.rs` gives an `<iframe>` node
+  the `tree_id` of its document, so the node is the graft (decision D11). `accessibility_node.rs` and
+  `accessibility_tree.rs` have hook lines tagged `Mercury:` (the old name-from-descendants code is removed; layout's
+  `display: none` and the semantic hide are two flags).
+- **Why:** VoiceOver needs roles, names, states and values to read a page, and iframes to be part of the tree.
+- **Upstream:** `accessibility/accessibility_node.rs` `update_properties_from_dom_node`, `update_node_local`,
+  `HTML_ELEMENT_ROLE_MAPPINGS`, `NAME_FROM_CONTENTS_ROLES` (0.8.0 lines 348-440, 770-866).
+- **Tested by:** the pure logic by `crates/mercury-a11y` tests (light pool); the glue by the `headless_servo_*` tests in
+  `crates/talaria-servo/tests/a11y_pages.rs` and `a11y_frames.rs`, which have not been run (they need a GL context).
+- **Drop when:** upstream servo#46241 (roles) and its name, state and iframe follow-ups land.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in
