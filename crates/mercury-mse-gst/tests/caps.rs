@@ -461,6 +461,76 @@ fn an_other_configuration_of_a_codec_with_its_own_variant_is_refused() {
     assert!(caps_for(&config).is_err());
 }
 
+/// Review finding 8: a rate, a channel count or a size that the stream declares as any `u32` is refused
+/// by name, not turned into `rate=-1` by `as i32` and left for GStreamer's negotiation to trip over.
+#[test]
+fn numbers_that_do_not_fit_a_caps_integer_are_refused() {
+    init();
+    let vorbis = || {
+        other(
+            TrackKind::Audio,
+            CodecId::Vorbis,
+            xiph([&[1u8; 30], &[3u8; 20], &[5u8; 100]]),
+        )
+    };
+    let mut config = vorbis();
+    config.sample_rate = u32::MAX;
+    config.channels = 2;
+    let error = caps_for(&config).unwrap_err();
+    assert!(error.contains("sample rate"), "{error}");
+    let mut config = vorbis();
+    config.sample_rate = 44_100;
+    config.channels = u32::MAX;
+    let error = caps_for(&config).unwrap_err();
+    assert!(error.contains("channel count"), "{error}");
+    // The edges that play are kept, and no value ever becomes negative.
+    let mut config = vorbis();
+    config.sample_rate = 768_000;
+    config.channels = 8;
+    let caps = caps_for(&config).unwrap();
+    let s = caps.structure(0).unwrap();
+    assert_eq!(s.get::<i32>("rate").unwrap(), 768_000);
+    assert_eq!(s.get::<i32>("channels").unwrap(), 8);
+    let mut config = vorbis();
+    config.sample_rate = 768_001;
+    assert!(caps_for(&config).is_err());
+
+    let mut video = track(TrackKind::Video, CodecConfig::Vp8);
+    video.width = u32::MAX;
+    video.height = 180;
+    assert!(caps_for(&video).unwrap_err().contains("width"));
+    video.width = 320;
+    video.height = 0x8000_0000;
+    assert!(caps_for(&video).unwrap_err().contains("height"));
+
+    // The Opus rate comes from the head, as a u32 as well.
+    let mut head = opus_head(2, 0, &[]);
+    head[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+    let config = track(TrackKind::Audio, CodecConfig::Opus { head });
+    assert!(caps_for(&config).unwrap_err().contains("sample rate"));
+}
+
+/// The packet length the feeder takes off the pre-skip comes from the TOC byte (RFC 6716 section 3.1).
+#[test]
+fn an_opus_packet_says_how_many_samples_it_decodes_to() {
+    use mercury_mse_gst::caps::opus_packet_samples as samples;
+    // CELT fullband 20 ms (config 31), one frame; two frames of equal and of different size; code 3 with
+    // a frame count byte (here 5 frames of 2.5 ms: CELT NB config 16).
+    assert_eq!(samples(&[31 << 3, 0xAA]), Some(960));
+    assert_eq!(samples(&[31 << 3 | 1, 0xAA]), Some(1_920));
+    assert_eq!(samples(&[31 << 3 | 2, 0xAA]), Some(1_920));
+    assert_eq!(samples(&[16 << 3 | 3, 5]), Some(600));
+    // SILK narrowband 60 ms, hybrid SWB 10 ms.
+    assert_eq!(samples(&[3 << 3]), Some(2_880));
+    assert_eq!(samples(&[12 << 3]), Some(480));
+    // Empty, a code 3 without its count byte, a zero count, and more than the 120 ms one packet may hold.
+    assert_eq!(samples(&[]), None);
+    assert_eq!(samples(&[31 << 3 | 3]), None);
+    assert_eq!(samples(&[31 << 3 | 3, 0]), None);
+    assert_eq!(samples(&[31 << 3 | 3, 7]), None);
+    assert_eq!(samples(&[31 << 3 | 3, 6]), Some(5_760));
+}
+
 #[test]
 fn stream_types_follow_the_kind() {
     assert_eq!(stream_type(TrackKind::Video), gst::StreamType::VIDEO);

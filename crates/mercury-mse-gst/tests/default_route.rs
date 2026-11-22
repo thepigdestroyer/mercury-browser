@@ -8,6 +8,14 @@
 //! `rig.rs`; on this machine none did (decision D15, the measurements are in the notes of item 2). The
 //! record-only `t07_av1_route_report` is `#[ignore]`d: run it with
 //! `crates/mercury-mse-gst/test.sh test --release -p mercury-mse-gst --test default_route -- --ignored --nocapture`.
+//!
+//! **If a local run of this crate hangs, suspect these three first** (`t07_default_route_h264_and_aac`,
+//! `t07_default_route_vp9_and_opus`, `t07_default_route_av1`). They are the only tests that let
+//! VideoToolbox decode, and they run un-ignored on an Intel Mac. With the screen locked a VideoToolbox
+//! session can end up in an unkillable state (`U` in `ps`): the watchdog panics the test, but it cannot kill
+//! a process in that state, so the run stays hung until the Mac is unlocked. Skip them with
+//! `-- --skip t07_default_route`. The CI runners are not affected (the macOS job is Apple Silicon, where
+//! they stay ignored; the Linux job has no `libgstapplemedia`).
 
 mod common;
 

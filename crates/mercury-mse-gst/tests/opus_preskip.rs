@@ -14,6 +14,7 @@ mod common;
 
 use std::time::Duration;
 
+use common::fakefeed::FakeFeed;
 use common::frames;
 use common::real::{RealSource, load};
 use common::rig::{Options, Rig, Shape, watchdog};
@@ -98,6 +99,73 @@ fn the_decoded_opus_stream_is_the_packets_less_the_pre_skip() {
         );
         assert_eq!(samples, packets - pre_skip as usize, "samples out");
         assert_eq!(first_pts, Some(0), "the first buffer is stamped 0");
+    });
+}
+
+/// The fixture's Opus track with the pre-skip of its `OpusHead` replaced (the head field is a `u16`),
+/// played through the element: `(samples out, first pts, the pts expected for the first buffer)`.
+fn decode_with_pre_skip(pre_skip: u16) -> (usize, Option<u64>, u64) {
+    let mut track = frames::track("opus", TrackKind::Audio);
+    let CodecConfig::Opus { head } = &mut track.config.codec else {
+        panic!("not an Opus track");
+    };
+    head[10..12].copy_from_slice(&pre_skip.to_le_bytes());
+    // The decoder stamps its output with the stamp of the packet it comes from, so the first buffer out
+    // is stamped like the first packet that is not wholly inside the pre-skip (the fixture's stamps are
+    // the demuxer's, which already subtract its own 312).
+    let first_audible = usize::from(pre_skip) / 960;
+    let expected_pts = track.frames[first_audible].pts.max(0) as u64;
+    let feed = FakeFeed::new();
+    feed.add_track(&track);
+    feed.set_duration(Some(8_000_000_000));
+    feed.set_initialized(true);
+    feed.release_all();
+    feed.end();
+    let rig = Rig::new(
+        feed,
+        Options {
+            shape: Shape::PlayBin,
+            video: false,
+            sync: false,
+            colour: false,
+            ..Options::default()
+        },
+    );
+    rig.play();
+    rig.wait_eos(Duration::from_secs(30));
+    let audio = rig.audio_stats();
+    let audio = audio.lock().unwrap();
+    let first_pts = audio.arrivals.first().and_then(|a| a.pts);
+    let samples = (audio.total_seconds() * 48_000.0).round() as usize;
+    eprintln!(
+        "Opus pre-skip {pre_skip}: {} buffers, {samples} samples, first pts {first_pts:?}",
+        audio.count()
+    );
+    (samples, first_pts, expected_pts)
+}
+
+/// Review finding 7: a pre-skip longer than the first packet (3,840 samples are 80 ms, four packets of
+/// the fixture's 20 ms; 2,000 is two packets and a part of a third) is carried across the packets until
+/// it is spent. Clipping it all off the first packet drops that packet and lets the next ones play
+/// with the rest of the pre-roll.
+#[test]
+fn a_pre_skip_longer_than_one_packet_is_clipped_across_packets() {
+    require!("opusdec", "playbin3", "appsrc");
+    watchdog("opus-preskip-long", 90, || {
+        let packets = packet_samples();
+        for pre_skip in [3_840u16, 2_000] {
+            let (samples, first_pts, expected_pts) = decode_with_pre_skip(pre_skip);
+            assert_eq!(
+                samples,
+                packets - usize::from(pre_skip),
+                "samples out with a pre-skip of {pre_skip}"
+            );
+            assert_eq!(
+                first_pts,
+                Some(expected_pts),
+                "the first buffer is the first audible packet's (pre-skip {pre_skip})"
+            );
+        }
     });
 }
 

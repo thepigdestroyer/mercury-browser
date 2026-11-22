@@ -40,6 +40,12 @@ const AV1C_MIN: usize = 4;
 /// `OpusHead` with channel-mapping family 0: magic, version, channels, pre-skip, rate, gain, family.
 const OPUS_HEAD_MIN: usize = 19;
 
+/// The largest sample rate, channel count and picture side a track may declare: above anything that plays
+/// (255 is the most an `OpusHead` can say; 65,536 is AV1's limit), far below what `i32` holds.
+const MAX_SAMPLE_RATE: u32 = 768_000;
+const MAX_CHANNELS: u32 = 255;
+const MAX_DIMENSION: u32 = 65_536;
+
 /// The fixed caps of a track's configuration, or why there are none.
 pub fn caps_for(config: &TrackConfig) -> Result<gst::Caps, String> {
     let mut builder = match &config.codec {
@@ -122,24 +128,42 @@ pub fn caps_for(config: &TrackConfig) -> Result<gst::Caps, String> {
         TrackKind::Video => {
             if config.width > 0 && config.height > 0 {
                 builder = builder
-                    .field("width", config.width as i32)
-                    .field("height", config.height as i32);
+                    .field("width", bounded(config.width, MAX_DIMENSION, "width")?)
+                    .field("height", bounded(config.height, MAX_DIMENSION, "height")?);
             }
         }
         TrackKind::Audio => {
             // The Opus branch already set the rate and channels from OpusHead.
             if !matches!(config.codec, CodecConfig::Opus { .. }) {
                 if config.sample_rate > 0 {
-                    builder = builder.field("rate", config.sample_rate as i32);
+                    builder = builder.field(
+                        "rate",
+                        bounded(config.sample_rate, MAX_SAMPLE_RATE, "sample rate")?,
+                    );
                 }
                 if config.channels > 0 {
-                    builder = builder.field("channels", config.channels as i32);
+                    builder = builder.field(
+                        "channels",
+                        bounded(config.channels, MAX_CHANNELS, "channel count")?,
+                    );
                 }
             }
         }
         TrackKind::Text => {}
     }
     Ok(builder.build())
+}
+
+/// A number from the stream as a caps integer, or why it is not one. A value the container or a codec
+/// header carries is any `u32`; `as i32` would turn 0xFFFF_FFFF into `rate=-1` and fail late, in
+/// GStreamer's negotiation, with a message that does not name the cause.
+fn bounded(value: u32, max: u32, what: &str) -> Result<i32, String> {
+    match i32::try_from(value) {
+        Ok(number) if value <= max => Ok(number),
+        _ => Err(format!(
+            "the {what} {value} is not usable (more than {max})"
+        )),
+    }
 }
 
 /// A header buffer for a `streamheader` field: the bytes with the `HEADER` flag.
@@ -239,7 +263,8 @@ fn opus_caps(
         (0, 0) => 48_000,
         (0, rate) => rate,
         (rate, _) => rate,
-    } as i32;
+    };
+    let rate = bounded(rate, MAX_SAMPLE_RATE, "sample rate")?;
     let mut builder = gst::Caps::builder("audio/x-opus")
         .field("rate", rate)
         .field("channels", channels)
@@ -263,12 +288,35 @@ fn opus_caps(
 
 /// The pre-skip of an `OpusHead`, in samples at 48 kHz: how many samples the decoder produces before
 /// the audio starts (`None` for a head that is not usable). `opusdec` does not take it from the caps: it
-/// drops them when the first buffer carries a `GstAudioClippingMeta`, which the feeder adds.
+/// drops them when a buffer carries a `GstAudioClippingMeta`, which the feeder adds to as many of the
+/// first buffers as the count takes (a pre-skip can be longer than one packet).
 pub fn opus_pre_skip(head: &[u8]) -> Option<u32> {
     if head.len() < OPUS_HEAD_MIN || &head[..8] != b"OpusHead" {
         return None;
     }
     Some(u32::from(u16::from_le_bytes([head[10], head[11]])))
+}
+
+/// The samples at 48 kHz an Opus packet decodes to, from its TOC byte and frame count (RFC 6716
+/// section 3.1; `None` for a packet that is empty or whose count is not valid). The feeder subtracts it
+/// from the pre-skip that is still to be clipped.
+pub fn opus_packet_samples(packet: &[u8]) -> Option<u32> {
+    /// Samples per frame by the 5-bit configuration of the TOC byte: SILK 10/20/40/60 ms (three
+    /// bandwidths), hybrid 10/20 ms (two), CELT 2.5/5/10/20 ms (four).
+    const FRAME: [u32; 32] = [
+        480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 1920, 2880, 480, 960, 480, 960, 120,
+        240, 480, 960, 120, 240, 480, 960, 120, 240, 480, 960, 120, 240, 480, 960,
+    ];
+    /// 120 ms: the most one packet may hold.
+    const MAX: u32 = 5760;
+    let toc = *packet.first()?;
+    let frames = match toc & 3 {
+        0 => 1,
+        1 | 2 => 2,
+        _ => u32::from(*packet.get(1)? & 0x3F),
+    };
+    let samples = FRAME[usize::from(toc >> 3)] * frames;
+    (frames > 0 && samples <= MAX).then_some(samples)
 }
 
 /// The `gst::StreamType` of a kind of track.

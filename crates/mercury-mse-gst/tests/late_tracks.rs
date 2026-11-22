@@ -149,12 +149,28 @@ fn playbin_plays_an_audio_track_added_a_second_late() {
 // On Linux the system GStreamer is 1.20 and its decodebin3 joins the late audio 139 ms off the video
 // in this bare shape (GitHub runner, run 45044693696; the same test passes with 1.28 on macOS, and
 // `playbin_plays_an_audio_track_added_a_second_late`, the product's path, passes on Linux with 40 ms).
-// Kept as a record, not a gate, until a newer GStreamer is checked (med-1b round 2b).
+// The cause is the GStreamer version, not the operating system, so the test decides at run time: below
+// 1.22 it prints the NOTE line and passes (a record, not a gate); on 1.22 or newer, on any system, it runs
+// and gates. A Linux job on a newer GStreamer (a newer runner image) therefore checks it for real. The
+// version at which decodebin3 is right is not measured (macOS 1.28 passes, Linux 1.20 does not); 1.22 is
+// the first release after 1.20; move the line if a run on 1.22 to 1.26 shows otherwise (med-1b 2b).
+
+/// Whether this GStreamer is one whose `decodebin3` is known to join late audio too far off in the bare
+/// shape (1.20, the Linux runner's system package).
+fn decodebin3_late_audio_is_a_record_only(version: (u32, u32, u32, u32)) -> bool {
+    (version.0, version.1) < (1, 22)
+}
+
 #[test]
-#[cfg_attr(
-    target_os = "linux",
-    ignore = "decodebin3 of GStreamer 1.20 joins late audio 139 ms off (CI run 45044693696); playbin3 passes"
-)]
+fn the_late_audio_record_is_gated_by_the_gstreamer_version_not_the_system() {
+    assert!(decodebin3_late_audio_is_a_record_only((1, 20, 3, 0)));
+    assert!(decodebin3_late_audio_is_a_record_only((1, 18, 6, 0)));
+    assert!(!decodebin3_late_audio_is_a_record_only((1, 22, 0, 0)));
+    assert!(!decodebin3_late_audio_is_a_record_only((1, 28, 0, 0)));
+    assert!(!decodebin3_late_audio_is_a_record_only((2, 0, 0, 0)));
+}
+
+#[test]
 fn decodebin3_plays_an_audio_track_added_a_second_late() {
     require!(
         "avdec_h264",
@@ -163,6 +179,16 @@ fn decodebin3_plays_an_audio_track_added_a_second_late() {
         "videoconvert",
         "appsrc"
     );
+    let version = gstreamer::version();
+    if decodebin3_late_audio_is_a_record_only(version) {
+        eprintln!(
+            "NOTE: recorded, not gated: decodebin3 joins late audio 139 ms off the video on GStreamer \
+             1.20 (CI run 45044693696); this is GStreamer {}.{}.{}, so the bare shape is not run \
+             (playbin3, the product's path, is gated by playbin_plays_an_audio_track_added_a_second_late)",
+            version.0, version.1, version.2
+        );
+        return;
+    }
     watchdog("late-bare", 90, || late_audio_plays(Shape::Bare));
 }
 

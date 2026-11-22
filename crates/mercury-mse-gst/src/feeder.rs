@@ -23,7 +23,7 @@ use gstreamer_audio::AudioClippingMeta;
 use mercury_mse::{CodecConfig, FeedItem, FeedState, FrameFeed, TrackConfig, TrackKind};
 
 use crate::buffers::buffer_for;
-use crate::caps::{caps_for, opus_pre_skip};
+use crate::caps::{caps_for, opus_packet_samples, opus_pre_skip};
 use crate::element::MseSrc;
 use crate::shared::{Shared, State, index};
 
@@ -42,8 +42,11 @@ pub(crate) struct TrackOut {
     pub pending_caps: Option<gst::Caps>,
     /// The `OpusHead` the decoder was last configured with (Opus tracks only).
     opus_head: Option<Vec<u8>>,
-    /// Samples (48 kHz) the next frame must have clipped off its start (decision D18): set when the
-    /// decoder is new, that is at the announcement and when the head changes; cleared by the push.
+    /// Samples (48 kHz) still to be clipped off the start of the next frames (decision D18): set to the
+    /// head's pre-skip when the decoder is new, that is at the announcement and when the head changes, and
+    /// reduced by each frame pushed with a clip, so a pre-skip longer than one packet (3,840 samples are
+    /// 80 ms, four packets of 20 ms) is taken off as many frames as it covers. After a flushing seek the
+    /// same head is not new, so the decoder's pre-roll there is not clipped again.
     pre_skip: u32,
 }
 
@@ -70,6 +73,21 @@ impl TrackOut {
             self.opus_head = Some(head.clone());
             self.pre_skip = opus_pre_skip(head).unwrap_or(0);
         }
+    }
+
+    /// The samples the buffer of this packet is to have clipped off its start: the packet's own length
+    /// at most (a longer rest goes on to the next packets). A packet whose length cannot be read takes
+    /// all that is left, as the first frame did before the count was carried over.
+    fn clip_for(&self, packet: &[u8]) -> u32 {
+        match opus_packet_samples(packet) {
+            Some(samples) => self.pre_skip.min(samples),
+            None => self.pre_skip,
+        }
+    }
+
+    /// The packet was pushed with `clip` samples clipped off: they are no longer owed.
+    fn clipped(&mut self, clip: u32) {
+        self.pre_skip = self.pre_skip.saturating_sub(clip);
     }
 }
 
@@ -289,9 +307,9 @@ impl Feeder {
                     },
                     FeedItem::Frame { frame, discont } => {
                         let mut buffer = buffer_for(&frame, discont);
-                        let pre_skip = self.tracks[track].pre_skip;
-                        if pre_skip > 0 {
-                            let start = u64::from(pre_skip).default_format();
+                        let clip = self.tracks[track].clip_for(&frame.data);
+                        if clip > 0 {
+                            let start = u64::from(clip).default_format();
                             let end = 0u64.default_format();
                             AudioClippingMeta::add(
                                 buffer.get_mut().expect("a new buffer is writable"),
@@ -311,7 +329,7 @@ impl Feeder {
                             appsrc.set_caps(Some(&caps));
                         }
                         match appsrc.push_buffer(buffer) {
-                            Ok(_) => self.tracks[track].pre_skip = 0,
+                            Ok(_) => self.tracks[track].clipped(clip),
                             Err(error) => {
                                 log::debug!(
                                     "mercury-mse-gst: push on the {} track refused: {error:?}",
