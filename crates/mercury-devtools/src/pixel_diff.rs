@@ -18,7 +18,8 @@
 //! folder or has changed size. `<before>` and `<after>` may also both be single PNG files.
 //!
 //! Exit status: 0 when every file is identical, 1 when anything differs or is missing on one
-//! side, 2 for a wrong command line or a file that is not a usable PNG (the message names it).
+//! side, 2 for a wrong command line, a folder with no PNG files, or a file that is not a usable
+//! PNG (the message names it).
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -170,7 +171,15 @@ pub fn compare(
                 return Err(Error(format!("{}: not a folder", folder.display())));
             }
         }
-        (list(before)?, list(after)?)
+        let lists = (list(before)?, list(after)?);
+        // A folder with no pictures (a mistyped path that exists, a render that wrote nothing)
+        // would compare as "nothing differs": that must not pass the gate.
+        for (folder, files) in [(before, &lists.0), (after, &lists.1)] {
+            if files.is_empty() {
+                return Err(Error(format!("{}: no PNG files", folder.display())));
+            }
+        }
+        lists
     };
     let single = before.is_file();
     let locate = |root: &Path, relative: &Path| {
@@ -218,8 +227,8 @@ fn list(root: &Path) -> Result<BTreeSet<PathBuf>, Error> {
         for item in read {
             let item = item.map_err(|error| Error(format!("{}: {error}", folder.display())))?;
             let path = item.path();
-            let kind = item
-                .file_type()
+            // `metadata` follows symbolic links, so a linked picture or folder counts.
+            let kind = fs::metadata(&path)
                 .map_err(|error| Error(format!("{}: {error}", path.display())))?;
             if kind.is_dir() {
                 folders.push(path);

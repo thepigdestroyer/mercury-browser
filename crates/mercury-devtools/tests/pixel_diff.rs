@@ -213,6 +213,39 @@ fn two_single_files_are_compared() {
     ));
 }
 
+#[test]
+fn a_folder_with_no_pictures_is_an_error_not_a_pass() {
+    let (before, after) = folders();
+    write(&before.path().join("a.png"), 2, 2, &[]);
+    write(&after.path().join("a.png"), 2, 2, &[]);
+    fs::write(after.path().join("notes.txt"), "no picture").expect("a file");
+    let empty = tempfile::tempdir().expect("a folder");
+    for (one, other) in [(empty.path(), before.path()), (before.path(), empty.path())] {
+        let error = compare_dirs(one, other, 0).expect_err("an error");
+        assert!(error.to_string().contains("no PNG files"), "{error}");
+    }
+    let both = compare_dirs(empty.path(), empty.path(), 0).expect_err("an error");
+    assert!(
+        both.to_string()
+            .contains(empty.path().to_str().expect("a path")),
+        "{both}"
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_picture_is_compared() {
+    let (before, after) = folders();
+    let target = tempfile::tempdir().expect("a folder");
+    write(&target.path().join("real.png"), 3, 3, &[]);
+    write(&before.path().join("a.png"), 3, 3, &[]);
+    std::os::unix::fs::symlink(target.path().join("real.png"), after.path().join("a.png"))
+        .expect("a link");
+    let report = compare_dirs(before.path(), after.path(), 0).expect("compares");
+    assert_eq!(report.entries.len(), 1);
+    assert!(report.is_identical());
+}
+
 mod executable {
     use super::*;
 
@@ -291,6 +324,15 @@ mod executable {
         ]);
         assert_eq!(status, 2);
         assert!(err.contains("--tolerance"), "{err}");
+    }
+
+    #[test]
+    fn an_empty_folder_exits_2() {
+        let (before, after) = folders();
+        write(&before.path().join("a.png"), 3, 3, &[]);
+        let (status, _, err) = run(&[before.path(), after.path()]);
+        assert_eq!(status, 2);
+        assert!(err.contains("no PNG files"), "{err}");
     }
 
     #[test]
