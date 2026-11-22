@@ -129,6 +129,10 @@ pub struct RuntimeOptions {
     /// the engine inside a test binary, which cannot be a content process (the engine tests of
     /// `tests/view_source_engine.rs`); the application never sets it.
     pub single_process: bool,
+    // net: third-party cookies and Global Privacy Control (`net_policy.rs`).
+    /// The network policy at start: Global Privacy Control is read now (a change applies at the next
+    /// start), third-party cookie blocking also live through `ServoRuntime::switches`.
+    pub net_policy: crate::net_policy::NetPolicySetup,
 }
 
 impl Default for RuntimeOptions {
@@ -143,6 +147,8 @@ impl Default for RuntimeOptions {
             http_disk_cache_dir: None,
             geolocation: GeolocationSetup::Off,
             single_process: false, // sh-pages
+            // net: the owner's defaults, third-party cookies blocked and GPC on.
+            net_policy: crate::net_policy::NetPolicySetup::default(),
         }
     }
 }
@@ -203,7 +209,9 @@ impl ServoRuntime {
         options.multiprocess &= !runtime_options.single_process; // sh-pages
         let multiprocess_enabled = options.multiprocess;
         let sandbox_enabled = options.sandbox;
-        let preferences = mercury_preferences(&runtime_options);
+        let mut preferences = mercury_preferences(&runtime_options);
+        // net: the process's network policy and `privacy_gpc_enabled`, from the one setting (net_policy.rs).
+        crate::net_policy::install(&runtime_options.net_policy, &mut preferences);
         let user_agent = preferences.user_agent.clone(); // downloads
         // site security: certificate exceptions from Mercury's certificate page
         let accepted_certificates = AcceptedHosts::default();
@@ -335,6 +343,18 @@ impl ServoRuntime {
     /// delegate, so keep the clone and replace the set through it.
     pub fn site_images(&self) -> SiteImagesHandle {
         self.site_images.clone()
+    }
+
+    // net
+    /// The network policy as the browser controls it: the state the network thread reads.
+    pub fn net_policy_control(&self) -> crate::net_policy::NetPolicyControl {
+        crate::net_policy::NetPolicyControl::process()
+    }
+
+    /// How many requests of the page `tab` shows were blocked as mixed content; 0 after the tab's
+    /// next main-frame load starts (EC17). No interface shows it yet.
+    pub fn mixed_content_blocked(&self, tab: TabId) -> u32 {
+        crate::net_messages::mixed_content_blocked(tab)
     }
 
     // blocklists
@@ -994,6 +1014,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
         }
         match status {
             LoadStatus::Started => {
+                // net: the mixed content counted for the page being left ends with it.
+                crate::net_messages::main_frame_load_started(self.tab_id);
                 // controls: requests of the page being left are dropped.
                 self.drop_controls();
                 self.load_metrics.borrow_mut().start(Instant::now());

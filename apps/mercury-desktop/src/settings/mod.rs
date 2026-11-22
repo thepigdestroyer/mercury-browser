@@ -24,14 +24,14 @@ use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
 use mercury_settings::{
-    AppearanceSettings, Repair, SearchEngine, Settings, SettingsError, SettingsStore,
-    StartupBehavior, Theme,
+    AppearanceSettings, PrivacySettings, Repair, SearchEngine, Settings, SettingsError,
+    SettingsStore, StartupBehavior, Theme,
 };
 use mercury_ui::{ChromeMetrics, ChromePalette, ChromeTheme, Look, MainWindow, apply_look};
 use slint::winit_030::{WinitWindowAccessor, winit};
 use slint::{ComponentHandle, Timer, TimerMode};
 use talaria_core::BrowserController;
-use talaria_servo::{EngineSwitches, RuntimeOptions};
+use talaria_servo::{EngineSwitches, NetPolicySetup, RuntimeOptions};
 
 use crate::cli::LaunchOptions;
 use crate::keyboard::color_scheme_from_winit;
@@ -465,13 +465,27 @@ where
 }
 
 /// The engine's options with the privacy settings it needs before it starts: content blocking
-/// and what to clear (also cleared at start, in case the last quit did not get to it).
+/// and what to clear (also cleared at start, in case the last quit did not get to it), and the
+/// network policy (third-party cookies, Global Privacy Control).
 pub(crate) fn with_privacy(options: RuntimeOptions, settings: &SettingsHandle) -> RuntimeOptions {
     let current = settings.settings.borrow();
     RuntimeOptions {
         block_ads_and_trackers: current.privacy.block_ads_and_trackers,
         clear_on_exit: apply::exit_clearing(&current.privacy.clear_on_exit),
+        // net: both settings decide the engine's network policy at start (EC5, EC25).
+        net_policy: net_policy_setup(&current.privacy),
         ..options
+    }
+}
+
+/// What the engine's network policy takes from the privacy settings at start. Global Privacy Control is
+/// read here only (the header and `navigator.globalPrivacyControl` come from one value, so a later change
+/// of the setting applies at the next start); third-party cookie blocking is also set live, in
+/// `apply_everywhere`.
+fn net_policy_setup(privacy: &PrivacySettings) -> NetPolicySetup {
+    NetPolicySetup {
+        block_third_party_cookies: privacy.block_third_party_cookies,
+        global_privacy_control: privacy.global_privacy_control,
     }
 }
 
@@ -570,6 +584,8 @@ fn apply_everywhere(
 
     if let Some(switches) = settings.switches.borrow().as_ref() {
         switches.set_content_blocking(current.privacy.block_ads_and_trackers);
+        // net: live; the next request of any tab sees it.
+        switches.set_block_third_party_cookies(current.privacy.block_third_party_cookies);
         switches.set_clear_on_exit(apply::exit_clearing(&current.privacy.clear_on_exit));
     }
 
@@ -963,5 +979,62 @@ pub(crate) mod tests {
         handle.push_look(&window, &Look::hermes_roomy(), Vec::new());
         palette.set_theme(ChromeTheme::Light);
         assert_eq!(palette.get_window_background(), HERMES_LIGHT);
+    }
+
+    // net: the privacy settings reach the engine's network policy.
+
+    #[test]
+    fn the_network_policy_takes_both_privacy_settings() {
+        let mut privacy = PrivacySettings::default();
+        assert_eq!(net_policy_setup(&privacy), NetPolicySetup::default());
+        assert_eq!(
+            net_policy_setup(&privacy),
+            NetPolicySetup {
+                block_third_party_cookies: true,
+                global_privacy_control: true,
+            }
+        );
+
+        privacy.block_third_party_cookies = false;
+        assert_eq!(
+            net_policy_setup(&privacy),
+            NetPolicySetup {
+                block_third_party_cookies: false,
+                global_privacy_control: true,
+            }
+        );
+
+        privacy.block_third_party_cookies = true;
+        privacy.global_privacy_control = false;
+        assert_eq!(
+            net_policy_setup(&privacy),
+            NetPolicySetup {
+                block_third_party_cookies: true,
+                global_privacy_control: false,
+            }
+        );
+    }
+
+    #[test]
+    fn the_engine_options_carry_the_network_policy_from_the_settings() {
+        init_slint();
+        // A fresh profile: the owner's defaults, and the other options are left as they were.
+        let handle = SettingsHandle::start(None);
+        let options = with_privacy(RuntimeOptions::default(), &handle);
+        assert_eq!(options.net_policy, NetPolicySetup::default());
+        assert!(options.block_ads_and_trackers);
+
+        handle.update(|settings| {
+            settings.privacy.block_third_party_cookies = false;
+            settings.privacy.global_privacy_control = false;
+        });
+        let options = with_privacy(RuntimeOptions::default(), &handle);
+        assert_eq!(
+            options.net_policy,
+            NetPolicySetup {
+                block_third_party_cookies: false,
+                global_privacy_control: false,
+            }
+        );
     }
 }

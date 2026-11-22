@@ -12,8 +12,9 @@
 interface IDBRequest : EventTarget {
   [Throws] readonly attribute any result;
   [Throws] readonly attribute DOMException? error;
-  // readonly attribute (IDBObjectStore or IDBIndex or IDBCursor)? source;
-  readonly attribute IDBObjectStore? source;
+  // Mercury: the union of the specification; it was `IDBObjectStore? source`, so the request of an
+  // index query or of a cursor reported an object store.
+  readonly attribute (IDBObjectStore or IDBIndex or IDBCursor)? source;
   readonly attribute IDBTransaction? transaction;
   readonly attribute IDBRequestReadyState readyState;
 

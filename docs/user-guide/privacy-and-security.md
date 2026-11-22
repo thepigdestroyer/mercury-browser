@@ -35,6 +35,17 @@ Turn blocking off and on in **Settings → Privacy and security → Block ads an
 
 Not available yet: per-site exceptions, hiding page elements (cosmetic filtering) and a count of blocked requests.
 
+## Cookies and tracking signals
+
+Mercury blocks **third-party cookies** by default. A cookie is third party when it belongs to a different site than the page you are on (the site is the registrable domain, such as `example.co.uk`, ignoring the scheme and any subdomain). For such a request Mercury sends no cookies, ignores the cookies in the answer, and hides them from the page's scripts (`document.cookie` reads empty and writes are dropped); the same goes for WebSocket connections. If Mercury cannot tell which page a request belongs to, it treats the request as third party. Cookies that Mercury itself reads (the site information, downloads, the PDF viewer) are not affected.
+
+- **SameSite.** A cookie that says `SameSite=Strict` is sent only when the request comes from the same site, and `SameSite=Lax` also when you follow a link or type an address (a top-level navigation that reads a page). `SameSite=None` is accepted only together with `Secure`. A cookie with no `SameSite` attribute is treated as `None`, as Firefox and Safari do.
+- **Global Privacy Control.** Mercury sends `Sec-GPC: 1` with every request and sets `navigator.globalPrivacyControl` to `true` in pages and workers, which tells sites that you do not want your data sold or shared. Sites are not obliged to honour it everywhere.
+- **Referrers.** A page cannot make Mercury send more of its address than the origin to another site: the policies `unsafe-url`, `no-referrer-when-downgrade` and `origin-when-cross-origin` are treated as `strict-origin-when-cross-origin`. Stricter policies are kept.
+- **Sign-in prompts.** A page's own `fetch` or `XMLHttpRequest` that gets a 401 from the page's own site now shows the sign-in prompt (at most one at a time, and not again for a minute after you cancel); requests to other sites and proxy sign-ins are answered as before.
+
+Some embedded content stops working while its cookies are blocked: sign-in buttons of other sites, comment systems and some video logins. There is no per-site exception in the interface yet (the engine has one; the Settings switch and the exception list come in a later version), and partitioned cookies (CHIPS) are blocked like others for now. Local storage, IndexedDB and cached files of third-party frames are **not** yet separated by site, so a tracker can still recognise you through them. The settings file has `block_third_party_cookies` (default `true`) and `global_privacy_control` (default `true`) under the privacy section; the Settings page does not show them yet.
+
 ## Pop-ups
 
 A page may open a new tab or window only in response to a click or key press in that page. Otherwise Mercury blocks it and shows **Pop-up blocked** in the toolbar with a button to allow pop-ups from that site until Mercury quits. Turn blocking off in **Settings → Privacy and security → Block pop-up windows**.

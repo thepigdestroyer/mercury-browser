@@ -25,6 +25,9 @@ mod load_metrics;
 mod media_session;
 // engine messages: routes the engine's Mercury message variants to the lanes that own them.
 mod mercury_messages;
+// net: the engine's network policy from the privacy settings, and the net lane's engine messages.
+mod net_messages;
+mod net_policy;
 mod opengl_context;
 // openurl
 mod openurl;
@@ -71,6 +74,8 @@ pub use geolocation::{
 };
 pub use http_disk_cache::remove_http_disk_cache;
 pub use mercury_proxy::{ProxyPreferences, ProxyServer, SystemProxySettings};
+// net
+pub use net_policy::{NetPolicyControl, NetPolicySetup};
 pub use opengl_context::ViewportSize;
 pub use page_requests::page_request_clock;
 pub use page_tabs::{

@@ -2,6 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: this file carries upstream code from LunarWerxs/servo, branch pr/indexeddb, commit
+// 860d2eff1 (author L0garithmic, MPL-2.0; the branch is AI-written): `clear_upgrade_transaction`
+// no longer panics. Mercury's other changes to this file are marked `Mercury:` where they are.
+
 use std::cell::Cell;
 
 use dom_struct::dom_struct;
@@ -163,10 +167,16 @@ impl IDBDatabase {
     }
 
     pub(crate) fn clear_upgrade_transaction(&self, transaction: &IDBTransaction) {
-        let current = self
-            .upgrade_transaction
-            .get()
-            .expect("clear_upgrade_transaction called but no upgrade transaction is set");
+        // Mercury: LunarWerxs/servo pr/indexeddb 860d2eff1 (L0garithmic, MPL-2.0), kept as
+        // upstream wrote it: the former `.expect()` here took the content process down.
+        // A backend error during an upgrade (for example a schema constraint failure
+        // on createIndex) can abort the transaction before it was recorded here, and
+        // an abort must never take the whole script thread down with it. Treat a
+        // missing upgrade transaction as already cleared.
+        let Some(current) = self.upgrade_transaction.get() else {
+            warn!("clear_upgrade_transaction called but no upgrade transaction is set");
+            return;
+        };
 
         debug_assert!(
             &*current == transaction,
@@ -265,7 +275,8 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
         // stores named in scope.
         let durability = options.durability;
         let scope = DOMStringList::new(cx, &self.global(), scope);
-        let transaction = IDBTransaction::new(cx, &self.global(), self, mode, durability, &scope);
+        // Mercury: `new` can fail now, with the error of the backend, instead of panicking.
+        let transaction = IDBTransaction::new(cx, &self.global(), self, mode, durability, &scope)?;
 
         // Step 8. Set transaction’s cleanup event loop to the current event loop.
         transaction.set_cleanup_event_loop();
@@ -365,8 +376,10 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
             },
         });
 
+        // Mercury: `create_abort_callback()?` and the `map_err` below replace a panic of the content
+        // process (an `unwrap()`) when the storage thread cannot be reached; nothing has changed yet.
         let operation = AsyncSchemaOperation::CreateObjectStore {
-            callback: transaction.create_abort_callback(),
+            callback: transaction.create_abort_callback()?,
             key_path: key_paths,
             auto_increment,
         };
@@ -379,7 +392,10 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
                 operation,
                 transaction_serial_number: transaction.get_serial_number(),
             })
-            .unwrap();
+            .map_err(|error| {
+                error!("Could not send createObjectStore to the storage thread: {error:?}");
+                Error::Operation(Some("The storage thread cannot be reached".to_owned()))
+            })?;
 
         self.object_store_names
             .safe_borrow_mut(cx.no_gc())
@@ -409,6 +425,10 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
             return Err(Error::NotFound(None));
         }
 
+        // Mercury: the callback is made before the object store set changes, so that a failure to
+        // make it (it used to panic the content process) leaves the database as it was.
+        let callback = transaction.create_abort_callback()?;
+
         // Step 5
         self.object_store_names
             .borrow_mut()
@@ -418,10 +438,9 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
         // FIXME:(arihant2math) Remove from index set ...
 
         // Step 7
-        let operation = AsyncSchemaOperation::DeleteObjectStore {
-            callback: transaction.create_abort_callback(),
-        };
-        self.get_idb_thread()
+        let operation = AsyncSchemaOperation::DeleteObjectStore { callback };
+        if let Err(error) = self
+            .get_idb_thread()
             .send(IndexedDBThreadMsg::AsyncSchemaOperation {
                 origin: self.global().origin().immutable().clone(),
                 database_name: self.name.to_string(),
@@ -429,7 +448,15 @@ impl IDBDatabaseMethods<crate::DomTypeHolder> for IDBDatabase {
                 operation,
                 transaction_serial_number: transaction.get_serial_number(),
             })
-            .unwrap();
+        {
+            // Mercury: the storage thread cannot be reached (this used to be an `unwrap()` that
+            // panicked the content process): put the name back and throw.
+            error!("Could not send deleteObjectStore to the storage thread: {error:?}");
+            self.object_store_names.borrow_mut().push(name.traced());
+            return Err(Error::Operation(Some(
+                "The storage thread cannot be reached".to_owned(),
+            )));
+        }
 
         Ok(())
     }

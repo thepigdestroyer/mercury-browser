@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>NETCOOKIES running</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html, body { margin: 0; background: #ffffff; color: #000000; }
+  body { padding: 10px 16px; font: 14px/1.3 -apple-system, "Helvetica Neue", Arial, sans-serif; }
+  h1 { margin: 0 0 6px; font-size: 20px; }
+  p.note { margin: 0 0 6px; font-size: 12px; color: #444444; }
+  #summary { font: bold 16px/1.4 Menlo, monospace; margin: 2px 0; }
+  #log { font: 13px/17px Menlo, monospace; }
+  #log div { white-space: normal; overflow-wrap: anywhere; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .skip { color: #666666; }
+  .info { color: #1a4f8b; }
+  iframe { width: 1px; height: 1px; border: 0; visibility: hidden; }
+</style>
+</head>
+<body>
+<!--
+  Mercury test page for the network policy (net-1 lane, items EC5, EC6, EC25, EC38): third-party cookies are
+  blocked, the Sec-GPC header and navigator.globalPrivacyControl are on, and requests are told apart by site.
+
+  THIS PAGE HAS NOT BEEN RUN. The screen of the Mac it was written on was locked, so no window could be opened.
+  Run it in the real browser before relying on any line of it, and record the verdict.
+
+  Setup
+    1. Map two host names to this machine. With the test server's own host file, a.test and b.test are two
+       different sites (the public suffix list has no "test" suffix):
+         printf '127.0.0.1 a.test b.test\n' > /tmp/net-hosts
+    2. Serve the repository's tests/ directory (the server ignores the Host header, so one port serves both
+       names; the /net/* routes are the test server's, item 3 of the lane):
+         scripts/serve-tests.sh --port 8765
+    3. Start Mercury with HOST_FILE=/tmp/net-hosts in its environment (Servo's network layer reads it, and
+       servo-net replaces the two names by 127.0.0.1) and open
+         http://a.test:8765/pages/net-cookies.html
+       Add ?expect=allowed when third-party cookies are switched off, ?gpc=off when Global Privacy Control
+       is switched off. Use a profile that has no a.test or b.test cookies.
+
+  What it checks, each as one "NETCOOKIES <name> PASS|FAIL|SKIP|INFO <detail>" line, and the verdict in the
+  title ("NETCOOKIES PASS" or "NETCOOKIES FAIL <n>"):
+    * navigator.globalPrivacyControl is a boolean and agrees with ?gpc=;
+    * a fetch to the page's own site (a.test) stores and sends its cookie, and carries Sec-GPC: 1;
+    * a credentialed CORS fetch to the other site (b.test) neither stores nor sends its cookie when blocking
+      is on (and does when ?expect=allowed);
+    * document.cookie of the page works, and document.cookie of a b.test frame inside the a.test page reads
+      "" and drops its writes when blocking is on;
+    * a dedicated worker's requests are judged by the web view's main frame: a.test cookies go with its
+      requests to a.test, b.test cookies do not go with its requests to b.test;
+    * a redirect from a.test to b.test is judged at each hop (needs GET /net/redirect?to=<url> in the test
+      server; SKIP if it is not there).
+
+  Not checked here (it needs navigations, not scripts): SameSite=Strict withheld from a cross-site link,
+  Lax sent on one. Open http://b.test:8765/pages/net-cookies.html?role=link, press the link, and read the
+  two lines the second page prints.
+-->
+<h1>Network policy: cookies and Global Privacy Control</h1>
+<p class="note">Open from http://a.test:PORT/ with a.test and b.test mapped to 127.0.0.1 (see the comment at the top of this file).</p>
+<div id="summary">running</div>
+<div id="log"></div>
+<script>
+  "use strict";
+
+  const params = new URLSearchParams(location.search);
+  const role = params.get("role") || "top";
+  const expectBlocked = params.get("expect") !== "allowed";
+  const expectGpc = params.get("gpc") !== "off";
+  const here = location.hostname;
+  const other = here === "a.test" ? "b.test" : (here === "b.test" ? "a.test" : null);
+  const port = location.port ? ":" + location.port : "";
+  const base = location.protocol + "//" + here + port;
+  const otherBase = other ? location.protocol + "//" + other + port : null;
+  const crossSite = { credentials: "include", mode: "cors" };
+
+  const logBox = document.getElementById("log");
+  const summary = document.getElementById("summary");
+  const counts = { PASS: 0, FAIL: 0, SKIP: 0, INFO: 0 };
+
+  function line(status, name, detail) {
+    counts[status]++;
+    const text = "NETCOOKIES " + name + " " + status + (detail ? " " + detail : "");
+    const row = document.createElement("div");
+    row.className = status.toLowerCase();
+    row.textContent = text;
+    logBox.appendChild(row);
+    console.log(text);
+  }
+
+  function check(name, ok, detail) {
+    line(ok ? "PASS" : "FAIL", name, detail);
+  }
+
+  function finish() {
+    const verdict = counts.FAIL === 0 && counts.PASS > 0
+      ? "NETCOOKIES PASS"
+      : "NETCOOKIES FAIL " + counts.FAIL;
+    summary.textContent = verdict + " (" + counts.PASS + " pass, " + counts.FAIL + " fail, " + counts.SKIP + " skip)";
+    document.title = verdict;
+  }
+
+  // The headers /net/echo reports, with lower-case names whether the answer wraps them or not.
+  function headersOf(body) {
+    const source = body && typeof body.headers === "object" && body.headers !== null ? body.headers : body;
+    const out = {};
+    for (const key of Object.keys(source || {})) {
+      out[key.toLowerCase()] = source[key];
+    }
+    return out;
+  }
+
+  async function get(url, options) {
+    const response = await fetch(url, options || { credentials: "include" });
+    return response;
+  }
+
+  async function echo(url, options) {
+    const response = await get(url, options);
+    if (!response.ok) {
+      throw new Error(url + " answered " + response.status);
+    }
+    return headersOf(await response.json());
+  }
+
+  function has(cookieHeader, pair) {
+    return typeof cookieHeader === "string" && cookieHeader.split(/;\s*/).includes(pair);
+  }
+
+  // ----- the framed page (b.test inside a.test): reports what it sees to its parent -----------------------------
+  async function frameMain() {
+    const report = { net_cookies: "frame", host: here };
+    try {
+      document.cookie = "fr=1";
+      report.documentCookie = document.cookie;
+    } catch (error) {
+      report.documentCookieError = String(error);
+    }
+    try {
+      report.echo = await echo(base + "/net/echo");
+    } catch (error) {
+      report.echoError = String(error);
+    }
+    window.parent.postMessage(report, "*");
+  }
+
+  // ----- the top page ----------------------------------------------------------------------------------------------
+  function waitForMessage(predicate, ms) {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => resolve(null), ms);
+      window.addEventListener("message", function listener(event) {
+        if (predicate(event.data)) {
+          clearTimeout(timer);
+          window.removeEventListener("message", listener);
+          resolve(event.data);
+        }
+      });
+    });
+  }
+
+  const workerSource = `
+    onmessage = async (event) => {
+      const { ownSet, ownEcho, otherSet, otherEcho } = event.data;
+      const out = { gpc: self.navigator.globalPrivacyControl };
+      const options = { credentials: "include", mode: "cors" };
+      try { out.ownEcho = await (await fetch(ownEcho, options)).json(); } catch (error) { out.ownEchoError = String(error); }
+      try { await fetch(otherSet, options); } catch (error) { out.otherSetError = String(error); }
+      try { out.otherEcho = await (await fetch(otherEcho, options)).json(); } catch (error) { out.otherEchoError = String(error); }
+      postMessage(out);
+    };`;
+
+  async function topMain() {
+    line("INFO", "page", base + " (expect third-party cookies " + (expectBlocked ? "blocked" : "allowed") + ", GPC " + (expectGpc ? "on" : "off") + ")");
+
+    check("navigator.globalPrivacyControl is a boolean", typeof navigator.globalPrivacyControl === "boolean", String(navigator.globalPrivacyControl));
+    check("navigator.globalPrivacyControl agrees with ?gpc", navigator.globalPrivacyControl === expectGpc, String(navigator.globalPrivacyControl));
+
+    if (other === null) {
+      line("SKIP", "sites", "open this page as http://a.test:PORT/pages/net-cookies.html, with a.test and b.test mapped to 127.0.0.1");
+      return;
+    }
+
+    // First party: the page's own site.
+    try {
+      await get(base + "/net/set-cookie?name=fp&value=1");
+      const own = await echo(base + "/net/echo");
+      check("first-party cookie is stored and sent by fetch", has(own.cookie, "fp=1"), String(own.cookie));
+      check("Sec-GPC on a first-party fetch", expectGpc ? own["sec-gpc"] === "1" : own["sec-gpc"] === undefined, String(own["sec-gpc"]));
+    } catch (error) {
+      line("FAIL", "first-party fetch", String(error));
+    }
+
+    document.cookie = "dc=1";
+    check("document.cookie of the page", document.cookie.split(/;\s*/).includes("dc=1"), document.cookie);
+
+    // Third party: the other site, credentialed, from a script of this page.
+    try {
+      await get(otherBase + "/net/set-cookie?name=tp&value=1", crossSite);
+      const third = await echo(otherBase + "/net/echo", crossSite);
+      const sent = has(third.cookie, "tp=1");
+      check("third-party cookie " + (expectBlocked ? "is not stored or sent" : "is stored and sent") + " by fetch", sent === !expectBlocked, String(third.cookie));
+      check("Sec-GPC on a third-party fetch", expectGpc ? third["sec-gpc"] === "1" : third["sec-gpc"] === undefined, String(third["sec-gpc"]));
+    } catch (error) {
+      line("FAIL", "third-party fetch", String(error));
+    }
+
+    // A frame of the other site.
+    try {
+      const frame = document.createElement("iframe");
+      frame.src = otherBase + "/pages/net-cookies.html?role=frame";
+      const reply = waitForMessage((data) => data && data.net_cookies === "frame", 8000);
+      document.body.appendChild(frame);
+      const report = await reply;
+      if (report === null) {
+        line("FAIL", "frame", "no answer from the frame within 8 s");
+      } else {
+        const cookie = report.documentCookie;
+        const seen = typeof cookie === "string" && cookie.split(/;\s*/).includes("fr=1");
+        check("document.cookie of a third-party frame " + (expectBlocked ? "reads empty and drops writes" : "works"), seen === !expectBlocked, JSON.stringify(cookie));
+        if (report.echo) {
+          // The frame's own site has cookies from the third-party fetch above (if they were stored) and from fr=1.
+          check("a third-party frame's fetch carries " + (expectBlocked ? "no cookie" : "its cookies"), expectBlocked ? !report.echo.cookie || !has(report.echo.cookie, "tp=1") : true, String(report.echo.cookie));
+        } else {
+          line("FAIL", "frame fetch", String(report.echoError));
+        }
+      }
+    } catch (error) {
+      line("FAIL", "frame", String(error));
+    }
+
+    // A dedicated worker: its requests have no partition key; the policy judges them by the web view's main frame.
+    try {
+      const worker = new Worker(URL.createObjectURL(new Blob([workerSource], { type: "text/javascript" })));
+      const reply = new Promise((resolve) => {
+        const timer = setTimeout(() => resolve(null), 8000);
+        worker.onmessage = (event) => { clearTimeout(timer); resolve(event.data); };
+        worker.onerror = (event) => { clearTimeout(timer); resolve({ error: String(event.message || event) }); };
+      });
+      worker.postMessage({
+        ownEcho: base + "/net/echo",
+        otherSet: otherBase + "/net/set-cookie?name=wtp&value=1",
+        otherEcho: otherBase + "/net/echo",
+      });
+      const report = await reply;
+      if (report === null || report.error) {
+        line("FAIL", "worker", report === null ? "no answer within 8 s" : report.error);
+      } else {
+        check("navigator.globalPrivacyControl in a worker", report.gpc === expectGpc, String(report.gpc));
+        const own = headersOf(report.ownEcho || {});
+        check("a worker's request to the page's own site carries the first-party cookie", has(own.cookie, "fp=1"), String(own.cookie));
+        const third = headersOf(report.otherEcho || {});
+        check("a worker's request to the other site " + (expectBlocked ? "carries no cookie" : "carries its cookie"), has(third.cookie, "wtp=1") === !expectBlocked, String(third.cookie));
+      }
+    } catch (error) {
+      line("FAIL", "worker", String(error));
+    }
+
+    // A redirect from this site to the other: judged at each hop.
+    try {
+      const response = await get(base + "/net/redirect?to=" + encodeURIComponent(otherBase + "/net/echo"), crossSite);
+      if (response.status === 404) {
+        line("SKIP", "redirect", "the test server has no /net/redirect route yet");
+      } else {
+        const final = headersOf(await response.json());
+        check("a redirect to the other site is judged at its last hop", has(final.cookie, "tp=1") === !expectBlocked, String(final.cookie));
+      }
+    } catch (error) {
+      line("SKIP", "redirect", String(error));
+    }
+  }
+
+  // ----- the manual SameSite page (role=link) -----------------------------------------------------------------------
+  function linkMain() {
+    const target = (other === null ? base : otherBase) + "/pages/net-cookies.html?role=landed";
+    const anchor = document.createElement("a");
+    anchor.href = target;
+    anchor.textContent = "Open " + target + " (a cross-site top-level navigation)";
+    logBox.appendChild(anchor);
+    line("INFO", "link", "first open the top page once so that its cookies exist, then press the link");
+  }
+
+  async function landedMain() {
+    try {
+      await get(base + "/net/set-cookie?name=strict&value=1&attrs=" + encodeURIComponent("SameSite=Strict"));
+      await get(base + "/net/set-cookie?name=lax&value=1&attrs=" + encodeURIComponent("SameSite=Lax"));
+      line("INFO", "landed", "set strict and lax on " + here + "; now go back, press the link again and read the next line");
+      const own = await echo(base + "/net/echo");
+      line("INFO", "landed cookies on a subresource of this page", String(own.cookie));
+    } catch (error) {
+      line("FAIL", "landed", String(error));
+    }
+    // The document request that loaded this page is the one that matters: the server log (serve-tests --log)
+    // shows its Cookie header. A cross-site link must have carried "lax" and not "strict".
+    line("INFO", "landed", "check the server log: the request for this page, made from a link on the other site, must show lax and not strict");
+  }
+
+  (async () => {
+    try {
+      if (role === "frame") {
+        await frameMain();
+        return;
+      }
+      if (role === "link") {
+        linkMain();
+      } else if (role === "landed") {
+        await landedMain();
+      } else {
+        await topMain();
+      }
+    } catch (error) {
+      line("FAIL", "page", String(error));
+    }
+    finish();
+  })();
+</script>
+</body>
+</html>

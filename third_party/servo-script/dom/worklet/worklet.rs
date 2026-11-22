@@ -28,6 +28,7 @@ use js::realm::CurrentRealm;
 use js::rust::wrappers2::{JS_GC, JS_GetGCParameter};
 use malloc_size_of::malloc_size_of_is_0;
 use net_traits::policy_container::PolicyContainer;
+use net_traits::pub_domains::Site;
 use net_traits::request::{Destination, Origin, PreloadedResources, RequestClient};
 use rustc_hash::FxHashMap;
 use script_bindings::reflector::{Reflector, reflect_dom_object};
@@ -200,6 +201,8 @@ impl WorkletMethods<crate::DomTypeHolder> for Worklet {
                 self.droppable_field.worklet_id,
                 self.global_type,
                 self.window.origin().immutable().clone(),
+                // Mercury: the document's key, for the module fetch (net-1 review, finding 1).
+                self.window.Document().determine_the_network_partition_key(),
                 global_scope.api_base_url(),
                 module_url_record,
                 global_scope.policy_container(),
@@ -260,6 +263,7 @@ pub trait WorkletThreadPool: JSTraceable {
         worklet_id: WorkletId,
         global_type: WorkletGlobalScopeType,
         origin: ImmutableOrigin,
+        network_partition_key: Option<Site>,
         base_url: ServoUrl,
         script_url: ServoUrl,
         policy_container: Arc<PolicyContainer>,
@@ -395,6 +399,7 @@ impl WorkletThreadPool for StatelessWorkletThreadPool {
         worklet_id: WorkletId,
         global_type: WorkletGlobalScopeType,
         origin: ImmutableOrigin,
+        network_partition_key: Option<Site>,
         base_url: ServoUrl,
         script_url: ServoUrl,
         policy_container: Arc<PolicyContainer>,
@@ -414,6 +419,7 @@ impl WorkletThreadPool for StatelessWorkletThreadPool {
                 worklet_id,
                 global_type,
                 origin: origin.clone(),
+                network_partition_key: network_partition_key.clone(),
                 base_url: base_url.clone(),
                 script_url: script_url.clone(),
                 policy_container: policy_container.clone(),
@@ -471,6 +477,7 @@ pub(crate) enum WorkletControl {
         worklet_id: WorkletId,
         global_type: WorkletGlobalScopeType,
         origin: ImmutableOrigin,
+        network_partition_key: Option<Site>,
         base_url: ServoUrl,
         script_url: ServoUrl,
         policy_container: Arc<PolicyContainer>,
@@ -756,6 +763,7 @@ impl WorkletThread {
         global_scope: &WorkletGlobalScope,
         pipeline_id: PipelineId,
         origin: ImmutableOrigin,
+        network_partition_key: Option<Site>,
         script_url: ServoUrl,
         policy_container: Arc<PolicyContainer>,
         credentials: RequestCredentials,
@@ -778,7 +786,8 @@ impl WorkletThread {
             is_nested_browsing_context: global.is_nested_browsing_context(),
             insecure_requests_policy: global.insecure_requests_policy(),
             has_trustworthy_ancestor_origin: global.has_trustworthy_ancestor_origin(),
-            network_partition_key: None,
+            network_partition_key,
+            browser_initiated_navigation: false,
         };
 
         // Step 2. If moduleResponsesMap[requestURL] is "fetching", wait in parallel until that entry's value changes, then queue a task on the networking task source to proceed with running the following steps.
@@ -911,6 +920,7 @@ impl WorkletThread {
                 worklet_id,
                 global_type,
                 origin,
+                network_partition_key,
                 base_url,
                 script_url,
                 policy_container,
@@ -934,6 +944,7 @@ impl WorkletThread {
                     &global,
                     pipeline_id,
                     origin,
+                    network_partition_key,
                     script_url,
                     policy_container,
                     credentials,

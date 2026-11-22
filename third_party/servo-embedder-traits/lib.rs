@@ -710,11 +710,24 @@ pub struct WebResourceRequest {
         serialize_with = "::hyper_serde::serialize"
     )]
     pub headers: HeaderMap,
+    // Mercury: this is the URL of the request's current hop (Servo 0.8 reported the first URL of the
+    // redirect chain here, which made a rewrite of a redirect hop meaningless); see request_interceptor.rs.
     pub url: ServoUrl,
     pub destination: Destination,
     pub referrer_url: Option<ServoUrl>,
+    // Mercury: true only for a navigation of the top-level frame; a frame navigated by a script or a link
+    // also has the destination `Document` and is not the main frame (D17).
     pub is_for_main_frame: bool,
     pub is_redirect: bool,
+    // Mercury: frame identity of the request (EC38, net-1 brief section 5.4). The network thread fills
+    // these three from its policy handle; see `servo-net/mercury_rewrite.rs`.
+    /// The site (scheme-less registrable domain) of the top-level document the request belongs to;
+    /// `None` when the network thread cannot tell.
+    pub top_level_site: Option<String>,
+    /// The ASCII serialisation of the origin that started the request; `None` for an opaque origin.
+    pub initiator_origin: Option<String>,
+    /// Whether the request's site differs from the top-level site; `None` when `top_level_site` is `None`.
+    pub is_third_party: Option<bool>,
 }
 
 #[derive(Clone, Deserialize, Serialize)]
@@ -731,6 +744,10 @@ pub enum WebResourceResponseMsg {
     CancelLoad,
     /// Signal that this load will not be intercepted.
     DoNotIntercept,
+    // Mercury: change the request's URL and headers, then let it go on (EC37). Terminal like
+    // `DoNotIntercept`; the rules for what may change are in `servo-net/mercury_rewrite.rs`.
+    /// Signal that this load will not be intercepted but that the request is to be changed first.
+    Rewrite(WebResourceRewrite),
 }
 
 #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]

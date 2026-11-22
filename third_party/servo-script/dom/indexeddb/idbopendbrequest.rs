@@ -12,7 +12,7 @@ use script_bindings::reflector::reflect_dom_object;
 use servo_base::generic_channel::GenericSend;
 use servo_url::origin::ImmutableOrigin;
 use storage_traits::client_storage::StorageProxyMap;
-use storage_traits::indexeddb::{BackendResult, IndexedDBThreadMsg, SyncOperation};
+use storage_traits::indexeddb::{BackendError, BackendResult, IndexedDBThreadMsg, SyncOperation};
 use stylo_atoms::Atom;
 use uuid::Uuid;
 
@@ -125,12 +125,6 @@ impl IDBOpenDBRequest {
 
     pub(crate) fn get_id(&self) -> Uuid {
         self.id
-    }
-
-    pub(crate) fn connection(&self) -> DomRoot<IDBDatabase> {
-        self.pending_connection
-            .get()
-            .expect("A connection should exist for the db.")
     }
 
     pub(crate) fn get_or_init_connection(
@@ -246,13 +240,19 @@ impl IDBOpenDBRequest {
         let response_listener = OpenRequestListener {
             open_request: Trusted::new(self),
         };
+        // Mercury: a lost reply or a callback that cannot be created used to panic the content
+        // process (`unwrap()` and `expect()`); now the request fails with an error event.
         let callback = GenericCallback::new(move |message| {
             let response_listener = response_listener.clone();
             task_source.queue(task!(request_callback: move |cx| {
-                response_listener.handle_delete_db(cx, message.unwrap());
+                let result = message.unwrap_or_else(|error| {
+                    error!("The reply to deleteDatabase was lost: {error:?}");
+                    Err(BackendError::Abort)
+                });
+                response_listener.handle_delete_db(cx, result);
             }))
         })
-        .expect("Could not create delete database callback");
+        .map_err(|error| error!("Could not create the deleteDatabase callback: {error:?}"))?;
 
         let delete_operation =
             SyncOperation::DeleteDatabase(callback, storage_key, name, proxy_map, self.get_id());

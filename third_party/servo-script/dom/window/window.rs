@@ -1097,6 +1097,7 @@ impl Window {
             insecure_requests_policy,
             has_trustworthy_ancestor_origin,
             network_partition_key,
+            browser_initiated_navigation: false,
         }
     }
 

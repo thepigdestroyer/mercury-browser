@@ -44,7 +44,8 @@ use layout_api::{
 use malloc_size_of::MallocSizeOfOps;
 use metrics::{InteractiveFlag, InteractiveWindow, ProgressiveWebMetrics};
 use net_traits::CookieSource::NonHTTP;
-use net_traits::CoreResourceMsg::{GetCookieStringForUrl, SetCookiesForUrl};
+// Mercury: `document.cookie` sends its partition key and web view, for the network policy (EC5, EC6).
+use net_traits::CoreResourceMsg::{GetCookieStringForDocument, SetCookiesForDocument};
 use net_traits::image_cache::ImageCache;
 use net_traits::policy_container::PolicyContainer;
 use net_traits::pub_domains::{Site, is_pub_domain};
@@ -6826,11 +6827,18 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
         let url = self.url();
         let (tx, rx) =
             profile_generic_channel::channel(self.global().time_profiler_chan().clone()).unwrap();
+        // Mercury: the document's top-level site and web view let the policy judge it (EC5, EC6).
         let _ = self
             .window
             .as_global_scope()
             .resource_threads()
-            .send(GetCookieStringForUrl(url, tx, NonHTTP));
+            .send(GetCookieStringForDocument(
+                url,
+                self.determine_the_network_partition_key(),
+                Some(self.window().webview_id()),
+                tx,
+                NonHTTP,
+            ));
         let cookies = rx.recv().unwrap();
         Ok(cookies.map_or(DOMString::new(), DOMString::from))
     }
@@ -6855,11 +6863,18 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
             vec![]
         };
 
+        // Mercury: the document's top-level site and web view let the policy judge it (EC5, EC6).
         let _ = self
             .window
             .as_global_scope()
             .resource_threads()
-            .send(SetCookiesForUrl(self.url(), cookies, NonHTTP));
+            .send(SetCookiesForDocument(
+                self.url(),
+                self.determine_the_network_partition_key(),
+                Some(self.window().webview_id()),
+                cookies,
+                NonHTTP,
+            ));
         Ok(())
     }
 

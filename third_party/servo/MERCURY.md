@@ -70,6 +70,20 @@ Changes made by lane txt-1 (text, 21 Nov 2026).
   the test hangs), and `ServoTest::spin` fails after two minutes instead of spinning forever.
 - **Drop when:** the #49400 test at the bump that contains it; the rest stays.
 
+Changes made by lane net-1 (21 Nov 2026).
+
+### The net lane's channel, the rewrite answer and the policy re-export — `servo.rs`, `lib.rs`, `webview_delegate.rs`
+
+- **What:** `handle_net_embedder_message` (0.8.0 line about 531) has one arm for `NetToEmbedderMsg::Mercury`, which calls K0's
+  `mercury::deliver` (the net thread's channel was not part of the scaffold). `lib.rs` re-exports `net::net_policy::{NetPolicy,
+  NetPolicyStats, SiteKey}` for Mercury. `webview_delegate.rs` has `WebResourceLoad::rewrite(self, WebResourceRewrite)` (EC37, the
+  answer that changes the URL or headers and lets the load go on), the test literal of `WebResourceRequest` takes the three new
+  fields, and there is one new test.
+- **Why:** Mercury sets the network policy and receives the mixed-content report (EC5, EC17, EC37).
+- **Tested by:** `webview_delegate`'s `test_web_resource_load_rewrite` (needs this crate's dev-dependencies, so it is run on a Servo
+  upgrade, not in `make test`) and `talaria-servo`'s `net_messages` tests.
+- **Drop when:** the scaffold is dropped and Servo has equivalents.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

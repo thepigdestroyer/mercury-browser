@@ -658,3 +658,58 @@ jobs:
 
       - name: Test servo-net
         run: make test-servo-net
+
+  # servo-storage is vendored like servo-net (dev-dependencies, excluded from the
+  # workspace): its own tests, among them the Web Locks and the IndexedDB schema
+  # ones of the net-1 lane, run on the crate's own manifest and lock with the
+  # vendored servo-storage-traits patched in (`make test-servo-storage`). Its own
+  # job, so that it does not depend on the servo-net one. It runs on Ubuntu 24.04: the
+  # crate's graph builds FreeType through webrender, so the `fonts/bundled_freetype`
+  # feature that fixes the servo-net job on 22.04 cannot be applied here, and 22.04's
+  # FreeType is too old for freetype-sys.
+  servo-storage:
+    name: Vendored servo-storage tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    env:
+      CLANG_PATH: /usr/bin/clang-14
+      LIBCLANG_PATH: /usr/lib/llvm-14/lib
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Reads rust-toolchain.toml: channel, profile and components.
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Install the build dependencies
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # The native libraries that servo-storage's own graph builds (bundled
+          # SQLite, aws-lc), without GStreamer.
+          sudo apt-get update
+          sudo apt-get install --yes \
+            build-essential \
+            clang-14 \
+            cmake \
+            libclang-14-dev \
+            libfontconfig1-dev \
+            ninja-build \
+            pkg-config
+
+          test -x "${CLANG_PATH}"
+          test -e "${LIBCLANG_PATH}/libclang.so"
+
+      - name: Test servo-storage
+        run: make test-servo-storage
