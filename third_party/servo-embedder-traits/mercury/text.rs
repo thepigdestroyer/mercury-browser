@@ -324,7 +324,9 @@ mod tests {
 
     #[test]
     fn debug_of_an_ime_event_never_prints_the_typed_text() {
-        use crate::{CompositionEvent, CompositionState, ImeEvent, ImeReplacement};
+        use keyboard_types::{CompositionEvent, CompositionState};
+
+        use crate::{ImeEvent, ImeReplacement};
         let events = [
             ImeEvent::Commit("hunter2 commit".to_owned()),
             ImeEvent::SetMarkedText {

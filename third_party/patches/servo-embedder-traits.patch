@@ -431,7 +431,7 @@ diff --git a/mercury/text.rs b/mercury/text.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury/text.rs
-@@ -0,0 +1,506 @@
+@@ -0,0 +1,508 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -758,7 +758,9 @@ new file mode 100644
 +
 +    #[test]
 +    fn debug_of_an_ime_event_never_prints_the_typed_text() {
-+        use crate::{CompositionEvent, CompositionState, ImeEvent, ImeReplacement};
++        use keyboard_types::{CompositionEvent, CompositionState};
++
++        use crate::{ImeEvent, ImeReplacement};
 +        let events = [
 +            ImeEvent::Commit("hunter2 commit".to_owned()),
 +            ImeEvent::SetMarkedText {

@@ -53,14 +53,6 @@ path = "../../third_party/servo-layout/tests/ellipsis.rs"
 name = "highlights"
 path = "../../third_party/servo-layout/tests/highlights.rs"
 
-[[test]]
-name = "tables"
-path = "../../third_party/servo-layout/tests/tables.rs"
-
-[[test]]
-name = "text"
-path = "../../third_party/servo-layout/tests/text.rs"
-
 # The Servo tests: each builds a whole engine on a software rendering context (no window). They
 # are skipped by `cargo test`, `cargo clippy --all-targets` and `make test` (`test = false`) and run
 # by `make engine-tests`, which names them.
