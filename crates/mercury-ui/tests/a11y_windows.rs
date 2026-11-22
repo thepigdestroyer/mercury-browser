@@ -112,13 +112,16 @@ fn about_window(media_line: &str) -> AboutWindow {
     window.set_credit_line("Began as a fork of Hermes Browser by Kayk Caputo.".into());
     // The window is as tall as its content wants: 420 px where the system's font fits the lines
     // in that, more where it does not. Content that grows a lot is a layout change to look at,
-    // not something to follow.
+    // not something to follow. The testing platform keeps the size it is given, so the first
+    // open only lays the content out, to learn the height it wants; the second opens the window
+    // at that height.
     a11y::open_window(&window, 380.0, 420.0);
     let height = window.get_wanted_height();
     assert!(
         (420.0..=480.0).contains(&height),
         "the About window wants {height} px"
     );
+    a11y::open_window(&window, 380.0, height);
     window
 }
 
