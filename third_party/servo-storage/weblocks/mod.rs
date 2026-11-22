@@ -578,8 +578,30 @@ impl<C: LockClient> LockManager<C> {
         self.purge_dead();
     }
 
+    /// Mercury: probes every client that holds a lock or has a request queued, whatever the lock, and drops the
+    /// ones that cannot be reached (net-1 review, finding 4). `query()` calls it, so a lock whose holder died is
+    /// not listed: the periodic probe runs only while somebody waits, which a `query()` alone does not.
+    pub(crate) fn probe_all(&mut self) {
+        for lock in self.held.values() {
+            if !lock.client.notify(LockEventMsg::Probe) {
+                self.dead.push(lock.client_id.clone());
+            }
+        }
+        for queue in self.queue_map.values() {
+            for request in queue {
+                if !request.client.notify(LockEventMsg::Probe) {
+                    self.dead.push(request.client_id.clone());
+                }
+            }
+        }
+        self.purge_dead();
+    }
+
     /// <https://www.w3.org/TR/web-locks/#snapshot-the-lock-state>
-    pub(crate) fn snapshot_lock_state(&self) -> LockManagerSnapshotMsg {
+    pub(crate) fn snapshot_lock_state(&mut self) -> LockManagerSnapshotMsg {
+        // Mercury: a holder that died is not listed (see `probe_all`).
+        self.probe_all();
+
         // Step 1. skip assert
         // Step 2. Let pending be a new list.
         let mut pending = vec![];
@@ -716,7 +738,7 @@ mod tests {
         request(client, client_id, name, LockModeMsg::Shared).0
     }
 
-    fn held_names(manager: &LockManager<Fake>) -> Vec<(String, String)> {
+    fn held_names(manager: &mut LockManager<Fake>) -> Vec<(String, String)> {
         let mut held: Vec<_> = manager
             .snapshot_lock_state()
             .held
@@ -741,7 +763,7 @@ mod tests {
 
         manager.release_lock("x", a.granted()[0].id);
         assert_eq!(b.granted().len(), 1, "b is granted when a releases");
-        assert_eq!(held_names(&manager), vec![("x".into(), "b".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "b".into())]);
 
         manager.release_lock("x", b.granted()[0].id);
         assert!(manager.is_idle());
@@ -864,11 +886,11 @@ mod tests {
         assert!(victim.was_stolen_from());
         assert_eq!(thief.granted().len(), 1, "the thief holds the lock at once");
         assert!(waiter.granted().is_empty(), "and the waiter is behind it");
-        assert_eq!(held_names(&manager), vec![("x".into(), "thief".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "thief".into())]);
 
         // The victim's callback finishes later and releases a lock it no longer has.
         manager.release_lock("x", victim.granted()[0].id);
-        assert_eq!(held_names(&manager), vec![("x".into(), "thief".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "thief".into())]);
         assert!(
             waiter.granted().is_empty(),
             "the late release changed nothing"
@@ -889,7 +911,7 @@ mod tests {
         manager.request_lock(steal);
         assert!(a.was_stolen_from());
         assert!(b.was_stolen_from());
-        assert_eq!(held_names(&manager), vec![("x".into(), "thief".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "thief".into())]);
     }
 
     #[test]
@@ -941,7 +963,7 @@ mod tests {
         let (ask, id) = request(&a, "a", "x", LockModeMsg::Exclusive);
         manager.request_lock(ask);
         manager.abort_request("x", id);
-        assert_eq!(held_names(&manager), vec![("x".into(), "a".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "a".into())]);
     }
 
     #[test]
@@ -951,7 +973,7 @@ mod tests {
         manager.request_lock(exclusive(&a, "a", "x"));
         manager.request_lock(exclusive(&b, "b", "x"));
         manager.release_lock("x", LockId::next());
-        assert_eq!(held_names(&manager), vec![("x".into(), "a".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "a".into())]);
         assert!(b.granted().is_empty());
     }
 
@@ -971,7 +993,7 @@ mod tests {
         manager.release_client("gone");
 
         assert_eq!(
-            held_names(&manager),
+            held_names(&mut manager),
             vec![("x".into(), "waiter".into()), ("z".into(), "waiter".into())],
             "the waiter got both locks the other client held"
         );
@@ -985,7 +1007,7 @@ mod tests {
         manager.request_lock(exclusive(&a, "a", "x"));
         manager.release_client("nobody");
         manager.release_client("b");
-        assert_eq!(held_names(&manager), vec![("x".into(), "a".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "a".into())]);
         assert!(b.events.borrow().is_empty());
     }
 
@@ -1003,7 +1025,7 @@ mod tests {
         manager.release_lock("x", holder.granted()[0].id);
 
         assert!(dead.granted().is_empty());
-        assert_eq!(held_names(&manager), vec![("x".into(), "next".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "next".into())]);
     }
 
     #[test]
@@ -1020,7 +1042,7 @@ mod tests {
         manager.probe();
 
         assert_eq!(
-            held_names(&manager),
+            held_names(&mut manager),
             vec![("x".into(), "waiter".into()), ("y".into(), "waiter".into())]
         );
     }
@@ -1053,7 +1075,7 @@ mod tests {
         manager.request_lock(exclusive(&next, "next", "x"));
 
         assert_eq!(next.granted().len(), 1);
-        assert_eq!(held_names(&manager), vec![("x".into(), "next".into())]);
+        assert_eq!(held_names(&mut manager), vec![("x".into(), "next".into())]);
     }
 
     #[test]
@@ -1079,6 +1101,30 @@ mod tests {
         assert_eq!(snapshot.pending.len(), 1);
         assert_eq!(snapshot.pending[0].mode, LockModeMsg::Shared);
         assert_eq!(snapshot.pending[0].client_id, "b");
+    }
+
+    #[test]
+    fn the_snapshot_does_not_list_the_locks_of_a_client_that_cannot_be_reached() {
+        let mut manager = LockManager::default();
+        let (dead, alive, waiter) = (Fake::new(), Fake::new(), Fake::new());
+        manager.request_lock(exclusive(&dead, "dead", "x"));
+        manager.request_lock(exclusive(&alive, "alive", "y"));
+        // `waiter` queues for `x`, behind the holder that is about to die.
+        manager.request_lock(exclusive(&waiter, "waiter", "x"));
+        dead.disconnect();
+
+        // No periodic probe has run (nobody waited for a second): the query itself finds out.
+        let snapshot = manager.snapshot_lock_state();
+        let held: Vec<(String, String)> = snapshot
+            .held
+            .iter()
+            .map(|lock| (lock.name.clone(), lock.client_id.clone()))
+            .collect();
+        // `dead` lost `x`, which went to the waiter; `alive` still has `y`.
+        assert!(held.contains(&("x".to_owned(), "waiter".to_owned())), "{held:?}");
+        assert!(held.contains(&("y".to_owned(), "alive".to_owned())), "{held:?}");
+        assert!(!held.iter().any(|(_, client)| client == "dead"), "{held:?}");
+        assert!(snapshot.pending.is_empty());
     }
 
     #[test]

@@ -280,8 +280,8 @@ test-servo-net:
 		--features test-util,devtools --test main -- \
 		--exact --skip fetch::test_file --skip filemanager_thread::test_filemanager
 
-# servo-storage's own tests (its unit tests and third_party/servo-storage/tests/main.rs: Web Locks, the IndexedDB schema facts, web
-# storage, cache storage), run like servo-net's: the crate has dev-dependencies and is excluded from the workspace,
+# servo-storage's own tests (its unit tests, third_party/servo-storage/tests/main.rs: Web Locks, the IndexedDB schema facts, web
+# storage, cache storage, and tests/weblocks_ipc.rs: Web Locks over a real IPC channel), run like servo-net's: the crate has dev-dependencies and is excluded from the workspace,
 # so cargo runs it on its own manifest and Cargo.lock, against the published sibling crates except
 # servo-storage-traits, which is patched in from third_party/ (the Web Locks messages are Mercury's, net-1).
 # No GStreamer, no window.
@@ -289,7 +289,7 @@ test-servo-storage:
 	"$(CARGO)" test --locked $(CARGO_FLAGS) --target-dir target \
 		--manifest-path third_party/servo-storage/Cargo.toml \
 		--config 'patch.crates-io.servo-storage-traits.path="third_party/servo-storage-traits"' \
-		--lib --test main
+		--lib --tests
 
 qa:
 	"$(MAKE)" fmt-check

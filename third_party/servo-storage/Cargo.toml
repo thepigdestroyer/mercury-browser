@@ -36,6 +36,12 @@ path = "lib.rs"
 name = "main"
 path = "tests/main.rs"
 
+# Mercury: Web Locks tests against a real IPC `GenericCallback` (net-1 review, finding 4). A target of its own,
+# because whether channels are IPC is decided once per process.
+[[test]]
+name = "weblocks_ipc"
+path = "tests/weblocks_ipc.rs"
+
 [dependencies.libc]
 version = "0.2"
 
@@ -105,6 +111,13 @@ features = [
     "v4",
     "v5",
 ]
+
+# Mercury: the `multiprocess` feature of servo-base, for tests/weblocks_ipc.rs (net-1 review, finding 4). It only
+# adds the choice of IPC channels, which is made at run time from the options; the other test targets do not
+# make it.
+[dev-dependencies.servo-base]
+version = "=0.8.0"
+features = ["multiprocess"]
 
 [dev-dependencies.profile]
 version = "=0.8.0"
