@@ -1,0 +1,115 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The rows, the hit result and the sizes the group dock and its capsule share (SPEC
+// design/ui-final/SPEC.md §4.4). Rust (src/group_dock) computes every position; Slint draws what
+// it is given.
+//
+// THE STRUCTS, THE ENUM AND `DockGeometry` BELOW ARE THE PINNED CONTRACT of lane group-dock
+// (sdd/lane-group-dock-brief.md §3.1). Other lanes build on them; a change goes through the lane
+// lead, and only additions are allowed. They live in their own file so that dock.slint and
+// dock-capsule.slint can both import them (no import cycle).
+
+import { GroupRow } from "models.slint";
+
+// The SPEC's numbers, in one place. A test (tests/group_dock_geometry.rs) asserts that these equal
+// the constants of src/group_dock/band.rs and capsule.rs.
+export global DockGeometry {
+    // The dock at rest is 2 * pad-y + pill-height = 52 px high; magnified it is 2 * pad-y +
+    // pill-height * the largest scale, and only the top edge moves.
+    out property <length> pill-height: 30px;
+    out property <length> pad-y: 11px;
+    out property <length> radius: 24px;
+    // Space below the dock (and below the capsule), inside the reserved band.
+    out property <length> bottom-margin: 12px;
+    // The band the dock reserves at the bottom of the page area (SPEC §4.4).
+    out property <length> band-open: 72px;
+    out property <length> band-shrunk: 40px;
+    // The height of `GroupDock`'s own box: the band plus the 5.5 px the magnified dock rises above
+    // it (bottom-margin + 2 * pad-y + pill-height * 1.45). Rust's `hit` measures y in this box
+    // (`DockData::container_height`); the box's bottom edge is the bottom of the band.
+    out property <length> box-height: 77.5px;
+    out property <length> capsule-width: 236px;
+    out property <length> capsule-height: 28px;
+    // The sliver width of the capsule at rest, and the area its slivers are fitted into.
+    out property <length> sliver: 6px;
+    out property <length> capsule-sliver-left: 14px;
+    out property <length> capsule-sliver-right: 176px;
+    out property <length> capsule-count-x: 182px;
+    out property <length> capsule-count-width: 26px;
+    out property <length> capsule-chevron-x: 212px;
+    // The x and the + buttons (a touch target of at least 24 px).
+    out property <length> button: 26px;
+}
+
+// What a point of the dock is over (group_dock::DockHit). Handler-less `hit` returns the enum's
+// first value, `none`, with `group` and `tab` 0; only `kind` means anything for `none`.
+export enum DockHitKind {
+    none,
+    pill,
+    chip,
+    sliver,
+    new-tab,
+    shrink,
+    // The x of a chip: closes the tab (added after the first pass; the other kinds keep their order).
+    chip-close,
+}
+
+// `group` is a `GroupRow.id` and `tab` a `TabRow.id`; -1 when the kind has none.
+export struct DockHit {
+    kind: DockHitKind,
+    group: int,
+    tab: int,
+}
+
+// One chip of the expanded (current) group's pill. `x` and `width` are in the pill, already scaled
+// by the magnification.
+export struct DockChip {
+    tab: int,
+    title: string,
+    shade: color,
+    active: bool,
+    unread: bool,
+    audible: bool,
+    muted: bool,
+    crashed: bool,
+    capture: bool,
+    loading: bool,
+    x: length,
+    width: length,
+}
+
+// One sliver of a folded pill or of the capsule: one per tab, in tab shades. `x` and `width` are in
+// the pill (or in the capsule), already scaled.
+export struct DockSliver {
+    tab: int,
+    shade: color,
+    active: bool,
+    x: length,
+    width: length,
+}
+
+// One pill of the dock: `x`, `width`, `height` and `scale` are the drawn (magnified) values in the
+// dock's container, `chips` is filled for the expanded pill and `slivers` for a folded one.
+export struct DockPill {
+    group: GroupRow,
+    x: length,
+    width: length,
+    height: length,
+    scale: float,
+    expanded: bool,
+    show-key: bool,
+    chips: [DockChip],
+    slivers: [DockSliver],
+}
+
+// The shape of a state marker on a chip or a folded pill (never colour alone): unread a disc,
+// crashed a triangle, camera or microphone a ring with a dot, playing sound three bars, muted a
+// ring with a slash, loading an empty ring.
+export enum DockStateKind {
+    disc,
+    triangle,
+    ring-dot,
+    bars,
+    ring-slash,
+    ring,
+}
