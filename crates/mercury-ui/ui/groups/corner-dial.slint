@@ -37,6 +37,39 @@ export struct DialCaption {
     y: length,
 }
 
+// The dial's own numbers, named once (the mockup's `dialColour`, SPEC §4.5). Everything that
+// belongs to the ring (radius 340, bands, labels) is Rust's and is not here. The 38 px gap to the
+// area's edge (DIAL_MARGIN) is Rust's too: it only reaches this file through the `place` callback.
+global DialMetrics {
+    // The dial's diameter (r 36).
+    out property <length> diameter: 72px;
+    // The load ring: centred on the dial's edge, 5 px wide.
+    out property <length> ring-width: 5px;
+    // The planet's radius.
+    out property <length> planet-radius: 27px;
+    // The favicon, and the chip that stands in for it.
+    out property <length> favicon-size: 18px;
+    // Pointer travel with the button down before a press becomes a drag (corner_dial::DRAG_THRESHOLD).
+    out property <length> drag-threshold: 6px;
+    // The focus ring (SPEC §5): width, and the gap between it and the load ring.
+    out property <length> focus-width: 2px;
+    out property <length> focus-gap: 2px;
+    // The hover caption (mockup `tip`): 30 px high, radius 8, 12.5 px text, 12 px of padding.
+    out property <length> caption-height: 30px;
+    out property <length> caption-radius: 8px;
+    out property <length> caption-font-size: 12.5px;
+    out property <length> caption-padding: 12px;
+    // SPEC §7: the fan opens in 180 ms and closes in 140 ms; the slide to a corner takes 180 ms;
+    // the load ring follows the progress in 120 ms and fades 400 ms after the load ends.
+    out property <duration> fan-open-time: 180ms;
+    out property <duration> fan-close-time: 140ms;
+    out property <duration> slide-time: 180ms;
+    out property <duration> progress-time: 120ms;
+    out property <duration> ring-fade-time: 400ms;
+    // The fan grows from this scale to 1 about the dial's centre while it opens.
+    out property <float> fan-start-scale: 0.92;
+}
+
 // Fills the overlay area the host gives it (the page area: below the toolbar, above the dock's
 // band). Only the dial (and, while fanned out, the scrim and the fan) take pointer input.
 export component CornerDial inherits Rectangle {
@@ -106,11 +139,438 @@ export component CornerDial inherits Rectangle {
     callback drag-moved(length, length);
     callback drop(int, int);
     callback drag-cancelled();
+    // ADDED to the contract (Slint does not let a component assign its own `in` property, so
+    // `focused-tab` cannot be moved from inside): an arrow key moved the keyboard focus to this tab
+    // id (`step-focus`). The fan shows it at once; the host sets `focused-tab` to the same id to keep
+    // the two in step.
+    callback focus-moved(int);
 
-    // SCAFFOLD: the body is item 3 `component` of the lane.
-    ring := RingBands {
-        visible: false;
-        ring-size: root.ring-size;
+    // The tab the keys have focused: `focused-tab` until an arrow key moves it, and again whenever
+    // the host sets `focused-tab`.
+    property <int> keyboard-tab: root.focused-tab;
+    changed focused-tab => {
+        root.keyboard-tab = root.focused-tab;
+    }
+
+    // Where the dial rests, and where a drag has put it. Only `place` and `clamp-drag` decide these.
+    property <DialPlacement> rest: root.place(root.corner, root.width, root.height);
+    property <DialPlacement> held: { x: 0px, y: 0px };
+    property <bool> dragging: false;
+    // The dial's centre: the pointer's while dragging, else the resting place. It slides to a new
+    // rest in 180 ms; a drag is followed without delay.
+    property <length> cx: root.dragging ? root.held.x : root.rest.x;
+    property <length> cy: root.dragging ? root.held.y : root.rest.y;
+    animate cx {
+        duration: root.dragging || root.reduce-motion ? 0ms : DialMetrics.slide-time;
+        easing: ease-out;
+    }
+    animate cy {
+        duration: root.dragging || root.reduce-motion ? 0ms : DialMetrics.slide-time;
+        easing: ease-out;
+    }
+    // 0 = closed, 1 = fanned out. Everything of the fan is drawn and active only above 0.
+    property <bool> fan-open: root.expanded && !root.suppressed && !root.dragging;
+    property <float> fan-progress: root.fan-open ? 1.0 : 0.0;
+    animate fan-progress {
+        duration: root.reduce-motion ? 0ms : (root.fan-open ? DialMetrics.fan-open-time : DialMetrics.fan-close-time);
+        easing: ease-out;
+    }
+    // The load ring (D10). `sweep` is the share of the ring the progress arc covers; it runs back
+    // to 0 while the arc is hidden, so the next load starts from 12 o'clock.
+    property <bool> progress-unknown: root.progress < 0;
+    property <float> sweep: root.loading && !root.progress-unknown ? Math.min(root.progress, 1.0) : 0.0;
+    animate sweep {
+        duration: root.reduce-motion ? 0ms : DialMetrics.progress-time;
+    }
+    // 0 while loading; when the load ends it is 1 at once and runs down to 0 in 400 ms. It is the
+    // fade of the full ring that the progress arc turns into when the load ends.
+    property <float> ring-hold: 0.0;
+    states [
+        loading when root.loading: {
+            ring-hold: 1.0;
+            in {
+                animate ring-hold {
+                    duration: 0ms;
+                }
+            }
+            out {
+                animate ring-hold {
+                    duration: root.reduce-motion ? 0ms : DialMetrics.ring-fade-time;
+                }
+            }
+        }
+    ]
+    // `ring-hold` is read in both states on purpose: Slint starts an animation from the value a
+    // property last had when it was read, and an unread one would jump to its end.
+    property <float> full-ring-opacity: Math.min(root.ring-hold, root.loading ? (root.sweep > 0.999 ? 1.0 : 0.0) : 1.0);
+    // The arc that turns once a second while the progress is unknown (a quarter of the ring).
+    property <bool> spinning: root.loading && root.progress-unknown && root.animate-spinners && !root.reduce-motion;
+    property <angle> arc-start: root.spinning ? Math.mod(animation-tick() / 1s, 1.0) * 360deg : 0deg;
+    property <float> arc-share: root.progress-unknown ? 0.25 : root.sweep;
+    property <angle> arc-end: root.arc-start + root.arc-share * 360deg;
+
+    // The component's own ways of changing `expanded`: each tells the host with `toggled`.
+    function toggle() {
+        root.expanded = !root.expanded;
+        root.toggled(root.expanded);
+        if root.expanded {
+            dial-focus.focus();
+        }
+    }
+    function close() {
+        if root.expanded {
+            root.expanded = false;
+            root.toggled(false);
+        }
+        root.close-requested();
+    }
+    function move-focus(step: int) {
+        let next = root.step-focus(root.keyboard-tab, step);
+        root.keyboard-tab = next;
+        root.focus-moved(next);
+    }
+    function finish-drag() {
+        let target = root.snap-corner(root.held.x, root.held.y, root.width, root.height, root.corner);
+        root.dragging = false;
+        if target != root.corner {
+            root.corner = target;
+            root.corner-changed(target);
+        }
+    }
+
+    changed suppressed => {
+        if root.suppressed {
+            root.dragging = false;
+            root.expanded = false;
+        }
+    }
+
+    // Everything is drawn here, so that `suppressed` removes it from the screen, from pointer input
+    // and from the accessibility tree at once.
+    Rectangle {
+        visible: !root.suppressed;
+
+        // Below the fan: dims the page while it is fanned out. A press on it closes the fan.
+        scrim := Rectangle {
+            visible: root.fan-progress > 0.0;
+            opacity: root.fan-progress;
+            background: ChromePalette.scrim.transparentize(0.4);
+
+            TouchArea {
+                enabled: root.expanded;
+                pointer-event(event) => {
+                    if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                        root.close();
+                    }
+                }
+            }
+        }
+
+        // The fan: a RingBands box centred on the dial. It grows from 92 % about the dial's centre.
+        ring := RingBands {
+            x: root.cx - root.ring-size / 2;
+            y: root.cy - root.ring-size / 2;
+            width: root.ring-size;
+            height: root.ring-size;
+            visible: root.fan-progress > 0.0;
+            opacity: root.fan-progress;
+            transform-scale: DialMetrics.fan-start-scale + (1.0 - DialMetrics.fan-start-scale) * root.fan-progress;
+            ring-size: root.ring-size;
+            groups: root.groups;
+            tabs: root.tabs;
+            segments: root.segments;
+            lifted-segments: root.lifted-segments;
+            segment-labels: root.segment-labels;
+            label-bands: root.label-bands;
+            label-glyphs: root.label-glyphs;
+            flags: root.flags;
+            hovered-tab <=> root.hovered-tab;
+            focused-tab: root.keyboard-tab;
+            interactive: root.expanded && !root.suppressed && !root.dragging;
+            accessible-name: "Tab dial";
+            reduce-motion: root.reduce-motion;
+            animate-spinners: root.animate-spinners;
+
+            hit-test(x, y, hovered) => {
+                return root.hit-test(x, y, hovered);
+            }
+            drop-target(x, y, dragged) => {
+                return root.drop-target(x, y, dragged);
+            }
+            tab-activated(id) => {
+                root.tab-activated(id);
+            }
+            tab-hovered(id) => {
+                root.tab-hovered(id);
+            }
+            group-activated(id) => {
+                root.group-activated(id);
+            }
+            tab-close(id) => {
+                root.tab-close(id);
+            }
+            tab-mute(id) => {
+                root.tab-mute(id);
+            }
+            drag-started(id) => {
+                root.drag-started(id);
+            }
+            drag-moved(x, y) => {
+                root.drag-moved(x, y);
+            }
+            drop(group, index) => {
+                root.drop(group, index);
+            }
+            drag-cancelled => {
+                root.drag-cancelled();
+            }
+            background-pressed => {
+                root.close();
+            }
+        }
+
+        // The hover caption, in the fan box's coordinates.
+        caption-box := Rectangle {
+            x: root.cx - root.ring-size / 2 + root.caption.x;
+            y: root.cy - root.ring-size / 2 + root.caption.y;
+            width: caption-text.preferred-width + 2 * DialMetrics.caption-padding;
+            height: DialMetrics.caption-height;
+            visible: root.fan-progress > 0.0 && root.hovered-tab >= 0 && root.caption.text != "";
+            opacity: root.fan-progress;
+            border-radius: DialMetrics.caption-radius;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+            background: ChromePalette.popup-background;
+
+            caption-text := Text {
+                x: DialMetrics.caption-padding;
+                y: (parent.height - self.height) / 2;
+                text: root.caption.text;
+                color: ChromePalette.text;
+                font-size: DialMetrics.caption-font-size;
+                font-weight: 600;
+                accessible-role: none;
+            }
+        }
+
+        // The dial. The button is this rectangle; the planet, the ring and the letter are decoration.
+        dial := Rectangle {
+            x: root.cx - self.width / 2;
+            y: root.cy - self.height / 2;
+            width: DialMetrics.diameter;
+            height: DialMetrics.diameter;
+            border-radius: self.width / 2;
+            background: ChromePalette.popup-background;
+            drop-shadow-color: ChromePalette.shadow;
+            drop-shadow-offset-y: 6px;
+            drop-shadow-blur: 12px;
+
+            accessible-role: button;
+            accessible-label: root.dial-label == "" ? "Tab dial" : root.dial-label;
+            accessible-expandable: true;
+            accessible-expanded: root.expanded;
+            accessible-action-default => {
+                root.toggle();
+            }
+            accessible-action-expand => {
+                if !root.expanded {
+                    root.toggle();
+                }
+            }
+
+            dial-focus := FocusScope {
+                key-pressed(event) => {
+                    if root.suppressed || event.modifiers.control || event.modifiers.alt || event.modifiers.meta {
+                        return reject;
+                    }
+                    if event.text == Key.Escape && root.expanded {
+                        root.close();
+                        return accept;
+                    }
+                    if event.text == " " || event.text == Key.Return {
+                        if !event.repeat {
+                            if root.expanded && root.keyboard-tab >= 0 {
+                                root.tab-activated(root.keyboard-tab);
+                            } else {
+                                root.toggle();
+                            }
+                        }
+                        return accept;
+                    }
+                    if root.expanded && (event.text == Key.LeftArrow || event.text == Key.UpArrow) {
+                        root.move-focus(-1);
+                        return accept;
+                    }
+                    if root.expanded && (event.text == Key.RightArrow || event.text == Key.DownArrow) {
+                        root.move-focus(1);
+                        return accept;
+                    }
+                    reject
+                }
+            }
+
+            // The load ring's track: always there, so the dial keeps a rim.
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: DialMetrics.diameter + DialMetrics.ring-width;
+                height: self.width;
+                border-radius: self.width / 2;
+                border-width: DialMetrics.ring-width;
+                border-color: ChromePalette.separator;
+            }
+
+            // The whole ring in `accent`: the end of a load, which fades out, and a progress of 100 %.
+            full-ring := Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: DialMetrics.diameter + DialMetrics.ring-width;
+                height: self.width;
+                visible: root.full-ring-opacity > 0.0;
+                opacity: root.full-ring-opacity;
+                border-radius: self.width / 2;
+                border-width: DialMetrics.ring-width;
+                border-color: ChromePalette.accent;
+            }
+
+            // The progress arc, from 12 o'clock clockwise (or the quarter arc that turns).
+            arc := Path {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: DialMetrics.diameter + DialMetrics.ring-width;
+                height: self.width;
+                viewbox-width: self.width / 1px;
+                viewbox-height: self.height / 1px;
+                visible: root.loading && root.arc-share > 0.001 && root.arc-share < 0.999;
+                stroke: ChromePalette.accent;
+                stroke-width: DialMetrics.ring-width;
+
+                MoveTo {
+                    x: (arc.width / 2 + DialMetrics.diameter / 2 * Math.sin(root.arc-start)) / 1px;
+                    y: (arc.height / 2 - DialMetrics.diameter / 2 * Math.cos(root.arc-start)) / 1px;
+                }
+                ArcTo {
+                    x: (arc.width / 2 + DialMetrics.diameter / 2 * Math.sin(root.arc-end)) / 1px;
+                    y: (arc.height / 2 - DialMetrics.diameter / 2 * Math.cos(root.arc-end)) / 1px;
+                    radius-x: DialMetrics.diameter / 2 / 1px;
+                    radius-y: DialMetrics.diameter / 2 / 1px;
+                    large-arc: root.arc-share > 0.5;
+                    sweep: true;
+                }
+            }
+
+            // The planet: the active group's colour, lit from the upper left (the mockup's
+            // gradient: centre at 35 % / 30 %, radius 75 %, white-ish at 0, the colour at 60 %, dark
+            // at 100 %). Slint's radial gradient is centred in its box and ends at the box's
+            // corner, so a box of four radii, placed on the highlight and clipped to the planet,
+            // gives the same shape (stops at 0, 31.8 % and 53 % of the half-diagonal).
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: 2 * DialMetrics.planet-radius;
+                height: self.width;
+                border-radius: self.width / 2;
+                clip: true;
+
+                Rectangle {
+                    x: 0.35 * parent.width - self.width / 2;
+                    y: 0.30 * parent.height - self.height / 2;
+                    width: 2 * parent.width;
+                    height: self.width;
+                    background: @radial-gradient(circle,
+                        root.active-colour.brighter(0.4) 0%,
+                        root.active-colour 31.8%,
+                        root.active-colour.darker(0.25) 53%,
+                        root.active-colour.darker(0.25) 100%);
+                }
+            }
+
+            // The favicon, or the first letter of the host on a chip.
+            if root.has-favicon: Image {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: DialMetrics.favicon-size;
+                height: DialMetrics.favicon-size;
+                source: root.favicon;
+                image-fit: contain;
+                accessible-role: none;
+            }
+            if !root.has-favicon && root.fallback-letter != "": Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: DialMetrics.favicon-size;
+                height: DialMetrics.favicon-size;
+                border-radius: self.width * 0.26;
+                background: ChromePalette.popup-background;
+
+                Text {
+                    text: root.fallback-letter;
+                    color: ChromePalette.text-secondary;
+                    font-size: parent.width * 0.62;
+                    font-weight: 700;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    accessible-role: none;
+                }
+            }
+
+            // The 2 px focus ring, outside the load ring.
+            focus-ring := Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: DialMetrics.diameter + DialMetrics.ring-width + 2 * (DialMetrics.focus-gap + DialMetrics.focus-width);
+                height: self.width;
+                visible: dial-focus.has-focus;
+                border-radius: self.width / 2;
+                border-width: DialMetrics.focus-width;
+                border-color: ChromePalette.focus-ring;
+            }
+
+            // A click toggles the fan; moving more than 6 px with the button down drags the dial.
+            touch := TouchArea {
+                property <length> pressed-at-x;
+                property <length> pressed-at-y;
+                property <length> grab-x;
+                property <length> grab-y;
+                pointer-event(event) => {
+                    if event.button == PointerEventButton.left && event.kind == PointerEventKind.down {
+                        self.pressed-at-x = dial.x + self.mouse-x;
+                        self.pressed-at-y = dial.y + self.mouse-y;
+                        self.grab-x = self.pressed-at-x - root.cx;
+                        self.grab-y = self.pressed-at-y - root.cy;
+                        dial-focus.focus();
+                    }
+                    if root.dragging && (event.kind == PointerEventKind.cancel || (event.button == PointerEventButton.left && event.kind == PointerEventKind.up)) {
+                        root.finish-drag();
+                    }
+                }
+                moved => {
+                    // The pointer in the component's coordinates: the dial moves under it while it drags.
+                    let px = dial.x + self.mouse-x;
+                    let py = dial.y + self.mouse-y;
+                    if !root.dragging {
+                        let travel = Math.sqrt(((px - self.pressed-at-x) / 1px) * ((px - self.pressed-at-x) / 1px)
+                            + ((py - self.pressed-at-y) / 1px) * ((py - self.pressed-at-y) / 1px)) * 1px;
+                        if travel > DialMetrics.drag-threshold {
+                            if root.expanded {
+                                root.expanded = false;
+                                root.toggled(false);
+                            }
+                            root.held = { x: root.cx, y: root.cy };
+                            root.dragging = true;
+                        }
+                    }
+                    if root.dragging {
+                        root.held = root.clamp-drag(px - self.grab-x, py - self.grab-y, root.width, root.height);
+                    }
+                }
+                clicked => {
+                    if !root.dragging {
+                        root.toggle();
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -165,10 +625,35 @@ export component CornerDialPreview inherits Window {
     callback drag-moved <=> dial.drag-moved;
     callback drop <=> dial.drop;
     callback drag-cancelled <=> dial.drag-cancelled;
+    callback focus-moved <=> dial.focus-moved;
 
-    // The page stand-in (not part of the contract).
+    // The page stand-in (not part of the contract): a header, a picture block and lines of text,
+    // so that the scrim has something to dim. None of it takes pointer input.
     Rectangle {
         background: ChromePalette.content-background;
+
+        Rectangle {
+            x: 0px;
+            y: 0px;
+            height: 47px;
+            background: ChromePalette.toolbar-background;
+        }
+        Rectangle {
+            x: 278px;
+            y: 200px;
+            width: 953px;
+            height: 348px;
+            border-radius: 12px;
+            background: ChromePalette.separator;
+        }
+        for line[index] in 8: Rectangle {
+            x: 278px;
+            y: 600px + index * 32px;
+            width: index == 3 || index == 7 ? 640px : 953px;
+            height: 10px;
+            border-radius: 5px;
+            background: ChromePalette.separator;
+        }
     }
 
     dial := CornerDial {
