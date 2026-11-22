@@ -32,20 +32,32 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   logged the whole request header map; they now go through `header_for_log` and `headers_for_log` in `mercury_log.rs`,
   which replace the value of `Cookie`, `Set-Cookie`, `Authorization` and `Proxy-Authorization` (case-insensitively) with
   `"<redacted>"` and print other headers as before.
-- **Why:** session cookies and credentials reached the log at `info` and `debug`. Not changed: URL logging at `info`
-  (`http_network_fetch` still prints every URL, query strings included; a follow-up).
+  (d) Train-22 security review, finding 5: the URLs that `http_loader.rs` logged (`http_network_fetch`, lines about 1976,
+  2188, 2285, 2336, 2418, 2447, 2453) and that `websocket_loader.rs` logged (lines about 129, 311, 363, 366) now go through
+  `url_for_log` in `mercury_log.rs`: scheme, host, port and path, with no user name, password, query string or fragment
+  (a `data:`, `blob:` or `javascript:` URL shows its scheme only). The WebSocket DOM actions, DOM messages and stream
+  messages (`trace`, lines about 178, 217, 241) print only the names of their variants through `variant_for_log`, never the
+  message body.
+- **Why:** session cookies and credentials reached the log at `info` and `debug`; query strings (tokens) and
+  `user:password@` URLs reached it at `info`, and WebSocket message bodies at `trace`. Not changed: other URL logs outside
+  these two files (the `fetch/` and `connector.rs` ones are at `debug`/`trace` and print what the page asked for; a
+  follow-up if the log policy wants them redacted too).
 - **Tested by:** the unit tests in `mercury_log.rs` (29 with the SVG ones below), run in a scratch crate that includes the two files with `#[path]` (see "Testing a vendored crate" in `docs/developer-guide/vendored-patches.md`: cargo refuses `-p servo-net` outside the crate's own workspace, because it has dev-dependencies). They are: redaction of each
   name and of mixed case, other headers unchanged, an empty value, a full map with two `Set-Cookie` entries; and
   `include_str!` guards: `the_cookie_files_do_not_log_a_cookie_value` fails if a logging call in `cookie_storage.rs` or
   `cookie.rs` logs anything but the cookie's name, domain, path or the sent count;
   `the_http_loader_logs_headers_only_through_the_redacting_helpers` fails if `http_loader.rs` logs a header or header map
-  outside the two helpers; `the_guard_finds_the_lines_servo_used_to_have` proves the guard flags Servo's old lines.
+  outside the two helpers; `the_guard_finds_the_lines_servo_used_to_have` proves the guard flags Servo's old lines. For (d):
+  `a_url_is_shown_without_credentials_query_and_fragment`, `a_url_that_carries_its_content_shows_only_its_scheme`,
+  `a_message_is_shown_by_its_variant_not_its_content`, and the guard
+  `the_http_and_websocket_loaders_log_urls_and_messages_only_through_the_helpers` (with
+  `the_url_guard_finds_the_lines_servo_used_to_have`).
 - **Drop when:** Servo no longer logs these values; then delete `mercury_log.rs` and its call sites.
 
 ### 3. SVG nesting guard (decision D8) — `image_cache.rs`, `lib.rs`, new `mercury_svg.rs`
 
 - **What:** Mercury's replacement for servo/servo#49835, which sets `usvg::Options::max_depth` to 500 (an option that exists from
-  usvg 0.50; the tree has 0.48.1, and moving resvg also touches the non-vendored `servo-malloc-size-of`). Three parts:
+  usvg 0.50; the tree has 0.48.1, and moving resvg also touches the non-vendored `servo-malloc-size-of`). Four parts:
   1. `parse_svg_document_in_memory` (0.8.0 line about 85) calls `mercury_svg::parse_tree(bytes, &usvg_options)` instead of
      `usvg::Tree::from_data`. `parse_tree` does what `from_data` does (gunzip SVGZ, UTF-8, roxmltree with `allow_dtd`), counts
      the nesting of the elements **on the parsed document** (so entities declared in a `<!DOCTYPE>` that expand to elements are
@@ -59,6 +71,14 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
   3. `parse_tree` runs on a scoped thread of its own with a 32 MiB stack (`PARSE_STACK_BYTES`; if the thread cannot be started it
      parses on the calling thread and logs it). This is what makes the limit hold against `<use>`: usvg's recursion depth is the
      depth of the tree **after** `<use>` expansion (up to its own limit of 1024), not the depth in the file.
+  4. SVGZ size limit (train-22 security review, finding 2): `unpack` no longer calls `usvg::decompress_svgz`, which reads gzip to
+     the end with no limit in usvg 0.48.1 (a gzip bomb of a few kilobytes fills the memory). It reads through
+     `flate2::read::GzDecoder` limited to `MAX_SVG_BYTES` + 1 = 32 MiB + 1 and refuses a larger result (top level: `Err("Not a
+     valid SVG document")`, logged; nested `data:` image: left out before usvg's own resolver can unpack it again). This is the
+     only reason for `flate2` in `[dependencies]` of `Cargo.toml` (it was a dev-dependency; marked `# Mercury:`). Tests: a
+     1 GiB gzip bomb (about 5 MB of gzip) is refused, exactly 32 MiB loads and 32 MiB + 1 is refused, and a bomb in a nested
+     `data:` image leaves the image out. Dropped together with the file at the resvg 0.50 bump (check then whether usvg's
+     `decompress_svgz` is still unbounded, and keep the limit if so).
 - **What was measured (usvg 0.48.1, a 2 MiB thread, as a rayon worker's, release build; probe and numbers in
   `.superpowers/sdd/k0-engine-base-logs/svg-probe-*.txt`):** usvg refuses more than 1024 levels by itself (`NodesLimitReached`,
   initial depth 0), so the first version's 100,000-level test documents never reached the converter; the crash is in the range
