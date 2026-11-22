@@ -6106,6 +6106,36 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-mse"
+version = "0.2.0"
+dependencies = [
+ "log",
+ "mercury-mse-testkit",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mercury-mse-gst"
+version = "0.2.0"
+dependencies = [
+ "glib",
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-base",
+ "log",
+ "mercury-mse",
+ "mercury-mse-testkit",
+]
+
+[[package]]
+name = "mercury-mse-testkit"
+version = "0.2.0"
+dependencies = [
+ "thiserror 2.0.21",
+]
+
+[[package]]
 name = "mercury-option-keys"
 version = "0.2.0"
 dependencies = [
@@ -10232,6 +10262,8 @@ dependencies = [
  "gstreamer-video",
  "gstreamer-webrtc",
  "log",
+ "mercury-mse",
+ "mercury-mse-gst",
  "servo-base",
  "servo-media",
  "servo-media-audio",
@@ -10314,6 +10346,7 @@ name = "servo-media-player"
 version = "0.8.0"
 dependencies = [
  "malloc_size_of_derive",
+ "mercury-mse",
  "serde",
  "servo-base",
  "servo-malloc-size-of",

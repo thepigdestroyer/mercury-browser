@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# Test support for the MSE lane (med-1), copied from the sp-mse spike's `mse-segments` (branch
+# lane/sp-mse, commit 4790f0a): splits fragmented MP4 and WebM files into the segments a page appends and
+# loads the ten committed fixtures. A dev-dependency of mercury-mse and mercury-mse-gst only: it is never
+# linked into the browser, and the parsers of mercury-mse do not depend on it.
+[package]
+name = "mercury-mse-testkit"
+description = "Test support for Mercury's MSE: splits fragmented MP4 and WebM files into init and media segments and loads the committed fixtures. Not part of the browser."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+thiserror.workspace = true

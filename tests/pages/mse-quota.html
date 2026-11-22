@@ -1,0 +1,151 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSE quota</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 16px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 12px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #sum { font: bold 18px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 14px/1.45 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+  video { background: #202020; display: block; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>MSE quota</h1>
+<p class="note">Fill the buffer until QuotaExceededError, then free memory with remove() and append again.</p>
+<div id="sum">running</div>
+<video id="v" width="320" height="180" muted playsinline></video>
+<div id="out"></div>
+<!--
+  Mercury test page for Media Source Extensions (lane med-1, MSE by Plan B). NOT RUN yet: the screen was
+  locked when it was written. It needs a browser started with MERCURY_DEV_MSE=1 (the preference
+  dom_media_source_enabled is off otherwise) and the fixtures of crates/mercury-mse-testkit/fixtures served
+  by scripts/serve-tests.sh under /mse-fixtures/ (override with ?fixtures=<base url>). Every check prints one
+  line that starts with PASS or FAIL (INFO lines only print a value); the result is also in document.title,
+  which ends with "(done)" when the page has finished. See docs/developer-guide/media-source.md.
+  The fixtures are 8 s at 25 fps, red for the first 4 s and blue for the last 4 s, a key frame every 2 s.
+-->
+<script>
+"use strict";
+const params = new URLSearchParams(location.search);
+const BASE = params.get("fixtures") || "/mse-fixtures/";
+const TITLE = "MSE quota";
+const out = document.getElementById("out");
+const video = document.getElementById("v");
+let passed = 0, failed = 0;
+function line(cls, text) { const d = document.createElement("div"); d.className = "line " + cls; d.textContent = text; out.appendChild(d); }
+function check(name, ok, detail) {
+  if (ok) { passed++; line("pass", "PASS " + name); } else { failed++; line("fail", "FAIL " + name + (detail !== undefined ? ": " + detail : "")); }
+  return ok;
+}
+function info(text) { line("info", "INFO " + text); }
+function finish(error) {
+  if (error) { failed++; line("fail", "FAIL the page stopped: " + (error && error.stack || error)); }
+  const text = passed + " PASS, " + failed + " FAIL";
+  document.getElementById("sum").textContent = text;
+  document.title = TITLE + ": " + text + " (done)";
+}
+const sleep = ms => new Promise(resolve => setTimeout(resolve, ms));
+function once(target, name, ms) {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(() => { target.removeEventListener(name, handler); reject(new Error("timeout waiting for " + name)); }, ms || 10000);
+    const handler = event => { clearTimeout(timer); resolve(event); };
+    target.addEventListener(name, handler, { once: true });
+  });
+}
+async function until(predicate, ms, what) {
+  const end = performance.now() + (ms || 10000);
+  while (!predicate()) { if (performance.now() > end) throw new Error("timeout waiting for " + what); await sleep(50); }
+}
+async function bytes(path) {
+  const response = await fetch(BASE + path);
+  if (!response.ok) throw new Error(path + ": HTTP " + response.status);
+  return new Uint8Array(await response.arrayBuffer());
+}
+// Fragmented MP4: the initialization segment is everything before the first styp (or moof), each media
+// segment starts at a styp (or at a moof that no styp precedes).
+function splitMp4(b) {
+  const view = new DataView(b.buffer, b.byteOffset, b.byteLength);
+  let init = null, current = -1, previous = ""; const segments = [];
+  for (let p = 0; p + 8 <= b.length;) {
+    let size = view.getUint32(p);
+    const type = String.fromCharCode(b[p + 4], b[p + 5], b[p + 6], b[p + 7]);
+    if (size === 1) size = Number(view.getBigUint64(p + 8)); else if (size === 0) size = b.length - p;
+    if (size < 8) break;
+    if (type === "styp" || (type === "moof" && previous !== "styp")) {
+      if (init === null) init = b.subarray(0, p); else segments.push(b.subarray(current, p));
+      current = p;
+    }
+    previous = type; p += size;
+  }
+  if (current >= 0) segments.push(b.subarray(current));
+  return { init, segments };
+}
+async function fixture(path) { return splitMp4(await bytes(path)); }
+const H264_LOW = 'video/mp4; codecs="avc1.42C00C"', H264_HIGH = 'video/mp4; codecs="avc1.42C01E"', AAC = 'audio/mp4; codecs="mp4a.40.2"';
+async function openSource() {
+  const mediaSource = new MediaSource();
+  const url = URL.createObjectURL(mediaSource);
+  video.src = url;
+  await once(mediaSource, "sourceopen");
+  return { mediaSource, url };
+}
+async function append(sourceBuffer, data) {
+  sourceBuffer.appendBuffer(data);
+  await once(sourceBuffer, "updateend");
+}
+function ranges(timeRanges) { const r = []; for (let i = 0; i < timeRanges.length; i++) r.push([+timeRanges.start(i).toFixed(3), +timeRanges.end(i).toFixed(3)]); return JSON.stringify(r); }
+function meanColour() {
+  try {
+    const canvas = document.createElement("canvas"); canvas.width = 16; canvas.height = 9;
+    const context = canvas.getContext("2d"); context.drawImage(video, 0, 0, 16, 9);
+    const data = context.getImageData(0, 0, 16, 9).data; let r = 0, b = 0;
+    for (let i = 0; i < data.length; i += 4) { r += data[i]; b += data[i + 2]; }
+    return { r: r / 144, b: b / 144 };
+  } catch (error) { return null; }
+}
+const isRed = c => c && c.r > c.b + 60, isBlue = c => c && c.b > c.r + 60;
+if (typeof MediaSource === "undefined") {
+  check("MediaSource exists (start the browser with MERCURY_DEV_MSE=1)", false);
+  finish();
+} else {
+  (async () => {
+    const { mediaSource } = await openSource();
+    const sb = mediaSource.addSourceBuffer(H264_HIGH);
+    sb.mode = "sequence";
+    check("mode is sequence", sb.mode === "sequence");
+    const f = await fixture("fmp4/video-h264-high.mp4");
+    await append(sb, f.init);
+    // About 1 MB per append: sixteen copies of the four media segments, joined back to back by sequence mode.
+    const parts = []; for (let i = 0; i < 16; i++) for (const s of f.segments) parts.push(s);
+    const size = parts.reduce((n, s) => n + s.length, 0), big = new Uint8Array(size);
+    let at = 0; for (const s of parts) { big.set(s, at); at += s.length; }
+    let appends = 0, error = null;
+    for (; appends < 400; appends++) {
+      try { sb.appendBuffer(big); } catch (e) { error = e; break; }
+      await once(sb, "updateend", 20000);
+      if (mediaSource.readyState !== "open") break;
+    }
+    info(appends + " appends of " + size + " bytes before the stop (the video quota is 150 MiB)");
+    check("the buffer fills up with a QuotaExceededError", error !== null && error.name === "QuotaExceededError", error && error.name);
+    check("the media source is still open", mediaSource.readyState === "open", mediaSource.readyState);
+    const end = sb.buffered.length ? sb.buffered.end(sb.buffered.length - 1) : 0;
+    info("buffered ends at " + end.toFixed(1) + " s");
+    sb.remove(0, end / 2);
+    await once(sb, "updateend", 20000);
+    check("remove() frees memory at once", true);
+    let again = null;
+    try { sb.appendBuffer(big); await once(sb, "updateend", 20000); } catch (e) { again = e; }
+    check("an append works again after remove()", again === null, again && again.name);
+  })().then(() => finish(), error => finish(error));
+}
+</script>
+</body>
+</html>

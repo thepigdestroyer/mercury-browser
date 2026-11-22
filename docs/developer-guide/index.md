@@ -23,8 +23,9 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 10. [Saved logins](passwords.md): the Keychain store, the password manager and the worker that keeps Keychain calls off the interface thread.
 11. [Camera and microphone](media-capture.md): how pages get them, and testing with fake devices only.
 12. [PDF viewer](pdf.md): how a PDF reaches the viewer, where PDFium comes from and how it is pinned, the helper process and its protocol, and the limits.
-13. [Releases](releases.md): the macOS disk image, the Linux archive, the update manifest and the documentation site.
-14. [Contributing](contributing.md): how to prepare a focused, reviewable change.
+13. [Media Source Extensions](media-source.md): how `MediaSource` and `SourceBuffer` run on Mercury's own backend, the development switch, and the test pages.
+14. [Releases](releases.md): the macOS disk image, the Linux archive, the update manifest and the documentation site.
+15. [Contributing](contributing.md): how to prepare a focused, reviewable change.
 
 ## Repository map
 

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 
 //! The workspace members the fast CI jobs build: those whose dependency closure has neither
-//! `servo` nor `slint`. Run through `scripts/ci/light-crates.sh`, which feeds it
+//! `servo`, `slint` nor `gstreamer`. Run through `scripts/ci/light-crates.sh`, which feeds it
 //! `cargo metadata`.
 //!
 //!     cargo metadata --format-version 1 | light-crates            # -p talaria-core -p …
@@ -51,7 +51,7 @@ fn main() -> ExitCode {
     if light.is_empty() {
         eprintln!(
             "light-crates: no workspace member is free of {}",
-            HEAVY.join(" and ")
+            HEAVY.join(", ")
         );
         return ExitCode::FAILURE;
     }

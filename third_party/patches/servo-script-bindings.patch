@@ -14,6 +14,27 @@ diff --git a/Cargo.toml b/Cargo.toml
  features = [
      "intl",
      "libz-sys",
+diff --git a/codegen/Bindings.conf b/codegen/Bindings.conf
+--- a/codegen/Bindings.conf
++++ b/codegen/Bindings.conf
+@@ -935,6 +935,17 @@
+     'cx': ['GetMetadata'],
+ },
+
++# Mercury: (MED-1) Media Source Extensions (servo/servo#47269, decomoraes). `weakReferenceable`: the
++# backend's event callback holds a weak reference to the MediaSource, like the media element's does.
++'MediaSource': {
++    'cx': ['AddSourceBuffer', 'EndOfStream', 'RemoveSourceBuffer'],
++    'weakReferenceable': True,
++},
++
++'SourceBuffer': {
++    'cx': ['GetBuffered'],
++},
++
+ 'MediaStreamTrack': {
+     'cx': ['Clone'],
+ },
 diff --git a/codegen/codegen.py b/codegen/codegen.py
 --- a/codegen/codegen.py
 +++ b/codegen/codegen.py
@@ -49,6 +70,19 @@ diff --git a/root.rs b/root.rs
          let _ = mem::transmute::<Dom<T>, &T>;
          unsafe { &*(self as *const [Dom<T>] as *const [&T]) }
      }
+diff --git a/webidls/HTMLMediaElement.webidl b/webidls/HTMLMediaElement.webidl
+--- a/webidls/HTMLMediaElement.webidl
++++ b/webidls/HTMLMediaElement.webidl
+@@ -5,7 +5,8 @@
+ // https://html.spec.whatwg.org/multipage/#htmlmediaelement
+
+ enum CanPlayTypeResult { "" /* empty string */, "maybe", "probably" };
+-typedef (MediaStream /*or MediaSource */ or Blob) MediaProvider;
++// Mercury: (MED-1) MediaSource joins the union (the generated name is MediaStreamOrMediaSourceOrBlob).
++typedef (MediaStream or MediaSource or Blob) MediaProvider;
+
+ [Exposed=Window, Abstract]
+ interface HTMLMediaElement : HTMLElement {
 diff --git a/webidls/MediaDevices.webidl b/webidls/MediaDevices.webidl
 --- a/webidls/MediaDevices.webidl
 +++ b/webidls/MediaDevices.webidl
@@ -62,6 +96,55 @@ diff --git a/webidls/MediaDevices.webidl b/webidls/MediaDevices.webidl
  };
 
  partial interface MediaDevices {
+diff --git a/webidls/MediaSource.webidl b/webidls/MediaSource.webidl
+new file mode 100644
+--- /dev/null
++++ b/webidls/MediaSource.webidl
+@@ -0,0 +1,44 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: (MED-1) carried from servo/servo#47269 by decomoraes ("script: Implement the Media Source
++// Extensions API"), MPL-2.0, with two changes: the constructor may throw (a backend that cannot
++// play MSE refuses it), and the interface is behind `dom_media_source_enabled` (default off).
++
++// https://w3c.github.io/media-source/#idl-def-mediasource
++
++enum ReadyState {
++  "closed",
++  "open",
++  "ended",
++};
++
++enum EndOfStreamError {
++  "network",
++  "decode",
++};
++
++[Exposed=Window, Pref="dom_media_source_enabled"]
++interface MediaSource : EventTarget {
++  [Throws] constructor();
++
++  readonly attribute SourceBufferList sourceBuffers;
++  readonly attribute SourceBufferList activeSourceBuffers;
++  readonly attribute ReadyState readyState;
++
++  [SetterThrows] attribute unrestricted double duration;
++
++  attribute EventHandler onsourceopen;
++  attribute EventHandler onsourceended;
++  attribute EventHandler onsourceclose;
++
++  static readonly attribute boolean canConstructInDedicatedWorker;
++
++  [Throws] SourceBuffer addSourceBuffer(DOMString type);
++  [Throws] undefined removeSourceBuffer(SourceBuffer sourceBuffer);
++  [Throws] undefined endOfStream(optional EndOfStreamError error);
++  [Throws] undefined setLiveSeekableRange(double start, double end);
++  [Throws] undefined clearLiveSeekableRange();
++  static boolean isTypeSupported(DOMString type);
++};
 diff --git a/webidls/MediaStreamTrack.webidl b/webidls/MediaStreamTrack.webidl
 --- a/webidls/MediaStreamTrack.webidl
 +++ b/webidls/MediaStreamTrack.webidl
@@ -213,3 +296,80 @@ diff --git a/webidls/RTCTrackEvent.webidl b/webidls/RTCTrackEvent.webidl
  interface RTCTrackEvent : Event {
      [Throws] constructor(DOMString type, RTCTrackEventInit eventInitDict);
      // readonly attribute RTCRtpReceiver           receiver;
+diff --git a/webidls/SourceBuffer.webidl b/webidls/SourceBuffer.webidl
+new file mode 100644
+--- /dev/null
++++ b/webidls/SourceBuffer.webidl
+@@ -0,0 +1,37 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: (MED-1) carried unchanged from servo/servo#47269 by decomoraes, MPL-2.0 (the interface is
++// behind `dom_media_source_enabled`, default off), except that `textTracks` is left out: this Servo's
++// `TextTrackList` is bound to a media element (listed in third_party/servo-script/MERCURY.md).
++
++// https://w3c.github.io/media-source/#idl-def-sourcebuffer
++
++enum AppendMode {
++  "segments",
++  "sequence",
++};
++
++[Exposed=Window, Pref="dom_media_source_enabled"]
++interface SourceBuffer : EventTarget {
++  [SetterThrows] attribute AppendMode mode;
++  readonly attribute boolean updating;
++  [Throws] readonly attribute TimeRanges buffered;
++  [SetterThrows] attribute double timestampOffset;
++  readonly attribute AudioTrackList audioTracks;
++  readonly attribute VideoTrackList videoTracks;
++  [SetterThrows] attribute double appendWindowStart;
++  [SetterThrows] attribute unrestricted double appendWindowEnd;
++
++  attribute EventHandler onupdatestart;
++  attribute EventHandler onupdate;
++  attribute EventHandler onupdateend;
++  attribute EventHandler onerror;
++  attribute EventHandler onabort;
++
++  [Throws] undefined appendBuffer(BufferSource data);
++  [Throws] undefined abort();
++  [Throws] undefined changeType(DOMString type);
++  [Throws] undefined remove(double start, unrestricted double end);
++};
+diff --git a/webidls/SourceBufferList.webidl b/webidls/SourceBufferList.webidl
+new file mode 100644
+--- /dev/null
++++ b/webidls/SourceBufferList.webidl
+@@ -0,0 +1,18 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: (MED-1) carried unchanged from servo/servo#47269 by decomoraes, MPL-2.0 (the interface is
++// behind `dom_media_source_enabled`, default off).
++
++// https://w3c.github.io/media-source/#idl-def-sourcebufferlist
++
++[Exposed=Window, Pref="dom_media_source_enabled"]
++interface SourceBufferList : EventTarget {
++  readonly attribute unsigned long length;
++
++  attribute EventHandler onaddsourcebuffer;
++  attribute EventHandler onremovesourcebuffer;
++
++  getter SourceBuffer (unsigned long index);
++};
+diff --git a/webidls/URL.webidl b/webidls/URL.webidl
+--- a/webidls/URL.webidl
++++ b/webidls/URL.webidl
+@@ -27,6 +27,8 @@
+
+   // https://w3c.github.io/FileAPI/#creating-revoking
+   static DOMString createObjectURL(Blob blob);
++  // Mercury: (MED-1) https://w3c.github.io/media-source/#dom-url-createobjecturl (servo/servo#47269)
++  static DOMString createObjectURL(MediaSource mediaSource);
+   static undefined revokeObjectURL(DOMString url);
+
+   USVString toJSON();
