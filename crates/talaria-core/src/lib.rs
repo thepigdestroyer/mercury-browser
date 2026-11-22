@@ -22,6 +22,7 @@ mod page_icon;
 mod page_request;
 mod site_security;
 mod tab;
+mod visibility_policy; // energy-1
 mod visits;
 mod web_view;
 mod zoom;
@@ -85,6 +86,11 @@ pub use site_security::{
     SecurityIndicator, is_local_host, main_frame_load, security_indicator, typed_https_upgrade,
 };
 pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
+// energy-1
+pub use visibility_policy::{
+    Exemption, MINIMISED_HIDE_DELAY, OCCLUDED_HIDE_DELAY, ViewVisibility, VisibilityInputs,
+    VisibilityPolicy, WindowCover,
+};
 pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};
