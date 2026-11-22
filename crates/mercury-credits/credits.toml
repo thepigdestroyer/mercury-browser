@@ -291,12 +291,13 @@ source = "pdfium-render-0.9.5 Cargo.toml (authors) and build.rs (header); LICENS
 
 # tree-sitter-html 0.23.2 (the view-source lane) says `license = "MIT"` in Cargo.toml and
 # tree-sitter.json and `@license MIT` in grammar.js, but the package ships no LICENSE file (the
-# other tree-sitter crates do). The copyright lines are the ones the package gives: its `authors`.
+# other tree-sitter crates do). The copyright line is the one of the upstream repository's LICENSE
+# file at the tag of this version (v0.23.2), read on 22 Nov 2026.
 [[clarify]]
 crate = "tree-sitter-html"
 licence = "MIT"
-copyright = "Copyright (c) Max Brunsfeld; Copyright (c) Amaan Qureshi"
-source = "tree-sitter-html-0.23.2 Cargo.toml (authors, license) and tree-sitter.json; grammar.js says @license MIT; the package has no LICENSE file"
+copyright = "Copyright (c) 2014 Max Brunsfeld"
+source = "the LICENSE file of the upstream repository at tag v0.23.2 (https://github.com/tree-sitter/tree-sitter-html/blob/v0.23.2/LICENSE); the crates.io package has no LICENSE file; Cargo.toml and tree-sitter.json say MIT, grammar.js says @license MIT"
 
 # ---------------------------------------------------------------------------------------------
 # macOS only (aarch64-apple-darwin): the Objective-C runtime's C shim. `objc2` links Apple's own

@@ -254,7 +254,9 @@ Rust crates that load and wrap the library are compiled into `mercury-browser` a
 The View Source page (`crates/mercury-view-source`) colours HTML, JavaScript and CSS with **tree-sitter**, a parsing
 library written in C. It is not downloaded as a binary: the C core and each grammar's `parser.c` are compiled into
 `mercury-browser` by their crates' build scripts (with `cc`), on Intel and on Apple Silicon alike, so there is nothing
-to pin by checksum. Every crate below is under the MIT licence, read in the package as it is in the cargo registry on
+to pin by checksum. Each grammar's `src/parser.c` (and its `grammar.json` and `node-types.json`) is **generated** by
+`tree-sitter generate` from the grammar's `grammar.js` and shipped in the crate as generated output, not written by
+hand; Mercury compiles it as it is and does not edit it. The generated parser carries the licence of its grammar. Every crate below is under the MIT licence, read in the package as it is in the cargo registry on
 20 Nov 2026, and keeps it; the copyright lines are the ones the packages give.
 
 - `tree-sitter` 0.27.2 — https://github.com/tree-sitter/tree-sitter — MIT (Copyright (c) 2018 Max Brunsfeld;
@@ -268,12 +270,12 @@ to pin by checksum. Every crate below is under the MIT licence, read in the pack
   injection of one language into another (`<script>` as JavaScript, `<style>` as CSS).
 - `tree-sitter-language` 0.1.9 — the same repository — MIT (Copyright (c) 2018 Max Brunsfeld;
   `LICENSES/MIT-tree-sitter.txt`) — the small crate through which a grammar hands its language to the library.
-- `tree-sitter-html` 0.23.2 — https://github.com/tree-sitter/tree-sitter-html — MIT (Copyright (c) Max Brunsfeld and
-  Amaan Qureshi, the crate's `authors`; `LICENSES/MIT-tree-sitter-html.txt`) — the HTML grammar and its highlight and
-  injection queries. **The package ships no licence file** (`Cargo.toml` and `tree-sitter.json` say `MIT`, and
-  `grammar.js` says `@license MIT`), so, as for `pdfium-render` above, the file in `LICENSES/` is the standard MIT text
-  with the copyright lines the package does give, and the credits page does the same (`[[clarify]]` in
-  `crates/mercury-credits/credits.toml`).
+- `tree-sitter-html` 0.23.2 — https://github.com/tree-sitter/tree-sitter-html — MIT (Copyright (c) 2014 Max
+  Brunsfeld; `LICENSES/MIT-tree-sitter-html.txt`) — the HTML grammar and its highlight and injection queries.
+  **The crates.io package ships no licence file** (`Cargo.toml` and `tree-sitter.json` say `MIT`, and `grammar.js` says
+  `@license MIT`), so the file in `LICENSES/` is the `LICENSE` of the upstream repository at tag `v0.23.2`
+  (https://github.com/tree-sitter/tree-sitter-html/blob/v0.23.2/LICENSE, read on 22 Nov 2026), with its copyright line
+  as it is there; the credits page does the same (`[[clarify]]` in `crates/mercury-credits/credits.toml`).
 - `tree-sitter-javascript` 0.25.0 — https://github.com/tree-sitter/tree-sitter-javascript — MIT (Copyright (c) 2014 Max
   Brunsfeld; `LICENSES/MIT-tree-sitter.txt`) — the JavaScript grammar and its queries.
 - `tree-sitter-css` 0.25.0 — https://github.com/tree-sitter/tree-sitter-css — MIT (Copyright (c) 2018 Max Brunsfeld;
