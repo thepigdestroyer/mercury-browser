@@ -510,7 +510,9 @@ mod tests {
         source_url: &str,
         third_party: Option<bool>,
     ) -> Verdict {
-        blocker.verdict_for(url, source_url, "script", "GET", false, third_party)
+        // `fetch` and XHR: adblock 0.13.5 applies a `$removeparam` rule that names no resource type to
+        // `xmlhttprequest` requests only (checked with the engine itself), so this is the type that gets rewritten.
+        blocker.verdict_for(url, source_url, "xmlhttprequest", "GET", false, third_party)
     }
 
     fn removeparam_blocker() -> ContentBlocker {
