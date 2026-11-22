@@ -6077,6 +6077,7 @@ version = "0.2.0"
 dependencies = [
  "adblock",
  "log",
+ "mercury-proxy",
  "mercury-settings",
  "reqwest",
  "serde",
@@ -6285,6 +6286,7 @@ version = "0.2.0"
 dependencies = [
  "encoding_rs",
  "log",
+ "mercury-proxy",
  "reqwest",
  "thiserror 2.0.21",
  "tokio",

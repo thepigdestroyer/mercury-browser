@@ -262,10 +262,11 @@ mod tests {
     }
 
     fn fetcher(server: &TestServer) -> Fetcher {
-        Fetcher::new(
+        Fetcher::with_proxy(
             Sources::local_server(&server.url("/lists/")).unwrap(),
             Timeouts::default(),
             Canceller::new(),
+            &Default::default(),
         )
         .unwrap()
     }

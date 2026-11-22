@@ -17,7 +17,7 @@ use reqwest::header::{
     USER_AGENT,
 };
 use reqwest::redirect::Policy;
-use reqwest::{Client, NoProxy, Proxy, Response, StatusCode};
+use reqwest::{Client, Response, StatusCode};
 use url::Url;
 
 use crate::address::ViewSourceUrl;
@@ -164,7 +164,7 @@ async fn fetch_chain(
     options: &FetchOptions,
 ) -> Result<SourceDocument, FetchError> {
     let proxies = Proxies::new(&options.proxy)?;
-    let client = build_client(options, &proxies)?;
+    let client = build_client(options)?;
     let headers = RequestHeaders::new(options)?;
     let mut current = apply_policy(options, url.target().clone())?;
     let mut redirects = 0;
@@ -372,27 +372,26 @@ async fn read_document(
 /// Redirects are off (they are followed by hand), nothing is stored (no cookie store is built
 /// in), and no `Accept-Encoding` is sent, so bodies arrive as the server wrote them.
 ///
-/// `no_proxy()` comes first: it clears every proxy and switches off reqwest's own reading of the
-/// `HTTP_PROXY` family of environment variables and of the system settings, which would
-/// otherwise be added on top of what is given. Then the engine's proxies are added, and they
-/// are the only ones. A target without a proxy for its scheme is connected to directly, exactly
-/// as the engine does; a target with one never is.
-fn build_client(options: &FetchOptions, proxies: &Proxies) -> Result<Client, FetchError> {
-    let no_proxy = NoProxy::from_string(&options.proxy.no_proxy);
-    let mut builder = Client::builder()
+/// The proxy is set by `mercury_proxy::apply`, the one function every Mercury HTTP client uses: it
+/// clears every proxy and switches off reqwest's own reading of the `HTTP_PROXY` family of
+/// environment variables and of the system settings, then adds the engine's proxies, which are
+/// the only ones. A target without a proxy for its scheme is connected to directly, exactly as
+/// the engine does; a target with one never is. The engine's proxy is what `options.proxy`
+/// holds (the runtime fills it from the same process-wide choice).
+fn build_client(options: &FetchOptions) -> Result<Client, FetchError> {
+    let builder = Client::builder()
         .redirect(Policy::none())
         .referer(false)
-        .connect_timeout(options.connect_timeout)
-        .no_proxy();
-    if let Some(uri) = &proxies.http {
-        let proxy = Proxy::http(uri.clone()).map_err(|_| FetchError::Proxy)?;
-        builder = builder.proxy(proxy.no_proxy(no_proxy.clone()));
-    }
-    if let Some(uri) = &proxies.https {
-        let proxy = Proxy::https(uri.clone()).map_err(|_| FetchError::Proxy)?;
-        builder = builder.proxy(proxy.no_proxy(no_proxy));
-    }
-    builder.build().map_err(|_| FetchError::Internal)
+        .connect_timeout(options.connect_timeout);
+    let preferences = mercury_proxy::ProxyPreferences {
+        http_uri: options.proxy.http.clone(),
+        https_uri: options.proxy.https.clone(),
+        no_proxy: options.proxy.no_proxy.clone(),
+    };
+    mercury_proxy::apply(builder, &preferences)
+        .map_err(|_| FetchError::Proxy)?
+        .build()
+        .map_err(|_| FetchError::Internal)
 }
 
 /// The two proxy addresses, checked, and the bypass list, for deciding whether a failure is the
