@@ -1,6 +1,33 @@
 # Mercury's changes to servo-net 0.8.0, against the crate as published on crates.io
 # (SHA-256 e274e25650db0dacd2a290d13f51effd12735c17d5448403c2c77fea530e034d). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-net.
+diff --git a/Cargo.lock b/Cargo.lock
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1284,9 +1284,9 @@
+
+ [[package]]
+ name = "form_urlencoded"
+-version = "1.2.2"
++version = "1.2.3"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "cb4cb245038516f5f85277875cdaa4f7d2c9a0fa0468de06ed190163b1581fcf"
++checksum = "afa489199eaffb1211795df1c6236ce1ad0d41a6fa45250add73e3b02420f06e"
+ dependencies = [
+  "percent-encoding",
+ ]
+@@ -5368,9 +5368,9 @@
+
+ [[package]]
+ name = "url"
+-version = "2.5.8"
++version = "2.5.9"
+ source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "ff67a8a4397373c3ef660812acab3268222035010ab8680ec4215f38ba3d0eed"
++checksum = "f00cd2407bb42c0ef17be88d4cf020f5cceffd121665bac9b8b9493a369b3b1a"
+ dependencies = [
+  "form_urlencoded",
+  "idna",
 diff --git a/certificate_exceptions.rs b/certificate_exceptions.rs
 new file mode 100644
 --- /dev/null
