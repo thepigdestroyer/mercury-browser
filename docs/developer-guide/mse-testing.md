@@ -115,4 +115,4 @@ These need a person with the browser and no tools. Start it with `MERCURY_DEV_MS
 
 ## Continuous integration
 
-`.github/workflows/mse.yml` builds and tests `mercury-mse`, `mercury-mse-testkit` and `mercury-mse-gst` on Ubuntu 22.04 (GStreamer 1.20, the `v1_18` features only) and on Apple Silicon (the bundled GStreamer, VideoToolbox), on pushes to `lane/med-1b` and by hand. The `#[ignore]` VideoToolbox and AV1 route tests run there as a **record-only** step: they print what the hardware answers and never fail the run.
+`.github/workflows/mse.yml` builds and tests `mercury-mse`, `mercury-mse-testkit` and `mercury-mse-gst` on Ubuntu 22.04 (GStreamer 1.20, the `v1_18` features only) and on Apple Silicon (the bundled GStreamer, VideoToolbox), on pushes to `mercury` and `master`, on pull requests and by hand (never on a lane branch: the train integrator runs it once at the merge). The `#[ignore]` VideoToolbox and AV1 route tests run there as a **record-only** step: they print what the hardware answers and never fail the run.
