@@ -6071,6 +6071,7 @@ dependencies = [
  "glib",
  "gstreamer",
  "gstreamer-app",
+ "gstreamer-audio",
  "gstreamer-base",
  "log",
  "mercury-mse",
