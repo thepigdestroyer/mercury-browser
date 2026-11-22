@@ -102,3 +102,12 @@ fn a_second_attach_is_refused_and_a_dropped_element_ends_its_thread() {
     assert!(mercury_mse_gst::attach(&element, feed).is_err());
     drop(element); // joins the feeder thread: returns, never hangs
 }
+
+#[test]
+fn a_missing_element_is_a_failure_when_the_bundled_gstreamer_is_in_use() {
+    // `test.sh` sets MERCURY_GSTREAMER_PREFIX: there a missing element must fail the test and not skip
+    // it (a suite that skips everything passes vacuously). Without it (Linux CI) it skips.
+    let prefix_set = std::env::var_os("MERCURY_GSTREAMER_PREFIX").is_some();
+    let outcome = std::panic::catch_unwind(|| common::env::skip_or_fail("no-such-element"));
+    assert_eq!(outcome.is_err(), prefix_set);
+}

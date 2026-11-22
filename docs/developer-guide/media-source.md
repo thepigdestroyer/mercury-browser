@@ -30,7 +30,7 @@ Servo 0.8 has no MSE, and GStreamer's own `mse` plugin did not pass the spike (`
 - **`crates/mercury-mse`** owns every spec algorithm that needs no DOM object: the readyState, the duration rules and truncation, `endOfStream`, the buffered intersection, `abort`, `remove`, `changeType`, the append window, the timestamp offset, the mode, coded-frame processing, quota and eviction (150 MiB video, 12 MiB audio, 1 MiB text per source buffer; the data behind the playback position minus 5 s goes first), and the element's readiness from the buffered ranges. Its contract is `src/api.rs` (`MediaSourceBackend`, `MseEvent`, `FrameFeed`, the types).
 - **`crates/mercury-mse-gst`** is the GStreamer half: the `MseSrc` element and the decoder-registry type support. It is registered as the URI handler of `mercury-mse://`, so `playbin3` creates it, and the player's `source-setup` hands it the feed.
 - **The DOM** (`third_party/servo-script/dom/mse/`) is carried in part from Servo pull request #47269 by decomoraes (MPL-2.0) and thinned: it keeps what is JavaScript-visible (the objects, the events and their tasks, the `updating` flag as the specification's tasks publish it, the object URL store) and forwards everything else to the backend. The backend's events (`InitSegment`, `AppendDone`, `AppendError`, `RemoveDone`, `DurationChanged`, `SourceEnded`, `BufferedChanged`) come back as media-element tasks.
-- **The element** (`htmlmediaelement.rs`) attaches a MediaSource that a `blob:` URL or `srcObject` names, creates the player with `StreamType::MediaSource` and connects it to the backend, takes the duration, `buffered`, `seekable` and the readiness from the backend, ignores the media engine's own duration and metadata, and never pushes bytes to the player.
+- **The element** (`dom/mse/mediaelement.rs`, a child module of `htmlmediaelement.rs`, which keeps only the hook lines) attaches a MediaSource that a `blob:` URL or `srcObject` names, creates the player with `StreamType::MediaSource` and connects it to the backend, takes the duration, `buffered`, `seekable` and the readiness from the backend, ignores the media engine's own duration and metadata, and never pushes bytes to the player.
 - **The vendored crates** change as `third_party/servo-script/MERCURY.md`, `servo-script-bindings/MERCURY.md`, `servo-media/MERCURY.md`, `servo-media-player/MERCURY.md` and `servo-media-gstreamer/MERCURY.md` list, with the hunks in the hot file `htmlmediaelement.rs` marked `Mercury (MED-1)`. A vendored crate depends on the two workspace crates by path (`make servo-patches-check`, `cargo fmt --all` and clippy accept it: the reverse direction is the forbidden one).
 - **dav1d** (the AV1 software decoder) joined the bundle as one of Mercury's own plugins (`scripts/macos/collect-gstreamer.sh`, `MERCURY_PLUGINS`); no decoder rank is changed anywhere.
 
@@ -65,6 +65,23 @@ What the pages assume from the engine: `canvas.drawImage(video)` reads the curre
 - `make servo-patches-check`, `make vendored-tests`: the vendored crates.
 
 The DOM is thin on purpose: what could be tested without a page is in the crate. What is left in the DOM and cannot be tested without a window is listed in the lane report (`.superpowers/sdd/lane-med-1-report.md`): the event plumbing, the `updating` flag's timing, and the media element's readiness and seek hooks.
+
+## Where the carried DOM came from, and what was checked
+
+The `MediaSource`, `SourceBuffer` and `SourceBufferList` objects, their WebIDL and the object URL store started from Servo pull request #47269 by decomoraes (MPL-2.0). That pull request was **closed unmerged on 16 August 2026**, after its author told a Servo maintainer that it was written with a large language model; Servo never reviewed it. Mercury therefore treats the carried code as unreviewed: the three interfaces were compared with the W3C WebIDL (attribute and method lists, `[Throws]` and `[SetterThrows]`, `unrestricted double`; `textTracks` and `handle` are left out on purpose), the object URL store was read for lifetime, origin and revocation, the event plumbing (a weak reference and one `unsafe impl Send`, which is sound only because the handler is dropped on the script thread, asserted in its `Drop`) was read, every DOM method was rechecked against the specification text, and the data plane and every algorithm the crate owns were not carried at all.
+
+## Memory limits (decision D17)
+
+A page cannot make MSE use more than its quota: every stored frame is charged its coded bytes plus a fixed 256 bytes of bookkeeping (`FRAME_OVERHEAD_BYTES`), so a stream of tiny frames hits `QuotaExceededError` long before it uses many times the quota in heap; the first `appendBuffer` is checked on its length before the DOM copies it, and again frame batch by frame batch while it is parsed; all source buffers of all MediaSources in a content process share one budget (1 GiB, `servo-media-gstreamer/mercury_mse.rs`); a MediaSource may hold at most 4 source buffers (real players use two); codec configuration records are capped at 64 KiB and `pssh` boxes at 1 MiB per initialization segment.
+
+## Blockers for turning the preference on
+
+These two known defects must be fixed (and run in a window) before `dom_media_source_enabled` leaves `PINNED_OFF`:
+
+1. A stale `AppendDone` that is already queued when the page calls `abort()` and then appends again in the same task ends the new append early.
+2. `waiting` at the end of the buffer has no underrun signal (it depends on `PositionChanged` every 500 ms and the player's state events).
+
+The element's always-compiled hooks (a lookup of the media source object URL store on every media load, and the `media_source` field) run with the preference off; they are cheap lookups and are listed in `third_party/servo-script/MERCURY.md`.
 
 ## What is still missing
 

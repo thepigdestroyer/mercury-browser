@@ -125,8 +125,14 @@ fn t04_two_hundred_lifecycles_leak_nothing() {
             "threads {threads0} -> {threads1}"
         );
         assert!(fds1 <= fds0 + 2 && fds1 + 2 >= fds0, "fds {fds0} -> {fds1}");
+        // Measured 285 to 383 kB per iteration on 20 Nov, with no leak of ours: the growth is the
+        // allocator and the software decoders of a whole `playbin3` pipeline, and no control run (the
+        // same pipeline without MSE) is possible with the same rig. A leak of 0.3 MB per lifecycle
+        // therefore cannot be told from that growth by RSS; the leak of the memory MSE owns is checked
+        // exactly instead (`mercury-mse` `model_t04_lifecycle`: the shared budget reads zero after 220
+        // lifecycles). This threshold only stops the growth from doubling.
         assert!(
-            per_iteration_kb < 1024.0,
+            per_iteration_kb < 600.0,
             "RSS slope {per_iteration_kb:.1} kB per iteration"
         );
         assert!(

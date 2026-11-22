@@ -233,7 +233,7 @@ pub fn synthetic_1080p(codec: &str, frames: u32) -> Option<Extracted> {
     };
     for element in ["videotestsrc", "videoconvert", encoder, "h264parse"] {
         if gst::ElementFactory::find(element).is_none() {
-            eprintln!("SKIP: {element} missing");
+            super::env::skip_or_fail(element);
             return None;
         }
     }

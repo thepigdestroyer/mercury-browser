@@ -172,9 +172,20 @@ pub fn have(elements: &[&str]) -> bool {
     init();
     for name in elements {
         if gst::ElementFactory::find(name).is_none() {
-            eprintln!("SKIP: {name} missing");
+            skip_or_fail(name);
             return false;
         }
     }
     true
+}
+
+/// Reports a missing element. Without `MERCURY_GSTREAMER_PREFIX` (Linux CI, a system GStreamer) the test
+/// skips: `SKIP: <element> missing`. With it set the bundled GStreamer is meant to have every element
+/// the tests use, so a missing one is a failure: a playback suite that skips everything must not pass.
+pub fn skip_or_fail(element: &str) {
+    assert!(
+        std::env::var_os("MERCURY_GSTREAMER_PREFIX").is_none(),
+        "{element} is missing from the bundled GStreamer (MERCURY_GSTREAMER_PREFIX is set, so this is a failure, not a skip)"
+    );
+    eprintln!("SKIP: {element} missing");
 }
