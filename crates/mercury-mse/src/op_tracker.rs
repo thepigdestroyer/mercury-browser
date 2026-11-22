@@ -11,9 +11,9 @@
 //! `remove` return); the tracker remembers the one that is pending and answers whether an event is for
 //! it.
 //!
-//! Skeleton: the signatures are committed by the lead; item 1 (`core`) implements the bodies. Rules the
-//! implementation keeps: after [`OpTracker::retire`] or a newer [`OpTracker::begin`], `finish(old)` is
-//! `false` for ever; `finish` of the pending operation is `true` exactly once.
+//! Rules: after [`OpTracker::retire`] or a newer [`OpTracker::begin`], `finish(old)` is `false` for
+//! ever (the backend never reuses an `OpId`, so "old" can never become pending again); `finish` of the
+//! pending operation is `true` exactly once.
 
 use crate::api::OpId;
 
@@ -29,19 +29,24 @@ impl OpTracker {
     }
 
     /// The backend accepted an append or a remove: it is the pending operation (replacing any other).
-    pub fn begin(&mut self, _op: OpId) {
-        todo!("item 1 `core`")
+    pub fn begin(&mut self, op: OpId) {
+        self.pending = Some(op);
     }
 
     /// `abort()`, removal of the buffer or `close()`: nothing is pending, whatever is in flight is stale.
     pub fn retire(&mut self) {
-        todo!("item 1 `core`")
+        self.pending = None;
     }
 
     /// A completion event for `op` arrived. `true` when it completes the pending operation (which is
     /// then no longer pending), `false` when it is stale and must be dropped.
-    pub fn finish(&mut self, _op: OpId) -> bool {
-        todo!("item 1 `core`")
+    pub fn finish(&mut self, op: OpId) -> bool {
+        if self.pending == Some(op) {
+            self.pending = None;
+            true
+        } else {
+            false
+        }
     }
 
     /// The operation that is pending, if any.
