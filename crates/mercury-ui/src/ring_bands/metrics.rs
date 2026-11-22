@@ -24,14 +24,32 @@ const PROBE_WEIGHT: u16 = 400;
 /// The size every advance is measured at, then scaled to the asked size (see `measure_advance`).
 const REFERENCE_SIZE: f32 = 100.0;
 
-type CacheKey = (char, u32, u16);
+/// An advance does not depend on the size once it is measured at `REFERENCE_SIZE`, so the cache is
+/// per character and weight and the size is applied on the way out.
+type CacheKey = (char, u16);
 
 /// `GlyphMetrics` that measures with the real font (cached per character, size and weight).
 /// Not `Send`: it owns a Slint component and belongs to the UI thread that made it.
 pub struct MeasuredMetrics {
-    measure: RingTextMeasure,
+    /// `None` only in a `Default` one, which answers like `ApproxMetrics` (the scaffold's stub).
+    measure: Option<RingTextMeasure>,
     cache: RefCell<HashMap<CacheKey, f32>>,
+    /// The width of "xx" per weight (the baseline of every advance of that weight).
+    baseline: RefCell<HashMap<u16, f32>>,
     reads: Cell<usize>,
+}
+
+impl Default for MeasuredMetrics {
+    /// Has no measuring component, so it answers like [`ApproxMetrics`]; use [`MeasuredMetrics::new`]
+    /// to measure.
+    fn default() -> Self {
+        Self {
+            measure: None,
+            cache: RefCell::default(),
+            baseline: RefCell::default(),
+            reads: Cell::new(0),
+        }
+    }
 }
 
 impl MeasuredMetrics {
@@ -40,9 +58,8 @@ impl MeasuredMetrics {
     /// Fails when the component cannot be created or does not give a positive width for "W".
     pub fn new() -> Result<Self, PlatformError> {
         let measured = Self {
-            measure: RingTextMeasure::new()?,
-            cache: RefCell::new(HashMap::new()),
-            reads: Cell::new(0),
+            measure: Some(RingTextMeasure::new()?),
+            ..Self::default()
         };
         let probe = measured.string_width(PROBE, PROBE_SIZE, PROBE_WEIGHT);
         if probe.is_finite() && probe > 0.0 {
@@ -63,25 +80,39 @@ impl MeasuredMetrics {
 
     /// The width of `text` read from the component, in logical px.
     fn string_width(&self, text: &str, size: f32, weight: u16) -> f32 {
+        let Some(measure) = &self.measure else {
+            return 0.0;
+        };
         self.reads.set(self.reads.get() + 1);
-        self.measure.set_sample(SharedString::from(text));
-        self.measure.set_font_size(size);
-        self.measure.set_font_weight(i32::from(weight));
-        self.measure.get_text_width()
+        measure.set_sample(SharedString::from(text));
+        measure.set_font_size(size);
+        measure.set_font_weight(i32::from(weight));
+        measure.get_text_width()
     }
 
     /// Measured at `REFERENCE_SIZE` and scaled: the software renderer snaps glyph advances to whole
     /// pixels, which at 12 px is a 5 to 10 percent error per glyph (and can make a heavier weight
     /// read narrower).
-    fn measure_advance(&self, ch: char, size: f32, weight: u16) -> f32 {
+    fn measure_advance(&self, ch: char, weight: u16) -> f32 {
         let with = self.string_width(&format!("x{ch}x"), REFERENCE_SIZE, weight);
-        let without = self.string_width("xx", REFERENCE_SIZE, weight);
-        let advance = (with - without) * size / REFERENCE_SIZE;
+        let cached = self.baseline.borrow().get(&weight).copied();
+        let without = cached.unwrap_or_else(|| {
+            let width = self.string_width("xx", REFERENCE_SIZE, weight);
+            self.baseline.borrow_mut().insert(weight, width);
+            width
+        });
+        let advance = with - without;
         if advance.is_finite() && advance > 0.0 {
             advance
         } else {
             0.0
         }
+    }
+}
+
+impl MeasuredMetrics {
+    fn fallback_advance(&self, ch: char, size: f32, weight: u16) -> f32 {
+        ApproxMetrics.advance(ch, size, weight)
     }
 }
 
@@ -104,13 +135,17 @@ impl GlyphMetrics for MeasuredMetrics {
         if !size.is_finite() || size <= 0.0 || has_no_advance(ch) {
             return 0.0;
         }
-        let key = (ch, size.to_bits(), weight);
-        if let Some(advance) = self.cache.borrow().get(&key) {
-            return *advance;
+        if self.measure.is_none() {
+            return self.fallback_advance(ch, size, weight);
         }
-        let advance = self.measure_advance(ch, size, weight);
-        self.cache.borrow_mut().insert(key, advance);
-        advance
+        let key = (ch, weight);
+        let cached = self.cache.borrow().get(&key).copied();
+        let at_reference = cached.unwrap_or_else(|| {
+            let advance = self.measure_advance(ch, weight);
+            self.cache.borrow_mut().insert(key, advance);
+            advance
+        });
+        at_reference * size / REFERENCE_SIZE
     }
 }
 
@@ -130,6 +165,41 @@ fn choose(result: Result<MeasuredMetrics, PlatformError>) -> Box<dyn GlyphMetric
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_default_one_answers_like_approx_metrics() {
+        let metrics = MeasuredMetrics::default();
+        for ch in ['W', 'i', 'm', ' '] {
+            assert_eq!(
+                metrics.advance(ch, 12.0, 600),
+                ApproxMetrics.advance(ch, 12.0, 600),
+                "{ch:?}"
+            );
+        }
+        assert_eq!(metrics.component_reads(), 0);
+    }
+
+    /// Deterministic on any font: whatever weight is asked reaches the measuring component (a
+    /// dropped weight would measure every weight as regular, which the width test can only see on
+    /// a font that has a bold face).
+    #[test]
+    fn the_weight_reaches_the_measuring_component() {
+        i_slint_backend_testing::init_no_event_loop();
+        let metrics = MeasuredMetrics {
+            measure: Some(RingTextMeasure::new().expect("the measuring window")),
+            ..MeasuredMetrics::default()
+        };
+        for weight in [400u16, 500, 600, 700, 800, 900] {
+            metrics.string_width("x", 12.0, weight);
+            let read = metrics.measure.as_ref().map(|m| m.get_font_weight());
+            assert_eq!(read, Some(i32::from(weight)));
+        }
+        metrics.advance('a', 12.0, 800);
+        let read = metrics.measure.as_ref().map(|m| m.get_font_weight());
+        assert_eq!(read, Some(800), "advance() measures at the asked weight");
+        let size = metrics.measure.as_ref().map(|m| m.get_font_size());
+        assert_eq!(size, Some(REFERENCE_SIZE), "and at the reference size");
+    }
 
     #[test]
     fn a_failing_constructor_gives_approx_metrics() {

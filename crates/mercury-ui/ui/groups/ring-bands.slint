@@ -44,7 +44,9 @@ component FlagProbe inherits Rectangle {
     in property <length> pointer-x;
     in property <length> pointer-y;
     in-out property <int> under-tab: -1;
-    property <length> reach: max(root.pin.size, 20px) / 2;
+    // Half the flag, plus 2 px, at most 10 px (the 20 px target of the brief): on a crowded ring the
+    // target stays inside the flag's own arc so that it cannot take a neighbour's click.
+    property <length> reach: min(root.pin.size / 2 + 2px, 10px);
     property <bool> under: (root.pin.kind == FlagKind.audible || root.pin.kind == FlagKind.muted)
         && abs(root.pointer-x - root.pin.x) <= root.reach && abs(root.pointer-y - root.pin.y) <= root.reach;
 
@@ -95,8 +97,13 @@ export component RingBands inherits Rectangle {
     in property <bool> dim-others;
     // Segments without `matches-query` at 18 %.
     in property <bool> query-active;
-    // TabRow.id of the tab being dragged (its slot is dashed and a ghost follows the pointer).
+    // A host-driven drag slot: the tab with this TabRow.id is drawn as an empty outline (no ghost, no
+    // insertion bar). RingBands never writes it; a host that wants to follow the component's own
+    // drag reads `drag-source` instead.
     in property <int> dragging-tab: -1;
+    // TabRow.id of the tab RingBands itself is dragging now (-1 when no drag is live): its slot is an
+    // outline and a ghost follows the pointer.
+    out property <int> drag-source: root.drag-active ? root.drag-tab : -1;
     // false: draws only; no hover, press or drag.
     in property <bool> interactive: true;
     // The container's `list` label; hosts override it ("Tab dial", a planet's name).
@@ -122,12 +129,32 @@ export component RingBands inherits Rectangle {
     callback drag-started(int);
     // Ring-local, also while the pointer is outside the box.
     callback drag-moved(length, length);
-    // group id, index-in-group: released over a valid drop target.
+    // group id, index-in-group: released over a valid drop target. The index counts the dragged tab
+    // itself, so inside its own group a drop on its slot gives its own index or the next one, and a
+    // host moving it later in the group subtracts 1.
     callback drop(int, int);
     // Released with no valid target.
     callback drag-cancelled();
     // A primary-button press whose hit-test kind is `outside` (lead request R1, corner-dial).
     callback background-pressed();
+
+    // Ends a drag exactly as a release outside every slot does, without a drop: the ghost, the slot
+    // outline and the insertion bar go and `drag-cancelled` fires if a drag was live. Hosts call it on
+    // Esc and when the popup or fan holding the ring closes. Does nothing else.
+    public function cancel-drag() {
+        if (root.drag-active) {
+            root.end-press();
+            root.drag-cancelled();
+        } else {
+            root.end-press();
+        }
+    }
+
+    changed interactive => {
+        if (!root.interactive) {
+            root.cancel-drag();
+        }
+    }
 
     accessible-role: list;
     accessible-label: root.accessible-name;
@@ -147,7 +174,7 @@ export component RingBands inherits Rectangle {
     private property <length> drag-x;
     private property <length> drag-y;
     private property <bool> press-live: false;
-    private property <int> press-mute: -1;
+    private property <bool> press-down: false;
     private property <length> pointer-x;
     private property <length> pointer-y;
     private property <int> flag-under: -1;
@@ -185,7 +212,7 @@ export component RingBands inherits Rectangle {
 
     function end-press() {
         root.press-live = false;
-        root.press-mute = -1;
+        root.press-down = false;
         root.drag-active = false;
         root.drag-tab = -1;
     }
@@ -224,7 +251,6 @@ export component RingBands inherits Rectangle {
         viewbox-width: root.ring-size / 1px;
         viewbox-height: root.ring-size / 1px;
         commands: seg.commands;
-        visible: seg.tab != root.hovered-tab || seg.tab == root.shown-drag;
         fill: seg.tab == root.shown-drag ? transparent : (i < root.tabs.length ? root.tabs[i].shade : transparent);
         stroke: seg.tab == root.shown-drag ? ChromePalette.text-muted : transparent;
         stroke-width: seg.tab == root.shown-drag ? 1.5px : 0px;
@@ -257,12 +283,14 @@ export component RingBands inherits Rectangle {
         height: root.ring-size;
         viewbox-width: root.ring-size / 1px;
         viewbox-height: root.ring-size / 1px;
-        visible: seg.tab == root.hovered-tab && seg.tab != root.shown-drag && i < root.lifted-segments.length;
         commands: i < root.lifted-segments.length ? root.lifted-segments[i].commands : "";
         fill: i < root.tabs.length ? root.tabs[i].shade : transparent;
         stroke: ChromePalette.popup-background;
         stroke-width: root.outline-width;
-        opacity: root.segment-opacity(i);
+        // Cross-fades with the resting shape (same inner edge and fill, so nothing flashes): `commands`
+        // cannot animate, the opacity can (SPEC §7: 90 ms).
+        opacity: seg.tab == root.hovered-tab && seg.tab != root.shown-drag && i < root.lifted-segments.length ? root.segment-opacity(i) : 0.0;
+        animate opacity { duration: root.hover-ms; }
         accessible-role: none;
     }
 
@@ -358,20 +386,16 @@ export component RingBands inherits Rectangle {
                 root.end-press();
                 root.pointer-x = self.mouse-x;
                 root.pointer-y = self.mouse-y;
+                root.press-down = true;
+                root.press-x = self.mouse-x;
+                root.press-y = self.mouse-y;
                 let hit = root.hit-test(self.mouse-x, self.mouse-y, root.hovered-tab);
-                if (root.flag-under >= 0) {
-                    // A press on a speaker flag is a mute click, never a tab press or a drag.
-                    root.press-live = true;
-                    root.press-kind = RingHitKind.centre;
-                    root.press-mute = root.flag-under;
-                } else if (hit.kind == RingHitKind.outside) {
+                if (hit.kind == RingHitKind.outside) {
                     root.background-pressed();
                 } else {
                     root.press-live = true;
                     root.press-kind = hit.kind;
                     root.press-id = hit.id;
-                    root.press-x = self.mouse-x;
-                    root.press-y = self.mouse-y;
                 }
             } else if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
                 if (root.drag-active) {
@@ -384,8 +408,12 @@ export component RingBands inherits Rectangle {
                     } else {
                         root.drag-cancelled();
                     }
-                } else if (root.press-mute >= 0) {
-                    let tab = root.press-mute;
+                } else if (root.press-down && root.flag-under >= 0
+                    && sqrt(pow((self.mouse-x - root.press-x) / 1px, 2) + pow((self.mouse-y - root.press-y) / 1px, 2)) * 1px <= root.drag-threshold) {
+                    // A click on a speaker or muted flag (the probes have seen the press point by now):
+                    // a mute click, never a tab press. The probes are updated by change handlers that
+                    // run after the press event, so the decision is taken on release.
+                    let tab = root.flag-under;
                     root.end-press();
                     root.tab-mute(tab);
                 } else if (root.press-live) {
@@ -466,6 +494,7 @@ export component RingBandsPreview inherits Window {
     in property <bool> dim-others <=> ring.dim-others;
     in property <bool> query-active <=> ring.query-active;
     in property <int> dragging-tab <=> ring.dragging-tab;
+    out property <int> drag-source <=> ring.drag-source;
     in property <bool> interactive <=> ring.interactive;
     in property <string> accessible-name <=> ring.accessible-name;
     in property <bool> reduce-motion <=> ring.reduce-motion;
@@ -483,6 +512,10 @@ export component RingBandsPreview inherits Window {
     callback drop <=> ring.drop;
     callback drag-cancelled <=> ring.drag-cancelled;
     callback background-pressed <=> ring.background-pressed;
+
+    public function cancel-drag() {
+        ring.cancel-drag();
+    }
 
     ring := RingBands {
         width: parent.width;
