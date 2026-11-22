@@ -1,0 +1,22 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-protection"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The model behind Mercury's protections (R13 W1-3): levels, per-site exceptions, counters, the weekly tally,
+# the local-network address classifier, the bounce-tracking state machine and screen-geometry rounding.
+# No engine and no UI toolkit: it builds in the light pool.
+[dependencies]
+log.workspace = true
+mercury-store = { path = "../mercury-store" }
+# Already in the lock through `adblock` (the registrable domain of a host).
+psl = "2"
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
