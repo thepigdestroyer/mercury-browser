@@ -3,18 +3,405 @@
 // The centre disc of the hub ring (SPEC design/ui-final/SPEC.md §4.3): rest (preview, title, path,
 // search field, hint), searching (field, the top results, "Search the web for ..."), an audio tab
 // (title, play state, Pause and Mute) and ⌥ held (key, group name, help). Reads only
-// `HubRingBridge`. Filled in by item 3 `centre` of lane hub-ring; the scaffold has the pinned
-// component name and size only.
+// `HubRingBridge`; its events are the bridge's `query-edited`, `result-activated`, `pause-clicked`,
+// `mute-clicked` and `see-everything`. Colours come from `ChromePalette` and the rows only; the
+// lengths are the mockups' (design/ui-final/ring/ring-{open,search,keys,status}-*.svg), written
+// relative to the disc's centre (`c`).
 
 import { ChromePalette } from "../theme/chrome-palette.slint";
-import { HubRingBridge } from "hub-ring-bridge.slint";
+import { CentreMode, HubRingBridge } from "hub-ring-bridge.slint";
+
+// A line of text placed by its baseline (disc-local), one line, elided at its width.
+component Line inherits Text {
+    in property <length> baseline;
+    height: self.font-size * 1.4;
+    y: self.baseline - self.font-size * 0.35 - self.height / 2;
+    wrap: no-wrap;
+    overflow: elide;
+    vertical-alignment: center;
+    horizontal-alignment: center;
+}
+
+// The same for text inside a control, whose label the control already carries.
+component Quiet inherits Text {
+    in property <length> baseline;
+    height: self.font-size * 1.4;
+    y: self.baseline - self.font-size * 0.35 - self.height / 2;
+    wrap: no-wrap;
+    overflow: elide;
+    vertical-alignment: center;
+    accessible-role: none;
+}
+
+// An outline icon drawn on the mockups' 16 x 16 grid at 13 px (scale 0.81).
+component Glyph inherits Path {
+    in property <string> d;
+    width: 13px;
+    height: 13px;
+    viewbox-width: 16;
+    viewbox-height: 16;
+    commands: self.d;
+    stroke-width: 1.5px;
+    stroke-line-cap: round;
+    stroke-line-join: round;
+    accessible-role: none;
+}
+
+// Pause and Mute: 88 x 30, radius 8, the icon and then the label.
+component DiscButton inherits Rectangle {
+    in property <string> label;
+    in property <string> icon;
+    in property <string> description;
+    callback clicked();
+    width: 88px;
+    height: 30px;
+    border-radius: 8px;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+    background: touch.pressed ? ChromePalette.button-pressed : touch.has-hover ? ChromePalette.button-hover : ChromePalette.popup-background;
+    accessible-role: button;
+    accessible-label: root.description;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    Glyph {
+        x: 10.5px;
+        y: 8.5px;
+        d: root.icon;
+        stroke: ChromePalette.text;
+    }
+
+    Quiet {
+        x: 31px;
+        width: parent.width - 39px;
+        baseline: 19.5px;
+        text: root.label;
+        font-size: 12px;
+        color: ChromePalette.text;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
 
 // A square, 272 px (the disc's diameter); the popover centres it on the ring.
 export component RingCentre inherits Rectangle {
+    // The disc's centre, in the disc's own coordinates.
+    property <length> c: 136px;
+    property <bool> searching: HubRingBridge.mode == CentreMode.searching;
+    property <bool> audio: HubRingBridge.mode == CentreMode.audio;
+    property <bool> held: HubRingBridge.mode == CentreMode.held;
+    property <bool> rest: HubRingBridge.mode == CentreMode.rest;
+
     width: 272px;
     height: 272px;
     border-radius: 136px;
     background: ChromePalette.window-background;
     border-width: 1px;
     border-color: ChromePalette.popup-border;
+    accessible-role: none;
+
+    // Puts the caret in the search field (the popover calls it when the first key is typed).
+    public function focus-field() {
+        input.focus();
+    }
+
+    // Rest and audio: the preview, then the title and the line under it.
+    if root.rest || root.audio: Rectangle {
+        x: root.c - 82px;
+        y: root.c - 104px;
+        width: 164px;
+        height: 90px;
+        border-radius: 5px;
+        background: HubRingBridge.has-preview ? ChromePalette.popup-background : HubRingBridge.preview-mark;
+        clip: true;
+
+        if HubRingBridge.has-preview: Image {
+            width: parent.width;
+            height: parent.height;
+            source: HubRingBridge.preview;
+            image-fit: cover;
+            accessible-role: none;
+        }
+        // No snapshot: the tab's card, with its title on a soft pill (readable on any mark colour).
+        if !HubRingBridge.has-preview: Rectangle {
+            x: 8px;
+            y: (parent.height - self.height) / 2;
+            width: parent.width - 16px;
+            height: 22px;
+            border-radius: 11px;
+            background: ChromePalette.window-background;
+            opacity: 0.8;
+        }
+        if !HubRingBridge.has-preview: Quiet {
+            x: 14px;
+            width: parent.width - 28px;
+            baseline: parent.height / 2 + 4px;
+            horizontal-alignment: center;
+            text: HubRingBridge.title;
+            font-size: 12px;
+            font-weight: 600;
+            color: ChromePalette.text;
+            opacity: 0.9;
+        }
+        // The software renderer does not round the clip: cover the image's square corners.
+        Path {
+            width: parent.width;
+            height: parent.height;
+            viewbox-width: 164;
+            viewbox-height: 90;
+            // The square, and the rounded rectangle wound the other way (a hole under either fill rule).
+            commands: "M0 0 H164 V90 H0 Z M5 0 A5 5 0 0 0 0 5 V85 A5 5 0 0 0 5 90 H159 A5 5 0 0 0 164 85 V5 A5 5 0 0 0 159 0 Z";
+            fill: ChromePalette.window-background;
+            fill-rule: evenodd;
+            accessible-role: none;
+        }
+        Rectangle {
+            border-radius: 5px;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+        }
+    }
+
+    if root.rest || root.audio: Line {
+        x: 11px;
+        width: 250px;
+        baseline: root.c + 10px;
+        text: HubRingBridge.title;
+        font-size: 15px;
+        font-weight: 600;
+        color: ChromePalette.text;
+    }
+
+    if root.rest: Line {
+        x: 11px;
+        width: 250px;
+        baseline: root.c + 30px;
+        text: HubRingBridge.subtitle;
+        font-size: 11px;
+        color: ChromePalette.text-muted;
+    }
+
+    if root.audio: Line {
+        x: 11px;
+        width: 250px;
+        baseline: root.c + 30px;
+        text: HubRingBridge.play-state;
+        font-size: 11px;
+        color: ChromePalette.text-muted;
+    }
+
+    // The search field: one element in rest and searching, so it keeps the focus between them
+    // (hidden, it also leaves the accessibility tree).
+    Rectangle {
+        visible: root.rest || root.searching;
+        x: root.c - (root.searching ? 108px : 100px);
+        y: root.c + (root.searching ? -76px : 46px);
+        width: root.searching ? 216px : 200px;
+        height: root.searching ? 32px : 30px;
+        border-radius: self.height / 2;
+        background: ChromePalette.search-field-background;
+        border-width: input.has-focus ? 2px : 1px;
+        border-color: input.has-focus ? ChromePalette.accent : ChromePalette.search-field-border;
+
+        Glyph {
+            x: 11.5px;
+            y: (parent.height - self.height) / 2;
+            d: "M2.5 7 A4.5 4.5 0 1 0 11.5 7 A4.5 4.5 0 1 0 2.5 7 M10.3 10.3 L13.5 13.5";
+            stroke: ChromePalette.placeholder;
+        }
+
+        placeholder := Quiet {
+            x: 32px;
+            width: parent.width - 44px;
+            height: parent.height;
+            y: 0px;
+            visible: HubRingBridge.query == "";
+            text: HubRingBridge.field-placeholder;
+            font-size: 12.5px;
+            color: ChromePalette.placeholder;
+        }
+
+        input := TextInput {
+            x: 32px;
+            width: parent.width - 44px;
+            height: parent.height;
+            text <=> HubRingBridge.query;
+            font-size: 13px;
+            color: ChromePalette.text;
+            single-line: true;
+            vertical-alignment: center;
+            accessible-label: "Search tabs";
+            accessible-description: HubRingBridge.field-placeholder;
+            accessible-placeholder-text: HubRingBridge.field-placeholder;
+            edited => {
+                HubRingBridge.query-edited(self.text);
+            }
+        }
+    }
+
+    // Searching: the top results, then the "Search the web for ..." row (tab -1).
+    if root.searching: Rectangle {
+        for row[i] in HubRingBridge.results: Rectangle {
+            x: root.c - 112px;
+            y: root.c - 30px + i * 42px;
+            width: 224px;
+            height: row.tab >= 0 ? 40px : 26px;
+            border-radius: row.tab >= 0 ? 10px : 8px;
+            background: row.selected ? ChromePalette.item-selected : touch.has-hover ? ChromePalette.item-hover : transparent;
+            accessible-role: list-item;
+            accessible-label: row.tab >= 0 ? row.title + ", " + row.path : row.title;
+            accessible-item-selectable: true;
+            accessible-item-selected: row.selected;
+            accessible-action-default => {
+                HubRingBridge.result-activated(i);
+            }
+
+            Quiet {
+                x: 12px;
+                width: parent.width - 24px;
+                baseline: 17px;
+                text: row.title;
+                font-size: row.tab >= 0 ? 13px : 12px;
+                font-weight: row.tab >= 0 ? 600 : 400;
+                color: row.selected ? ChromePalette.item-selected-text : row.tab >= 0 ? ChromePalette.text : ChromePalette.text-secondary;
+            }
+
+            if row.tab >= 0: Quiet {
+                x: 12px;
+                width: parent.width - 24px;
+                baseline: 33px;
+                text: row.path;
+                font-size: 11px;
+                color: row.selected ? ChromePalette.item-selected-text : ChromePalette.text-muted;
+            }
+
+            // Return on the row that was clicked (or given the focus) opens it too.
+            key-scope := FocusScope {
+                key-pressed(event) => {
+                    if event.text == Key.Return {
+                        HubRingBridge.result-activated(i);
+                        return accept;
+                    }
+                    return reject;
+                }
+            }
+
+            touch := TouchArea {
+                clicked => {
+                    key-scope.focus();
+                    HubRingBridge.result-activated(i);
+                }
+            }
+        }
+    }
+
+    // Audio: Pause (only when the media session has the command) and Mute side by side.
+    if root.audio && HubRingBridge.can-pause: DiscButton {
+        x: root.c - 92px;
+        y: root.c + 46px;
+        label: HubRingBridge.paused ? "Play" : "Pause";
+        description: (HubRingBridge.paused ? "Play " : "Pause ") + HubRingBridge.title;
+        icon: HubRingBridge.paused ? "M5 3 L13 8 L5 13 Z" : "M5.5 3 V13 M10.5 3 V13";
+        clicked => {
+            HubRingBridge.pause-clicked();
+        }
+    }
+
+    if root.audio: DiscButton {
+        x: HubRingBridge.can-pause ? root.c + 4px : root.c - 44px;
+        y: root.c + 46px;
+        label: HubRingBridge.muted ? "Unmute" : "Mute";
+        description: (HubRingBridge.muted ? "Unmute " : "Mute ") + HubRingBridge.title;
+        icon: HubRingBridge.muted ? "M2.5 6 H5 L8.5 3 V13 L5 10 H2.5 Z M11 6 A3 3 0 0 1 11 10" : "M2.5 6 H5 L8.5 3 V13 L5 10 H2.5 Z M10.5 6 L14 9.5 M14 6 L10.5 9.5";
+        clicked => {
+            HubRingBridge.mute-clicked();
+        }
+    }
+
+    // ⌥ held: the key in large type, the group, how to pick a tab, how to commit.
+    if root.held: Rectangle {
+        Line {
+            x: 11px;
+            width: 250px;
+            baseline: root.c - 40px;
+            text: HubRingBridge.held-key;
+            font-size: 32px;
+            font-weight: 800;
+            color: ChromePalette.accent;
+        }
+
+        Line {
+            x: 11px;
+            width: 250px;
+            baseline: root.c - 4px;
+            text: HubRingBridge.held-name;
+            font-size: 16px;
+            font-weight: 700;
+            color: ChromePalette.text;
+        }
+
+        Line {
+            x: 11px;
+            width: 250px;
+            baseline: root.c + 20px;
+            text: HubRingBridge.held-help;
+            font-size: 12px;
+            color: ChromePalette.text-secondary;
+        }
+
+        Line {
+            x: 11px;
+            width: 250px;
+            baseline: root.c + 50px;
+            text: "release ⌥ to switch";
+            font-size: 12px;
+            color: ChromePalette.text-secondary;
+        }
+    }
+
+    // The hint line.
+    Line {
+        x: 11px;
+        width: 250px;
+        baseline: root.c + (root.held ? 90px : root.searching ? 92px : 102px);
+        text: HubRingBridge.footer;
+        font-size: 10.5px;
+        color: ChromePalette.text-muted;
+    }
+
+    // "See everything" opens Orbit; drawn only when the host has one.
+    if root.rest && HubRingBridge.orbit-available: Rectangle {
+        x: root.c - 42px;
+        y: root.c + 108px;
+        width: 84px;
+        height: 18px;
+        border-radius: 9px;
+        background: seeing.has-hover ? ChromePalette.button-hover : transparent;
+        accessible-role: button;
+        accessible-label: "See everything";
+        accessible-action-default => {
+            HubRingBridge.see-everything();
+        }
+
+        Quiet {
+            width: parent.width;
+            baseline: 12.5px;
+            horizontal-alignment: center;
+            text: "See everything";
+            font-size: 11px;
+            font-weight: 600;
+            color: ChromePalette.accent;
+        }
+
+        seeing := TouchArea {
+            clicked => {
+                HubRingBridge.see-everything();
+            }
+        }
+    }
 }

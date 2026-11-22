@@ -7,6 +7,7 @@
 
 use slint::{Color, Image, SharedString};
 
+use super::nav::FocusOrder;
 use super::{HubRingInput, LOOSE_GROUP_ID, TabMedia};
 use crate::TabRow;
 use crate::ring_bands::fixtures;
@@ -62,4 +63,35 @@ pub fn mockup_input(dark: bool) -> HubRingInput {
         hold_ms: 400,
         ..HubRingInput::default()
     }
+}
+
+/// The focus order of `input` the way the controller builds it: the shown (not pinned) tabs in the
+/// order the input lists them (which must be ring order, as `mockup_input` has it), the groups
+/// with the upper-case first character of their key label as key, and the pinned tab ids as beads.
+pub fn focus_order(input: &HubRingInput) -> FocusOrder {
+    let tabs: Vec<(i32, i32)> = input
+        .tabs
+        .iter()
+        .filter(|tab| !tab.pinned)
+        .map(|tab| (tab.id, tab.group))
+        .collect();
+    let groups: Vec<(i32, Option<char>)> = input
+        .groups
+        .iter()
+        .map(|group| {
+            let key = group
+                .key_label
+                .chars()
+                .next()
+                .and_then(|c| c.to_uppercase().next());
+            (group.id, key)
+        })
+        .collect();
+    let beads: Vec<i32> = input
+        .tabs
+        .iter()
+        .filter(|tab| tab.pinned)
+        .map(|tab| tab.id)
+        .collect();
+    FocusOrder::new(&tabs, &groups, &beads)
 }
