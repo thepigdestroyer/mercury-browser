@@ -6,7 +6,7 @@
   "source": {
     "force_https": null,
     "input_sha256": null,
-    "name": "servo-default-resources 0.8.0 (Servo commit 4e136d8ef31b7c4748fbfac606ca463f3efd7537, components/default-resources/resources/hsts_preload.fstmap, generated from Chromium's transport_security_state_static.json; Chromium revision and date not recorded)",
+    "name": "servo-default-resources 0.8.0 (Servo commit 4e136d8ef31b7c4748fbfac606ca463f3efd7537, components/default-resources/resources/hsts_preload.fstmap, an earlier snapshot of Chromium's transport_security_state_static.json; its revision and date are not recorded)",
     "objects": null,
     "ref": null,
     "retrieved": null,
