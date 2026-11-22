@@ -39,6 +39,7 @@ On the `mercury` branch today:
 - ad and tracker blocking at the network level, with filter lists updated in the background;
 - your system's proxy settings and an HTTP disk cache;
 - session restore and reopening closed tabs, and pinned tabs, tab search and dragging tabs into order;
+- a PDF viewer in the tab ([PDF viewer](pdf-viewer.md)): scroll, zoom, find and copy text, with no forms or annotations, and no screen-reader access to the text of the pages;
 - the history window and address-bar suggestions, bookmarks, importing from other browsers, the downloads list, find in page, and opening links from other apps;
 - the tab audio indicator and Now Playing;
 - saved logins in the Keychain, managed in Settings, with a manual fill from the right-click menu;

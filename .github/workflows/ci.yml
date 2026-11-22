@@ -597,7 +597,7 @@ jobs:
   # certificate (R14 EC27, a release blocker). `make test-servo-net` runs them
   # on the crate's own manifest and lock, against loopback servers only. It
   # builds the crate's own dependency graph (no GStreamer, no window), which is
-  # most of the time; the 400 tests take seconds.
+  # most of the time; the 450 tests take seconds.
   servo-net:
     name: Vendored servo-net tests
     runs-on: ubuntu-22.04

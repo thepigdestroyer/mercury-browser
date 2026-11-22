@@ -700,8 +700,10 @@ fn the_viewer_sources_name_every_control_and_use_only_palette_colours() {
             "the toolbar names its {name:?} button"
         );
     }
-    // The page area says what it is and where it is.
-    assert!(pages.contains("accessible-role: AccessibleRole.main;"));
+    // The page area says what it is and where it is. It is a region: the window's one `main` is
+    // the web view's node (`a11y_pdf.rs` checks that).
+    assert!(pages.contains("accessible-role: AccessibleRole.region;"));
+    assert!(!pages.contains("AccessibleRole.main"));
     assert!(pages.contains("accessible-label: \"PDF document, page \""));
     // The password field is a `RequestField` in its password mode (the field that keeps a typed
     // password from assistive technology; `a11y_secrets.rs` allows a password input type nowhere

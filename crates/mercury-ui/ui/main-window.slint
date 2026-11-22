@@ -1153,7 +1153,7 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if !root.web-view-visible && !root.is-new-tab: VerticalLayout {
+            if !root.web-view-visible && !root.is-new-tab && !root.pdf-viewer-shown: VerticalLayout {
                 alignment: center;
                 spacing: 10px;
                 padding-left: 32px;
@@ -1174,7 +1174,7 @@ export component MainWindow inherits Window {
                 focus-on-tab-navigation: false;
                 accessible-role: main; // a11y-base
                 accessible-label: "Page content"; // a11y-base
-                accessible-description: "Mercury doesn't pass web page content to assistive technology yet."; // a11y-base: the page-accessibility lane deletes this line when it grafts the page's tree here
+                accessible-description: root.pdf-viewer-shown ? "" : "Mercury doesn't pass web page content to assistive technology yet."; // a11y-base: the page-accessibility lane deletes this line when it grafts the page's tree here
 
                 focus-gained => {
                     root.web-view-focus-changed(true);

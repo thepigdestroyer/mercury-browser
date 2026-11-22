@@ -100,6 +100,10 @@ flowchart TB
 | `crates/mercury-devtools` | Development and CI tools: the loopback server for `tests/`, the smoke test's screenshot checker and the CI scripts' helpers |
 | `crates/mercury-filter-lists` | The ad and tracker filter lists as data files: the manifest and its SHA-256 checks, the compiled engine's cache and the background updates |
 | `crates/mercury-site-security` | Site security with no engine inside: safe display of host names, Mercury's network, certificate and crash error pages, and certificate-exception requests |
+| `crates/mercury-appearance` | How Mercury looks, as data: the palettes and the contrast rules each one must pass, the tab-group colours and the resolving of the stored appearance settings into values for the interface, with no engine and no Slint |
+| `crates/mercury-pdf` | The PDF viewer without PDFium, the engine or the interface toolkit: the protocol with the helper process, the client, the helper's serve loop and the model of what to draw |
+| `crates/mercury-pdfium` | The PDFium backend of the PDF viewer and the helper process's entry point (`mercury-browser --pdf-worker`); PDFium is loaded at run time from a prebuilt library, not linked |
+| `crates/mercury-credits` | A build tool: writes `credits.html`, the licence texts of every crate built into the app, and checks that every crate can be credited (`make credits-check`) |
 | `crates/mercury-tab-snapshots` | Small pictures of the open tabs, for the Orbit view, with no engine inside: shrinking a frame to at most 480 by 300 pixels, a store kept in memory under a 128 MB cap, and the rules for when a picture is taken |
 | `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset (`scripts/macos/make-icns.sh`) |
 | `crates/mercury-release` | A release tool: writes and signs the update manifest (`update.json`) published with each release |
@@ -137,6 +141,7 @@ pie showData title Work packages, 19 November 2026
 | Import window for other browsers' data | ✅ Done | Chromium-based browsers and Firefox |
 | Downloads list, saving links and pages | ✅ Done | |
 | Find in page | ✅ Done | |
+| PDF viewer: PDFs open in the tab, drawn from pages that PDFium renders in a helper process | ✅ Done | No forms, no annotations, no screen-reader access to the page text. The first run on Apple Silicon is still to be checked by hand |
 | Links opened from other apps and a second launch | ✅ Done | |
 | Tab audio indicator, mute, and macOS Now Playing | ✅ Done | |
 | Pinned tabs, dragging to reorder, tab search, duplicate tab, close other tabs | ✅ Done | |
@@ -170,6 +175,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 
 **From where Mercury is right now**
 
+- The PDF viewer shows pages, finds and copies text and follows links; it has no forms and no annotations, and a screen reader cannot read the text of a PDF page. PDFium comes as a prebuilt library without V8 and without XFA, so no JavaScript inside a PDF runs.
 - There's no Apple Developer ID yet. Hence the ad hoc signature and the warning on first launch.
 - Updates are manual: the browser has no update check yet. Each release does carry a signed update manifest (`update.json`) for the check that is planned, but nothing reads it today.
 - Releases carry an ad-hoc signed macOS disk image (Apple Silicon only) and a Linux x86-64 archive, with SHA-256 checksums and a build-provenance attestation ([how to check them](docs/user-guide/installation.md#verify-a-download)). Neither is notarised, and neither updates itself. No release has been made yet. An Intel Mac builds the app from source with `make run`; `make app-macos` is Apple Silicon only.

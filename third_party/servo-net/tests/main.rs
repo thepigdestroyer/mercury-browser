@@ -22,6 +22,8 @@ mod hsts;
 mod http_cache;
 mod http_loader;
 mod image_cache;
+// Mercury: the unit tests of mercury_log.rs and mercury_svg.rs (the library itself has `test = false`).
+mod mercury_unit;
 mod resource_thread;
 mod subresource_integrity;
 use std::sync::Arc;
