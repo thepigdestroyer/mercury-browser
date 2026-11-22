@@ -57,6 +57,19 @@ ignore = [
     # moves to rusqlite 0.41, or carrying a patched libsqlite3-sys 0.36 that
     # bundles SQLite 3.54 through [patch.crates-io]. Neither is done yet.
     { id = "RUSTSEC-2026-0459", reason = "libsqlite3-sys 0.36 (links = sqlite3) is pinned by Servo's rusqlite 0.38; mercury-import opens copied third-party databases with their -wal, the advisory's scenario; fix needs a Servo upgrade or a patched libsqlite3-sys" },
+    # Timing variability in crypto-bigint's "constant-time" arithmetic (subtraction, division, Montgomery
+    # multiplication) on some compilers and CPUs.
+    # crypto-bigint 0.5.5 <- elliptic-curve 0.13.8 <- p256 0.13.2 <- authenticator 0.5.0 (Mozilla's USB security
+    # key library, EC43, macOS only, `crypto_rust` feature) <- mercury-passkeys.
+    # authenticator 0.5.0 is the latest release and pins p256 0.13, whose elliptic-curve needs crypto-bigint
+    # ^0.5, so the fixed 0.7.6 cannot be selected. The only use of p256 there is one ephemeral ECDH
+    # (`p256::ecdh::EphemeralSecret::random(OsRng)`, `src/crypto/rustcrypto.rs`) per PIN or UV exchange with a
+    # security key over USB: a fresh key used once, so a timing side channel would need an observer on the
+    # same machine during that one exchange. It signs nothing and holds no long-term key (passkeys made by
+    # Mercury's own manager use passkey-crypto's p256 0.14, which links crypto-bigint 0.7.11). The other
+    # backends are worse (`crypto_nss`: NSS is not shipped; `crypto_openssl`: a system OpenSSL; `crypto_dummy`:
+    # no PIN protocol). Remove when authenticator releases on p256 0.14, or if EC43 is dropped.
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 is pinned by p256 0.13 in authenticator 0.5.0 (USB security keys, macOS only); it is used for one ephemeral ECDH per PIN exchange, never for a long-term key; no fixed version is selectable" },
 ]
 
 [bans]

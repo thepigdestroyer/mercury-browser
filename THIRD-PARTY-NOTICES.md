@@ -249,6 +249,22 @@ Rust crates that load and wrap the library are compiled into `mercury-browser` a
 - `vecmath` 1.0.0 — https://github.com/pistondevelopers/vecmath — MIT (Copyright (c) 2014 PistonDevelopers;
   `LICENSES/MIT-vecmath.txt`) — a dependency of `pdfium-render`.
 
+## Passkeys and security keys (`crates/mercury-passkeys`)
+
+Three crates are linked as libraries into `mercury-passkeys` (no code of theirs is copied into Mercury's files). They are
+pinned to exact versions in the workspace `Cargo.toml`, and the credits page carries their licence texts and notices.
+
+- `passkey` 0.6.0 and the crates it re-exports, `passkey-authenticator`, `passkey-client`, `passkey-types`, `passkey-crypto`
+  and `passkey-transports`, with `public-suffix` — https://github.com/1Password/passkey-rs — MIT OR Apache-2.0 (used under
+  MIT; Copyright (c) 2022 1Password; `LICENSES/MIT.txt`) — the software authenticator, the WebAuthn and CTAP2 types and the
+  crypto traits behind Mercury's built-in passkey manager. The packages carry no licence file; the holder was read in the
+  repository's `LICENSE-MIT` on 22 Nov 2026.
+- `credential-exchange-format` 0.4.0 — https://github.com/bitwarden/credential-exchange — MIT (Copyright (c) 2024
+  Bitwarden; `LICENSES/MIT.txt`) — the FIDO Credential Exchange Format types used to import and export passkeys.
+- `authenticator` 0.5.0 — https://github.com/mozilla/authenticator-rs — MPL-2.0 (Mozilla; `LICENSES/MPL-2.0.txt`) — USB
+  security keys (CTAP2 over HID), macOS only, with its `crypto_rust` feature (RustCrypto; Mozilla's NSS is not used). It is an
+  unmodified library; its source is the crate on crates.io, and the credits page points to it.
+
 ## Vendored crates (`third_party/`)
 
 Mercury Browser carries 26 crates in `third_party/`. Each is the crate exactly as published on

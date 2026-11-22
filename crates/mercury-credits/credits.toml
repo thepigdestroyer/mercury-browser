@@ -326,3 +326,57 @@ crates = [
     # Linux only (macOS uses the platform verifier).
     "rustls-native-certs",
 ]
+
+# ---------------------------------------------------------------------------------------------
+# passkeys (lane passkey-l, 22 Nov 2026): the passkey-rs crates and credential-exchange-format ship no licence
+# file in their packages (their `include` lists name ../LICENSE-MIT, which cargo does not package). The holder
+# was read in the repositories' LICENSE-MIT files on 22 Nov 2026.
+# ---------------------------------------------------------------------------------------------
+
+[[clarify]]
+crate = "passkey"
+licence = "MIT"
+copyright = "Copyright (c) 2022 1Password"
+source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+
+[[clarify]]
+crate = "passkey-authenticator"
+licence = "MIT"
+copyright = "Copyright (c) 2022 1Password"
+source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+
+[[clarify]]
+crate = "passkey-client"
+licence = "MIT"
+copyright = "Copyright (c) 2022 1Password"
+source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+
+[[clarify]]
+crate = "passkey-crypto"
+licence = "MIT"
+copyright = "Copyright (c) 2022 1Password"
+source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+
+[[clarify]]
+crate = "passkey-transports"
+licence = "MIT"
+copyright = "Copyright (c) 2022 1Password"
+source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+
+[[clarify]]
+crate = "passkey-types"
+licence = "MIT"
+copyright = "Copyright (c) 2022 1Password"
+source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+
+[[clarify]]
+crate = "public-suffix"
+licence = "MIT"
+copyright = "Copyright (c) 2022 1Password"
+source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+
+[[clarify]]
+crate = "credential-exchange-format"
+licence = "MIT"
+copyright = "Copyright (c) 2024 Bitwarden"
+source = "https://github.com/bitwarden/credential-exchange, LICENSE at the repository root"
