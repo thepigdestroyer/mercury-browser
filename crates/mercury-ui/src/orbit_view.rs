@@ -3,10 +3,9 @@
 //! The Orbit overview (SPEC `design/ui-final/SPEC.md` §4.6): the pure parts. The Slint view is
 //! `ui/orbit/orbit.slint`; the desktop glue is `apps/mercury-desktop/src/orbit.rs`.
 //!
-//! **This file is the frozen scaffold of lane orbit-view** (`.superpowers/sdd/lane-orbit-view-brief.md`).
-//! The shared types below are what the five items build against; an addition is fine, a change goes
-//! through the lane lead. Every submodule has stub bodies (marked `STUB`) that compile; the items
-//! fill them in:
+//! Lane orbit-view (`.superpowers/sdd/lane-orbit-view-brief.md`). The shared types below are what
+//! the machine, the layout, the data builder, the drag resolver and the desktop glue build against;
+//! an addition is fine, a change goes through the lane lead. The submodules:
 //!
 //! | Module | Item | What |
 //! | --- | --- | --- |

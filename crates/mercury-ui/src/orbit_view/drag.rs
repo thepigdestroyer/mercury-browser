@@ -4,15 +4,21 @@
 //! the one resolver that decides what a drop means (whatever started the drag), the slot to final
 //! place conversion and the group operations the glue runs on the controller.
 //!
-//! STUB in the scaffold commit: the types and signatures are final, the bodies answer `NoChange`
-//! and `Err`; item 3 `drag` of lane orbit-view writes the real ones. The types are the contract of
-//! the machine (item 1) and the glue (item 5).
+//! The types are the contract of the machine (item 1) and the glue (item 5). Everything here is
+//! pure: no window, no clock.
+//!
+//! - The payload is `slint::DataTransfer` user data ([`OrbitPayload`]); only user data that downcasts
+//!   to it, from this session, with sane ids, is accepted. Text is never read back: another app can
+//!   forge text, it cannot forge an `Rc<OrbitPayload>`.
+//! - The plain text of a drag is the tab's title or the group's name, never a URL.
+//! - [`resolve`] is the one place that decides what a drop means; [`can_accept`] is "would the drop
+//!   change something".
 
 use std::rc::Rc;
 
 use slint::DataTransfer;
 
-use super::OrbitInput;
+use super::{LOOSE_GROUP_ID, OrbitInput};
 
 /// What is being dragged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -43,7 +49,8 @@ pub enum Decision {
     NoChange,
     /// Not allowed: a pinned source, an unknown id, a stale payload, a group onto "New group".
     Reject,
-    /// Move the tab: `group` is `None` for the loose planet; `index` is the final place in the group.
+    /// Move the tab: `group` is `None` for the loose planet; `index` is the final place in the group
+    /// (for the loose planet: among the pseudo planet's tabs, informational).
     MoveTab {
         tab: i32,
         group: Option<i32>,
@@ -75,9 +82,21 @@ pub enum GroupOp {
 impl Decision {
     /// The controller operation for this decision, if it has one (`NewGroup` has none until the
     /// popover is confirmed: the machine then emits `Effect::Apply(GroupOp::CreateGroup ..)`).
-    /// STUB: always `None`.
+    /// `NoChange` and `Reject` have none. A move to the loose planet (`group: None`) is `Ungroup`:
+    /// the controller's strip index is not known to Orbit, so `index` is dropped there.
     pub fn op(&self) -> Option<GroupOp> {
-        None
+        match *self {
+            Decision::MoveTab {
+                tab,
+                group: Some(group),
+                index,
+            } => Some(GroupOp::MoveTab { tab, group, index }),
+            Decision::MoveTab {
+                tab, group: None, ..
+            } => Some(GroupOp::Ungroup { tab }),
+            Decision::ReorderGroup { group, index } => Some(GroupOp::ReorderGroup { group, index }),
+            Decision::NoChange | Decision::Reject | Decision::NewGroup { .. } => None,
+        }
     }
 }
 
@@ -103,41 +122,200 @@ pub enum PayloadError {
 
 impl OrbitPayload {
     /// The `DataTransfer` for a `DragArea`: user data is the authority; the plain text is the tab's
-    /// title or the group's name, never a URL. STUB: user data only.
-    pub fn to_data_transfer(&self, _text: &str) -> DataTransfer {
+    /// title or the group's name (see [`drag_text`]) so that a drop elsewhere reads something. A text
+    /// that looks like a URL is left out: Orbit never puts an address on the pasteboard.
+    pub fn to_data_transfer(&self, text: &str) -> DataTransfer {
         let mut data = DataTransfer::default();
         data.set_user_data(Rc::new(*self));
+        if !looks_like_url(text) {
+            data.set_plain_text(text.into());
+        }
         data
     }
 
-    /// Reads a payload back, accepting only this `session`. STUB: always `NotOrbit`.
+    /// Reads a payload back, accepting only this `session`. Only user data that is an
+    /// [`OrbitPayload`] counts; the plain text is never parsed.
     pub fn from_data_transfer(
-        _data: &DataTransfer,
-        _session: u64,
+        data: &DataTransfer,
+        session: u64,
     ) -> Result<OrbitPayload, PayloadError> {
-        Err(PayloadError::NotOrbit)
+        let user = data.user_data().ok_or(PayloadError::NotOrbit)?;
+        let payload = *user
+            .downcast::<OrbitPayload>()
+            .map_err(|_| PayloadError::NotOrbit)?;
+        if payload.session != session {
+            return Err(PayloadError::StaleSession);
+        }
+        let sane = match payload.source {
+            Source::Tab(id) => id >= 0,
+            Source::Group(id) => id >= 0 || id == LOOSE_GROUP_ID,
+        };
+        if sane {
+            Ok(payload)
+        } else {
+            Err(PayloadError::BadId)
+        }
     }
 }
 
-/// What dropping `source` on `target` means for these rows. STUB: `NoChange`.
-pub fn resolve(_source: Source, _target: DropTarget, _input: &OrbitInput) -> Decision {
-    Decision::NoChange
+/// Whether a text is an address (a scheme, `www.`) and not words: no whitespace and a scheme
+/// separator, a `www.` start or one of the schemes without `//`.
+fn looks_like_url(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() || text.contains(char::is_whitespace) {
+        return false;
+    }
+    let lower = text.to_ascii_lowercase();
+    lower.contains("://")
+        || lower.starts_with("www.")
+        || ["mailto:", "data:", "javascript:", "about:", "blob:"]
+            .iter()
+            .any(|scheme| lower.starts_with(scheme))
+}
+
+/// The plain text a drag carries: the tab's title or the group's name; for a tab whose title is an
+/// address (a page without a title) its host; empty for an unknown id. Never a URL.
+pub fn drag_text(source: Source, input: &OrbitInput) -> String {
+    match source {
+        Source::Tab(id) => {
+            let Some(tab) = input.tab(id) else {
+                return String::new();
+            };
+            if !looks_like_url(&tab.title) {
+                return tab.title.to_string();
+            }
+            if looks_like_url(&tab.host) {
+                String::new()
+            } else {
+                tab.host.to_string()
+            }
+        }
+        Source::Group(id) => input
+            .group(id)
+            .map(|group| group.name.to_string())
+            .unwrap_or_default(),
+    }
+}
+
+/// What dropping `source` on `target` means for these rows.
+///
+/// - A tab onto a group: [`Decision::MoveTab`] with the final place (see [`slot_to_final_index`]);
+///   a slot past the end is the end; `slot: None` is the end of another group, and nothing for the
+///   tab's own group (to reorder inside a group, drop on its ring). The loose planet gives
+///   `group: None` (its `index` is the place among the pseudo planet's tabs; see [`Decision::op`]);
+///   a tab that is already loose changes nothing there.
+/// - A tab onto "New group" or empty space: [`Decision::NewGroup`].
+/// - A group onto another group: [`Decision::ReorderGroup`] with the target's place in the order
+///   (the slot is ignored); onto itself or onto empty space: `NoChange`; onto "New group" or from or
+///   onto the loose planet (always last, not reorderable): `Reject`.
+/// - A pinned tab, an unknown tab or group: `Reject`.
+pub fn resolve(source: Source, target: DropTarget, input: &OrbitInput) -> Decision {
+    match source {
+        Source::Tab(tab) => resolve_tab(tab, target, input),
+        Source::Group(group) => resolve_group(group, target, input),
+    }
+}
+
+fn resolve_tab(tab: i32, target: DropTarget, input: &OrbitInput) -> Decision {
+    let Some(row) = input.tab(tab) else {
+        return Decision::Reject;
+    };
+    if input.is_pinned(tab) {
+        return Decision::Reject;
+    }
+    let (group, slot) = match target {
+        DropTarget::NewGroup | DropTarget::Empty => return Decision::NewGroup { tab },
+        DropTarget::Group { group, slot } => (group, slot),
+    };
+    if input.group(group).is_none() {
+        return Decision::Reject;
+    }
+    let tabs = input.tabs_of(group);
+    let len = tabs.len();
+    let own = row.group == group;
+    if group == LOOSE_GROUP_ID {
+        if own {
+            return Decision::NoChange;
+        }
+        return Decision::MoveTab {
+            tab,
+            group: None,
+            index: slot.map_or(len, |slot| slot.min(len)),
+        };
+    }
+    if !own {
+        return Decision::MoveTab {
+            tab,
+            group: Some(group),
+            index: slot.map_or(len, |slot| slot.min(len)),
+        };
+    }
+    let (Some(at), Some(slot)) = (tabs.iter().position(|t| t.id == tab), slot) else {
+        return Decision::NoChange;
+    };
+    let index = slot_to_final_index(Some(group), at, group, slot.min(len));
+    if index == at {
+        Decision::NoChange
+    } else {
+        Decision::MoveTab {
+            tab,
+            group: Some(group),
+            index,
+        }
+    }
+}
+
+fn resolve_group(group: i32, target: DropTarget, input: &OrbitInput) -> Decision {
+    if group == LOOSE_GROUP_ID || input.group(group).is_none() {
+        return Decision::Reject;
+    }
+    match target {
+        DropTarget::NewGroup => Decision::Reject,
+        DropTarget::Empty => Decision::NoChange,
+        DropTarget::Group { group: to, .. } => {
+            if to == LOOSE_GROUP_ID {
+                return Decision::Reject;
+            }
+            let Some(index) = input.groups.iter().position(|g| g.id == to) else {
+                return Decision::Reject;
+            };
+            if to == group {
+                Decision::NoChange
+            } else {
+                Decision::ReorderGroup { group, index }
+            }
+        }
+    }
 }
 
 /// The final place in the group for a tab dropped at insertion `slot` (`ring-bands` reports slots
 /// before removal): when the tab is already in that group and the slot is after its own place the
-/// final place is `slot - 1`. STUB: `slot`.
+/// final place is `slot - 1`; its own slot and the one after it leave it where it is; an earlier
+/// slot is the place. For another group the slot is the place.
 pub fn slot_to_final_index(
-    _current_group: Option<i32>,
-    _current_index: usize,
-    _target_group: i32,
+    current_group: Option<i32>,
+    current_index: usize,
+    target_group: i32,
     slot: usize,
 ) -> usize {
-    slot
+    if current_group != Some(target_group) {
+        return slot;
+    }
+    if slot > current_index + 1 {
+        slot - 1
+    } else if slot < current_index {
+        slot
+    } else {
+        current_index
+    }
 }
 
 /// Whether a `DropArea` should accept this payload on this target (what `can-drop` answers; the
-/// Slint side maps `true` to `DragAction.move`). STUB: `false`.
-pub fn can_accept(_payload: &OrbitPayload, _target: DropTarget, _input: &OrbitInput) -> bool {
-    false
+/// Slint side maps `true` to `DragAction.move` and `false` to none): exactly when [`resolve`] would
+/// change something.
+pub fn can_accept(payload: &OrbitPayload, target: DropTarget, input: &OrbitInput) -> bool {
+    matches!(
+        resolve(payload.source, target, input),
+        Decision::MoveTab { .. } | Decision::NewGroup { .. } | Decision::ReorderGroup { .. }
+    )
 }

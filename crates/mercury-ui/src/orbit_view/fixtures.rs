@@ -306,7 +306,10 @@ mod tests {
                     assert_eq!(t.index_in_group, i as i32);
                 }
             }
-            assert_eq!(input.tab(104).map(|t| t.title.as_str()), Some("AccessKit guide"));
+            assert_eq!(
+                input.tab(104).map(|t| t.title.as_str()),
+                Some("AccessKit guide")
+            );
             assert_eq!(input.tabs.iter().filter(|t| t.active).count(), 1);
         }
     }
@@ -321,12 +324,17 @@ mod tests {
             ..tabs[1].clone()
         });
         let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false);
-        let loose = input.group(super::super::LOOSE_GROUP_ID).expect("pseudo planet");
+        let loose = input
+            .group(super::super::LOOSE_GROUP_ID)
+            .expect("pseudo planet");
         assert_eq!(loose.count, 2);
         assert_eq!(input.pinned, vec![101]);
         assert!(input.tabs.iter().all(|t| !t.pinned));
         assert_eq!(input.group(1).map(|g| g.count), Some(9));
-        assert_eq!(input.groups.last().map(|g| g.id), Some(super::super::LOOSE_GROUP_ID));
+        assert_eq!(
+            input.groups.last().map(|g| g.id),
+            Some(super::super::LOOSE_GROUP_ID)
+        );
     }
 
     #[test]
