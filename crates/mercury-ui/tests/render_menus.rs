@@ -282,6 +282,11 @@ fn render_about(theme: ChromeTheme, name: &str) -> ([u8; 3], [u8; 3]) {
     about.window().set_size(LogicalSize::new(380.0, 420.0));
     about.show().expect("the About window can be shown");
     let height = about.get_wanted_height();
+    // Content that grows a lot is a layout change to look at, not something to follow.
+    assert!(
+        (420.0..=480.0).contains(&height),
+        "{name}: the About window wants {height} px"
+    );
     about.window().set_size(LogicalSize::new(380.0, height));
     let pixels = about
         .window()

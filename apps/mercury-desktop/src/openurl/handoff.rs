@@ -319,24 +319,31 @@ fn serve(mut stream: UnixStream, open: OpenAddresses) {
     let _ = stream.shutdown(std::net::Shutdown::Write);
     // A sender of someone else's is not waited for.
     if !matches!(result, Err(HandoffError::UnsafeSocket(_))) {
-        drain(&mut stream);
+        drain(&mut stream, DRAIN_TIMEOUT, MAX_DRAIN_BYTES);
     }
 }
 
 /// Reads and drops what the sender still has in flight, within bounds. On Linux, closing a
 /// socket with unread bytes resets the connection, and the sender then loses the reply that was
-/// already written (a message over the size limit stops being read at the limit).
-fn drain(stream: &mut UnixStream) {
-    let deadline = std::time::Instant::now() + DRAIN_TIMEOUT;
-    let mut remaining = MAX_DRAIN_BYTES;
+/// already written (a message over the size limit stops being read at the limit). Each read waits
+/// only for the time that is left, so the whole drain ends within `timeout`.
+fn drain(stream: &mut UnixStream, timeout: Duration, max_bytes: usize) -> usize {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut remaining = max_bytes;
     let mut buffer = [0_u8; 8192];
-    while remaining > 0 && std::time::Instant::now() < deadline {
+    while remaining > 0 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        // A zero timeout is an error for the socket, and means the time is up.
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
         let wanted = buffer.len().min(remaining);
         match stream.read(&mut buffer[..wanted]) {
             Ok(0) | Err(_) => break,
             Ok(read) => remaining -= read,
         }
     }
+    max_bytes - remaining
 }
 
 fn receive(stream: &mut UnixStream) -> Result<Vec<String>, HandoffError> {
@@ -644,6 +651,41 @@ mod tests {
         answering.join().expect("the server thread ends");
         assert_eq!(result, Err(HandoffError::Refused("too big".to_owned())));
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_drain_ends_with_its_time_even_when_the_sender_says_nothing() {
+        let (_sender, mut receiver) = UnixStream::pair().expect("a socket pair");
+        // The read timeout of a served connection is longer than the drain's time.
+        receiver
+            .set_read_timeout(Some(IO_TIMEOUT))
+            .expect("a read timeout is set");
+        let started = std::time::Instant::now();
+
+        let read = drain(&mut receiver, Duration::from_millis(200), MAX_DRAIN_BYTES);
+
+        assert_eq!(read, 0);
+        assert!(
+            started.elapsed() < IO_TIMEOUT / 2,
+            "the drain took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_drain_stops_at_its_byte_limit() {
+        let (mut sender, mut receiver) = UnixStream::pair().expect("a socket pair");
+        let writing = std::thread::spawn(move || {
+            // More than the limit; the write fails when the receiver is dropped.
+            let _ = sender.write_all(&vec![b'a'; 512 * 1024]);
+        });
+        let limit = 100 * 1024;
+
+        let read = drain(&mut receiver, Duration::from_secs(10), limit);
+
+        assert_eq!(read, limit);
+        drop(receiver);
+        writing.join().expect("the sender thread ends");
     }
 
     #[test]

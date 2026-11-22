@@ -72,8 +72,9 @@ export component AboutWindow inherits Window {
     icon: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
     width: 380px;
     // 420 px where the lines fit; taller when the system's font makes the wrapped lines longer,
-    // so that the Slint badge at the bottom is never cut off.
-    preferred-height: root.wanted-height;
+    // so that the Slint badge at the bottom is never cut off. An explicit height keeps the window
+    // fixed in size (Slint sets its minimum and maximum height to it).
+    height: root.wanted-height;
     background: ChromePalette.window-background;
     forward-focus: key-scope;
 
