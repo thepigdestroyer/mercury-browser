@@ -28,6 +28,20 @@ diff --git a/Cargo.lock b/Cargo.lock
  dependencies = [
   "form_urlencoded",
   "idna",
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -359,6 +359,10 @@
+ [dependencies.webrender_api]
+ version = "0.70"
+
++# Mercury: mercury_svg.rs unpacks SVGZ through a size-limited gzip reader (usvg 0.48.1 has no limit).
++[dependencies.flate2]
++version = "1.1"
++
+ [dev-dependencies.flate2]
+ version = "1.1"
+
 diff --git a/certificate_exceptions.rs b/certificate_exceptions.rs
 new file mode 100644
 --- /dev/null
@@ -800,35 +814,94 @@ diff --git a/http_loader.rs b/http_loader.rs
      invalidate_cached_resources, refresh,
  };
 +// Mercury: redacts cookie and credential header values in the debug logs (EC13).
-+use crate::mercury_log::{header_for_log, headers_for_log};
++use crate::mercury_log::{header_for_log, headers_for_log, url_for_log};
  use crate::resource_thread::{AuthCache, AuthCacheEntry};
  use crate::websocket_loader::start_websocket;
 
-@@ -2184,8 +2186,9 @@
+@@ -1969,9 +1971,10 @@
+     revalidation_request.service_workers_mode = ServiceWorkersMode::None;
+
+     let context = context.clone();
++    // Mercury: no query string or credentials in the log (EC13).
+     debug!(
+-        "spawning stale-while-revalidate background revalidation for {:?}",
+-        revalidation_request.current_url()
++        "spawning stale-while-revalidate background revalidation for {}",
++        url_for_log(&revalidation_request.current_url())
+     );
+     spawn_task(async move {
+         let mut target = DiscardFetch;
+@@ -2183,9 +2186,11 @@
+     let url = request.current_url();
      let request_id = request.id.0;
      if log_enabled!(log::Level::Info) {
-         info!("{:?} request for {}", request.method, url);
+-        info!("{:?} request for {}", request.method, url);
 -        for header in request.headers.iter() {
 -            debug!(" - {:?}", header);
++        // Mercury: no query string or credentials in the log (EC13).
++        info!("{:?} request for {}", request.method, url_for_log(&url));
 +        // Mercury: the values of Cookie and Authorization are not logged (EC13).
 +        for (name, value) in request.headers.iter() {
 +            debug!(" - {}", header_for_log(name, value));
          }
      }
 
-@@ -2280,8 +2283,9 @@
+@@ -2279,9 +2284,14 @@
+     let request = &mut fetch_params.request;
 
      if log_enabled!(log::Level::Info) {
-         debug!("{:?} response for {}", response_stream.version(), url);
+-        debug!("{:?} response for {}", response_stream.version(), url);
 -        for header in response_stream.headers().iter() {
 -            debug!(" - {:?}", header);
++        debug!(
++            "{:?} response for {}",
++            response_stream.version(),
++            url_for_log(&url)
++        );
 +        // Mercury: the values of Set-Cookie are not logged (EC13).
 +        for (name, value) in response_stream.headers().iter() {
 +            debug!(" - {}", header_for_log(name, value));
          }
      }
 
-@@ -2478,11 +2482,10 @@
+@@ -2327,9 +2337,9 @@
+     response.status = HttpStatus::new(response_stream.status(), status_text);
+
+     info!(
+-        "got {:?} response for {:?}",
++        "got {:?} response for {}",
+         response_stream.status(),
+-        request.url()
++        url_for_log(&request.url())
+     );
+     response.headers = response_stream.headers().clone();
+     response.referrer = request.referrer.to_url().cloned();
+@@ -2411,7 +2421,7 @@
+                 future::ready(Ok(response_body_accumulator))
+             })
+             .and_then(move |complete_response_body| {
+-                debug!("successfully finished response for {:?}", url1);
++                debug!("successfully finished response for {}", url_for_log(&url1));
+                 let mut body = complete_response_body.lock();
+                 let mut completed_body = match *body {
+                     ResponseBody::Receiving(ref mut body) => std::mem::take(body),
+@@ -2440,13 +2450,13 @@
+             })
+             .map_err(move |error| {
+                 if let std::io::ErrorKind::InvalidData = error.kind() {
+-                    debug!("Content decompression error for {:?}", url2);
++                    debug!("Content decompression error for {}", url_for_log(&url2));
+                     let _ = done_sender3.send(Data::Error(NetworkError::DecompressionError));
+                     let mut body = response_body2.lock();
+
+                     *body = ResponseBody::Done(vec![]);
+                 }
+-                debug!("finished response for {:?}", url2);
++                debug!("finished response for {}", url_for_log(&url2));
+                 let mut body = response_body2.lock();
+                 let completed_body = match *body {
+                     ResponseBody::Receiving(ref mut body) => std::mem::take(body),
+@@ -2478,11 +2488,10 @@
      if credentials_flag {
          set_cookies_from_headers(&url, &response.headers, &context.state.cookie_jar);
      }
@@ -842,7 +915,7 @@ diff --git a/http_loader.rs b/http_loader.rs
 
      // TODO these steps
      // Step 16
-@@ -2634,9 +2637,11 @@
+@@ -2634,9 +2643,11 @@
              return Response::network_error(NetworkError::CorsMethod);
          }
 
@@ -912,7 +985,7 @@ diff --git a/mercury_log.rs b/mercury_log.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury_log.rs
-@@ -0,0 +1,419 @@
+@@ -0,0 +1,598 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -929,6 +1002,7 @@ new file mode 100644
 +//! Servo release that no longer logs these values.
 +
 +use http::header::{HeaderMap, HeaderName, HeaderValue};
++use servo_url::ServoUrl;
 +
 +/// What the value of a secret header is replaced with.
 +pub(crate) const REDACTED: &str = "<redacted>";
@@ -970,6 +1044,53 @@ new file mode 100644
 +        .map(|(name, value)| format!("{name:?}: {}", value_for_log(name, value)))
 +        .collect();
 +    format!("{{{}}}", entries.join(", "))
++}
++
++/// A URL as a log line shows it: scheme, host, port and path, without the user name and password, the query
++/// string and the fragment (they carry session tokens and credentials). A URL that has no host and no path to
++/// speak of (`data:`, `blob:`, `javascript:`) shows only its scheme.
++pub(crate) fn url_for_log(url: &ServoUrl) -> String {
++    let url = url.as_url();
++    if url.cannot_be_a_base() {
++        return format!("{}:", url.scheme());
++    }
++    let mut shown = format!("{}://", url.scheme());
++    if let Some(host) = url.host_str() {
++        shown.push_str(host);
++    }
++    if let Some(port) = url.port() {
++        shown.push_str(&format!(":{port}"));
++    }
++    shown.push_str(url.path());
++    shown
++}
++
++/// What a message, or an action on a connection, is called, without its content: the names of the variants
++/// from the outside in (`Some(Ok(Text("secret")))` is `Some/Ok/Text`). Takes them from the `Debug` text: a name
++/// is an identifier directly followed by `(`; the content of a message is a string or a byte list, which never
++/// start that way.
++pub(crate) fn variant_for_log<T: std::fmt::Debug>(value: &T) -> String {
++    let text = format!("{value:?}");
++    let mut names: Vec<&str> = Vec::new();
++    let mut rest = text.as_str();
++    loop {
++        let end = rest
++            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
++            .unwrap_or(rest.len());
++        let (name, after) = rest.split_at(end);
++        if !name.is_empty() {
++            names.push(name);
++        }
++        match after.strip_prefix('(') {
++            Some(inner) if !name.is_empty() => rest = inner,
++            _ => break,
++        }
++    }
++    if names.is_empty() {
++        "(unknown)".to_owned()
++    } else {
++        names.join("/")
++    }
 +}
 +
 +#[cfg(test)]
@@ -1289,6 +1410,137 @@ new file mode 100644
 +        );
 +    }
 +
++    // ---- URLs and message bodies -----------------------------------------------------------------------
++
++    fn shown(url: &str) -> String {
++        url_for_log(&ServoUrl::parse(url).unwrap())
++    }
++
++    #[test]
++    fn a_url_is_shown_without_credentials_query_and_fragment() {
++        assert_eq!(
++            shown("https://user:pass@example.com:8443/a/b.html?token=s3cr3t&x=1#frag"),
++            "https://example.com:8443/a/b.html"
++        );
++        assert_eq!(shown("http://example.com"), "http://example.com/");
++        assert_eq!(
++            shown("wss://example.com/socket?ticket=s3cr3t"),
++            "wss://example.com/socket"
++        );
++        assert_eq!(shown("http://[::1]:3000/x?q=1"), "http://[::1]:3000/x");
++    }
++
++    #[test]
++    fn a_url_that_carries_its_content_shows_only_its_scheme() {
++        assert_eq!(shown("data:text/plain;base64,c2VjcmV0"), "data:");
++        assert_eq!(shown("blob:https://example.com/0d9f"), "blob:");
++        assert_eq!(shown("javascript:alert('s3cr3t')"), "javascript:");
++    }
++
++    #[test]
++    fn a_message_is_shown_by_its_variant_not_its_content() {
++        #[derive(Debug)]
++        #[allow(dead_code)]
++        enum Frame {
++            Text(String),
++            Binary(Vec<u8>),
++            Close { reason: String },
++            Ping,
++        }
++        let frames = [
++            (
++                Some(Ok::<_, ()>(Frame::Text("s3cr3t".into()))),
++                "Some/Ok/Text",
++            ),
++            (Some(Ok(Frame::Binary(vec![115, 51]))), "Some/Ok/Binary"),
++            (
++                Some(Ok(Frame::Close {
++                    reason: "s3cr3t".into(),
++                })),
++                "Some/Ok/Close",
++            ),
++            (Some(Ok(Frame::Ping)), "Some/Ok/Ping"),
++            (None, "None"),
++        ];
++        for (frame, expected) in frames {
++            let line = variant_for_log(&frame);
++            assert!(!line.contains("s3cr3t") && !line.contains("115"), "{line}");
++            assert_eq!(line, expected);
++        }
++        assert_eq!(variant_for_log(&"s3cr3t"), "(unknown)");
++    }
++
++    /// Problems with the logging calls in a network file: a URL may only be logged through `url_for_log`,
++    /// and a WebSocket message or action only through `variant_for_log`.
++    fn url_log_problems(file: &str, source: &str) -> Vec<String> {
++        const URLS: [&str; 6] = ["url", "url1", "url2", "resource_url", "current_url", "uri"];
++        const MESSAGES: [&str; 3] = ["dom_action", "dom_msg", "ws_msg"];
++        let mut problems = Vec::new();
++        for call in log_macro_calls(source) {
++            let args = arguments(call);
++            let Some((literal, rest)) = args.split_first() else {
++                continue;
++            };
++            for name in inline_captures(literal) {
++                if URLS.contains(&name.as_str()) || MESSAGES.contains(&name.as_str()) {
++                    problems.push(format!(
++                        "{file}: `{{{name}}}` in `{literal}` captures a URL or message"
++                    ));
++                }
++            }
++            for arg in rest {
++                let mentions = |names: &[&str]| {
++                    arg.split(|c: char| !(c.is_alphanumeric() || c == '_'))
++                        .any(|word| names.contains(&word))
++                };
++                let wrapped =
++                    arg.starts_with("url_for_log(") || arg.starts_with("variant_for_log(");
++                if (mentions(&URLS) || mentions(&MESSAGES)) && !wrapped {
++                    problems.push(format!("{file}: logs `{arg}` in `{literal}` unredacted"));
++                }
++            }
++        }
++        problems
++    }
++
++    #[test]
++    fn the_http_and_websocket_loaders_log_urls_and_messages_only_through_the_helpers() {
++        for (file, source) in [
++            ("http_loader.rs", include_str!("http_loader.rs")),
++            ("websocket_loader.rs", include_str!("websocket_loader.rs")),
++        ] {
++            let problems = url_log_problems(file, source);
++            assert!(
++                problems.is_empty(),
++                "a query string, credentials or a message body would reach the log (EC13):\n{}",
++                problems.join("\n")
++            );
++            assert!(
++                source.contains("url_for_log("),
++                "{file} no longer uses url_for_log"
++            );
++        }
++        assert!(include_str!("websocket_loader.rs").contains("variant_for_log("));
++    }
++
++    #[test]
++    fn the_url_guard_finds_the_lines_servo_used_to_have() {
++        let old = [
++            r#"info!("{:?} request for {}", request.method, url);"#,
++            r#"debug!("finished response for {:?}", url2);"#,
++            r#"trace!("starting WS connection to {}", client.url());"#,
++            r#"trace!("processing websocket http response for {}", resource_url);"#,
++            r#"trace!("processing WS stream: {:?}", ws_msg);"#,
++            r#"trace!("handling WS DOM action: {:?}", dom_action);"#,
++            r#"info!("request for {url}");"#,
++        ];
++        for line in old {
++            assert_eq!(url_log_problems("old", line).len(), 1, "{line}");
++        }
++        let new = r#"info!("request for {}", url_for_log(&url)); trace!("{}", variant_for_log(&ws_msg));"#;
++        assert!(url_log_problems("new", new).is_empty());
++    }
++
 +    #[test]
 +    fn the_guard_finds_the_lines_servo_used_to_have() {
 +        // The upstream 0.8 lines, verbatim. If the guard did not flag these it would guard nothing.
@@ -1336,7 +1588,7 @@ diff --git a/mercury_svg.rs b/mercury_svg.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury_svg.rs
-@@ -0,0 +1,725 @@
+@@ -0,0 +1,865 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -1374,12 +1626,17 @@ new file mode 100644
 +//!    (`<use>`). 32 MiB is ten times what 1024 levels of nested `<svg>` need, for each of the four nested
 +//!    documents. Rendering (`resvg::render`) needs less than 512 KiB for the same trees (measured at 1024
 +//!    levels), and dropping a tree is a loop over a vector per level, so they stay on the worker.
++//! 4. **A size limit on SVGZ.** usvg 0.48.1 unpacks gzip with `read_to_end` and no limit, so a few kilobytes of
++//!    gzip in `<img src="x.svgz">` (or in a nested `data:` image) could fill the memory before the depth count
++//!    starts. [`unpack`] reads through `flate2`'s `GzDecoder` limited to [`MAX_SVG_BYTES`] + 1 bytes and refuses
++//!    anything larger; a nested image over the limit is left out before usvg's own resolver can unpack it.
 +//!
 +//! This is a Mercury file. Drop it (with the two calls in `image_cache.rs` and the `mod mercury_svg;` line
 +//! in `lib.rs`) at the Servo bump that takes resvg 0.50, and set `max_depth: 500` there as upstream does.
 +
 +use std::borrow::Cow;
 +use std::cell::Cell;
++use std::io::Read;
 +use std::sync::Arc;
 +
 +use log::warn;
@@ -1401,6 +1658,10 @@ new file mode 100644
 +
 +/// The error for any other document usvg or roxmltree cannot read.
 +pub(crate) const INVALID: &str = "Not a valid SVG document";
++
++/// The most an SVG may be once unpacked: 32 MiB. An SVGZ can be a thousand times smaller than its content, and
++/// usvg 0.48.1 unpacks without a limit, so one `<img src="x.svgz">` could otherwise take the memory of the process.
++pub(crate) const MAX_SVG_BYTES: usize = 32 << 20;
 +
 +/// The two magic bytes at the start of a gzip stream (an `.svgz` file).
 +const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
@@ -1455,14 +1716,44 @@ new file mode 100644
 +    }
 +}
 +
-+/// The bytes of an SVG, unpacked when they are gzip. `Err` for malformed gzip. A gzip stream inside a gzip
-+/// stream comes out as gzip, which is not UTF-8, so it is never read as XML afterwards.
-+fn unpack(bytes: &[u8]) -> Result<Cow<'_, [u8]>, usvg::Error> {
-+    if bytes.starts_with(&GZIP_MAGIC) {
-+        usvg::decompress_svgz(bytes).map(Cow::Owned)
-+    } else {
-+        Ok(Cow::Borrowed(bytes))
++/// Why an SVGZ stream was refused by [`unpack`].
++#[derive(Debug)]
++enum UnpackError {
++    /// Not a valid gzip stream.
++    Gzip(std::io::Error),
++    /// More than [`MAX_SVG_BYTES`] come out of it.
++    TooLarge,
++}
++
++impl std::fmt::Display for UnpackError {
++    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
++        match self {
++            UnpackError::Gzip(error) => write!(formatter, "{error}"),
++            UnpackError::TooLarge => write!(
++                formatter,
++                "the SVGZ file unpacks to more than {MAX_SVG_BYTES} bytes"
++            ),
++        }
 +    }
++}
++
++/// The bytes of an SVG, unpacked when they are gzip. `Err` for malformed gzip, or when more than
++/// [`MAX_SVG_BYTES`] come out of it: the reader stops one byte past the limit, so a few kilobytes of gzip
++/// cannot be made to fill the memory (`usvg::decompress_svgz` reads to the end without a limit). A gzip stream
++/// inside a gzip stream comes out as gzip, which is not UTF-8, so it is never read as XML afterwards.
++fn unpack(bytes: &[u8]) -> Result<Cow<'_, [u8]>, UnpackError> {
++    if !bytes.starts_with(&GZIP_MAGIC) {
++        return Ok(Cow::Borrowed(bytes));
++    }
++    let mut unpacked = Vec::new();
++    flate2::read::GzDecoder::new(bytes)
++        .take(MAX_SVG_BYTES as u64 + 1)
++        .read_to_end(&mut unpacked)
++        .map_err(UnpackError::Gzip)?;
++    if unpacked.len() > MAX_SVG_BYTES {
++        return Err(UnpackError::TooLarge);
++    }
++    Ok(Cow::Owned(unpacked))
 +}
 +
 +/// The nesting of the elements of `document`: the root element is 1. Stops counting when the depth is over
@@ -1495,7 +1786,10 @@ new file mode 100644
 +/// Parses SVG `bytes` as `usvg::Tree::from_data` does, refusing a document that is nested too deeply (see the
 +/// module documentation), on a thread with a large stack. The error is [`TOO_DEEP`] or [`INVALID`]; the
 +/// reason is logged.
-+pub(crate) fn parse_tree(bytes: &[u8], options: &usvg::Options) -> Result<usvg::Tree, &'static str> {
++pub(crate) fn parse_tree(
++    bytes: &[u8],
++    options: &usvg::Options,
++) -> Result<usvg::Tree, &'static str> {
 +    std::thread::scope(|scope| {
 +        let spawned = std::thread::Builder::new()
 +            .name("MercurySvgParse".to_owned())
@@ -1547,9 +1841,15 @@ new file mode 100644
 +                return default(mime, data, options);
 +            }
 +            let _entered = match nested_depth(&data) {
++                // Bad gzip, or more than MAX_SVG_BYTES once unpacked: usvg's resolver would unpack it
++                // again without a limit, so it never sees it. The `<image>` draws nothing.
++                Err(error) => {
++                    warn!("Leaving out an SVG image inside an SVG image: {error}");
++                    return None;
++                },
 +                // Not XML at all (a PNG sent as `text/plain`, say): usvg decides what it is.
-+                None => None,
-+                Some(depth) => {
++                Ok(None) => None,
++                Ok(Some(depth)) => {
 +                    let entered = Entered::new(depth);
 +                    if entered.is_none() {
 +                        warn!(
@@ -1567,12 +1867,16 @@ new file mode 100644
 +    )
 +}
 +
-+/// The nesting of the XML in `data` (unpacked if it is gzip), or `None` if it is not XML that roxmltree reads.
-+fn nested_depth(data: &[u8]) -> Option<u32> {
-+    let data = unpack(data).ok()?;
-+    let text = std::str::from_utf8(&data).ok()?;
-+    let document = roxmltree::Document::parse_with_options(text, xml_options()).ok()?;
-+    Some(element_depth(&document))
++/// The nesting of the XML in `data` (unpacked if it is gzip): `Ok(None)` if it is not XML that roxmltree reads,
++/// `Err` if it is gzip that cannot be unpacked within [`MAX_SVG_BYTES`].
++fn nested_depth(data: &[u8]) -> Result<Option<u32>, UnpackError> {
++    let data = unpack(data)?;
++    let Ok(text) = std::str::from_utf8(&data) else {
++        return Ok(None);
++    };
++    Ok(roxmltree::Document::parse_with_options(text, xml_options())
++        .ok()
++        .map(|document| element_depth(&document)))
 +}
 +
 +#[cfg(test)]
@@ -1590,7 +1894,8 @@ new file mode 100644
 +
 +    /// `levels` elements deep: the `<svg>` root, `levels - 1` nested `<g>`, and a `<rect>` beside them.
 +    fn nested(levels: usize) -> Vec<u8> {
-+        let mut svg = format!(r#"<?xml version="1.0"?>{HEAD}<rect width="10" height="10" fill="green"/>"#);
++        let mut svg =
++            format!(r#"<?xml version="1.0"?>{HEAD}<rect width="10" height="10" fill="green"/>"#);
 +        svg.push_str(&"<g>".repeat(levels - 1));
 +        svg.push_str(&"</g>".repeat(levels - 1));
 +        svg.push_str("</svg>");
@@ -1729,7 +2034,11 @@ new file mode 100644
 +        // usvg alone accepts all of these (it refuses from 1025 levels). 600 is the case the first version of
 +        // this guard could not tell from usvg and no test covered; 1000 and 1024 are the edge of usvg's limit.
 +        for levels in [501, 600, 700, 800, 1000, 1024] {
-+            assert_eq!(parse(&nested(levels)).unwrap_err(), TOO_DEEP, "{levels} nested g");
++            assert_eq!(
++                parse(&nested(levels)).unwrap_err(),
++                TOO_DEEP,
++                "{levels} nested g"
++            );
 +            assert_eq!(
 +                parse(&nested_svg(levels)).unwrap_err(),
 +                TOO_DEEP,
@@ -1766,7 +2075,10 @@ new file mode 100644
 +        assert_eq!(counted, MAX_SVG_DEPTH + 1);
 +        assert_eq!(parse(&nested(100_000)).unwrap_err(), TOO_DEEP);
 +        // Opened and never closed: not well formed, refused as invalid, again without recursing.
-+        assert_eq!(parse("<g>".repeat(100_000).as_bytes()).unwrap_err(), INVALID);
++        assert_eq!(
++            parse("<g>".repeat(100_000).as_bytes()).unwrap_err(),
++            INVALID
++        );
 +    }
 +
 +    #[test]
@@ -1801,7 +2113,11 @@ new file mode 100644
 +            "<g>".repeat(10_000),
 +            "<g>".repeat(10_000)
 +        );
-+        assert_eq!(depth_of(&hidden), 2, "svg and style: the rest is text, comment and PI");
++        assert_eq!(
++            depth_of(&hidden),
++            2,
++            "svg and style: the rest is text, comment and PI"
++        );
 +        assert!(parse(hidden.as_bytes()).is_ok());
 +    }
 +
@@ -1904,17 +2220,89 @@ new file mode 100644
 +        assert_eq!(parse(&gzip(&gzip(&nested(20)))).unwrap_err(), INVALID);
 +    }
 +
++    /// A gzip stream of `len` zero bytes, written in pieces so that the test never holds them.
++    fn gzip_of_zeros(len: usize) -> Vec<u8> {
++        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
++        let piece = vec![0u8; 1 << 20];
++        let mut left = len;
++        while left > 0 {
++            let now = left.min(piece.len());
++            encoder.write_all(&piece[..now]).unwrap();
++            left -= now;
++        }
++        encoder.finish().unwrap()
++    }
++
++    /// An SVG document of exactly `len` bytes (blanks after the root element).
++    fn svg_of_length(len: usize) -> Vec<u8> {
++        let mut svg = format!("{HEAD}</svg>").into_bytes();
++        svg.resize(len, b' ');
++        svg
++    }
++
++    #[test]
++    fn a_gzip_bomb_is_refused_before_it_is_unpacked() {
++        // A gigabyte of zeros is a few megabytes of gzip. Unbounded, `unpack` returns the whole gigabyte.
++        let bomb = gzip_of_zeros(1 << 30);
++        assert!(bomb.len() < 8 << 20, "{} bytes", bomb.len());
++        assert!(matches!(unpack(&bomb), Err(UnpackError::TooLarge)));
++        assert_eq!(parse(&bomb).unwrap_err(), INVALID);
++    }
++
++    #[test]
++    fn the_unpacked_size_limit_is_32_mib_exactly() {
++        assert_eq!(MAX_SVG_BYTES, 32 << 20);
++        let at_the_limit = unpack_len(&gzip(&svg_of_length(MAX_SVG_BYTES)));
++        assert_eq!(at_the_limit.unwrap(), MAX_SVG_BYTES);
++        let over = unpack_len(&gzip(&svg_of_length(MAX_SVG_BYTES + 1)));
++        assert!(matches!(over, Err(UnpackError::TooLarge)));
++        // Plain (not packed) bytes are not this function's business: the caller's own size limits apply.
++        assert_eq!(unpack_len(b"<svg/>").unwrap(), 6);
++    }
++
++    fn unpack_len(bytes: &[u8]) -> Result<usize, UnpackError> {
++        unpack(bytes).map(|unpacked| unpacked.len())
++    }
++
++    #[test]
++    fn an_svgz_at_the_limit_still_loads() {
++        assert!(parse(&gzip(&svg_of_length(MAX_SVG_BYTES))).is_ok());
++    }
++
++    #[test]
++    fn a_gzip_bomb_in_a_nested_data_url_leaves_the_image_out() {
++        // Over the limit, so refused here and never handed to usvg's own (unbounded) resolver: the outer
++        // document loads and the `<image>` draws nothing.
++        let bomb = gzip_of_zeros(MAX_SVG_BYTES + (16 << 20));
++        for mime in ["image/svg+xml", "text/plain"] {
++            let tree = parse(&with_image(&data_url(mime, &bomb))).expect("the outer one loads");
++            assert_eq!(images(&tree), (0, 0), "{mime}");
++        }
++        // Just under the limit, a nested SVGZ is as before.
++        let tree = parse(&with_image(&data_url("image/svg+xml", &gzip(&nested(20))))).unwrap();
++        assert_eq!(images(&tree), (1, 0));
++    }
++
 +    #[test]
 +    fn a_nested_svg_in_a_data_url_is_counted_too() {
 +        // The outer document is 2 levels deep and loads; what it embeds is 600 deep (usvg alone loads it).
 +        for mime in ["image/svg+xml", "text/plain"] {
-+            let tree = parse(&with_image(&data_url(mime, &nested(600)))).expect("the outer one loads");
-+            assert_eq!(images(&tree), (0, 0), "{mime}: the 600-level image is left out");
++            let tree =
++                parse(&with_image(&data_url(mime, &nested(600)))).expect("the outer one loads");
++            assert_eq!(
++                images(&tree),
++                (0, 0),
++                "{mime}: the 600-level image is left out"
++            );
 +        }
 +        // Packed, and 100,000 levels packed into a few hundred bytes.
 +        let tree = parse(&with_image(&data_url("image/svg+xml", &gzip(&nested(600))))).unwrap();
 +        assert_eq!(images(&tree), (0, 0), "an SVGZ data URL is unpacked first");
-+        let tree = parse(&with_image(&data_url("image/svg+xml", &gzip(&nested(100_000))))).unwrap();
++        let tree = parse(&with_image(&data_url(
++            "image/svg+xml",
++            &gzip(&nested(100_000)),
++        )))
++        .unwrap();
 +        assert_eq!(images(&tree), (0, 0));
 +        // A shallow image is kept, as an SVG image.
 +        for mime in ["image/svg+xml", "text/plain"] {
@@ -1923,8 +2311,8 @@ new file mode 100644
 +        }
 +        // Raster data is not touched: a PNG under its own type and under text/plain.
 +        let png: &[u8] = &[
-+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R', 0, 0, 0, 1,
-+            0, 0, 0, 1, 8, 6, 0, 0, 0,
++            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R',
++            0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
 +        ];
 +        for mime in ["image/png", "text/plain"] {
 +            let tree = parse(&with_image(&data_url(mime, png))).unwrap();
@@ -1983,7 +2371,10 @@ new file mode 100644
 +        let options = options();
 +        assert!(parse_tree_here(&nested(10), &options).is_ok());
 +        assert_eq!(CHAIN.get(), Chain::default());
-+        assert_eq!(parse_tree_here(&nested(501), &options).unwrap_err(), TOO_DEEP);
++        assert_eq!(
++            parse_tree_here(&nested(501), &options).unwrap_err(),
++            TOO_DEEP
++        );
 +        assert_eq!(CHAIN.get(), Chain::default());
 +        assert_eq!(parse_tree_here(b"<svg", &options).unwrap_err(), INVALID);
 +        assert_eq!(CHAIN.get(), Chain::default());
@@ -2014,9 +2405,8 @@ new file mode 100644
 +
 +    /// `groups` groups of `levels` nested `<svg>` elements, each ending in a `<use>` of the one before.
 +    fn use_amplified_document(groups: usize, levels: usize) -> Vec<u8> {
-+        let mut svg = format!(
-+            r#"{HEAD}<defs><g id="g0"><rect width="10" height="10" fill="green"/></g>"#
-+        );
++        let mut svg =
++            format!(r#"{HEAD}<defs><g id="g0"><rect width="10" height="10" fill="green"/></g>"#);
 +        for group in 1..=groups {
 +            svg.push_str(&format!(r#"<g id="g{group}">"#));
 +            svg.push_str(&r#"<svg width="10" height="10">"#.repeat(levels));
@@ -2040,7 +2430,9 @@ new file mode 100644
 +        );
 +        assert!(parse(&doc).is_ok());
 +        // Called from a worker's own 2 MiB stack, which is where Servo calls it.
-+        assert!(on_a_worker_stack(|| parse(&use_amplified_document(4, 200)).is_ok()));
++        assert!(on_a_worker_stack(
++            || parse(&use_amplified_document(4, 200)).is_ok()
++        ));
 +    }
 +
 +    #[test]
@@ -3282,7 +3674,28 @@ new file mode 100644
 diff --git a/websocket_loader.rs b/websocket_loader.rs
 --- a/websocket_loader.rs
 +++ b/websocket_loader.rs
-@@ -153,10 +153,8 @@
+@@ -42,6 +42,7 @@
+ use crate::cookie::ServoCookie;
+ use crate::hosts::replace_host;
+ use crate::http_loader::HttpState;
++use crate::mercury_log::{url_for_log, variant_for_log};
+
+ /// Create a Request object for the initial HTTP request.
+ /// This request contains `Origin`, `Sec-WebSocket-Protocol`, `Authorization`,
+@@ -126,7 +127,11 @@
+     resource_url: &ServoUrl,
+     protocols: &[String],
+ ) -> Result<Option<String>, Error> {
+-    trace!("processing websocket http response for {}", resource_url);
++    // Mercury: no query string or credentials in the log, and no message bodies (EC13).
++    trace!(
++        "processing websocket http response for {}",
++        url_for_log(resource_url)
++    );
+     let mut protocol_in_use = None;
+     if let Some(protocol_name) = response.headers().get("Sec-WebSocket-Protocol") {
+         let protocol_name = protocol_name.to_str().unwrap_or("");
+@@ -153,10 +158,8 @@
          }
      }
 
@@ -3294,4 +3707,56 @@ diff --git a/websocket_loader.rs b/websocket_loader.rs
 +    http_state.learn_hsts_from_response(resource_url, response.headers());
 
      Ok(protocol_in_use)
+ }
+@@ -177,7 +180,7 @@
+
+     dom_action_receiver.set_callback(move |message| {
+         let dom_action = message.expect("Ws dom_action message to deserialize");
+-        trace!("handling WS DOM action: {:?}", dom_action);
++        trace!("handling WS DOM action: {}", variant_for_log(&dom_action));
+         match dom_action {
+             WebSocketDomAction::SendMessage(MessageData::Text(data)) => {
+                 if let Err(e) = sender.send(DomMsg::Send(Message::Text(data.into()))) {
+@@ -216,7 +219,7 @@
+     loop {
+         select! {
+             dom_msg = dom_receiver.recv() => {
+-                trace!("processing dom msg: {:?}", dom_msg);
++                trace!("processing dom msg: {}", variant_for_log(&dom_msg));
+                 let dom_msg = match dom_msg {
+                     Some(msg) => msg,
+                     None => break,
+@@ -240,7 +243,7 @@
+                 }
+             }
+             ws_msg = stream.next() => {
+-                trace!("processing WS stream: {:?}", ws_msg);
++                trace!("processing WS stream: {}", variant_for_log(&ws_msg));
+                 let msg = match ws_msg {
+                     Some(Ok(msg)) => msg,
+                     Some(Err(e)) => {
+@@ -310,7 +313,7 @@
+     tls_config: TlsConfig,
+     dom_action_receiver: CallbackSetter<WebSocketDomAction>,
+ ) -> Result<Response, Error> {
+-    trace!("starting WS connection to {}", client.url());
++    trace!("starting WS connection to {}", url_for_log(&client.url()));
+
+     let initiated_close = Arc::new(AtomicBool::new(false));
+     let dom_receiver = setup_dom_listener(dom_action_receiver, initiated_close.clone());
+@@ -362,10 +365,13 @@
+             return Ok(response);
+         }
+
+-        trace!("about to start ws loop for {}", url);
++        trace!("about to start ws loop for {}", url_for_log(&url));
+         spawn_task(run_ws_loop(dom_receiver, resource_event_sender, stream));
+     } else {
+-        trace!("client closed connection for {}, not running loop", url);
++        trace!(
++            "client closed connection for {}, not running loop",
++            url_for_log(&url)
++        );
+     }
+     Ok(response)
  }

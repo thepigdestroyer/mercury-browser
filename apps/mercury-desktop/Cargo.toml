@@ -38,6 +38,8 @@ mercury-option-keys = { path = "../../crates/mercury-option-keys" }
 # pdf-viewer: the PDF viewer's model and process protocol, and the PDFium backend with the helper process.
 mercury-pdf = { path = "../../crates/mercury-pdf" }
 mercury-pdfium = { path = "../../crates/mercury-pdfium" }
+# the proxy of this run, shared by Servo and the other HTTP clients (downloads, PDF re-fetch).
+mercury-proxy = { path = "../../crates/mercury-proxy" }
 # passwords-ui
 mercury-password-manager = { path = "../../crates/mercury-password-manager" }
 mercury-passwords = { path = "../../crates/mercury-passwords" }

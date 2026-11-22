@@ -42,13 +42,13 @@ use crate::page_tabs::{
     AdoptedWebView, DocumentRequestListener, DocumentStartedListener, NewTabAllocator, PageTabs,
     SharedDocumentRequestListener,
 };
-use crate::proxy::SystemProxySettings;
 use crate::screen::ScreenMetrics;
 use crate::session_data::{
     AfterEngineCleanup, HandleThenCleanup, clean_up_before_engine_start, end_session_cookies,
 };
 use crate::web_view::TabParts;
 use crate::{ServoWebView, ServoWebViewError};
+use mercury_proxy::{ProxyPreferences, SystemProxySettings};
 // site security
 use crate::certificate_exceptions::{AcceptedHosts, mercury_protocols};
 use crate::site_information::{self, SiteDataSummary};
@@ -592,18 +592,16 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
 
 /// Servo's `Preferences::default` has already read the `http_proxy`, `https_proxy` and
 /// `no_proxy` environment variables (and their upper-case forms); if any was set, those win
-/// and the system settings are not used, as in command-line tools.
+/// and the system settings are not used, as in command-line tools. The choice is
+/// `mercury_proxy::choose`, the same one the desktop app records with `mercury_proxy::install`
+/// for the clients that are not Servo (downloads, the PDF viewer's fetch).
 fn apply_system_proxy(preferences: &mut Preferences, system: Option<&SystemProxySettings>) {
-    let from_environment = !preferences.network_http_proxy_uri.is_empty()
-        || !preferences.network_https_proxy_uri.is_empty()
-        || !preferences.network_http_no_proxy.is_empty();
-    let Some(system) = system else {
-        return;
+    let environment = ProxyPreferences {
+        http_uri: std::mem::take(&mut preferences.network_http_proxy_uri),
+        https_uri: std::mem::take(&mut preferences.network_https_proxy_uri),
+        no_proxy: std::mem::take(&mut preferences.network_http_no_proxy),
     };
-    if from_environment {
-        return;
-    }
-    let proxy = system.preferences();
+    let proxy = mercury_proxy::choose(environment, system);
     preferences.network_http_proxy_uri = proxy.http_uri;
     preferences.network_https_proxy_uri = proxy.https_uri;
     preferences.network_http_no_proxy = proxy.no_proxy;
@@ -1774,7 +1772,7 @@ mod tests {
         }
     }
 
-    use crate::proxy::ProxyServer;
+    use mercury_proxy::ProxyServer;
 
     fn proxy_preferences(preferences: &Preferences) -> [&str; 3] {
         [

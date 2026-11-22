@@ -5989,6 +5989,7 @@ dependencies = [
  "mercury-passwords",
  "mercury-pdf",
  "mercury-pdfium",
+ "mercury-proxy",
  "mercury-settings",
  "mercury-site-security",
  "mercury-store",
@@ -6037,6 +6038,7 @@ dependencies = [
  "futures-util",
  "libc",
  "log",
+ "mercury-proxy",
  "mime_guess",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
@@ -6191,6 +6193,13 @@ dependencies = [
  "log",
  "mercury-pdf",
  "pdfium-render",
+]
+
+[[package]]
+name = "mercury-proxy"
+version = "0.2.0"
+dependencies = [
+ "reqwest",
 ]
 
 [[package]]
@@ -10438,6 +10447,7 @@ dependencies = [
  "cookie 0.18.2",
  "crossbeam-channel",
  "data-url",
+ "flate2",
  "fst",
  "futures",
  "futures-core",
@@ -12002,6 +12012,7 @@ dependencies = [
  "libc",
  "log",
  "mercury-a11y",
+ "mercury-proxy",
  "mercury-site-security",
  "mercury-view-source",
  "objc2 0.6.5",

@@ -407,12 +407,15 @@ fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeO
 }
 
 /// Adds the system's proxy settings (macOS). Elsewhere Servo reads the proxy environment
-/// variables itself, which also win on macOS.
+/// variables itself, which also win on macOS. The same choice is recorded for the other HTTP
+/// clients (`mercury_proxy::install`), so a download or a PDF re-fetch never goes out directly
+/// when the page's own request goes through a proxy.
 fn with_system_proxy(runtime_options: RuntimeOptions) -> RuntimeOptions {
     #[cfg(target_os = "macos")]
     let system_proxy = system_proxy::read_system_proxy();
     #[cfg(not(target_os = "macos"))]
     let system_proxy = None;
+    mercury_proxy::install(system_proxy.as_ref());
     RuntimeOptions {
         system_proxy,
         ..runtime_options

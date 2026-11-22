@@ -20,6 +20,7 @@ members = [
     "crates/mercury-passwords",
     "crates/mercury-pdf",
     "crates/mercury-pdfium",
+    "crates/mercury-proxy",
     "crates/mercury-release",
     "crates/mercury-servo-patches",
     "crates/mercury-settings",

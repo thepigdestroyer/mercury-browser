@@ -26,6 +26,7 @@ talaria-core = { path = "../talaria-core" }
 mercury-a11y = { path = "../mercury-a11y" }
 # site security: Mercury's error pages, and Servo's other resources (patched, see Cargo.toml).
 getrandom.workspace = true
+mercury-proxy = { path = "../mercury-proxy" }
 mercury-site-security = { path = "../mercury-site-security" }
 # sh-pages: the view-source handler (`view_source.rs`) fetches, highlights and renders with this crate.
 futures-util.workspace = true

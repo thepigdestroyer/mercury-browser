@@ -42,6 +42,7 @@ use crate::connector::TlsConfig;
 use crate::cookie::ServoCookie;
 use crate::hosts::replace_host;
 use crate::http_loader::HttpState;
+use crate::mercury_log::{url_for_log, variant_for_log};
 
 /// Create a Request object for the initial HTTP request.
 /// This request contains `Origin`, `Sec-WebSocket-Protocol`, `Authorization`,
@@ -126,7 +127,11 @@ fn process_ws_response(
     resource_url: &ServoUrl,
     protocols: &[String],
 ) -> Result<Option<String>, Error> {
-    trace!("processing websocket http response for {}", resource_url);
+    // Mercury: no query string or credentials in the log, and no message bodies (EC13).
+    trace!(
+        "processing websocket http response for {}",
+        url_for_log(resource_url)
+    );
     let mut protocol_in_use = None;
     if let Some(protocol_name) = response.headers().get("Sec-WebSocket-Protocol") {
         let protocol_name = protocol_name.to_str().unwrap_or("");
@@ -175,7 +180,7 @@ fn setup_dom_listener(
 
     dom_action_receiver.set_callback(move |message| {
         let dom_action = message.expect("Ws dom_action message to deserialize");
-        trace!("handling WS DOM action: {:?}", dom_action);
+        trace!("handling WS DOM action: {}", variant_for_log(&dom_action));
         match dom_action {
             WebSocketDomAction::SendMessage(MessageData::Text(data)) => {
                 if let Err(e) = sender.send(DomMsg::Send(Message::Text(data.into()))) {
@@ -214,7 +219,7 @@ async fn run_ws_loop(
     loop {
         select! {
             dom_msg = dom_receiver.recv() => {
-                trace!("processing dom msg: {:?}", dom_msg);
+                trace!("processing dom msg: {}", variant_for_log(&dom_msg));
                 let dom_msg = match dom_msg {
                     Some(msg) => msg,
                     None => break,
@@ -238,7 +243,7 @@ async fn run_ws_loop(
                 }
             }
             ws_msg = stream.next() => {
-                trace!("processing WS stream: {:?}", ws_msg);
+                trace!("processing WS stream: {}", variant_for_log(&ws_msg));
                 let msg = match ws_msg {
                     Some(Ok(msg)) => msg,
                     Some(Err(e)) => {
@@ -308,7 +313,7 @@ pub(crate) async fn start_websocket(
     tls_config: TlsConfig,
     dom_action_receiver: CallbackSetter<WebSocketDomAction>,
 ) -> Result<Response, Error> {
-    trace!("starting WS connection to {}", client.url());
+    trace!("starting WS connection to {}", url_for_log(&client.url()));
 
     let initiated_close = Arc::new(AtomicBool::new(false));
     let dom_receiver = setup_dom_listener(dom_action_receiver, initiated_close.clone());
@@ -360,10 +365,13 @@ pub(crate) async fn start_websocket(
             return Ok(response);
         }
 
-        trace!("about to start ws loop for {}", url);
+        trace!("about to start ws loop for {}", url_for_log(&url));
         spawn_task(run_ws_loop(dom_receiver, resource_event_sender, stream));
     } else {
-        trace!("client closed connection for {}, not running loop", url);
+        trace!(
+            "client closed connection for {}, not running loop",
+            url_for_log(&url)
+        );
     }
     Ok(response)
 }
