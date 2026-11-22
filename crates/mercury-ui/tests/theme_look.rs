@@ -41,19 +41,19 @@ fn ids(look: &Look) -> (&'static str, &'static str) {
 }
 
 #[test]
-fn the_default_settings_give_b2_and_the_roomy_sizes_without_notes() {
+fn the_default_settings_give_signal_and_the_roomy_sizes_without_notes() {
     let (look, notes) = Look::from_appearance(&AppearanceSettings::default());
-    assert_eq!(ids(&look), ("mercury-b2", "mercury-b2"));
+    assert_eq!(ids(&look), ("signal", "signal"));
     assert_eq!(look.metrics, Metrics::ROOMY);
     assert!(notes.is_empty(), "{notes:?}");
 }
 
 #[test]
-fn an_unknown_palette_id_gives_b2_with_one_note_and_changes_nothing() {
-    let stored = appearance("no-such-palette", "mercury-b2");
+fn an_unknown_palette_id_gives_signal_with_one_note_and_changes_nothing() {
+    let stored = appearance("no-such-palette", "signal");
     let before = stored.clone();
     let (look, notes) = Look::from_appearance(&stored);
-    assert_eq!(ids(&look), ("mercury-b2", "mercury-b2"));
+    assert_eq!(ids(&look), ("signal", "signal"));
     assert_eq!(notes.len(), 1, "{notes:?}");
     assert_eq!(notes[0].field, "appearance.palette_light");
     assert!(notes[0].reason.contains("no-such-palette"), "{notes:?}");
@@ -63,8 +63,13 @@ fn an_unknown_palette_id_gives_b2_with_one_note_and_changes_nothing() {
 #[test]
 fn hermes_cannot_be_chosen_by_hand_but_the_gate_can_ask_for_it() {
     let (look, notes) = Look::from_appearance(&appearance("hermes", "hermes"));
-    assert_eq!(ids(&look), ("mercury-b2", "mercury-b2"));
+    assert_eq!(ids(&look), ("signal", "signal"));
     assert_eq!(notes.len(), 2, "{notes:?}");
+    for id in ["mercury-b2", "graphite", "midnight"] {
+        let (look, notes) = Look::from_appearance(&appearance(id, id));
+        assert_eq!(ids(&look), ("signal", "signal"), "{id}");
+        assert_eq!(notes.len(), 2, "{id}: {notes:?}");
+    }
 
     let hermes = Look::hermes_roomy();
     assert_eq!(ids(&hermes), ("hermes", "hermes"));
@@ -73,14 +78,15 @@ fn hermes_cannot_be_chosen_by_hand_but_the_gate_can_ask_for_it() {
 
 #[test]
 fn two_different_palettes_give_a_mixed_look() {
-    let (look, notes) = Look::from_appearance(&appearance("mercury-b2", "mercury-b2"));
+    let (look, notes) = Look::from_appearance(&appearance("forest", "glacier"));
     assert!(notes.is_empty());
+    assert_eq!(ids(&look), ("forest", "glacier"));
     let mixed = Look::new(
         look.palette_light,
         palettes::find("hermes").expect("hermes exists"),
         look.metrics,
     );
-    assert_eq!(ids(&mixed), ("mercury-b2", "hermes"));
+    assert_eq!(ids(&mixed), ("forest", "hermes"));
     assert!(look.palette_light.id != mixed.palette_dark.id);
 }
 

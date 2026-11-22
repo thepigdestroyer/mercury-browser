@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-//! `mercury-b2`: Mercury's own look, the default palette (SPEC §1, owner decision of 18 Nov 2026).
+//! `mercury-b2`: Mercury's own look as designed on 18 Nov 2026 (SPEC §1). **Not selectable and not
+//! the default** since 22 Nov 2026: the owner rejected it and chose Signal, Forest, Abyss and
+//! Glacier instead. Kept as data (its tests and the `Sun` brand colours stay).
 //!
 //! Light is warm paper with plum-black ink and the brand's orange; dark is the "night plate",
 //! a deep violet with the Sun's amber. Where the owner gave a value it is used as given:
@@ -42,7 +44,7 @@ pub const ID: &str = "mercury-b2";
 pub const PALETTE: Palette = Palette {
     id: ID,
     name: "Mercury",
-    selectable: true,
+    selectable: false,
     light,
     dark,
 };

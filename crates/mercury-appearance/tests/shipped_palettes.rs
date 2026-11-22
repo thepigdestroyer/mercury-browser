@@ -1,12 +1,29 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-//! The palette candidates (22 Nov 2026) held to the crate's own contrast rules in both schemes,
-//! the way `contrast_rules.rs` holds the selectable palettes. Run with `--nocapture` for the
-//! report (lowest ratios, the exempt pairs).
+//! The six palettes designed on 22 Nov 2026 (the four the owner chose to ship, Signal, Forest,
+//! Abyss and Glacier, and the two that stay in the code, Graphite and Midnight) held to the
+//! crate's own contrast rules in both schemes, so the two that cannot be chosen stay as good as
+//! the four that can. Run with `--nocapture` for the report (lowest ratios, the exempt pairs).
 
 use mercury_appearance::palette::{Role, Scheme};
-use mercury_appearance::palettes::{self, candidates};
+use mercury_appearance::palettes;
 use mercury_appearance::{Colour, EXEMPT, Minimum, Palette, check, measure, oklab};
+
+/// The ids of the six, and which of them a user can choose.
+const SIX: [(&str, bool); 6] = [
+    ("signal", true),
+    ("forest", true),
+    ("abyss", true),
+    ("glacier", true),
+    ("graphite", false),
+    ("midnight", false),
+];
+
+fn six() -> Vec<&'static Palette> {
+    SIX.iter()
+        .map(|&(id, _)| palettes::find(id).unwrap_or_else(|| panic!("{id} is in the code")))
+        .collect()
+}
 
 fn ratio(palette: &Palette, scheme: Scheme, foreground: Role, background: Role) -> f64 {
     let fg = palette.colour(scheme, foreground);
@@ -36,20 +53,27 @@ fn hue(colour: Colour) -> f64 {
 }
 
 #[test]
-fn the_candidates_have_every_role_and_unique_ids() {
-    let all = candidates::all();
+fn the_six_have_every_role_and_unique_ids_and_four_can_be_chosen() {
+    let all = six();
     assert_eq!(all.len(), 6);
     let mut ids: Vec<&str> = all.iter().map(|palette| palette.id).collect();
     ids.sort_unstable();
     ids.dedup();
     assert_eq!(ids.len(), 6);
-    for palette in all {
-        assert!(!palette.selectable, "{}", palette.id);
+    for (palette, &(id, selectable)) in all.into_iter().zip(&SIX) {
+        assert_eq!(palette.id, id);
+        assert_eq!(palette.selectable, selectable, "{}", palette.id);
         for scheme in Scheme::ALL {
             assert_eq!(palette.colours(scheme).count(), Role::COUNT);
             for (role, colour) in palette.colours(scheme) {
                 let veil = matches!(role, Role::Scrim | Role::Shadow);
-                assert_eq!(colour.a != 255, veil, "{} {}", palette.id, role.slint_name());
+                assert_eq!(
+                    colour.a != 255,
+                    veil,
+                    "{} {}",
+                    palette.id,
+                    role.slint_name()
+                );
             }
         }
     }
@@ -58,7 +82,7 @@ fn the_candidates_have_every_role_and_unique_ids() {
 #[test]
 fn every_candidate_passes_every_rule_in_both_schemes() {
     let mut failures = Vec::new();
-    for palette in candidates::all() {
+    for palette in six() {
         for scheme in Scheme::ALL {
             let measurements = measure(palette, scheme);
             let lowest_text = measurements
@@ -108,10 +132,13 @@ fn report_the_exempt_pairs() {
     ];
     for (role, _) in EXEMPT {
         if !matches!(role, Role::Scrim | Role::Shadow) {
-            assert!(pairs.iter().any(|(r, _)| r == role), "{role:?} is not reported");
+            assert!(
+                pairs.iter().any(|(r, _)| r == role),
+                "{role:?} is not reported"
+            );
         }
     }
-    for palette in candidates::all() {
+    for palette in six() {
         for scheme in Scheme::ALL {
             let cells: Vec<String> = pairs
                 .iter()
@@ -119,14 +146,19 @@ fn report_the_exempt_pairs() {
                     format!("{} {:.2}", fg.slint_name(), ratio(palette, scheme, fg, bg))
                 })
                 .collect();
-            println!("EXEMPT {:9} {:5} {}", palette.id, scheme.name(), cells.join(" | "));
+            println!(
+                "EXEMPT {:9} {:5} {}",
+                palette.id,
+                scheme.name(),
+                cells.join(" | ")
+            );
         }
     }
 }
 
 #[test]
 fn the_house_rules_that_are_not_in_the_contrast_rules_hold() {
-    for palette in candidates::all() {
+    for palette in six() {
         for scheme in Scheme::ALL {
             // The information bar is never blue (Role docs); the capture mark is a recording red.
             for role in [Role::InfoBackground, Role::InfoBorder] {
@@ -141,23 +173,36 @@ fn the_house_rules_that_are_not_in_the_contrast_rules_hold() {
             }
             let capture = palette.colour(scheme, Role::CaptureIndicator);
             let degrees = hue(capture);
-            assert!(degrees.min(360.0 - degrees) <= 12.0, "{} capture hue", palette.id);
-            assert!(capture.r > capture.g.saturating_add(100) && capture.r > capture.b.saturating_add(100));
+            assert!(
+                degrees.min(360.0 - degrees) <= 12.0,
+                "{} capture hue",
+                palette.id
+            );
+            assert!(
+                capture.r > capture.g.saturating_add(100)
+                    && capture.r > capture.b.saturating_add(100)
+            );
             let danger = hue(palette.colour(scheme, Role::Danger));
-            assert!(danger.min(360.0 - danger) <= 12.0, "{} danger hue", palette.id);
+            assert!(
+                danger.min(360.0 - danger) <= 12.0,
+                "{} danger hue",
+                palette.id
+            );
             // The text tiers step down in strength on the toolbar.
             let on = |role| ratio(palette, scheme, role, Role::ToolbarBackground);
             assert!(on(Role::Text) > on(Role::TextSecondary), "{}", palette.id);
-            assert!(on(Role::TextSecondary) >= on(Role::TextMuted), "{}", palette.id);
+            assert!(
+                on(Role::TextSecondary) >= on(Role::TextMuted),
+                "{}",
+                palette.id
+            );
         }
     }
 }
 
 #[test]
-fn the_candidates_are_different_from_both_rejected_palettes_and_from_each_other() {
-    let mut all: Vec<&Palette> = candidates::all().iter().collect();
-    let rejected: Vec<&Palette> = palettes::all().iter().collect();
-    all.extend(rejected.iter().copied());
+fn report_how_far_apart_the_palettes_are() {
+    let all: Vec<&Palette> = palettes::all().iter().collect();
     for scheme in Scheme::ALL {
         for (index, a) in all.iter().enumerate() {
             for b in &all[index + 1..] {

@@ -1,0 +1,46 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The Mercury Browser mark (a disc crossed by the M sigil) in the colours of the theme: the disc
+// is the fill accent of the palette (`primary-button-background`) and the M is the colour drawn
+// on that accent (`primary-button-text`), so the mark changes with the palette and the scheme and
+// is legible on it (4.5:1, a rule of every selectable palette). Two flat one-colour SVGs, tinted
+// here; there is no per-theme copy of the image.
+//
+// Use it wherever the mark is drawn inside the browser's own windows. The window `icon` properties
+// and the Dock icon are static pictures that cannot follow a palette.
+import { ChromePalette } from "chrome-palette.slint";
+
+export component MercuryMark inherits Rectangle {
+    // Use the heavier M at 24 px and below (tab icons, list rows).
+    in property <bool> heavy: false;
+
+    background: transparent;
+    accessible-role: none;
+
+    Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("mercury-mark-disc.svg");
+        colorize: ChromePalette.primary-button-background;
+        image-fit: contain;
+        accessible-role: none;
+    }
+
+    if !root.heavy: Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("mercury-mark-m.svg");
+        colorize: ChromePalette.primary-button-text;
+        image-fit: contain;
+        accessible-role: none;
+    }
+
+    if root.heavy: Image {
+        width: parent.width;
+        height: parent.height;
+        source: @image-url("mercury-mark-m-heavy.svg");
+        colorize: ChromePalette.primary-button-text;
+        image-fit: contain;
+        accessible-role: none;
+    }
+}

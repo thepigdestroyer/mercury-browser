@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-//! Palette exploration (scratch, 22 Nov 2026): the 7 scenes of `theme_scenes.rs` drawn by Slint's
-//! software renderer for every palette in `palettes::candidates`, in Light and in Dark.
+//! Palette gallery: the 7 scenes of `theme_scenes.rs` drawn by Slint's software renderer for every
+//! palette a user can choose (`palettes::selectable`), in Light and in Dark, with the Mercury mark
+//! in each palette's accent.
 //!
 //! Set `MERCURY_PALETTE_DIR` to save them as `<dir>/<palette>/<n>-<scene>-<scheme>.png`, the file
 //! names of the theme-plumbing owner set.
@@ -81,6 +82,7 @@ const HEIGHT: u32 = 560;
 /// How a scene is lit: nothing pushed, or a look pushed.
 #[derive(Clone, Copy)]
 enum Lit {
+    #[allow(dead_code)]
     BuiltIn,
     Pushed(&'static str),
 }
@@ -95,10 +97,7 @@ impl Lit {
 }
 
 fn look(id: &str) -> Look {
-    let palette = palettes::candidates::all()
-        .iter()
-        .find(|palette| palette.id == id)
-        .expect("a candidate this build has");
+    let palette = palettes::find(id).expect("a palette this build has");
     Look::new(palette, palette, Metrics::ROOMY)
 }
 
@@ -260,18 +259,38 @@ const THEMES: [(ChromeTheme, Scheme); 2] = [
     (ChromeTheme::Dark, Scheme::Dark),
 ];
 
-
 #[test]
-fn every_candidate_is_drawn_in_every_scene() {
+fn every_chosen_palette_is_drawn_in_every_scene_with_the_mark_in_its_accent() {
     init_platform();
-    for palette in palettes::candidates::all() {
+    for palette in palettes::selectable() {
         for scene in SCENES {
             for (theme, scheme) in THEMES {
                 let pixels = render(scene, theme, Lit::Pushed(palette.id));
                 let corner = rgb(&pixels, 3, 3);
                 if matches!(scene, Scene::Tabs) {
                     let frame = palette.colour(scheme, Role::WindowBackground);
-                    assert_eq!(corner, [frame.r, frame.g, frame.b], "{} {scheme:?}", palette.id);
+                    assert_eq!(
+                        corner,
+                        [frame.r, frame.g, frame.b],
+                        "{} {scheme:?}",
+                        palette.id
+                    );
+                }
+                // The new-tab page and the About window draw the mark large: its disc is the
+                // palette's fill accent, thousands of pixels of exactly that colour.
+                if matches!(scene, Scene::NewTab | Scene::About) {
+                    let fill = palette.colour(scheme, Role::PrimaryButtonBackground);
+                    let disc = pixels
+                        .as_slice()
+                        .iter()
+                        .filter(|p| [p.r, p.g, p.b] == [fill.r, fill.g, fill.b])
+                        .count();
+                    assert!(
+                        disc > 2000,
+                        "{scene:?} {} {scheme:?}: the mark's disc has {disc} px of {}",
+                        palette.id,
+                        fill.to_hex()
+                    );
                 }
             }
         }

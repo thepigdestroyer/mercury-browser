@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use mercury_appearance::keymap::{LetterKey, parse_sequence};
 use mercury_appearance::palette::{Role, Scheme};
-use mercury_appearance::palettes::{self, hermes, mercury_b2};
+use mercury_appearance::palettes::{self, hermes, mercury_b2, signal};
 use mercury_appearance::resolve::{AppearanceSettings, Layout, Repair, Resolved, resolve};
 use mercury_settings::{
     DEFAULT_KEY_SEQUENCE, DEFAULT_PALETTE, DialCorner, DockStart, KeyCapture, LAYOUT_IDS, Settings,
@@ -72,11 +72,11 @@ fn only_the_exact_ids_are_layouts() {
 // --- The defaults ---
 
 #[test]
-fn the_defaults_resolve_to_mercury_b2_with_the_dock_and_the_dial() {
+fn the_defaults_resolve_to_signal_with_the_dock_and_the_dial() {
     let resolved = clean(&AppearanceSettings::default());
     assert_eq!(resolved.layout, Layout::Mercury);
-    assert_eq!(resolved.palette_light.id, mercury_b2::ID);
-    assert_eq!(resolved.palette_dark.id, mercury_b2::ID);
+    assert_eq!(resolved.palette_light.id, signal::ID);
+    assert_eq!(resolved.palette_dark.id, signal::ID);
     assert_eq!(resolved.palette_light.id, DEFAULT_PALETTE);
     assert!(resolved.dock_visible());
     let groups = &resolved.tab_groups;
@@ -99,7 +99,7 @@ fn the_defaults_resolve_to_mercury_b2_with_the_dock_and_the_dial() {
 }
 
 #[test]
-fn the_default_settings_file_resolves_without_notes_and_its_colours_are_the_b2_ones() {
+fn the_default_settings_file_resolves_without_notes_and_its_colours_are_the_signal_ones() {
     let (settings, repairs) = Settings::default().validated();
     assert!(repairs.is_empty());
     let resolved = clean(&settings.appearance);
@@ -255,21 +255,21 @@ fn the_sequence_is_parsed_the_same_way_as_the_key_map_parses_it() {
 
 #[test]
 fn an_unknown_palette_falls_back_with_a_note_and_the_stored_value_is_kept() {
-    let appearance = settings(|a| a.palette_light = "graphite".to_owned());
+    let appearance = settings(|a| a.palette_light = "tangerine".to_owned());
     let before = appearance.clone();
     let (resolved, repairs) = resolve(&appearance);
     assert_eq!(appearance, before, "resolve must not change what is stored");
-    assert_eq!(appearance.palette_light, "graphite");
+    assert_eq!(appearance.palette_light, "tangerine");
     assert_eq!(resolved.palette_light.id, DEFAULT_PALETTE);
     assert_eq!(resolved.palette_dark.id, DEFAULT_PALETTE);
     assert_eq!(fields(&repairs), ["appearance.palette_light"]);
     let reason = &repairs[0].reason;
-    assert!(reason.contains("\"graphite\""), "{reason}");
+    assert!(reason.contains("\"tangerine\""), "{reason}");
     assert!(
         reason.contains("not a palette this version has"),
         "{reason}"
     );
-    assert!(reason.contains("mercury-b2"), "{reason}");
+    assert!(reason.contains("\"signal\""), "{reason}");
     assert!(reason.contains("kept"), "{reason}");
 }
 
@@ -314,6 +314,33 @@ fn a_palette_that_cannot_be_chosen_is_not_used_even_when_the_file_names_it() {
         appearance.palette_light, "hermes",
         "the stored value is kept"
     );
+}
+
+#[test]
+fn the_palettes_that_were_not_chosen_fall_back_to_signal_with_one_note_each() {
+    for id in ["mercury-b2", "graphite", "midnight", "hermes"] {
+        let appearance = settings(|a| a.palette_dark = id.to_owned());
+        let (resolved, repairs) = resolve(&appearance);
+        assert_eq!(resolved.palette_light.id, "signal", "{id}");
+        assert_eq!(resolved.palette_dark.id, "signal", "{id}");
+        assert_eq!(fields(&repairs), ["appearance.palette_dark"], "{id}");
+        assert!(
+            repairs[0].reason.contains("cannot be chosen"),
+            "{id}: {}",
+            repairs[0].reason
+        );
+    }
+}
+
+#[test]
+fn two_chosen_palettes_are_used_one_per_scheme() {
+    let appearance = settings(|a| {
+        a.palette_light = "forest".to_owned();
+        a.palette_dark = "glacier".to_owned();
+    });
+    let resolved = clean(&appearance);
+    assert_eq!(resolved.palette(Scheme::Light).id, "forest");
+    assert_eq!(resolved.palette(Scheme::Dark).id, "glacier");
 }
 
 #[test]

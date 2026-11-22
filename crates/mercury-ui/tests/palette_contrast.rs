@@ -553,6 +553,9 @@ fn suggestion(
 /// clock), its title and, below it, the address.
 fn selected_suggestions(checks: &mut Checks) {
     let window = MainWindow::new().expect("the main window builds");
+    // Not the new-tab page: its mark is a disc of the fill accent, which in Light is also the
+    // colour of `item-selected` and would be taken for a selected row.
+    window.set_is_new_tab(false);
     window.show().expect("the main window shows");
     let screen = Screen::of_newest_window(1180, 760);
     window.set_suggestions(ModelRc::new(VecModel::from(vec![

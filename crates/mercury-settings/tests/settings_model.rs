@@ -25,8 +25,8 @@ const DEFAULT_FILE: &str = r#"{
     "show_bookmarks_bar": true,
     "show_home_button": false,
     "layout": "mercury",
-    "palette_light": "mercury-b2",
-    "palette_dark": "mercury-b2",
+    "palette_light": "signal",
+    "palette_dark": "signal",
     "tab_groups": {
       "dock": true,
       "dock_in_classic": false,
@@ -95,8 +95,8 @@ fn the_defaults_are_the_documented_ones() {
     assert!(settings.appearance.show_bookmarks_bar);
     assert!(!settings.appearance.show_home_button);
     assert_eq!(settings.appearance.layout, "mercury");
-    assert_eq!(settings.appearance.palette_light, "mercury-b2");
-    assert_eq!(settings.appearance.palette_dark, "mercury-b2");
+    assert_eq!(settings.appearance.palette_light, "signal");
+    assert_eq!(settings.appearance.palette_dark, "signal");
     // The tab-group defaults are listed one by one in appearance_settings.rs.
     assert!(settings.appearance.tab_groups.dial);
     assert!(settings.privacy.block_ads_and_trackers);

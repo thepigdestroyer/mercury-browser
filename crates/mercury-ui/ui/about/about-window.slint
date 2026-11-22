@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 import { AboutSlint, Palette } from "std-widgets.slint";
 import { ChromePalette, ChromeTheme } from "../theme/chrome-palette.slint";
+import { MercuryMark } from "../theme/mercury-mark.slint"; // themes
 
 export enum AboutLink {
     licence,
@@ -101,12 +102,9 @@ export component AboutWindow inherits Window {
                 alignment: center;
                 height: 76px;
 
-                Image {
+                MercuryMark { // themes
                     width: 72px;
                     height: 72px;
-                    source: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
-                    image-fit: contain;
-                    accessible-role: none;
                 }
             }
 

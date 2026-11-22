@@ -6,6 +6,7 @@ import { ChromePalette } from "theme/chrome-palette.slint";
 export { ChromeColors, ChromePalette, ChromeTheme } from "theme/chrome-palette.slint";
 // theme-plumbing: the chrome's sizes (Rust pushes them: src/theme)
 import { ChromeMetrics } from "theme/chrome-metrics.slint";
+import { MercuryMark } from "theme/mercury-mark.slint"; // themes
 export { ChromeMetrics } from "theme/chrome-metrics.slint";
 // ring-geometry: the tab-group rows and arc shapes (Rust fills them: src/ring_geometry)
 export { ArcGlyph, ArcSeg, GroupRow, TabRow } from "groups/models.slint";
@@ -1052,12 +1053,9 @@ export component MainWindow inherits Window {
                             alignment: center;
                             height: 84px;
 
-                            Image {
+                            MercuryMark { // themes
                                 width: 80px;
                                 height: 80px;
-                                source: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
-                                image-fit: contain;
-                                accessible-role: none; // a11y-base
                             }
                         }
 

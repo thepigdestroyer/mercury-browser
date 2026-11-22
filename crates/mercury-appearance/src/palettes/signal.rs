@@ -15,7 +15,7 @@ pub const ID: &str = "signal";
 pub const PALETTE: Palette = Palette {
     id: ID,
     name: "Signal",
-    selectable: false,
+    selectable: true,
     light,
     dark,
 };

@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-//! Palette-exploration generator (scratch, 22 Nov 2026).
+//! Generator of the six palettes designed on 22 Nov 2026.
 //!
-//! Each candidate is a short list of design tokens per scheme (surfaces, ink, accent fill). The
+//! Each palette is a short list of design tokens per scheme (surfaces, ink, accent fill). The
 //! 54 roles are derived from them, and every role that a contrast rule holds to a ratio is
 //! tuned (a few percent at a time, toward ink) until it passes the crate's own `RULES` with a
 //! small margin. The result is written as ordinary palette data (two exhaustive tables of
 //! literals), which is what the crate ships; nothing here runs in the browser.
 //!
-//! Usage: `cargo run --example palette_gen -- <crate dir>` writes
-//! `<crate dir>/src/palettes/candidates/*.rs`.
+//! Usage: `cargo run --example palette_gen -- <crate dir>` rewrites
+//! `<crate dir>/src/palettes/<id>.rs` for each of them. `palettes/mod.rs` (the list and its
+//! order) is written by hand.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -20,6 +21,9 @@ use mercury_appearance::{Colour, EXEMPT, RULES, Role};
 type Map = BTreeMap<Role, Colour>;
 
 const TEXT_MARGIN: f64 = 0.1;
+
+/// The palettes the owner chose to ship (22 Nov 2026): the only ones a user may select.
+const SELECTABLE: [&str; 4] = ["signal", "forest", "abyss", "glacier"];
 
 /// The design tokens of one scheme.
 struct Scheme {
@@ -410,7 +414,13 @@ fn slack(map: &Map, role: Role, colour: Colour) -> f64 {
 
 /// `seed` moved toward `toward` one percent at a time until the rules of `role` hold with a
 /// margin and `extra` is true.
-fn tune(map: &Map, role: Role, seed: Colour, toward: Colour, extra: &dyn Fn(Colour) -> bool) -> Colour {
+fn tune(
+    map: &Map,
+    role: Role,
+    seed: Colour,
+    toward: Colour,
+    extra: &dyn Fn(Colour) -> bool,
+) -> Colour {
     for step in 0..=100 {
         let colour = seed.mix(toward, f64::from(step) / 100.0);
         if slack(map, role, colour) >= TEXT_MARGIN && extra(colour) {
@@ -504,7 +514,13 @@ fn build(s: &Scheme) -> Map {
     // the primary label reads on it.
     let accent = tune(&m, R::Accent, fill, extreme, &label_ok);
     m.insert(R::Accent, accent);
-    let hover_label = tune(&m, R::ButtonLabelHover, accent.mix(extreme, 0.15), extreme, &|_| true);
+    let hover_label = tune(
+        &m,
+        R::ButtonLabelHover,
+        accent.mix(extreme, 0.15),
+        extreme,
+        &|_| true,
+    );
     m.insert(R::ButtonLabelHover, hover_label);
     let highlight = tune(&m, R::MatchHighlight, accent, extreme, &|_| true);
     m.insert(R::MatchHighlight, highlight);
@@ -521,7 +537,13 @@ fn build(s: &Scheme) -> Map {
 
     // The text tiers: as soft as the hierarchy wants, then moved toward ink until they pass.
     let soft = s.soft;
-    let secondary = tune(&m, R::TextSecondary, ink.mix(bar, 0.30 * soft), ink, &|_| true);
+    let secondary = tune(
+        &m,
+        R::TextSecondary,
+        ink.mix(bar, 0.30 * soft),
+        ink,
+        &|_| true,
+    );
     let muted = tune(&m, R::TextMuted, ink.mix(bar, 0.42 * soft), ink, &|_| true);
     m.insert(R::TextMuted, muted);
     // Muted text has to clear the pressed fills, which can make it the stronger of the two: keep
@@ -531,17 +553,43 @@ fn build(s: &Scheme) -> Map {
         secondary = secondary.mix(ink, 0.05);
     }
     m.insert(R::TextSecondary, secondary);
-    let placeholder = tune(&m, R::Placeholder, ink.mix(field, 0.48 * soft), ink, &|_| true);
+    let placeholder = tune(
+        &m,
+        R::Placeholder,
+        ink.mix(field, 0.48 * soft),
+        ink,
+        &|_| true,
+    );
     m.insert(R::Placeholder, placeholder);
-    let button_label = tune(&m, R::ButtonLabel, ink.mix(bar, 0.22 * soft), ink, &|_| true);
+    let button_label = tune(&m, R::ButtonLabel, ink.mix(bar, 0.22 * soft), ink, &|_| {
+        true
+    });
     m.insert(R::ButtonLabel, button_label);
-    let tab_title = tune(&m, R::TabTitleInactive, ink.mix(bar, 0.30 * soft), ink, &|_| true);
+    let tab_title = tune(
+        &m,
+        R::TabTitleInactive,
+        ink.mix(bar, 0.30 * soft),
+        ink,
+        &|_| true,
+    );
     m.insert(R::TabTitleInactive, tab_title);
-    let shortcut = tune(&m, R::ShortcutText, ink.mix(popup, 0.42 * soft), ink, &|_| true);
+    let shortcut = tune(
+        &m,
+        R::ShortcutText,
+        ink.mix(popup, 0.42 * soft),
+        ink,
+        &|_| true,
+    );
     m.insert(R::ShortcutText, shortcut);
     let status = tune(&m, R::StatusText, ink.mix(popup, 0.12), ink, &|_| true);
     m.insert(R::StatusText, status);
-    let close = tune(&m, R::TabCloseLabel, ink.mix(frame, 0.45 * soft), ink, &|_| true);
+    let close = tune(
+        &m,
+        R::TabCloseLabel,
+        ink.mix(frame, 0.45 * soft),
+        ink,
+        &|_| true,
+    );
     m.insert(R::TabCloseLabel, close);
     m
 }
@@ -570,7 +618,10 @@ fn violations(map: &Map) -> Vec<String> {
 
 fn literal(colour: Colour) -> String {
     if colour.a == 255 {
-        format!("Colour::hex(0x{:02x}{:02x}{:02x})", colour.r, colour.g, colour.b)
+        format!(
+            "Colour::hex(0x{:02x}{:02x}{:02x})",
+            colour.r, colour.g, colour.b
+        )
     } else {
         format!(
             "Colour::hex_alpha(0x{:02x}{:02x}{:02x}{:02x})",
@@ -588,7 +639,12 @@ fn table(out: &mut String, name: &str, doc: &str, map: &Map) {
     let _ = writeln!(out, "const fn {name}(role: Role) -> Colour {{");
     let _ = writeln!(out, "    match role {{");
     for role in Role::ALL {
-        let _ = writeln!(out, "        Role::{} => {},", variant_name(role), literal(map[&role]));
+        let _ = writeln!(
+            out,
+            "        Role::{} => {},",
+            variant_name(role),
+            literal(map[&role])
+        );
     }
     let _ = writeln!(out, "    }}");
     let _ = writeln!(out, "}}");
@@ -596,7 +652,10 @@ fn table(out: &mut String, name: &str, doc: &str, map: &Map) {
 
 fn module(candidate: &Candidate, light: &Map, dark: &Map) -> String {
     let mut out = String::new();
-    let _ = writeln!(out, "// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0");
+    let _ = writeln!(
+        out,
+        "// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0"
+    );
     let _ = writeln!(
         out,
         "// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors"
@@ -624,7 +683,11 @@ fn module(candidate: &Candidate, light: &Map, dark: &Map) -> String {
     let _ = writeln!(out, "pub const PALETTE: Palette = Palette {{");
     let _ = writeln!(out, "    id: ID,");
     let _ = writeln!(out, "    name: \"{}\",", candidate.name);
-    let _ = writeln!(out, "    selectable: false,");
+    let _ = writeln!(
+        out,
+        "    selectable: {},",
+        SELECTABLE.contains(&candidate.id)
+    );
     let _ = writeln!(out, "    light,");
     let _ = writeln!(out, "    dark,");
     let _ = writeln!(out, "}};");
@@ -639,60 +702,31 @@ fn main() {
     let root: PathBuf = std::env::args_os()
         .nth(1)
         .map_or_else(|| PathBuf::from("."), PathBuf::from)
-        .join("src/palettes/candidates");
+        .join("src/palettes");
     std::fs::create_dir_all(&root).expect("the directory can be made");
     let all = candidates();
-    let mut mod_rs = String::new();
-    let _ = writeln!(mod_rs, "// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0");
-    let _ = writeln!(
-        mod_rs,
-        "// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors"
-    );
-    let _ = writeln!(
-        mod_rs,
-        "//! Palette candidates for the owner to choose from (22 Nov 2026). None is selectable yet."
-    );
-    let _ = writeln!(mod_rs, "//!");
-    let _ = writeln!(
-        mod_rs,
-        "//! Generated by `examples/palette_gen.rs`. Promoting one means moving its module up into"
-    );
-    let _ = writeln!(
-        mod_rs,
-        "//! [`crate::palettes`], setting `selectable: true` and adding it to that module's `ALL`."
-    );
-    let _ = writeln!(mod_rs);
     let mut failed = false;
-    for candidate in &all {
-        let _ = writeln!(mod_rs, "pub mod {};", candidate.id);
-    }
-    let _ = writeln!(mod_rs);
-    let _ = writeln!(mod_rs, "use crate::palette::Palette;");
-    let _ = writeln!(mod_rs);
-    let _ = writeln!(mod_rs, "/// Every candidate.");
-    let _ = writeln!(mod_rs, "pub static ALL: [Palette; {}] = [", all.len());
-    for candidate in &all {
-        let _ = writeln!(mod_rs, "    {}::PALETTE,", candidate.id);
-    }
-    let _ = writeln!(mod_rs, "];");
-    let _ = writeln!(mod_rs);
-    let _ = writeln!(mod_rs, "/// Every candidate.");
-    let _ = writeln!(mod_rs, "pub fn all() -> &'static [Palette] {{");
-    let _ = writeln!(mod_rs, "    &ALL");
-    let _ = writeln!(mod_rs, "}}");
 
     for candidate in &all {
         let light = build(&candidate.light);
         let dark = build(&candidate.dark);
         for (name, map) in [("light", &light), ("dark", &dark)] {
-            assert_eq!(map.len(), Role::COUNT, "{} {name}: a role is missing", candidate.id);
+            assert_eq!(
+                map.len(),
+                Role::COUNT,
+                "{} {name}: a role is missing",
+                candidate.id
+            );
             for failure in violations(map) {
                 failed = true;
                 println!("FAIL {} {name}: {failure}", candidate.id);
             }
         }
-        std::fs::write(root.join(format!("{}.rs", candidate.id)), module(candidate, &light, &dark))
-            .expect("the module can be written");
+        std::fs::write(
+            root.join(format!("{}.rs", candidate.id)),
+            module(candidate, &light, &dark),
+        )
+        .expect("the module can be written");
         println!(
             "{:9} light fill {} accent {} | dark fill {} accent {}",
             candidate.id,
@@ -702,7 +736,6 @@ fn main() {
             dark[&Role::Accent].to_hex(),
         );
     }
-    std::fs::write(root.join("mod.rs"), mod_rs).expect("mod.rs can be written");
     let _ = EXEMPT;
     if failed {
         std::process::exit(1);

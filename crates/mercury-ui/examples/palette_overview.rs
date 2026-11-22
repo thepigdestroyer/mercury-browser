@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-//! Contact sheets for the palette candidates (scratch, 22 Nov 2026): one `overview.png` per palette
+//! Contact sheets for the palettes a user can choose: one `overview.png` per palette
 //! folder (scene 2, light and dark side by side, with the colours) and one combined
-//! `overview.png` with all of them. Reads the pictures `tests/palette_explore.rs` saved.
+//! `overview.png` with all of them. Reads the pictures `tests/palette_gallery.rs` saved.
 //!
 //! `cargo run --release -p mercury-ui --example palette_overview -- <palettes directory>`
 
@@ -144,12 +144,22 @@ thread_local! {
 
 fn mood(id: &str) -> &'static str {
     match id {
-        "abyss" => "Deep ocean: sea-glass white by day, a trench of blue-green by night, bright cyan-turquoise accent.",
-        "glacier" => "Arctic ice: frosted blue-white chrome, vivid cyan accent; steel-blue polar night in the dark.",
+        "abyss" => {
+            "Deep ocean: sea-glass white by day, a trench of blue-green by night, bright cyan-turquoise accent."
+        }
+        "glacier" => {
+            "Arctic ice: frosted blue-white chrome, vivid cyan accent; steel-blue polar night in the dark."
+        }
         "graphite" => "Studio graphite: true neutral greys, no tint, one electric-violet accent.",
-        "midnight" => "Midnight indigo with an aurora-green accent: periwinkle paper by day, deep saturated blue by night.",
-        "forest" => "Moss and mint: sage-green paper by day, a dark forest floor by night, fresh lime-mint accent.",
-        "signal" => "Bold and stark: paper white and ink black, hard hairlines, one hot electric-pink accent.",
+        "midnight" => {
+            "Midnight indigo with an aurora-green accent: periwinkle paper by day, deep saturated blue by night."
+        }
+        "forest" => {
+            "Moss and mint: sage-green paper by day, a dark forest floor by night, fresh lime-mint accent."
+        }
+        "signal" => {
+            "Bold and stark: paper white and ink black, hard hairlines, one hot electric-pink accent."
+        }
         _ => "",
     }
 }
@@ -166,7 +176,10 @@ fn load(path: &Path) -> Result<Image, Box<dyn Error>> {
 
 fn colour(palette: &Palette, scheme: Scheme, role: Role) -> (Color, String) {
     let value = palette.colour(scheme, role);
-    (Color::from_rgb_u8(value.r, value.g, value.b), value.to_hex())
+    (
+        Color::from_rgb_u8(value.r, value.g, value.b),
+        value.to_hex(),
+    )
 }
 
 fn swatch(palette: &Palette, label: &str, scheme: Scheme, role: Role) -> Swatch {
@@ -181,11 +194,21 @@ fn swatch(palette: &Palette, label: &str, scheme: Scheme, role: Role) -> Swatch 
 fn card(root: &Path, palette: &Palette) -> Result<CardData, Box<dyn Error>> {
     let folder = root.join(palette.id);
     let swatches = vec![
-        swatch(palette, "L accent", Scheme::Light, Role::PrimaryButtonBackground),
+        swatch(
+            palette,
+            "L accent",
+            Scheme::Light,
+            Role::PrimaryButtonBackground,
+        ),
         swatch(palette, "L frame", Scheme::Light, Role::WindowBackground),
         swatch(palette, "L bar", Scheme::Light, Role::ToolbarBackground),
         swatch(palette, "L text", Scheme::Light, Role::Text),
-        swatch(palette, "D accent", Scheme::Dark, Role::PrimaryButtonBackground),
+        swatch(
+            palette,
+            "D accent",
+            Scheme::Dark,
+            Role::PrimaryButtonBackground,
+        ),
         swatch(palette, "D frame", Scheme::Dark, Role::WindowBackground),
         swatch(palette, "D bar", Scheme::Dark, Role::ToolbarBackground),
         swatch(palette, "D text", Scheme::Dark, Role::Text),
@@ -244,7 +267,12 @@ fn sheet(
         image::ExtendedColorType::Rgba8,
         image::ImageFormat::Png,
     )?;
-    println!("{} ({} x {})", path.display(), snapshot.width(), snapshot.height());
+    println!(
+        "{} ({} x {})",
+        path.display(),
+        snapshot.width(),
+        snapshot.height()
+    );
     Ok(())
 }
 
@@ -255,7 +283,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         .ok_or("usage: palette_overview <palettes directory>")?;
     slint::platform::set_platform(Box::new(HeadlessPlatform))
         .map_err(|error| format!("platform: {error}"))?;
-    for palette in palettes::candidates::all() {
+    for palette in palettes::selectable() {
         // One palette: the whole picture of scene 2, both schemes, at full size.
         sheet(
             vec![card(&root, palette)?],
@@ -267,8 +295,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         )?;
     }
     // All of them: the top of the window (strip, toolbar, a little page), scaled down.
-    let cards = palettes::candidates::all()
-        .iter()
+    let cards = palettes::selectable()
         .map(|palette| card(&root, palette))
         .collect::<Result<Vec<_>, _>>()?;
     sheet(cards, 2, 0.62, 250.0, false, &root.join("overview.png"))?;
