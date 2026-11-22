@@ -450,7 +450,8 @@ fn resolved_size_should_be_used_value(fragment: &Fragment) -> bool {
         Fragment::AbsoluteOrFixedPositionedPlaceholder(_) |
         Fragment::Image(_) |
         Fragment::IFrame(_) => true,
-        Fragment::Text(_) => false,
+        // Mercury: text-overflow (`ElidedText`, hand-port of servo/servo#42394)
+        Fragment::Text(_) | Fragment::ElidedText(_) => false,
     }
 }
 

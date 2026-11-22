@@ -21,6 +21,12 @@ use servo::{PrefValue, Preferences};
 pub(crate) const STYLO_PREFS: &[(&str, bool)] = &[
     // `:nth-child(An+B of S)`: Servo's selector parser knows it and Stylo matches it.
     ("layout.css.nth-child-of.enabled", true),
+    // CSS counters (ED5, lane txt-1): `counter-reset` and `counter-increment`. The counter pass
+    // is in `third_party/servo-layout/counters.rs`; without this line Stylo drops both properties.
+    ("layout.css.counters.enabled", true),
+    // `text-overflow: clip | ellipsis | <string>` (ED7, lane txt-1), laid out by
+    // `third_party/servo-layout/ellipsis.rs` and `flow/inline/line.rs`.
+    ("layout.css.text-overflow.enabled", true),
 ];
 
 /// `STYLO_PREFS` as the comma-separated list `Preferences::stylo_prefs` holds.
@@ -184,7 +190,8 @@ mod tests {
     fn the_stylo_list_is_joined_into_the_preferences() {
         assert_eq!(
             applied().stylo_prefs,
-            "layout.css.nth-child-of.enabled=true"
+            "layout.css.nth-child-of.enabled=true,layout.css.counters.enabled=true,\
+             layout.css.text-overflow.enabled=true"
         );
     }
 
@@ -202,6 +209,13 @@ mod tests {
             servo::prefs::stylo_bool_pref("layout.css.nth-child-of.enabled"),
             Some(true)
         );
+        // ED5 counters and ED7 text-overflow (lane txt-1) are on, because they work.
+        for name in [
+            "layout.css.counters.enabled",
+            "layout.css.text-overflow.enabled",
+        ] {
+            assert_eq!(servo::prefs::stylo_bool_pref(name), Some(true), "{name}");
+        }
     }
 
     #[test]

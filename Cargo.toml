@@ -8,6 +8,7 @@ members = [
     "crates/mercury-credits",
     "crates/mercury-devtools",
     "crates/mercury-downloads",
+    "crates/mercury-engine-tests",
     "crates/mercury-filter-lists",
     "crates/mercury-iconset",
     "crates/mercury-import",

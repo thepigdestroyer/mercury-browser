@@ -30,8 +30,8 @@ use slint::winit_030::winit::event::{ElementState, KeyEvent};
 use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use talaria_core::{
-    BrowserController, ControlAnswer, ControlId, ControlRect, ControlRequest, PointerButton,
-    PointerButtonAction, Rgb, TabActivation, TabId,
+    BrowserController, BrowserState, ControlAnswer, ControlId, ControlRect, ControlRequest,
+    PointerButton, PointerButtonAction, Rgb, TabActivation, TabId,
 };
 
 use self::color::{ColorKey, ColorModel, SWATCHES, from_hue_lightness, hue_lightness};
@@ -330,14 +330,18 @@ impl Controls {
             show_popup(window, &current.popup, page, zoom, false);
         }
 
+        // txt-1: a composition belongs to the tab that started it; leaving the tab ends it.
+        crate::ime::active_tab_changed(tab_id);
+        // txt-1: a password field has no input method and holds secure event input.
+        crate::secure_input::password_changed(
+            window,
+            state.text_input().is_some_and(|text| text.is_password),
+        );
         // Slint places the input method itself while one of its text fields has focus.
         if window.get_text_input_focused() {
             current.input_method_area = None;
         } else {
-            let area = state.input_method().map(|rect| {
-                log::debug!("input-method element (from Servo): {rect:?}");
-                element_in_window(rect, page, zoom)
-            });
+            let area = input_method_area(state, page, zoom);
             if current.input_method_area != Some(area) {
                 current.input_method_area = Some(area);
                 log::debug!("input-method area: {area:?}");
@@ -882,6 +886,17 @@ fn menu_answer(command: Option<MenuCommand>) -> (ControlAnswer, Option<String>) 
     }
 }
 
+/// Where the input method's candidate window goes (txt-1): the caret of the focused editable
+/// element, from the engine's text state (page coordinates plus the page's place in the window,
+/// as `element_in_window` does for any element); without one, the element's own rectangle;
+/// without that, nothing.
+fn input_method_area(state: &BrowserState, page: Rect, zoom_percent: u16) -> Option<Rect> {
+    let caret = state.text_input().and_then(|text| text.caret_rect);
+    caret
+        .or_else(|| state.input_method())
+        .map(|rect| element_in_window(rect, page, zoom_percent))
+}
+
 fn set_input_method_area(window: &MainWindow, area: Option<Rect>) {
     // Without an editable element the area goes back to winit's initial one.
     let area = area.unwrap_or(Rect {
@@ -1295,5 +1310,111 @@ mod tests {
             )
         );
         assert_eq!(menu_answer(None), (ControlAnswer::Dismiss, None));
+    }
+
+    // txt-1
+    #[test]
+    fn the_candidate_window_goes_to_the_caret_then_the_element_then_nowhere() {
+        use talaria_core::{BrowserEvent, TextInputState, Utf16Range};
+
+        let page = Rect {
+            x: 10.0,
+            y: 100.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let text_state = |caret_rect| TextInputState {
+            document: 1,
+            sequence: 1,
+            text: "hello".to_owned(),
+            text_start: 0,
+            selection: Utf16Range::collapsed(5),
+            marked: None,
+            caret_rect,
+            multiline: false,
+            is_password: false,
+        };
+        let mut state = BrowserState::default();
+        assert_eq!(input_method_area(&state, page, 100), None);
+
+        // Only the element is known: its rectangle, in the window.
+        state.apply(BrowserEvent::InputMethodShown {
+            id: ControlId::new(1),
+            rect: ControlRect {
+                x: 20,
+                y: 30,
+                width: 200,
+                height: 24,
+            },
+        });
+        assert_eq!(
+            input_method_area(&state, page, 100),
+            Some(Rect {
+                x: 30.0,
+                y: 130.0,
+                width: 200.0,
+                height: 24.0,
+            })
+        );
+
+        // A text state without a caret rectangle changes nothing.
+        state.apply(BrowserEvent::TextInputState(Some(text_state(None))));
+        assert_eq!(
+            input_method_area(&state, page, 100),
+            Some(Rect {
+                x: 30.0,
+                y: 130.0,
+                width: 200.0,
+                height: 24.0,
+            })
+        );
+
+        // With the caret: the caret, not the element's corner.
+        let caret = ControlRect {
+            x: 120,
+            y: 34,
+            width: 2,
+            height: 18,
+        };
+        state.apply(BrowserEvent::TextInputState(Some(text_state(Some(caret)))));
+        assert_eq!(
+            input_method_area(&state, page, 100),
+            Some(Rect {
+                x: 130.0,
+                y: 134.0,
+                width: 2.0,
+                height: 18.0,
+            })
+        );
+        // Page zoom scales the page's own pixels, not the page's place in the window.
+        assert_eq!(
+            input_method_area(&state, page, 200),
+            Some(Rect {
+                x: 250.0,
+                y: 168.0,
+                width: 4.0,
+                height: 36.0,
+            })
+        );
+
+        // The caret alone is enough (its message may come first).
+        let mut caret_first = BrowserState::default();
+        caret_first.apply(BrowserEvent::TextInputState(Some(text_state(Some(caret)))));
+        assert_eq!(
+            input_method_area(&caret_first, page, 100),
+            Some(Rect {
+                x: 130.0,
+                y: 134.0,
+                width: 2.0,
+                height: 18.0,
+            })
+        );
+
+        // Nothing editable has focus any more.
+        state.apply(BrowserEvent::TextInputState(None));
+        state.apply(BrowserEvent::ControlHidden {
+            id: ControlId::new(1),
+        });
+        assert_eq!(input_method_area(&state, page, 100), None);
     }
 }

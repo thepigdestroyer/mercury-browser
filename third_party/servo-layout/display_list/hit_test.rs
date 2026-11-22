@@ -27,7 +27,10 @@ use webrender_api::units::{LayoutPoint, LayoutRect, LayoutSize, RectExt};
 use crate::display_list::clip::{Clip, ClipId};
 use crate::display_list::paint_traversal::{PaintTraversal, PaintTraversalHandler};
 use crate::display_list::{StackingContext, StackingContextTree, ToWebRender, TraversalState};
-use crate::fragment_tree::{BoxFragmentWithStyle, Fragment, FragmentFlags, TextFragment};
+// Mercury: text-overflow. `ElidedTextFragment` is new here.
+use crate::fragment_tree::{
+    BoxFragmentWithStyle, ElidedTextFragment, Fragment, FragmentFlags, TextFragment,
+};
 use crate::geom::PhysicalRect;
 
 struct DomPositionCandidate {
@@ -104,6 +107,15 @@ impl<'a> HitTest<'a> {
         if let Fragment::Text(text_fragment) = &hit.fragment {
             let character_offset =
                 text_fragment.character_offset(hit.point_in_target.map(Au::from_f32_px))?;
+            return Some((hit.node, character_offset));
+        }
+
+        // Mercury: text-overflow. Elided text is still all of the text of its node for the DOM,
+        // whatever part of it is painted.
+        if let Fragment::ElidedText(elided_text) = &hit.fragment {
+            let character_offset = elided_text
+                .text_fragment
+                .character_offset(hit.point_in_target.map(Au::from_f32_px))?;
             return Some((hit.node, character_offset));
         }
 
@@ -217,6 +229,17 @@ impl PaintTraversalHandler for HitTest<'_> {
     ) {
         Fragment::Text(fragment.clone()).hit_test(state, self);
     }
+
+    // Mercury: text-overflow. Needs `PaintTraversalHandler::visit_elided_text`, which
+    // `paint_traversal.rs` declares (see the notes of lane txt-1, item 5).
+    fn visit_elided_text(
+        &mut self,
+        state: &TraversalState,
+        _line_box_rect: PhysicalRect<Au>,
+        fragment: &Arc<ElidedTextFragment>,
+    ) {
+        Fragment::ElidedText(fragment.clone()).hit_test(state, self);
+    }
 }
 
 impl Clip {
@@ -239,7 +262,10 @@ impl Fragment {
              fragment_rect: PhysicalRect<Au>,
              border_radius: BorderRadius,
              fragment_flags: FragmentFlags,
-             auto_cursor: Cursor| {
+             auto_cursor: Cursor,
+             // Mercury: text-overflow. The part of `fragment_rect` that can be hit, when that is
+             // less than all of it: elided text is hit only where it is still painted.
+             hittable_rect: Option<PhysicalRect<Au>>| {
                 let is_root_element = fragment_flags.contains(FragmentFlags::IS_ROOT_ELEMENT);
 
                 if !is_root_element {
@@ -292,6 +318,16 @@ impl Fragment {
                     return false;
                 }
 
+                // Mercury: text-overflow
+                if let Some(hittable_rect) = hittable_rect &&
+                    !hittable_rect
+                        .translate(state.origin.to_vector())
+                        .to_webrender()
+                        .contains(point_in_spatial_node)
+                {
+                    return false;
+                }
+
                 let point_in_target = point_in_spatial_node.cast_unit() -
                     Vector2D::new(
                         fragment_rect.origin.x.to_f32_px(),
@@ -334,6 +370,7 @@ impl Fragment {
                 box_fragment.border_radius(),
                 box_fragment.base.flags,
                 Cursor::Default,
+                None, // Mercury: text-overflow
             ),
             Fragment::Text(text) => hit_test_fragment_inner(
                 &text.style(),
@@ -341,7 +378,25 @@ impl Fragment {
                 BorderRadius::zero(),
                 FragmentFlags::empty(),
                 Cursor::Text,
+                None, // Mercury: text-overflow
             ),
+            // Mercury: text-overflow. Hit tests skip elided text: nothing after the cut is hit, and
+            // of the text that is cut only the glyphs that are still painted are. The pull request
+            // this is ported from (servo/servo#42394) left this as a TODO and hit all of the text.
+            Fragment::ElidedText(elided_text) => {
+                if elided_text.is_fully_elided() {
+                    return false;
+                }
+                let text = &elided_text.text_fragment;
+                hit_test_fragment_inner(
+                    &text.style(),
+                    text.base.rect(),
+                    BorderRadius::zero(),
+                    FragmentFlags::empty(),
+                    Cursor::Text,
+                    Some(elided_text.kept_rect(text.base.rect())),
+                )
+            },
             _ => false,
         }
     }
@@ -470,8 +525,12 @@ impl ClosestFragmentSearch {
     }
 
     fn maybe_update(&mut self, fragment: &Fragment, point_in_fragment: Point2D<Au, CSSPixel>) {
-        let Fragment::Text(text_fragment) = fragment else {
-            return;
+        // Mercury: text-overflow. Elided text is still text of the DOM, and a click near it, or on
+        // the marker that stands for it, finds an offset in all of it.
+        let text_fragment = match fragment {
+            Fragment::Text(text_fragment) => text_fragment,
+            Fragment::ElidedText(elided_text) => &elided_text.text_fragment,
+            _ => return,
         };
 
         let (distance, point_in_vertical_bounds) = {

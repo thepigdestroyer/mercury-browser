@@ -232,6 +232,78 @@ SpiderMonkey's security fixes); the same line is changed in `servo-script-bindin
 - **Why:** names, states and values are computed from the DOM; a stale answer is a wrong reading.
 - **Tested by:** `headless_servo_state_changes_reach_the_tree` and the frames tests in `crates/talaria-servo/tests/`.
 - **Drop when:** upstream servo#46241 and its follow-ups damage the tree for the same changes.
+## Changes: text, lane txt-1 (21 Nov 2026)
+
+Typed highlights (EB7), IME composition (EB11) and two post-0.8 selection fixes. Nothing here is a backport of a pull request
+unless it says so.
+
+### 14. Selection on replaced elements (servo/servo#49613) — `dom/node/layout_dom.rs`, `dom/selection.rs`, `dom/selection_range.rs`
+
+Merge commit `af5f54ba7` (sabbCodes, 14 Nov 2026). `replaced_is_selected` also requires a non-collapsed range;
+`FlatTreeSelection::is_collapsed` and `SelectionRange::is_collapsed` are new; the element branch of `set_node_selection` follows.
+Needs the `servo-layout` hunk. Drop at the Servo bump that contains #49613 (B1).
+
+### 15. UA widgets are not selected (servo/servo#49885) — `dom/selection.rs`
+
+Hand-port (merge commit `afc9224b1`, Martin Robinson, 13 Nov 2026): `VisibleSelectionTraversal` skips the subtree of an element whose
+shadow root is a UA widget (`Element` joins the `use crate::dom::{..}` line). Needs the `user-agent.css` hunk of `servo-layout`.
+Drop at the bump that contains #49885 (B1).
+
+### 16. Typed highlights (EB7) — new `dom/highlights.rs`; `dom/mod.rs`, `dom/document/document.rs`, `dom/window/window.rs`, `dom/node/node.rs`, `dom/node/layout_dom.rs`, `dom/characterdata/characterdata.rs`, `layout_dom/servo_layout_node.rs`
+
+- **What:** a `HighlightSet` of live `Range`s per `Document` (field, initialiser and accessor `Document::highlights()` in
+  `document.rs`: `#[dom_struct]` forbids public fields, so a sibling module cannot read the field). Once per reflow, right after the
+  selection update (`window.rs`: one hook line, `Document::update_highlights`), it resolves the text nodes each range covers and
+  pushes each node's highlights to its text run (`CharacterData::set_text_run_highlights`; a new display list, no relayout). It
+  keeps the per-node result for layout to read when it builds a run (`LayoutDom<Node>::highlights_for_text_node`); the text of a text
+  control gets its composition from the control (`composition_for_layout`). `NodeFlags::OVERLAPS_HIGHLIGHT` (bit 4) lets layout ask
+  only the nodes that have one. API: `set(kind, ranges)`, `clear(kind)`, `clear_all()`; the find, text-fragment and spell-check
+  lanes are its next producers.
+- **Why:** composition underlines inside `contenteditable` (EB11) and, later, find in page, text fragments and spell check.
+- **Upstream:** none. **Tested by:** the pure parts in `servo-layout-api` and `servo-layout`; the script side by the compile and
+  by `servo/tests/input_methods.rs` (composition in an editing host registers its range here). **Drop when:** never as a whole.
+- **Cost:** `update` recomputes per reflow while the set is not empty; producers so far are small ranges. Not measured.
+
+### 17. IME composition and the text input state (EB11) — new `dom/document/text_input_state.rs`, `dom/execcommand/composition.rs`; `dom/document/{document_event_handler,editing,document,mod}.rs`, `dom/execcommand/execcommands.rs`, `dom/html/form_controls/{text_input,text_control,htmlinputelement,htmltextareaelement}.rs`, `dom/html/form_controls/input_type/text_input_widget.rs`
+
+- **What:** `ImeEvent::{Commit, SetMarkedText, InsertText}` (see `servo-embedder-traits/MERCURY.md`) and the events in the order
+  Chromium fires them (`compositionstart`, `compositionupdate`, a non-cancelable `beforeinput`, `input` with `insertCompositionText`
+  and `isComposing`, then `compositionend` exactly once; `Commit("")` cancels). `ImeState` (`text_input_state.rs`) keeps the
+  composition, resolves replacement ranges (honoured only for the last `sequence` sent, an unchanged text window, on character
+  boundaries; never in a password field, never outside the editable) and sends `TextMsg::InputState` when the focused editable's
+  text, selection, composition or caret rectangle changes (`None` when focus leaves an editable). **Text controls:** `TextInput`
+  keeps a `composition` range; updates replace it instead of selecting the inserted text; `EndComposition(text)` now applies the
+  final text (it used to drop it); the marked range reaches layout through `composition_for_layout` and
+  `TextInputWidget::set_text_run_highlights` (`Composition`, `CompositionSelected`). **Editing hosts:** the refusal of
+  `StartComposition`/`EndComposition` at `editing.rs:397-400` is gone; `inserttext` runs through `exec_command_with_input_events`
+  with the `insertCompositionText`/`insertReplacementText` event parameters (`composition.rs`), and the marked text is a live DOM
+  `Range` registered as `Composition` in the highlight set. **Hooks:** `document_event_handler.rs` (field `ime`, the new
+  `handle_ime_event` arms, `handle_ime_commit` of #49400, a flush after keyboard, IME, mouse and touch events), and
+  `Document::update_the_rendering` (`document.rs`: one line after the reflow, `flush_text_input_state_after_reflow`).
+- **Decisions:** a cancel fires `beforeinput` and `input` (data `""`) before `compositionend`, so React and friends see the value
+  change; `Dismissed` ends an open composition with `compositionend` and keeps the text; `InsertText`/`Commit` during a
+  composition finish it with that text. The caret rectangle is an estimate (layout has no query for a range's box; it is exact for
+  monospace text), measured once for a newly focused editable and while composing, and after a reflow; it is relative to the frame
+  like `ShowEmbedderControl`'s rectangle. The text of an editing host's state is the plain text of the block that holds the
+  selection. **Cost:** a flush first compares a *stamp* (a text control keeps a content counter bumped at the two places that write
+  its text, plus its edit point, selection origin and composition; an editing host's block has the DOM version number of
+  `inclusive_descendants_version`, plus the selection and marked ranges) with the last one, and returns before it copies any
+  text when nothing changed and the caret rectangle needs no new measurement; so a reflow caused elsewhere on the page (an
+  animation) costs one comparison, whatever the size of the text. A state costs one copy of the control's text per change.
+  `SetMarkedText` and `InsertText` force a style reflow once each (`is_still_rendered`: an event listener may have hidden the
+  element); that is one per keystroke of an input method, not per frame. **Document id:** every state carries the document's
+  pipeline id and "nothing focused" is the separate `TextMsg::InputCleared(id)`, so the browser can ignore the late "cleared" of a
+  page after the state of an iframe's field arrived. A composition left behind by a focus change between two input method events
+  ends with its own `compositionend` before the next event is handled.
+- **Why:** Chinese, Japanese and Korean input, dead keys, the emoji picker, dictation and the accent menu (R14 EB11, P0).
+- **Upstream:** the Commit part is servo/servo#49400 (merge commit `13fbe153e`, drop at the bump that has it); the rest is Mercury's.
+  **Tested by:** `servo/tests/mercury_ime.rs` (25 tests; `make engine-tests`, see `servo/MERCURY.md`) and the `#[cfg(test)]` modules of
+  `composition.rs` and `text_input_state.rs` (`make engine-tests` runs `cargo test -p servo-script --lib`); nothing was seen in a
+  window. **Unverified against Chromium or WPT:** the order of the composition events (on a commit there is no `compositionupdate`
+  that carries the final text, and a commit of the text that is already marked still fires a second `beforeinput`/`input`) and
+  the order of `compositionend` and `blur` (here `compositionend` can follow `blur`, from the blur handler's flush): run WPT
+  `uievents/composition` and `editing/` composition tests and align, or soften the wording. **Drop when:** never as a whole; if a bump brings composition for editing hosts, `composition.rs` and the host half of
+  `ImeState` go.
 
 ## Warnings
 

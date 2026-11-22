@@ -21,11 +21,13 @@
 //! reach a log.
 
 use servo::{CoreMsg, MercuryEmbedderMsg};
-use talaria_core::TabId;
+use talaria_core::{BrowserEvent, TabId};
 
 /// Handle one Mercury message from the engine. `tab` is the tab of the web view the message
-/// concerns, or `None` for a message that names no web view (or whose web view has gone).
-pub(crate) fn handle(tab: Option<TabId>, message: MercuryEmbedderMsg) {
+/// concerns, or `None` for a message that names no web view (or whose web view has gone). `emit`
+/// sends a browser event to that tab's state (a no-op for a message without a tab); a lane that has
+/// to tell the browser something uses it.
+pub(crate) fn handle(tab: Option<TabId>, message: MercuryEmbedderMsg, emit: &dyn Fn(BrowserEvent)) {
     match message {
         MercuryEmbedderMsg::Core(message) => handle_core(tab, message),
         // The a11y lane: replace this call with the lane's handler.
@@ -36,8 +38,8 @@ pub(crate) fn handle(tab: Option<TabId>, message: MercuryEmbedderMsg) {
         MercuryEmbedderMsg::Net(message) => unhandled(tab, &message),
         // The page lane: replace this call with the lane's handler.
         MercuryEmbedderMsg::Page(message) => unhandled(tab, &message),
-        // The text lane: replace this call with the lane's handler.
-        MercuryEmbedderMsg::Text(message) => unhandled(tab, &message),
+        // The text lane (txt-1): `text_messages.rs`.
+        MercuryEmbedderMsg::Text(message) => crate::text_messages::handle(message, emit),
     }
 }
 
@@ -136,12 +138,34 @@ mod tests {
         ));
     }
 
+    fn no_event(_event: BrowserEvent) {}
+
     #[test]
     fn a_probe_is_handled_without_a_panic_with_or_without_a_tab() {
-        handle(None, MercuryEmbedderMsg::Core(CoreMsg::Probe(u64::MAX)));
+        handle(
+            None,
+            MercuryEmbedderMsg::Core(CoreMsg::Probe(u64::MAX)),
+            &no_event,
+        );
         handle(
             Some(TabId::new(3)),
             MercuryEmbedderMsg::Core(CoreMsg::Probe(0)),
+            &no_event,
+        );
+    }
+
+    // txt-1
+    #[test]
+    fn a_text_message_reaches_the_tab_as_a_browser_event() {
+        let events = std::cell::RefCell::new(Vec::new());
+        handle(
+            Some(TabId::new(1)),
+            MercuryEmbedderMsg::Text(servo::TextMsg::InputCleared(4)),
+            &|event| events.borrow_mut().push(event),
+        );
+        assert_eq!(
+            events.into_inner(),
+            vec![BrowserEvent::TextInputCleared { document: 4 }]
         );
     }
 

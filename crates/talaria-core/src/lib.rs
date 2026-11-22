@@ -22,6 +22,8 @@ mod page_icon;
 mod page_request;
 mod site_security;
 mod tab;
+// txt-1: IME input and the focused editable's text state
+mod text_input;
 mod visits;
 mod web_view;
 mod zoom;
@@ -85,6 +87,11 @@ pub use site_security::{
     SecurityIndicator, is_local_host, main_frame_load, security_indicator, typed_https_upgrade,
 };
 pub use tab::{RestoredTab, Tab, TabActivation, TabCommand, TabEvent, TabId};
+// txt-1
+pub use text_input::{
+    ImeClause, ImeClauseKind, ImeReplacement, TextInputState, Utf16Range, utf8_offset_of_utf16,
+    utf16_len, utf16_offset_of_byte,
+};
 pub use visits::{NavigationOrigin, VisitKey, VisitUpdate};
 pub use web_view::{WebView, dispatch_command};
 pub use zoom::{DEFAULT_ZOOM_PERCENT, ZOOM_STEPS, zoom_in, zoom_out};

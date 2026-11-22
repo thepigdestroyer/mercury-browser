@@ -6045,6 +6045,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-engine-tests"
+version = "0.2.0"
+dependencies = [
+ "accesskit",
+ "app_units",
+ "dpi",
+ "euclid",
+ "servo",
+ "servo-base",
+ "servo-default-resources",
+ "servo-embedder-traits",
+ "servo-layout",
+ "servo-layout-api",
+ "servo-paint-api",
+ "smallvec",
+ "stylo",
+ "unicode-segmentation",
+ "url",
+ "webrender_api",
+]
+
+[[package]]
 name = "mercury-filter-lists"
 version = "0.2.0"
 dependencies = [
@@ -10015,6 +10037,7 @@ dependencies = [
  "taffy 0.15.1",
  "unicode-bidi",
  "unicode-script",
+ "unicode-segmentation",
  "unicode_categories",
  "url",
  "uuid",

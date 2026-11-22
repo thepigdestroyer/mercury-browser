@@ -88,7 +88,16 @@ diff --git a/dom/canvas/imagedata.rs b/dom/canvas/imagedata.rs
 diff --git a/dom/characterdata/characterdata.rs b/dom/characterdata/characterdata.rs
 --- a/dom/characterdata/characterdata.rs
 +++ b/dom/characterdata/characterdata.rs
-@@ -109,12 +109,16 @@
+@@ -8,6 +8,8 @@
+ use atomic_refcell::{AtomicRef, AtomicRefCell};
+ use dom_struct::dom_struct;
+ use js::context::JSContext;
++// Mercury: lane txt-1 (EB7).
++use layout_api::TextHighlights;
+ use script_bindings::codegen::InheritTypes::{CharacterDataTypeId, NodeTypeId, TextTypeId};
+ use servo_base::text::{AssumeUnder4GB, RangeAny, Utf16CodeUnits, Utf32CodeUnits};
+
+@@ -109,12 +111,27 @@
      pub(crate) fn set_text_run_selection(
          &self,
          new_range: Option<RangeAny<Utf32CodeUnits>>,
@@ -103,6 +112,17 @@ diff --git a/dom/characterdata/characterdata.rs b/dom/characterdata/characterdat
 +            .is_some_and(|layout_data| {
 +                layout_data.set_text_run_selection(new_range, new_paints_caret)
 +            })
++    }
++
++    // Mercury: lane txt-1 (EB7). Typed highlights, beside the selection above and independent of it.
++    /// Returns whether `highlights` was successfully set on an existing text run. They replace the
++    /// highlights the text run had; an empty set clears them.
++    pub(crate) fn set_text_run_highlights(&self, highlights: TextHighlights) -> bool {
++        self.upcast::<Node>()
++            .layout_data()
++            .borrow()
++            .as_ref()
++            .is_some_and(|layout_data| layout_data.set_text_run_highlights(highlights))
      }
 
      /// Returns the rendered text for this [`CharacterData`].
@@ -1035,7 +1055,16 @@ new file mode 100644
 diff --git a/dom/document/document.rs b/dom/document/document.rs
 --- a/dom/document/document.rs
 +++ b/dom/document/document.rs
-@@ -882,6 +882,10 @@
+@@ -625,6 +625,8 @@
+     has_pending_animated_image_update: Cell<bool>,
+     /// <https://w3c.github.io/slection-api/#dfn-selection>
+     selection: MutNullableDom<Selection>,
++    // Mercury: lane txt-1 (EB7). The typed highlights (IME composition, find, ...) of this document.
++    highlights: crate::dom::highlights::HighlightSet,
+     /// A timeline for animations which is used for synchronizing animations.
+     /// <https://drafts.csswg.org/web-animations/#timeline>
+     timeline: Dom<DocumentTimeline>,
+@@ -882,6 +884,10 @@
 
          self.clean_up_media_elements(cx.no_gc());
 
@@ -1046,7 +1075,20 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          // Step 3. For each WebTransport object transport whose relevant global object is window, run the context cleanup steps given transport.
          // TODO
 
-@@ -2531,6 +2535,8 @@
+@@ -1158,6 +1164,12 @@
+         self.selection.get()
+     }
+
++    // Mercury: lane txt-1 (EB7). The field is private to this module; the accessor is the way in.
++    /// The typed highlights of this [`Document`]: IME composition, find matches, spelling, ...
++    pub(crate) fn highlights(&self) -> &crate::dom::highlights::HighlightSet {
++        &self.highlights
++    }
++
+     pub(crate) fn set_activity(&self, cx: &mut JSContext, activity: DocumentActivity) {
+         // This function should only be called on documents with a browsing context
+         assert!(self.has_browsing_context);
+@@ -2531,6 +2543,8 @@
      }
 
      /// Step 9 of <https://html.spec.whatwg.org/multipage/#the-end>
@@ -1055,7 +1097,16 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
      fn queue_document_completion(&self, cx: &mut JSContext) {
          // The initial about:blank document passes through
          // https://html.spec.whatwg.org/multipage/#creating-a-new-browsing-context
-@@ -3605,7 +3611,7 @@
+@@ -3429,6 +3443,8 @@
+         }
+
+         let (reflow_phases, statistics) = self.window().reflow(cx, ReflowGoal::UpdateTheRendering);
++        // Mercury: lane txt-1 (EB11). Send the focused editable's text state when layout is current.
++        self.event_handler().flush_text_input_state_after_reflow(cx);
+         let phases = phases.union(reflow_phases);
+
+         self.window().paint_api().update_epoch(
+@@ -3605,7 +3621,7 @@
      }
 
      /// <https://html.spec.whatwg.org/multipage/#allowed-to-use>
@@ -1064,7 +1115,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          // Step 1. If document's browsing context is null, then return false.
          if !self.has_browsing_context {
              return false;
-@@ -3621,6 +3627,19 @@
+@@ -3621,6 +3637,19 @@
          // Step 4. Return false.
          // TODO: All features are currently enabled for `Document`s because we do not
          // implement the Permissions Policy specification.
@@ -1084,7 +1135,16 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          true
      }
 
-@@ -5133,6 +5152,8 @@
+@@ -4333,6 +4362,8 @@
+             dirty_canvases: DomRefCell::new(Default::default()),
+             has_pending_animated_image_update: Cell::new(false),
+             selection: MutNullableDom::new(None),
++            // Mercury: lane txt-1 (EB7).
++            highlights: Default::default(),
+             timeline: Dom::from_ref(timeline),
+             animation_manager: AnimationManager::new(),
+             dirty_root: Default::default(),
+@@ -5133,6 +5164,8 @@
              .collect()
      }
 
@@ -1096,7 +1156,34 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
 diff --git a/dom/document/document_event_handler.rs b/dom/document/document_event_handler.rs
 --- a/dom/document/document_event_handler.rs
 +++ b/dom/document/document_event_handler.rs
-@@ -75,6 +75,8 @@
+@@ -8,11 +8,13 @@
+ use std::mem;
+ use std::time::{Duration, Instant};
+
++// Mercury: backport of servo/servo#49400 (13fbe153e): `EditingAction` is used by `handle_ime_commit`.
+ use embedder_traits::{
+-    Cursor, EmbedderMsg, ImeEvent, InputEvent, InputEventId, InputEventOutcome, InputEventResult,
+-    KeyboardEvent as EmbedderKeyboardEvent, MouseButton, MouseButtonAction, MouseButtonEvent,
+-    MouseLeftViewportEvent, MouseMoveEvent, TouchEvent as EmbedderTouchEvent, TouchEventType,
+-    TouchId, TouchPointerType, UntrustedNodeAddress, WheelEvent as EmbedderWheelEvent,
++    Cursor, EditingAction, EmbedderMsg, ImeEvent, InputEvent, InputEventId, InputEventOutcome,
++    InputEventResult, KeyboardEvent as EmbedderKeyboardEvent, MouseButton, MouseButtonAction,
++    MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent, TouchEvent as EmbedderTouchEvent,
++    TouchEventType, TouchId, TouchPointerType, UntrustedNodeAddress,
++    WheelEvent as EmbedderWheelEvent,
+ };
+ #[cfg(feature = "gamepad")]
+ use embedder_traits::{
+@@ -61,6 +63,8 @@
+     editing_action_from_composition_event, editing_action_from_keyboard_event,
+ };
+ use crate::dom::document::focus::FocusableArea;
++// Mercury: the IME state of a document and its text state message (EB11).
++use crate::dom::document::text_input_state::{FlushMode, ImeState};
+ use crate::dom::document::interactive_element_command::InteractiveElementCommand;
+ use crate::dom::event::{EventBubbles, EventCancelable, EventComposed, EventFlags};
+ #[cfg(feature = "gamepad")]
+@@ -75,6 +79,8 @@
  use crate::dom::node::focus::FocusTrigger;
  use crate::dom::node::{self, Node, NodeTraits};
  use crate::dom::pointerevent::{PointerEvent, PointerId};
@@ -1105,7 +1192,76 @@ diff --git a/dom/document/document_event_handler.rs b/dom/document/document_even
  use crate::dom::types::{
      CompositionEvent, Element, Event, EventTarget, GlobalScope, HTMLAnchorElement, HTMLAreaElement,
      HTMLElement, HTMLLabelElement, MouseEvent, Touch, TouchEvent, TouchList, WheelEvent, Window,
-@@ -1642,9 +1644,10 @@
+@@ -256,6 +262,8 @@
+     /// The current drag gesture, if one exists. Events that affect this drag
+     /// gesture will be forwarded to it.
+     drag_gesture: DomRefCell<Option<DragGesture>>,
++    // Mercury: the IME composition and the text state message of this document (EB11).
++    ime: ImeState,
+ }
+
+ impl DocumentEventHandler {
+@@ -283,9 +291,30 @@
+             pending_pointer_capture: Default::default(),
+             pointer_capture_target: Default::default(),
+             drag_gesture: Default::default(),
++            ime: Default::default(),
+         }
+     }
+
++    // Mercury: the IME state of this document (EB11).
++    pub(crate) fn ime(&self) -> &ImeState {
++        &self.ime
++    }
++
++    // Mercury: tell the browser what the focused editable holds if that changed, after an input
++    // event or a focus change (EB11). Does not force layout except for a newly focused
++    // editable or an open composition.
++    pub(crate) fn flush_text_input_state_after_input(&self, cx: &mut JSContext) {
++        self.ime
++            .flush(cx, &self.window.Document(), FlushMode::AfterInput);
++    }
++
++    // Mercury: the same after a reflow, when layout is up to date (EB11); `Document::update_the_rendering()`
++    // calls this after its reflow.
++    pub(crate) fn flush_text_input_state_after_reflow(&self, cx: &mut JSContext) {
++        self.ime
++            .flush(cx, &self.window.Document(), FlushMode::AfterReflow);
++    }
++
+     /// Note a pending input event, to be processed at the next `update_the_rendering` task.
+     pub(crate) fn note_pending_input_event(&self, event: ConstellationInputEvent) {
+         let mut pending_input_events = self.pending_input_events.borrow_mut();
+@@ -388,6 +417,16 @@
+         for event in pending_input_events {
+             self.active_keyboard_modifiers
+                 .set(event.active_keyboard_modifiers);
++            // Mercury: input that can change the text, the selection or the focus of an editable
++            // (EB11).
++            let may_change_text_state = matches!(
++                event.event.event,
++                InputEvent::Keyboard(_) |
++                    InputEvent::Ime(_) |
++                    InputEvent::MouseButton(_) |
++                    InputEvent::Touch(_) |
++                    InputEvent::EditingAction(_)
++            );
+             let result = match event.event.event {
+                 InputEvent::MouseButton(mouse_button_event) => {
+                     self.handle_native_mouse_button_event(cx, mouse_button_event, &event);
+@@ -439,6 +478,11 @@
+                 },
+             };
+
++            // Mercury: tell the browser what the focused editable holds (EB11).
++            if may_change_text_state {
++                self.flush_text_input_state_after_input(cx);
++            }
++
+             input_event_outcomes.push(InputEventOutcome {
+                 id: event.event.id,
+                 result,
+@@ -1642,9 +1686,10 @@
              TouchEventType::Cancel => "touchcancel",
          };
 
@@ -1118,6 +1274,139 @@ diff --git a/dom/document/document_event_handler.rs b/dom/document/document_even
 
          let touch_event = TouchEvent::new(
              cx,
+@@ -1823,18 +1868,52 @@
+         self.run_default_keydown_handler(cx, target, &keyboard_event, flags.into())
+     }
+
++    // Mercury: backport of servo/servo#49400 (13fbe153e): `ImeEvent::Commit`, and the composition
++    // handling moves into `handle_ime_composition`. Drop at the bump that has it.
+     fn handle_ime_event(&self, cx: &mut JSContext, event: ImeEvent) -> InputEventResult {
+-        let document = self.window.Document();
+-        let composition_event = match event {
++        match event {
+             ImeEvent::Dismissed => {
+-                document
+-                    .focus_handler()
+-                    .focus(cx, &FocusableArea::Viewport, FocusTrigger::Script);
+-                return Default::default();
++                // Mercury: an open composition ends first, its text stays (EB11).
++                self.ime.dismiss(cx, &self.window.Document());
++                self.window.Document().focus_handler().focus(
++                    cx,
++                    &FocusableArea::Viewport,
++                    FocusTrigger::Script,
++                );
++                Default::default()
++            },
++            ImeEvent::Commit(text) => self.handle_ime_commit(cx, text),
++            // Mercury: marked text and insertions from the system (EB11).
++            ImeEvent::SetMarkedText {
++                text,
++                selected,
++                clauses,
++                replacement,
++            } => self.ime.set_marked_text(
++                cx,
++                &self.window.Document(),
++                text,
++                selected,
++                clauses,
++                replacement,
++            ),
++            ImeEvent::InsertText { text, replacement } => {
++                self.ime
++                    .insert_text(cx, &self.window.Document(), text, replacement)
+             },
+-            ImeEvent::Composition(composition_event) => composition_event,
+-        };
++            ImeEvent::Composition(composition_event) => {
++                self.handle_ime_composition(cx, composition_event)
++            },
++        }
++    }
+
++    // Mercury: backport of servo/servo#49400 (13fbe153e): the former body of `handle_ime_event`.
++    fn handle_ime_composition(
++        &self,
++        cx: &mut JSContext,
++        composition_event: keyboard_types::CompositionEvent,
++    ) -> InputEventResult {
++        let document = self.window.Document();
+         // spec: https://w3c.github.io/uievents/#compositionstart
+         // spec: https://w3c.github.io/uievents/#compositionupdate
+         // spec: https://w3c.github.io/uievents/#compositionend
+@@ -1877,6 +1956,26 @@
+         composition_event_result
+     }
+
++    // Mercury: backport of servo/servo#49400 (13fbe153e): text committed by an input method, with or
++    // without a composition.
++    fn handle_ime_commit(&self, cx: &mut JSContext, text: String) -> InputEventResult {
++        let document = self.window.Document();
++        // Mercury: with a composition open the text replaces the marked text and ends it (EB11).
++        if self.ime.has_open_composition(cx, &document) {
++            return self.ime.commit(cx, &document, text);
++        }
++        let focused_area = document.focus_handler().focused_area();
++        let Some(focused_element) = focused_area.element() else {
++            // Event is only dispatched if there is a focused element.
++            return Default::default();
++        };
++        let editing_host = document.editing_context(cx.no_gc(), focused_element.upcast());
++        if editing_host.perform_editing_action(cx, EditingAction::InsertText(text)) {
++            return InputEventResult::Consumed;
++        }
++        Default::default()
++    }
++
+     fn handle_wheel_event(
+         &self,
+         cx: &mut JSContext,
+diff --git a/dom/document/editing.rs b/dom/document/editing.rs
+--- a/dom/document/editing.rs
++++ b/dom/document/editing.rs
+@@ -394,10 +394,17 @@
+         // This function does not do any checks for whether or not we are actually inside an
+         // editing host, since those checks are performed by exec_command_for_command_id either way.
+         let (command, argument) = match editing_action {
+-            // TODO: composition should be supported once editing hosts have selection support
+-            EditingAction::MoveCursor(..) |
++            EditingAction::MoveCursor(..) => return false,
++            // Mercury: composition in editing hosts (EB11). The marked text is kept by the
++            // document's IME state, which also fires the input events of the composition.
+             EditingAction::StartComposition |
+-            EditingAction::EndComposition(..) => return false,
++            EditingAction::InsertCompositionText(..) |
++            EditingAction::EndComposition(..) => {
++                return self
++                    .event_handler()
++                    .ime()
++                    .perform_composition_action(cx, self, editing_action);
++            },
+             EditingAction::SelectAll | EditingAction::Clipboard(_) => {
+                 unreachable!("Should have been handled before this point.")
+             },
+@@ -434,8 +441,8 @@
+             // > with value equal to the text the user provided. If the user inserts multiple
+             // > characters at once or in quick succession, this specification does not define
+             // > whether it is treated as one insertion or several consecutive insertions.
+-            // TODO: composition should be supported once editing hosts have selection support
+-            EditingAction::InsertText(text) | EditingAction::InsertCompositionText(text) => (
++            // Mercury: the composition actions are handled above (EB11).
++            EditingAction::InsertText(text) => (
+                 DOMString::from_static("inserttext"),
+                 DOMString::from(text.as_str()),
+             ),
+@@ -523,7 +530,8 @@
+ }
+
+ impl TextControlElementEditingContext {
+-    fn text_control_element(&self) -> &dyn TextControlElement {
++    // Mercury: `pub(crate)`, the IME state of the document uses it (EB11).
++    pub(crate) fn text_control_element(&self) -> &dyn TextControlElement {
+         match self {
+             TextControlElementEditingContext::TextArea(text_area) => &**text_area,
+             TextControlElementEditingContext::Input(input) => &**input,
 diff --git a/dom/document/mod.rs b/dom/document/mod.rs
 --- a/dom/document/mod.rs
 +++ b/dom/document/mod.rs
@@ -1132,6 +1421,1170 @@ diff --git a/dom/document/mod.rs b/dom/document/mod.rs
  pub(crate) mod accessibility_data;
  mod animation_manager;
  #[expect(clippy::module_inception, reason = "The interface name is Document")]
+@@ -17,6 +21,8 @@
+ pub(crate) mod focus;
+ mod iframe_collection;
+ mod interactive_element_command;
++// Mercury: the IME state of a document and its text state message (EB11, the text lane).
++pub(crate) mod text_input_state;
+ mod tree_ordered_index_map;
+ pub(crate) mod visibilitystateentry;
+ pub(crate) mod websocket;
+diff --git a/dom/document/text_input_state.rs b/dom/document/text_input_state.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/document/text_input_state.rs
+@@ -0,0 +1,1150 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this whole file is Mercury's (EB11, the text lane). It is the IME state of a document:
++// the composition that an `ImeEvent` opened, the replacement of text the system asks for, and the
++// text state message that tells the browser what the focused editable holds. The hooks in
++// upstream files are in `document_event_handler.rs` (the events, a flush after each input event),
++// `editing.rs` (the old `Composition` events in editing hosts) and the two text controls (a flush
++// when they gain or lose focus).
++
++//! The IME state of a document.
++//!
++//! * [`ImeState::set_marked_text`], [`ImeState::commit`] and [`ImeState::insert_text`] handle the
++//!   `ImeEvent`s of the same names, for text controls and editing hosts alike, and fire the events
++//!   of a composition in the order Chromium does: `compositionstart` (cancelable), then for each
++//!   update `compositionupdate`, `beforeinput` (not cancelable) and `input`
++//!   (`insertCompositionText`, `isComposing`), and at the end `compositionend` exactly once.
++//! * [`ImeState::flush`] builds a [`TextInputState`] for the focused editable, and sends it to
++//!   the browser when it differs from the last one sent.
++//!
++//! Neither logs text: what a user types must not reach a log.
++
++use std::cell::Cell;
++use std::ops::Range as UnitRange;
++
++use embedder_traits::{
++    EditingAction, EmbedderMsg, ImeClause, ImeClauseKind, ImeReplacement, InputEventResult,
++    MercuryEmbedderMsg, TextInputState, TextMsg, TextWindow,
++};
++use js::context::JSContext;
++use keyboard_types::CompositionState;
++use layout_api::HighlightKind;
++use script_bindings::cell::DomRefCell;
++use script_bindings::codegen::GenericBindings::CharacterDataBinding::CharacterDataMethods;
++use script_bindings::codegen::GenericBindings::DocumentBinding::DocumentMethods;
++use script_bindings::codegen::GenericBindings::NodeBinding::NodeMethods;
++use script_bindings::codegen::GenericBindings::SelectionBinding::SelectionMethods;
++use script_bindings::inheritance::Castable;
++use script_bindings::root::DomRoot;
++use script_bindings::str::DOMString;
++
++use crate::dom::bindings::root::MutNullableDom;
++use crate::dom::characterdata::CharacterData;
++use crate::dom::document::Document;
++use crate::dom::document::editing::EditingContext;
++use crate::dom::event::EventFlags;
++use crate::dom::execcommand::execcommands::composition::{self, ImeInputEvents};
++use crate::dom::html::htmlbrelement::HTMLBRElement;
++use crate::dom::iterators::ShadowIncluding;
++use crate::dom::node::{Node, NodeTraits};
++use crate::dom::range::Range;
++use crate::dom::text::Text;
++use crate::dom::text_input::{Lines, TextInputStamp};
++use crate::dom::types::{CompositionEvent, Element, Event, EventTarget};
++
++/// When the text state is being flushed, which decides whether layout is asked for the caret
++/// rectangle.
++#[derive(Clone, Copy, Debug, Eq, PartialEq)]
++pub(crate) enum FlushMode {
++    /// After an input event, or a focus change: the caret rectangle is measured only for a newly
++    /// focused editable and while a composition is open (the candidate window follows it). At
++    /// most one layout is forced, by that measurement.
++    AfterInput,
++    /// After a reflow, when layout is up to date and measuring costs nothing: the caret
++    /// rectangle is brought up to date.
++    AfterReflow,
++}
++
++/// The IME state of a [`Document`], kept in its `DocumentEventHandler`.
++#[derive(Default, JSTraceable, MallocSizeOf)]
++#[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
++pub(crate) struct ImeState {
++    /// The element a composition opened by an `ImeEvent` belongs to.
++    composition_target: MutNullableDom<Element>,
++    /// The marked text of an editing host, as a live range.
++    host_marked: MutNullableDom<Range>,
++    /// The text of the marked text at its last update, for the `compositionend` of a composition
++    /// that lost its element.
++    marked_text: DomRefCell<String>,
++    /// The editable the last state message described.
++    last_target: MutNullableDom<Element>,
++    /// The last state message sent (`None` for "nothing editable has focus" and before the first).
++    #[no_trace]
++    #[ignore_malloc_size_of = "a message that was sent already"]
++    last_sent: DomRefCell<Option<TextInputState>>,
++    /// The sequence number of the last message sent.
++    sequence: Cell<u64>,
++    /// Whether the caret of the editable moved since its rectangle was measured.
++    caret_rect_stale: Cell<bool>,
++    /// What the last state was made of, so that a flush can skip the rebuild (and its copy of
++    /// the text) when nothing changed.
++    #[no_trace]
++    #[ignore_malloc_size_of = "a few numbers"]
++    last_stamp: DomRefCell<Option<Stamp>>,
++}
++
++/// A boundary point of a range: the node's address, its offset, for both ends.
++type RangeStamp = (usize, u32, usize, u32);
++
++/// Everything the text state of the focused editable is made of, except the caret rectangle and
++/// the text itself. Equal stamps mean an equal state; making one copies nothing (a text control
++/// keeps a counter of its changes, an editing host's block has a version number).
++#[derive(Clone, Debug, PartialEq)]
++enum Stamp {
++    Control {
++        input: TextInputStamp,
++        password: bool,
++    },
++    Host {
++        version: u64,
++        selection: Option<RangeStamp>,
++        marked: Option<RangeStamp>,
++    },
++}
++
++fn range_stamp(range: &Range) -> RangeStamp {
++    let (start, end) = (range.start_container(), range.end_container());
++    (
++        &*start as *const Node as usize,
++        range.start_offset(),
++        &*end as *const Node as usize,
++        range.end_offset(),
++    )
++}
++
++/// Whether a flush can return before it builds the state: it is the same editable as the last
++/// message described, a message was sent, nothing it is made of changed, and the caret rectangle
++/// does not need a new measurement after this reflow.
++fn can_skip_rebuild(
++    target_changed: bool,
++    sent_before: bool,
++    stamp_unchanged: bool,
++    mode: FlushMode,
++    caret_rect_stale: bool,
++) -> bool {
++    !target_changed &&
++        sent_before &&
++        stamp_unchanged &&
++        !(mode == FlushMode::AfterReflow && caret_rect_stale)
++}
++
++/// The focused element, if there is one.
++fn focused_element(document: &Document) -> Option<DomRoot<Element>> {
++    let focused_area = document.focus_handler().focused_area();
++    focused_area.element().map(DomRoot::from_ref)
++}
++
++/// Whether `a` and `b` are the same element.
++fn same_element(a: &Element, b: &Element) -> bool {
++    a.upcast::<Node>() == b.upcast::<Node>()
++}
++
++/// The focused editable: a text control, or an element in an editing host.
++fn focused_editable(
++    cx: &mut JSContext,
++    document: &Document,
++) -> Option<(DomRoot<Element>, EditingContext)> {
++    let element = focused_element(document)?;
++    let context = document.editing_context(cx.no_gc(), element.upcast());
++    if matches!(context, EditingContext::TextControl(_)) {
++        return Some((element, context));
++    }
++    // Editing hosts exist only with `execCommand` (Mercury turns it on).
++    if !servo_config::pref!(dom_exec_command_enabled) {
++        return None;
++    }
++    let editable = element.upcast::<Node>().is_editable_or_editing_host();
++    editable.then_some((element, context))
++}
++
++/// Fire a composition event at `target`. Returns the flags of the event, so that the caller can
++/// tell whether a page canceled it or handled it.
++fn fire_composition_event(
++    cx: &mut JSContext,
++    document: &Document,
++    target: &Element,
++    state: CompositionState,
++    data: &str,
++) -> EventFlags {
++    let window = document.window();
++    let cancelable = state == CompositionState::Start;
++    let event = CompositionEvent::new(
++        cx,
++        window,
++        state.event_type().into(),
++        true,
++        cancelable,
++        Some(window),
++        0,
++        DOMString::from(data),
++    );
++    let event = event.upcast::<Event>();
++    event.fire(cx, target.upcast::<EventTarget>());
++    event.flags()
++}
++
++/// The caret and the selected clause the input method asked for, both as UTF-16 offsets into the
++/// marked text: the caret is where its own selection starts (the end of the marked text if it
++/// said nothing); the selected clause is its selection if that is not empty, otherwise the
++/// clause it marked as selected.
++fn caret_and_selected_clause(
++    selected: Option<&UnitRange<u32>>,
++    clauses: &[ImeClause],
++) -> (Option<u32>, Option<UnitRange<u32>>) {
++    let caret = selected.map(|selected| selected.start);
++    let selected_clause = selected
++        .filter(|selected| selected.start < selected.end)
++        .cloned()
++        .or_else(|| {
++            clauses
++                .iter()
++                .find(|clause| {
++                    matches!(
++                        clause.kind,
++                        ImeClauseKind::SelectedRaw | ImeClauseKind::SelectedConverted
++                    ) && clause.range.start < clause.range.end
++                })
++                .map(|clause| clause.range.clone())
++        });
++    (caret, selected_clause)
++}
++
++impl ImeState {
++    /// Whether the focused editable has an open composition, whoever opened it.
++    pub(crate) fn has_open_composition(&self, cx: &mut JSContext, document: &Document) -> bool {
++        focused_editable(cx, document)
++            .is_some_and(|(element, context)| self.composition_is_open(&element, &context))
++    }
++
++    /// Whether the editable of `context` has an open composition, whoever opened it.
++    fn composition_is_open(&self, element: &Element, context: &EditingContext) -> bool {
++        match context {
++            EditingContext::TextControl(control) => {
++                control.text_control_element().text_input().is_composing()
++            }
++            EditingContext::Document(_) => self
++                .composition_target
++                .get()
++                .is_some_and(|target| same_element(&target, element)),
++        }
++    }
++
++    // ----- the events -----------------------------------------------------------------------
++
++    /// `ImeEvent::SetMarkedText`: the input method set its marked text.
++    pub(crate) fn set_marked_text(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        text: String,
++        selected: Option<UnitRange<u32>>,
++        clauses: Vec<ImeClause>,
++        replacement: Option<ImeReplacement>,
++    ) -> InputEventResult {
++        let Some((element, context)) = focused_editable(cx, document) else {
++            return Default::default();
++        };
++        self.end_stale_composition(cx, document, &element);
++        if !is_still_rendered(cx, &element) {
++            return Default::default();
++        }
++
++        let composing = self.composition_is_open(&element, &context);
++        // An empty text ends the composition, or means nothing if there was none.
++        if text.is_empty() {
++            return if composing {
++                self.finish(cx, document, &element, &context, String::new())
++            } else {
++                Default::default()
++            };
++        }
++
++        let mut result = InputEventResult::default();
++        if !composing {
++            // The marked text starts by replacing the text the system named, if it still can.
++            if let Some(replacement) = &replacement {
++                self.select_replacement(cx, document, &element, &context, replacement);
++            }
++
++            let flags = fire_composition_event(cx, document, &element, CompositionState::Start, "");
++            result |= flags.into();
++            if flags.intersects(EventFlags::Canceled | EventFlags::Handled) {
++                return result;
++            }
++            self.begin(&element, &context);
++        }
++
++        // `compositionupdate`, then the text and its `beforeinput` and `input` events.
++        let flags = fire_composition_event(cx, document, &element, CompositionState::Update, &text);
++        result |= flags.into();
++        if flags.intersects(EventFlags::Canceled | EventFlags::Handled) {
++            return result;
++        }
++        *self.marked_text.borrow_mut() = text.clone();
++        let (caret, selected_clause) = caret_and_selected_clause(selected.as_ref(), &clauses);
++        let changed = match &context {
++            EditingContext::TextControl(control) => control
++                .text_control_element()
++                .ime_update_marked_text(cx, &text, caret, selected_clause),
++            EditingContext::Document(_) => {
++                self.update_host(cx, document, &text, caret, selected_clause)
++            }
++        };
++        if changed {
++            result |= InputEventResult::Consumed;
++        }
++        result
++    }
++
++    /// `ImeEvent::Commit`, with a composition open: the text replaces the marked text and ends
++    /// the composition. (Without a composition it is an insertion: `handle_ime_commit()`.)
++    pub(crate) fn commit(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        text: String,
++    ) -> InputEventResult {
++        let Some((element, context)) = focused_editable(cx, document) else {
++            return Default::default();
++        };
++        if !self.composition_is_open(&element, &context) {
++            return self.insert_text(cx, document, text, None);
++        }
++        self.finish(cx, document, &element, &context, text)
++    }
++
++    /// `ImeEvent::InsertText`: text the system inserts without composing it, perhaps in place of
++    /// text it names. With a composition open, the text ends it, as `Commit` does.
++    pub(crate) fn insert_text(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        text: String,
++        replacement: Option<ImeReplacement>,
++    ) -> InputEventResult {
++        let Some((element, context)) = focused_editable(cx, document) else {
++            return Default::default();
++        };
++        self.end_stale_composition(cx, document, &element);
++        if self.composition_is_open(&element, &context) {
++            return self.finish(cx, document, &element, &context, text);
++        }
++        if text.is_empty() || !is_still_rendered(cx, &element) {
++            return Default::default();
++        }
++
++        let replacing = replacement.as_ref().is_some_and(|replacement| {
++            self.select_replacement(cx, document, &element, &context, replacement)
++        });
++        let inserted = match &context {
++            EditingContext::TextControl(control) => control
++                .text_control_element()
++                .ime_insert_text(cx, &text, replacing),
++            EditingContext::Document(_) => {
++                let events = if replacing {
++                    ImeInputEvents::replacement(&text)
++                } else {
++                    ImeInputEvents::insertion(&text)
++                };
++                composition::insert_text(cx, document, &text, &events)
++            }
++        };
++        if inserted {
++            InputEventResult::Consumed
++        } else {
++            Default::default()
++        }
++    }
++
++    /// `ImeEvent::Dismissed` with a composition open: it ends, the marked text stays as it is
++    /// (nothing the user typed is lost), before the caller moves focus away.
++    pub(crate) fn dismiss(&self, cx: &mut JSContext, document: &Document) {
++        let Some(target) = self.composition_target.get() else {
++            return;
++        };
++        self.end_lost_composition(cx, document, &target);
++    }
++
++    // ----- composition ----------------------------------------------------------------------
++
++    /// Open a composition on `element` (its `compositionstart` was fired).
++    fn begin(&self, element: &Element, context: &EditingContext) {
++        self.composition_target.set(Some(element));
++        self.host_marked.set(None);
++        if let EditingContext::TextControl(control) = context {
++            control
++                .text_control_element()
++                .text_input_mut()
++                .begin_composition();
++        }
++    }
++
++    /// End the composition with `text` as its final text, and fire `compositionend` (once).
++    fn finish(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        element: &Element,
++        context: &EditingContext,
++        text: String,
++    ) -> InputEventResult {
++        match context {
++            EditingContext::TextControl(control) => {
++                control
++                    .text_control_element()
++                    .ime_commit_composition(cx, &text);
++            }
++            EditingContext::Document(_) => {
++                // The same events as for an update, even when the text did not change.
++                self.update_host(cx, document, &text, None, None);
++                self.end_host(cx, document, None, true);
++            }
++        }
++        // The composition is closed before the event, so that a page that reacts to it, or an
++        // event that arrives meanwhile, cannot end it a second time.
++        self.composition_target.set(None);
++        self.host_marked.set(None);
++        self.marked_text.borrow_mut().clear();
++        let flags = fire_composition_event(cx, document, element, CompositionState::End, &text);
++        InputEventResult::from(flags) | InputEventResult::Consumed
++    }
++
++    /// A composition that belongs to another element than the focused editable (the focus moved
++    /// between two IME events, before any flush noticed): it ends, with its `compositionend`,
++    /// before the event for the new element is handled.
++    fn end_stale_composition(&self, cx: &mut JSContext, document: &Document, focused: &Element) {
++        if let Some(target) = self.composition_target.get() {
++            if !same_element(&target, focused) {
++                self.end_lost_composition(cx, document, &target);
++            }
++        }
++    }
++
++    /// A composition whose element is not the focused editable any more: end it where it is and
++    /// fire `compositionend` with the marked text it had.
++    fn end_lost_composition(&self, cx: &mut JSContext, document: &Document, target: &Element) {
++        let text = std::mem::take(&mut *self.marked_text.borrow_mut());
++        let context = document.editing_context(cx.no_gc(), target.upcast());
++        match &context {
++            EditingContext::TextControl(control) => {
++                let control = control.text_control_element();
++                control.text_input_mut().end_composition(None);
++                control.maybe_update_composition_highlights();
++            }
++            EditingContext::Document(_) => self.end_host(cx, document, None, false),
++        }
++        self.composition_target.set(None);
++        self.host_marked.set(None);
++        fire_composition_event(cx, document, target, CompositionState::End, &text);
++    }
++
++    /// The old `Composition` events in an editing host (`EditingAction`s of the document):
++    /// `StartComposition`, `InsertCompositionText` and `EndComposition`.
++    pub(crate) fn perform_composition_action(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        action: &EditingAction,
++    ) -> bool {
++        match action {
++            EditingAction::StartComposition => {
++                self.host_marked.set(None);
++                false
++            }
++            EditingAction::InsertCompositionText(text) => {
++                self.update_host(cx, document, text, None, None)
++            }
++            EditingAction::EndComposition(text) => {
++                let changed =
++                    self.host_marked.get().is_some() && *self.marked_text.borrow() != *text;
++                self.end_host(cx, document, Some(text), true);
++                changed
++            }
++            _ => false,
++        }
++    }
++
++    // ----- editing hosts --------------------------------------------------------------------
++
++    /// Replace the marked text of the editing host (or the selection, when a composition just
++    /// began) with `text`, with the events of a composition, and put the caret where the input
++    /// method wants it. Returns whether the text was changed.
++    fn update_host(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        text: &str,
++        caret: Option<u32>,
++        selected: Option<UnitRange<u32>>,
++    ) -> bool {
++        let events = ImeInputEvents::composition(text);
++        let marked = self.host_marked.get();
++        let Some(range) =
++            composition::replace_marked_text(cx, document, marked.as_deref(), text, &events)
++        else {
++            return false;
++        };
++        self.host_marked.set(Some(&range));
++        *self.marked_text.borrow_mut() = text.to_owned();
++        self.place_host_caret(cx, document, &range, caret, selected);
++        true
++    }
++
++    /// Put the selection (the caret) at `caret` in the marked text of an editing host, and show
++    /// the marked text and the selected clause as highlights.
++    fn place_host_caret(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        marked: &Range,
++        caret: Option<u32>,
++        selected: Option<UnitRange<u32>>,
++    ) {
++        if let Some(caret) = caret
++            && let Some((node, offset)) = composition::position_in_range(cx, marked, caret)
++            && let Some(selection) = document.GetSelection(cx)
++        {
++            let _ = selection.Collapse(cx, Some(&node), offset);
++        }
++
++        let highlights = document.highlights();
++        if marked.collapsed() {
++            highlights.clear(HighlightKind::Composition);
++        } else {
++            highlights.set(HighlightKind::Composition, vec![DomRoot::from_ref(marked)]);
++        }
++        let clause_range = selected.and_then(|selected| {
++            let (start, start_offset) = composition::position_in_range(cx, marked, selected.start)?;
++            let (end, end_offset) = composition::position_in_range(cx, marked, selected.end)?;
++            Some(Range::new(
++                cx,
++                document,
++                &start,
++                start_offset,
++                &end,
++                end_offset,
++            ))
++        });
++        match clause_range {
++            Some(range) if !range.collapsed() => {
++                highlights.set(HighlightKind::CompositionSelected, vec![range]);
++            }
++            _ => highlights.clear(HighlightKind::CompositionSelected),
++        }
++    }
++
++    /// End the composition of an editing host: with `final_text`, the marked text first becomes
++    /// that (events as for an update, unless it already is); then the highlights go and the
++    /// caret is after the text.
++    ///
++    /// `move_caret` is false for a composition that lost its element (the focus, and with it the
++    /// selection, is somewhere else by now: putting the caret back would steal it).
++    fn end_host(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        final_text: Option<&str>,
++        move_caret: bool,
++    ) {
++        if let Some(final_text) = final_text
++            && self.host_marked.get().is_some()
++            && *self.marked_text.borrow() != *final_text
++        {
++            self.update_host(cx, document, final_text, None, None);
++        }
++
++        if move_caret
++            && let Some(marked) = self.host_marked.get()
++            && let Some(selection) = document.GetSelection(cx)
++        {
++            let _ = selection.Collapse(cx, Some(&marked.end_container()), marked.end_offset());
++        }
++        self.host_marked.set(None);
++        let highlights = document.highlights();
++        highlights.clear(HighlightKind::Composition);
++        highlights.clear(HighlightKind::CompositionSelected);
++    }
++
++    // ----- replacement ----------------------------------------------------------------------
++
++    /// Select the text of the focused editable that `replacement` names, so that the text that
++    /// comes next replaces it. It is honoured only while the last state message sent is the one
++    /// `replacement` was made from and the editable still holds the text that message carried;
++    /// otherwise nothing is selected and the text goes in at the selection. Never panics and
++    /// never touches text outside the editable. Returns whether the selection was set.
++    fn select_replacement(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        element: &Element,
++        context: &EditingContext,
++        replacement: &ImeReplacement,
++    ) -> bool {
++        let last = self.last_sent.borrow().clone();
++        let Some(last) = last else {
++            return false;
++        };
++        if last.sequence != replacement.sequence
++            || last.is_password
++            || replacement.range.start > replacement.range.end
++            || replacement.range.end > TextWindow::utf16_len(&last.text)
++            || !self
++                .last_target
++                .get()
++                .is_some_and(|target| same_element(&target, element))
++        {
++            return false;
++        }
++        let start = last.text_start.saturating_add(replacement.range.start);
++        let end = last.text_start.saturating_add(replacement.range.end);
++
++        match context {
++            EditingContext::TextControl(control) => {
++                let control = control.text_control_element();
++                let whole = String::from(control.text_input().get_content());
++                if !window_is_unchanged(&whole, &last) {
++                    return false;
++                }
++                let selected = control
++                    .text_input_mut()
++                    .select_utf16_range_checked(start, end);
++                if selected {
++                    control.maybe_update_shared_selection();
++                }
++                selected
++            }
++            EditingContext::Document(_) => {
++                let Some(host_text) = HostText::new(cx, document, element) else {
++                    return false;
++                };
++                if !window_is_unchanged(&host_text.text, &last) {
++                    return false;
++                }
++                let (Some((start_node, start_offset)), Some((end_node, end_offset))) =
++                    (host_text.position_at(start), host_text.position_at(end))
++                else {
++                    return false;
++                };
++                document.GetSelection(cx).is_some_and(|selection| {
++                    selection
++                        .SetBaseAndExtent(cx, &start_node, start_offset, &end_node, end_offset)
++                        .is_ok()
++                })
++            }
++        }
++    }
++
++    // ----- the text state message -----------------------------------------------------------
++
++    /// Tell the browser what the focused editable holds, if that changed since the last time.
++    /// Cheap when nothing is editable and nothing was sent.
++    pub(crate) fn flush(&self, cx: &mut JSContext, document: &Document, mode: FlushMode) {
++        // A composition whose element lost focus ends here.
++        if let Some(target) = self.composition_target.get() {
++            let still_focused =
++                focused_element(document).is_some_and(|focused| same_element(&focused, &target));
++            if !still_focused {
++                self.end_lost_composition(cx, document, &target);
++            }
++        }
++
++        let Some((element, context)) = focused_editable(cx, document) else {
++            self.last_target.set(None);
++            self.last_stamp.borrow_mut().take();
++            if self.last_sent.borrow().is_some() {
++                self.send(document, None);
++            }
++            return;
++        };
++
++        // Cheap first: a stamp copies nothing. A reflow that changed nothing about the editable
++        // (an animation elsewhere on the page) ends here, whatever the size of the text.
++        let target_changed = self
++            .last_target
++            .get()
++            .is_none_or(|target| !same_element(&target, &element));
++        let stamp = self.stamp_of(cx, document, &element, &context);
++        if can_skip_rebuild(
++            target_changed,
++            self.last_sent.borrow().is_some(),
++            stamp.is_some() && *self.last_stamp.borrow() == stamp,
++            mode,
++            self.caret_rect_stale.get(),
++        ) {
++            return;
++        }
++
++        let Some(mut state) = self.build_state(cx, document, &element, &context) else {
++            return;
++        };
++        *self.last_stamp.borrow_mut() = stamp;
++
++        let previous = self.last_sent.borrow().clone();
++        let content_changed = previous
++            .as_ref()
++            .is_none_or(|previous| !previous.same_content_as(&state));
++        let composing = state.marked.is_some();
++
++        let measure = target_changed
++            || composing
++            || (mode == FlushMode::AfterReflow
++                && (content_changed || self.caret_rect_stale.get() || previous.is_none()));
++        if measure {
++            state.caret_rect = self.measure_caret_rect(cx, document, &element, &context);
++            self.caret_rect_stale.set(false);
++        } else {
++            // The caret may have moved; its rectangle is measured after the next reflow.
++            state.caret_rect = previous.as_ref().and_then(|previous| previous.caret_rect);
++            if content_changed {
++                self.caret_rect_stale.set(true);
++            }
++        }
++
++        // Nothing to send if it is the state last sent (the sequence number apart).
++        let unchanged = !target_changed
++            && previous.as_ref().is_some_and(|previous| {
++                previous.same_content_as(&state) && previous.caret_rect == state.caret_rect
++            });
++        if unchanged {
++            return;
++        }
++
++        self.last_target.set(Some(&element));
++        self.send(document, Some(state));
++    }
++
++    /// What the state of the focused editable is made of, without copying its text.
++    fn stamp_of(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        element: &Element,
++        context: &EditingContext,
++    ) -> Option<Stamp> {
++        match context {
++            EditingContext::TextControl(control) => {
++                let control = control.text_control_element();
++                Some(Stamp::Control {
++                    input: control.text_input().change_stamp(),
++                    password: control.is_password_field(),
++                })
++            },
++            EditingContext::Document(_) => {
++                let host = element.upcast::<Node>().editing_host_of()?;
++                let selection = document
++                    .selection()
++                    .and_then(|selection| selection.active_range(cx))
++                    .map(|range| range_stamp(&range));
++                Some(Stamp::Host {
++                    version: host.inclusive_descendants_version(),
++                    selection,
++                    marked: self.host_marked.get().map(|marked| range_stamp(&marked)),
++                })
++            },
++        }
++    }
++
++    /// Send a message and remember it. Every message, `None` included, takes the next sequence
++    /// number.
++    fn send(&self, document: &Document, state: Option<TextInputState>) {
++        let sequence = self.sequence.get() + 1;
++        self.sequence.set(sequence);
++        let document_id = u64::from(document.window().pipeline_id());
++        let state = state.map(|mut state| {
++            state.sequence = sequence;
++            state.document = document_id;
++            state
++        });
++        *self.last_sent.borrow_mut() = state.clone();
++        // The "nothing is focused" message names its document: a late one from a page must not
++        // hide the field of the frame the focus moved to.
++        let message = match state {
++            Some(state) => TextMsg::InputState(Box::new(state)),
++            None => TextMsg::InputCleared(document_id),
++        };
++        document.send_to_embedder(EmbedderMsg::Mercury(
++            Some(document.webview_id()),
++            MercuryEmbedderMsg::Text(message),
++        ));
++    }
++
++    /// The state of the focused editable, without a caret rectangle and a sequence number.
++    fn build_state(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        element: &Element,
++        context: &EditingContext,
++    ) -> Option<TextInputState> {
++        match context {
++            EditingContext::TextControl(control) => {
++                let control = control.text_control_element();
++                let is_password = control.is_password_field();
++                let multiline = control.text_input().mode() == Lines::Multiple;
++                let window = if is_password {
++                    // The text of a password field never leaves the engine.
++                    TextWindow::new("", 0..0, None)
++                } else {
++                    let text_input = control.text_input();
++                    let whole = String::from(text_input.get_content());
++                    let selection =
++                        text_input.selection_start_utf16().0..text_input.selection_end_utf16().0;
++                    TextWindow::new(&whole, selection, text_input.composition_utf16_range())
++                };
++                Some(state_from_window(window, multiline, is_password))
++            }
++            EditingContext::Document(_) => {
++                let host_text = HostText::new(cx, document, element)?;
++                let total = TextWindow::utf16_len(&host_text.text);
++                let range = document
++                    .selection()
++                    .and_then(|selection| selection.active_range(cx));
++                let selection = range
++                    .and_then(|range| {
++                        let start =
++                            host_text.offset_of(&range.start_container(), range.start_offset())?;
++                        let end =
++                            host_text.offset_of(&range.end_container(), range.end_offset())?;
++                        Some(start..end.max(start))
++                    })
++                    .unwrap_or(total..total);
++                let marked = self.host_marked.get().and_then(|marked| {
++                    let start =
++                        host_text.offset_of(&marked.start_container(), marked.start_offset())?;
++                    let end = host_text.offset_of(&marked.end_container(), marked.end_offset())?;
++                    Some(start..end.max(start))
++                });
++                let window = TextWindow::new(&host_text.text, selection, marked);
++                Some(state_from_window(window, true, false))
++            }
++        }
++    }
++
++    /// The rectangle of the caret of the focused editable, in CSS pixels of its frame. This asks
++    /// layout (forcing it if it is out of date), so it is done sparingly: see [`FlushMode`].
++    fn measure_caret_rect(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        element: &Element,
++        context: &EditingContext,
++    ) -> Option<[f32; 4]> {
++        // The text node the caret is in and its offset (UTF-16 code units).
++        let located: Option<(DomRoot<Node>, u32)> = match context {
++            EditingContext::TextControl(control) => {
++                let control = control.text_control_element();
++                let node = control.value_text_node()?;
++                let caret = control.text_input().selection_end_utf16().0;
++                Some((DomRoot::from_ref(node.upcast::<Node>()), caret))
++            }
++            EditingContext::Document(_) => document
++                .selection()
++                .and_then(|selection| selection.active_range(cx))
++                .and_then(|range| {
++                    let (node, offset) = (range.end_container(), range.end_offset());
++                    node.is::<Text>().then_some((node, offset))
++                }),
++        };
++
++        if let Some((node, caret)) = located {
++            let rects: Vec<[f32; 4]> = node
++                .border_boxes(cx)
++                .iter()
++                .map(|rect| {
++                    [
++                        rect.origin.x.to_f64_px() as f32,
++                        rect.origin.y.to_f64_px() as f32,
++                        rect.size.width.to_f64_px() as f32,
++                        rect.size.height.to_f64_px() as f32,
++                    ]
++                })
++                .collect();
++            if let Some(rect) = TextWindow::estimate_caret_rect(&rects, caret, node.len()) {
++                return Some(rect);
++            }
++        }
++
++        // No box for the text (it is empty, or not rendered): the box of the editable itself.
++        element.upcast::<Node>().border_box(cx).map(|rect| {
++            [
++                rect.origin.x.to_f64_px() as f32,
++                rect.origin.y.to_f64_px() as f32,
++                rect.size.width.to_f64_px() as f32,
++                rect.size.height.to_f64_px() as f32,
++            ]
++        })
++    }
++}
++
++fn state_from_window(window: TextWindow, multiline: bool, is_password: bool) -> TextInputState {
++    TextInputState {
++        document: 0,
++        sequence: 0,
++        text: window.text,
++        text_start: window.text_start,
++        selection: window.selection,
++        marked: window.marked,
++        caret_rect: None,
++        multiline,
++        is_password,
++    }
++}
++
++/// Whether `whole` still has, where the last message put it, the text that message carried.
++fn window_is_unchanged(whole: &str, last: &TextInputState) -> bool {
++    let start = last.text_start;
++    let end = start.saturating_add(TextWindow::utf16_len(&last.text));
++    let (Some(start), Some(end)) = (
++        TextWindow::utf16_to_byte_offset(whole, start),
++        TextWindow::utf16_to_byte_offset(whole, end),
++    ) else {
++        return false;
++    };
++    start <= end && whole[start..end] == *last.text
++}
++
++/// Whether an event listener left the element in the rendered tree (it may have hidden it).
++fn is_still_rendered(cx: &mut JSContext, element: &Element) -> bool {
++    let node = element.upcast::<Node>();
++    node.owner_window()
++        .layout_reflow(cx, layout_api::QueryMsg::StyleQuery);
++    node.is_being_rendered_or_delegates_rendering(None)
++}
++
++// ----- the plain text of an editing host ------------------------------------------------------
++
++/// What the plain text of an editing host's block is made of.
++struct HostPiece {
++    /// A Text node, or the `<br>` (or block) that stands for a line break.
++    node: DomRoot<Node>,
++    /// Where the piece starts in the text, in UTF-16 code units.
++    start: u32,
++    /// How long it is, in UTF-16 code units.
++    length: u32,
++    is_text: bool,
++}
++
++/// The plain text of the block of an editing host that the selection is in (the whole host when
++/// it has no blocks), with a map between offsets in that text and DOM positions. Text nodes
++/// contribute their text, `<br>` and block boundaries a newline.
++struct HostText {
++    text: String,
++    pieces: Vec<HostPiece>,
++}
++
++impl HostText {
++    fn new(cx: &mut JSContext, document: &Document, element: &Element) -> Option<Self> {
++        let host = element.upcast::<Node>().editing_host_of()?;
++        // The block the selection ends in: the part of the host an input method asks about.
++        let focus = document
++            .selection()
++            .and_then(|selection| selection.active_range(cx))
++            .map(|range| range.end_container())
++            .filter(|node| host.is_inclusive_ancestor_of(node))
++            .unwrap_or_else(|| host.clone());
++        let mut block = host.clone();
++        for ancestor in focus.inclusive_ancestors(ShadowIncluding::No) {
++            if *ancestor == *host {
++                break;
++            }
++            if ancestor.is::<Element>() && ancestor.is_block_node() {
++                block = ancestor;
++                break;
++            }
++        }
++
++        let mut built = HostText {
++            text: String::new(),
++            pieces: Vec::new(),
++        };
++        for node in block.traverse_preorder(ShadowIncluding::No) {
++            if let Some(character_data) = node.downcast::<Text>() {
++                let data = String::from(character_data.upcast::<CharacterData>().Data());
++                built.push(&node, &data, true);
++            } else if node.is::<HTMLBRElement>() {
++                built.push(&node, "\n", false);
++            } else if *node != *block
++                && node.is::<Element>()
++                && node.is_block_node()
++                && !built.text.is_empty()
++                && !built.text.ends_with('\n')
++            {
++                // The start of a block inside the block: a new line.
++                built.push(&node, "\n", false);
++            }
++        }
++        Some(built)
++    }
++
++    /// Append a piece of the text.
++    fn push(&mut self, node: &DomRoot<Node>, piece_text: &str, is_text: bool) {
++        let start = self
++            .pieces
++            .last()
++            .map_or(0, |piece| piece.start + piece.length);
++        let length = TextWindow::utf16_len(piece_text);
++        self.text.push_str(piece_text);
++        self.pieces.push(HostPiece {
++            node: node.clone(),
++            start,
++            length,
++            is_text,
++        });
++    }
++
++    /// The offset in the text of the boundary point (`container`, `offset`), or `None` if it is
++    /// not in this block.
++    fn offset_of(&self, container: &Node, offset: u32) -> Option<u32> {
++        if container.is::<Text>() {
++            let piece = self
++                .pieces
++                .iter()
++                .find(|piece| piece.is_text && &*piece.node == container)?;
++            return Some(piece.start + offset.min(piece.length));
++        }
++        // A position between the children of an element.
++        let inside = |piece: &&HostPiece| container.is_inclusive_ancestor_of(&piece.node);
++        match container.children().nth(offset as usize) {
++            Some(child) => self
++                .pieces
++                .iter()
++                .find(|piece| child.is_inclusive_ancestor_of(&piece.node))
++                .map(|piece| piece.start)
++                .or_else(|| {
++                    // Nothing inside the child: the end of what comes before it.
++                    self.pieces
++                        .iter()
++                        .filter(inside)
++                        .last()
++                        .map(|piece| piece.start + piece.length)
++                }),
++            None => self
++                .pieces
++                .iter()
++                .filter(inside)
++                .last()
++                .map(|piece| piece.start + piece.length),
++        }
++    }
++
++    /// The DOM position of the offset `offset` in the text; an offset between two pieces is at
++    /// the end of the earlier one. `None` past the end of the text.
++    fn position_at(&self, offset: u32) -> Option<(DomRoot<Node>, u32)> {
++        let piece = self
++            .pieces
++            .iter()
++            .find(|piece| offset <= piece.start + piece.length)?;
++        if piece.is_text {
++            return Some((piece.node.clone(), offset - piece.start));
++        }
++        // A line break: before it or after it, in its parent.
++        let parent = piece.node.GetParentNode()?;
++        let index = piece.node.index();
++        Some((
++            parent,
++            if offset <= piece.start {
++                index
++            } else {
++                index + 1
++            },
++        ))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::dom::text_input::{ClipboardProvider, SelectionDirection, TextInput};
++
++    struct NoClipboard;
++
++    impl ClipboardProvider for NoClipboard {
++        fn get_text(&mut self) -> Result<String, String> {
++            Err("no clipboard in tests".to_owned())
++        }
++        fn set_text(&mut self, _: String) {}
++    }
++
++    fn input(text: &str) -> TextInput<NoClipboard> {
++        TextInput::new(Lines::Single, DOMString::from(text), NoClipboard)
++    }
++
++    #[test]
++    fn a_flush_that_changed_nothing_skips_the_rebuild() {
++        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterReflow, false));
++        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterInput, true));
++    }
++
++    #[test]
++    fn a_changed_target_stamp_or_a_first_message_rebuilds() {
++        assert!(!can_skip_rebuild(true, true, true, FlushMode::AfterReflow, false));
++        assert!(!can_skip_rebuild(false, false, true, FlushMode::AfterReflow, false));
++        assert!(!can_skip_rebuild(false, true, false, FlushMode::AfterReflow, false));
++    }
++
++    #[test]
++    fn a_stale_caret_rectangle_is_measured_after_a_reflow_only() {
++        assert!(!can_skip_rebuild(false, true, true, FlushMode::AfterReflow, true));
++        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterInput, true));
++    }
++
++    #[test]
++    fn the_stamp_of_an_untouched_text_input_does_not_change() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++        // Reading and moving nothing: the same stamp, however often it is asked for.
++        assert_eq!(before, text.change_stamp());
++        text.clear_selection();
++        assert_eq!(before, text.change_stamp());
++    }
++
++    #[test]
++    fn an_edit_changes_the_stamp_even_when_the_length_does_not() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++
++        text.set_content(DOMString::from("jello"));
++
++        assert_ne!(before, text.change_stamp());
++    }
++
++    #[test]
++    fn a_selection_change_changes_the_stamp() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++
++        text.set_selection_range_utf16(
++            servo_base::text::Utf16CodeUnits(1),
++            servo_base::text::Utf16CodeUnits(3),
++            SelectionDirection::None,
++        );
++
++        assert_ne!(before, text.change_stamp());
++    }
++
++    #[test]
++    fn a_composition_changes_the_stamp() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++
++        text.begin_composition();
++        text.replace_composition("ni");
++        let composing = text.change_stamp();
++        assert_ne!(before, composing);
++
++        text.replace_composition("nihao");
++        assert_ne!(composing, text.change_stamp());
++    }
++}
 diff --git a/dom/element/element.rs b/dom/element/element.rs
 --- a/dom/element/element.rs
 +++ b/dom/element/element.rs
@@ -1881,6 +3334,290 @@ new file mode 100644
 +    // Step 7. Return true.
 +    true
 +}
+diff --git a/dom/execcommand/composition.rs b/dom/execcommand/composition.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/execcommand/composition.rs
+@@ -0,0 +1,279 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this whole file is Mercury's (EB11, the text lane). It lets an input method run the
++// `inserttext` command of an editing host with the `beforeinput` and `input` events of a
++// composition (`insertCompositionText`, `isComposing`, not cancelable) or of a replacement
++// (`insertReplacementText`), and keeps the marked text of the composition as a live DOM range.
++// The hook in `execcommands.rs` is one parameter of `exec_command_with_input_events()`; the
++// command itself is not copied.
++
++use std::cmp::Ordering;
++
++use js::context::JSContext;
++use script_bindings::codegen::GenericBindings::DocumentBinding::DocumentMethods;
++use script_bindings::codegen::GenericBindings::SelectionBinding::SelectionMethods;
++use script_bindings::inheritance::Castable;
++use script_bindings::root::DomRoot;
++use script_bindings::str::DOMString;
++
++use crate::dom::abstractrange::bp_position;
++use crate::dom::document::Document;
++use crate::dom::event::inputevent::InputEventFlags;
++use crate::dom::execcommand::execcommands::DocumentExecCommandSupport;
++use crate::dom::iterators::ShadowIncluding;
++use crate::dom::node::Node;
++use crate::dom::range::Range;
++use crate::dom::text::Text;
++
++/// What an input method says about the `beforeinput` and `input` events an editing command fires.
++#[derive(Clone, Debug)]
++pub(crate) struct ImeInputEvents {
++    /// `insertCompositionText`, `insertText` or `insertReplacementText`.
++    pub(crate) input_type: &'static str,
++    /// Whether the events are part of a composition (`isComposing`, `beforeinput` not cancelable).
++    pub(crate) composing: bool,
++    /// The text, as the `data` of both events.
++    pub(crate) data: String,
++}
++
++impl ImeInputEvents {
++    pub(crate) fn composition(text: &str) -> Self {
++        Self {
++            input_type: "insertCompositionText",
++            composing: true,
++            data: text.to_owned(),
++        }
++    }
++
++    pub(crate) fn insertion(text: &str) -> Self {
++        Self {
++            input_type: "insertText",
++            composing: false,
++            data: text.to_owned(),
++        }
++    }
++
++    pub(crate) fn replacement(text: &str) -> Self {
++        Self {
++            input_type: "insertReplacementText",
++            composing: false,
++            data: text.to_owned(),
++        }
++    }
++}
++
++/// The flags of the `beforeinput` event of an editing command.
++pub(crate) fn before_input_flags(input: Option<&ImeInputEvents>) -> InputEventFlags {
++    match input {
++        None => InputEventFlags::BUBBLES | InputEventFlags::CANCELABLE,
++        // > beforeinput: cancelable unless inputType is insertCompositionText
++        Some(input) if input.composing => InputEventFlags::BUBBLES | InputEventFlags::COMPOSING,
++        Some(_) => InputEventFlags::BUBBLES | InputEventFlags::CANCELABLE,
++    }
++}
++
++/// The flags of the `input` event of an editing command.
++pub(crate) fn input_flags(input: Option<&ImeInputEvents>) -> InputEventFlags {
++    match input {
++        Some(input) if input.composing => InputEventFlags::BUBBLES | InputEventFlags::COMPOSING,
++        _ => InputEventFlags::BUBBLES,
++    }
++}
++
++/// The `data` of the events of an editing command (null for the commands of the spec).
++pub(crate) fn event_data(input: Option<&ImeInputEvents>) -> Option<DOMString> {
++    input.map(|input| DOMString::from(input.data.as_str()))
++}
++
++/// The `inputType` of the events of an editing command: the input method's, or `mapped`, the
++/// mapped value of the command.
++pub(crate) fn event_input_type(input: Option<&ImeInputEvents>, mapped: DOMString) -> DOMString {
++    input.map_or(mapped, |input| DOMString::from(input.input_type))
++}
++
++/// Run the `inserttext` command with the input events of `input`. Returns whether it ran.
++pub(crate) fn insert_text(
++    cx: &mut JSContext,
++    document: &Document,
++    text: &str,
++    input: &ImeInputEvents,
++) -> bool {
++    document.exec_command_with_input_events(
++        cx,
++        DOMString::from_static("inserttext"),
++        DOMString::from(text),
++        Some(input),
++    )
++}
++
++/// Replace `marked` (or, if there is none, the selection) with `text` in the editing host that has
++/// the selection, with the input events of `input`, and return the range of the new text. The
++/// selection is left collapsed after it, as `inserttext` does.
++///
++/// Returns `None` if there is no selection, the command did not run (`beforeinput` was canceled,
++/// the selection is not editable) or it left no selection.
++pub(crate) fn replace_marked_text(
++    cx: &mut JSContext,
++    document: &Document,
++    marked: Option<&Range>,
++    text: &str,
++    input: &ImeInputEvents,
++) -> Option<DomRoot<Range>> {
++    let selection = document.GetSelection(cx)?;
++    if let Some(marked) = marked {
++        // The command replaces the selection: select the marked text.
++        selection
++            .SetBaseAndExtent(
++                cx,
++                &marked.start_container(),
++                marked.start_offset(),
++                &marked.end_container(),
++                marked.end_offset(),
++            )
++            .ok()?;
++    }
++
++    let active_range = selection.active_range(cx)?;
++    let start_container = active_range.start_container();
++    let start_offset = active_range.start_offset();
++    // A live range that stays where the new text starts: DOM mutations do not move a boundary
++    // point that is at the offset text is inserted at.
++    let start = Range::new(
++        cx,
++        document,
++        &start_container,
++        start_offset,
++        &start_container,
++        start_offset,
++    );
++
++    if !insert_text(cx, document, text, input) {
++        return None;
++    }
++
++    let end_range = selection.active_range(cx)?;
++    let end_container = end_range.end_container();
++    let end_offset = end_range.end_offset();
++    let (start_container, start_offset) = (start.start_container(), start.start_offset());
++    if bp_position(
++        cx.no_gc(),
++        &start_container,
++        start_offset,
++        &end_container,
++        end_offset,
++    ) == Ordering::Greater
++    {
++        // Something moved the range past the end: the new text is empty.
++        return Some(Range::new(
++            cx,
++            document,
++            &end_container,
++            end_offset,
++            &end_container,
++            end_offset,
++        ));
++    }
++    Some(Range::new(
++        cx,
++        document,
++        &start_container,
++        start_offset,
++        &end_container,
++        end_offset,
++    ))
++}
++
++/// The Text nodes of `range` in tree order, each with the span of its text that is inside the
++/// range, in UTF-16 code units (the unit of DOM offsets).
++pub(crate) fn text_spans(
++    cx: &mut JSContext,
++    range: &Range,
++) -> Vec<(DomRoot<Node>, std::ops::Range<u32>)> {
++    let start = range.start_container();
++    let end = range.end_container();
++    let mut nodes: Vec<DomRoot<Node>> = vec![start.clone()];
++    if start != end {
++        let root = start.owner_doc();
++        let unrooted_end = end.as_unrooted(cx.no_gc());
++        nodes.extend(
++            start
++                .following_nodes_unrooted(cx.no_gc(), root.upcast::<Node>(), ShadowIncluding::No)
++                .take_while(|node| *node != *end)
++                .chain(std::iter::once(unrooted_end))
++                .map(|node| node.as_rooted()),
++        );
++    }
++
++    nodes
++        .into_iter()
++        .filter(|node| node.is::<Text>())
++        .map(|node| {
++            let from = if node == start {
++                range.start_offset()
++            } else {
++                0
++            };
++            let to = if node == end {
++                range.end_offset()
++            } else {
++                node.len()
++            };
++            (node, from..to.max(from))
++        })
++        .collect()
++}
++
++/// The DOM position of the UTF-16 offset `offset` of the text of `range` (its Text nodes one after
++/// the other). An offset between two nodes is at the end of the earlier one. `None` if the range
++/// has no text or `offset` is past it.
++pub(crate) fn position_in_range(
++    cx: &mut JSContext,
++    range: &Range,
++    offset: u32,
++) -> Option<(DomRoot<Node>, u32)> {
++    let mut remaining = offset;
++    for (node, span) in text_spans(cx, range) {
++        let length = span.end - span.start;
++        if remaining <= length {
++            return Some((node, span.start + remaining));
++        }
++        remaining -= length;
++    }
++    None
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn a_composition_is_not_cancelable_and_is_composing() {
++        let composition = ImeInputEvents::composition("ni");
++        let before = before_input_flags(Some(&composition));
++        assert!(before.contains(InputEventFlags::COMPOSING));
++        assert!(!before.contains(InputEventFlags::CANCELABLE));
++        let after = input_flags(Some(&composition));
++        assert!(after.contains(InputEventFlags::COMPOSING));
++        assert_eq!(composition.input_type, "insertCompositionText");
++    }
++
++    #[test]
++    fn the_events_of_the_spec_commands_are_unchanged() {
++        let before = before_input_flags(None);
++        assert!(before.contains(InputEventFlags::CANCELABLE));
++        assert!(!before.contains(InputEventFlags::COMPOSING));
++        assert!(input_flags(None) == InputEventFlags::BUBBLES);
++        assert!(event_data(None).is_none());
++    }
++
++    #[test]
++    fn a_replacement_is_cancelable_and_not_composing() {
++        let replacement = ImeInputEvents::replacement("é");
++        assert!(before_input_flags(Some(&replacement)).contains(InputEventFlags::CANCELABLE));
++        assert!(!input_flags(Some(&replacement)).contains(InputEventFlags::COMPOSING));
++        assert_eq!(replacement.input_type, "insertReplacementText");
++        assert_eq!(ImeInputEvents::insertion("a").input_type, "insertText");
++    }
++}
 diff --git a/dom/execcommand/contenteditable/node.rs b/dom/execcommand/contenteditable/node.rs
 --- a/dom/execcommand/contenteditable/node.rs
 +++ b/dom/execcommand/contenteditable/node.rs
@@ -2102,7 +3839,30 @@ diff --git a/dom/execcommand/contenteditable/selection.rs b/dom/execcommand/cont
 diff --git a/dom/execcommand/execcommands.rs b/dom/execcommand/execcommands.rs
 --- a/dom/execcommand/execcommands.rs
 +++ b/dom/execcommand/execcommands.rs
-@@ -169,6 +169,8 @@
+@@ -15,7 +15,8 @@
+ use crate::dom::comment::Comment;
+ use crate::dom::document::Document;
+ use crate::dom::event::Event;
+-use crate::dom::event::inputevent::{InputEvent, InputEventFlags};
++// Mercury: `InputEventFlags` is used through `composition::*_flags()` now (EB11).
++use crate::dom::event::inputevent::InputEvent;
+ use crate::dom::execcommand::basecommand::CommandName;
+ use crate::dom::execcommand::commands::fontsize::maybe_normalize_pixels;
+ use crate::dom::html::htmlelement::HTMLElement;
+@@ -23,6 +24,12 @@
+ use crate::dom::processinginstruction::ProcessingInstruction;
+ use crate::dom::selection::Selection;
+
++// Mercury: IME input events for editing hosts (EB11, the text lane). Declared here, with a path,
++// so that `execcommand/mod.rs` needs no line; move it there when convenient.
++#[path = "composition.rs"]
++pub(crate) mod composition;
++use self::composition::ImeInputEvents;
++
+ /// <https://w3c.github.io/editing/docs/execCommand/#miscellaneous-commands>
+ fn is_command_listed_in_miscellaneous_section(command_name: CommandName) -> bool {
+     matches!(
+@@ -169,6 +176,8 @@
              "insertparagraph" => CommandName::InsertParagraph,
              "inserttext" => CommandName::InsertText,
              "italic" => CommandName::Italic,
@@ -2111,6 +3871,71 @@ diff --git a/dom/execcommand/execcommands.rs b/dom/execcommand/execcommands.rs
              "removeformat" => CommandName::RemoveFormat,
              "strikethrough" => CommandName::Strikethrough,
              "stylewithcss" => CommandName::StyleWithCss,
+@@ -197,6 +206,14 @@
+         command_id: DOMString,
+         value: DOMString,
+     ) -> bool;
++    // Mercury: the same, with the `beforeinput` and `input` events of an input method (EB11).
++    fn exec_command_with_input_events(
++        &self,
++        cx: &mut JSContext,
++        command_id: DOMString,
++        value: DOMString,
++        input: Option<&ImeInputEvents>,
++    ) -> bool;
+ }
+
+ impl DocumentExecCommandSupport for Document {
+@@ -270,6 +287,19 @@
+         command_id: DOMString,
+         value: DOMString,
+     ) -> bool {
++        // Mercury: the body is `exec_command_with_input_events()` (EB11).
++        self.exec_command_with_input_events(cx, command_id, value, None)
++    }
++
++    // Mercury: the body of `exec_command_for_command_id()`; `input` overrides the type, data and
++    // flags of its `beforeinput` and `input` events (EB11).
++    fn exec_command_with_input_events(
++        &self,
++        cx: &mut JSContext,
++        command_id: DOMString,
++        value: DOMString,
++        input: Option<&ImeInputEvents>,
++    ) -> bool {
+         let window = self.window();
+         // Step 3. If command is not supported or not enabled, return false.
+         let Some((command, mut selection)) = self.check_support_and_enabled(cx, &command_id) else {
+@@ -296,11 +326,11 @@
+                 window,
+                 None,
+                 atom!("beforeinput"),
+-                InputEventFlags::BUBBLES | InputEventFlags::CANCELABLE,
++                composition::before_input_flags(input),
+                 Some(window),
+                 0,
+-                None,
+-                mapped_value_of_command(command),
++                composition::event_data(input),
++                composition::event_input_type(input, mapped_value_of_command(command)),
+             );
+             let event = event.upcast::<Event>();
+             // Step 4.3. If the value returned by the previous step is false, return false.
+@@ -347,11 +377,11 @@
+                 window,
+                 None,
+                 atom!("input"),
+-                InputEventFlags::BUBBLES,
++                composition::input_flags(input),
+                 Some(window),
+                 0,
+-                None,
+-                mapped_value_of_command(command),
++                composition::event_data(input),
++                composition::event_input_type(input, mapped_value_of_command(command)),
+             );
+             let event = event.upcast::<Event>();
+             event.set_trusted(true);
 diff --git a/dom/gamepad/gamepad.rs b/dom/gamepad/gamepad.rs
 --- a/dom/gamepad/gamepad.rs
 +++ b/dom/gamepad/gamepad.rs
@@ -2124,6 +3949,321 @@ diff --git a/dom/gamepad/gamepad.rs b/dom/gamepad/gamepad.rs
                  None,
                  GamepadHand::_empty,
                  axis_bounds,
+diff --git a/dom/highlights.rs b/dom/highlights.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/highlights.rs
+@@ -0,0 +1,310 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: new file (lane txt-1, EB7). Typed highlights per document, pushed to layout.
++
++//! The typed highlights of a [`Document`]: the marked text of an IME composition inside an
++//! editing host, find matches, text fragments, spelling and grammar errors.
++//!
++//! A [`HighlightSet`] holds live DOM [`Range`]s, each with a [`HighlightKind`]. Producers (the IME
++//! code, later find in page) call [`HighlightSet::set`] and [`HighlightSet::clear`]. Once per
++//! reflow, right after the document selection's flags are updated (`Window::reflow`),
++//! [`HighlightSet::update`] works out which text nodes each range covers and the offsets in each,
++//! gives the typed highlights of a text node to the text run of that node with
++//! `CharacterData::set_text_run_highlights` (layout repaints without a new layout), and keeps the
++//! result, per node, for layout to read when it builds a text run later
++//! (`LayoutDom<Node>::highlights_for_text_node`). Nodes that are covered by a highlight carry
++//! `NodeFlags::OVERLAPS_HIGHLIGHT`, so layout only looks up the nodes that have one.
++//!
++//! This is separate from the document selection (`selection.rs`), which keeps its own path to
++//! layout. The text of a text control (`<input>`, `<textarea>`) is not reached by a range of the
++//! document: its composition comes from the control (`composition_for_layout`).
++
++use std::cmp::Ordering;
++
++use atomic_refcell::AtomicRefCell;
++use js::context::NoGC;
++use layout_api::{HighlightKind, TextHighlight, TextHighlights};
++use rustc_hash::FxHashMap;
++use script_bindings::cell::DomRefCell;
++use script_bindings::dom::UnrootedDom;
++use servo_base::text::{RangeAny, Utf16CodeUnits};
++use style::dom::OpaqueNode;
++
++use crate::dom::abstractrange::bp_position;
++use crate::dom::bindings::inheritance::Castable;
++use crate::dom::bindings::root::{Dom, DomRoot, LayoutDom};
++use crate::dom::document::Document;
++use crate::dom::iterators::ShadowIncluding;
++use crate::dom::range::Range;
++use crate::dom::text::Text;
++use crate::dom::{CharacterData, Node, NodeDamage, NodeFlags, NodeTraits};
++
++/// One range with the kind of highlight it stands for.
++#[derive(JSTraceable, MallocSizeOf)]
++#[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
++struct HighlightEntry {
++    #[no_trace]
++    kind: HighlightKind,
++    range: Dom<Range>,
++}
++
++/// The typed highlights of one [`Document`]. See the module documentation.
++#[derive(JSTraceable, MallocSizeOf)]
++#[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
++pub(crate) struct HighlightSet {
++    /// The ranges of every producer, in the order they were set.
++    entries: DomRefCell<Vec<HighlightEntry>>,
++    /// The text nodes that got highlights at the last [`HighlightSet::update`] (the nodes that
++    /// have `NodeFlags::OVERLAPS_HIGHLIGHT`), so that a node which loses its last highlight is
++    /// found and cleared.
++    touched: DomRefCell<Vec<Dom<Node>>>,
++    /// What layout reads: the highlights of each of the `touched` nodes as of the last update.
++    /// Plain data, replaced only by [`HighlightSet::update`], never while layout runs.
++    #[no_trace]
++    #[ignore_malloc_size_of = "plain data for layout, bounded by the highlighted text nodes"]
++    resolved: AtomicRefCell<FxHashMap<OpaqueNode, TextHighlights>>,
++}
++
++impl Default for HighlightSet {
++    fn default() -> Self {
++        Self {
++            entries: DomRefCell::new(Vec::new()),
++            touched: DomRefCell::new(Vec::new()),
++            resolved: AtomicRefCell::new(FxHashMap::default()),
++        }
++    }
++}
++
++impl HighlightSet {
++    /// Replace every range of `kind` with `ranges` (none clears the kind) and ask for a new
++    /// display list, which is when the change reaches layout.
++    pub(crate) fn set(&self, kind: HighlightKind, ranges: Vec<DomRoot<Range>>) {
++        let document = {
++            let mut entries = self.entries.borrow_mut();
++            let document_of_previous = entries
++                .iter()
++                .find(|entry| entry.kind == kind)
++                .map(|entry| entry.range.start_container().owner_document());
++            if document_of_previous.is_none() && ranges.is_empty() {
++                return;
++            }
++            let document = document_of_previous.or_else(|| {
++                ranges
++                    .first()
++                    .map(|range| range.start_container().owner_document())
++            });
++            entries.retain(|entry| entry.kind != kind);
++            entries.extend(ranges.iter().map(|range| HighlightEntry {
++                kind,
++                range: Dom::from_ref(&**range),
++            }));
++            document
++        };
++        if let Some(document) = document {
++            Self::request_new_display_list(&document);
++        }
++    }
++
++    /// Remove every range of `kind`.
++    pub(crate) fn clear(&self, kind: HighlightKind) {
++        self.set(kind, Vec::new());
++    }
++
++    /// Remove every range of every kind.
++    #[allow(dead_code)] // Mercury: for producers of later lanes that reset everything at once.
++    pub(crate) fn clear_all(&self) {
++        let document = {
++            let mut entries = self.entries.borrow_mut();
++            let document = entries
++                .first()
++                .map(|entry| entry.range.start_container().owner_document());
++            entries.clear();
++            document
++        };
++        if let Some(document) = document {
++            Self::request_new_display_list(&document);
++        }
++    }
++
++    /// A reflow, and with it [`HighlightSet::update`], is needed for a change of the set to show.
++    /// A request for a new display list is what makes the document ask for a rendering update.
++    fn request_new_display_list(document: &Document) {
++        document.window().layout().set_needs_new_display_list();
++    }
++
++    /// The highlights that [`HighlightSet::update`] resolved for `node`, for layout.
++    fn resolved_for(&self, node: OpaqueNode) -> TextHighlights {
++        self.resolved
++            .borrow()
++            .get(&node)
++            .cloned()
++            .unwrap_or_default()
++    }
++
++    /// Work out the highlights of every text node the ranges of the set cover and give them to
++    /// layout. Called once per reflow, before layout runs. A set with no range and no text node
++    /// left to clear costs nothing.
++    ///
++    /// The result is recomputed every time and only pushed where it differs from the last one,
++    /// so there is no need to be told when a live range moves because the DOM changed.
++    pub(crate) fn update(&self, no_gc: &NoGC, document: &Document) {
++        let entries = self.entries.borrow();
++        let mut touched = self.touched.borrow_mut();
++        if entries.is_empty() && touched.is_empty() {
++            return;
++        }
++
++        let mut per_node: FxHashMap<UnrootedDom<'_, Node>, TextHighlights> = Default::default();
++        for entry in entries.iter() {
++            for_each_text_node_in_range(no_gc, &entry.range, |node, start, end| {
++                let Some(character_data) = node.downcast::<CharacterData>() else {
++                    return;
++                };
++                let (start, end) = {
++                    let text = character_data.data();
++                    (
++                        start.map(|offset| offset.to_utf32_code_units_in(&text)),
++                        end.map(|offset| offset.to_utf32_code_units_in(&text)),
++                    )
++                };
++                if let (Some(start), Some(end)) = (start, end) &&
++                    start >= end
++                {
++                    // Nothing of this node is in the range (an offset in the middle of an
++                    // astral character rounds towards the start).
++                    return;
++                }
++                per_node.entry(node).or_default().push(TextHighlight {
++                    kind: entry.kind,
++                    range: RangeAny::new(start, end),
++                });
++            });
++        }
++
++        let mut resolved = self.resolved.borrow_mut();
++        let mut new_resolved: FxHashMap<OpaqueNode, TextHighlights> =
++            FxHashMap::with_capacity_and_hasher(per_node.len(), Default::default());
++        let mut new_touched: Vec<Dom<Node>> = Vec::with_capacity(per_node.len());
++        let mut needs_new_display_list = false;
++
++        for (node, highlights) in per_node {
++            let key = node.to_opaque();
++            node.set_flag(NodeFlags::OVERLAPS_HIGHLIGHT, true);
++            new_touched.push(Dom::from_ref(&*node));
++            if resolved.get(&key) != Some(&highlights) {
++                needs_new_display_list |= push_to_layout(no_gc, &node, highlights.clone());
++            }
++            new_resolved.insert(key, highlights);
++        }
++
++        // Text nodes that had highlights and have none any more.
++        for node in touched.iter() {
++            if new_resolved.contains_key(&node.to_opaque()) {
++                continue;
++            }
++            node.set_flag(NodeFlags::OVERLAPS_HIGHLIGHT, false);
++            needs_new_display_list |= push_to_layout(no_gc, node, TextHighlights::new());
++        }
++
++        *resolved = new_resolved;
++        *touched = new_touched;
++        if needs_new_display_list {
++            document.window().layout().set_needs_new_display_list();
++        }
++    }
++}
++
++/// Give `highlights` to the text run of `node`. Returns whether a new display list is needed.
++///
++/// When there is no text run to take them (the node has no box yet, or `::first-letter` makes
++/// several), the highlights are not lost: layout reads them from the set when it builds the
++/// run, so the node is dirtied to make it do so. That only happens when a node's highlights
++/// change, never on a reflow that changes nothing.
++fn push_to_layout(no_gc: &NoGC, node: &Node, highlights: TextHighlights) -> bool {
++    let Some(character_data) = node.downcast::<CharacterData>() else {
++        return false;
++    };
++    if character_data.set_text_run_highlights(highlights) {
++        true
++    } else {
++        node.dirty(no_gc, NodeDamage::ContentOrHeritage);
++        false
++    }
++}
++
++/// Call `callback` for each text node that `range` covers any part of, in tree order, with the
++/// start and the end of the covered part in UTF-16 code units of the node's text. A bound is
++/// `None` when the range goes on past it (the range starts or ends in another node).
++///
++/// A collapsed range covers nothing.
++fn for_each_text_node_in_range<'no_gc>(
++    no_gc: &'no_gc NoGC,
++    range: &Range,
++    mut callback: impl FnMut(UnrootedDom<'no_gc, Node>, Option<Utf16CodeUnits>, Option<Utf16CodeUnits>),
++) {
++    let start_container = range.start_container();
++    let start_offset = range.start_offset();
++    let end_container = range.end_container();
++    let end_offset = range.end_offset();
++    let same_container = std::ptr::eq::<Node>(&*start_container, &*end_container);
++    if same_container && start_offset == end_offset {
++        return;
++    }
++
++    // The common case: a composition or a find match inside one text node.
++    if same_container && start_container.is::<Text>() {
++        callback(
++            start_container.as_unrooted(no_gc),
++            Some(Utf16CodeUnits(start_offset)),
++            Some(Utf16CodeUnits(end_offset)),
++        );
++        return;
++    }
++
++    let Some(root) = end_container.common_ancestor(&start_container, ShadowIncluding::No) else {
++        return;
++    };
++    for node in root.traverse_preorder_unrooted(no_gc, ShadowIncluding::No) {
++        if !node.is::<Text>() {
++            continue;
++        }
++        // A text node that starts at or after the end of the range, and so does every text node
++        // after it in tree order.
++        if bp_position(no_gc, &node, 0, &end_container, end_offset) != Ordering::Less {
++            break;
++        }
++        // A text node that ends at or before the start of the range.
++        if bp_position(no_gc, &node, node.len(), &start_container, start_offset) !=
++            Ordering::Greater
++        {
++            continue;
++        }
++        let is_start = std::ptr::eq::<Node>(&**node, &*start_container);
++        let is_end = std::ptr::eq::<Node>(&**node, &*end_container);
++        callback(
++            node,
++            is_start.then_some(Utf16CodeUnits(start_offset)),
++            is_end.then_some(Utf16CodeUnits(end_offset)),
++        );
++    }
++}
++
++impl Document {
++    // Mercury: lane txt-1 (EB7). The hook of `Window::reflow`.
++    /// Push the typed highlights of this document to layout. Called once per reflow, right after
++    /// the document selection's flags are updated and before layout runs.
++    pub(crate) fn update_highlights(&self, no_gc: &NoGC) {
++        self.highlights().update(no_gc, self);
++    }
++}
++
++impl<'dom> LayoutDom<'dom, Document> {
++    /// The typed highlights the set of this document resolved for the text node `node` at the
++    /// last reflow. Layout asks for it when it builds a text run of a node that has
++    /// `NodeFlags::OVERLAPS_HIGHLIGHT`.
++    pub(crate) fn highlights_for_node_for_layout(self, node: OpaqueNode) -> TextHighlights {
++        self.unsafe_get().highlights().resolved_for(node)
++    }
++}
 diff --git a/dom/html/embedded_content/htmlcanvaselement.rs b/dom/html/embedded_content/htmlcanvaselement.rs
 --- a/dom/html/embedded_content/htmlcanvaselement.rs
 +++ b/dom/html/embedded_content/htmlcanvaselement.rs
@@ -2186,7 +4326,58 @@ diff --git a/dom/html/embedded_content/htmlvideoelement.rs b/dom/html/embedded_c
 diff --git a/dom/html/form_controls/htmlinputelement.rs b/dom/html/form_controls/htmlinputelement.rs
 --- a/dom/html/form_controls/htmlinputelement.rs
 +++ b/dom/html/form_controls/htmlinputelement.rs
-@@ -1072,6 +1072,11 @@
+@@ -936,6 +936,17 @@
+         text_input.selection_for_layout
+     }
+
++    // Mercury: the marked text of an IME composition, for layout (EB11).
++    pub(crate) fn composition_for_layout(self) -> Option<RangeAny<Utf32CodeUnits>> {
++        let element = self.unsafe_get();
++        if !element.is_textual_or_password.get() {
++            return None;
++        }
++        #[expect(unsafe_code)]
++        let text_input = unsafe { element.text_input.borrow_for_layout() };
++        text_input.composition_for_layout
++    }
++
+     pub(crate) fn width(self) -> LengthOrPercentageOrAuto {
+         self.image_button_dimension(&local_name!("width"))
+     }
+@@ -1059,6 +1070,32 @@
+         matches!(*self.input_type(), InputType::Password(_))
+     }
+
++    // Mercury: the text node of the value, for the caret rectangle of the IME (EB11).
++    fn value_text_node(&self) -> Option<DomRoot<crate::dom::characterdata::CharacterData>> {
++        self.input_type
++            .borrow()
++            .as_specific()
++            .text_input_widget()
++            .and_then(|text_input_widget| text_input_widget.borrow().value_text_node())
++    }
++
++    // Mercury: the IME highlights go to the text run of the value (EB11).
++    fn push_composition_highlights(
++        &self,
++        composition: Option<RangeAny<Utf32CodeUnits>>,
++        selected: Option<RangeAny<Utf32CodeUnits>>,
++    ) -> bool {
++        self.input_type
++            .borrow()
++            .as_specific()
++            .text_input_widget()
++            .is_some_and(|text_input_widget| {
++                text_input_widget
++                    .borrow()
++                    .set_text_run_highlights(composition, selected)
++            })
++    }
++
+     fn placeholder_text<'a>(&'a self) -> Ref<'a, TracedDOMString> {
+         self.placeholder.borrow()
+     }
+@@ -1072,6 +1109,11 @@
      }
 
      fn handle_text_content_changed(&self, cx: &mut JSContext) {
@@ -2198,7 +4389,31 @@ diff --git a/dom/html/form_controls/htmlinputelement.rs b/dom/html/form_controls
          self.update_placeholder_shown_state(cx.no_gc());
          self.upcast::<Node>()
              .dirty(cx.no_gc(), NodeDamage::ContentOrHeritage);
-@@ -2090,6 +2095,11 @@
+@@ -1083,11 +1125,22 @@
+                 self.implicit_submission(cx);
+             },
+             KeyReaction::DispatchInput(text, input_type) => {
+-                self.queue_input_event(text, input_type);
++                // Mercury: a composition update fires `input` now, after the update; the others
++                // are queued as before (EB11).
++                let fire_now = input_type.is_composing();
++                let text_to_fire_now = if fire_now {
++                    text
++                } else {
++                    self.queue_input_event(text, input_type);
++                    None
++                };
+                 self.value_dirty.set(true);
+                 self.update_placeholder_shown_state(cx.no_gc());
+                 self.upcast::<Node>().dirty(cx.no_gc(), NodeDamage::Other);
+                 self.maybe_update_shared_selection();
++                if fire_now {
++                    self.fire_input_event_now(cx, text_to_fire_now, input_type);
++                }
+             },
+             KeyReaction::RedrawSelection => {
+                 self.maybe_update_shared_selection();
+@@ -2090,6 +2143,11 @@
      }
 
      fn value_changed(&self, cx: &mut JSContext) {
@@ -2210,6 +4425,30 @@ diff --git a/dom/html/form_controls/htmlinputelement.rs b/dom/html/form_controls
          self.maybe_update_shared_selection();
          self.update_related_validity_states(cx);
          if self.upcast::<Node>().is_connected() {
+@@ -2170,6 +2228,12 @@
+             document
+                 .embedder_controls()
+                 .hide_embedder_control(self.upcast());
++            // Mercury: a composition does not survive the loss of focus; the text stays (EB11).
++            self.text_input_mut().abandon_composition();
++            self.maybe_update_composition_highlights();
++            document
++                .event_handler()
++                .flush_text_input_state_after_input(cx);
+         } else if *event_type == *"focus" {
+             let input_type = &*self.input_type();
+             let Ok(input_method_type) = input_type.try_into() else {
+@@ -2199,6 +2263,10 @@
+                 }),
+                 None,
+             );
++            // Mercury: tell the browser what text the focused control has (EB11).
++            document
++                .event_handler()
++                .flush_text_input_state_after_input(cx);
+         }
+     }
+ }
 diff --git a/dom/html/form_controls/htmlselectelement.rs b/dom/html/form_controls/htmlselectelement.rs
 --- a/dom/html/form_controls/htmlselectelement.rs
 +++ b/dom/html/form_controls/htmlselectelement.rs
@@ -2228,7 +4467,68 @@ diff --git a/dom/html/form_controls/htmlselectelement.rs b/dom/html/form_control
 diff --git a/dom/html/form_controls/htmltextareaelement.rs b/dom/html/form_controls/htmltextareaelement.rs
 --- a/dom/html/form_controls/htmltextareaelement.rs
 +++ b/dom/html/form_controls/htmltextareaelement.rs
-@@ -316,6 +316,11 @@
+@@ -74,6 +74,14 @@
+         text_input.selection_for_layout
+     }
+
++    // Mercury: the marked text of an IME composition, for layout (EB11).
++    pub(crate) fn composition_for_layout(self) -> Option<RangeAny<Utf32CodeUnits>> {
++        let element = self.unsafe_get();
++        #[expect(unsafe_code)]
++        let text_input = unsafe { element.text_input.borrow_for_layout() };
++        text_input.composition_for_layout
++    }
++
+     pub(crate) fn get_cols(self) -> u32 {
+         self.upcast::<Element>()
+             .get_attr_for_layout(&ns!(), &local_name!("cols"))
+@@ -168,6 +176,9 @@
+             document
+                 .embedder_controls()
+                 .hide_embedder_control(self.upcast());
++            // Mercury: a composition does not survive the loss of focus; the text stays (EB11).
++            self.text_input_mut().abandon_composition();
++            self.maybe_update_composition_highlights();
+         } else if *event_type == *"focus" {
+             // If there is a Document selection collapse it. This isn't really specified
+             // and there are quite a few open specification issues about the interaction
+@@ -194,6 +205,12 @@
+
+         // Focus changes can activate or deactivate a selection.
+         self.maybe_update_shared_selection();
++
++        // Mercury: tell the browser what text the focused control has, or that none has focus
++        // (EB11).
++        document
++            .event_handler()
++            .flush_text_input_state_after_input(cx);
+     }
+
+     /// <https://w3c.github.io/selection-api/#dfn-schedule-a-selectionchange-event>
+@@ -303,6 +320,22 @@
+         }
+     }
+
++    // Mercury: the text node of the value, for the caret rectangle of the IME (EB11).
++    fn value_text_node(&self) -> Option<DomRoot<crate::dom::characterdata::CharacterData>> {
++        self.text_input_widget.borrow().value_text_node()
++    }
++
++    // Mercury: the IME highlights go to the text run of the value (EB11).
++    fn push_composition_highlights(
++        &self,
++        composition: Option<RangeAny<Utf32CodeUnits>>,
++        selected: Option<RangeAny<Utf32CodeUnits>>,
++    ) -> bool {
++        self.text_input_widget
++            .borrow()
++            .set_text_run_highlights(composition, selected)
++    }
++
+     fn placeholder_text<'a>(&'a self) -> Ref<'a, TracedDOMString> {
+         self.placeholder.borrow()
+     }
+@@ -316,6 +349,11 @@
      }
 
      fn handle_text_content_changed(&self, cx: &mut JSContext) {
@@ -2240,10 +4540,42 @@ diff --git a/dom/html/form_controls/htmltextareaelement.rs b/dom/html/form_contr
          self.validity_state(cx)
              .perform_validation_and_update(cx, ValidationFlags::all());
 
+@@ -335,10 +373,21 @@
+         match action {
+             KeyReaction::TriggerDefaultAction => (),
+             KeyReaction::DispatchInput(text, input_type) => {
+-                self.queue_input_event(text, input_type);
++                // Mercury: a composition update fires `input` now, after the update; the others
++                // are queued as before (EB11).
++                let fire_now = input_type.is_composing();
++                let text_to_fire_now = if fire_now {
++                    text
++                } else {
++                    self.queue_input_event(text, input_type);
++                    None
++                };
+                 self.value_dirty.set(true);
+                 self.handle_text_content_changed(cx);
+                 self.maybe_update_shared_selection();
++                if fire_now {
++                    self.fire_input_event_now(cx, text_to_fire_now, input_type);
++                }
+             },
+             KeyReaction::RedrawSelection => {
+                 self.maybe_update_shared_selection();
 diff --git a/dom/html/form_controls/input_type/text_input_widget.rs b/dom/html/form_controls/input_type/text_input_widget.rs
 --- a/dom/html/form_controls/input_type/text_input_widget.rs
 +++ b/dom/html/form_controls/input_type/text_input_widget.rs
-@@ -64,10 +64,11 @@
+@@ -5,6 +5,8 @@
+
+ use html5ever::{local_name, ns};
+ use js::context::JSContext;
++// Mercury: the typed highlights of a text run (EB7, EB11).
++use layout_api::{HighlightKind, TextHighlight, TextHighlights};
+ use markup5ever::QualName;
+ use script_bindings::cell::DomRefCell;
+ use script_bindings::codegen::GenericBindings::CharacterDataBinding::CharacterDataMethods;
+@@ -64,13 +66,51 @@
 
          let mut updated = false;
          if let Some(character_data) = shadow_tree.value_character_data() {
@@ -2257,6 +4589,625 @@ diff --git a/dom/html/form_controls/input_type/text_input_widget.rs b/dom/html/f
          }
          updated
      }
++
++    // Mercury: the IME composition highlights of the control's value (EB11). The marked text is
++    // underlined (`Composition`) and the clause the input method works on more thickly
++    // (`CompositionSelected`); never painted as a selection.
++    /// Returns whether the highlights were set on an existing text run. An empty set clears them.
++    pub(crate) fn set_text_run_highlights(
++        &self,
++        composition: Option<RangeAny<Utf32CodeUnits>>,
++        selected: Option<RangeAny<Utf32CodeUnits>>,
++    ) -> bool {
++        let Some(shadow_tree) = &*self.shadow_tree.borrow() else {
++            return false;
++        };
++        let Some(character_data) = shadow_tree.value_character_data() else {
++            return false;
++        };
++
++        let mut highlights = TextHighlights::new();
++        if let Some(range) = composition {
++            highlights.push(TextHighlight {
++                kind: HighlightKind::Composition,
++                range,
++            });
++        }
++        if let Some(range) = selected {
++            highlights.push(TextHighlight {
++                kind: HighlightKind::CompositionSelected,
++                range,
++            });
++        }
++        character_data.set_text_run_highlights(highlights)
++    }
++
++    // Mercury: the text node of the control's value, for the caret rectangle of the IME (EB11).
++    pub(crate) fn value_text_node(&self) -> Option<DomRoot<CharacterData>> {
++        self.shadow_tree.borrow().as_ref()?.value_character_data()
++    }
+ }
+
+ #[derive(JSTraceable, MallocSizeOf, PartialEq)]
+diff --git a/dom/html/form_controls/text_control.rs b/dom/html/form_controls/text_control.rs
+--- a/dom/html/form_controls/text_control.rs
++++ b/dom/html/form_controls/text_control.rs
+@@ -15,7 +15,10 @@
+ use script_bindings::domstring::TracedDOMString;
+ use script_bindings::inheritance::Castable;
+ use script_bindings::refcounted::Trusted;
+-use servo_base::text::Utf16CodeUnits;
++// Mercury: `DomRoot` is used by `TextControlElement::value_text_node()` (EB11).
++use script_bindings::root::DomRoot;
++// Mercury: `RangeAny` and `Utf32CodeUnits` are used by the composition highlights (EB11).
++use servo_base::text::{RangeAny, Utf16CodeUnits, Utf32CodeUnits};
+
+ use crate::dom::bindings::codegen::Bindings::HTMLFormElementBinding::SelectionMode;
+ use crate::dom::bindings::error::{Error, ErrorResult};
+@@ -50,6 +53,16 @@
+     fn read_only_or_disabled(&self) -> bool;
+     fn handle_text_content_changed(&self, cx: &mut JSContext);
+     fn handle_key_reaction(&self, cx: &mut JSContext, action: KeyReaction);
++    // Mercury: push the IME highlights (the marked text and the selected clause) into the text run
++    // of the control's value; returns whether a text run took them (EB11).
++    fn push_composition_highlights(
++        &self,
++        composition: Option<RangeAny<Utf32CodeUnits>>,
++        selected: Option<RangeAny<Utf32CodeUnits>>,
++    ) -> bool;
++    // Mercury: the text node of the control's value in its UA shadow tree, for the caret
++    // rectangle of the IME (EB11).
++    fn value_text_node(&self) -> Option<DomRoot<crate::dom::characterdata::CharacterData>>;
+
+     fn insert_content(&self, cx: &mut JSContext, text_content: &str) {
+         self.text_input_mut().insert(text_content);
+@@ -69,13 +82,99 @@
+
+         let key_reaction = self.text_input_mut().perform_editing_action(action);
+         if key_reaction == KeyReaction::Nothing {
++            // Mercury: starting a composition changes the IME state, not the text (EB11).
++            self.maybe_update_composition_highlights();
+             return false;
+         }
+
+         self.handle_key_reaction(cx, key_reaction);
++        // Mercury: the marked text may have moved or ended (EB11).
++        self.maybe_update_composition_highlights();
+         true // TODO: Return true if the action can have any effect.
+     }
+
++    // Mercury: the IME operations of a text control (EB11, the text lane). The document-level
++    // orchestration (composition events, the replacement range, the state message) is in
++    // `document/text_input_state.rs`; these are the parts that need the control.
++
++    /// Keep what layout paints for the composition equal to the control's: when the marked text or
++    /// the selected clause changed, push both to the text run and ask for a repaint.
++    fn maybe_update_composition_highlights(&self) {
++        let (composition, selected) = {
++            let mut text_input = self.text_input_mut();
++            let composition = text_input.composition_character_offsets();
++            let selected = text_input.composition_selected_character_offsets();
++            if composition == text_input.composition_for_layout &&
++                selected == text_input.composition_selected_for_layout
++            {
++                return;
++            }
++            text_input.composition_for_layout = composition;
++            text_input.composition_selected_for_layout = selected;
++            (composition, selected)
++        };
++        // If there is no text run yet, layout reads the composition when it builds one.
++        if self.push_composition_highlights(composition, selected) {
++            self.as_element()
++                .owner_window()
++                .layout()
++                .set_needs_new_display_list();
++        }
++    }
++
++    /// Replace the marked text (opening a composition at the selection if none is open) with
++    /// `text` and fire `beforeinput` and `input` (`insertCompositionText`, composing). Then put
++    /// the caret where the input method wants it. Returns whether the text was changed.
++    fn ime_update_marked_text(
++        &self,
++        cx: &mut JSContext,
++        text: &str,
++        caret: Option<u32>,
++        selected: Option<std::ops::Range<u32>>,
++    ) -> bool {
++        let handled = self
++            .perform_editing_action(cx, EditingAction::InsertCompositionText(text.to_owned()));
++        // The page may have ended the composition or changed the text in its `input` handler: the
++        // caret is only placed in a composition that is still open.
++        if self.text_input().is_composing() {
++            self.text_input_mut().set_composition_caret(caret, selected);
++            self.maybe_update_shared_selection();
++            self.maybe_update_composition_highlights();
++        }
++        handled
++    }
++
++    /// End the composition: replace the marked text with the final `text` (events as for an
++    /// update) and leave the caret after it. `compositionend` is the caller's.
++    fn ime_commit_composition(&self, cx: &mut JSContext, text: &str) {
++        self.perform_editing_action(cx, EditingAction::InsertCompositionText(text.to_owned()));
++        self.text_input_mut().end_composition(None);
++        self.maybe_update_shared_selection();
++        self.maybe_update_composition_highlights();
++    }
++
++    /// Insert `text` for the system (the emoji picker, dictation) as `insertText`, or, when the
++    /// caller selected the range to replace first, as `insertReplacementText`.
++    fn ime_insert_text(&self, cx: &mut JSContext, text: &str, replacing: bool) -> bool {
++        if !replacing {
++            return self.perform_editing_action(cx, EditingAction::InsertText(text.to_owned()));
++        }
++        let canceled =
++            self.fire_beforeinput_event(cx, Some(text), InputEventType::InsertReplacementText);
++        if canceled {
++            return false;
++        }
++        self.text_input_mut().insert(text);
++        self.handle_key_reaction(
++            cx,
++            KeyReaction::DispatchInput(
++                Some(text.to_owned()),
++                InputEventType::InsertReplacementText,
++            ),
++        );
++        true
++    }
++
+     /// Returns true if and only if the editing action should be canceled.
+     fn maybe_fire_beforeinput_event_for_editing_action(
+         &self,
+@@ -151,29 +250,23 @@
+             .user_interaction_task_source()
+             .queue(task!(fire_input_event: move |cx| {
+                 let target = target.root();
+-                let global = target.global();
+-                let window = global.as_window();
+-                let mut flags = InputEventFlags::BUBBLES;
+-                if input_type.is_composing() {
+-                    flags |= InputEventFlags::COMPOSING;
+-                }
+-                let event = InputEvent::new(
+-                    cx,
+-                    window,
+-                    None,
+-                    atom!("input"),
+-                    flags,
+-                    Some(window),
+-                    0,
+-                    data.map(DOMString::from),
+-                    input_type.as_str().into(),
+-                );
+-                let event = event.upcast::<Event>();
+-                event.set_composed(true);
+-                event.fire(cx, &target);
++                // Mercury: the body of this task is `dispatch_input_event_now()`, which the
++                // composition updates also use (EB11).
++                dispatch_input_event_now(cx, &target, data, input_type);
+             }));
+     }
+
++    // Mercury: fire the `input` event now, not in a task. Composition updates fire it in the
++    // same task as `beforeinput` and before `compositionend`, as browsers do (EB11).
++    fn fire_input_event_now(
++        &self,
++        cx: &mut JSContext,
++        data: Option<String>,
++        input_type: InputEventType,
++    ) {
++        dispatch_input_event_now(cx, self.as_element().upcast::<EventTarget>(), data, input_type);
++    }
++
+     /// <https://html.spec.whatwg.org/multipage/#dom-textarea/input-select>
+     fn dom_select(&self, cx: &mut JSContext) {
+         // Step 1: If this element is an input element, and either select() does not apply
+@@ -548,3 +641,33 @@
+         self.maybe_update_shared_selection();
+     }
+ }
++
++// Mercury: the body of the `input` event task of `queue_input_event()`, so that a composition
++// update can fire the event synchronously too (EB11).
++fn dispatch_input_event_now(
++    cx: &mut JSContext,
++    target: &EventTarget,
++    data: Option<String>,
++    input_type: InputEventType,
++) {
++    let global = target.global();
++    let window = global.as_window();
++    let mut flags = InputEventFlags::BUBBLES;
++    if input_type.is_composing() {
++        flags |= InputEventFlags::COMPOSING;
++    }
++    let event = InputEvent::new(
++        cx,
++        window,
++        None,
++        atom!("input"),
++        flags,
++        Some(window),
++        0,
++        data.map(DOMString::from),
++        input_type.as_str().into(),
++    );
++    let event = event.upcast::<Event>();
++    event.set_composed(true);
++    event.fire(cx, target);
++}
+diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_input.rs
+--- a/dom/html/form_controls/text_input.rs
++++ b/dom/html/form_controls/text_input.rs
+@@ -8,9 +8,10 @@
+ use std::ops::Range;
+
+ use app_units::Au;
++// Mercury: `TextWindow` has the UTF-16 helpers of the IME code (EB11).
+ use embedder_traits::{
+     EditingAction, EditingDirection, EditingMotion, EmbedderMsg, ModifySelection,
+-    ScriptToEmbedderChan,
++    ScriptToEmbedderChan, TextWindow,
+ };
+ use js::context::JSContext;
+ use layout_api::SegmentGranularity;
+@@ -158,8 +159,35 @@
+     pub(crate) previous_selection_range: Range<RopeIndex>,
+     #[no_trace]
+     pub(crate) selection_for_layout: Option<RangeAny<Utf32CodeUnits>>,
++
++    // Mercury: IME composition (EB11). The marked text of an open composition, and the clause the
++    // input method has selected inside it. The caret is the IME's caret, never a selection.
++    #[no_trace]
++    composition: Option<Range<RopeIndex>>,
++    #[no_trace]
++    composition_selected: Option<Range<RopeIndex>>,
++    // Mercury: what layout reads (`composition_for_layout()` of the element); the element keeps
++    // these equal to the composition when it pushes the highlights to the text run.
++    #[no_trace]
++    pub(crate) composition_for_layout: Option<RangeAny<Utf32CodeUnits>>,
++    #[no_trace]
++    pub(crate) composition_selected_for_layout: Option<RangeAny<Utf32CodeUnits>>,
++    // Mercury: bumped whenever the text changes (the two places that write the rope), so that the
++    // IME state flush can tell cheaply that nothing changed since the last message (EB11).
++    content_version: u64,
+ }
+
++// Mercury: everything the text state message is made of, without the text itself: two equal
++// stamps mean an equal state, and comparing them copies nothing (EB11).
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub(crate) struct TextInputStamp {
++    content_version: u64,
++    edit_point: RopeIndex,
++    selection_origin: Option<RopeIndex>,
++    composition: Option<Range<RopeIndex>>,
++    composition_selected: Option<Range<RopeIndex>>,
++}
++
+ /// <https://www.w3.org/TR/input-events-2/#interface-InputEvent-Attributes>
+ #[derive(Clone, Copy, PartialEq)]
+ pub enum InputEventType {
+@@ -167,6 +195,8 @@
+     InsertLineBreak,
+     InsertFromPaste,
+     InsertCompositionText,
++    // Mercury: text the system replaces (the accent menu, dictation corrections), EB11.
++    InsertReplacementText,
+     DeleteByCut,
+     DeleteContentBackward,
+     DeleteContentForward,
+@@ -179,6 +209,7 @@
+             Self::InsertLineBreak => "insertLineBreak",
+             Self::InsertFromPaste => "insertFromPaste",
+             Self::InsertCompositionText => "insertCompositionText",
++            Self::InsertReplacementText => "insertReplacementText",
+             Self::DeleteByCut => "deleteByCut",
+             Self::DeleteContentBackward => "deleteContentBackward",
+             Self::DeleteContentForward => "deleteContentForward",
+@@ -219,9 +250,26 @@
+             was_last_change_by_set_content: true,
+             previous_selection_range: Default::default(),
+             selection_for_layout: None,
++            // Mercury: IME composition (EB11).
++            composition: None,
++            composition_selected: None,
++            composition_for_layout: None,
++            composition_selected_for_layout: None,
++            content_version: 0,
+         }
+     }
+
++    // Mercury: see [`TextInputStamp`] (EB11).
++    pub(crate) fn change_stamp(&self) -> TextInputStamp {
++        TextInputStamp {
++            content_version: self.content_version,
++            edit_point: self.edit_point,
++            selection_origin: self.selection_origin,
++            composition: self.composition.clone(),
++            composition_selected: self.composition_selected.clone(),
++        }
++    }
++
+     pub fn edit_point(&self) -> RopeIndex {
+         self.edit_point
+     }
+@@ -306,10 +354,8 @@
+         self.rope.index_to_utf16_offset(self.selection_start())
+     }
+
+-    /// The byte offset of the selection_start()
+-    fn selection_start_offset(&self) -> Utf8CodeUnits {
+-        self.rope.index_to_utf8_offset(self.selection_start())
+-    }
++    // Mercury: `selection_start_offset()` was only used by `insert_for_composition()`, which the
++    // composition range replaced (EB11); both are removed.
+
+     /// The end of the selection (or the edit point, if there is no selection). Always greater
+     /// than or equal to selection_start(), regardless of the selection direction.
+@@ -419,6 +465,7 @@
+         let start = self.selection_start();
+         let end = self.selection_end();
+         let end_index_of_insertion = self.rope.replace_range(start..end, string_to_insert);
++        self.content_version += 1; // Mercury: see `change_stamp` (EB11).
+
+         self.was_last_change_by_set_content = false;
+         self.clear_selection();
+@@ -558,13 +605,24 @@
+                 self.insert(&text);
+                 KeyReaction::DispatchInput(Some(text), InputEventType::InsertText)
+             },
++            // Mercury: the marked text is replaced, not inserted and selected (EB11).
+             EditingAction::InsertCompositionText(text) => {
+-                self.insert_for_composition(&text);
++                self.replace_composition(&text);
+                 KeyReaction::DispatchInput(Some(text), InputEventType::InsertCompositionText)
+             },
+-            EditingAction::EndComposition(..) => {
+-                self.clear_selection();
+-                KeyReaction::RedrawSelection
++            // Mercury: the text a composition ends with is the final text; it used to be dropped
++            // (EB11).
++            EditingAction::EndComposition(text) => {
++                if self.end_composition(Some(&text)) {
++                    KeyReaction::DispatchInput(Some(text), InputEventType::InsertCompositionText)
++                } else {
++                    KeyReaction::RedrawSelection
++                }
++            },
++            // Mercury: a composition starts at the selection (EB11).
++            EditingAction::StartComposition => {
++                self.begin_composition();
++                KeyReaction::Nothing
+             },
+             EditingAction::Delete => {
+                 if self.delete_unit_or_selection(RopeMovement::Grapheme, EditingDirection::Forward)
+@@ -590,21 +648,171 @@
+                     KeyReaction::Nothing
+                 }
+             },
+-            EditingAction::SelectAll |
+-            EditingAction::Clipboard(..) |
+-            EditingAction::StartComposition => KeyReaction::Nothing,
++            EditingAction::SelectAll | EditingAction::Clipboard(..) => KeyReaction::Nothing,
++        }
++    }
++
++    // Mercury: the IME composition API of a text control (EB11, the text lane). The marked text is
++    // a range of the rope that updates replace; the caret inside it is the input method's.
++
++    pub(crate) fn is_composing(&self) -> bool {
++        self.composition.is_some()
++    }
++
++    /// Open a composition at the selection (the first marked text replaces what is selected).
++    /// Does nothing if one is open.
++    pub(crate) fn begin_composition(&mut self) {
++        if self.composition.is_none() {
++            self.composition = Some(self.selection_start()..self.selection_end());
++            self.composition_selected = None;
++        }
++    }
++
++    /// Forget the composition without touching the text (the control lost focus, the text was
++    /// replaced by a script, the user clicked elsewhere). Returns whether there was one.
++    pub(crate) fn abandon_composition(&mut self) -> bool {
++        self.composition_selected = None;
++        self.composition.take().is_some()
++    }
++
++    /// The marked text as UTF-16 offsets of the whole text.
++    pub(crate) fn composition_utf16_range(&self) -> Option<Range<u32>> {
++        let range = self.composition.as_ref()?;
++        let start = self
++            .rope
++            .index_to_utf16_offset(self.rope.normalize_index(range.start))
++            .0;
++        let end = self
++            .rope
++            .index_to_utf16_offset(self.rope.normalize_index(range.end))
++            .0;
++        Some(start..end.max(start))
++    }
++
++    /// Replace the marked text with `text`, opening a composition at the selection first if none
++    /// is open, and leave the caret after the new marked text. Newlines and the maximum length
++    /// follow the rules of typing.
++    pub(crate) fn replace_composition(&mut self, text: &str) {
++        self.begin_composition();
++        let Some(range) = self.composition.clone() else {
++            return;
++        };
++        let start = self.rope.normalize_index(range.start);
++        let end = self.rope.normalize_index(range.end).max(start);
++        self.selection_origin = Some(start);
++        self.edit_point = end;
++        self.selection_direction = SelectionDirection::Forward;
++        self.replace_selection(&DOMString::from(text));
++        // `replace_selection` cleared the selection and put the edit point after the insertion.
++        self.composition = Some(start..self.edit_point);
++        self.composition_selected = None;
++    }
++
++    /// Close the composition, leaving the caret after the marked text. With `final_text` the
++    /// marked text is first replaced by it when it differs. Returns whether the text changed.
++    pub(crate) fn end_composition(&mut self, final_text: Option<&str>) -> bool {
++        let Some(range) = self.composition.take() else {
++            return false;
++        };
++        self.composition_selected = None;
++        let start = self.rope.normalize_index(range.start);
++        let end = self.rope.normalize_index(range.end).max(start);
++        if let Some(final_text) = final_text {
++            let current: String = self.rope.slice(Some(start), Some(end)).into();
++            if current != self.mode.normalize(final_text) {
++                self.selection_origin = Some(start);
++                self.edit_point = end;
++                self.selection_direction = SelectionDirection::Forward;
++                self.replace_selection(&DOMString::from(final_text));
++                return true;
++            }
+         }
++        self.clear_selection();
++        self.edit_point = end;
++        false
+     }
+
+-    fn insert_for_composition<S: Into<String>>(&mut self, insertion: S) {
+-        let start = self.selection_start_offset();
+-        let insertion = insertion.into();
+-        self.insert(&insertion);
++    /// Put the caret at `caret` inside the marked text and remember `selected` as the clause the
++    /// input method is working on. Both are UTF-16 offsets into the marked text; `None` puts the
++    /// caret at its end. Out of range offsets are clamped (and never split a surrogate pair).
++    pub(crate) fn set_composition_caret(
++        &mut self,
++        caret: Option<u32>,
++        selected: Option<Range<u32>>,
++    ) {
++        let Some(range) = self.composition.clone() else {
++            return;
++        };
++        let start = self.rope.normalize_index(range.start);
++        let end = self.rope.normalize_index(range.end).max(start);
++        let marked: String = self.rope.slice(Some(start), Some(end)).into();
++        let start_offset = self.rope.index_to_utf8_offset(start);
++        let rope = &self.rope;
++        let index_at = |utf16: u32| -> RopeIndex {
++            let mut utf16 = utf16.min(TextWindow::utf16_len(&marked));
++            // Not in the middle of a surrogate pair: round down.
++            let byte = loop {
++                if let Some(byte) = TextWindow::utf16_to_byte_offset(&marked, utf16) {
++                    break byte;
++                }
++                utf16 = utf16.saturating_sub(1);
++            };
++            rope.utf8_offset_to_rope_index(start_offset + Utf8CodeUnits(byte as u32))
++        };
++
++        let caret_index = caret.map_or(end, &index_at);
++        let selected = selected
++            .map(|selected| index_at(selected.start)..index_at(selected.end))
++            .filter(|selected| selected.start < selected.end);
++        self.clear_selection();
++        self.edit_point = caret_index;
++        self.composition_selected = selected;
++    }
++
++    /// The marked text as character offsets for layout (`None` when there is none or it is
++    /// empty).
++    pub(crate) fn composition_character_offsets(&self) -> Option<RangeAny<Utf32CodeUnits>> {
++        self.character_offsets_of(self.composition.as_ref()?)
++    }
++
++    /// The clause the input method has selected, as character offsets for layout.
++    pub(crate) fn composition_selected_character_offsets(
++        &self,
++    ) -> Option<RangeAny<Utf32CodeUnits>> {
++        self.character_offsets_of(self.composition_selected.as_ref()?)
++    }
++
++    fn character_offsets_of(&self, range: &Range<RopeIndex>) -> Option<RangeAny<Utf32CodeUnits>> {
++        let start = self.rope.normalize_index(range.start);
++        let end = self.rope.normalize_index(range.end);
++        if start >= end {
++            return None;
++        }
++        Some(RangeAny::new(
++            Some(self.rope.index_to_character_offset(start)),
++            Some(self.rope.index_to_character_offset(end)),
++        ))
++    }
++
++    /// Select the text between two UTF-16 offsets of the whole text, if both are inside it and
++    /// not in the middle of a surrogate pair. Returns whether the selection was set.
++    pub(crate) fn select_utf16_range_checked(&mut self, start: u32, end: u32) -> bool {
++        let content = self.rope.contents();
++        let (Some(start), Some(end)) = (
++            TextWindow::utf16_to_byte_offset(&content, start),
++            TextWindow::utf16_to_byte_offset(&content, end),
++        ) else {
++            return false;
++        };
++        if start > end {
++            return false;
++        }
+         self.set_selection_range_utf8(
+-            start,
+-            start + Utf8CodeUnits(insertion.len() as u32),
++            Utf8CodeUnits(start as u32),
++            Utf8CodeUnits(end as u32),
+             SelectionDirection::Forward,
+         );
++        true
+     }
+
+     fn edit_point_for_hit_test_result(&self, hit_test_result: &HitTestResult) -> RopeIndex {
+@@ -677,6 +885,11 @@
+             _ => false,
+         };
+
++        // Mercury: a click moves the caret out of the marked text; the system ended it (EB11).
++        if selection_changed {
++            self.abandon_composition();
++        }
++
+         if selection_changed && mouse_event.buttons().contains(MouseButtons::Primary) {
+             element
+                 .owner_document()
+@@ -711,7 +924,15 @@
+     /// Newline stripping only happens for incremental updates to the [`Rope`] as `<input>`
+     /// elements currently need to store unsanitized values while being created.
+     pub fn set_content(&mut self, content: DOMString) {
+-        self.rope = Rope::new(content.str().replace("\r\n", "\n").replace("\r", "\n"));
++        let new_contents = content.str().replace("\r\n", "\n").replace("\r", "\n");
++        // Mercury: a script that sets the text the control already has (a controlled input does
++        // after every `input` event) must not end the composition; any other text does (EB11).
++        if self.composition.is_some() && self.rope.contents() != new_contents {
++            self.composition = None;
++            self.composition_selected = None;
++        }
++        self.rope = Rope::new(new_contents);
++        self.content_version += 1; // Mercury: see `change_stamp` (EB11).
+         self.was_last_change_by_set_content = true;
+
+         self.edit_point = self.rope.normalize_index(self.edit_point());
+@@ -718,6 +939,13 @@
+         self.selection_origin = self
+             .selection_origin
+             .map(|selection_origin| self.rope.normalize_index(selection_origin));
++        // Mercury: the marked text keeps its place when the text did not change (EB11).
++        self.composition = self.composition.take().map(|range| {
++            self.rope.normalize_index(range.start)..self.rope.normalize_index(range.end)
++        });
++        self.composition_selected = self.composition_selected.take().map(|range| {
++            self.rope.normalize_index(range.start)..self.rope.normalize_index(range.end)
++        });
+     }
+
+     pub fn set_selection_range_utf16(
 diff --git a/dom/html/htmlelement.rs b/dom/html/htmlelement.rs
 --- a/dom/html/htmlelement.rs
 +++ b/dom/html/htmlelement.rs
@@ -2964,6 +5915,15 @@ diff --git a/dom/mod.rs b/dom/mod.rs
  pub(crate) mod types {
      include!(concat!(env!("OUT_DIR"), "/InterfaceTypes.rs"));
  }
+@@ -275,6 +276,8 @@
+ pub(crate) use self::geometry::*;
+ pub(crate) mod globalscope;
+ pub(crate) use self::globalscope::*;
++// Mercury: new module (lane txt-1, EB7), the typed highlights of a document.
++pub(crate) mod highlights;
+ pub(crate) mod html;
+ pub(crate) use self::html::*;
+ pub(crate) mod indexeddb;
 diff --git a/dom/navigator/navigator.rs b/dom/navigator/navigator.rs
 --- a/dom/navigator/navigator.rs
 +++ b/dom/navigator/navigator.rs
@@ -2982,9 +5942,53 @@ diff --git a/dom/navigator/navigator.rs b/dom/navigator/navigator.rs
 diff --git a/dom/node/layout_dom.rs b/dom/node/layout_dom.rs
 --- a/dom/node/layout_dom.rs
 +++ b/dom/node/layout_dom.rs
-@@ -281,9 +281,15 @@
+@@ -9,6 +9,8 @@
+     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutElementType, LayoutNodeType,
+     SVGElementData,
+ };
++// Mercury: lane txt-1 (EB7).
++use layout_api::{HighlightKind, TextHighlight, TextHighlights};
+ use net_traits::image_cache::Image;
+ use pixels::ImageMetadata;
+ use script_bindings::codegen::InheritTypes::{
+@@ -280,10 +282,50 @@
+         Some(RangeAny::new(start, end))
      }
 
++    // Mercury: lane txt-1 (EB7). Beside `selection_for_text_node`, which is unchanged.
++    /// The typed highlights that cover this text node: the ranges of its document's
++    /// [`HighlightSet`](crate::dom::highlights::HighlightSet) that script resolved for it at the
++    /// last reflow, or, for the text of a text control, the marked text of the control's IME
++    /// composition. Offsets are in `char`s of the node's text.
++    pub(crate) fn highlights_for_text_node(&self) -> TextHighlights {
++        if let Some(shadow_root) = self.containing_shadow_root_for_layout() {
++            let host = shadow_root.get_host_for_layout();
++            let composition = if let Some(input) = host.downcast::<HTMLInputElement>() {
++                Some(input.composition_for_layout())
++            } else {
++                host.downcast::<HTMLTextAreaElement>()
++                    .map(|textarea| textarea.composition_for_layout())
++            };
++            if let Some(composition) = composition {
++                // The text of a text control is in a user agent widget: no range of the
++                // document reaches it, only the composition of the control does.
++                return composition
++                    .map(|range| TextHighlight {
++                        kind: HighlightKind::Composition,
++                        range,
++                    })
++                    .into_iter()
++                    .collect();
++            }
++        }
++
++        if !self.unsafe_get().get_flag(NodeFlags::OVERLAPS_HIGHLIGHT) {
++            return TextHighlights::new();
++        }
++        self.owner_doc_for_layout()
++            .highlights_for_node_for_layout(self.opaque())
++    }
++
      pub(crate) fn text_node_paints_caret(&self) -> bool {
 -        // TODO: Add support for `contenteditable`.
 +        // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
@@ -3000,10 +6004,49 @@ diff --git a/dom/node/layout_dom.rs b/dom/node/layout_dom.rs
      }
 
      pub(crate) fn text_node_needs_caret_placeholder(&self) -> bool {
+@@ -294,8 +336,21 @@
+
+     pub(crate) fn replaced_is_selected(&self) -> bool {
+         let unsafe_self = self.unsafe_get();
+-        unsafe_self.get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION) &&
+-            !unsafe_self.get_flag(NodeFlags::SELECTION_INHIBITED)
++        // Mercury: backport of servo/servo#49613 (af5f54ba7). Drop at the bump that has it.
++        if !unsafe_self.get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION) ||
++            unsafe_self.get_flag(NodeFlags::SELECTION_INHIBITED)
++        {
++            return false;
++        }
++
++        let Some(selection) = self.owner_doc_for_layout().visible_selection_for_layout() else {
++            return false;
++        };
++        let Some(range) = selection.range_for_layout() else {
++            return false;
++        };
++
++        !range.is_collapsed()
+     }
+
+     pub(crate) fn image_url(self) -> Option<ServoUrl> {
 diff --git a/dom/node/node.rs b/dom/node/node.rs
 --- a/dom/node/node.rs
 +++ b/dom/node/node.rs
-@@ -2748,7 +2748,8 @@
+@@ -202,7 +202,13 @@
+         /// animating image. This flag is never cleared once it is set.
+         const HAS_EVER_ANIMATED = 1 << 3;
+
+-        // There are two free bits here.
++        // Mercury: lane txt-1 (EB7) takes one of the two free bits.
++        /// Whether this text node is covered by a typed highlight of its document (an IME
++        /// composition, a find match, ...: see `dom::highlights`). Layout only asks the nodes that
++        /// have it.
++        const OVERLAPS_HIGHLIGHT = 1 << 4;
++
++        // There is one free bit here.
+
+         /// Specifies whether the parser has set an associated form owner for
+         /// this element. Only applicable for form-associatable elements.
+@@ -2748,7 +2754,8 @@
                  node.children_unrooted(cx.no_gc())
                      .map(|node| Dom::from_ref(&**node)),
              );
@@ -3013,7 +6056,7 @@ diff --git a/dom/node/node.rs b/dom/node/node.rs
          } else {
              from_ref(&node)
          };
-@@ -3010,7 +3011,7 @@
+@@ -3010,7 +3017,7 @@
          let added_nodes = if let Some(node) = node.as_ref() {
              if let NodeTypeId::DocumentFragment(_) = node.type_id() {
                  added_nodes.extend(node.children().map(|child| Dom::from_ref(&*child)));
@@ -3022,7 +6065,7 @@ diff --git a/dom/node/node.rs b/dom/node/node.rs
              } else {
                  from_ref(node)
              }
-@@ -3035,7 +3036,7 @@
+@@ -3035,7 +3042,7 @@
          if !removed_nodes.is_empty() || !added_nodes.is_empty() {
              let mutation = LazyCell::new(|| Mutation::ChildList {
                  added: Some(added_nodes),
@@ -3031,7 +6074,7 @@ diff --git a/dom/node/node.rs b/dom/node/node.rs
                  prev: None,
                  next: None,
              });
-@@ -4111,7 +4112,7 @@
+@@ -4111,7 +4118,7 @@
              node.type_id() == NodeTypeId::DocumentFragment(DocumentFragmentTypeId::ShadowRoot)
          {
              nodes.extend(node.children().map(|node| Dom::from_ref(&*node)));
@@ -3107,17 +6150,21 @@ diff --git a/dom/range/range.rs b/dom/range/range.rs
 diff --git a/dom/selection.rs b/dom/selection.rs
 --- a/dom/selection.rs
 +++ b/dom/selection.rs
-@@ -41,7 +41,8 @@
+@@ -41,8 +41,11 @@
  use crate::dom::selection_range::{RootedSelectionBoundary, SelectionBoundary, SelectionRange};
  use crate::dom::staticrange::StaticRange;
  use crate::dom::traversal::FlatTreeForSelectionNoGcTraversal;
 -use crate::dom::types::ShadowRoot;
+-use crate::dom::{CharacterData, FlatTreeParent, NodeDamage, NodeFlags, StartOrEnd};
 +// Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
 +use crate::dom::types::{HTMLInputElement, HTMLTextAreaElement, ShadowRoot};
- use crate::dom::{CharacterData, FlatTreeParent, NodeDamage, NodeFlags, StartOrEnd};
++// Mercury: backport of servo/servo#49885 (afc9224b1). Drop at the bump that has it. (`Element` joins
++// this line; upstream also moved the `Node` and `NodeTraits` imports here.)
++use crate::dom::{CharacterData, Element, FlatTreeParent, NodeDamage, NodeFlags, StartOrEnd};
 
  /// Used value of [`user-select`](https://drafts.csswg.org/css-ui-4/#propdef-user-select):
-@@ -77,6 +78,9 @@
+ /// like the computed value but excludes `auto`.
+@@ -77,6 +80,9 @@
      /// * Boundaries are in flat tree order.
      #[custom_trace]
      visible_range: AtomicRefCell<Option<SelectionRange>>,
@@ -3127,7 +6174,7 @@ diff --git a/dom/selection.rs b/dom/selection.rs
      /// The [`Direction`] of this [`Selection`] which determines which endpoint of
      /// [`Self::range`] is the anchor and which is the focus.
      direction: Cell<Direction>,
-@@ -95,6 +99,7 @@
+@@ -95,6 +101,7 @@
              range: Default::default(),
              live_range: MutNullableDom::new(None),
              visible_range: Default::default(),
@@ -3135,7 +6182,7 @@ diff --git a/dom/selection.rs b/dom/selection.rs
              direction: Cell::new(Direction::Directionless),
              has_scheduled_selectionchange_event: Cell::new(false),
              visible_selection_dirty: Cell::new(false),
-@@ -338,6 +343,13 @@
+@@ -338,6 +345,13 @@
              return;
          }
 
@@ -3149,7 +6196,7 @@ diff --git a/dom/selection.rs b/dom/selection.rs
          let previously_flagged_nodes = self
              .iter_nodes_with_overlaps_document_selection_flag(no_gc)
              .collect();
-@@ -347,10 +359,34 @@
+@@ -347,10 +361,34 @@
              previously_flagged_nodes,
              flat_tree_selection.as_ref(),
              &self.document,
@@ -3184,7 +6231,7 @@ diff --git a/dom/selection.rs b/dom/selection.rs
      /// <https://w3c.github.io/selection-api/#dfn-schedule-a-selectionchange-event>
      pub(crate) fn queue_selectionchange_task(&self) {
          // Step 1. If target's has scheduled selectionchange event is true, abort these steps.
-@@ -1457,6 +1493,10 @@
+@@ -1457,6 +1495,10 @@
      pub(crate) fn range_for_layout(&self) -> Option<AtomicRef<'dom, SelectionRange>> {
          AtomicRef::filter_map(self.unsafe_get().visible_range.borrow(), Option::as_ref)
      }
@@ -3195,7 +6242,34 @@ diff --git a/dom/selection.rs b/dom/selection.rs
  }
 
  enum FlatTreeNodePosition {
-@@ -1761,6 +1801,8 @@
+@@ -1675,6 +1717,11 @@
+         })
+     }
+
++    // Mercury: backport of servo/servo#49613 (af5f54ba7). Drop at the bump that has it.
++    fn is_collapsed(&self) -> bool {
++        self.start.container == self.end.container && self.start.offset == self.end.offset
++    }
++
+     fn range_for_character_data(&self, character_data: &CharacterData) -> RangeAny<Utf32CodeUnits> {
+         let text = character_data.data();
+         let node: &Node = character_data.upcast();
+@@ -1737,6 +1784,14 @@
+                     {
+                         self.skip_subtree = true;
+                     }
++
++                    // Mercury: backport of servo/servo#49885 (afc9224b1). Drop at the bump that has it.
++                    if let Some(element) = node.downcast::<Element>() &&
++                        let Some(shadow_root) = element.shadow_root() &&
++                        shadow_root.is_user_agent_widget()
++                    {
++                        self.skip_subtree = true;
++                    }
+                     return Some(node);
+                 },
+                 PrePostIteration::Leave(node) => {
+@@ -1761,6 +1816,8 @@
      used_user_select_cache: FxHashMap<UnrootedDom<'no_gc, Node>, UsedUserSelect>,
      /// Whether or not this update requires a display list update.
      needs_new_display_list: bool,
@@ -3204,7 +6278,7 @@ diff --git a/dom/selection.rs b/dom/selection.rs
  }
 
  impl<'no_gc> VisibleSelectionFlagUpdate<'no_gc> {
-@@ -1769,6 +1811,7 @@
+@@ -1769,6 +1826,7 @@
          previously_flagged_nodes: FxHashSet<UnrootedDom<'no_gc, Node>>,
          flat_tree_selection: Option<&FlatTreeSelection<'_>>,
          document: &Document,
@@ -3212,7 +6286,7 @@ diff --git a/dom/selection.rs b/dom/selection.rs
      ) {
          let mut update = Self {
              no_gc,
-@@ -1775,6 +1818,7 @@
+@@ -1775,6 +1833,7 @@
              previously_flagged_nodes,
              used_user_select_cache: Default::default(),
              needs_new_display_list: false,
@@ -3220,7 +6294,7 @@ diff --git a/dom/selection.rs b/dom/selection.rs
          };
 
          if let Some(flat_tree_selection) = flat_tree_selection {
-@@ -1824,7 +1868,7 @@
+@@ -1824,7 +1883,7 @@
          character_data: &CharacterData,
          range: Option<RangeAny<Utf32CodeUnits>>,
      ) {
@@ -3229,6 +6303,33 @@ diff --git a/dom/selection.rs b/dom/selection.rs
              self.needs_new_display_list = true;
          } else {
              // Note: This isn't just necessary when the `CharacterData` doesn't have a
+@@ -1843,7 +1902,10 @@
+                 flat_tree_selection.range_for_character_data(character_data)
+             });
+             self.set_character_data_selection(character_data, range);
+-        } else if node.set_element_selection(flat_tree_selection.is_some()) {
++        // Mercury: backport of servo/servo#49613 (af5f54ba7). Drop at the bump that has it.
++        } else if node.set_element_selection(
++            flat_tree_selection.is_some_and(|selection| !selection.is_collapsed()),
++        ) {
+             self.needs_new_display_list = true;
+         }
+     }
+diff --git a/dom/selection_range.rs b/dom/selection_range.rs
+--- a/dom/selection_range.rs
++++ b/dom/selection_range.rs
+@@ -128,6 +128,11 @@
+         Self { start, end }
+     }
+
++    // Mercury: backport of servo/servo#49613 (af5f54ba7). Drop at the bump that has it.
++    pub(crate) fn is_collapsed(&self) -> bool {
++        self.start == self.end
++    }
++
+     pub(crate) fn new_from_rooted(
+         start: RootedSelectionBoundary,
+         end: RootedSelectionBoundary,
 diff --git a/dom/serviceworker/notification.rs b/dom/serviceworker/notification.rs
 --- a/dom/serviceworker/notification.rs
 +++ b/dom/serviceworker/notification.rs
@@ -3447,7 +6548,16 @@ diff --git a/dom/window/window.rs b/dom/window/window.rs
      pub(crate) fn advance_animation_clock(&self, no_gc: &NoGC, delta: TimeDuration) {
          self.Document()
              .advance_animation_timeline_for_testing(delta);
-@@ -3997,19 +4018,14 @@
+@@ -2759,6 +2780,8 @@
+         if let Some(selection) = document.selection() {
+             selection.update_overlaps_document_selection_flags(cx.no_gc());
+         }
++        // Mercury: lane txt-1 (EB7). Push the typed highlights (IME composition, find, ...) to layout.
++        document.update_highlights(cx.no_gc());
+
+         let restyle_reason = document.restyle_reason(cx.no_gc());
+         document.clear_restyle_reasons();
+@@ -3997,19 +4020,14 @@
          }
      }
 
@@ -3494,6 +6604,35 @@ diff --git a/event_loop/script_thread.rs b/event_loop/script_thread.rs
      pub(crate) fn handle_tick_all_animations_for_testing(no_gc: &NoGC, id: PipelineId) {
          with_script_thread(|script_thread| {
              let Some(document) = script_thread.documents.borrow().find_document(id) else {
+diff --git a/layout_dom/servo_layout_node.rs b/layout_dom/servo_layout_node.rs
+--- a/layout_dom/servo_layout_node.rs
++++ b/layout_dom/servo_layout_node.rs
+@@ -12,6 +12,8 @@
+     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutDataTrait, LayoutElement, LayoutNode,
+     LayoutNodeType, PseudoElementChain, SVGElementData, TrustedNodeAddress,
+ };
++// Mercury: lane txt-1 (EB7).
++use layout_api::TextHighlights;
+ use net_traits::image_cache::Image;
+ use pixels::ImageMetadata;
+ use servo_arc::Arc;
+@@ -259,6 +261,16 @@
+         self.node.selection_for_text_node()
+     }
+
++    // Mercury: lane txt-1 (EB7).
++    fn text_node_highlights(&self) -> TextHighlights {
++        // Pseudo-elements do not ever have a highlight.
++        if !self.pseudo_element_chain.is_empty() {
++            return TextHighlights::new();
++        }
++
++        self.node.highlights_for_text_node()
++    }
++
+     fn text_node_paints_caret(&self) -> bool {
+         self.node.text_node_paints_caret()
+     }
 diff --git a/tasks/task_manager.rs b/tasks/task_manager.rs
 --- a/tasks/task_manager.rs
 +++ b/tasks/task_manager.rs

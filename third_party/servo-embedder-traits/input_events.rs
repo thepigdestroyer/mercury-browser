@@ -2,6 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: `Range` is used by the IME clause and replacement types (EB11).
+use std::ops::Range;
 use std::sync::atomic::{AtomicUsize, Ordering};
 
 use bitflags::bitflags;
@@ -415,10 +417,74 @@ impl WheelEvent {
 }
 
 /// The types of an input method event.
-#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+// Mercury: no derived `Debug`: it would print the typed text; see `impl Debug for ImeEvent` in
+// `mercury/text.rs`.
+#[derive(Clone, Deserialize, MallocSizeOf, Serialize)]
 pub enum ImeEvent {
+    /// See [CompositionEvent].
     Composition(CompositionEvent),
+    /// The input method committed text. Note that this can be sent without
+    /// an active composition.
+    // Mercury: backport of servo/servo#49400 (13fbe153e). Drop at the bump that has it.
+    Commit(String),
+    // Mercury: marked text with the IME's selected range, its clauses and an optional range to
+    // replace (EB11, the text lane). Ranges are in UTF-16 code units.
+    /// The input method set (or replaced) its marked text. A composition is started if none is
+    /// open. Empty `text` ends an open composition without inserting anything.
+    ///
+    /// `selected` is the input method's own selection inside `text` (a collapsed range is the
+    /// caret), `clauses` mark how `text` is segmented and which clause is selected, and
+    /// `replacement` asks to replace text of the editable that is not selected yet (a
+    /// composition started in the middle of existing text, as macOS does for reconversion).
+    SetMarkedText {
+        text: String,
+        selected: Option<Range<u32>>,
+        clauses: Vec<ImeClause>,
+        replacement: Option<ImeReplacement>,
+    },
+    // Mercury: text inserted by the system without a composition (the emoji picker, dictation,
+    // the accent menu), with an optional range to replace (EB11, the text lane).
+    /// Text the system inserts without composing it, optionally replacing a range of the
+    /// editable's text (`insertReplacementText`).
+    InsertText {
+        text: String,
+        replacement: Option<ImeReplacement>,
+    },
+    /// The input method was dismissed.
     Dismissed,
+}
+
+// Mercury: the clause and replacement types of the new IME events (EB11, the text lane).
+/// What an input method says about a part of its marked text.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize)]
+pub enum ImeClauseKind {
+    /// Text the user typed that the input method has not converted.
+    Raw,
+    /// Text the input method has converted.
+    Converted,
+    /// The raw clause the user is working on.
+    SelectedRaw,
+    /// The converted clause the user is working on (the candidate being chosen).
+    SelectedConverted,
+}
+
+/// One segment of an input method's marked text.
+#[derive(Clone, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize)]
+pub struct ImeClause {
+    /// The segment, in UTF-16 code units of the marked text.
+    pub range: Range<u32>,
+    pub kind: ImeClauseKind,
+}
+
+/// A range of the focused editable's text that an input event replaces.
+///
+/// The range is in UTF-16 code units of the text of the `TextInputState` message that carries
+/// `sequence`. The engine honours it only while that is the last message it sent for the focused
+/// editable and the text is still what it was then; otherwise it inserts at the selection.
+#[derive(Clone, Debug, Deserialize, Eq, MallocSizeOf, PartialEq, Serialize)]
+pub struct ImeReplacement {
+    pub range: Range<u32>,
+    pub sequence: u64,
 }
 
 #[cfg(feature = "gamepad")]

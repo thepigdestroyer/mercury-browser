@@ -625,6 +625,8 @@ pub(crate) struct Document {
     has_pending_animated_image_update: Cell<bool>,
     /// <https://w3c.github.io/slection-api/#dfn-selection>
     selection: MutNullableDom<Selection>,
+    // Mercury: lane txt-1 (EB7). The typed highlights (IME composition, find, ...) of this document.
+    highlights: crate::dom::highlights::HighlightSet,
     /// A timeline for animations which is used for synchronizing animations.
     /// <https://drafts.csswg.org/web-animations/#timeline>
     timeline: Dom<DocumentTimeline>,
@@ -1160,6 +1162,12 @@ impl Document {
     #[inline]
     pub(crate) fn selection(&self) -> Option<DomRoot<Selection>> {
         self.selection.get()
+    }
+
+    // Mercury: lane txt-1 (EB7). The field is private to this module; the accessor is the way in.
+    /// The typed highlights of this [`Document`]: IME composition, find matches, spelling, ...
+    pub(crate) fn highlights(&self) -> &crate::dom::highlights::HighlightSet {
+        &self.highlights
     }
 
     pub(crate) fn set_activity(&self, cx: &mut JSContext, activity: DocumentActivity) {
@@ -3435,6 +3443,8 @@ impl Document {
         }
 
         let (reflow_phases, statistics) = self.window().reflow(cx, ReflowGoal::UpdateTheRendering);
+        // Mercury: lane txt-1 (EB11). Send the focused editable's text state when layout is current.
+        self.event_handler().flush_text_input_state_after_reflow(cx);
         let phases = phases.union(reflow_phases);
 
         self.window().paint_api().update_epoch(
@@ -4352,6 +4362,8 @@ impl Document {
             dirty_canvases: DomRefCell::new(Default::default()),
             has_pending_animated_image_update: Cell::new(false),
             selection: MutNullableDom::new(None),
+            // Mercury: lane txt-1 (EB7).
+            highlights: Default::default(),
             timeline: Dom::from_ref(timeline),
             animation_manager: AnimationManager::new(),
             dirty_root: Default::default(),
