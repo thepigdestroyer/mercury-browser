@@ -19,6 +19,7 @@
 pub mod api;
 pub mod backend;
 pub mod media_source;
+pub mod media_state;
 pub mod mime;
 pub mod op_tracker;
 pub mod parse;
@@ -26,6 +27,8 @@ pub mod processor;
 pub mod ranges;
 pub mod seek_hold;
 pub mod source_buffer;
+pub mod source_buffer_ops;
+pub mod stall_controller;
 pub mod stall_guard;
 pub mod trackbuffer;
 
