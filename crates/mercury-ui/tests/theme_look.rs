@@ -75,10 +75,11 @@ fn hermes_cannot_be_chosen_by_hand_but_the_gate_can_ask_for_it() {
 fn two_different_palettes_give_a_mixed_look() {
     let (look, notes) = Look::from_appearance(&appearance("mercury-b2", "mercury-b2"));
     assert!(notes.is_empty());
-    let mixed = Look {
-        palette_dark: palettes::find("hermes").expect("hermes exists"),
-        ..look
-    };
+    let mixed = Look::new(
+        look.palette_light,
+        palettes::find("hermes").expect("hermes exists"),
+        look.metrics,
+    );
     assert_eq!(ids(&mixed), ("mercury-b2", "hermes"));
     assert!(look.palette_light.id != mixed.palette_dark.id);
 }

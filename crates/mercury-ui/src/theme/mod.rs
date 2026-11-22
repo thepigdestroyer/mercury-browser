@@ -22,7 +22,11 @@ use slint::{ComponentHandle, Global};
 use crate::{ChromeMetrics, ChromePalette};
 
 /// What the chrome looks like: the palette for each scheme and the sizes.
+///
+/// Build one with [`Look::from_appearance`] (the real look) or [`Look::new`]; the struct is
+/// `non_exhaustive` so that a field added later (the density preset) breaks no other crate.
 #[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
 pub struct Look {
     /// The palette whose light table is used in the light scheme.
     pub palette_light: &'static Palette,
@@ -33,6 +37,19 @@ pub struct Look {
 }
 
 impl Look {
+    /// A look from its three parts.
+    pub const fn new(
+        palette_light: &'static Palette,
+        palette_dark: &'static Palette,
+        metrics: Metrics,
+    ) -> Self {
+        Self {
+            palette_light,
+            palette_dark,
+            metrics,
+        }
+    }
+
     /// The look the stored appearance settings ask for, and the notes about anything that had to
     /// fall back (a palette id this version does not have). Nothing is written back.
     pub fn from_appearance(appearance: &AppearanceSettings) -> (Self, Vec<Repair>) {
@@ -46,7 +63,8 @@ impl Look {
     }
 
     /// Today's colours and sizes, the chrome as it looked before the look was data. It is the
-    /// baseline of the theme-plumbing pixel gate and no user can choose it. **Delete it with the
+    /// baseline of the theme-plumbing pixel gate and no user can choose it: use it in tests only, and
+    /// note that a window nobody pushes to already shows these colours. **Delete it with the
     /// `hermes` palette** in the layout-switch lane, once that gate has passed.
     pub fn hermes_roomy() -> Self {
         let hermes = palettes::find("hermes").unwrap_or_else(palettes::default_palette);
