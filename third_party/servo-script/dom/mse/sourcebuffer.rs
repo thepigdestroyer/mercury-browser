@@ -18,7 +18,8 @@ use dom_struct::dom_struct;
 use js::context::JSContext;
 use script_bindings::reflector::reflect_dom_object;
 use servo_media::player::mse::{
-    AppendMode as BackendAppendMode, MediaSourceReadyState as BackendReadyState, SourceBufferId,
+    AppendMode as BackendAppendMode, MediaSourceReadyState as BackendReadyState, MseError,
+    SourceBufferId,
 };
 use stylo_atoms::Atom;
 
@@ -391,6 +392,19 @@ impl SourceBufferMethods<crate::DomTypeHolder> for SourceBuffer {
             return Err(Error::InvalidState(Some(
                 "The media element is in an error state".into(),
             )));
+        }
+
+        // A buffer bigger than everything the source buffer may ever hold is refused before it is
+        // copied (the quota check of prepare append, made on the length alone: the copy of a
+        // multi-gigabyte buffer is itself what a page could use to exhaust memory).
+        let length = match &data {
+            ArrayBufferViewOrArrayBuffer::ArrayBufferView(view) => view.len(),
+            ArrayBufferViewOrArrayBuffer::ArrayBuffer(buffer) => buffer.len(),
+        };
+        if length > media_source.backend().max_append_bytes() {
+            return Err(dom_error(MseError::QuotaExceeded(format!(
+                "an append of {length} bytes is bigger than the source buffer can ever hold"
+            ))));
         }
 
         // Step 2. Add data to the end of the input buffer (a copy: the page may reuse its buffer).

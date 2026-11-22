@@ -10,10 +10,11 @@
 // `connect_media_source`, `source-setup`); `MERCURY.md` lists them.
 
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use ::mercury_mse::{
-    EventSink, Limits, MediaSourceBackend, MseBackend, MseError, MseEvent, TypeSupport,
+    EventSink, Limits, MediaSourceBackend, MemoryBudget, MseBackend, MseError, MseEvent,
+    TypeSupport,
 };
 use ::mercury_mse_gst::{GstTypeSupport, MSE_URI_SCHEME};
 use log::{debug, warn};
@@ -22,6 +23,20 @@ use servo_base::generic_channel::GenericCallback;
 /// Set once `mercury_mse_gst::register()` succeeded: the `MseSrc` element and its `mercury-mse://` URI
 /// handler exist. Without it MSE is reported as unsupported and a MediaSource player refuses to start.
 static REGISTERED: AtomicBool = AtomicBool::new(false);
+
+/// The most coded-frame memory all the MediaSources of this process may hold together (decision D17 of
+/// lane med-1, review S3): 1 GiB. One video source buffer may hold 150 MiB and a page may have several
+/// players, so a per-source quota alone let a few tabs (or one hostile page with many elements) take
+/// gigabytes; Servo runs the pages of a Mercury window in one process, so the budget is per process and
+/// shared by every tab. 1 GiB leaves room for about six full 1080p players and is a small part of a
+/// 16 GB Mac; a tab that hits it gets `QuotaExceededError` and must `remove()`, as for its own quota.
+const PROCESS_BUDGET_BYTES: usize = 1024 * 1024 * 1024;
+
+/// The budget every MediaSource backend of the process charges.
+fn process_budget() -> &'static Arc<MemoryBudget> {
+    static BUDGET: OnceLock<Arc<MemoryBudget>> = OnceLock::new();
+    BUDGET.get_or_init(|| MemoryBudget::new(PROCESS_BUDGET_BYTES))
+}
 
 /// Registers the `MseSrc` element with GStreamer (idempotent). Called after `gstreamer::init()` and the
 /// plugin loading. A failure is logged and leaves MSE unsupported; it never stops the media backend.
@@ -75,10 +90,11 @@ pub(crate) fn create_media_source(
             debug!("An MSE event could not be delivered (the media element is gone): {error:?}");
         }
     });
-    Ok(Arc::new(MseBackend::new(
+    Ok(Arc::new(MseBackend::with_budget(
         sink,
         Arc::new(GstTypeSupport),
         Limits::default(),
+        Arc::clone(process_budget()),
     )))
 }
 

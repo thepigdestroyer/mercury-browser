@@ -30,7 +30,20 @@ fn dev_mse_from(value: Option<&str>) -> bool {
 /// [`DEV_MSE_ENV`], read once per process.
 fn dev_mse_requested() -> bool {
     static REQUESTED: OnceLock<bool> = OnceLock::new();
-    *REQUESTED.get_or_init(|| dev_mse_from(std::env::var(DEV_MSE_ENV).ok().as_deref()))
+    *REQUESTED.get_or_init(|| {
+        let requested = dev_mse_from(std::env::var(DEV_MSE_ENV).ok().as_deref());
+        if requested {
+            // Decision (review of lane med-1, S6): the switch works in release builds too, because the
+            // owner runs the pages in the same release build the lanes use; the pinned preference is the
+            // product default and this is a development door. It is loud so that it is never on by
+            // accident, and it goes when the preference is flipped (the pin is then removed).
+            log::warn!(
+                "{DEV_MSE_ENV}=1: Media Source Extensions are ON. They are unfinished and unreviewed; \
+                 this is for development only"
+            );
+        }
+        requested
+    })
 }
 
 /// Stylo (style system) preferences, by their Gecko names, that Mercury sets. They are joined into

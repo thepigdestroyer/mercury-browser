@@ -60,7 +60,8 @@ path dependencies on both crates. Everything new is in `mercury_mse.rs`; the hoo
 
 7. **`mercury_mse.rs` (new file):** `register()` (the element and its URI handler; a failure is logged and
    leaves MSE unsupported), `create_media_source(events)` (an `MseBackend` whose `EventSink` sends on the
-   `GenericCallback`, with `GstTypeSupport` and the default quota `Limits`), `is_type_supported(mime)`,
+   `GenericCallback`, with `GstTypeSupport`, the default quota `Limits` and one 1 GiB memory budget shared by every MediaSource of the
+   process), `is_type_supported(mime)`,
    `uri_for(player id)` and `attach(source element, backend)`.
 8. **`lib.rs`:** `mod mercury_mse`, `register()` after the plugins are loaded, and the two `Backend`
    methods `create_media_source` and `is_type_supported_mse`.
@@ -69,10 +70,13 @@ path dependencies on both crates. Everything new is in `mercury_mse.rs`; the hoo
    the caller of `setup` (there is no `need-data` to wait for before the page appends anything);
    `Player::connect_media_source` stores the backend and runs `setup`, so it must come first; `seek` and
    `set_playback_rate` accept the new stream type (the duration check in `seek` is skipped for it: the
-   MediaSource owns the duration); `push_data` is never used. A `seek` asked for before `GstPlay` has media
-   info (`pending_seek`) is held and sent with the first seekable metadata: `GstPlay` drops it otherwise, and
-   `playbin3` refuses a seek until its first buffer has arrived (the backend's `seeking` points the feed at
-   the target, so that buffer comes). Hunks are marked `Mercury: (MED-1)`.
+   MediaSource owns the duration); `push_data` is never used. A seek of a MediaSource player goes
+   through `mercury_mse::SeekHold` (`seek_hold`; its tests are in the crate): `GstPlay` drops a seek before it
+   has media info and `playbin3` refuses one until its first buffer has arrived, so the seek is held and sent
+   with the first seekable metadata (the backend's `seeking` points the feed at the target, so that buffer
+   comes), freed when the pipeline settles (Paused, Playing) if it never said "seekable" (`SeekDone` is then
+   reported, so the element's seek ends), and given to `GstPlay` only after the player's lock is released
+   (`run_seek_decision`). Hunks are marked `Mercury: (MED-1)`.
 
 Tested by `mercury-mse` and `mercury-mse-gst`'s own suites (light pool, no Servo). The Servo-side glue
 compiles (`cargo check -p servo-media-gstreamer`) and has **not been run in a window** (the screen was locked);

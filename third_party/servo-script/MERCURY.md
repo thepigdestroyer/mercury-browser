@@ -205,7 +205,7 @@ SpiderMonkey's security fixes); the same line is changed in `servo-script-bindin
 
 Behind `dom_media_source_enabled` (off by default; `MERCURY_DEV_MSE=1` turns it on for development, see
 `docs/developer-guide/media-source.md`). The DOM objects are carried from servo/servo#47269
-(decomoraes, MPL-2.0: `MediaSource`, `SourceBuffer`, `SourceBufferList`, the object URL store, the
+(decomoraes, MPL-2.0; the pull request was closed unmerged on 16 Aug 2026 after its author said it was written with an LLM, so Servo never reviewed the carried code, and Mercury re-checked it: see the guide: `MediaSource`, `SourceBuffer`, `SourceBufferList`, the object URL store, the
 `HTMLMediaElement` attach and detach steps) and **thinned**: Mercury's own Servo-free crate
 `crates/mercury-mse` owns every spec algorithm that needs no DOM object (readyState, duration,
 `endOfStream`, the buffered intersection, abort, remove, `changeType`, the append window, the timestamp
@@ -214,7 +214,8 @@ element in `crates/mercury-mse-gst` feeds the player. The DOM calls `MediaSource
 `MseEvent`s into events and media element notifications. The PR's `bytestream.rs`, its parser and its
 `push_data` data plane are not carried; nothing is ever pushed to the player.
 
-1. **`dom/mse/` (new directory):** `mediasource.rs`, `sourcebuffer.rs`, `sourcebufferlist.rs`, `mod.rs`.
+1. **`dom/mse/` (new directory):** `mediasource.rs`, `sourcebuffer.rs`, `sourcebufferlist.rs`, `mod.rs`, and
+   `mediaelement.rs` (Mercury's own element side, declared by `htmlmediaelement.rs`, see item 5).
    Each file's header names the PR. `MediaSource` creates its backend through
    `ServoMedia::create_media_source` with a `GenericCallback` that only queues a media element task (the
    media element's own player-callback pattern, with a weak reference so the object stays collectable),
@@ -232,7 +233,8 @@ element in `crates/mercury-mse-gst` feeds the player. The DOM calls `MediaSource
 4. **`dom/url/url.rs`:** `URL.createObjectURL(MediaSource)` (`CreateObjectURL_`) and `revokeObjectURL` for
    it. Carried from the PR.
 5. **`dom/html/embedded_content/htmlmediaelement.rs`** (hot file, every hunk marked `Mercury (MED-1)`;
-   line numbers as of this commit, for the next Servo bump):
+   the line numbers are approximate (they date from the first MED-1 commit and moved when the `media_source_*`
+   block left the file): `grep -n "Mercury (MED-1)"` finds every hook, for the next Servo bump):
    * 36, 63, 93: imports. 134-155: `SrcObject::MediaSource` and the union conversion
      (`MediaStreamOrMediaSourceOrBlob`; the IDL union gained `MediaSource`). 300-304, 475: the
      `media_source` field. 1353-1360: `load_from_src_attribute` makes `Resource::MediaSource` for a URL in
@@ -240,13 +242,18 @@ element in `crates/mercury-mse-gst` feeds the player. The DOM calls `MediaSource
      source is not closed or was attached before), then creates the player, and detaches if that fails.
      1746-1752: the new `Resource::MediaSource` and `SrcObject::MediaSource` arms fetch nothing. 1840:
      `in_error_state` is `pub(crate)`.
-   * 1845-2120: the new block of `media_source_*` functions: `media_source_for_resource`,
+   * The `media_source_*` functions are **not in this file**: they are in the new `dom/mse/mediaelement.rs`
+     (an `impl HTMLMediaElement` that this file declares as a child module with one `#[path =
+     "../../mse/mediaelement.rs"] mod mediaelement_mse;` line, so it sees the element's private items and no
+     upstream item changed its visibility), and a three-line comment marks the place where they used to be
+     (after `in_error_state`). They are `media_source_for_resource`,
      `queue_media_source_stop_delaying_the_load_event`, `detach_media_source`,
      `media_source_position_changed`, `media_source_seeking`, `media_source_update_ready_state` (readiness
      from `element_ready_state` around the position: HAVE_METADATA outside the buffered ranges, HAVE_ENOUGH_DATA
      once ended, HAVE_CURRENT_DATA at the end), `media_source_metadata_received` (the "once enough of the
      media data has been fetched" steps), `media_source_init_received`, `media_source_duration_changed`
-     (idempotent), `media_source_end_of_stream`, `media_source_error`.
+     (idempotent), `media_source_end_of_stream`, `media_source_error`. The first seven are `pub(super)`, the rest
+     `pub(crate)`.
    * 2498-2503: `seek` calls `media_source_seeking` after setting the new position. 2565-2573, 2636-2670:
      `create_media_player` (`StreamType::MediaSource`, `connect_media_source` as the player's first call, no
      download buffering). 2713: `reset_media_player` detaches the MediaSource after the player is dropped.

@@ -21,7 +21,7 @@ use servo_media::MediaInstanceError;
 use servo_media_player::audio::AudioRenderer;
 use servo_media_player::context::PlayerGLContext;
 use servo_media_player::metadata::Metadata;
-use servo_media_player::mse::MediaSourceBackend; // Mercury: (MED-1) MSE
+use servo_media_player::mse::{MediaSourceBackend, SeekDecision, SeekHold}; // Mercury: (MED-1) MSE
 use servo_media_player::video::VideoFrameRenderer;
 use servo_media_player::{
     PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, SeekLockMsg, StreamType,
@@ -144,11 +144,12 @@ struct PlayerInner {
     /// To allow teardown to free seek_data that is waiting for the script thread.
     /// Mercury: servo/servo#49784 (EA0 backport), with the weak references and the teardown in `Drop`.
     seek_lock: Option<SeekLock>,
-    /// Mercury: (MED-1) the latest seek asked for before `GstPlay` had media info. `GstPlay` drops a seek
-    /// until then, and a MediaSource pipeline cannot preroll on its own when the page seeked (or
-    /// resumed) to a position the feed has no data for yet; the seek is sent with the first seekable
-    /// metadata, which is what makes `playbin3` flush and start at the position.
-    pending_seek: Option<f64>,
+    /// Mercury: (MED-1) what to do with a seek of a MediaSource player: `GstPlay` drops a seek until it
+    /// has media info and `playbin3` refuses one until its first buffer has arrived, so a seek asked
+    /// for before that is held and sent later (`mercury_mse::SeekHold`, with its tests).
+    seek_hold: SeekHold,
+    /// Mercury: (MED-1) to report `SeekDone` for a seek that cannot be done (an unseekable pipeline).
+    observer: Arc<Mutex<GenericCallback<PlayerEvent>>>,
 }
 
 impl PlayerInner {
@@ -230,7 +231,7 @@ impl PlayerInner {
         self.paused.set(true);
         self.can_resume.set(false);
         self.last_metadata = None;
-        self.pending_seek = None; // Mercury: (MED-1)
+        self.seek_hold.reset(); // Mercury: (MED-1)
         self.source = None;
         Ok(())
     }
@@ -286,10 +287,23 @@ impl PlayerInner {
             return Err(PlayerError::SeekOutOfRange);
         }
 
-        // Mercury: (MED-1) see `pending_seek`.
-        if self.stream_type == StreamType::MediaSource && self.last_metadata.is_none() {
-            self.pending_seek = Some(time);
-            return Ok(());
+        // Mercury: (MED-1) a MediaSource seek may have to wait for the pipeline (see `seek_hold`).
+        if self.stream_type == StreamType::MediaSource {
+            match self.seek_hold.seek(time) {
+                SeekDecision::Send(_) => {},
+                SeekDecision::Held { replaced } => {
+                    gstreamer::info!(
+                        self.cat,
+                        obj = &self.player,
+                        "Seek to {time} held until the pipeline can take it (replaces {replaced:?})"
+                    );
+                    return Ok(());
+                },
+                SeekDecision::Unseekable(position) => {
+                    let _ = self.observer.lock().unwrap().send(PlayerEvent::SeekDone(position));
+                    return Ok(());
+                },
+            }
         }
 
         let time = time * 1_000_000_000.;
@@ -420,6 +434,24 @@ impl PlayerInner {
             .map_err(|_| PlayerError::SetTrackFailed)?;
         self.player.set_video_track_enabled(enabled);
         Ok(())
+    }
+}
+
+/// Mercury: (MED-1) carries out what `SeekHold` decided, on a thread that holds no lock of the player:
+/// gives the seek to `GstPlay`, or tells the element that a seek on an unseekable pipeline is over.
+fn run_seek_decision(
+    player: &gstreamer_play::Play,
+    observer: &Arc<Mutex<GenericCallback<PlayerEvent>>>,
+    decision: SeekDecision,
+) {
+    match decision {
+        SeekDecision::Send(time) => {
+            player.seek(gstreamer::ClockTime::from_nseconds((time * 1_000_000_000.) as u64));
+        },
+        SeekDecision::Unseekable(position) => {
+            let _ = observer.lock().unwrap().send(PlayerEvent::SeekDone(position));
+        },
+        SeekDecision::Held { .. } => {},
     }
 }
 
@@ -711,7 +743,8 @@ impl GStreamerPlayer {
             cat: gstreamer::DebugCategory::get("servoplayer").unwrap(),
             enough_data: Arc::new(AtomicBool::new(false)),
             seek_lock: None,
-            pending_seek: None, // Mercury: (MED-1)
+            seek_hold: SeekHold::new(), // Mercury: (MED-1)
+            observer: self.observer.clone(),
         })));
 
         let inner = self.inner.borrow();
@@ -735,7 +768,23 @@ impl GStreamerPlayer {
             let Some(inner_clone) = weak_inner.upgrade() else {
                 return;
             };
-            inner_clone.lock().unwrap().play_state = play_state;
+            // Mercury: (MED-1) a MediaSource player that settles (Paused, Playing) frees a seek that was
+            // held for media info that never said "seekable"; the seek is made after the lock is released.
+            let (released, player) = {
+                let mut inner = inner_clone.lock().unwrap();
+                inner.play_state = play_state;
+                let settled = matches!(
+                    play_state,
+                    gstreamer_play::PlayState::Paused | gstreamer_play::PlayState::Playing
+                ) && inner.stream_type == StreamType::MediaSource;
+                (
+                    settled.then(|| inner.seek_hold.settled()).flatten(),
+                    inner.player.clone(),
+                )
+            };
+            if let Some(decision) = released {
+                run_seek_decision(&player, &observer, decision);
+            }
 
             let state = match play_state {
                 gstreamer_play::PlayState::Buffering => Some(PlaybackState::Buffering),
@@ -805,6 +854,11 @@ impl GStreamerPlayer {
                     .is_some_and(|last_metadata| last_metadata.duration != new_duration);
 
             inner.last_metadata = Some(metadata.clone());
+            // Mercury: (MED-1) `GstPlay` has media info now: a seek held for it can go. It is done below,
+            // after the lock is released: a signal handler must not call into the player with it held.
+            let released = (inner.stream_type == StreamType::MediaSource)
+                .then(|| inner.seek_hold.metadata(metadata.is_seekable))
+                .flatten();
             gstreamer::info!(
                 inner.cat,
                 obj = &inner.player,
@@ -813,14 +867,6 @@ impl GStreamerPlayer {
             );
             let _ = notify!(observer, PlayerEvent::MetadataUpdated(metadata));
 
-            // Mercury: (MED-1) `GstPlay` has media info now: send the seek it dropped before.
-            if inner.last_metadata.as_ref().is_some_and(|m| m.is_seekable) &&
-                let Some(time) = inner.pending_seek.take()
-            {
-                inner
-                    .player
-                    .seek(gstreamer::ClockTime::from_nseconds((time * 1_000_000_000.) as u64));
-            }
 
             // We need to check this here because there is no guarantee that
             // duration-changed and media-info-updated come in the same order.
@@ -838,6 +884,13 @@ impl GStreamerPlayer {
 
             if send_pause_event {
                 let _ = notify!(observer, PlayerEvent::StateChanged(PlaybackState::Paused));
+            }
+
+            // Mercury: (MED-1) the lock is released first.
+            if let Some(decision) = released {
+                let player = inner.player.clone();
+                drop(inner);
+                run_seek_decision(&player, &observer, decision);
             }
         });
 

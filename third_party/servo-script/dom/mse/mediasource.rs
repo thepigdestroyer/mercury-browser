@@ -13,7 +13,7 @@
 use std::cell::{Cell, RefCell};
 use std::ffi::CString;
 use std::rc::Rc;
-use std::sync::{Arc, Mutex, OnceLock, Weak};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
@@ -151,7 +151,11 @@ impl MediaSource {
                 let Some(handler) = slot.get().and_then(Weak::upgrade) else {
                     return;
                 };
-                handler.lock().unwrap().handle_event(cx, event);
+                // A panic in an earlier event must not make every later one panic the script thread.
+                handler
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .handle_event(cx, event);
             }));
         })
         .map_err(|_| {

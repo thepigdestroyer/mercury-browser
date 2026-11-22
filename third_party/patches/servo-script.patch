@@ -1241,16 +1241,7 @@ diff --git a/dom/html/embedded_content/htmlcanvaselement.rs b/dom/html/embedded_
 diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_content/htmlmediaelement.rs
 --- a/dom/html/embedded_content/htmlmediaelement.rs
 +++ b/dom/html/embedded_content/htmlmediaelement.rs
-@@ -33,6 +33,8 @@
- use servo_base::generic_channel::{self};
- use servo_config::pref;
- use servo_media::player::audio::AudioRenderer;
-+// Mercury (MED-1): the MSE contract types the element reads from the backend.
-+use servo_media::player::mse::{ElementReadyState, EosError, InitInfo, TrackKind};
- use servo_media::player::video::{VideoFrame, VideoFrameRenderer};
- use servo_media::player::{PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, StreamType};
- use servo_media::{ClientContextId, ServoMedia, SupportsMediaType};
-@@ -58,7 +60,8 @@
+@@ -58,7 +58,8 @@
  use crate::dom::bindings::codegen::Bindings::URLBinding::URLMethods;
  use crate::dom::bindings::codegen::Bindings::WindowBinding::Window_Binding::WindowMethods;
  use crate::dom::bindings::codegen::UnionTypes::{
@@ -1260,7 +1251,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  };
  use crate::dom::bindings::error::{Error, ErrorResult, Fallible};
  use crate::dom::bindings::inheritance::Castable;
-@@ -87,6 +90,7 @@
+@@ -87,6 +88,7 @@
  use crate::dom::mediafragmentparser::MediaFragmentParser;
  use crate::dom::medialist::MediaList;
  use crate::dom::mediastream::MediaStream;
@@ -1268,7 +1259,17 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  use crate::dom::node::virtualmethods::VirtualMethods;
  use crate::dom::node::{Node, NodeDamage, NodeTraits, UnbindContext};
  use crate::dom::performance::performanceresourcetiming::InitiatorType;
-@@ -129,15 +133,21 @@
+@@ -124,20 +126,31 @@
+ /// instead of strict equality. (Unit is second)
+ const SEEK_POSITION_THRESHOLD: f64 = 0.5;
+
++// Mercury: (MED-1) the element's Media Source Extensions functions, a child module so that it sees the
++// element's private items (see the file's header).
++#[path = "../../mse/mediaelement.rs"]
++mod mediaelement_mse;
++
+ #[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
+ #[derive(JSTraceable, MallocSizeOf)]
  enum SrcObject {
      MediaStream(Dom<MediaStream>),
      Blob(Dom<Blob>),
@@ -1294,7 +1295,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          }
      }
  }
-@@ -287,6 +297,12 @@
+@@ -287,6 +300,12 @@
      /// <https://html.spec.whatwg.org/multipage/#list-of-newly-introduced-cues>
      newly_introduced_cues: DomRefCell<Vec<Dom<TextTrackCue>>>,
      shadow_tree: DomRefCell<Option<ShadowTree>>,
@@ -1307,7 +1308,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  }
 
  /// <https://html.spec.whatwg.org/multipage/#dom-media-networkstate>
-@@ -456,6 +472,7 @@
+@@ -456,6 +475,7 @@
              position_when_time_marches_on_ran: Default::default(),
              newly_introduced_cues: Default::default(),
              shadow_tree: Default::default(),
@@ -1315,7 +1316,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          }
      }
 
-@@ -1332,7 +1349,15 @@
+@@ -1332,7 +1352,15 @@
          // then the load failed.
          // Note that the resource fetch algorithm itself takes care
          // of the cleanup in case of failure itself.
@@ -1332,7 +1333,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
      }
 
      /// <https://html.spec.whatwg.org/multipage/#concept-media-load-algorithm>
-@@ -1641,8 +1666,23 @@
+@@ -1641,8 +1669,23 @@
 
      /// <https://html.spec.whatwg.org/multipage/#concept-media-load-resource>
      fn resource_fetch_algorithm(&self, cx: &JSContext, resource: Resource) {
@@ -1356,7 +1357,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              self.resource_selection_algorithm_failure_steps(cx);
              return;
          }
-@@ -1703,9 +1743,13 @@
+@@ -1703,9 +1746,13 @@
                  // Steps 5.remote.2-5.remote.8
                  self.fetch_request(cx, None, None);
              },
@@ -1370,7 +1371,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                          SrcObject::Blob(blob) => {
                              let blob_url = URL::CreateObjectURL(&self.global(), blob);
                              *self.blob_url.borrow_mut() =
-@@ -1793,10 +1837,262 @@
+@@ -1793,10 +1840,14 @@
              }));
      }
 
@@ -1380,261 +1381,13 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          self.error.get().is_some()
      }
 
-+    // ---- Mercury: (MED-1) Media Source Extensions -------------------------------------------------
-+    //
-+    // While a MediaSource is attached (`media_source`) the element asks its backend for the buffered
-+    // and seekable ranges and for the readiness around the playback position, takes the media duration
-+    // from the MediaSource, and ignores the media engine's own duration and metadata. The player pulls
-+    // frames from the backend's feed; nothing is ever pushed to it. The hooks in the upstream functions
-+    // are marked `Mercury (MED-1)`; `third_party/servo-script/MERCURY.md` lists them.
-+
-+    /// The MediaSource a resource names, if any: a media source object URL or `srcObject`.
-+    fn media_source_for_resource(&self, resource: &Resource) -> Option<DomRoot<MediaSource>> {
-+        match resource {
-+            Resource::MediaSource(media_source) => Some(media_source.clone()),
-+            Resource::Object => match *self.src_object.borrow() {
-+                Some(SrcObject::MediaSource(ref media_source)) => {
-+                    Some(DomRoot::from_ref(&**media_source))
-+                },
-+                _ => None,
-+            },
-+            Resource::Url(_) => None,
-+        }
-+    }
-+
-+    /// The attach steps set the delaying-the-load-event flag to false.
-+    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
-+    fn queue_media_source_stop_delaying_the_load_event(&self) {
-+        let this = Trusted::new(self);
-+        let generation_id = self.generation_id.get();
-+
-+        self.owner_global()
-+            .task_manager()
-+            .media_element_task_source()
-+            .queue(task!(media_source_stop_delaying_the_load_event: move |cx| {
-+                let this = this.root();
-+                if generation_id != this.generation_id.get() {
-+                    return;
-+                }
-+
-+                this.delay_load_event(cx, false);
-+            }));
-+    }
-+
-+    /// <https://w3c.github.io/media-source/#dfn-detaching-from-a-media-element>
-+    fn detach_media_source(&self) {
-+        if let Some(media_source) = self.media_source.take() {
-+            media_source.detach();
-+        }
-+    }
-+
-+    /// The backend learns every playback position (coded frame eviction, readiness).
-+    fn media_source_position_changed(&self, position: f64) {
-+        if let Some(media_source) = self.media_source.get() {
-+            media_source.backend().set_position(position);
-+        }
-+    }
-+
-+    /// The MediaSource's seeking algorithm, run by the seek algorithm once the new playback position is
-+    /// set: an ended MediaSource goes back to "open" (and `sourceopen` is queued) and the readiness is
-+    /// re-evaluated at the new position (HAVE_METADATA when it is not buffered).
-+    /// <https://w3c.github.io/media-source/#mediasource-seeking>
-+    fn media_source_seeking(&self, time: f64) {
-+        let Some(media_source) = self.media_source.get() else {
-+            return;
-+        };
-+        media_source.backend().set_position(time);
-+        media_source.seeking(time);
-+        // The seek algorithm has no JavaScript context, so the readiness is re-evaluated in a task.
-+        let this = Trusted::new(self);
-+        let generation_id = self.generation_id.get();
-+        self.owner_global()
-+            .task_manager()
-+            .media_element_task_source()
-+            .queue(task!(media_source_seek_ready_state: move |cx| {
-+                let this = this.root();
-+                if generation_id != this.generation_id.get() {
-+                    return;
-+                }
-+
-+                this.media_source_update_ready_state(cx);
-+            }));
-+    }
-+
-+    /// Sets the element's readyState from what the backend says about the position (decision D13 of
-+    /// the lane): HAVE_METADATA once every source buffer has its initialization segment and outside
-+    /// the buffered ranges, HAVE_CURRENT_DATA, HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA by how much is
-+    /// buffered ahead, HAVE_ENOUGH_DATA once the stream has ended. The events follow from
-+    /// `change_ready_state`. Called on every initialization segment, append, removal, eviction,
-+    /// position and seek. A no-op without a MediaSource.
-+    pub(crate) fn media_source_update_ready_state(&self, cx: &mut JSContext) {
-+        let Some(media_source) = self.media_source.get() else {
-+            return;
-+        };
-+        let current = self.ready_state.get();
-+        let mut target = match media_source
-+            .backend()
-+            .element_ready_state(self.current_playback_position.get())
-+        {
-+            ElementReadyState::HaveNothing => ReadyState::HaveNothing,
-+            ElementReadyState::HaveMetadata => ReadyState::HaveMetadata,
-+            ElementReadyState::HaveCurrentData => ReadyState::HaveCurrentData,
-+            ElementReadyState::HaveFutureData => ReadyState::HaveFutureData,
-+            ElementReadyState::HaveEnoughData => ReadyState::HaveEnoughData,
-+        };
-+
-+        if current != ReadyState::HaveNothing {
-+            // Once the metadata is known the readyState does not go back to HAVE_NOTHING.
-+            if target < ReadyState::HaveMetadata {
-+                target = ReadyState::HaveMetadata;
-+            }
-+            // At the end of the media resource the element is at HAVE_CURRENT_DATA, as the "reaches
-+            // the end" steps leave it.
-+            if self.ended_playback(LoopCondition::Ignored) {
-+                target = ReadyState::HaveCurrentData;
-+            }
-+        }
-+
-+        if target == current {
-+            return;
-+        }
-+
-+        if current == ReadyState::HaveNothing {
-+            // The first transition runs the media data processing steps for the metadata, which set
-+            // HAVE_METADATA (and fire `loadedmetadata`), then go on to the target.
-+            self.media_source_metadata_received(cx);
-+            if target > ReadyState::HaveMetadata {
-+                self.change_ready_state(cx, target);
-+            }
-+            return;
-+        }
-+
-+        self.change_ready_state(cx, target);
-+    }
-+
-+    /// The media data processing steps "once enough of the media data has been fetched to determine
-+    /// the duration", for the MediaSource's initialization segments.
-+    /// <https://html.spec.whatwg.org/multipage/#media-data-processing-steps-list>
-+    fn media_source_metadata_received(&self, cx: &mut JSContext) {
-+        let Some(media_source) = self.media_source.get() else {
-+            return;
-+        };
-+
-+        // Step 3. Set the current playback position and the official playback position to the
-+        // earliest possible position.
-+        let earliest_possible_position = self.earliest_possible_position();
-+        self.current_playback_position
-+            .set(earliest_possible_position);
-+        self.official_playback_position
-+            .set(earliest_possible_position);
-+
-+        // Step 4. Update the duration attribute with the time of the last frame of the resource (the
-+        // MediaSource's duration), which queues `durationchange`.
-+        self.duration
-+            .set(media_source.backend().duration().unwrap_or(f64::NAN));
-+        self.queue_media_element_task_to_fire_event(atom!("durationchange"));
-+
-+        // Step 5. For video elements, queue `resize` (the natural dimensions were set from the
-+        // initialization segment).
-+        if self.downcast::<HTMLVideoElement>().is_some() {
-+            self.queue_media_element_task_to_fire_event(atom!("resize"));
-+        }
-+
-+        // Step 6. Set the readyState attribute to HAVE_METADATA.
-+        self.change_ready_state(cx, ReadyState::HaveMetadata);
-+
-+        // Steps 7 to 9. If the media element's default playback start position is greater than zero,
-+        // then seek to that time; set it to zero.
-+        if self.default_playback_start_position.get() > 0. {
-+            self.seek(
-+                self.default_playback_start_position.get(),
-+                /* approximate_for_speed */ false,
-+            );
-+        }
-+        self.default_playback_start_position.set(0.);
-+    }
-+
-+    /// An initialization segment was parsed: the video's natural dimensions, then the readiness (the
-+    /// MediaSource's initialization segment received algorithm, step 7 onwards).
-+    /// <https://w3c.github.io/media-source/#dfn-initialization-segment-received>
-+    pub(crate) fn media_source_init_received(&self, cx: &mut JSContext, init: &InitInfo) {
-+        if let Some(video_element) = self.downcast::<HTMLVideoElement>() &&
-+            let Some(track) = init
-+                .tracks
-+                .iter()
-+                .find(|track| track.kind == TrackKind::Video && track.width > 0 && track.height > 0) &&
-+            video_element.set_natural_dimensions(
-+                cx.no_gc(),
-+                Some(track.width),
-+                Some(track.height),
-+            ) &&
-+            self.ready_state.get() != ReadyState::HaveNothing
-+        {
-+            self.queue_media_element_task_to_fire_event(atom!("resize"));
-+        }
-+
-+        self.media_source_update_ready_state(cx);
-+    }
-+
-+    /// <https://w3c.github.io/media-source/#dfn-duration-change> step 6: update the media duration
-+    /// and run the media element's duration change algorithm. Idempotent: the backend reports a
-+    /// change again by an event after the DOM called for it. Before HAVE_METADATA the media duration
-+    /// stays NaN (the metadata steps publish it).
-+    pub(crate) fn media_source_duration_changed(&self, duration: f64) {
-+        if self.ready_state.get() == ReadyState::HaveNothing {
-+            return;
-+        }
-+        let old_duration = self.duration.get();
-+        if old_duration == duration || (old_duration.is_nan() && duration.is_nan()) {
-+            return;
-+        }
-+
-+        self.duration.set(duration);
-+        self.queue_media_element_task_to_fire_event(atom!("durationchange"));
-+
-+        // If the duration is changed such that the current playback position ends up being greater
-+        // than the time of the end of the media resource, then the user agent must also seek to the
-+        // time of the end of the media resource.
-+        if self.current_playback_position.get() > duration {
-+            self.seek(duration, /* approximate_for_speed */ false);
-+        }
-+    }
-+
-+    /// <https://w3c.github.io/media-source/#dfn-end-of-stream> step 3.2: notify the media element
-+    /// that it now has all of the media data. The duration may have changed with the stream's end, and
-+    /// an ended stream has enough data.
-+    pub(crate) fn media_source_end_of_stream(&self, cx: &mut JSContext) {
-+        if let Some(media_source) = self.media_source.get() {
-+            self.media_source_duration_changed(media_source.backend().duration().unwrap_or(f64::NAN));
-+        }
-+        self.media_source_update_ready_state(cx);
-+    }
-+
-+    /// <https://w3c.github.io/media-source/#dfn-end-of-stream> steps 4 and 5: the media data
-+    /// processing steps for a network or a decode error (`endOfStream("network")`, `("decode")`, or a
-+    /// failed append).
-+    pub(crate) fn media_source_error(&self, cx: &mut JSContext, error: EosError) {
-+        if self.ready_state.get() == ReadyState::HaveNothing {
-+            // => "If the media data cannot be fetched at all, due to network errors, causing the
-+            // user agent to give up trying to fetch the resource" (and the unsupported-format case:
-+            // both end in the failure steps).
-+            self.media_data_processing_failure_steps(cx);
-+            return;
-+        }
-+
-+        // => "If the connection is interrupted after some media data has been received" and "If the
-+        // media data is corrupted".
-+        let error = match error {
-+            EosError::Network => MEDIA_ERR_NETWORK,
-+            EosError::Decode => MEDIA_ERR_DECODE,
-+        };
-+        self.media_data_processing_fatal_steps(cx, error);
-+    }
++    // Mercury: (MED-1) the Media Source Extensions functions of the element (`media_source_*`,
++    // `detach_media_source`) are in `dom/mse/mediaelement.rs`, a child module of this one.
 +
      /// <https://html.spec.whatwg.org/multipage/#potentially-playing>
      fn is_potentially_playing(&self) -> bool {
          // > A media element is said to be potentially playing when
-@@ -2199,6 +2495,10 @@
+@@ -2199,6 +2250,10 @@
          // Step 11. Set the current playback position to the new playback position.
          self.current_playback_position.set(time);
 
@@ -1645,7 +1398,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          if let Some(ref player) = *self.player.borrow() &&
              let Err(error) = player.lock().unwrap().seek(time)
          {
-@@ -2262,6 +2562,8 @@
+@@ -2262,6 +2317,8 @@
                  if let Some(ref src_object) = *self.src_object.borrow() {
                      match src_object {
                          SrcObject::MediaStream(_) => StreamType::Stream,
@@ -1654,7 +1407,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                          _ => StreamType::Seekable,
                      }
                  } else {
-@@ -2268,6 +2570,8 @@
+@@ -2268,6 +2325,8 @@
                      return Err(());
                  }
              },
@@ -1663,7 +1416,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              _ => StreamType::Seekable,
          };
 
-@@ -2329,19 +2633,39 @@
+@@ -2329,19 +2388,39 @@
              Box::new(window.get_player_context()),
          );
 
@@ -1707,7 +1460,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              {
                  warn!("Could not set download buffering: {error:?}");
              }
-@@ -2386,6 +2710,9 @@
+@@ -2386,6 +2465,9 @@
          }
 
          *self.player.borrow_mut() = None;
@@ -1717,7 +1470,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          self.video_renderer.lock().unwrap().reset();
          *self.event_handler.borrow_mut() = None;
 
-@@ -2557,6 +2884,12 @@
+@@ -2557,6 +2639,12 @@
          cx: &mut JSContext,
          metadata: &servo_media::player::metadata::Metadata,
      ) {
@@ -1730,7 +1483,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          // The following steps should be run once on the initial `metadata` signal from the media
          // engine.
          if self.ready_state.get() != ReadyState::HaveNothing {
-@@ -2797,6 +3130,12 @@
+@@ -2797,6 +2885,12 @@
      }
 
      fn playback_duration_changed(&self, duration: Option<Duration>) {
@@ -1743,7 +1496,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          let duration = duration.map_or(f64::INFINITY, |duration| duration.as_secs_f64());
 
          if self.duration.get() == duration {
-@@ -2958,16 +3297,22 @@
+@@ -2958,16 +3052,22 @@
 
      fn playback_state_changed(&self, cx: &mut JSContext, state: &PlaybackState) {
          let mut media_session_playback_state = MediaSessionPlaybackState::None_;
@@ -1768,7 +1521,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                      self.change_ready_state(cx, ReadyState::HaveEnoughData);
                  }
              },
-@@ -2990,6 +3335,11 @@
+@@ -2990,6 +3090,11 @@
      }
 
      fn seekable(&self) -> TimeRangesContainer {
@@ -1780,7 +1533,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          let mut seekable = TimeRangesContainer::default();
          if let Some(ref player) = *self.player.borrow() {
              let ranges = player.lock().unwrap().seekable();
-@@ -3374,19 +3724,23 @@
+@@ -3374,19 +3479,23 @@
      }
 
      /// <https://html.spec.whatwg.org/multipage/#dom-media-srcobject>
@@ -1794,11 +1547,11 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
                  SrcObject::MediaStream(stream) => {
 -                    MediaStreamOrBlob::MediaStream(DomRoot::from_ref(stream))
 +                    MediaStreamOrMediaSourceOrBlob::MediaStream(DomRoot::from_ref(stream))
-                 },
++                },
 +                // Mercury (MED-1)
 +                SrcObject::MediaSource(media_source) => {
 +                    MediaStreamOrMediaSourceOrBlob::MediaSource(DomRoot::from_ref(media_source))
-+                },
+                 },
              })
      }
 
@@ -1808,7 +1561,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
          *self.src_object.borrow_mut() = value.map(|value| value.into());
          self.media_element_load_algorithm(cx);
      }
-@@ -3608,7 +3962,12 @@
+@@ -3608,7 +3717,12 @@
      /// <https://html.spec.whatwg.org/multipage/#dom-media-buffered>
      fn Buffered(&self, cx: &mut JSContext) -> DomRoot<TimeRanges> {
          let mut buffered = TimeRangesContainer::default();
@@ -1822,7 +1575,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
              let ranges = player.lock().unwrap().buffered();
              for range in ranges {
                  let _ = buffered.add(range.start, range.end);
-@@ -3885,6 +4244,10 @@
+@@ -3885,6 +3999,10 @@
  enum Resource {
      Object,
      Url(ServoUrl),
@@ -1833,7 +1586,7 @@ diff --git a/dom/html/embedded_content/htmlmediaelement.rs b/dom/html/embedded_c
  }
 
  #[derive(Debug, MallocSizeOf, PartialEq)]
-@@ -4418,7 +4781,11 @@
+@@ -4418,7 +4536,11 @@
              },
              PlayerEvent::NeedData => element.playback_need_data(),
              PlayerEvent::PositionChanged(position) => {
@@ -2592,11 +2345,285 @@ diff --git a/dom/mod.rs b/dom/mod.rs
  pub(crate) mod mutationobserver;
  pub(crate) use self::mutationobserver::*;
  pub(crate) mod navigator;
+diff --git a/dom/mse/mediaelement.rs b/dom/mse/mediaelement.rs
+new file mode 100644
+--- /dev/null
++++ b/dom/mse/mediaelement.rs
+@@ -0,0 +1,269 @@
++// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
++// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
++
++// Mercury: (MED-1) the media element's side of Media Source Extensions: attach and detach, the
++// readiness from the backend, the metadata and duration steps, the end of stream and error steps, and
++// the MediaSource's seeking algorithm. Written by Mercury; it is a new file so that the upstream
++// `htmlmediaelement.rs` keeps only one-line hooks (the `mod` line, the calls, and the `media_source`
++// field), which a Servo bump rebases in minutes.
++//
++// This file is declared as a child module of `htmlmediaelement.rs` (`#[path = "../../mse/mediaelement.rs"]`)
++// and not in `dom/mse/mod.rs`: a child module sees the element's private fields and methods, which
++// these functions read and set, so no upstream item had to change its visibility.
++
++// Mercury (MED-1): the MSE contract types the element reads from the backend.
++use servo_media::player::mse::{ElementReadyState, EosError, InitInfo, TrackKind};
++
++use super::*;
++
++impl HTMLMediaElement {
++    //
++    // While a MediaSource is attached (`media_source`) the element asks its backend for the buffered
++    // and seekable ranges and for the readiness around the playback position, takes the media duration
++    // from the MediaSource, and ignores the media engine's own duration and metadata. The player pulls
++    // frames from the backend's feed; nothing is ever pushed to it. The hooks in the upstream functions
++    // are marked `Mercury (MED-1)`; `third_party/servo-script/MERCURY.md` lists them.
++
++    /// The MediaSource a resource names, if any: a media source object URL or `srcObject`.
++    pub(super) fn media_source_for_resource(&self, resource: &Resource) -> Option<DomRoot<MediaSource>> {
++        match resource {
++            Resource::MediaSource(media_source) => Some(media_source.clone()),
++            Resource::Object => match *self.src_object.borrow() {
++                Some(SrcObject::MediaSource(ref media_source)) => {
++                    Some(DomRoot::from_ref(&**media_source))
++                },
++                _ => None,
++            },
++            Resource::Url(_) => None,
++        }
++    }
++
++    /// The attach steps set the delaying-the-load-event flag to false.
++    /// <https://w3c.github.io/media-source/#dfn-attaching-to-a-media-element>
++    pub(super) fn queue_media_source_stop_delaying_the_load_event(&self) {
++        let this = Trusted::new(self);
++        let generation_id = self.generation_id.get();
++
++        self.owner_global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(media_source_stop_delaying_the_load_event: move |cx| {
++                let this = this.root();
++                if generation_id != this.generation_id.get() {
++                    return;
++                }
++
++                this.delay_load_event(cx, false);
++            }));
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-detaching-from-a-media-element>
++    pub(super) fn detach_media_source(&self) {
++        if let Some(media_source) = self.media_source.take() {
++            media_source.detach();
++        }
++    }
++
++    /// The backend learns every playback position (coded frame eviction, readiness).
++    pub(super) fn media_source_position_changed(&self, position: f64) {
++        if let Some(media_source) = self.media_source.get() {
++            media_source.backend().set_position(position);
++        }
++    }
++
++    /// The MediaSource's seeking algorithm, run by the seek algorithm once the new playback position is
++    /// set: an ended MediaSource goes back to "open" (and `sourceopen` is queued) and the readiness is
++    /// re-evaluated at the new position (HAVE_METADATA when it is not buffered).
++    /// <https://w3c.github.io/media-source/#mediasource-seeking>
++    pub(super) fn media_source_seeking(&self, time: f64) {
++        let Some(media_source) = self.media_source.get() else {
++            return;
++        };
++        media_source.backend().set_position(time);
++        media_source.seeking(time);
++        // The seek algorithm has no JavaScript context, so the readiness is re-evaluated in a task.
++        let this = Trusted::new(self);
++        let generation_id = self.generation_id.get();
++        self.owner_global()
++            .task_manager()
++            .media_element_task_source()
++            .queue(task!(media_source_seek_ready_state: move |cx| {
++                let this = this.root();
++                if generation_id != this.generation_id.get() {
++                    return;
++                }
++
++                this.media_source_update_ready_state(cx);
++            }));
++    }
++
++    /// Sets the element's readyState from what the backend says about the position (decision D13 of
++    /// the lane): HAVE_METADATA once every source buffer has its initialization segment and outside
++    /// the buffered ranges, HAVE_CURRENT_DATA, HAVE_FUTURE_DATA and HAVE_ENOUGH_DATA by how much is
++    /// buffered ahead, HAVE_ENOUGH_DATA once the stream has ended. The events follow from
++    /// `change_ready_state`. Called on every initialization segment, append, removal, eviction,
++    /// position and seek. A no-op without a MediaSource.
++    pub(crate) fn media_source_update_ready_state(&self, cx: &mut JSContext) {
++        let Some(media_source) = self.media_source.get() else {
++            return;
++        };
++        let current = self.ready_state.get();
++        let mut target = match media_source
++            .backend()
++            .element_ready_state(self.current_playback_position.get())
++        {
++            ElementReadyState::HaveNothing => ReadyState::HaveNothing,
++            ElementReadyState::HaveMetadata => ReadyState::HaveMetadata,
++            ElementReadyState::HaveCurrentData => ReadyState::HaveCurrentData,
++            ElementReadyState::HaveFutureData => ReadyState::HaveFutureData,
++            ElementReadyState::HaveEnoughData => ReadyState::HaveEnoughData,
++        };
++
++        if current != ReadyState::HaveNothing {
++            // Once the metadata is known the readyState does not go back to HAVE_NOTHING.
++            if target < ReadyState::HaveMetadata {
++                target = ReadyState::HaveMetadata;
++            }
++            // At the end of the media resource the element is at HAVE_CURRENT_DATA, as the "reaches
++            // the end" steps leave it.
++            if self.ended_playback(LoopCondition::Ignored) {
++                target = ReadyState::HaveCurrentData;
++            }
++        }
++
++        if target == current {
++            return;
++        }
++
++        if current == ReadyState::HaveNothing {
++            // The first transition runs the media data processing steps for the metadata, which set
++            // HAVE_METADATA (and fire `loadedmetadata`), then go on to the target.
++            self.media_source_metadata_received(cx);
++            if target > ReadyState::HaveMetadata {
++                self.change_ready_state(cx, target);
++            }
++            return;
++        }
++
++        self.change_ready_state(cx, target);
++    }
++
++    /// The media data processing steps "once enough of the media data has been fetched to determine
++    /// the duration", for the MediaSource's initialization segments.
++    /// <https://html.spec.whatwg.org/multipage/#media-data-processing-steps-list>
++    pub(super) fn media_source_metadata_received(&self, cx: &mut JSContext) {
++        let Some(media_source) = self.media_source.get() else {
++            return;
++        };
++
++        // Step 3. Set the current playback position and the official playback position to the
++        // earliest possible position.
++        let earliest_possible_position = self.earliest_possible_position();
++        self.current_playback_position
++            .set(earliest_possible_position);
++        self.official_playback_position
++            .set(earliest_possible_position);
++
++        // Step 4. Update the duration attribute with the time of the last frame of the resource (the
++        // MediaSource's duration), which queues `durationchange`.
++        self.duration
++            .set(media_source.backend().duration().unwrap_or(f64::NAN));
++        self.queue_media_element_task_to_fire_event(atom!("durationchange"));
++
++        // Step 5. For video elements, queue `resize` (the natural dimensions were set from the
++        // initialization segment).
++        if self.downcast::<HTMLVideoElement>().is_some() {
++            self.queue_media_element_task_to_fire_event(atom!("resize"));
++        }
++
++        // Step 6. Set the readyState attribute to HAVE_METADATA.
++        self.change_ready_state(cx, ReadyState::HaveMetadata);
++
++        // Steps 7 to 9. If the media element's default playback start position is greater than zero,
++        // then seek to that time; set it to zero.
++        if self.default_playback_start_position.get() > 0. {
++            self.seek(
++                self.default_playback_start_position.get(),
++                /* approximate_for_speed */ false,
++            );
++        }
++        self.default_playback_start_position.set(0.);
++    }
++
++    /// An initialization segment was parsed: the video's natural dimensions, then the readiness (the
++    /// MediaSource's initialization segment received algorithm, step 7 onwards).
++    /// <https://w3c.github.io/media-source/#dfn-initialization-segment-received>
++    pub(crate) fn media_source_init_received(&self, cx: &mut JSContext, init: &InitInfo) {
++        if let Some(video_element) = self.downcast::<HTMLVideoElement>() &&
++            let Some(track) = init
++                .tracks
++                .iter()
++                .find(|track| track.kind == TrackKind::Video && track.width > 0 && track.height > 0) &&
++            video_element.set_natural_dimensions(
++                cx.no_gc(),
++                Some(track.width),
++                Some(track.height),
++            ) &&
++            self.ready_state.get() != ReadyState::HaveNothing
++        {
++            self.queue_media_element_task_to_fire_event(atom!("resize"));
++        }
++
++        self.media_source_update_ready_state(cx);
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-duration-change> step 6: update the media duration
++    /// and run the media element's duration change algorithm. Idempotent: the backend reports a
++    /// change again by an event after the DOM called for it. Before HAVE_METADATA the media duration
++    /// stays NaN (the metadata steps publish it).
++    pub(crate) fn media_source_duration_changed(&self, duration: f64) {
++        if self.ready_state.get() == ReadyState::HaveNothing {
++            return;
++        }
++        let old_duration = self.duration.get();
++        if old_duration == duration || (old_duration.is_nan() && duration.is_nan()) {
++            return;
++        }
++
++        self.duration.set(duration);
++        self.queue_media_element_task_to_fire_event(atom!("durationchange"));
++
++        // If the duration is changed such that the current playback position ends up being greater
++        // than the time of the end of the media resource, then the user agent must also seek to the
++        // time of the end of the media resource.
++        if self.current_playback_position.get() > duration {
++            self.seek(duration, /* approximate_for_speed */ false);
++        }
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-end-of-stream> step 3.2: notify the media element
++    /// that it now has all of the media data. The duration may have changed with the stream's end, and
++    /// an ended stream has enough data.
++    pub(crate) fn media_source_end_of_stream(&self, cx: &mut JSContext) {
++        if let Some(media_source) = self.media_source.get() {
++            self.media_source_duration_changed(media_source.backend().duration().unwrap_or(f64::NAN));
++        }
++        self.media_source_update_ready_state(cx);
++    }
++
++    /// <https://w3c.github.io/media-source/#dfn-end-of-stream> steps 4 and 5: the media data
++    /// processing steps for a network or a decode error (`endOfStream("network")`, `("decode")`, or a
++    /// failed append).
++    pub(crate) fn media_source_error(&self, cx: &mut JSContext, error: EosError) {
++        if self.ready_state.get() == ReadyState::HaveNothing {
++            // => "If the media data cannot be fetched at all, due to network errors, causing the
++            // user agent to give up trying to fetch the resource" (and the unsupported-format case:
++            // both end in the failure steps).
++            self.media_data_processing_failure_steps(cx);
++            return;
++        }
++
++        // => "If the connection is interrupted after some media data has been received" and "If the
++        // media data is corrupted".
++        let error = match error {
++            EosError::Network => MEDIA_ERR_NETWORK,
++            EosError::Decode => MEDIA_ERR_DECODE,
++        };
++        self.media_data_processing_fatal_steps(cx, error);
++    }
++}
 diff --git a/dom/mse/mediasource.rs b/dom/mse/mediasource.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/mediasource.rs
-@@ -0,0 +1,655 @@
+@@ -0,0 +1,659 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -2612,7 +2639,7 @@ new file mode 100644
 +use std::cell::{Cell, RefCell};
 +use std::ffi::CString;
 +use std::rc::Rc;
-+use std::sync::{Arc, Mutex, OnceLock, Weak};
++use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 +
 +use dom_struct::dom_struct;
 +use js::context::JSContext;
@@ -2750,7 +2777,11 @@ new file mode 100644
 +                let Some(handler) = slot.get().and_then(Weak::upgrade) else {
 +                    return;
 +                };
-+                handler.lock().unwrap().handle_event(cx, event);
++                // A panic in an earlier event must not make every later one panic the script thread.
++                handler
++                    .lock()
++                    .unwrap_or_else(PoisonError::into_inner)
++                    .handle_event(cx, event);
 +            }));
 +        })
 +        .map_err(|_| {
@@ -3278,7 +3309,7 @@ diff --git a/dom/mse/sourcebuffer.rs b/dom/mse/sourcebuffer.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/mse/sourcebuffer.rs
-@@ -0,0 +1,513 @@
+@@ -0,0 +1,527 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -3299,7 +3330,8 @@ new file mode 100644
 +use js::context::JSContext;
 +use script_bindings::reflector::reflect_dom_object;
 +use servo_media::player::mse::{
-+    AppendMode as BackendAppendMode, MediaSourceReadyState as BackendReadyState, SourceBufferId,
++    AppendMode as BackendAppendMode, MediaSourceReadyState as BackendReadyState, MseError,
++    SourceBufferId,
 +};
 +use stylo_atoms::Atom;
 +
@@ -3672,6 +3704,19 @@ new file mode 100644
 +            return Err(Error::InvalidState(Some(
 +                "The media element is in an error state".into(),
 +            )));
++        }
++
++        // A buffer bigger than everything the source buffer may ever hold is refused before it is
++        // copied (the quota check of prepare append, made on the length alone: the copy of a
++        // multi-gigabyte buffer is itself what a page could use to exhaust memory).
++        let length = match &data {
++            ArrayBufferViewOrArrayBuffer::ArrayBufferView(view) => view.len(),
++            ArrayBufferViewOrArrayBuffer::ArrayBuffer(buffer) => buffer.len(),
++        };
++        if length > media_source.backend().max_append_bytes() {
++            return Err(dom_error(MseError::QuotaExceeded(format!(
++                "an append of {length} bytes is bigger than the source buffer can ever hold"
++            ))));
 +        }
 +
 +        // Step 2. Add data to the end of the input buffer (a copy: the page may reuse its buffer).

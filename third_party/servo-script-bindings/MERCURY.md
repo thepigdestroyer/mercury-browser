@@ -46,7 +46,7 @@ or Servo gives capture its own preference.
 
 ### MED-1: Media Source Extensions (20 Nov 2026)
 
-6. **WebIDL for Media Source Extensions**, carried from servo/servo#47269 by decomoraes (MPL-2.0), behind
+6. **WebIDL for Media Source Extensions**, carried from servo/servo#47269 by decomoraes (MPL-2.0; that pull request was closed unmerged on 16 Aug 2026 after its author said it was written with an LLM, so Servo never reviewed it: the IDL was compared with the W3C WebIDL), behind
    `dom_media_source_enabled` (default off): new `webidls/MediaSource.webidl` (the constructor may throw: a
    backend that cannot play MSE refuses it), `webidls/SourceBuffer.webidl` (without `textTracks`: this Servo's
    `TextTrackList` is bound to a media element), `webidls/SourceBufferList.webidl`; `webidls/URL.webidl` gains
