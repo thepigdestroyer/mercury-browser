@@ -1,0 +1,13 @@
+{
+  "manifest_version": 2,
+  "name": "Firefox Add-on",
+  "version": "1.0.0pre1",
+  "description": "A Firefox manifest version 2 add-on used as a test fixture.",
+  "applications": { "gecko": { "id": "{daf44bf7-a45e-4450-979c-91cf07434c3d}", "strict_min_version": "109.0" } },
+  "browser_action": { "default_title": "Fox", "default_icon": { "16": "a.png", "32": "b.png" } },
+  "background": { "scripts": ["background.js"] },
+  "permissions": ["menus", "tabs", "<all_urls>", "webRequest", "webRequestBlocking"],
+  "optional_permissions": ["clipboardRead"],
+  "options_ui": { "page": "options.html", "open_in_tab": false },
+  "content_security_policy": "script-src 'self'; object-src 'self'"
+}

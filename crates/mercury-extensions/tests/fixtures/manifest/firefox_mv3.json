@@ -1,0 +1,21 @@
+{
+  "manifest_version": 3,
+  "name": "Firefox MV3",
+  "version": "2.0",
+  "browser_specific_settings": {
+    "gecko": {
+      "id": "mv3@example.org",
+      "strict_min_version": "128.0",
+      "strict_max_version": "159.*",
+      "update_url": "https://example.org/updates.json"
+    },
+    "gecko_android": {}
+  },
+  "action": { "default_title": "Fox 3" },
+  "background": { "scripts": ["event.js"], "persistent": false },
+  "permissions": ["storage", "webRequest", "webRequestBlocking", "contextMenus"],
+  "host_permissions": ["*://*.example.org/*"],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'sha256-AbCdEf123+/=' http://localhost:8000; object-src 'self'"
+  }
+}

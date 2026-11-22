@@ -1,0 +1,63 @@
+{
+  "manifest_version": 3,
+  "name": "__MSG_extName__",
+  "version": "1.2.3.4",
+  "version_name": "1.2.3 beta",
+  "description": "A Chrome manifest version 3 extension used as a test fixture.",
+  "default_locale": "en",
+  "minimum_chrome_version": "116",
+  "icons": { "16": "icons/16.png", "48": "/icons/48.png", "128": "./icons/128.png" },
+  "action": {
+    "default_title": "Do it",
+    "default_popup": "popup.html",
+    "default_icon": { "16": "icons/16.png", "32": "icons/32.png" }
+  },
+  "background": { "service_worker": "background.js", "type": "module" },
+  "content_scripts": [
+    {
+      "matches": ["https://*.example.com/*", "https://example.org/app/*"],
+      "exclude_matches": ["https://private.example.com/*"],
+      "js": ["content.js"],
+      "css": ["content.css"],
+      "run_at": "document_start",
+      "all_frames": true,
+      "world": "MAIN"
+    }
+  ],
+  "permissions": ["storage", "tabs", "activeTab", "scripting", "declarativeNetRequest", "madeUpPermission"],
+  "optional_permissions": ["bookmarks", "history"],
+  "host_permissions": ["https://api.example.com/*", "http://localhost:8080/*"],
+  "optional_host_permissions": ["https://*/*"],
+  "web_accessible_resources": [
+    {
+      "resources": ["images/*", "inject.js"],
+      "matches": ["https://*.example.com/*"],
+      "use_dynamic_url": true
+    },
+    { "resources": ["widget.html"], "extension_ids": ["jpignaibiiemhngfjkcpokkamffknabf"] }
+  ],
+  "content_security_policy": {
+    "extension_pages": "script-src 'self' 'wasm-unsafe-eval'; object-src 'self'",
+    "sandbox": "sandbox allow-scripts; script-src 'self' 'unsafe-eval'"
+  },
+  "declarative_net_request": {
+    "rule_resources": [
+      { "id": "ads", "enabled": true, "path": "rules/ads.json" },
+      { "id": "trackers", "enabled": false, "path": "rules/trackers.json" }
+    ]
+  },
+  "options_ui": { "page": "options.html", "open_in_tab": true },
+  "side_panel": { "default_path": "panel.html" },
+  "commands": {
+    "_execute_action": { "suggested_key": { "default": "Ctrl+Shift+Y", "mac": "Command+Shift+Y" } },
+    "toggle": { "suggested_key": { "default": "Alt+T" }, "description": "Toggle the thing", "global": false }
+  },
+  "externally_connectable": { "ids": ["*"], "matches": ["https://example.com/*"] },
+  "devtools_page": "devtools.html",
+  "chrome_url_overrides": { "newtab": "newtab.html" },
+  "storage": { "managed_schema": "schema.json" },
+  "omnibox": { "keyword": "go" },
+  "incognito": "spanning",
+  "update_url": "https://updates.example.com/crx",
+  "some_vendor_key": { "anything": [1, 2, 3] }
+}
