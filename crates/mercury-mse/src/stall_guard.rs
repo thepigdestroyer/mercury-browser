@@ -117,6 +117,15 @@ impl StallGuard {
         StallAction::None
     }
 
+    /// Milliseconds of the hysteresis still to wait at `now_ms` (0 when no transition was made yet or
+    /// the 250 ms have passed): how long the [`crate::stall_controller::StallController`] asks the element
+    /// to wait before it looks again.
+    pub fn hysteresis_left_ms(&self, now_ms: u64) -> u64 {
+        self.last_transition_ms.map_or(0, |last| {
+            HYSTERESIS_MS.saturating_sub(now_ms.saturating_sub(last))
+        })
+    }
+
     /// `true` while the pipeline is paused by the guard.
     pub fn is_stalled(&self) -> bool {
         self.stalled
