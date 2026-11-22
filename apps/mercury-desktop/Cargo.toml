@@ -41,6 +41,8 @@ mercury-pdfium = { path = "../../crates/mercury-pdfium" }
 # the proxy of this run, shared by Servo and the other HTTP clients (downloads, PDF re-fetch).
 mercury-proxy = { path = "../../crates/mercury-proxy" }
 # passwords-ui
+# hub-ring lane: the group swatches and tab shades of the ring's rows (`src/hub_ring.rs`).
+mercury-appearance = { path = "../../crates/mercury-appearance" }
 mercury-password-manager = { path = "../../crates/mercury-password-manager" }
 mercury-passwords = { path = "../../crates/mercury-passwords" }
 mercury-settings = { path = "../../crates/mercury-settings" }

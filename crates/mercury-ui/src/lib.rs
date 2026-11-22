@@ -17,6 +17,9 @@ pub mod corner_dial;
 // group-dock
 pub mod group_dock;
 
+// hub-ring
+pub mod hub_ring;
+
 // theme-plumbing
 mod theme;
 pub use theme::{Look, apply_look};

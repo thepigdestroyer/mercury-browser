@@ -35,6 +35,9 @@ mod find;
 mod geolocation;
 mod history_ui;
 mod ime; // txt-1: the IME composition state machine
+// hub-ring: installed by layout-switch (brief D7)
+#[allow(dead_code)]
+mod hub_ring;
 mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
