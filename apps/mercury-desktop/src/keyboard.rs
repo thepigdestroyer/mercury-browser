@@ -22,6 +22,7 @@ pub(crate) fn connect_native_keyboard_input(
     window: &MainWindow,
     controller: Rc<RefCell<BrowserController>>,
     web_view_focused: Rc<Cell<bool>>,
+    _settings: &Rc<crate::settings::SettingsHandle>, // input-hooks
 ) {
     let weak_window = window.as_weak();
     let mut modifiers = ModifiersState::empty();

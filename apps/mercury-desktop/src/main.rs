@@ -34,8 +34,11 @@ mod filter_lists; // blocklists
 mod find;
 mod geolocation;
 mod history_ui;
+mod ctrl_tab; // input-hooks
+mod focus_regions; // input-hooks
 mod ime; // txt-1: the IME composition state machine
 mod import_ui; // import-ui lane
+mod input_hooks; // input-hooks
 mod keyboard;
 mod keyutils;
 #[cfg(target_os = "macos")]
@@ -46,6 +49,7 @@ mod macos_terminate;
 mod macos_text_input; // txt-1: replacement ranges, emoji and dictation through winit's view
 #[cfg(target_os = "macos")]
 mod media_buffers;
+mod option_hook; // input-hooks
 mod option_keys; // key-switcher
 mod secure_input; // txt-1: no input method and secure event input in password fields
 // media-capture
@@ -275,6 +279,7 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
         &window,
         Rc::clone(&controller),
         Rc::clone(&web_view_focused),
+        &settings, // input-hooks
     );
     #[cfg(feature = "diagnostics")]
     if options.import_from.is_some() {
