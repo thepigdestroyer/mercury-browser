@@ -134,6 +134,7 @@ export struct OrbitSun {
     radius: length,             // 92
     title: string,              // the profile name
     subtitle: string,           // "Window 1 · 40 tabs"
+    accessible-label: string,   // "Personal, window 1, 40 tabs" (no middle dot)
     opacity: float,
 }
 
@@ -164,6 +165,7 @@ export struct OrbitPopover {
     x: length,                  // top-left
     y: length,
     name: string,
+    placeholder: string,        // "Untitled group" while the field is empty
     colours: [color],
     colour-names: [string],
     selected: int,

@@ -31,6 +31,7 @@ pub mod data;
 pub mod drag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fixtures;
+pub mod keys;
 pub mod layout;
 pub mod machine;
 pub mod search;
