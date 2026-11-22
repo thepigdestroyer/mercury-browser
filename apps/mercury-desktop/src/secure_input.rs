@@ -68,6 +68,7 @@ impl Policy {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn secure_input_held(&self) -> bool {
         self.secure_input_held
     }
