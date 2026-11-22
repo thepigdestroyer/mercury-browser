@@ -26,7 +26,11 @@
 set -eu
 
 # ---- the pins --------------------------------------------------------------------------------
-# web-platform-tests master on 2026-11-22 (commit date 2026-11-22T00:22:35Z).
+# web-platform-tests master on 2026-11-22 (commit date 2026-11-22T00:22:35Z). WPT is pinned by git
+# commit id, not by a SHA-256 of an archive: git verifies every object it fetches against the commit
+# id (SHA-1 with collision detection), which pins the whole tree; a hash of GitHub's generated
+# tarball would pin the archiver's output, which GitHub does not promise to keep byte-for-byte. The
+# three player builds are single files, so those are pinned by SHA-256 below.
 WPT_URL="https://github.com/web-platform-tests/wpt"
 WPT_COMMIT="42e27408034f57afe4c726476d1a0bd96b873129"
 WPT_DIRS="media-source resources common interfaces"

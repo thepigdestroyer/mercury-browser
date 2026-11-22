@@ -5,8 +5,8 @@
 # 1.20 from Ubuntu 22.04, the oldest the code must compile against: the `v1_18` features only) and
 # Apple Silicon (the bundled GStreamer; the real VideoToolbox and the AV1 routes). MED-1b brief, D9.
 #
-# A separate file so that no lane's edit of ci.yml conflicts with it. It runs on `master`, `mercury`,
-# pull requests and by hand, never on a lane branch (owner rule of 22 Nov 2026: lanes trigger no CI;
+# A separate file so that no lane's edit of ci.yml conflicts with it. It runs on `master`, `mercury`
+# and by hand, never on a lane branch and never on a pull request from one (owner rule of 22 Nov 2026: lanes trigger no CI;
 # the train integrator runs it once at the merge), and only builds and tests the MSE crates (no
 # Servo, a few minutes each). When the MSE work has merged, the two jobs belong in ci.yml and this
 # file goes.
@@ -20,7 +20,6 @@ on:
     branches:
       - master
       - mercury
-  pull_request:
   workflow_dispatch:
 
 permissions:

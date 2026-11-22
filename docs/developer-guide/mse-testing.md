@@ -18,7 +18,7 @@ What is here:
 | The runner | `mse-run` (`crates/mercury-devtools`) | One browser process per test, a watchdog, a journal, a report. |
 | The server routes | `serve-tests` (`crates/mercury-devtools/src/serve/`) | `/wpt/`, `/mse-players/`, `/mse-dash/`, `/mse-hls/`, `POST /__report`. |
 | The wrapper | `scripts/dev/mse-window-run.sh` | One command. |
-| The fetch script | `scripts/dev/fetch-mse-tools.sh` | WPT, dash.js, Shaka Player and hls.js, pinned and checked by SHA-256. |
+| The fetch script | `scripts/dev/fetch-mse-tools.sh` | WPT (pinned by git commit id: git verifies every object it fetches against it, which pins the whole tree; a hash of a generated tarball would pin the archiver, not the tree), dash.js, Shaka Player and hls.js (single files, checked by SHA-256). |
 
 ## Run it
 
@@ -115,4 +115,4 @@ These need a person with the browser and no tools. Start it with `MERCURY_DEV_MS
 
 ## Continuous integration
 
-`.github/workflows/mse.yml` builds and tests `mercury-mse`, `mercury-mse-testkit` and `mercury-mse-gst` on Ubuntu 22.04 (GStreamer 1.20, the `v1_18` features only) and on Apple Silicon (the bundled GStreamer, VideoToolbox), on pushes to `mercury` and `master`, on pull requests and by hand (never on a lane branch: the train integrator runs it once at the merge). The `#[ignore]` VideoToolbox and AV1 route tests run there as a **record-only** step: they print what the hardware answers and never fail the run.
+`.github/workflows/mse.yml` builds and tests `mercury-mse`, `mercury-mse-testkit` and `mercury-mse-gst` on Ubuntu 22.04 (GStreamer 1.20, the `v1_18` features only) and on Apple Silicon (the bundled GStreamer, VideoToolbox), on pushes to `mercury` and `master` and by hand (never on a lane branch or a pull request from one: the train integrator runs it once at the merge). The `#[ignore]` VideoToolbox and AV1 route tests run there as a **record-only** step: they print what the hardware answers and never fail the run.
