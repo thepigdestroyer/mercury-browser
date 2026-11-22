@@ -492,4 +492,144 @@ mod parse_errors {
         let w = feed_stream(&load("vp9-low").unwrap(), &ChunkPlan::Whole).unwrap();
         assert!(init_of(&w.events)[0].pssh.is_empty());
     }
+
+    // ---- D16 for WebM: ContentEncodings (review finding 3 of lane med-1b round 2) ----
+
+    /// A `ContentEncodings` element with one `ContentEncoding` of the given children.
+    fn content_encodings(encoding: &[u8]) -> Vec<u8> {
+        elem(0x6D80, &elem(0x6240, encoding))
+    }
+
+    /// `ContentEncryption` (AES, a key id): what an EME-protected VP9 or Opus stream carries.
+    fn encrypted_encoding() -> Vec<u8> {
+        content_encodings(&cat(&[
+            &uint_elem(0x5031, 0),
+            &uint_elem(0x5032, 1),
+            &uint_elem(0x5033, 1),
+            &elem(
+                0x5035,
+                &cat(&[&uint_elem(0x47E1, 5), &elem(0x47E2, &[0xAB; 16])]),
+            ),
+        ]))
+    }
+
+    /// `ContentCompression` with the header-stripping algorithm (3).
+    fn header_stripped_encoding() -> Vec<u8> {
+        content_encodings(&cat(&[
+            &uint_elem(0x5031, 0),
+            &uint_elem(0x5032, 1),
+            &uint_elem(0x5033, 0),
+            &elem(
+                0x5034,
+                &cat(&[&uint_elem(0x4254, 3), &elem(0x4255, &[0x00, 0x00, 0x01])]),
+            ),
+        ]))
+    }
+
+    /// A `ContentEncoding` of a type no registry names, with a child element nobody defined.
+    fn unknown_encoding() -> Vec<u8> {
+        content_encodings(&cat(&[
+            &uint_elem(0x5031, 0),
+            &uint_elem(0x5032, 1),
+            &uint_elem(0x5033, 9),
+            &elem(0x5099, &[1, 2, 3]),
+        ]))
+    }
+
+    fn webm_track_with(kind: u64, codec: &str, extra: &[u8]) -> Vec<u8> {
+        let media = if kind == 1 {
+            elem(0xE0, &cat(&[&uint_elem(0xB0, 320), &uint_elem(0xBA, 180)]))
+        } else if kind == 2 {
+            elem(
+                0xE1,
+                &cat(&[&float_elem(0xB5, 48_000.0), &uint_elem(0x9F, 2)]),
+            )
+        } else {
+            Vec::new()
+        };
+        let private = if codec == "A_OPUS" {
+            elem(0x63A2, &opus_head(2))
+        } else {
+            Vec::new()
+        };
+        elem(
+            TRACK_ENTRY,
+            &cat(&[
+                &uint_elem(0xD7, kind),
+                &uint_elem(0x83, kind),
+                &elem(0x86, codec.as_bytes()),
+                &private,
+                &media,
+                extra,
+            ]),
+        )
+    }
+
+    fn webm_refusal(entries: &[Vec<u8>]) -> String {
+        match error_of(same_under_all_plans(
+            Container::WebM,
+            &[&webm_init(entries)],
+        )) {
+            ParseError::Unsupported(m) => m,
+            other => panic!("expected Unsupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn d16_a_webm_track_with_content_encryption_is_unsupported_and_says_protected() {
+        for (kind, codec) in [(1, "V_VP9"), (1, "V_VP8"), (2, "A_OPUS")] {
+            let m = webm_refusal(&[webm_track_with(kind, codec, &encrypted_encoding())]);
+            assert!(m.contains("protected") && m.contains("D16"), "{codec}: {m}");
+        }
+        // Next to a clear track of the other kind it is still refused (the error is not per track).
+        let m = webm_refusal(&[
+            webm_track_with(1, "V_VP9", &[]),
+            webm_track_with(2, "A_OPUS", &encrypted_encoding()),
+        ]);
+        assert!(m.contains("protected"), "{m}");
+    }
+
+    #[test]
+    fn d16_a_webm_track_with_header_stripping_is_unsupported_and_names_the_reason() {
+        let m = webm_refusal(&[webm_track_with(1, "V_VP9", &header_stripped_encoding())]);
+        assert!(m.contains("ContentEncodings") && m.contains("D16"), "{m}");
+        // Stripped headers are not protection: the message does not claim it.
+        assert!(!m.contains("protected"), "{m}");
+    }
+
+    #[test]
+    fn d16_a_webm_track_with_an_unknown_content_encoding_is_unsupported() {
+        for entry in [
+            webm_track_with(1, "V_VP9", &unknown_encoding()),
+            // An empty ContentEncodings element is not a clear track either.
+            webm_track_with(1, "V_VP9", &elem(0x6D80, &[])),
+        ] {
+            let m = webm_refusal(&[entry]);
+            assert!(m.contains("ContentEncodings") && m.contains("D16"), "{m}");
+        }
+    }
+
+    #[test]
+    fn d16_a_clear_webm_track_and_an_ignored_track_with_encodings_parse() {
+        // No ContentEncodings: parses, as before.
+        let events = same_under_all_plans(
+            Container::WebM,
+            &[&webm_init(&[
+                webm_track_with(1, "V_VP9", &[]),
+                webm_track_with(2, "A_OPUS", &[]),
+            ])],
+        )
+        .expect("a clear WebM initialization segment");
+        assert_eq!(init_of(&events)[0].tracks.len(), 2);
+        // A subtitle track (type 17) is not played, so its encodings are not a reason to refuse.
+        let events = same_under_all_plans(
+            Container::WebM,
+            &[&webm_init(&[
+                webm_track_with(1, "V_VP9", &[]),
+                webm_track_with(17, "S_TEXT/UTF8", &encrypted_encoding()),
+            ])],
+        )
+        .expect("an encrypted subtitle track is ignored with the track");
+        assert_eq!(init_of(&events)[0].tracks.len(), 1);
+    }
 }

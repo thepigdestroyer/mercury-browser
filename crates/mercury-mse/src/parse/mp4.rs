@@ -56,9 +56,12 @@ use super::config::{
 };
 use super::{
     ByteQueue, FEED_SLICE, MAX_BOX_BYTES, MAX_CODEC_CONFIG_BYTES, MAX_PSSH_BYTES,
-    MAX_RETAINED_BYTES, MAX_SAMPLES_PER_FRAGMENT, Output, PResult, frame_data, malformed,
-    ticks_to_ns, unsupported,
+    MAX_RETAINED_BYTES, MAX_SAMPLES_PER_FRAGMENT, Output, PResult, check_audio_numbers, frame_data,
+    malformed, ticks_to_ns, unsupported,
 };
+
+/// Size, type, version and flags, and the 16-byte system ID of a `pssh` box.
+const PSSH_HEAD_BYTES: usize = 8 + 4 + 16;
 
 /// `Sample::track` of a sample whose track the initialization segment does not list (it is dropped).
 const NO_TRACK: usize = usize::MAX;
@@ -487,6 +490,7 @@ fn parse_moov(payload: &[u8]) -> PResult<Moov> {
     let mut trexes: Vec<(u32, Trex)> = Vec::new();
     let mut pssh = Vec::new();
     let mut pssh_bytes = 0usize;
+    let mut pssh_dropped_head: Option<Vec<u8>> = None;
     let mut saw_trak = false;
     let mut saw_mvex = false;
     for b in boxes(payload) {
@@ -541,10 +545,20 @@ fn parse_moov(payload: &[u8]) -> PResult<Moov> {
                 pssh_bytes = pssh_bytes.saturating_add(b.whole.len());
                 if pssh_bytes <= MAX_PSSH_BYTES {
                     pssh.push(b.whole.to_vec());
+                } else if pssh_dropped_head.is_none() {
+                    pssh_dropped_head =
+                        Some(b.whole[..b.whole.len().min(PSSH_HEAD_BYTES)].to_vec());
                 }
             }
             _ => {}
         }
+    }
+    // `InitInfo::protected` is "the segment has `pssh` boxes", read from this list. When every box was
+    // over the cap nothing was kept, so the list would say "none" for a stream that announced protection:
+    // keep the first dropped box's header (size, type, version, flags, system ID: enough to name the DRM
+    // system, and cut short on purpose) as the record that one was there.
+    if pssh.is_empty() {
+        pssh.extend(pssh_dropped_head);
     }
     if !saw_trak {
         return Err(malformed("a moov box without a trak"));
@@ -925,6 +939,11 @@ fn parse_entry(kind: TrackKind, entry: &BoxRef<'_>) -> PResult<Entry> {
             )));
         }
     };
+    // Whichever box the numbers came from (the entry's own fields, the codec record), they end up in
+    // caps: one check covers them all.
+    if kind == TrackKind::Audio {
+        check_audio_numbers(sample_rate, channels)?;
+    }
     Ok(Entry {
         codec,
         codec_string,

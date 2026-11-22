@@ -9,7 +9,7 @@
 //! The string rules start from the spike's `mse-segments` `mp4_init.rs` (Mercury's own).
 
 use super::bmff::Reader;
-use super::{PResult, malformed};
+use super::{PResult, check_audio_numbers, malformed};
 
 /// `avc1.PPCCLL` from the first four bytes of an `avcC` record (profile, constraint flags, level, as
 /// upper-case hex); `entry` is the sample entry type (`avc1` or `avc3`).
@@ -192,6 +192,11 @@ pub(crate) fn parse_asc(asc: &[u8]) -> PResult<AudioSpecificConfig> {
             channels = 2;
         }
     }
+    // An explicit 24-bit rate can be anything; 0 names no rate at all.
+    if sample_rate == 0 {
+        return Err(malformed("an AudioSpecificConfig with a sample rate of 0"));
+    }
+    check_audio_numbers(sample_rate, channels)?;
     Ok(AudioSpecificConfig {
         object_type,
         sample_rate,
@@ -233,10 +238,12 @@ pub(crate) fn parse_opus_head(head: &[u8]) -> PResult<OpusHead> {
     if family != 0 && head.len() < 21 + usize::from(channels) {
         return Err(malformed("an Opus channel mapping table that is cut short"));
     }
+    let input_rate = u32::from_le_bytes([head[12], head[13], head[14], head[15]]);
+    check_audio_numbers(input_rate, u32::from(channels))?;
     Ok(OpusHead {
         channels,
         pre_skip: u16::from_le_bytes([head[10], head[11]]),
-        input_rate: u32::from_le_bytes([head[12], head[13], head[14], head[15]]),
+        input_rate,
     })
 }
 
@@ -457,6 +464,7 @@ pub(crate) fn parse_flac_blocks(blocks: &[u8]) -> PResult<FlacInfo> {
             if sample_rate == 0 {
                 return Err(bad("has a sample rate of 0"));
             }
+            check_audio_numbers(sample_rate, channels)?;
             info = Some(FlacInfo {
                 sample_rate,
                 channels,
@@ -525,6 +533,7 @@ pub(crate) fn parse_vorbis_codec_private(p: &[u8]) -> PResult<VorbisInfo> {
     if channels == 0 || sample_rate == 0 {
         return Err(bad("has no channels or a sample rate of 0"));
     }
+    check_audio_numbers(sample_rate, channels)?;
     Ok(VorbisInfo {
         sample_rate,
         channels,

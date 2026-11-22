@@ -18,6 +18,9 @@ use mercury_mse::api::{
 };
 use mercury_mse_testkit::{load, with_cenc_protection, with_pssh};
 
+mod parse_support;
+use parse_support::{TRACK_ENTRY, cat, elem, uint_elem, webm_init};
+
 const WIDEVINE: [u8; 16] = [
     0xED, 0xEF, 0x8B, 0xA9, 0x79, 0xD6, 0x4A, 0xCE, 0xA3, 0xC8, 0x27, 0xDC, 0xD5, 0x1D, 0x21, 0xED,
 ];
@@ -135,6 +138,113 @@ fn a_protected_track_fails_the_append_with_unsupported() {
                 "{name}"
             );
         }
+    }
+}
+
+// ---- pssh over the cap (review finding 13 of lane med-1b round 2) ----
+
+#[test]
+fn a_pssh_set_over_the_cap_still_marks_the_segment_protected() {
+    use mercury_mse::parse::MAX_PSSH_BYTES;
+    use parse_support::{TrackSpec, bx, ftyp, moov_of, payload};
+    let mime = r#"video/mp4; codecs="avc1.42C01E""#;
+    let build =
+        |boxes: &[Vec<u8>]| cat(&[&ftyp(), &moov_of(&[TrackSpec::video(1, 1000)], &[], boxes)]);
+    // One box that alone is over the cap: none of it is kept, yet the stream announces protection.
+    let huge = bx("pssh", &payload(7, MAX_PSSH_BYTES + 1000));
+    let events = append_init(mime, build(&[huge]));
+    assert_eq!(error_of(&events), None, "a clear stream with pssh plays");
+    assert!(
+        init_of(&events).expect("an init segment").protected,
+        "an oversize pssh is still a pssh"
+    );
+    // Three boxes of which only the first fits under the cap: protected too.
+    let boxes: Vec<Vec<u8>> = (0..3)
+        .map(|i| bx("pssh", &payload(i, MAX_PSSH_BYTES / 2 + 1)))
+        .collect();
+    let events = append_init(mime, build(&boxes));
+    assert!(init_of(&events).expect("an init segment").protected);
+    // And with no pssh at all it is not.
+    let events = append_init(mime, build(&[]));
+    assert!(!init_of(&events).expect("an init segment").protected);
+}
+
+// ---- WebM: ContentEncodings (review finding 3 of lane med-1b round 2) ----
+//
+// A WebM track is protected, or has its headers stripped, through `ContentEncodings` (0x6D80) in its
+// `TrackEntry`. No decryptor exists before MED-5 and no frame is rebuilt from stripped headers, so the
+// append fails at the initialization segment with `Unsupported`, as for an fMP4 `encv`/`enca` track.
+
+const VP9_MIME: &str = r#"video/webm; codecs="vp9""#;
+
+fn vp9_entry_with(extra: &[u8]) -> Vec<u8> {
+    elem(
+        TRACK_ENTRY,
+        &cat(&[
+            &uint_elem(0xD7, 1),
+            &uint_elem(0x83, 1),
+            &elem(0x86, b"V_VP9"),
+            &elem(0xE0, &cat(&[&uint_elem(0xB0, 320), &uint_elem(0xBA, 180)])),
+            extra,
+        ]),
+    )
+}
+
+fn content_encoding(children: &[u8]) -> Vec<u8> {
+    elem(0x6D80, &elem(0x6240, children))
+}
+
+fn webm_encryption() -> Vec<u8> {
+    content_encoding(&cat(&[
+        &uint_elem(0x5031, 0),
+        &uint_elem(0x5032, 1),
+        &uint_elem(0x5033, 1),
+        &elem(0x5035, &uint_elem(0x47E1, 5)),
+    ]))
+}
+
+fn webm_header_stripping() -> Vec<u8> {
+    content_encoding(&cat(&[
+        &uint_elem(0x5031, 0),
+        &uint_elem(0x5032, 1),
+        &uint_elem(0x5033, 0),
+        &elem(0x5034, &uint_elem(0x4254, 3)),
+    ]))
+}
+
+fn webm_unknown_encoding() -> Vec<u8> {
+    content_encoding(&cat(&[&uint_elem(0x5033, 9), &elem(0x5099, &[1])]))
+}
+
+#[test]
+fn a_clear_webm_track_is_not_protected() {
+    let events = append_init(VP9_MIME, webm_init(&[vp9_entry_with(&[])]));
+    assert_eq!(error_of(&events), None, "{events:?}");
+    let init = init_of(&events).expect("an initialization segment");
+    assert!(!init.protected);
+    assert_eq!(init.tracks.len(), 1);
+}
+
+#[test]
+fn a_webm_track_with_content_encodings_fails_the_append_with_unsupported() {
+    for (what, extra) in [
+        ("ContentEncryption", webm_encryption()),
+        (
+            "ContentCompression (header stripping)",
+            webm_header_stripping(),
+        ),
+        ("an unknown encoding", webm_unknown_encoding()),
+    ] {
+        let events = append_init(VP9_MIME, webm_init(&[vp9_entry_with(&extra)]));
+        assert_eq!(
+            error_of(&events),
+            Some(AppendErrorKind::Unsupported),
+            "{what}: {events:?}"
+        );
+        assert!(
+            init_of(&events).is_none(),
+            "{what}: no init segment is reported"
+        );
     }
 }
 

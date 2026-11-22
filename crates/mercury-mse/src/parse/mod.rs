@@ -69,8 +69,36 @@ pub const MAX_CODEC_CONFIG_BYTES: usize = 64 * 1024;
 
 /// The most bytes of `pssh` boxes copied out of one initialization segment (they are only kept for
 /// EME, which does not exist yet; a real `moov` carries a few hundred bytes of them). The boxes past
-/// the cap are dropped, not an error: the stream plays without them.
+/// the cap are dropped, not an error: the stream plays without them. If no box fits (the first is over
+/// the cap), the 28-byte head of the first one stands in for the set so that the segment still reads as
+/// carrying `pssh` boxes (`InitInfo::protected`).
 pub const MAX_PSSH_BYTES: usize = 1024 * 1024;
+
+/// The highest sample rate an audio track may declare (Hz). The rate and the channel count of a stream
+/// reach the decoder's caps as numbers, so a value outside what any audio device or codec uses is
+/// refused at the initialization segment with `Unsupported` instead of failing negotiation later in the
+/// pipeline. 768 kHz is four times the highest rate of the supported codecs (192 kHz).
+pub const MAX_AUDIO_SAMPLE_RATE: u32 = 768_000;
+
+/// The most channels an audio track may declare (7.1). See [`MAX_AUDIO_SAMPLE_RATE`].
+pub const MAX_AUDIO_CHANNELS: u32 = 8;
+
+/// Refuses a sample rate or channel count of an audio track that is above [`MAX_AUDIO_SAMPLE_RATE`] or
+/// [`MAX_AUDIO_CHANNELS`] (`Unsupported`: the stream is well formed, Mercury does not play it). 0 means
+/// "not stated" here and passes; the callers that cannot do without a value refuse 0 themselves.
+pub(crate) fn check_audio_numbers(sample_rate: u32, channels: u32) -> PResult<()> {
+    if sample_rate > MAX_AUDIO_SAMPLE_RATE {
+        return Err(unsupported(format!(
+            "an audio sample rate of {sample_rate} Hz (the most supported is {MAX_AUDIO_SAMPLE_RATE})"
+        )));
+    }
+    if channels > MAX_AUDIO_CHANNELS {
+        return Err(unsupported(format!(
+            "an audio track of {channels} channels (the most supported is {MAX_AUDIO_CHANNELS})"
+        )));
+    }
+    Ok(())
+}
 
 pub(crate) type PResult<T> = Result<T, ParseError>;
 

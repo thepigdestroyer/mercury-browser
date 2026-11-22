@@ -28,8 +28,11 @@
 //!   track number the initialization segment does not list at all is `Malformed`, and a block with no data
 //!   is dropped. VP8, VP9, AV1, Opus, Vorbis (`A_VORBIS`), FLAC (`A_FLAC`), AC-3 (`A_AC3`) and E-AC-3
 //!   (`A_EAC3`) are fed; any other codec is `Unsupported`, HEVC (`V_MPEGH/ISO/HEVC`, a Matroska codec
-//!   that WebM does not have) with a note. Lacing is `Unsupported`. `ContentEncodings` (protection) are
-//!   not looked at. A VP9 track gets the short codec string `vp9` unless its `CodecPrivate` lists profile,
+//!   that WebM does not have) with a note. Lacing is `Unsupported`. A track of an audio or video kind
+//!   with any `ContentEncodings` (0x6D80: encryption, or compression such as header stripping) is
+//!   `Unsupported` (decision D16: no decryptor exists and no frame is rebuilt); the message starts "a
+//!   protected WebM track" when a `ContentEncryption` (0x5035, or an encoding of type 1) is present, which
+//!   is how the caller tells protection from the other encodings. A VP9 track gets the short codec string `vp9` unless its `CodecPrivate` lists profile,
 //!   level and bit depth (libvpx's muxer writes none).
 
 use std::sync::Arc;
@@ -45,15 +48,17 @@ use super::config::{
 };
 use super::ebml::{
     BlockHeader, ID_AUDIO, ID_BLOCK, ID_BLOCK_DURATION, ID_BLOCK_GROUP, ID_CHANNELS, ID_CLUSTER,
-    ID_CODEC_ID, ID_CODEC_PRIVATE, ID_DEFAULT_DURATION, ID_DOC_TYPE, ID_DURATION, ID_EBML,
-    ID_FLAG_DEFAULT, ID_FLAG_ENABLED, ID_INFO, ID_LANGUAGE, ID_PIXEL_HEIGHT, ID_PIXEL_WIDTH,
-    ID_REFERENCE_BLOCK, ID_SAMPLING_FREQUENCY, ID_SEGMENT, ID_SIMPLE_BLOCK, ID_TIMECODE,
-    ID_TIMECODE_SCALE, ID_TRACK_ENTRY, ID_TRACK_NUMBER, ID_TRACK_TYPE, ID_TRACKS, ID_VIDEO,
-    elements, is_level1, parse_block_header, peek_header, read_float, read_string, read_uint,
+    ID_CODEC_ID, ID_CODEC_PRIVATE, ID_CONTENT_ENCODING, ID_CONTENT_ENCODING_TYPE,
+    ID_CONTENT_ENCODINGS, ID_CONTENT_ENCRYPTION, ID_DEFAULT_DURATION, ID_DOC_TYPE, ID_DURATION,
+    ID_EBML, ID_FLAG_DEFAULT, ID_FLAG_ENABLED, ID_INFO, ID_LANGUAGE, ID_PIXEL_HEIGHT,
+    ID_PIXEL_WIDTH, ID_REFERENCE_BLOCK, ID_SAMPLING_FREQUENCY, ID_SEGMENT, ID_SIMPLE_BLOCK,
+    ID_TIMECODE, ID_TIMECODE_SCALE, ID_TRACK_ENTRY, ID_TRACK_NUMBER, ID_TRACK_TYPE, ID_TRACKS,
+    ID_VIDEO, elements, is_level1, parse_block_header, peek_header, read_float, read_string,
+    read_uint,
 };
 use super::{
     ByteQueue, FEED_SLICE, MAX_BOX_BYTES, MAX_CODEC_CONFIG_BYTES, MAX_RETAINED_BYTES, Output,
-    PResult, malformed, unsupported,
+    PResult, check_audio_numbers, malformed, unsupported,
 };
 
 const EBML_MAGIC: [u8; 4] = [0x1a, 0x45, 0xdf, 0xa3];
@@ -110,6 +115,41 @@ struct RawTrack {
     channels: Option<u64>,
     language: String,
     default: bool,
+    /// What the `ContentEncodings` of the entry say, if it has any.
+    encodings: Option<ContentEncodings>,
+}
+
+/// A track's `ContentEncodings`: the frames are not stored as the codec wrote them.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ContentEncodings {
+    /// A `ContentEncryption` (or an encoding of type 1, encryption) is among them.
+    Encrypted,
+    /// Compression (header stripping, zlib...) or an encoding nobody here knows.
+    Other,
+}
+
+/// Reads a `ContentEncodings` element. Any content at all makes the track unplayable by Mercury; what
+/// is recorded is whether protection is involved, for the message.
+fn parse_content_encodings(payload: &[u8]) -> PResult<ContentEncodings> {
+    let mut found = ContentEncodings::Other;
+    for encoding in elements(payload) {
+        let encoding = encoding?;
+        if encoding.id != ID_CONTENT_ENCODING {
+            continue;
+        }
+        for field in elements(encoding.payload) {
+            let field = field?;
+            let encrypted = match field.id {
+                ID_CONTENT_ENCRYPTION => true,
+                ID_CONTENT_ENCODING_TYPE => read_uint(field.payload)? == 1,
+                _ => false,
+            };
+            if encrypted {
+                found = ContentEncodings::Encrypted;
+            }
+        }
+    }
+    Ok(found)
 }
 
 #[derive(Debug)]
@@ -764,6 +804,13 @@ fn parse_track_entry(payload: &[u8]) -> PResult<RawTrack> {
             ID_DEFAULT_DURATION => t.default_duration = Some(read_uint(e.payload)?),
             ID_FLAG_DEFAULT => t.default = read_uint(e.payload)? != 0,
             ID_FLAG_ENABLED => enabled = read_uint(e.payload)? != 0,
+            ID_CONTENT_ENCODINGS => {
+                let found = parse_content_encodings(e.payload)?;
+                // Protection wins over anything another ContentEncodings element says.
+                if t.encodings != Some(ContentEncodings::Encrypted) {
+                    t.encodings = Some(found);
+                }
+            }
             ID_LANGUAGE => {
                 let l = read_string(e.payload);
                 t.language = if l == "und" { String::new() } else { l };
@@ -809,6 +856,21 @@ fn build_track(raw: &RawTrack, scale: u64) -> PResult<(TrackConfig, Option<Ns>)>
     } else {
         TrackKind::Audio
     };
+    // Decision D16: no decryptor exists before MED-5, and no frame is rebuilt from stripped headers, so
+    // a track with content encodings fails here instead of feeding ciphertext to a decoder.
+    match raw.encodings {
+        Some(ContentEncodings::Encrypted) => {
+            return Err(unsupported(
+                "a protected WebM track (ContentEncryption in ContentEncodings): decryption is not available (decision D16)",
+            ));
+        }
+        Some(ContentEncodings::Other) => {
+            return Err(unsupported(
+                "a WebM track with ContentEncodings: header stripping and other content encodings are not supported (decision D16)",
+            ));
+        }
+        None => {}
+    }
     let track_id = u32::try_from(raw.number)
         .map_err(|_| malformed("a track number that does not fit in 32 bits"))?;
     let mut width = raw.width;
@@ -940,6 +1002,9 @@ fn build_track(raw: &RawTrack, scale: u64) -> PResult<(TrackConfig, Option<Ns>)>
     }
     if kind == TrackKind::Audio && channels == 0 {
         return Err(malformed("an audio track with no channels"));
+    }
+    if kind == TrackKind::Audio {
+        check_audio_numbers(sample_rate, channels)?;
     }
     if kind != TrackKind::Video {
         width = 0;
