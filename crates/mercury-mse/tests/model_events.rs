@@ -140,7 +140,7 @@ fn d9_eviction_sends_buffered_changed_before_the_append_done() {
     let s = load("h264-low");
     let long = tile(&s, 5).unwrap();
     let limits = Limits {
-        video_bytes: 100_000,
+        video_bytes: 200_000,
         ..Limits::default()
     };
     let rig = Rig::with_limits(limits);

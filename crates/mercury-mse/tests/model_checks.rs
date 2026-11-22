@@ -52,8 +52,8 @@ fn add_source_buffer_checks_in_the_specs_order() {
     let id = rig.add("video/mp4; codecs=\"avc1.42C00C\"");
     assert_eq!(rig.backend.source_buffer_count(), 1);
     assert_eq!(id, 0);
-    // The sixteenth buffer is the last.
-    for _ in 1..16 {
+    // The fourth buffer is the last (decision D17: real players use two; 16 allowed 2.6 GiB).
+    for _ in 1..4 {
         rig.add("audio/mp4; codecs=\"mp4a.40.2\"");
     }
     assert!(matches!(

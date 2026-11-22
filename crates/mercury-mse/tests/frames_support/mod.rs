@@ -14,6 +14,9 @@ use mercury_mse::{
     TimeRange, TrackConfig, TrackKind,
 };
 
+/// What every stored frame counts beyond its bytes (the quota's per-frame overhead).
+pub const OV: usize = mercury_mse::FRAME_OVERHEAD_BYTES;
+
 pub const MS: Ns = 1_000_000;
 pub const SEC: Ns = 1_000_000_000;
 

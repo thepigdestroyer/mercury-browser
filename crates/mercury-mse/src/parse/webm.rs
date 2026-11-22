@@ -48,8 +48,8 @@ use super::ebml::{
     elements, is_level1, parse_block_header, peek_header, read_float, read_string, read_uint,
 };
 use super::{
-    ByteQueue, FEED_SLICE, MAX_BOX_BYTES, MAX_RETAINED_BYTES, Output, PResult, malformed,
-    unsupported,
+    ByteQueue, FEED_SLICE, MAX_BOX_BYTES, MAX_CODEC_CONFIG_BYTES, MAX_RETAINED_BYTES, Output,
+    PResult, malformed, unsupported,
 };
 
 const EBML_MAGIC: [u8; 4] = [0x1a, 0x45, 0xdf, 0xa3];
@@ -748,7 +748,15 @@ fn parse_track_entry(payload: &[u8]) -> PResult<RawTrack> {
             ID_TRACK_NUMBER => t.number = read_uint(e.payload)?,
             ID_TRACK_TYPE => t.kind = read_uint(e.payload)?,
             ID_CODEC_ID => t.codec_id = read_string(e.payload),
-            ID_CODEC_PRIVATE => t.codec_private = e.payload.to_vec(),
+            ID_CODEC_PRIVATE => {
+                if e.payload.len() > MAX_CODEC_CONFIG_BYTES {
+                    return Err(unsupported(format!(
+                        "a CodecPrivate of {} bytes (the most kept is {MAX_CODEC_CONFIG_BYTES})",
+                        e.payload.len()
+                    )));
+                }
+                t.codec_private = e.payload.to_vec();
+            }
             ID_DEFAULT_DURATION => t.default_duration = Some(read_uint(e.payload)?),
             ID_FLAG_DEFAULT => t.default = read_uint(e.payload)? != 0,
             ID_FLAG_ENABLED => enabled = read_uint(e.payload)? != 0,

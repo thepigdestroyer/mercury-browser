@@ -84,11 +84,11 @@ mod frames_remove {
         let mut p = eight_seconds();
         let before = p.bytes();
         let removed = p.remove(0, Some(4 * SEC));
-        assert_eq!(removed.bytes, 2 * 8000 + 98 * 1000);
+        assert_eq!(removed.bytes, 2 * 8000 + 98 * 1000 + 100 * OV);
         assert_eq!(p.bytes(), before - removed.bytes);
         let removed = p.remove(0, None);
         assert_eq!(p.bytes(), 0);
-        assert_eq!(removed.bytes, 2 * 8000 + 98 * 1000);
+        assert_eq!(removed.bytes, 2 * 8000 + 98 * 1000 + 100 * OV);
         assert!(p.buffered().is_empty());
         assert_eq!(p.highest_end(), None);
         p.check_invariants().unwrap();
@@ -133,7 +133,7 @@ mod frames_remove {
         let removed = p.remove(SEC, Some(3 * SEC));
         assert_eq!(removed.frames, 100);
         assert_eq!(ms_ranges(&p.buffered()), [(0, 1000), (3000, 8000)]);
-        assert_eq!(p.bytes(), 300 * 300);
+        assert_eq!(p.bytes(), 300 * (300 + OV));
         // remove from the middle of a frame: frames that start in the range go, the one before stays
         p.remove(secs(3.01), Some(secs(3.05)));
         assert_eq!(

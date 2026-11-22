@@ -30,8 +30,11 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Bound::{Excluded, Unbounded};
+use std::sync::Arc;
 
-use crate::api::{CodedFrame, Ns, TimeRange, TrackConfig, TrackKind};
+use crate::api::{
+    CodedFrame, FRAME_OVERHEAD_BYTES, MemoryBudget, Ns, TimeRange, TrackConfig, TrackKind,
+};
 use crate::ranges;
 
 /// Presentation intervals that are this close (1 microsecond, which is the spec's own rounding
@@ -73,9 +76,10 @@ impl StoredFrame {
         self.frame.pts.saturating_add(self.frame.duration)
     }
 
-    /// Coded bytes.
+    /// What the frame counts for in the quota and the shared budget: its coded bytes plus
+    /// [`FRAME_OVERHEAD_BYTES`], the memory its entries take beyond them.
     pub fn size(&self) -> usize {
-        self.frame.data.len()
+        self.frame.data.len().saturating_add(FRAME_OVERHEAD_BYTES)
     }
 }
 
@@ -151,6 +155,8 @@ pub struct TrackBuffer {
     by_pts: BTreeSet<(Ns, FrameKey)>,
     next_seq: u64,
     bytes: usize,
+    /// The memory budget shared with other source buffers, if any: charged for every stored frame.
+    budget: Option<Arc<MemoryBudget>>,
     /// Union of the frames' presentation intervals, merged within [`MERGE_EPSILON`].
     ranges: Vec<TimeRange>,
     /// The longest frame duration since the buffer was last empty.
@@ -172,6 +178,14 @@ pub struct TrackBuffer {
     pub need_random_access_point: bool,
 }
 
+impl Drop for TrackBuffer {
+    fn drop(&mut self) {
+        if let Some(budget) = &self.budget {
+            budget.release(self.bytes);
+        }
+    }
+}
+
 impl TrackBuffer {
     /// An empty track buffer with its first codec configuration.
     pub fn new(kind: TrackKind, config: TrackConfig) -> Self {
@@ -181,6 +195,7 @@ impl TrackBuffer {
             by_pts: BTreeSet::new(),
             next_seq: 0,
             bytes: 0,
+            budget: None,
             ranges: Vec::new(),
             longest: 0,
             last_inserted_pts: None,
@@ -199,6 +214,14 @@ impl TrackBuffer {
         self.kind
     }
 
+    /// Makes this track buffer charge `budget` for what it stores (and for what it holds now).
+    pub fn set_budget(&mut self, budget: Arc<MemoryBudget>) {
+        budget.charge(self.bytes);
+        if let Some(old) = self.budget.replace(budget) {
+            old.release(self.bytes);
+        }
+    }
+
     /// Frames stored.
     pub fn len(&self) -> usize {
         self.frames.len()
@@ -208,7 +231,7 @@ impl TrackBuffer {
         self.frames.is_empty()
     }
 
-    /// Coded bytes stored.
+    /// Bytes stored, counted as the quota counts them (coded bytes plus the per-frame overhead).
     pub fn bytes(&self) -> usize {
         self.bytes
     }
@@ -289,7 +312,11 @@ impl TrackBuffer {
             self.current_gop = seq;
         }
         let end = frame.pts.saturating_add(frame.duration);
-        self.bytes += frame.data.len();
+        let size = frame.data.len().saturating_add(FRAME_OVERHEAD_BYTES);
+        self.bytes += size;
+        if let Some(budget) = &self.budget {
+            budget.charge(size);
+        }
         self.longest = self.longest.max(frame.duration);
         self.last_inserted_pts = Some(frame.pts);
         ranges::insert_interval(
@@ -497,6 +524,9 @@ impl TrackBuffer {
             self.by_pts.remove(&(sf.frame.pts, *key));
             let size = sf.size();
             self.bytes -= size;
+            if let Some(budget) = &self.budget {
+                budget.release(size);
+            }
             info.frames += 1;
             info.bytes += size;
             if info.last_dts_hit.is_none() && self.last_decode_timestamp == Some(sf.frame.dts) {

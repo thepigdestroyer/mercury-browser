@@ -141,7 +141,7 @@ mod frames_perf {
         let mut next = TOTAL;
         for _ in 0..200 {
             let end = p.highest_end().unwrap();
-            let report = p.evict_report(48 * 100, end - 60 * SEC);
+            let report = p.evict_report(48 * (100 + OV), end - 60 * SEC);
             assert!(report.ok);
             evicted += report.removed.frames;
             p.process_frames(frames(next, 48, &data)).unwrap();

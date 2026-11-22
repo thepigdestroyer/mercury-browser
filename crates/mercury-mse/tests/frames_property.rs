@@ -215,7 +215,7 @@ mod frames_property {
                 pts,
                 dur,
                 key: f.keyframe,
-                bytes: f.data.len(),
+                bytes: f.data.len() + mercury_mse::FRAME_OVERHEAD_BYTES,
             });
             self.next_seq += 1;
             self.longest = self.longest.max(dur);
@@ -427,7 +427,7 @@ mod frames_property {
                 pts: sf.frame.pts,
                 dur: sf.frame.duration,
                 key: sf.frame.keyframe,
-                bytes: sf.frame.data.len(),
+                bytes: sf.frame.data.len() + mercury_mse::FRAME_OVERHEAD_BYTES,
             })
             .collect();
         let want = m.sorted();

@@ -51,8 +51,9 @@ use super::config::{
     parse_asc, parse_esds, parse_opus_head, vp9_codec_string,
 };
 use super::{
-    ByteQueue, FEED_SLICE, MAX_BOX_BYTES, MAX_RETAINED_BYTES, MAX_SAMPLES_PER_FRAGMENT, Output,
-    PResult, frame_data, malformed, ticks_to_ns, unsupported,
+    ByteQueue, FEED_SLICE, MAX_BOX_BYTES, MAX_CODEC_CONFIG_BYTES, MAX_PSSH_BYTES,
+    MAX_RETAINED_BYTES, MAX_SAMPLES_PER_FRAGMENT, Output, PResult, frame_data, malformed,
+    ticks_to_ns, unsupported,
 };
 
 /// `Sample::track` of a sample whose track the initialization segment does not list (it is dropped).
@@ -481,6 +482,7 @@ fn parse_moov(payload: &[u8]) -> PResult<Moov> {
     let mut tracks: Vec<Track> = Vec::new();
     let mut trexes: Vec<(u32, Trex)> = Vec::new();
     let mut pssh = Vec::new();
+    let mut pssh_bytes = 0usize;
     let mut saw_trak = false;
     let mut saw_mvex = false;
     for b in boxes(payload) {
@@ -531,7 +533,12 @@ fn parse_moov(payload: &[u8]) -> PResult<Moov> {
                     }
                 }
             }
-            b"pssh" => pssh.push(b.whole.to_vec()),
+            b"pssh" => {
+                pssh_bytes = pssh_bytes.saturating_add(b.whole.len());
+                if pssh_bytes <= MAX_PSSH_BYTES {
+                    pssh.push(b.whole.to_vec());
+                }
+            }
             _ => {}
         }
     }
@@ -723,12 +730,20 @@ fn parse_entry(kind: TrackKind, entry: &BoxRef<'_>) -> PResult<Entry> {
     }
     let name = type_str(&format);
     let need = |typ: &[u8; 4]| {
-        entry_child(kids, typ).ok_or_else(|| {
+        let child = entry_child(kids, typ).ok_or_else(|| {
             malformed(format!(
                 "a '{name}' sample entry without its '{}' box",
                 type_str(typ)
             ))
-        })
+        })?;
+        if child.payload().len() > MAX_CODEC_CONFIG_BYTES {
+            return Err(unsupported(format!(
+                "a '{}' configuration box of {} bytes (the most kept is {MAX_CODEC_CONFIG_BYTES})",
+                type_str(typ),
+                child.payload().len()
+            )));
+        }
+        Ok(child)
     };
     let wrong_handler = || {
         malformed(format!(

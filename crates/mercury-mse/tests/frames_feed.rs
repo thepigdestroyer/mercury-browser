@@ -344,7 +344,7 @@ mod frames_feed {
         p.process_frames(audio(0, 10, 20 * MS, 20)).unwrap();
         // the second append replaced the first (same times): 10 frames of 20 bytes
         assert_eq!(p.frame_count(A), 10);
-        assert_eq!(p.bytes(), 200);
+        assert_eq!(p.bytes(), 200 + 10 * OV);
         let frames = frames_of(&read_all(&p, A, 0));
         assert_eq!(frames.len(), 10);
         assert!(frames.iter().all(|f| f.data.len() == 20));

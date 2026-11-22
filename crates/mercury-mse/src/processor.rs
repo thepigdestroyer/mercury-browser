@@ -10,12 +10,18 @@
 //!
 //! Written from the W3C Media Source Extensions text (sections 5.5.2 reset parser state, 5.5.7
 //! initialization segment received, 5.5.8 coded frame processing, 5.5.9 coded frame removal, 5.5.10 coded
-//! frame eviction, and the `buffered` attribute of 3.1). Ladybird's `SourceBufferProcessor` (BSD-2-Clause,
-//! `Libraries/LibMedia/MediaSourceExtensions`, master `cb3f4fa`) and Firefox's `TrackBuffersManager`
-//! (MPL-2.0) were read for ideas only: when the "last frame of the group was removed" reset applies
-//! (Ladybird's reading of w3c/media-source issue 290), the eviction order (behind the position first, then
-//! beyond it), and the one-frame fuzz of buffered ranges. No code of either is copied, so the file stays
-//! under Mercury's licence (brief D1).
+//! frame eviction, and the `buffered` attribute of 3.1). The file is Mercury's own and no code was
+//! translated from another project. Design references only, read while it was written: Ladybird's
+//! `SourceBufferProcessor` (BSD-2-Clause, `Libraries/LibMedia/MediaSourceExtensions`, read at master
+//! `cb3f4fafb851ded99295bcb2675044984ad38ca4` of 20 Nov 2026; the lane brief names the earlier master
+//! `a390d9f1a0c0e8269cece5838e67e7c271576e7e` of the same day, which was not the one read), Firefox's
+//! `TrackBuffersManager` (MPL-2.0), and Chrome's published per-kind quotas (12 MiB audio, 150 MiB
+//! video, which are numbers, not expression). What the references gave: when the "last frame of the
+//! group was removed" reset applies (w3c/media-source issue 290), the order of eviction (behind the
+//! position first, then beyond it), and the one-frame fuzz of buffered ranges. The structure, data
+//! structures (GOP-keyed `TrackBuffer`, the append frontier, the feed cursor) and control flow differ.
+//! The file stays under Mercury's licence (brief D1), and `THIRD-PARTY-NOTICES.md` carries no entry for
+//! it.
 //!
 //! # Times
 //!
@@ -41,10 +47,12 @@
 //!   comes from a tick count, so the same instant can differ by a nanosecond or two.
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use crate::api::CodedFrame;
 use crate::api::{
-    AppendMode, FeedItem, InitSegment, Limits, Ns, TimeRange, TrackConfig, TrackKind,
+    AppendMode, FRAME_OVERHEAD_BYTES, FeedItem, InitSegment, Limits, MemoryBudget, Ns, TimeRange,
+    TrackConfig, TrackKind,
 };
 use crate::ranges;
 use crate::trackbuffer::{FrameKey, RemovedInfo, TrackBuffer};
@@ -176,11 +184,14 @@ pub struct SourceBufferProcessor {
     first_init: bool,
     pending_init: bool,
     tracks: BTreeMap<TrackKind, TrackBuffer>,
+    /// The memory budget shared with the other source buffers (see [`MemoryBudget`]).
+    budget: Option<Arc<MemoryBudget>>,
 }
 
 impl SourceBufferProcessor {
     pub fn new(limits: Limits) -> Self {
         SourceBufferProcessor {
+            budget: None,
             limits,
             mode: AppendMode::Segments,
             timestamp_offset: 0,
@@ -256,8 +267,11 @@ impl SourceBufferProcessor {
         let first = !self.first_init || self.pending_init;
         if self.tracks.is_empty() {
             for t in &init.tracks {
-                self.tracks
-                    .insert(t.kind, TrackBuffer::new(t.kind, t.clone()));
+                let mut buffer = TrackBuffer::new(t.kind, t.clone());
+                if let Some(budget) = &self.budget {
+                    buffer.set_budget(Arc::clone(budget));
+                }
+                self.tracks.insert(t.kind, buffer);
             }
             self.first_init = true;
             self.pending_init = false;
@@ -738,6 +752,25 @@ impl SourceBufferProcessor {
 
     // ---- additions: quota ----
 
+    /// Makes every track buffer, now and later, charge `budget` (the memory shared with the other
+    /// source buffers).
+    pub fn set_budget(&mut self, budget: Arc<MemoryBudget>) {
+        for tb in self.tracks.values_mut() {
+            tb.set_budget(Arc::clone(&budget));
+        }
+        self.budget = Some(budget);
+    }
+
+    /// The shared budget, if any.
+    pub fn budget(&self) -> Option<&Arc<MemoryBudget>> {
+        self.budget.as_ref()
+    }
+
+    /// No initialization segment has created a track buffer yet.
+    pub fn is_uninitialized(&self) -> bool {
+        self.tracks.is_empty()
+    }
+
     /// The coded-frame bytes this source buffer may hold: the sum of the per-kind limits over its
     /// tracks.
     pub fn capacity(&self) -> usize {
@@ -773,20 +806,50 @@ impl SourceBufferProcessor {
     /// taken alone, so what stays decodes. A buffer that holds only the current range, with nothing
     /// behind the keep-behind line, therefore cannot evict: `ok` is `false` and the page must `remove`.
     pub fn evict_report(&mut self, incoming_bytes: usize, position: Ns) -> EvictReport {
+        if self.tracks.is_empty() {
+            return EvictReport {
+                ok: true,
+                removed: Removed::default(),
+            };
+        }
+        let total_capacity = self.capacity();
+        let mut incoming = [0usize; 3];
+        for kind in TrackKind::ALL {
+            if self.tracks.contains_key(&kind) {
+                incoming[kind_slot(kind)] =
+                    share_of(incoming_bytes, self.limits.bytes_for(kind), total_capacity);
+            }
+        }
+        self.evict_for(incoming, position)
+    }
+
+    /// [`Self::evict_report`] for frames already parsed: each track is charged for its own frames
+    /// (their bytes plus the per-frame overhead), so that a batch of video frames does not use up the
+    /// audio quota. This is the check that bounds what one append can store, whatever it promised.
+    pub fn evict_report_for_frames(&mut self, frames: &[CodedFrame], position: Ns) -> EvictReport {
+        let mut incoming = [0usize; 3];
+        for f in frames {
+            let slot = kind_slot(f.kind);
+            incoming[slot] =
+                incoming[slot].saturating_add(f.data.len().saturating_add(FRAME_OVERHEAD_BYTES));
+        }
+        self.evict_for(incoming, position)
+    }
+
+    /// The eviction rule of [`Self::evict_report`] with the incoming bytes already split per track.
+    fn evict_for(&mut self, incoming: [usize; 3], position: Ns) -> EvictReport {
         let mut report = EvictReport {
             ok: true,
             removed: Removed::default(),
         };
-        if self.tracks.is_empty() {
-            return report;
-        }
-        let total_capacity = self.capacity();
+        let mut all_incoming = 0usize;
         for kind in TrackKind::ALL {
             if !self.tracks.contains_key(&kind) {
                 continue;
             }
             let quota = self.limits.bytes_for(kind);
-            let share = share_of(incoming_bytes, quota, total_capacity);
+            let share = incoming[kind_slot(kind)];
+            all_incoming = all_incoming.saturating_add(share);
             let held = self.track_bytes(kind);
             let need = held.saturating_add(share).saturating_sub(quota);
             if need > 0 {
@@ -798,6 +861,36 @@ impl SourceBufferProcessor {
                 }
             }
             if self.track_bytes(kind).saturating_add(share) > quota {
+                report.ok = false;
+            }
+        }
+        // The shared budget (decision D17): when every source buffer of the process together would pass
+        // it, this one gives up what its own rule allows, and the append is refused if that is not
+        // enough.
+        if let Some(budget) = self.budget.clone() {
+            let excess = || {
+                budget
+                    .used()
+                    .saturating_add(all_incoming)
+                    .saturating_sub(budget.cap())
+            };
+            let mut need = excess();
+            for kind in TrackKind::ALL {
+                if need == 0 {
+                    break;
+                }
+                if !self.tracks.contains_key(&kind) {
+                    continue;
+                }
+                let info = self.evict_track(kind, need, position);
+                report.removed.frames += info.frames;
+                report.removed.bytes += info.bytes;
+                if let Some(pts) = info.last_dts_hit {
+                    self.last_frame_removed(pts);
+                }
+                need = excess();
+            }
+            if need > 0 {
                 report.ok = false;
             }
         }
@@ -899,6 +992,14 @@ impl SourceBufferProcessor {
 }
 
 fn kind_index(kind: TrackKind) -> usize {
+    match kind {
+        TrackKind::Video => 0,
+        TrackKind::Audio => 1,
+        TrackKind::Text => 2,
+    }
+}
+
+fn kind_slot(kind: TrackKind) -> usize {
     match kind {
         TrackKind::Video => 0,
         TrackKind::Audio => 1,

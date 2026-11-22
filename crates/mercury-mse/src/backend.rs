@@ -52,8 +52,8 @@ use std::thread::{self, JoinHandle, ThreadId};
 
 use crate::api::{
     AppendMode, ElementReadyState, EosError, EventSink, FeedBatch, FrameFeed, Limits,
-    MediaSourceBackend, MediaSourceReadyState, MseError, MseEvent, Ns, SourceBufferId, TimeRange,
-    TrackConfig, TrackKind, TypeSupport,
+    MediaSourceBackend, MediaSourceReadyState, MemoryBudget, MseError, MseEvent, Ns,
+    SourceBufferId, TimeRange, TrackConfig, TrackKind, TypeSupport,
 };
 use crate::media_source::{MediaSource, Outgoing, SliceStatus};
 use crate::source_buffer::{APPEND_SLICE, AppendFailure};
@@ -273,6 +273,20 @@ impl MseBackend {
             }),
             worker: Mutex::new(None),
         }
+    }
+
+    /// [`Self::new`] with a memory budget shared with other backends: every source buffer of this one
+    /// charges it for the frames it stores, so the sum over all of them (all the pages of a content
+    /// process, for the glue) cannot pass its cap (decision D17).
+    pub fn with_budget(
+        events: EventSink,
+        types: Arc<dyn TypeSupport>,
+        limits: Limits,
+        budget: Arc<MemoryBudget>,
+    ) -> MseBackend {
+        let backend = MseBackend::new(events, types, limits);
+        backend.shared.lock_state().set_budget(budget);
+        backend
     }
 
     /// `MediaSource.isTypeSupported` (`mime::is_type_supported`).
@@ -527,6 +541,10 @@ impl MediaSourceBackend for MseBackend {
 
     fn seeking(&self, secs: f64) -> bool {
         self.call(|s| s.seeking(secs))
+    }
+
+    fn max_append_bytes(&self) -> usize {
+        self.query(|s| s.max_append_bytes())
     }
 
     fn frame_feed(&self) -> Arc<dyn FrameFeed> {

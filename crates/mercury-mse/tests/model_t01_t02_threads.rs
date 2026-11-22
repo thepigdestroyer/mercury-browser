@@ -185,7 +185,7 @@ fn scenario(kind: Kind, destructive: bool) {
     let s = load("h264-low");
     let limits = if matches!(kind, Kind::BufferedChanged) {
         Limits {
-            video_bytes: 100_000,
+            video_bytes: 200_000,
             ..Limits::default()
         }
     } else {

@@ -60,6 +60,18 @@ pub fn new_parser(container: Container) -> Box<dyn ByteStreamParser> {
     }
 }
 
+/// The most bytes of one codec configuration record (`avcC`, `vpcC`, `av1C`, the AudioSpecificConfig,
+/// `dOps`, a WebM `CodecPrivate`) the parsers keep. Real records are a few hundred bytes (an `avcC` with
+/// many parameter sets stays under 2 KB); the track buffer keeps up to 64 configurations and every
+/// `Config` the feed serves is copied into caps, so an unbounded record multiplied by them was a
+/// memory amplification.
+pub const MAX_CODEC_CONFIG_BYTES: usize = 64 * 1024;
+
+/// The most bytes of `pssh` boxes copied out of one initialization segment (they are only kept for
+/// EME, which does not exist yet; a real `moov` carries a few hundred bytes of them). The boxes past
+/// the cap are dropped, not an error: the stream plays without them.
+pub const MAX_PSSH_BYTES: usize = 1024 * 1024;
+
 pub(crate) type PResult<T> = Result<T, ParseError>;
 
 pub(crate) fn malformed(message: impl Into<String>) -> ParseError {

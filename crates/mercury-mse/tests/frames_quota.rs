@@ -15,8 +15,8 @@ mod frames_quota {
     const V: TrackKind = TrackKind::Video;
     const A: TrackKind = TrackKind::Audio;
 
-    /// One 2 s segment of 25 fps video: one group, 8000 + 49 * 1000 bytes.
-    const SEGMENT_BYTES: usize = 57_000;
+    /// One 2 s segment of 25 fps video: one group, 8000 + 49 * 1000 coded bytes and 50 frames' overhead.
+    const SEGMENT_BYTES: usize = 57_000 + 50 * OV;
 
     fn segment(index: i64) -> Vec<mercury_mse::CodedFrame> {
         video_25fps(index * 2, 2)
@@ -115,10 +115,10 @@ mod frames_quota {
             p.process_frames(segment(i)).unwrap();
             appended += 1;
         }
-        // 17 segments fit (969,000); the 18th needs 1,026,000
-        assert_eq!(first_refusal, Some(17));
-        assert_eq!(appended, 17);
-        assert_eq!(p.bytes(), 17 * SEGMENT_BYTES);
+        // 14 segments fit (977,200); the 15th needs 1,047,000
+        assert_eq!(first_refusal, Some(14));
+        assert_eq!(appended, 14);
+        assert_eq!(p.bytes(), 14 * SEGMENT_BYTES);
         assert!(p.bytes() <= CAP);
         assert!(!p.has_room(SEGMENT_BYTES));
         // the page removes the first 10 s: the bytes are back at once
@@ -133,8 +133,8 @@ mod frames_quota {
             before - 5 * SEGMENT_BYTES,
             "nothing needed to go"
         );
-        p.process_frames(segment(17)).unwrap();
-        assert_eq!(ms_ranges(&p.buffered()), [(10_000, 36_000)]);
+        p.process_frames(segment(14)).unwrap();
+        assert_eq!(ms_ranges(&p.buffered()), [(10_000, 30_000)]);
     }
 
     #[test]
@@ -163,12 +163,13 @@ mod frames_quota {
         }
         assert_eq!(ms_ranges(&p.buffered()), [(0, 10_000), (600_000, 620_000)]);
         assert_eq!(p.bytes(), 15 * SEGMENT_BYTES);
-        // room for 3 more segments only if 2 groups of the far range go: it needs 140,000 bytes freed
+        // room for 5 more segments: 15 held + 5 incoming over the quota of 14.3 segments needs 396,000
+        // bytes freed, so 6 groups of the far range go (whole groups, from its end)
         let report = p.evict_report(5 * SEGMENT_BYTES, 0);
         assert!(report.ok);
-        assert_eq!(report.removed.bytes, 3 * SEGMENT_BYTES);
-        assert_eq!(report.removed.frames, 150);
-        assert_eq!(ms_ranges(&p.buffered()), [(0, 10_000), (600_000, 614_000)]);
+        assert_eq!(report.removed.bytes, 6 * SEGMENT_BYTES);
+        assert_eq!(report.removed.frames, 300);
+        assert_eq!(ms_ranges(&p.buffered()), [(0, 10_000), (600_000, 608_000)]);
         p.check_invariants().unwrap();
     }
 
@@ -178,7 +179,7 @@ mod frames_quota {
         // lies beyond keep_ahead (30 s) but evicting it would leave a hole at the page's next segment
         const CAP: usize = 1_000_000;
         let mut p = processor_with(&[V], limits(CAP));
-        for i in 0..17i64 {
+        for i in 0..14i64 {
             p.process_frames(segment(i)).unwrap();
         }
         let before = p.bytes();
@@ -188,19 +189,19 @@ mod frames_quota {
         let report = p.evict_report(SEGMENT_BYTES, 20 * SEC);
         assert!(report.ok);
         assert_eq!(report.removed.bytes, SEGMENT_BYTES);
-        assert_eq!(ms_ranges(&p.buffered()), [(2_000, 34_000)]);
+        assert_eq!(ms_ranges(&p.buffered()), [(2_000, 28_000)]);
     }
 
     #[test]
     fn t06_eviction_takes_whole_groups_from_the_start_and_keeps_keyframes_first() {
-        let mut p = processor_with(&[V], limits(500_000));
+        let mut p = processor_with(&[V], limits(560_000));
         for i in 0..8i64 {
             p.process_frames(segment(i)).unwrap();
         }
         // position 12 s: behind 7 s are free to go (groups ending at or before 7 s: 0-2, 2-4, 4-6)
         let report = p.evict_report(2 * SEGMENT_BYTES, 12 * SEC);
         assert!(report.ok);
-        // 456,000 held + 114,000 incoming - 500,000 = 70,000 to free: two groups of 57,000
+        // 558,400 held + 139,600 incoming - 560,000 = 138,000 to free: two groups of 69,800
         assert_eq!(report.removed.bytes, 2 * SEGMENT_BYTES);
         assert_eq!(report.removed.frames, 100);
         assert_eq!(ms_ranges(&p.buffered()), [(4_000, 16_000)]);
@@ -211,7 +212,7 @@ mod frames_quota {
 
     #[test]
     fn t06_a_group_that_straddles_the_keep_behind_line_stays_whole() {
-        let mut p = processor_with(&[V], limits(300_000));
+        let mut p = processor_with(&[V], limits(350_000));
         for i in 0..5i64 {
             p.process_frames(segment(i)).unwrap();
         }
@@ -220,7 +221,7 @@ mod frames_quota {
         assert!(report.ok);
         assert_eq!(ms_ranges(&p.buffered()), [(2_000, 10_000)]);
         // position 6.9 s: the line is at 1.9 s, no group ends before it: nothing goes
-        let mut q = processor_with(&[V], limits(300_000));
+        let mut q = processor_with(&[V], limits(350_000));
         for i in 0..5i64 {
             q.process_frames(segment(i)).unwrap();
         }
@@ -230,27 +231,28 @@ mod frames_quota {
 
     #[test]
     fn t06_each_kind_has_its_own_quota() {
-        // audio holds 100,000 bytes at most, video a lot more
+        // audio holds 71,200 counted bytes (200 frames of 100 bytes and their overhead), video a lot more
         let mut p = processor_with(
             &[V, A],
             Limits {
                 video_bytes: 50_000_000,
-                audio_bytes: 20_000,
+                audio_bytes: 200 * (100 + OV),
                 ..limits(0)
             },
         );
         p.process_frames(video_25fps(0, 8)).unwrap();
-        // 300 audio frames of 100 bytes, 20 ms each = 6 s, 30,000 bytes: over the audio quota
+        // 300 audio frames of 100 bytes, 20 ms each = 6 s, 300 * (100 + OV) counted: over the audio quota
         p.process_frames(audio(0, 300, 20 * MS, 100)).unwrap();
-        assert_eq!(p.track_bytes(A), 30_000);
+        assert_eq!(p.track_bytes(A), 300 * (100 + OV));
         let video_before = p.track_bytes(V);
         let report = p.evict_report(0, 8 * SEC);
         assert!(report.ok);
         assert_eq!(
-            report.removed.bytes, 10_000,
+            report.removed.bytes,
+            100 * (100 + OV),
             "audio only, back to its quota"
         );
-        assert_eq!(p.track_bytes(A), 20_000);
+        assert_eq!(p.track_bytes(A), 200 * (100 + OV));
         assert_eq!(p.track_bytes(V), video_before);
         // the audio lost its start
         assert_eq!(ms_ranges(&p.track_buffered(A)), [(2000, 6000)]);
@@ -305,8 +307,8 @@ mod frames_quota {
         for i in 0..10i64 {
             let v = segment(i);
             let a = audio(i * 2 * SEC, 100, 20 * MS, 200);
-            expected += v.iter().map(|f| f.data.len()).sum::<usize>();
-            expected += a.iter().map(|f| f.data.len()).sum::<usize>();
+            expected += v.iter().map(|f| f.data.len() + OV).sum::<usize>();
+            expected += a.iter().map(|f| f.data.len() + OV).sum::<usize>();
             p.process_frames(v).unwrap();
             p.process_frames(a).unwrap();
             assert_eq!(p.bytes(), expected);

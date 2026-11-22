@@ -54,6 +54,13 @@ impl AppendFailure {
         }
     }
 
+    pub fn quota(message: impl Into<String>) -> Self {
+        AppendFailure {
+            kind: AppendErrorKind::QuotaExceeded,
+            message: message.into(),
+        }
+    }
+
     pub fn internal(message: impl Into<String>) -> Self {
         AppendFailure {
             kind: AppendErrorKind::Internal,
@@ -107,6 +114,8 @@ pub enum Unit {
 /// units are kept even when the slice fails, because their effects on the processor have happened.
 #[derive(Debug, Default)]
 pub struct SliceResult {
+    /// Making room for the slice's frames evicted data (the DOM is told with `BufferedChanged`).
+    pub evicted: bool,
     pub units: Vec<Unit>,
     pub failure: Option<AppendFailure>,
 }
@@ -205,7 +214,7 @@ impl SourceBuffer {
 
     /// Runs one slice of an append through the parser and the processor. The parser and processor
     /// refuse bad input with an error and never panic; the caller wraps this in `catch_unwind` anyway.
-    pub fn push_slice(&mut self, data: &[u8]) -> SliceResult {
+    pub fn push_slice(&mut self, data: &[u8], position: Ns) -> SliceResult {
         let mut result = SliceResult::default();
         let events = match self.parser.push(data) {
             Ok(events) => events,
@@ -229,6 +238,21 @@ impl SourceBuffer {
                             TrackKind::Audio => self.audio_frame_duration = frame.duration,
                             TrackKind::Text => {}
                         }
+                    }
+                    // Whatever the append promised, the frames it carries are charged to the quota and
+                    // the shared budget before they are stored (decision D6, D17): this bounds the
+                    // memory one append can take, with the first append of a source buffer too (no
+                    // track buffer existed when `begin_append` checked it).
+                    let report = self.processor.evict_report_for_frames(&frames, position);
+                    if report.removed.bytes > 0 || report.removed.frames > 0 {
+                        result.evicted = true;
+                    }
+                    if !report.ok {
+                        self.buffer_full = true;
+                        result.failure = Some(AppendFailure::quota(
+                            "the coded frames of the append do not fit the source buffer's quota",
+                        ));
+                        return result;
                     }
                     match self.processor.process_frames(frames) {
                         Ok(done) => {

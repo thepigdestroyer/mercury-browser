@@ -18,8 +18,8 @@ mod frames_basic {
         assert_eq!(p.frame_count(TrackKind::Video), 200);
         assert_eq!(ms_ranges(&p.buffered()), [(0, 8000)]);
         assert_eq!(p.highest_end(), Some(8 * SEC));
-        // 4 keyframes of 8000 bytes and 196 deltas of 1000
-        assert_eq!(p.bytes(), 4 * 8000 + 196 * 1000);
+        // 4 keyframes of 8000 bytes and 196 deltas of 1000, and the overhead of 200 frames
+        assert_eq!(p.bytes(), 4 * 8000 + 196 * 1000 + 200 * OV);
 
         // remove(0, 4 s) keeps [4, 8]; remove(6 s, +Infinity) leaves [4, 6]
         let removed = p.remove(0, Some(4 * SEC));
@@ -29,7 +29,7 @@ mod frames_basic {
         assert_eq!(removed.frames, 50);
         assert_eq!(ms_ranges(&p.buffered()), [(4000, 6000)]);
         // [4, 6) is one group of 50 frames: a keyframe and 49 deltas
-        assert_eq!(p.bytes(), 8000 + 49 * 1000);
+        assert_eq!(p.bytes(), 8000 + 49 * 1000 + 50 * OV);
         p.check_invariants().unwrap();
     }
 

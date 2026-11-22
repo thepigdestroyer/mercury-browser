@@ -15,6 +15,7 @@
 //!   [`InitSegment`] and [`CodedFrame`]s.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 
 use serde::{Deserialize, Serialize};
 
@@ -359,6 +360,9 @@ pub enum AppendErrorKind {
     Unsupported,
     /// A fault of the backend itself.
     Internal,
+    /// The coded frames of the append do not fit the quota (a page appended far more than it asked
+    /// room for, or a stream of tiny frames): the append stops, as for a decode error.
+    QuotaExceeded,
 }
 
 /// Everything the backend tells the DOM. It crosses a `GenericCallback`, so it is plain data. The rules
@@ -427,7 +431,75 @@ impl Default for Limits {
     }
 }
 
+/// What one stored coded frame costs beyond its bytes: its entries in the track buffer's two ordered
+/// maps (key, `StoredFrame` and its `CodedFrame` fields, the presentation index), the `Arc` header and
+/// allocator rounding of its data, and the group bookkeeping. About 270 bytes by count of the structures
+/// (the review of lane med-1 estimated 200 to 300), so 256. The quota and the shared budget count
+/// `data.len()` plus this for every frame, so that a stream of one-byte frames cannot use many times the
+/// quota in heap. Real streams stay close to their old quota: a 2 s video segment of 50 frames adds
+/// 12.8 KB to some megabytes, and the audio quota still holds about 8 minutes of AAC.
+pub const FRAME_OVERHEAD_BYTES: usize = 256;
+
+/// One memory budget shared by every source buffer of every MediaSource that holds a clone of it (the
+/// glue makes one per content process, decision D17). A track buffer charges it for each frame it
+/// stores and gives the bytes back when the frame is removed or the buffer dropped; eviction and the
+/// append checks read it, so the sum over all pages cannot pass its cap whatever each page's own quota
+/// says.
+#[derive(Debug)]
+pub struct MemoryBudget {
+    cap: usize,
+    used: AtomicUsize,
+}
+
+impl MemoryBudget {
+    /// A budget of `cap` bytes, nothing used.
+    pub fn new(cap: usize) -> Arc<MemoryBudget> {
+        Arc::new(MemoryBudget {
+            cap,
+            used: AtomicUsize::new(0),
+        })
+    }
+
+    /// The bytes all holders have stored now.
+    pub fn used(&self) -> usize {
+        self.used.load(Ordering::Relaxed)
+    }
+
+    /// The most the holders may store together.
+    pub fn cap(&self) -> usize {
+        self.cap
+    }
+
+    pub(crate) fn charge(&self, bytes: usize) {
+        self.used.fetch_add(bytes, Ordering::Relaxed);
+    }
+
+    pub(crate) fn release(&self, bytes: usize) {
+        let mut current = self.used.load(Ordering::Relaxed);
+        loop {
+            match self.used.compare_exchange_weak(
+                current,
+                current.saturating_sub(bytes),
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => return,
+                Err(actual) => current = actual,
+            }
+        }
+    }
+}
+
 impl Limits {
+    /// The most bytes one `appendBuffer` may carry: what all the track buffers of a source buffer may
+    /// hold together. An append bigger than that can never fit, so it is refused before it is copied
+    /// or parsed.
+    pub fn max_append_bytes(&self) -> usize {
+        self.video_bytes
+            .saturating_add(self.audio_bytes)
+            .saturating_add(self.text_bytes)
+    }
+
     /// The byte limit of a track buffer of this kind.
     pub fn bytes_for(&self, kind: TrackKind) -> usize {
         match kind {
@@ -605,6 +677,12 @@ pub trait MediaSourceBackend: Send + Sync {
     fn seeking(&self, secs: f64) -> bool;
     /// The feed GStreamer pulls from.
     fn frame_feed(&self) -> Arc<dyn FrameFeed>;
+    /// The most bytes one `appendBuffer` may carry ([`Limits::max_append_bytes`]); the DOM checks the
+    /// size of the page's buffer against it before it copies it. A backend without a limit says
+    /// `usize::MAX`.
+    fn max_append_bytes(&self) -> usize {
+        usize::MAX
+    }
 }
 
 #[cfg(test)]

@@ -9,13 +9,14 @@
 
 mod model_support;
 
-use std::sync::Arc;
+use std::sync::{Arc, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
 use mercury_mse::MseBackend;
 use mercury_mse::api::{
-    AllDecoders, FeedState, Limits, MediaSourceBackend, MseEvent, SourceBufferId, TrackKind,
+    AllDecoders, FeedState, Limits, MediaSourceBackend, MemoryBudget, MseEvent, SourceBufferId,
+    TrackKind,
 };
 use mercury_mse_testkit::{SegmentedStream, tile};
 use model_support::*;
@@ -25,11 +26,20 @@ struct Material {
     big: Vec<u8>,
 }
 
+/// Every backend of this test charges one budget: when all of them are gone it must read zero, which
+/// is a deterministic leak detector for the frames' memory (the process RSS is too noisy to find a leak
+/// of a few hundred kilobytes per lifecycle).
+fn budget() -> &'static Arc<MemoryBudget> {
+    static BUDGET: OnceLock<Arc<MemoryBudget>> = OnceLock::new();
+    BUDGET.get_or_init(|| MemoryBudget::new(usize::MAX / 2))
+}
+
 fn new_backend(rec: &Arc<Recorder>) -> Arc<MseBackend> {
-    let backend = Arc::new(MseBackend::new(
+    let backend = Arc::new(MseBackend::with_budget(
         rec.sink(),
         Arc::new(AllDecoders),
         Limits::default(),
+        Arc::clone(budget()),
     ));
     backend.open();
     backend
@@ -174,6 +184,17 @@ fn t04_create_append_drop_in_every_order_200_iterations() {
             "after 200 lifecycles: threads {threads_before:?} -> {threads_after:?}, descriptors {fds_before:?} -> {fds_after:?}"
         );
         thread::sleep(Duration::from_millis(50));
+    }
+    // Everything the frames held went back to the budget (the workers are gone, so nothing is in
+    // flight): a leak of even one frame per lifecycle would show here.
+    let deadline = Instant::now() + Duration::from_secs(3);
+    while budget().used() != 0 {
+        assert!(
+            Instant::now() < deadline,
+            "after 220 lifecycles the budget still holds {} bytes",
+            budget().used()
+        );
+        thread::sleep(Duration::from_millis(20));
     }
     let _ = MseEvent::BufferedChanged { id: 0 };
 }

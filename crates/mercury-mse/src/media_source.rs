@@ -25,16 +25,18 @@ use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::sync::Arc;
 
 use crate::api::{
-    ElementReadyState, EosError, FeedBatch, FeedState, Limits, MediaSourceReadyState, MseError,
-    MseEvent, Ns, SourceBufferId, TimeRange, TrackConfig, TrackKind, TypeSupport, ns_to_secs,
-    secs_to_ns,
+    ElementReadyState, EosError, FeedBatch, FeedState, Limits, MediaSourceReadyState, MemoryBudget,
+    MseError, MseEvent, Ns, SourceBufferId, TimeRange, TrackConfig, TrackKind, TypeSupport,
+    ns_to_secs, secs_to_ns,
 };
 use crate::mime::{ParsedType, parse_type};
 use crate::processor::FeedCursor;
 use crate::source_buffer::{AppendFailure, Busy, SourceBuffer, Unit};
 
-/// More source buffers than this are refused with `QuotaExceededError`.
-pub const MAX_SOURCE_BUFFERS: usize = 16;
+/// More source buffers than this are refused with `QuotaExceededError`. Decision D17: 4, not 16. Real
+/// players use two (one video, one audio; a few add a third for text or a second audio language) and each
+/// one may hold its own quota, so 16 per MediaSource allowed 2.6 GiB.
+pub const MAX_SOURCE_BUFFERS: usize = 4;
 
 /// How many removed source buffers are remembered, so that an id used after removal gives
 /// `InvalidStateError` and not `NotFoundError`. Older ones are forgotten.
@@ -111,6 +113,8 @@ pub struct MediaSource {
     clock: u64,
     out: Vec<Outgoing>,
     feed: FeedPlace,
+    /// The memory budget shared with every other MediaSource of the process, if the glue made one.
+    budget: Option<Arc<MemoryBudget>>,
 }
 
 impl MediaSource {
@@ -128,7 +132,18 @@ impl MediaSource {
             clock: 0,
             out: Vec::new(),
             feed: FeedPlace::default(),
+            budget: None,
         }
+    }
+
+    /// Every source buffer added from now on charges `budget` (see [`MemoryBudget`]).
+    pub fn set_budget(&mut self, budget: Arc<MemoryBudget>) {
+        self.budget = Some(budget);
+    }
+
+    /// The most bytes one `appendBuffer` may carry.
+    pub fn max_append_bytes(&self) -> usize {
+        self.limits.max_append_bytes()
     }
 
     // ---- the outbox ----
@@ -313,8 +328,11 @@ impl MediaSource {
         let id = self.next_id;
         self.next_id += 1;
         let generation = self.tick();
-        self.buffers
-            .push(SourceBuffer::new(id, parsed, self.limits, generation));
+        let mut buffer = SourceBuffer::new(id, parsed, self.limits, generation);
+        if let Some(budget) = &self.budget {
+            buffer.processor.set_budget(Arc::clone(budget));
+        }
+        self.buffers.push(buffer);
         Ok(id)
     }
 
@@ -552,6 +570,22 @@ impl MediaSource {
                 "the media element has an error".into(),
             ));
         }
+        // An append that can never fit is refused whole, before anything is parsed: more than all the
+        // track buffers of a source buffer may hold, or (before the first initialization segment, when
+        // no track buffer exists to be checked) more than the shared budget has left. What the
+        // append's frames really take is checked again, frame batch by batch, while it is parsed.
+        if len > self.limits.max_append_bytes()
+            || (self.buffers[i].processor.is_uninitialized()
+                && self
+                    .budget
+                    .as_ref()
+                    .is_some_and(|b| b.used().saturating_add(len) > b.cap()))
+        {
+            self.buffers[i].buffer_full = true;
+            return Err(MseError::QuotaExceeded(format!(
+                "an append of {len} bytes cannot fit the memory MSE may use"
+            )));
+        }
         self.reopen_if_ended();
         let position = self.position;
         let report = self.buffers[i].processor.evict_report(len, position);
@@ -673,7 +707,10 @@ impl MediaSource {
         {
             return SliceStatus::Stale;
         }
-        let result = self.buffers[i].push_slice(data);
+        let result = self.buffers[i].push_slice(data, self.position);
+        if result.evicted {
+            self.push_event(MseEvent::BufferedChanged { id });
+        }
         let mut wake = false;
         for unit in result.units {
             match unit {

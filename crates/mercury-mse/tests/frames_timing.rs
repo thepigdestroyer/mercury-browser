@@ -397,12 +397,12 @@ mod frames_timing {
             "a zero-duration frame covers no time"
         );
         assert_eq!(p.frame_count(V), 5);
-        assert_eq!(p.bytes(), 500);
+        assert_eq!(p.bytes(), 500 + 5 * OV);
         // eviction can still clear them (a buffer full of nothing)
         let mut q = processor_with(
             &[V],
             mercury_mse::Limits {
-                video_bytes: 300,
+                video_bytes: 3 * (100 + OV),
                 ..Default::default()
             },
         );
