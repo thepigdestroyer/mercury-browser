@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSE players: Shaka Player</title>
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 16px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 12px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #sum { font: bold 18px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 14px/1.45 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+  video { background: #202020; display: block; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>MSE players: Shaka Player</h1>
+<p class="note">Shaka Player plays the generated 8 s DASH stream (/mse-dash/h264/manifest.mpd): start, one seek, one forced quality switch, play to the end, getVideoPlaybackQuality(); then the WebM variant (/mse-dash/vp9/manifest.mpd: VP9 and Opus) for 2 s.</p>
+<div id="sum">running</div>
+<video id="v" width="320" height="180" muted playsinline></video>
+<div id="out"></div>
+<!--
+  Mercury test page for Media Source Extensions (lane med-1b, D11). NOT RUN yet. It needs a browser started
+  with MERCURY_DEV_MSE=1, the player fetched by scripts/dev/fetch-mse-tools.sh and both served by
+  scripts/serve-tests.sh (/mse-players/shaka-player.compiled.js, /mse-dash/). Lines start with PASS, FAIL or
+  INFO; the title ends with "(done)". Run all of it with scripts/dev/mse-window-run.sh players.
+  The WebM part is skipped (INFO) when isTypeSupported says no to VP9 or Opus.
+-->
+<script src="common.js"></script>
+<script>
+"use strict";
+kit.run("MSE players: Shaka Player", async () => {
+  await kit.loadScript("/mse-players/shaka-player.compiled.js");
+  kit.check("Shaka Player is loaded", typeof shaka === "object" && typeof shaka.Player === "function");
+  kit.info("Shaka Player " + (shaka.Player.version || "?"));
+  shaka.polyfill.installAll();
+  kit.check("Shaka says this browser is supported", shaka.Player.isBrowserSupported());
+  const video = document.getElementById("v");
+  const errors = [];
+  const player = new shaka.Player();
+  await player.attach(video);
+  player.addEventListener("error", event => {
+    const text = "code " + event.detail.code + " category " + event.detail.category + (event.detail.data ? " " + JSON.stringify(event.detail.data).slice(0, 200) : "");
+    // Shaka's severity 2 is CRITICAL; anything lower it retries by itself.
+    if (event.detail.severity === 2) errors.push(text);
+    kit.info("player error event (severity " + event.detail.severity + "): " + text);
+  });
+  // Keep the first variant until the page switches.
+  player.configure({ abr: { enabled: false } });
+  await player.load("/mse-dash/h264/manifest.mpd");
+  kit.check("Shaka loaded the manifest", true);
+  await kit.standardRun({
+    video, errors,
+    async switchTo(width) {
+      const variants = player.getVariantTracks();
+      kit.info("variants: " + JSON.stringify(variants.map(v => ({ id: v.id, w: v.width, bw: v.bandwidth, active: v.active }))));
+      const variant = variants.find(v => v.width === width);
+      if (!variant) throw new Error("no variant " + width + " wide in the manifest");
+      player.selectVariantTrack(variant, true);
+    },
+    async extra() {
+      const webm = 'video/webm; codecs="vp09.00.11.08"', opus = 'audio/webm; codecs="opus"';
+      if (!MediaSource.isTypeSupported(webm) || !MediaSource.isTypeSupported(opus)) {
+        kit.info("the WebM variant is skipped: isTypeSupported says no to VP9 or Opus");
+        return;
+      }
+      await player.unload();
+      await player.load("/mse-dash/vp9/manifest.mpd");
+      kit.check("Shaka loaded the VP9 and Opus manifest", true);
+      try { await video.play(); } catch (error) { kit.info("play() rejected: " + error); }
+      await kit.expect("the WebM variant plays for 2 s", () => video.currentTime > 2, 20000);
+      kit.check("the WebM variant shows VP9 frames", video.videoWidth === 320 || video.videoWidth === 640, video.videoWidth);
+    },
+  });
+  await player.destroy();
+}, 48000);
+</script>
+</body>
+</html>

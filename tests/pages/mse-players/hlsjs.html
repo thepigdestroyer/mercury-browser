@@ -1,0 +1,77 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>MSE players: hls.js</title>
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 16px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 12px 16px; }
+  h1 { font-size: 20px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #sum { font: bold 18px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 14px/1.45 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+  video { background: #202020; display: block; margin: 8px 0; }
+</style>
+</head>
+<body>
+<h1>MSE players: hls.js</h1>
+<p class="note">hls.js plays the generated 8 s HLS CMAF stream (/mse-hls/h264/master.m3u8: two H.264 variants and an AAC audio rendition): start, one seek, one forced level switch, play to the end, getVideoPlaybackQuality().</p>
+<div id="sum">running</div>
+<video id="v" width="320" height="180" muted playsinline></video>
+<div id="out"></div>
+<!--
+  Mercury test page for Media Source Extensions (lane med-1b, D11). NOT RUN yet. It needs a browser started
+  with MERCURY_DEV_MSE=1, the player fetched by scripts/dev/fetch-mse-tools.sh and both served by
+  scripts/serve-tests.sh (/mse-players/hls.min.js, /mse-hls/). Lines start with PASS, FAIL or INFO; the title
+  ends with "(done)". Run all of it with scripts/dev/mse-window-run.sh players.
+  The transmuxing worker is off (enableWorker: false): the stream is fMP4, nothing is transmuxed, and a
+  Worker from a Blob URL is a separate engine question (docs/developer-guide/mse-testing.md).
+-->
+<script src="common.js"></script>
+<script>
+"use strict";
+kit.run("MSE players: hls.js", async () => {
+  await kit.loadScript("/mse-players/hls.min.js");
+  kit.check("hls.js is loaded", typeof Hls === "function");
+  kit.check("hls.js says MediaSource is supported", Hls.isSupported());
+  kit.info("hls.js " + (Hls.version || "?"));
+  const video = document.getElementById("v");
+  const errors = [];
+  const hls = new Hls({ enableWorker: false, startLevel: 0, capLevelToPlayerSize: false });
+  hls.on(Hls.Events.ERROR, (event, data) => {
+    const text = (data.type || "") + "/" + (data.details || "") + (data.reason ? " " + data.reason : "") + (data.fatal ? " (fatal)" : "");
+    if (data.fatal) errors.push(text);
+    kit.info("player error event: " + text);
+  });
+  const parsed = new Promise((resolve, reject) => {
+    hls.on(Hls.Events.MANIFEST_PARSED, (event, data) => resolve(data));
+    setTimeout(() => reject(new Error("timeout waiting for MANIFEST_PARSED")), 15000);
+  });
+  hls.loadSource("/mse-hls/h264/master.m3u8");
+  hls.attachMedia(video);
+  const manifest = await parsed;
+  kit.check("hls.js parsed the master playlist: two levels", manifest.levels.length === 2, manifest.levels.length);
+  // Keep the first level until the page switches.
+  hls.autoLevelCapping = -1;
+  hls.currentLevel = 0;
+  await kit.standardRun({
+    video, errors,
+    async switchTo(width) {
+      kit.info("levels: " + JSON.stringify(hls.levels.map(l => ({ w: l.width, bw: l.bitrate }))));
+      const index = hls.levels.findIndex(l => l.width === width);
+      if (index < 0) throw new Error("no level " + width + " wide in the playlist");
+      // currentLevel flushes the buffer and switches at once (nextLevel waits for the next fragment).
+      hls.currentLevel = index;
+    },
+  });
+  hls.destroy();
+}, 48000);
+</script>
+</body>
+</html>

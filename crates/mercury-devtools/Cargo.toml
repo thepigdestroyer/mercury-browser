@@ -42,3 +42,15 @@ libc.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+
+# MED-1b item 5 (the MSE window run): the runner, and what it needs. Appended here so that other
+# lanes' edits of the sections above merge cleanly.
+[[bin]]
+name = "mse-run"
+path = "src/bin/mse-run.rs"
+
+[dependencies.mercury-mse-testkit]
+path = "../mercury-mse-testkit"
+
+[dependencies.toml]
+version = "0.9"

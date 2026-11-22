@@ -1,0 +1,721 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# The known failures of the web-platform-tests `media-source/` tree on Mercury, and the contract of
+# flip condition F3 of the MED-1b brief for `dom_media_source_enabled`: after a run of
+# `scripts/dev/mse-window-run.sh wpt`, anything that differs from this file is reported (a new
+# failure and an unexpected pass alike), and the share of passing subtests is quoted.
+#
+# How to read it: docs/developer-guide/mse-testing.md. Format (crates/mercury-devtools/src/mse_run/expect.rs):
+#
+#   [[test]]
+#   path = "media-source/<file>"          # below the WPT root (.any.js and .window.js files by their .html page)
+#   class = "dom"                         # mse-core | dom | player | engine-gap | test-bug | not-planned
+#   reason = "why it fails"               # required, like the class: an entry without one is refused
+#   issue = "https://..."                 # optional; F3 wants one for mse-core and dom entries in the core areas
+#   skip = true                           # optional: not run (not-planned)
+#   harness = "TIMEOUT"                   # optional: the expected harness status (default OK)
+#   fail = ["subtest"]                    # expected FAIL; also timeout = [...], notrun = [...], precondition_failed = [...]
+#
+# A file with no entry must finish OK with every subtest PASS.
+#
+# STATUS: PROVISIONAL. Nothing has run against Mercury yet (the first window run is central). The entries
+# below are the starting list of the MED-1b brief, D10: Servo PR #47269's `tests/wpt/meta/media-source/`
+# (196 failing subtests, 38 files that time out or error; see sdd/med-1-logs/pr/47269.diff), which lists what
+# Servo's own implementation of that PR fails. Mercury carries that PR's DOM but not its data path, so some
+# entries will turn out to be unexpected passes (round 2b removes them) and failures that are not listed will
+# appear (round 2b adds them with a class and a reason). The classes below are guessed from the file's area
+# and are re-classed from the real failure. The WPT checkout is pinned in scripts/dev/fetch-mse-tools.sh
+# (commit 42e27408, 22 Nov 2026); `idlharness.window.js` of the PR is `idlharness.any.html` there.
+
+[[test]]
+path = 'media-source/SourceBuffer-abort-readyState.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'SourceBuffer#abort() (video/mp4) : If the readyState attribute of the parent media source is not in the "open" state then throw an INVALID_STATE_ERR exception and abort these steps.',
+]
+
+[[test]]
+path = 'media-source/SourceBuffer-abort-removed.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'SourceBuffer#abort (video/mp4) : if this object has been removed from the sourceBuffers attribute of the parent media source, then throw an INVALID_STATE_ERR exception and abort these steps.',
+]
+
+[[test]]
+path = 'media-source/SourceBuffer-abort-updating.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'SourceBuffer#abort() (video/mp4) : Check the algorithm when the updating attribute is true.',
+]
+
+[[test]]
+path = 'media-source/SourceBuffer-abort.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'SourceBuffer#abort() (video/mp4): Check the values of appendWindowStart and appendWindowEnd.',
+]
+
+[[test]]
+path = 'media-source/SourceBuffer-appendWindowEnd-rounding.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'setup',
+  'last frame at 10',
+  'last frame at 22',
+]
+
+[[test]]
+path = 'media-source/SourceBuffer-short-frame-endOfStream.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'setup',
+  'endOfStream() with short frame duration',
+]
+
+[[test]]
+path = 'media-source/URL-createObjectURL-revoke.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Check referenced MediaSource can open after URL.revokeObjectURL(url).',
+]
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-detach-element.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-duration.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-handle-transfer.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-handle.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-objecturl.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-play-terminate-worker.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-play.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/idlharness.any.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Partial interface AudioTrack: valid exposure set',
+  'Partial interface VideoTrack: valid exposure set',
+  'Partial interface TextTrack: valid exposure set',
+  'MediaSourceHandle interface: existence and properties of interface object',
+  'MediaSourceHandle interface object length',
+  'MediaSourceHandle interface object name',
+  'MediaSourceHandle interface: existence and properties of interface prototype object',
+  "MediaSourceHandle interface: existence and properties of interface prototype object's \"constructor\" property",
+  "MediaSourceHandle interface: existence and properties of interface prototype object's @@unscopables property",
+  'ManagedMediaSource interface: existence and properties of interface object',
+  'ManagedMediaSource interface object length',
+  'ManagedMediaSource interface object name',
+  'ManagedMediaSource interface: existence and properties of interface prototype object',
+  "ManagedMediaSource interface: existence and properties of interface prototype object's \"constructor\" property",
+  "ManagedMediaSource interface: existence and properties of interface prototype object's @@unscopables property",
+  'ManagedMediaSource interface: attribute streaming',
+  'ManagedMediaSource interface: attribute onstartstreaming',
+  'ManagedMediaSource interface: attribute onendstreaming',
+  'BufferedChangeEvent interface: existence and properties of interface object',
+  'BufferedChangeEvent interface object length',
+  'BufferedChangeEvent interface object name',
+  'BufferedChangeEvent interface: existence and properties of interface prototype object',
+  "BufferedChangeEvent interface: existence and properties of interface prototype object's \"constructor\" property",
+  "BufferedChangeEvent interface: existence and properties of interface prototype object's @@unscopables property",
+  'BufferedChangeEvent interface: attribute addedRanges',
+  'BufferedChangeEvent interface: attribute removedRanges',
+  'ManagedSourceBuffer interface: existence and properties of interface object',
+  'ManagedSourceBuffer interface object length',
+  'ManagedSourceBuffer interface object name',
+  'ManagedSourceBuffer interface: existence and properties of interface prototype object',
+  "ManagedSourceBuffer interface: existence and properties of interface prototype object's \"constructor\" property",
+  "ManagedSourceBuffer interface: existence and properties of interface prototype object's @@unscopables property",
+  'ManagedSourceBuffer interface: attribute onbufferedchange',
+  'AudioTrack interface: attribute sourceBuffer',
+  'VideoTrack interface: attribute sourceBuffer',
+  'TextTrack interface: attribute sourceBuffer',
+]
+
+[[test]]
+path = 'media-source/invalid-third-block.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'invalid-third-block',
+]
+
+[[test]]
+path = 'media-source/last-frame-dimensions.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+fail = [
+  'setup',
+  'last frame dimensions',
+]
+
+[[test]]
+path = 'media-source/mediasource-activesourcebuffers.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+harness = "ERROR"
+
+[[test]]
+path = 'media-source/mediasource-addsourcebuffer-mode.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  "addSourceBuffer() sets SourceBuffer.mode to 'sequence' when the generate timestamps flag is true",
+]
+
+[[test]]
+path = 'media-source/mediasource-addsourcebuffer.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Test addSourceBuffer() with Vorbis and VP8 in separate SourceBuffers',
+  'Test addSourceBuffer() audio only',
+  'Test addSourceBuffer() with AAC and H.264',
+  'Test addSourceBuffer() with AAC and H.264 in separate SourceBuffers',
+]
+
+[[test]]
+path = 'media-source/mediasource-append-buffer.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+harness = "TIMEOUT"
+fail = [
+  'Test SourceBuffer.abort() call during a pending appendBuffer().',
+  'Test MediaSource.removeSourceBuffer() call during a pending appendBuffer().',
+  'Test appendBuffer with partial init segments.',
+  'Test appendBuffer more Audio tracks than Video tracks',
+  'Test appendBuffer events order.',
+  'Test abort in the middle of an initialization segment.',
+]
+timeout = [
+  'Test appendBuffer with partial media segments.',
+]
+
+[[test]]
+path = 'media-source/mediasource-appendbuffer-quota-exceeded.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+harness = "ERROR"
+
+[[test]]
+path = 'media-source/mediasource-avtracks.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+harness = "TIMEOUT"
+fail = [
+  'Media tracks must be removed when the HTMLMediaElement.src is changed',
+  'Media tracks must be removed when HTMLMediaElement.load() is called',
+]
+timeout = [
+  'Check that media tracks and their properties are populated properly',
+  'Media tracks must be removed when the SourceBuffer is removed from the MediaSource',
+]
+
+[[test]]
+path = 'media-source/mediasource-buffered-seek.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  'Test seeking to a buffered location.',
+]
+
+[[test]]
+path = 'media-source/mediasource-buffered.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+harness = "ERROR"
+
+[[test]]
+path = 'media-source/mediasource-changetype-play-implicit.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Test video-only implicit changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp8"',
+  'Test video-only implicit changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp8" (using types without codecs parameters for addSourceBuffer)',
+  'Test video-only implicit changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp9"',
+  'Test video-only implicit changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp9" (using types without codecs parameters for addSourceBuffer)',
+  'Test video-only implicit changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp8"',
+  'Test video-only implicit changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp8" (using types without codecs parameters for addSourceBuffer)',
+  'Test video-only implicit changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp9"',
+  'Test video-only implicit changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp9" (using types without codecs parameters for addSourceBuffer)',
+]
+
+[[test]]
+path = 'media-source/mediasource-changetype-play-negative.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Check if browser supports enough test media types across audio and video for changeType negative tests',
+]
+
+[[test]]
+path = 'media-source/mediasource-changetype-play-without-codecs-parameter.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Check if browser supports enough test media types',
+  'Test video-only changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp8" (using types without codecs parameters)',
+  'Test video-only changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp9" (using types without codecs parameters)',
+  'Test video-only changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp8" (using types without codecs parameters)',
+  'Test video-only changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp9" (using types without codecs parameters)',
+]
+
+[[test]]
+path = 'media-source/mediasource-changetype-play.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Check if browser supports enough test media types',
+  'Test video-only changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp8"',
+  'Test video-only changeType for video/webm; codecs="vp8" <-> video/webm; codecs="vp9"',
+  'Test video-only changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp8"',
+  'Test video-only changeType for video/webm; codecs="vp9" <-> video/webm; codecs="vp9"',
+]
+
+[[test]]
+path = 'media-source/mediasource-changetype.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Test changeType sets mode to sequence for change to type that generates timestamps',
+  "Test changeType retains previous mode when changing to type that doesn't generate timestamps",
+]
+
+[[test]]
+path = 'media-source/mediasource-closed.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Test removeSourceBuffer() while closed.',
+  'Test setting duration while open->closed.',
+  'Test getting duration while open->closed.',
+  'Test sourcebuffer.abort when closed.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-mp4-a-bitrate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests mp4 audio-only bitrate changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-mp4-av-audio-bitrate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests mp4 audio bitrate changes in multiplexed content.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-mp4-av-framesize.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests mp4 frame size changes in multiplexed content.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-mp4-av-video-bitrate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests mp4 video bitrate changes in multiplexed content.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-mp4-v-bitrate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests mp4 video-only bitrate changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-mp4-v-framerate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests mp4 video-only frame rate changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-mp4-v-framesize.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests mp4 video-only frame size changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-webm-a-bitrate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests webm audio-only bitrate changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-webm-v-bitrate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests webm video-only bitrate changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-webm-v-framerate.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests webm video-only frame rate changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-config-change-webm-v-framesize.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Tests webm video-only frame size changes.',
+]
+
+[[test]]
+path = 'media-source/mediasource-correct-frames-after-reappend.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "ERROR"
+timeout = [
+  'Test the expected frames are played at the expected times, even in presence of reappends',
+]
+
+[[test]]
+path = 'media-source/mediasource-correct-frames.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "ERROR"
+timeout = [
+  'Test the expected frames are played at the expected times',
+]
+
+[[test]]
+path = 'media-source/mediasource-duration.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+harness = "ERROR"
+
+[[test]]
+path = 'media-source/mediasource-endofstream.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'MediaSource.endOfStream(): duration truncated to 0 when there are no buffered coded frames',
+  'MediaSource.endOfStream(): duration and buffered range end time before and after endOfStream',
+]
+
+[[test]]
+path = 'media-source/mediasource-errors.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  'Appending media segment before the first initialization segment.',
+  "Signaling 'decode' error via endOfStream() before initialization segment has been appended.",
+  "Signaling 'network' error via endOfStream() before initialization segment has been appended.",
+]
+
+[[test]]
+path = 'media-source/mediasource-getvideoplaybackquality.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Test HTMLVideoElement.getVideoPlaybackQuality() with MediaSource API',
+]
+
+[[test]]
+path = 'media-source/mediasource-iamf-playback.html'
+class = "not-planned"
+reason = "IAMF audio is not supported (isTypeSupported is false, as in Servo's list), so the test reports PRECONDITION_FAILED"
+precondition_failed = [
+  'IAMF MSE audio playback advances currentTime',
+]
+
+[[test]]
+path = 'media-source/mediasource-invalid-codec.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+harness = "TIMEOUT"
+fail = [
+  'Test an MP4 with an invalid codec results in an error.',
+]
+timeout = [
+  'Test a WebM with an invalid codec results in an error.',
+]
+
+[[test]]
+path = 'media-source/mediasource-is-type-supported.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Test valid WebM type "audio/webm;codecs="vorbis""',
+  'Test valid WebM type "AUDIO/WEBM;CODECS="vorbis""',
+  'Test valid WebM type "audio/webm;codecs=vorbis;test="6""',
+  'Test valid WebM type "audio/webm;codecs="opus""',
+  'Test valid WebM type "video/webm;codecs="opus""',
+  'Test valid MP4 type "video/mp4;codecs="avc1.4d001e""',
+  'Test valid MP4 type "video/mp4;codecs="avc1.42001e""',
+  'Test valid MP4 type "audio/mp4;codecs="mp4a.40.2""',
+  'Test valid MP4 type "audio/mp4;codecs="mp4a.40.5""',
+  'Test valid MP4 type "audio/mp4;codecs="mp4a.67""',
+  'Test valid MP4 type "video/mp4;codecs="mp4a.40.2""',
+  'Test valid MP4 type "video/mp4;codecs="avc1.4d001e,mp4a.40.2""',
+  'Test valid MP4 type "video/mp4;codecs="mp4a.40.2 , avc1.4d001e ""',
+  'Test valid MP4 type "video/mp4;codecs="avc1.4d001e,mp4a.40.5""',
+  'Test valid MP4 type "audio/mp4;codecs="Opus""',
+  'Test valid MP4 type "video/mp4;codecs="Opus""',
+  'Test valid MP4 type "audio/mp4;codecs="fLaC""',
+  'Test valid MP4 type "video/mp4;codecs="fLaC""',
+]
+
+[[test]]
+path = 'media-source/mediasource-multiple-attach.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  'Test that MediaSource can reattach if closed first',
+]
+
+[[test]]
+path = 'media-source/mediasource-play-then-seek-back.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  'Test playing then seeking back.',
+]
+
+[[test]]
+path = 'media-source/mediasource-play.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+fail = [
+  'Test normal playback case with MediaSource API',
+]
+
+[[test]]
+path = 'media-source/mediasource-redundant-seek.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  'Test redundant fully prebuffered seek',
+]
+
+[[test]]
+path = 'media-source/mediasource-remove.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Test aborting a remove operation.',
+  'Test removing all appended data.',
+  'Test removing beginning of appended data.',
+  'Test removing the middle of appended data.',
+  'Test removing the end of appended data.',
+]
+
+[[test]]
+path = 'media-source/mediasource-removesourcebuffer.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Test calling removeSourceBuffer() for a sourceBuffer belonging to a different mediaSource instance.',
+]
+
+[[test]]
+path = 'media-source/mediasource-replay.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  "Test replaying video after 'ended'",
+]
+
+[[test]]
+path = 'media-source/mediasource-seek-beyond-duration.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  'Test seeking beyond updated media duration.',
+  'Test seeking beyond media duration.',
+]
+
+[[test]]
+path = 'media-source/mediasource-seek-during-pending-seek.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+harness = "TIMEOUT"
+timeout = [
+  'Test seeking to a new location before transitioning beyond HAVE_METADATA.',
+  'Test seeking to a new location during a pending seek.',
+]
+
+[[test]]
+path = 'media-source/mediasource-seekable.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+fail = [
+  'Get seekable time ranges when the sourcebuffer is empty.',
+]
+
+[[test]]
+path = 'media-source/mediasource-sequencemode-append-buffer.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'Test sequence AppendMode appendBuffer(first media segment)',
+  'Test sequence AppendMode appendBuffer(second media segment)',
+  'Test sequence AppendMode appendBuffer(second media segment, then first media segment)',
+]
+
+[[test]]
+path = 'media-source/mediasource-sourcebuffer-mode-timestamps.html'
+class = "mse-core"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: append, abort or configuration-change behaviour of the media data path; re-classed from the first window run"
+fail = [
+  'audio/aac : If generate timestamps flag equals true and new mode equals "segments", then throw a TypeError exception and abort these steps.',
+  'audio/mpeg : If generate timestamps flag equals true and new mode equals "segments", then throw a TypeError exception and abort these steps.',
+]
+
+[[test]]
+path = 'media-source/mediasource-sourcebufferlist.html'
+class = "dom"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta (the same carried DOM, another data plane): DOM-level behaviour of the carried interfaces; re-classed from the first window run"
+fail = [
+  'Test SourceBufferList getter method',
+  'Test SourceBufferList event dispatching.',
+  'Test that only 1 removesourcebuffer event fires on each SourceBufferList when the MediaSource closes.',
+]
+
+[[test]]
+path = 'media-source/mse-for-webcodecs/tentative/mediasource-encrypted-webcodecs-appendencodedchunks-play.https.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/mse-for-webcodecs/tentative/mediasource-webcodecs-addsourcebuffer.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/mse-for-webcodecs/tentative/mediasource-webcodecs-appendencodedchunks-play.html'
+class = "not-planned"
+reason = 'not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)'
+skip = true
+
+[[test]]
+path = 'media-source/waiting-for-audio.html'
+class = "player"
+reason = "provisional, from Servo PR #47269's tests/wpt/meta: playback or seeking through the element and GStreamer; re-classed from the first window run"
+fail = [
+  'playback after waiting for audio',
+]
+
+[[test]]
+path = 'media-source/dedicated-worker/managed/mediasource-manager-worker-play.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/dedicated-worker/mediasource-worker-handle-transfer-to-shared-and-service-workers.https.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/managed/mediasource-manager-bufferedchange-append.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/managed/mediasource-manager-bufferedchange-endofstream.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/managed/mediasource-manager-bufferedchange-remove.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/managed/mediasource-manager-bufferedchangeevent-constructor.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/managed/mediasource-manager-interfaces.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/managed/mediasource-manager-streaming-detach.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+
+[[test]]
+path = 'media-source/managed/mediasource-manager-streaming.html'
+class = "not-planned"
+reason = "not planned: MSE in workers, ManagedMediaSource and WebCodecs input are out of this lane (MED-1b brief, section 5)"
+skip = true
+

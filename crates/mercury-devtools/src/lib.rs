@@ -13,9 +13,14 @@
 //!   run through `scripts/ci/light-crates.sh`).
 //! - [`github_env`]: the variables `scripts/ci/github-env.sh` passes to later GitHub Actions
 //!   steps (`github-env`).
+//! - `mse_run` (Unix only): the runner of the Media Source Extensions window checks
+//!   (`mse-run`, through `scripts/dev/mse-window-run.sh`), which uses the routes of [`serve`]
+//!   for the WPT tree, the player pages and the generated streams.
 
 pub mod colors;
 pub mod github_env;
 pub mod metadata;
+#[cfg(unix)]
+pub mod mse_run;
 pub mod png;
 pub mod serve;

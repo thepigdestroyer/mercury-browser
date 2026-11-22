@@ -130,6 +130,7 @@ impl Responder<'_> {
 pub(super) fn reason(code: u16) -> &'static str {
     match code {
         200 => "OK",
+        204 => "No Content",
         206 => "Partial Content",
         301 => "Moved Permanently",
         304 => "Not Modified",
@@ -137,6 +138,7 @@ pub(super) fn reason(code: u16) -> &'static str {
         401 => "Unauthorized",
         404 => "Not Found",
         405 => "Method Not Allowed",
+        413 => "Payload Too Large",
         414 => "Request-URI Too Long",
         416 => "Requested Range Not Satisfiable",
         431 => "Request Header Fields Too Large",

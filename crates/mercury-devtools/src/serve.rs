@@ -19,7 +19,9 @@
 //!   (read-only, the same range support), which `tests/pages/mse-*.html` load their media from;
 //! - the downloads routes (`/download/<name>`, `POST /form-result`) and the request log
 //!   (`--log FILE`), which the Python script gained after this crate was written (see
-//!   `downloads`).
+//!   `downloads`);
+//! - the routes of the MSE window run (`/wpt/`, `/mse-players/`, `/mse-dash/`, `/mse-hls/`,
+//!   `POST /__report`; see `mse`, `streams` and `wpt`).
 //!
 //! The work is split by job: `cli` reads the command line, `http` reads requests and
 //! writes responses, `files` answers the file routes, `downloads` the generated downloads and
@@ -29,10 +31,14 @@ mod cli;
 mod downloads;
 mod files;
 mod http;
+mod mse;
 mod python;
+pub mod streams;
+pub mod wpt;
 
 pub use cli::{Command, DESCRIPTION, UsageError, help_text, parse_arguments};
 pub use files::{guess_type, translate_path};
+pub use mse::{ReportSink, TOKEN_PARAMETER, mse_tools_dir};
 
 use std::fs;
 use std::io::{self, BufRead, BufReader, Read};
@@ -77,6 +83,7 @@ pub struct Server {
     listener: TcpListener,
     root: Arc<PathBuf>,
     log: Option<Arc<RequestLog>>,
+    mse: mse::Routes,
 }
 
 impl Server {
@@ -88,7 +95,21 @@ impl Server {
             listener,
             root: Arc::new(root),
             log: None,
+            mse: mse::Routes::new(mse_tools_dir()),
         })
+    }
+
+    /// Serves the fetched WPT checkout and player builds from `dir` (default: [`mse_tools_dir`]).
+    pub fn with_mse_tools_dir(mut self, dir: impl Into<PathBuf>) -> Server {
+        self.mse = self.mse.with_tools_dir(dir.into());
+        self
+    }
+
+    /// Hands the body of every `POST /__report` to `sink`; `mse-run` reads what pages report
+    /// this way.
+    pub fn with_report_sink(mut self, sink: ReportSink) -> Server {
+        self.mse = self.mse.with_sink(sink);
+        self
     }
 
     /// Appends one JSON line per request to `path` (`--log`); see the `downloads` module for
@@ -108,14 +129,16 @@ impl Server {
 
     /// Answers connections until the process ends, each on its own thread.
     pub fn run(self) {
+        let mse = Arc::new(self.mse);
         for stream in self.listener.incoming() {
             match stream {
                 Ok(stream) => {
                     let root = Arc::clone(&self.root);
                     let log = self.log.clone();
+                    let mse = Arc::clone(&mse);
                     let spawned = std::thread::Builder::new()
                         .name("serve-tests connection".into())
-                        .spawn(move || handle_connection(stream, &root, log.as_deref()));
+                        .spawn(move || handle_connection(stream, &root, log.as_deref(), &mse));
                     if spawned.is_err() {
                         std::thread::sleep(Duration::from_millis(10));
                     }
@@ -135,15 +158,20 @@ impl Server {
     }
 }
 
-fn handle_connection(stream: TcpStream, root: &Path, log: Option<&RequestLog>) {
+fn handle_connection(stream: TcpStream, root: &Path, log: Option<&RequestLog>, mse: &mse::Routes) {
     // A client that goes away mid-response only ends its own connection. Python printed a
     // traceback to standard error then; nothing here does.
-    let _ = handle_request(&stream, root, log);
+    let _ = handle_request(&stream, root, log, mse);
     let _ = stream.shutdown(Shutdown::Write);
 }
 
 /// Reads one request from the connection and answers it.
-fn handle_request(stream: &TcpStream, root: &Path, log: Option<&RequestLog>) -> io::Result<()> {
+fn handle_request(
+    stream: &TcpStream,
+    root: &Path,
+    log: Option<&RequestLog>,
+    mse: &mse::Routes,
+) -> io::Result<()> {
     let mut reader = BufReader::new(stream);
     let mut responder = Responder {
         stream,
@@ -219,8 +247,11 @@ fn handle_request(stream: &TcpStream, root: &Path, log: Option<&RequestLog>) -> 
         headers,
     };
     match request.command.as_str() {
-        "GET" | "HEAD" => respond(&mut responder, &request, root, log),
-        "POST" => post(&mut responder, &mut reader, &request, log),
+        "GET" | "HEAD" => respond(&mut responder, &request, root, log, mse),
+        "POST" => match mse.post(&mut responder, &mut reader, &request) {
+            Some(result) => result,
+            None => post(&mut responder, &mut reader, &request, log),
+        },
         other => {
             let message = format!("Unsupported method ({})", python_repr(other));
             responder.send_error(501, Some(&message), None)
@@ -235,9 +266,13 @@ fn respond(
     request: &Request,
     root: &Path,
     log: Option<&RequestLog>,
+    mse: &mse::Routes,
 ) -> io::Result<()> {
     if request.path.split('?').next() == Some(PRIVATE_PATH) {
         return send_private(responder, request);
+    }
+    if let Some(result) = mse.get(responder, request, root) {
+        return result;
     }
     if request.command == "GET" && url_path(&request.path).starts_with(DOWNLOAD_PREFIX) {
         return send_download(responder, request, log);

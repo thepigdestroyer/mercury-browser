@@ -1,0 +1,188 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# The Media Source Extensions crates on the two platforms the lane's machine is not: Linux (GStreamer
+# 1.20 from Ubuntu 22.04, the oldest the code must compile against: the `v1_18` features only) and
+# Apple Silicon (the bundled GStreamer; the real VideoToolbox and the AV1 routes). MED-1b brief, D9.
+#
+# A separate file so that no lane's edit of ci.yml conflicts with it. ci.yml runs on `master`,
+# `mercury` and pull requests and so never sees a lane branch; this one runs on the lane branch of the
+# MSE work and by hand, and only builds and tests the MSE crates (no Servo, a few minutes each). When
+# the MSE work has merged, the two jobs belong in ci.yml and this file goes.
+#
+# The steps that run the `#[ignore]` VideoToolbox and AV1 tests are record-only: they print what the
+# hardware answers (docs/developer-guide/media-source.md) and never fail the run.
+name: Media Source Extensions
+
+on:
+  push:
+    branches:
+      - lane/med-1b
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mse-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  CARGO_PROFILE_DEV_DEBUG: "0"
+  CARGO_PROFILE_TEST_DEBUG: "0"
+  CARGO_PROFILE_RELEASE_DEBUG: "0"
+
+jobs:
+  linux:
+    name: Linux (GStreamer 1.20)
+    runs-on: ubuntu-22.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          # Reads rust-toolchain.toml: channel, profile and components.
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Install GStreamer and the software decoders
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          sudo apt-get update
+
+          # GitHub's Ubuntu 22.04 image preinstalls LLVM's libunwind 14, which conflicts with the GNU
+          # libunwind that GStreamer needs.
+          sudo apt-get remove --yes libunwind-14-dev
+
+          sudo apt-get install --yes \
+            gstreamer1.0-libav \
+            gstreamer1.0-plugins-bad \
+            gstreamer1.0-plugins-base \
+            gstreamer1.0-plugins-good \
+            gstreamer1.0-plugins-ugly \
+            gstreamer1.0-tools \
+            libgstreamer-plugins-base1.0-dev \
+            libgstreamer1.0-dev \
+            libunwind-dev \
+            pkg-config
+
+          # The oldest GStreamer the code may need: the crate enables the v1_18 features only.
+          pkg-config --modversion gstreamer-1.0
+          pkg-config --atleast-version=1.18 gstreamer-1.0
+          pkg-config --atleast-version=1.18 gstreamer-app-1.0
+          gst-inspect-1.0 avdec_h264 >/dev/null
+          gst-inspect-1.0 appsrc >/dev/null
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: >-
+          cargo clippy --locked --release
+          -p mercury-mse -p mercury-mse-testkit -p mercury-mse-gst
+          --all-targets -- -D warnings
+
+      # No MERCURY_GSTREAMER_PREFIX here: the tests use the system GStreamer and a test whose element
+      # is missing prints "SKIP: <element> missing" and passes. The skips are listed by the next step.
+      - name: Test
+        shell: bash
+        env:
+          RUST_TEST_THREADS: "2"
+        run: |
+          set -euo pipefail
+
+          cargo test --locked --release \
+            -p mercury-mse -p mercury-mse-testkit -p mercury-mse-gst \
+            -- --nocapture 2>&1 | tee mse-test.log
+
+      - name: Which tests skipped
+        if: always()
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          grep -c '^SKIP:' mse-test.log || true
+          grep '^SKIP:' mse-test.log | sort | uniq -c | sort -rn | head -30 || true
+
+  macos:
+    name: macOS (Apple Silicon)
+    runs-on: macos-26
+    timeout-minutes: 120
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install the pinned Rust toolchain
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          rustup toolchain install
+          rustc --version
+          cargo --version
+
+      - name: Restore the GStreamer packages
+        id: gstreamer-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: gstreamer-macos-arm64-${{ hashFiles('scripts/macos/gstreamer.sh') }}
+
+      - name: Fetch and verify the GStreamer packages
+        run: scripts/macos/gstreamer.sh fetch
+
+      - name: Save the GStreamer packages
+        if: steps.gstreamer-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/Library/Caches/mercury-browser/gstreamer/**/*.pkg
+          key: ${{ steps.gstreamer-cache.outputs.cache-primary-key }}
+
+      - name: Unpack and check GStreamer
+        run: make gstreamer-macos
+
+      - name: Export the GStreamer build environment
+        run: scripts/ci/github-env.sh scripts/macos/gstreamer.sh env
+
+      - name: Format
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        run: |
+          cargo clippy --locked --release -p mercury-mse -p mercury-mse-testkit --all-targets -- -D warnings
+          crates/mercury-mse-gst/test.sh clippy --locked --release -p mercury-mse-gst --all-targets -- -D warnings
+
+      # The bundled GStreamer, software decoders and the real default route (VideoToolbox) where a
+      # test does not need a window. A missing element fails the test here (MERCURY_GSTREAMER_PREFIX
+      # is set by test.sh).
+      - name: Test
+        env:
+          RUST_TEST_THREADS: "2"
+        run: |
+          cargo test --locked --release -p mercury-mse -p mercury-mse-testkit
+          crates/mercury-mse-gst/test.sh test --locked --release -p mercury-mse-gst
+
+      # Record-only: what VideoToolbox and the AV1 routes do on a real (virtual) M1. The result is
+      # read from the log of the run; it decides nothing here. A hung step ends at its time limit.
+      - name: VideoToolbox and AV1 route reports (record only)
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          RUST_TEST_THREADS: "1"
+        run: crates/mercury-mse-gst/test.sh test --locked --release -p mercury-mse-gst -- --ignored --nocapture --test-threads=1
