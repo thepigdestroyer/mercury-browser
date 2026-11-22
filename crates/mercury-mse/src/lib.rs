@@ -23,6 +23,7 @@ pub mod mime;
 pub mod parse;
 pub mod processor;
 pub mod ranges;
+pub mod seek_hold;
 pub mod source_buffer;
 pub mod trackbuffer;
 
@@ -36,6 +37,7 @@ pub use parse::new_parser;
 pub use processor::{
     EvictReport, FeedCursor, InitOutcome, ProcessError, Processed, Removed, SourceBufferProcessor,
 };
+pub use seek_hold::{SeekDecision, SeekHold};
 pub use trackbuffer::{FrameKey, StoredFrame, TrackBuffer};
 
 // ---- item 3 `model` exports ----
