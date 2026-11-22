@@ -62,7 +62,7 @@ const fn light(role: Role) -> Colour {
         // Text.
         Role::Text => Colour::hex(0x1a1230),
         Role::TextSecondary => Colour::hex(0x5b5168),
-        Role::TextMuted => Colour::hex(0x6a6077),
+        Role::TextMuted => Colour::hex(0x635970),
         Role::Placeholder => Colour::hex(0x736982),
         // Accent text and buttons.
         Role::Accent => Colour::hex(0xa03c14),
@@ -132,7 +132,7 @@ const fn dark(role: Role) -> Colour {
         // Text.
         Role::Text => Colour::hex(0xf3eef8),
         Role::TextSecondary => Colour::hex(0xb4aac6),
-        Role::TextMuted => Colour::hex(0x9e94b4),
+        Role::TextMuted => Colour::hex(0xa198b7),
         Role::Placeholder => Colour::hex(0x9a90b0),
         // Accent text and buttons.
         Role::Accent => Colour::hex(0xffb547),
