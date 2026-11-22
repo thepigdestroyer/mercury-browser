@@ -7,8 +7,8 @@
 use mercury_settings::DialCorner;
 use mercury_ui::DialCornerKind;
 use mercury_ui::corner_dial::{
-    corner_from_name, corner_from_slint, corner_name, corner_to_slint, dial_label, effective_corner,
-    step_focus,
+    corner_from_name, corner_from_slint, corner_name, corner_to_slint, dial_label,
+    effective_corner, step_focus,
 };
 
 /// Every corner. The `match` is exhaustive on purpose: a fifth variant fails to compile here, so the
@@ -105,7 +105,10 @@ fn slint_mapping_round_trips_all_four() {
 
 #[test]
 fn slint_mapping_pairs_the_same_named_corners() {
-    assert_eq!(corner_to_slint(DialCorner::TopLeft), DialCornerKind::TopLeft);
+    assert_eq!(
+        corner_to_slint(DialCorner::TopLeft),
+        DialCornerKind::TopLeft
+    );
     assert_eq!(
         corner_to_slint(DialCorner::TopRight),
         DialCornerKind::TopRight
@@ -158,7 +161,10 @@ fn label_without_a_group_is_just_tab_dial() {
 
 #[test]
 fn label_names_the_group() {
-    assert_eq!(dial_label(Some("Research"), false, 0.0), "Tab dial, Research");
+    assert_eq!(
+        dial_label(Some("Research"), false, 0.0),
+        "Tab dial, Research"
+    );
 }
 
 #[test]

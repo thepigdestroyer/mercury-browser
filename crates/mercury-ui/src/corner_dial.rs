@@ -30,8 +30,8 @@ mod state;
 pub use fan::DialFan;
 pub use geometry::{DialGeometry, fan_spec, fan_start_deg};
 pub use state::{
-    corner_from_name, corner_from_slint, corner_name, corner_to_slint, dial_label, effective_corner,
-    step_focus,
+    corner_from_name, corner_from_slint, corner_name, corner_to_slint, dial_label,
+    effective_corner, step_focus,
 };
 
 /// Diameter of the dial at rest (SPEC §4.5).

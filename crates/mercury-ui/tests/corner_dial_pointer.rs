@@ -103,8 +103,7 @@ impl Rig {
         });
         window.on_snap_corner(|x, y, width, height, current| {
             corner_to_slint(
-                DialGeometry::new(width, height)
-                    .snap(Point::new(x, y), corner_from_slint(current)),
+                DialGeometry::new(width, height).snap(Point::new(x, y), corner_from_slint(current)),
             )
         });
         let ids: Vec<i32> = fan.borrow().data.tabs.iter().map(|tab| tab.id).collect();
@@ -274,11 +273,7 @@ fn a_click_on_the_dial_opens_the_fan_and_a_second_click_closes_it() {
     assert_eq!(rig.events(), ["toggled(false)"]);
     rig.advance(200);
     assert_eq!(rig.fan_opacity(), 0.0);
-    assert_eq!(
-        rig.dial_centre(),
-        (x, y),
-        "toggling does not move the dial"
-    );
+    assert_eq!(rig.dial_centre(), (x, y), "toggling does not move the dial");
 }
 
 #[test]
@@ -318,7 +313,10 @@ fn a_press_and_a_forty_pixel_move_drags_the_dial_and_closes_the_fan() {
 
     rig.release(-50.0, -50.0);
     assert_eq!(rig.events(), [corner_event(DialCorner::TopLeft)]);
-    assert_eq!(corner_from_slint(rig.window.get_corner()), DialCorner::TopLeft);
+    assert_eq!(
+        corner_from_slint(rig.window.get_corner()),
+        DialCorner::TopLeft
+    );
     assert!(
         !rig.window.get_expanded(),
         "a drag is not a click: it does not reopen the fan"
@@ -350,7 +348,10 @@ fn releasing_a_drag_in_each_quadrant_snaps_to_what_snap_says() {
 
             let dragged_to = geometry.clamp_drag(Point::new(release.0, release.1));
             let expected = geometry.snap(dragged_to, start);
-            assert_eq!(expected, quadrant, "the oracle for {release:?} from {start:?}");
+            assert_eq!(
+                expected, quadrant,
+                "the oracle for {release:?} from {start:?}"
+            );
             let wanted_events = if expected == start {
                 Vec::new()
             } else {
@@ -594,7 +595,11 @@ fn with_the_fan_open_a_move_over_a_segment_hovers_it_and_a_click_activates_it() 
         let at = (BOX_ORIGIN.0 + segment.mid_x, BOX_ORIGIN.1 + segment.mid_y);
         let id = tabs[index].id;
         rig.move_to(at.0, at.1);
-        assert_eq!(rig.window.get_hovered_tab(), id, "hover over segment {index}");
+        assert_eq!(
+            rig.window.get_hovered_tab(),
+            id,
+            "hover over segment {index}"
+        );
         assert!(rig.events().contains(&format!("tab-hovered({id})")));
         rig.events();
         rig.click(at.0, at.1);
@@ -740,7 +745,11 @@ fn transform_scale_maps_the_pointer_into_the_scaled_element() {
     };
     // Scaled by 0.5 about its centre (100, 100), the 50..150 box is drawn at 75..125.
     click(55.0, 100.0);
-    assert_eq!(*hits.borrow(), 0, "inside the unscaled box, outside the drawn one");
+    assert_eq!(
+        *hits.borrow(),
+        0,
+        "inside the unscaled box, outside the drawn one"
+    );
     click(80.0, 100.0);
     assert_eq!(*hits.borrow(), 1, "inside the drawn box");
     probe.set_factor(1.0);
@@ -797,7 +806,11 @@ fn the_dial_slides_to_its_corner_in_180_ms() {
     let (x, y) = rig.dial_centre();
     rig.press(x, y);
     rig.drag_to((x, y), (300.0, 200.0));
-    assert_eq!(rig.dial_centre(), (300.0, 200.0), "a drag follows the pointer without delay");
+    assert_eq!(
+        rig.dial_centre(),
+        (300.0, 200.0),
+        "a drag follows the pointer without delay"
+    );
     rig.release(300.0, 200.0);
     rig.advance(90);
     let (mx, my) = rig.dial_centre();
@@ -812,10 +825,14 @@ fn the_dial_slides_to_its_corner_in_180_ms() {
 #[test]
 fn the_host_can_move_the_dial_by_setting_the_corner() {
     let rig = Rig::new(DialCorner::BottomRight);
-    rig.window.set_corner(corner_to_slint(DialCorner::BottomLeft));
+    rig.window
+        .set_corner(corner_to_slint(DialCorner::BottomLeft));
     rig.advance(200);
     assert_eq!(rig.dial_centre(), (74.0, 826.0));
-    assert!(rig.events().is_empty(), "the host's own change is not reported back");
+    assert!(
+        rig.events().is_empty(),
+        "the host's own change is not reported back"
+    );
 }
 
 #[test]
@@ -826,7 +843,10 @@ fn the_load_ring_shows_the_progress_and_ends_with_a_fade() {
         rig.element("CornerDial::full-ring")
             .map(|ring| ring.computed_opacity())
     };
-    assert!(arc().is_none() && full().is_none(), "at rest: the track only");
+    assert!(
+        arc().is_none() && full().is_none(),
+        "at rest: the track only"
+    );
 
     rig.window.set_loading(true);
     rig.window.set_progress(0.0);

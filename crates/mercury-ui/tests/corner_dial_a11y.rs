@@ -79,8 +79,7 @@ impl Rig {
         });
         window.on_snap_corner(|x, y, width, height, current| {
             corner_to_slint(
-                DialGeometry::new(width, height)
-                    .snap(Point::new(x, y), corner_from_slint(current)),
+                DialGeometry::new(width, height).snap(Point::new(x, y), corner_from_slint(current)),
             )
         });
         let toggles = Rc::new(RefCell::new(Vec::new()));
@@ -194,7 +193,10 @@ fn the_dial_is_the_only_thing_read_while_closed_and_it_has_an_area() {
     rig.window.set_fallback_letter("D".into());
     rig.window.set_has_favicon(false);
     let nodes = rig.nodes();
-    assert_eq!(a11y::dump(&nodes), format!("button | {LABEL} | | collapsed\n"));
+    assert_eq!(
+        a11y::dump(&nodes),
+        format!("button | {LABEL} | | collapsed\n")
+    );
     a11y::assert_labelled(&nodes, "the dial at rest");
     a11y::assert_bounds(&nodes, (1440.0, 900.0));
     let rect = nodes[0].rect();
@@ -209,7 +211,12 @@ fn the_dial_is_the_only_thing_read_while_closed_and_it_has_an_area() {
     rig.window.set_progress(0.65);
     rig.advance(200);
     let nodes = rig.nodes();
-    assert_eq!(nodes.len(), 1, "the favicon and the ring are decoration:\n{}", a11y::dump(&nodes));
+    assert_eq!(
+        nodes.len(),
+        1,
+        "the favicon and the ring are decoration:\n{}",
+        a11y::dump(&nodes)
+    );
 }
 
 #[test]
@@ -261,7 +268,12 @@ fn an_open_fan_is_a_list_called_tab_dial_with_one_tab_per_segment() {
         .iter()
         .filter(|node| node.role == AccessibleRole::Tab)
         .collect();
-    assert_eq!(tabs.len(), 22, "the mockup's 22 tabs:\n{}", a11y::dump(&nodes));
+    assert_eq!(
+        tabs.len(),
+        22,
+        "the mockup's 22 tabs:\n{}",
+        a11y::dump(&nodes)
+    );
     let mut labels: Vec<String> = tabs.iter().map(|tab| tab.label.clone()).collect();
     let mut wanted: Vec<String> = rig
         .fan
@@ -314,7 +326,9 @@ fn the_caption_and_the_scrim_are_not_read() {
     rig.advance(10);
     let nodes = rig.nodes();
     assert!(
-        nodes.iter().all(|node| !node.label.contains("Reading · Essay on maps")),
+        nodes
+            .iter()
+            .all(|node| !node.label.contains("Reading · Essay on maps")),
         "the caption is decoration (the hovered tab already has its label):\n{}",
         a11y::dump(&nodes)
     );
