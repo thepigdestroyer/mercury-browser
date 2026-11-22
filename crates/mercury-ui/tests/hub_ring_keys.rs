@@ -11,7 +11,7 @@
 
 mod common;
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::Duration;
 
@@ -403,6 +403,33 @@ fn up_wraps_from_the_first_result_to_the_web_row() {
         .map(|r| r.selected)
         .collect();
     assert_eq!(selected, [false, false, true]);
+}
+
+#[test]
+fn escape_ends_a_drag_in_progress_as_a_release_outside_would() {
+    let rig = Rig::new();
+    let cancelled = Rc::new(Cell::new(0));
+    let count = Rc::clone(&cancelled);
+    rig.bridge()
+        .on_drag_cancelled(move || count.set(count.get() + 1));
+    // Press on a segment of Reading (straight below the centre) and move 14 px: a drag begins.
+    let start = LogicalPosition::new(258.0, 258.0 + 180.0);
+    rig.send(WindowEvent::PointerMoved { position: start });
+    rig.send(WindowEvent::PointerPressed {
+        position: start,
+        button: PointerEventButton::Left,
+    });
+    rig.send(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(start.x + 14.0, start.y),
+    });
+    assert_eq!(cancelled.get(), 0, "the drag is still going");
+    rig.named(Key::Escape);
+    assert_eq!(cancelled.get(), 1, "Esc cancels the drag, no drop");
+    assert!(
+        rig.host.calls().is_empty(),
+        "a cancelled drag moves nothing: {:?}",
+        rig.host.calls()
+    );
 }
 
 #[test]

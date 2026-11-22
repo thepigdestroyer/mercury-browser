@@ -178,6 +178,11 @@ export component RingPopoverContent inherits Rectangle {
     height: HubRingBridge.ring-size;
     forward-focus: keys;
 
+    // Ends a drag in progress as a release outside would (the popup calls it when it closes).
+    public function cancel-drag() {
+        ring.cancel-drag();
+    }
+
     // The first typed character puts the caret in the search field (its border turns accent); the
     // keys still go to Rust first, the field gets the ones Rust leaves (paste and the like).
     property <bool> searching: HubRingBridge.query-active;
@@ -207,6 +212,10 @@ export component RingPopoverContent inherits Rectangle {
         width: parent.width;
         height: parent.height;
         capture-key-pressed(event) => {
+            // Esc ends a drag in progress (the ring's own cancel); Rust still sees the key.
+            if event.text == Key.Escape {
+                ring.cancel-drag();
+            }
             if HubRingBridge.key-pressed(event.text, event.modifiers.alt, event.modifiers.control, event.modifiers.meta, event.modifiers.shift) {
                 return accept;
             }
@@ -217,7 +226,7 @@ export component RingPopoverContent inherits Rectangle {
             return reject;
         }
 
-        RingBands {
+        ring := RingBands {
             width: parent.width;
             height: parent.height;
             ring-size: HubRingBridge.ring-size;
@@ -312,6 +321,7 @@ export component RingPopover inherits Rectangle {
         if !root.popup-open {
             close-timer.running = false;
             root.closing = false;
+            content.cancel-drag();
             HubRingBridge.closed();
         }
     }
