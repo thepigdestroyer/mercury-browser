@@ -1,0 +1,34 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mercury-passkeys"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[features]
+# The fake user verifier, the fake security key and the helpers the engine and UI lanes' tests need.
+testing = []
+
+[dependencies]
+async-trait.workspace = true
+credential-exchange-format.workspace = true
+data-encoding.workspace = true
+getrandom.workspace = true
+passkey.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+url.workspace = true
+zeroize.workspace = true
+
+[target.'cfg(target_os = "macos")'.dependencies]
+authenticator.workspace = true
+core-foundation.workspace = true
+log.workspace = true
+security-framework.workspace = true
+
+[dev-dependencies]
+mercury-passkeys = { path = ".", features = ["testing"] }
+tempfile.workspace = true
