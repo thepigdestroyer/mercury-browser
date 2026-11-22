@@ -10,6 +10,7 @@
 mod apply;
 mod edit;
 mod exit;
+mod groups_panel; // settings-ui
 mod load;
 mod saver;
 mod window;
@@ -75,6 +76,8 @@ pub(crate) struct SettingsHandle {
     switches: RefCell<Option<EngineSwitches>>,
     /// The browser window: its colour scheme is the system's, for the settings window.
     main_window: RefCell<slint::Weak<MainWindow>>,
+    /// The Tab groups section's key panel and the controller it reads (settings-ui).
+    groups: groups_panel::GroupsPanel,
     finished: Cell<bool>,
     /// The notes about the look (a palette this version lacks) already logged, so that each text
     /// is logged once per run and not on every settings change.
@@ -119,6 +122,7 @@ impl SettingsHandle {
             window_theme_timer: Timer::default(),
             switches: RefCell::new(None),
             main_window: RefCell::default(),
+            groups: groups_panel::GroupsPanel::default(),
             finished: Cell::new(false),
             look_notes_logged: RefCell::default(),
         });
@@ -503,6 +507,7 @@ pub(crate) fn connect(
     controller: &Rc<RefCell<BrowserController>>,
 ) {
     *settings.main_window.borrow_mut() = window.as_weak();
+    settings.groups.set_controller(controller); // settings-ui
     apply_chrome_theme(window);
     // Taken once, before the event loop runs; from then on settings reach the engine through
     // the shared switches, never by borrowing it.

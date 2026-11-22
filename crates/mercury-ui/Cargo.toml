@@ -14,6 +14,9 @@ test-support = []
 
 [dependencies]
 slint.workspace = true
+# settings-ui: the Appearance and Tab groups sections show what mercury-appearance computes from the stored settings.
+mercury-appearance = { path = "../mercury-appearance" }
+mercury-settings = { path = "../mercury-settings" }
 
 # theme-plumbing: `src/theme` turns the resolved palettes and the sizes preset into what the
 # `ChromePalette` and `ChromeMetrics` globals hold. Engine-free, like this crate.

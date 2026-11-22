@@ -30,7 +30,7 @@ On the `mercury` branch today:
 
 - tabs, pages that open tabs, pop-up blocking (pop-ups need a click in the page), and pages closing their own tab;
 - the address bar with seven built-in search engines and keywords such as `@wikipedia`;
-- a settings window for search, appearance (Light, Dark, System), the home page and clearing data when Mercury quits;
+- a settings window for search, appearance (Light, Dark, System), the home page and clearing data when Mercury quits, and sections for the layout and the tab groups' letters, which are saved but change nothing you can see until the tab-group interface arrives;
 - page dialogs, permission prompts and HTTP sign-in;
 - drop-down lists, a colour picker, the macOS file panel and a right-click menu;
 - the macOS menu bar and the About window;

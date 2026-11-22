@@ -18,6 +18,7 @@
 //! - [`metrics`]: the sizes of the chrome's rows, buttons and tabs, as a preset.
 //! - [`resolve`](mod@resolve): turns the stored [`mercury_settings::AppearanceSettings`] into what the
 //!   interface needs, with notes for anything it had to fall back from.
+//! - [`panels`]: what the settings window's Appearance and Tab groups sections show and do.
 
 #![deny(missing_docs)]
 #![cfg_attr(not(test), deny(clippy::unwrap_used, clippy::expect_used))]
@@ -30,6 +31,8 @@ pub mod metrics;
 pub mod oklab;
 pub mod palette;
 pub mod palettes;
+// settings-ui: what the Appearance and Tab groups sections of the settings window show and do.
+pub mod panels;
 pub mod resolve;
 
 pub use colour::Colour;

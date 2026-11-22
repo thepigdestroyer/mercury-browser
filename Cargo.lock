@@ -5951,6 +5951,7 @@ dependencies = [
  "image",
  "libc",
  "log",
+ "mercury-appearance",
  "mercury-downloads",
  "mercury-filter-lists",
  "mercury-import",

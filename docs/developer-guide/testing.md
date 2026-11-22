@@ -68,7 +68,9 @@ Desktop tests exercise event routing, bounded command dispatch, shortcuts, key c
 
 ### The interface
 
-`crates/mercury-ui/tests/page_request_render.rs` and `render_menus.rs` render Mercury's Slint components with Slint's software renderer, so they can be checked without a window. The examples in `crates/mercury-ui/examples/` (`render_settings`, `render_controls`, `render_tabs`) render the settings window, the page controls and the tab strip to PNGs for review.
+`crates/mercury-ui/tests/page_request_render.rs` and `render_menus.rs` render Mercury's Slint components with Slint's software renderer, so they can be checked without a window. The examples in `crates/mercury-ui/examples/` (`render_settings`, `render_controls`, `render_tabs`) render the settings window, the page controls and the tab strip to PNGs for review. `render_settings_appearance` and `render_settings_tab_groups` render the Appearance and Tab groups sections in every state of their accessibility tests (Mercury and Classic, Orbit and the dial off, the note that the interface is not in yet, a conflict, a dead key, a refused key, keys off, an empty window, 64 groups), in light and dark, at the narrowest window (560 px) and at 900 px: `cargo run --release -p mercury-ui --example render_settings_tab_groups -- <output directory>`. Open the PNGs; nothing may be clipped at 560 px.
+
+The pure models of the two sections are in `crates/mercury-appearance/src/panels/` (`layout_panel.rs`, `key_panel.rs`) with their tests in `crates/mercury-appearance/tests/`; they take seconds, so put new logic there and keep the Slint files to drawing. The accessibility tests of the sections are `crates/mercury-ui/tests/a11y_settings_appearance.rs` and `a11y_settings_tab_groups.rs`, with goldens `a11y-snapshots/settings-appearance-*.txt` and `settings-tab-groups-*.txt`. When a section is added or renamed, every `windows-settings-*.txt` golden changes (they carry the sidebar); bless those by file and read `git diff -U0` to check that only the sidebar lines moved.
 
 ### ⌥ group keys
 

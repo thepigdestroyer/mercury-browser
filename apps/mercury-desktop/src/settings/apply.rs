@@ -92,6 +92,10 @@ pub(crate) fn apply_to_controller(controller: &mut BrowserController, settings: 
     controller.set_default_zoom_percent(settings.appearance.default_zoom_percent);
     controller.set_forced_color_scheme(forced_color_scheme(settings.appearance.theme));
     controller.set_https_only(settings.privacy.https_only); // site-security
+    // settings-ui: the letters new groups take
+    controller.set_group_key_sequence(super::groups_panel::key_sequence(
+        &settings.appearance.tab_groups.keys,
+    ));
 }
 
 #[cfg(test)]
@@ -336,6 +340,29 @@ mod tests {
         settings.homepage = "https://home.test/".to_owned();
         settings.startup = StartupBehavior::RestoreSession;
         assert_eq!(start_up_address(&settings, &[]), None);
+    }
+
+    #[test]
+    fn the_controller_takes_the_letters_for_new_groups_from_the_settings() {
+        let mut controller = BrowserController::default();
+        let mut settings = Settings::default();
+        settings.appearance.tab_groups.keys.default_sequence = "QWE".to_owned();
+        apply_to_controller(&mut controller, &settings);
+        apply_to_controller(&mut controller, &settings);
+        let tabs = [controller.active_tab_id(), controller.open_tab()];
+
+        for tab in tabs {
+            controller
+                .create_group(&[tab], None, None, std::time::SystemTime::UNIX_EPOCH)
+                .expect("a group");
+        }
+
+        let keys = controller
+            .groups()
+            .iter()
+            .map(|group| group.key.map(talaria_core::GroupKey::letter))
+            .collect::<Vec<_>>();
+        assert_eq!(keys, [Some('Q'), Some('W')]);
     }
 
     #[test]

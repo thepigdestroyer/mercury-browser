@@ -23,3 +23,6 @@ pub use theme::{Look, apply_look};
 
 // key-switcher
 pub mod key_switcher;
+
+// settings-ui: the Appearance and Tab groups sections of the settings window
+pub mod settings_sections;

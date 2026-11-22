@@ -12,6 +12,7 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use mercury_ui::settings_sections::section;
 use mercury_ui::{
     ChromePalette, ChromeTheme, ContextMenuRow, LoginListRow, MainWindow, PasswordManagerUi,
     SettingsWindow,
@@ -79,7 +80,7 @@ fn row(site: &str, username: &str, kind: &str) -> LoginListRow {
 fn sample_settings_window(scheme: ColorScheme) -> Result<SettingsWindow, Box<dyn Error>> {
     let window = SettingsWindow::new()?;
     window.set_forced_color_scheme(scheme);
-    window.set_section(4);
+    window.set_section(section::PASSWORDS);
     window.set_offer_to_save_passwords(true);
     let ui = window.global::<PasswordManagerUi>();
     ui.set_storage_note("Saved in your login keychain.".into());
