@@ -31,8 +31,8 @@ pub enum MediaStateAction {
 /// Without a MediaSource this is **exactly** what Servo 0.8 (and `main`) does:
 /// `if potentially_playing && !is_playing { play } else if is_playing { pause }`, so `Pause` whenever the
 /// player runs and the first branch was not taken, even for an element that is potentially playing (an
-/// upstream defect, kept so that the default build, with MSE off, does not change; the upstream
-/// description is in `sdd/med-1b-logs/upstream-descriptions.md`). `stalled` does not exist there and is
+/// defect of Servo 0.8, kept for a plain element so that the default build does not change until the
+/// F6 window check of `sdd/deferred-hands-on.md` has passed). `stalled` does not exist there and is
 /// ignored.
 ///
 /// With a MediaSource: `Play` if `potentially_playing && !stalled && !is_playing`; `Pause` if
