@@ -439,19 +439,21 @@ export component CornerDial inherits Rectangle {
                 y: (parent.height - self.height) / 2;
                 width: DialMetrics.diameter + DialMetrics.ring-width;
                 height: self.width;
-                viewbox-width: self.width / 1px;
-                viewbox-height: self.height / 1px;
+                // Slint fits the viewbox into the box minus the stroke width, so the viewbox is that size
+                // and the arc's centre is half of it (a 72 px viewbox maps 1:1 onto the ring).
+                viewbox-width: (self.width - DialMetrics.ring-width) / 1px;
+                viewbox-height: (self.height - DialMetrics.ring-width) / 1px;
                 visible: root.loading && root.arc-share > 0.001 && root.arc-share < 0.999;
                 stroke: ChromePalette.accent;
                 stroke-width: DialMetrics.ring-width;
 
                 MoveTo {
-                    x: (arc.width / 2 + DialMetrics.diameter / 2 * Math.sin(root.arc-start)) / 1px;
-                    y: (arc.height / 2 - DialMetrics.diameter / 2 * Math.cos(root.arc-start)) / 1px;
+                    x: ((arc.width - DialMetrics.ring-width) / 2 + DialMetrics.diameter / 2 * Math.sin(root.arc-start)) / 1px;
+                    y: ((arc.height - DialMetrics.ring-width) / 2 - DialMetrics.diameter / 2 * Math.cos(root.arc-start)) / 1px;
                 }
                 ArcTo {
-                    x: (arc.width / 2 + DialMetrics.diameter / 2 * Math.sin(root.arc-end)) / 1px;
-                    y: (arc.height / 2 - DialMetrics.diameter / 2 * Math.cos(root.arc-end)) / 1px;
+                    x: ((arc.width - DialMetrics.ring-width) / 2 + DialMetrics.diameter / 2 * Math.sin(root.arc-end)) / 1px;
+                    y: ((arc.height - DialMetrics.ring-width) / 2 - DialMetrics.diameter / 2 * Math.cos(root.arc-end)) / 1px;
                     radius-x: DialMetrics.diameter / 2 / 1px;
                     radius-y: DialMetrics.diameter / 2 / 1px;
                     large-arc: root.arc-share > 0.5;
@@ -459,30 +461,27 @@ export component CornerDial inherits Rectangle {
                 }
             }
 
-            // The planet: the active group's colour, lit from the upper left (the mockup's
-            // gradient: centre at 35 % / 30 %, radius 75 %, white-ish at 0, the colour at 60 %, dark
-            // at 100 %). Slint's radial gradient is centred in its box and ends at the box's
-            // corner, so a box of four radii, placed on the highlight and clipped to the planet,
-            // gives the same shape (stops at 0, 31.8 % and 53 % of the half-diagonal).
+            // The planet: the active group's colour with a darker rim and a lighter patch on the upper
+            // left (the mockup's radial gradient, centred at 35 % / 30 %, approximated by plain shapes).
+            // Plain rounded rectangles on purpose: the software renderer draws a gradient or a clip
+            // with its corners square, and the pictures of this lane come from it.
             Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 width: 2 * DialMetrics.planet-radius;
                 height: self.width;
                 border-radius: self.width / 2;
-                clip: true;
-
-                Rectangle {
-                    x: 0.35 * parent.width - self.width / 2;
-                    y: 0.30 * parent.height - self.height / 2;
-                    width: 2 * parent.width;
-                    height: self.width;
-                    background: @radial-gradient(circle,
-                        root.active-colour.brighter(0.4) 0%,
-                        root.active-colour 31.8%,
-                        root.active-colour.darker(0.25) 53%,
-                        root.active-colour.darker(0.25) 100%);
-                }
+                background: root.active-colour;
+                border-width: 4px;
+                border-color: root.active-colour.darker(0.25);
+            }
+            Rectangle {
+                x: (parent.width - 2 * DialMetrics.planet-radius) / 2 + 0.35 * 2 * DialMetrics.planet-radius - self.width / 2;
+                y: (parent.height - 2 * DialMetrics.planet-radius) / 2 + 0.30 * 2 * DialMetrics.planet-radius - self.height / 2;
+                width: 0.8 * DialMetrics.planet-radius;
+                height: self.width;
+                border-radius: self.width / 2;
+                background: root.active-colour.brighter(0.6).transparentize(0.55);
             }
 
             // The favicon, or the first letter of the host on a chip.
