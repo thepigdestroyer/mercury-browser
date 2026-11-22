@@ -32,8 +32,8 @@ mod engine;
 mod filter_lists; // blocklists
 mod find;
 mod geolocation;
-// hub-ring: installed by layout-switch (brief D7)
 mod history_ui;
+// hub-ring: installed by layout-switch (brief D7)
 #[allow(dead_code)]
 mod hub_ring;
 mod import_ui; // import-ui lane
