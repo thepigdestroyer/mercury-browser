@@ -13,6 +13,8 @@ pub mod ring_bands;
 
 // corner-dial
 pub mod corner_dial;
+// group-dock
+pub mod group_dock;
 
 // theme-plumbing
 mod theme;
