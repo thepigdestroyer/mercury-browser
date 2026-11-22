@@ -10,6 +10,7 @@
 #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
 
 use std::cell::Cell;
+use std::sync::Arc;
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
@@ -262,12 +263,35 @@ impl RequestListener {
                     // `IDBIndex::records_for`). A query that is not a cursor is answered from them
                     // directly; the records of a cursor step go to `iterate_cursor` below.
                     let mut answered_directly = false;
-                    let records = match self.index_param.as_ref() {
+                    let records: Arc<Vec<IndexedDBRecord>> = match self.index_param.as_ref() {
                         Some(index_param) => {
-                            let index = index_param.index.root();
-                            let mut records =
-                                index.records_for(cx, &global, records, index_param.needs_values);
-                            records.retain(|record| index_param.range.contains(&record.key));
+                            // Mercury: a cursor step that has its records already (see
+                            // `IDBCursor::execute_iteration`) does not derive them again; the first step
+                            // derives them and the cursor keeps them (net-1 review, finding 3).
+                            let records = match index_param.snapshot.as_ref() {
+                                Some(snapshot) => snapshot.clone(),
+                                None => {
+                                    let index = index_param.index.root();
+                                    let mut derived = index.records_for(
+                                        cx,
+                                        &global,
+                                        records,
+                                        index_param.needs_values,
+                                    );
+                                    derived
+                                        .retain(|record| index_param.range.contains(&record.key));
+                                    let derived = Arc::new(derived);
+                                    if index_param.kind == IndexQueryKind::Cursor &&
+                                        let Some(param) = self.iteration_param.as_ref()
+                                    {
+                                        param
+                                            .cursor
+                                            .root()
+                                            .keep_snapshot(index_param.generation, derived.clone());
+                                    }
+                                    derived
+                                },
+                            };
                             if index_param.kind != IndexQueryKind::Cursor {
                                 if let Err(e) =
                                     index_param.answer(cx, &global, &records, answer.handle_mut())
@@ -285,7 +309,7 @@ impl RequestListener {
                             }
                             records
                         },
-                        None => records,
+                        None => Arc::new(records),
                     };
 
                     if !answered_directly {
@@ -302,7 +326,7 @@ impl RequestListener {
                             );
                             return;
                         };
-                        let cursor = match iterate_cursor(&global, cx, param, records) {
+                        let cursor = match iterate_cursor(&global, cx, param, &records) {
                             Ok(cursor) => cursor,
                             Err(e) => {
                                 warn!("Error reading structuredclone data");
@@ -660,6 +684,11 @@ impl IDBRequest {
             },
         };
         let operation = operation_fn(callback);
+        // Mercury: a request that writes makes the index records that a cursor kept stale (net-1 review,
+        // finding 3).
+        if matches!(operation, AsyncOperation::ReadWrite(_)) {
+            source.note_write();
+        }
 
         if matches!(
             operation,

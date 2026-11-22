@@ -1,24 +1,25 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-// Mercury: tests for the index tables of the IndexedDB SQLite store and multiEntry. This is a new
-// Mercury file; nothing in it is copied from Servo or another project. It includes Servo's own
-// `create.rs` (MPL-2.0) as a module, unchanged, so that the tests run against the real schema.
+// Mercury: facts about the index tables of the IndexedDB SQLite store. This is a new Mercury file; nothing in it
+// is copied from Servo or another project. It includes Servo's own `create.rs` (MPL-2.0) as a module, unchanged,
+// so that the facts are checked against the real schema.
 
-//! What the SQLite schema of the IndexedDB store allows for the records of an index, and what a
-//! SQLite failure looks like to the code that maps it to a DOMException.
+//! **What these tests are, and are not.** They pin facts about SQLite and about Servo's schema (that a unique
+//! index's primary key refuses a repeated member, that the Debug text of a constraint failure names
+//! `ConstraintViolation`, ...), written as SQL by hand. They call no Mercury code and are **not** evidence that
+//! IndexedDB's multiEntry or unique indexes work. That evidence is:
 //!
-//! Servo 0.8's engine never writes `index_data` or `unique_index_data`: it creates and clears them
-//! (`delete_store`) but nothing inserts a row, because it stores values as opaque structured-clone
-//! blobs and cannot evaluate a key path. The records of an index are derived in script from the
-//! records of the object store (`IDBIndex::records_for` in `servo-script`, whose own tests cover
-//! multiEntry expansion, ordering and unique indexes). These tests pin the properties of the schema
-//! that a writer for real index rows will rely on, so that nobody has to guess them:
+//! - the unit tests of `indexeddb/engines/sqlite/unique_index_rows.rs`, which put records through the engine's
+//!   own `put_item`, `delete_item`, `clear` and `delete_index` (unique keys, multiEntry members, rollback of a
+//!   refused put);
+//! - the unit tests of `key.rs` and `idbindex.rs` in `servo-script` (key extraction, multiEntry expansion,
+//!   ordering).
 //!
-//! - `index_data` holds several rows for one record (one per member of a multiEntry key), and
-//!   several records may share a member;
-//! - `unique_index_data` holds one row per member too, and refuses a member that another record
-//!   already has;
-//! - the rows of a record must be deleted before the record (a foreign key), as `delete_store` does;
+//! The facts, which the writer in `unique_index_rows.rs` relies on:
+//!
+//! - `index_data` holds several rows for one record (one per member of a multiEntry key), and several records
+//!   may share a member;
+//! - `unique_index_data` holds one row per member too, and refuses a member that another record already has;
 //! - both tables are therefore usable for multiEntry as they are: no migration is needed;
 //! - the Debug text of a SQLite constraint failure names `ConstraintViolation`, which
 //!   `map_backend_error_to_request_error` in `servo-script` turns into a ConstraintError.

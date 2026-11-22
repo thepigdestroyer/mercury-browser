@@ -11,6 +11,7 @@
 // index cursor that keeps asking through its index, no value copies for key-only queries, and `get` and
 // `getKey` requiring a key). Mercury's other changes to this file are marked `Mercury:` where they are.
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
@@ -27,6 +28,7 @@ use script_bindings::reflector::{Reflector, reflect_dom_object};
 use script_bindings::str::DOMString;
 use storage_traits::indexeddb::{
     AsyncOperation, AsyncReadOnlyOperation, IndexedDBKeyRange, IndexedDBKeyType, IndexedDBRecord,
+    UniqueIndexKeys,
 };
 
 use crate::dom::bindings::codegen::Bindings::IDBCursorBinding::IDBCursorDirection;
@@ -175,12 +177,15 @@ impl IDBIndex {
         // Mercury: the records of an index are not in the backend (see `records_for`), so it is asked
         // for the whole object store and the reply handler of the request derives the index's records
         // and applies `range` to them. The cursor does the same on every step, see `IDBCursor`.
+        // A new cursor has derived nothing yet: this first step scans the store.
         let index_param = IndexQueryParam {
             index: Trusted::new(self),
             range,
             count: None,
             kind: IndexQueryKind::Cursor,
             needs_values: !key_only,
+            generation: self.object_store.write_generation(),
+            snapshot: None,
         };
 
         IDBRequest::execute_async_indexed(
@@ -249,6 +254,8 @@ impl IDBIndex {
             count,
             kind,
             needs_values,
+            generation: self.object_store.write_generation(),
+            snapshot: None,
         };
 
         IDBRequest::execute_async_indexed(
@@ -267,6 +274,31 @@ impl IDBIndex {
         .inspect(|request| {
             // Mercury: the source of the request is this index.
             request.set_source(Some(RequestSource::Index(Dom::from_ref(self))));
+        })
+    }
+
+    // Mercury: the keys that `value` has in this index, when the index is unique (net-1 review, finding 3): one
+    // key, one per member of a multiEntry key, or none when the value has no valid key for it. A value whose key
+    // extraction throws has none either (the exception is not the put's).
+    pub(crate) fn unique_index_keys_of(
+        &self,
+        cx: &mut JSContext,
+        value: HandleValue,
+    ) -> Option<UniqueIndexKeys> {
+        if !self.unique {
+            return None;
+        }
+        let keys = match extract_key(cx, value, &self.key_path, Some(self.multi_entry)) {
+            Ok(ExtractionResult::Key(key)) => index_keys_of(key, self.multi_entry),
+            Ok(ExtractionResult::Invalid | ExtractionResult::Failure) => Vec::new(),
+            Err(_) => {
+                clear_pending_exception(cx);
+                Vec::new()
+            },
+        };
+        Some(UniqueIndexKeys {
+            index_name: String::from(self.Name()),
+            keys,
         })
     }
 
@@ -352,6 +384,15 @@ pub(crate) struct IndexQueryParam {
     /// rebuilds its records from a full scan of the object store, and copying every stored value
     /// into records nobody reads is the difference between a cheap query and an expensive one.
     pub(crate) needs_values: bool,
+    /// The write generation of the object store when the request was made (see
+    /// `IDBObjectStore::write_generation`).
+    ///
+    /// Mercury: net-1 review, finding 3.
+    pub(crate) generation: u64,
+    /// For a cursor step: the records of the index that the cursor derived at the generation above, when
+    /// it has them. The step then asks the backend for nothing (see `execute_iteration`) and reads them
+    /// instead of deriving the index again from the whole object store.
+    pub(crate) snapshot: Option<Arc<Vec<IndexedDBRecord>>>,
 }
 
 impl IndexQueryParam {
