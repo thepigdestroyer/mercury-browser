@@ -54,10 +54,9 @@ fn resolve(root: &Path, request_path: &str) -> Option<PathBuf> {
     }
     let (base, rest) = if let Some(rest) = path.strip_prefix("/pages/") {
         (root.join("tests/pages"), rest)
-    } else if let Some(rest) = path.strip_prefix("/mse-fixtures/") {
-        (root.join("crates/mercury-mse-testkit/fixtures"), rest)
     } else {
-        return None;
+        let rest = path.strip_prefix("/mse-fixtures/")?;
+        (root.join("crates/mercury-mse-testkit/fixtures"), rest)
     };
     let file = base.join(rest);
     file.is_file().then_some(file)
