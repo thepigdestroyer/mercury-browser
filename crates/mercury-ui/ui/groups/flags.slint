@@ -223,6 +223,9 @@ export component RingFlags inherits Rectangle {
                 color: ChromePalette.text;
                 horizontal-alignment: center;
                 vertical-alignment: center;
+                // A Text is `text` to assistive technology by default; the chips are decoration
+                // (the segment label has the number and the key switcher announces the digits).
+                accessible-role: none;
             }
         }
     }

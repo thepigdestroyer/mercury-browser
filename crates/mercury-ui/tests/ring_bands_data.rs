@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#![cfg(feature = "test-support")]
 //! The data builder of `RingBands` without a window: which rows are shown, the parallel arrays,
 //! hit-testing in row ids, the accessible label of every segment, the glyph colours (rest, held,
 //! theme), the persistent models and the cost of a build on crowded rings.
