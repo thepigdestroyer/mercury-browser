@@ -139,7 +139,7 @@ fn c09_change_type_checks() {
     ));
     assert!(matches!(
         rig.backend
-            .change_type(id, "video/mp4; codecs=\"hev1.1.6.L93.B0\""),
+            .change_type(id, "video/mp2t; codecs=\"avc1.42C00C\""),
         Err(MseError::NotSupported(_))
     ));
     assert!(matches!(

@@ -346,8 +346,13 @@ impl MediaSource {
             )));
         }
         let generation = self.tick();
+        let had_tracks = self.buffers[i].processor.first_init_received();
         self.buffers[i].discard(generation);
         self.prune_tombstones();
+        if had_tracks {
+            // `FrameFeed::tracks()` changes (D17): the consumer reads it again when woken.
+            self.push_wake();
+        }
         Ok(())
     }
 
@@ -1015,7 +1020,22 @@ impl MediaSource {
             self.feed.suppliers[slot] = Some(id);
             self.feed.cursors[slot] = None;
         }
-        let position = self.feed.position;
+        // A cursor that starts while another kind's cursor already runs belongs to a late track (a
+        // source buffer added or initialized after the pipeline started, D17) or to a new supplier: it
+        // starts where playback is, not at the position of the last seek, or the whole stream before
+        // the playback position would be sent to a pipeline that is already past it.
+        let late = self.feed.cursors[slot].is_none()
+            && self
+                .feed
+                .cursors
+                .iter()
+                .enumerate()
+                .any(|(k, c)| k != slot && c.is_some());
+        let position = if late {
+            self.feed.position.max(self.position)
+        } else {
+            self.feed.position
+        };
         let known = self.feed.known_config[slot];
         let processor = &self.buffers[i].processor;
         let cursor = self.feed.cursors[slot]
