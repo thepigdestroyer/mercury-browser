@@ -33,17 +33,30 @@ Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message 
 
 Changes made by lane txt-1 (text, 21 Nov 2026).
 
-### IME sequences and the state messages — `tests/input_methods.rs`, `tests/common/mod.rs`
+### IME sequences and the state messages — `tests/mercury_ime.rs` (new), `tests/input_methods.rs`, `tests/common/mod.rs`, `tests/rustfmt.toml` (new)
 
-- **What:** the test of servo/servo#49400 (`test_commit_without_composition`) and 21 tests more for Pinyin in `<input>`,
-  `<textarea>` and `contenteditable`, Japanese clauses with a selected clause, Korean (marked text replaced in place), a dead key,
-  cancel (`Commit("")` and `SetMarkedText("")`), `Dismissed`, `InsertText` with and without a replacement (a current sequence, a
-  stale one, changed text, past the end, inside a surrogate pair), `beforeinput` `preventDefault` during a composition, and the
-  state messages (on focus, typing, selection change, `None` on blur, no text for a password, a 4,096-unit window for a long
-  text). `tests/common/mod.rs` records every `TextMsg::InputState` that arrives through `notify_mercury_message`. The tests use
-  a `SoftwareRenderingContext` and no window. A Servo with `dom_exec_command_enabled` is built for the editing-host cases.
+- **What:** `tests/input_methods.rs` (Servo's own file) gets only the test of servo/servo#49400 (`test_commit_without_composition`).
+  The rest is in the new `tests/mercury_ime.rs`, so that a Servo bump does not conflict with it: its own harness (a copy of
+  `InputMethodTest` with a Servo that has `execCommand` on, helpers for marked text and commit) and 25 tests for Pinyin in
+  `<input>`, `<textarea>` and `contenteditable`, Japanese clauses with a selected clause, Korean (marked text replaced in place),
+  a dead key, cancel (`Commit("")` and `SetMarkedText("")`), `Dismissed`, `InsertText` with and without a replacement (a current
+  sequence, a stale one, changed text, past the end, inside a surrogate pair), `beforeinput` `preventDefault` during a
+  composition, a composition left behind by a focus change, and the state messages (on focus, typing, selection change, `None`
+  on blur, no text for a password, a 4,096-unit window for a long text, no message for a reflow that changed nothing about the
+  field, a document id on every state and on every "cleared" message, an iframe's field). `tests/common/mod.rs` records every
+  `TextMsg::InputState` and `TextMsg::InputCleared` that arrives through `notify_mercury_message`. The tests use a
+  `SoftwareRenderingContext` and no window. `tests/rustfmt.toml` is Servo's own rustfmt configuration, so that `cargo fmt --all`
+  (which formats the test files through `crates/mercury-engine-tests`) leaves the upstream test files alone.
 - **Why:** the engine side of EB11 had no test of its own.
-- **Tested by:** `timeout 600 cargo test --release -p servo --test input_methods` (see the report of lane txt-1 for the result).
+- **Tested by (how they run):** `servo` has dev-dependencies and is not a workspace member, so cargo refuses `cargo test -p servo`,
+  and `--manifest-path third_party/servo/Cargo.toml` would resolve the published, unpatched sibling crates. The workspace member
+  `crates/mercury-engine-tests` has `[[test]]` targets that point at these files and builds them against the patched crates:
+  **`make engine-tests`** (needs GStreamer; no window; `scripts/ci/engine-tests.sh` runs each test in a process of its own, because
+  Servo keeps its options in a process-wide `OnceLock` and a second engine in a process panics with "Already initialized").
+  `test = false` keeps them out of `make test`. Two hook lines in `tests/common/mod.rs`: the patched `servo-default-resources` does
+  not register its resource reader (the browser registers its own), so the test binary registers Servo's default one
+  (`submit_resource_reader!`; without it the engine panics with "No resource reader registered" on its constellation thread and
+  the test hangs), and `ServoTest::spin` fails after two minutes instead of spinning forever.
 - **Drop when:** the #49400 test at the bump that contains it; the rest stays.
 
 ## Removing this directory

@@ -497,7 +497,7 @@ diff --git a/dom/document/text_input_state.rs b/dom/document/text_input_state.rs
 new file mode 100644
 --- /dev/null
 +++ b/dom/document/text_input_state.rs
-@@ -0,0 +1,935 @@
+@@ -0,0 +1,1150 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -551,7 +551,7 @@ new file mode 100644
 +use crate::dom::node::{Node, NodeTraits};
 +use crate::dom::range::Range;
 +use crate::dom::text::Text;
-+use crate::dom::text_input::Lines;
++use crate::dom::text_input::{Lines, TextInputStamp};
 +use crate::dom::types::{CompositionEvent, Element, Event, EventTarget};
 +
 +/// When the text state is being flushed, which decides whether layout is asked for the caret
@@ -588,6 +588,56 @@ new file mode 100644
 +    sequence: Cell<u64>,
 +    /// Whether the caret of the editable moved since its rectangle was measured.
 +    caret_rect_stale: Cell<bool>,
++    /// What the last state was made of, so that a flush can skip the rebuild (and its copy of
++    /// the text) when nothing changed.
++    #[no_trace]
++    #[ignore_malloc_size_of = "a few numbers"]
++    last_stamp: DomRefCell<Option<Stamp>>,
++}
++
++/// A boundary point of a range: the node's address, its offset, for both ends.
++type RangeStamp = (usize, u32, usize, u32);
++
++/// Everything the text state of the focused editable is made of, except the caret rectangle and
++/// the text itself. Equal stamps mean an equal state; making one copies nothing (a text control
++/// keeps a counter of its changes, an editing host's block has a version number).
++#[derive(Clone, Debug, PartialEq)]
++enum Stamp {
++    Control {
++        input: TextInputStamp,
++        password: bool,
++    },
++    Host {
++        version: u64,
++        selection: Option<RangeStamp>,
++        marked: Option<RangeStamp>,
++    },
++}
++
++fn range_stamp(range: &Range) -> RangeStamp {
++    let (start, end) = (range.start_container(), range.end_container());
++    (
++        &*start as *const Node as usize,
++        range.start_offset(),
++        &*end as *const Node as usize,
++        range.end_offset(),
++    )
++}
++
++/// Whether a flush can return before it builds the state: it is the same editable as the last
++/// message described, a message was sent, nothing it is made of changed, and the caret rectangle
++/// does not need a new measurement after this reflow.
++fn can_skip_rebuild(
++    target_changed: bool,
++    sent_before: bool,
++    stamp_unchanged: bool,
++    mode: FlushMode,
++    caret_rect_stale: bool,
++) -> bool {
++    !target_changed &&
++        sent_before &&
++        stamp_unchanged &&
++        !(mode == FlushMode::AfterReflow && caret_rect_stale)
 +}
 +
 +/// The focused element, if there is one.
@@ -706,6 +756,7 @@ new file mode 100644
 +        let Some((element, context)) = focused_editable(cx, document) else {
 +            return Default::default();
 +        };
++        self.end_stale_composition(cx, document, &element);
 +        if !is_still_rendered(cx, &element) {
 +            return Default::default();
 +        }
@@ -786,6 +837,7 @@ new file mode 100644
 +        let Some((element, context)) = focused_editable(cx, document) else {
 +            return Default::default();
 +        };
++        self.end_stale_composition(cx, document, &element);
 +        if self.composition_is_open(&element, &context) {
 +            return self.finish(cx, document, &element, &context, text);
 +        }
@@ -857,7 +909,7 @@ new file mode 100644
 +            EditingContext::Document(_) => {
 +                // The same events as for an update, even when the text did not change.
 +                self.update_host(cx, document, &text, None, None);
-+                self.end_host(cx, document, None);
++                self.end_host(cx, document, None, true);
 +            }
 +        }
 +        // The composition is closed before the event, so that a page that reacts to it, or an
@@ -867,6 +919,17 @@ new file mode 100644
 +        self.marked_text.borrow_mut().clear();
 +        let flags = fire_composition_event(cx, document, element, CompositionState::End, &text);
 +        InputEventResult::from(flags) | InputEventResult::Consumed
++    }
++
++    /// A composition that belongs to another element than the focused editable (the focus moved
++    /// between two IME events, before any flush noticed): it ends, with its `compositionend`,
++    /// before the event for the new element is handled.
++    fn end_stale_composition(&self, cx: &mut JSContext, document: &Document, focused: &Element) {
++        if let Some(target) = self.composition_target.get() {
++            if !same_element(&target, focused) {
++                self.end_lost_composition(cx, document, &target);
++            }
++        }
 +    }
 +
 +    /// A composition whose element is not the focused editable any more: end it where it is and
@@ -880,7 +943,7 @@ new file mode 100644
 +                control.text_input_mut().end_composition(None);
 +                control.maybe_update_composition_highlights();
 +            }
-+            EditingContext::Document(_) => self.end_host(cx, document, None),
++            EditingContext::Document(_) => self.end_host(cx, document, None, false),
 +        }
 +        self.composition_target.set(None);
 +        self.host_marked.set(None);
@@ -906,7 +969,7 @@ new file mode 100644
 +            EditingAction::EndComposition(text) => {
 +                let changed =
 +                    self.host_marked.get().is_some() && *self.marked_text.borrow() != *text;
-+                self.end_host(cx, document, Some(text));
++                self.end_host(cx, document, Some(text), true);
 +                changed
 +            }
 +            _ => false,
@@ -985,7 +1048,16 @@ new file mode 100644
 +    /// End the composition of an editing host: with `final_text`, the marked text first becomes
 +    /// that (events as for an update, unless it already is); then the highlights go and the
 +    /// caret is after the text.
-+    fn end_host(&self, cx: &mut JSContext, document: &Document, final_text: Option<&str>) {
++    ///
++    /// `move_caret` is false for a composition that lost its element (the focus, and with it the
++    /// selection, is somewhere else by now: putting the caret back would steal it).
++    fn end_host(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        final_text: Option<&str>,
++        move_caret: bool,
++    ) {
 +        if let Some(final_text) = final_text
 +            && self.host_marked.get().is_some()
 +            && *self.marked_text.borrow() != *final_text
@@ -993,7 +1065,8 @@ new file mode 100644
 +            self.update_host(cx, document, final_text, None, None);
 +        }
 +
-+        if let Some(marked) = self.host_marked.get()
++        if move_caret
++            && let Some(marked) = self.host_marked.get()
 +            && let Some(selection) = document.GetSelection(cx)
 +        {
 +            let _ = selection.Collapse(cx, Some(&marked.end_container()), marked.end_offset());
@@ -1089,20 +1162,36 @@ new file mode 100644
 +
 +        let Some((element, context)) = focused_editable(cx, document) else {
 +            self.last_target.set(None);
++            self.last_stamp.borrow_mut().take();
 +            if self.last_sent.borrow().is_some() {
 +                self.send(document, None);
 +            }
 +            return;
 +        };
-+        let Some(mut state) = self.build_state(cx, document, &element, &context) else {
-+            return;
-+        };
 +
-+        let previous = self.last_sent.borrow().clone();
++        // Cheap first: a stamp copies nothing. A reflow that changed nothing about the editable
++        // (an animation elsewhere on the page) ends here, whatever the size of the text.
 +        let target_changed = self
 +            .last_target
 +            .get()
 +            .is_none_or(|target| !same_element(&target, &element));
++        let stamp = self.stamp_of(cx, document, &element, &context);
++        if can_skip_rebuild(
++            target_changed,
++            self.last_sent.borrow().is_some(),
++            stamp.is_some() && *self.last_stamp.borrow() == stamp,
++            mode,
++            self.caret_rect_stale.get(),
++        ) {
++            return;
++        }
++
++        let Some(mut state) = self.build_state(cx, document, &element, &context) else {
++            return;
++        };
++        *self.last_stamp.borrow_mut() = stamp;
++
++        let previous = self.last_sent.borrow().clone();
 +        let content_changed = previous
 +            .as_ref()
 +            .is_none_or(|previous| !previous.same_content_as(&state));
@@ -1136,19 +1225,58 @@ new file mode 100644
 +        self.send(document, Some(state));
 +    }
 +
++    /// What the state of the focused editable is made of, without copying its text.
++    fn stamp_of(
++        &self,
++        cx: &mut JSContext,
++        document: &Document,
++        element: &Element,
++        context: &EditingContext,
++    ) -> Option<Stamp> {
++        match context {
++            EditingContext::TextControl(control) => {
++                let control = control.text_control_element();
++                Some(Stamp::Control {
++                    input: control.text_input().change_stamp(),
++                    password: control.is_password_field(),
++                })
++            },
++            EditingContext::Document(_) => {
++                let host = element.upcast::<Node>().editing_host_of()?;
++                let selection = document
++                    .selection()
++                    .and_then(|selection| selection.active_range(cx))
++                    .map(|range| range_stamp(&range));
++                Some(Stamp::Host {
++                    version: host.inclusive_descendants_version(),
++                    selection,
++                    marked: self.host_marked.get().map(|marked| range_stamp(&marked)),
++                })
++            },
++        }
++    }
++
 +    /// Send a message and remember it. Every message, `None` included, takes the next sequence
 +    /// number.
 +    fn send(&self, document: &Document, state: Option<TextInputState>) {
 +        let sequence = self.sequence.get() + 1;
 +        self.sequence.set(sequence);
++        let document_id = u64::from(document.window().pipeline_id());
 +        let state = state.map(|mut state| {
 +            state.sequence = sequence;
++            state.document = document_id;
 +            state
 +        });
 +        *self.last_sent.borrow_mut() = state.clone();
++        // The "nothing is focused" message names its document: a late one from a page must not
++        // hide the field of the frame the focus moved to.
++        let message = match state {
++            Some(state) => TextMsg::InputState(Box::new(state)),
++            None => TextMsg::InputCleared(document_id),
++        };
 +        document.send_to_embedder(EmbedderMsg::Mercury(
 +            Some(document.webview_id()),
-+            MercuryEmbedderMsg::Text(TextMsg::InputState(state.map(Box::new))),
++            MercuryEmbedderMsg::Text(message),
 +        ));
 +    }
 +
@@ -1262,6 +1390,7 @@ new file mode 100644
 +
 +fn state_from_window(window: TextWindow, multiline: bool, is_password: bool) -> TextInputState {
 +    TextInputState {
++        document: 0,
 +        sequence: 0,
 +        text: window.text,
 +        text_start: window.text_start,
@@ -1431,6 +1560,92 @@ new file mode 100644
 +                index + 1
 +            },
 +        ))
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::dom::text_input::{ClipboardProvider, SelectionDirection, TextInput};
++
++    struct NoClipboard;
++
++    impl ClipboardProvider for NoClipboard {
++        fn get_text(&mut self) -> Result<String, String> {
++            Err("no clipboard in tests".to_owned())
++        }
++        fn set_text(&mut self, _: String) {}
++    }
++
++    fn input(text: &str) -> TextInput<NoClipboard> {
++        TextInput::new(Lines::Single, DOMString::from(text), NoClipboard)
++    }
++
++    #[test]
++    fn a_flush_that_changed_nothing_skips_the_rebuild() {
++        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterReflow, false));
++        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterInput, true));
++    }
++
++    #[test]
++    fn a_changed_target_stamp_or_a_first_message_rebuilds() {
++        assert!(!can_skip_rebuild(true, true, true, FlushMode::AfterReflow, false));
++        assert!(!can_skip_rebuild(false, false, true, FlushMode::AfterReflow, false));
++        assert!(!can_skip_rebuild(false, true, false, FlushMode::AfterReflow, false));
++    }
++
++    #[test]
++    fn a_stale_caret_rectangle_is_measured_after_a_reflow_only() {
++        assert!(!can_skip_rebuild(false, true, true, FlushMode::AfterReflow, true));
++        assert!(can_skip_rebuild(false, true, true, FlushMode::AfterInput, true));
++    }
++
++    #[test]
++    fn the_stamp_of_an_untouched_text_input_does_not_change() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++        // Reading and moving nothing: the same stamp, however often it is asked for.
++        assert_eq!(before, text.change_stamp());
++        text.clear_selection();
++        assert_eq!(before, text.change_stamp());
++    }
++
++    #[test]
++    fn an_edit_changes_the_stamp_even_when_the_length_does_not() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++
++        text.set_content(DOMString::from("jello"));
++
++        assert_ne!(before, text.change_stamp());
++    }
++
++    #[test]
++    fn a_selection_change_changes_the_stamp() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++
++        text.set_selection_range_utf16(
++            servo_base::text::Utf16CodeUnits(1),
++            servo_base::text::Utf16CodeUnits(3),
++            SelectionDirection::None,
++        );
++
++        assert_ne!(before, text.change_stamp());
++    }
++
++    #[test]
++    fn a_composition_changes_the_stamp() {
++        let mut text = input("hello");
++        let before = text.change_stamp();
++
++        text.begin_composition();
++        text.replace_composition("ni");
++        let composing = text.change_stamp();
++        assert_ne!(before, composing);
++
++        text.replace_composition("nihao");
++        assert_ne!(composing, text.change_stamp());
 +    }
 +}
 diff --git a/dom/execcommand/basecommand.rs b/dom/execcommand/basecommand.rs
@@ -3593,7 +3808,7 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
  };
  use js::context::JSContext;
  use layout_api::SegmentGranularity;
-@@ -158,6 +159,19 @@
+@@ -158,8 +159,35 @@
      pub(crate) previous_selection_range: Range<RopeIndex>,
      #[no_trace]
      pub(crate) selection_for_layout: Option<RangeAny<Utf32CodeUnits>>,
@@ -3610,10 +3825,26 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
 +    pub(crate) composition_for_layout: Option<RangeAny<Utf32CodeUnits>>,
 +    #[no_trace]
 +    pub(crate) composition_selected_for_layout: Option<RangeAny<Utf32CodeUnits>>,
++    // Mercury: bumped whenever the text changes (the two places that write the rope), so that the
++    // IME state flush can tell cheaply that nothing changed since the last message (EB11).
++    content_version: u64,
  }
 
++// Mercury: everything the text state message is made of, without the text itself: two equal
++// stamps mean an equal state, and comparing them copies nothing (EB11).
++#[derive(Clone, Debug, Eq, PartialEq)]
++pub(crate) struct TextInputStamp {
++    content_version: u64,
++    edit_point: RopeIndex,
++    selection_origin: Option<RopeIndex>,
++    composition: Option<Range<RopeIndex>>,
++    composition_selected: Option<Range<RopeIndex>>,
++}
++
  /// <https://www.w3.org/TR/input-events-2/#interface-InputEvent-Attributes>
-@@ -167,6 +181,8 @@
+ #[derive(Clone, Copy, PartialEq)]
+ pub enum InputEventType {
+@@ -167,6 +195,8 @@
      InsertLineBreak,
      InsertFromPaste,
      InsertCompositionText,
@@ -3622,7 +3853,7 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
      DeleteByCut,
      DeleteContentBackward,
      DeleteContentForward,
-@@ -179,6 +195,7 @@
+@@ -179,6 +209,7 @@
              Self::InsertLineBreak => "insertLineBreak",
              Self::InsertFromPaste => "insertFromPaste",
              Self::InsertCompositionText => "insertCompositionText",
@@ -3630,7 +3861,7 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
              Self::DeleteByCut => "deleteByCut",
              Self::DeleteContentBackward => "deleteContentBackward",
              Self::DeleteContentForward => "deleteContentForward",
-@@ -219,6 +236,11 @@
+@@ -219,9 +250,26 @@
              was_last_change_by_set_content: true,
              previous_selection_range: Default::default(),
              selection_for_layout: None,
@@ -3639,10 +3870,25 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
 +            composition_selected: None,
 +            composition_for_layout: None,
 +            composition_selected_for_layout: None,
++            content_version: 0,
          }
      }
 
-@@ -306,10 +328,8 @@
++    // Mercury: see [`TextInputStamp`] (EB11).
++    pub(crate) fn change_stamp(&self) -> TextInputStamp {
++        TextInputStamp {
++            content_version: self.content_version,
++            edit_point: self.edit_point,
++            selection_origin: self.selection_origin,
++            composition: self.composition.clone(),
++            composition_selected: self.composition_selected.clone(),
++        }
++    }
++
+     pub fn edit_point(&self) -> RopeIndex {
+         self.edit_point
+     }
+@@ -306,10 +354,8 @@
          self.rope.index_to_utf16_offset(self.selection_start())
      }
 
@@ -3655,7 +3901,15 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
 
      /// The end of the selection (or the edit point, if there is no selection). Always greater
      /// than or equal to selection_start(), regardless of the selection direction.
-@@ -558,13 +578,24 @@
+@@ -419,6 +465,7 @@
+         let start = self.selection_start();
+         let end = self.selection_end();
+         let end_index_of_insertion = self.rope.replace_range(start..end, string_to_insert);
++        self.content_version += 1; // Mercury: see `change_stamp` (EB11).
+
+         self.was_last_change_by_set_content = false;
+         self.clear_selection();
+@@ -558,13 +605,24 @@
                  self.insert(&text);
                  KeyReaction::DispatchInput(Some(text), InputEventType::InsertText)
              },
@@ -3684,7 +3938,7 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
              },
              EditingAction::Delete => {
                  if self.delete_unit_or_selection(RopeMovement::Grapheme, EditingDirection::Forward)
-@@ -590,21 +621,171 @@
+@@ -590,21 +648,171 @@
                      KeyReaction::Nothing
                  }
              },
@@ -3773,8 +4027,12 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
 +        self.clear_selection();
 +        self.edit_point = end;
 +        false
-+    }
-+
+     }
+
+-    fn insert_for_composition<S: Into<String>>(&mut self, insertion: S) {
+-        let start = self.selection_start_offset();
+-        let insertion = insertion.into();
+-        self.insert(&insertion);
 +    /// Put the caret at `caret` inside the marked text and remember `selected` as the clause the
 +    /// input method is working on. Both are UTF-16 offsets into the marked text; `None` puts the
 +    /// caret at its end. Out of range offsets are clamped (and never split a surrogate pair).
@@ -3810,12 +4068,8 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
 +        self.clear_selection();
 +        self.edit_point = caret_index;
 +        self.composition_selected = selected;
-     }
-
--    fn insert_for_composition<S: Into<String>>(&mut self, insertion: S) {
--        let start = self.selection_start_offset();
--        let insertion = insertion.into();
--        self.insert(&insertion);
++    }
++
 +    /// The marked text as character offsets for layout (`None` when there is none or it is
 +    /// empty).
 +    pub(crate) fn composition_character_offsets(&self) -> Option<RangeAny<Utf32CodeUnits>> {
@@ -3865,7 +4119,7 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
      }
 
      fn edit_point_for_hit_test_result(&self, hit_test_result: &HitTestResult) -> RopeIndex {
-@@ -677,6 +858,11 @@
+@@ -677,6 +885,11 @@
              _ => false,
          };
 
@@ -3877,7 +4131,7 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
          if selection_changed && mouse_event.buttons().contains(MouseButtons::Primary) {
              element
                  .owner_document()
-@@ -711,7 +897,14 @@
+@@ -711,7 +924,15 @@
      /// Newline stripping only happens for incremental updates to the [`Rope`] as `<input>`
      /// elements currently need to store unsanitized values while being created.
      pub fn set_content(&mut self, content: DOMString) {
@@ -3890,10 +4144,11 @@ diff --git a/dom/html/form_controls/text_input.rs b/dom/html/form_controls/text_
 +            self.composition_selected = None;
 +        }
 +        self.rope = Rope::new(new_contents);
++        self.content_version += 1; // Mercury: see `change_stamp` (EB11).
          self.was_last_change_by_set_content = true;
 
          self.edit_point = self.rope.normalize_index(self.edit_point());
-@@ -718,6 +911,13 @@
+@@ -718,6 +939,13 @@
          self.selection_origin = self
              .selection_origin
              .map(|selection_origin| self.rope.normalize_index(selection_origin));

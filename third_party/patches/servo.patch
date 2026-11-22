@@ -208,16 +208,45 @@ diff --git a/servo_delegate.rs b/servo_delegate.rs
 diff --git a/tests/common/mod.rs b/tests/common/mod.rs
 --- a/tests/common/mod.rs
 +++ b/tests/common/mod.rs
-@@ -98,6 +98,8 @@
+@@ -76,7 +76,14 @@
+
+     /// Spin the Servo event loop until the provided callback returns `false`.
+     pub fn spin(&self, callback: impl Fn() -> bool) {
++        // Mercury: a stuck engine (a panic on its constellation thread, a lost message) fails the
++        // test after two minutes instead of hanging the whole test run.
++        let deadline = std::time::Instant::now() + Duration::from_secs(120);
+         while callback() {
++            assert!(
++                std::time::Instant::now() < deadline,
++                "the engine did not answer within two minutes"
++            );
+             self.servo.spin_event_loop();
+             std::thread::sleep(Duration::from_millis(1));
+         }
+@@ -83,6 +90,11 @@
+     }
+ }
+
++// Mercury: the patched `servo-default-resources` does not register its reader (the browser registers
++// its own, `talaria-servo/src/resources.rs`), so a test binary registers Servo's default one, or the
++// engine panics with "No resource reader registered" and the test hangs.
++embedder_traits::submit_resource_reader!(&servo_default_resources::DefaultResourceReader);
++
+ #[derive(Default)]
+ pub(crate) struct WebViewDelegateImpl {
+     pub(crate) url_changed: Cell<bool>,
+@@ -98,6 +110,10 @@
      pub(crate) fullscreen: Cell<bool>,
      pub(crate) crashes: Cell<usize>,
      pub(crate) input_event_result: RefCell<Option<InputEventResult>>,
 +    // Mercury: the text state messages of the text lane, in the order they arrived (EB11).
 +    pub(crate) text_states: RefCell<Vec<Option<servo::TextInputState>>>,
++    // Mercury: the document of each "nothing is focused" message (`None` in `text_states`).
++    pub(crate) text_cleared_documents: RefCell<Vec<u64>>,
  }
 
  #[allow(dead_code)] // Used by some tests and not others
-@@ -116,6 +118,7 @@
+@@ -116,6 +132,7 @@
          self.fullscreen.set(false);
          self.crashes.set(0);
          *self.input_event_result.borrow_mut() = None;
@@ -225,17 +254,22 @@ diff --git a/tests/common/mod.rs b/tests/common/mod.rs
      }
  }
 
-@@ -188,6 +191,15 @@
+@@ -188,6 +205,20 @@
      ) {
          *self.input_event_result.borrow_mut() = Some(result);
      }
 +
 +    // Mercury: record the state messages of the text lane (EB11).
 +    fn notify_mercury_message(&self, _webview: WebView, message: servo::MercuryEmbedderMsg) {
-+        if let servo::MercuryEmbedderMsg::Text(servo::TextMsg::InputState(state)) = message {
-+            self.text_states
-+                .borrow_mut()
-+                .push(state.map(|state| *state));
++        match message {
++            servo::MercuryEmbedderMsg::Text(servo::TextMsg::InputState(state)) => {
++                self.text_states.borrow_mut().push(Some(*state));
++            },
++            servo::MercuryEmbedderMsg::Text(servo::TextMsg::InputCleared(document)) => {
++                self.text_states.borrow_mut().push(None);
++                self.text_cleared_documents.borrow_mut().push(document);
++            },
++            _ => {},
 +        }
 +    }
  }
@@ -244,42 +278,7 @@ diff --git a/tests/common/mod.rs b/tests/common/mod.rs
 diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 --- a/tests/input_methods.rs
 +++ b/tests/input_methods.rs
-@@ -8,9 +8,12 @@
- use std::rc::Rc;
-
- use embedder_traits::InputMethodType;
-+// Mercury: the clause and replacement types, the preferences and the state message of the IME
-+// tests (EB11).
- use servo::{
--    CompositionEvent, CompositionState, EmbedderControl, ImeEvent, InputEvent, JSValue, Key,
--    KeyState, KeyboardEvent, WebView, WebViewBuilder,
-+    CompositionEvent, CompositionState, EmbedderControl, ImeClause, ImeClauseKind, ImeEvent,
-+    ImeReplacement, InputEvent, JSValue, Key, KeyState, KeyboardEvent, Preferences,
-+    TextInputState, WebView, WebViewBuilder,
- };
- use url::Url;
-
-@@ -36,7 +39,18 @@
-
- impl InputMethodTest {
-     fn new(body: &str) -> Self {
--        let servo_test = ServoTest::new();
-+        Self::with_servo_test(ServoTest::new(), body)
-+    }
-+
-+    // Mercury: a Servo with `execCommand` on, which editing hosts (contenteditable) need (EB11).
-+    fn new_with_editing_hosts(body: &str) -> Self {
-+        Self::with_servo_test(
-+            ServoTest::new_with_builder(|builder| builder.preferences(editing_preferences())),
-+            body,
-+        )
-+    }
-+
-+    fn with_servo_test(servo_test: ServoTest, body: &str) -> Self {
-         let delegate = Rc::new(WebViewDelegateImpl::default());
-         let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
-             .delegate(delegate.clone())
-@@ -275,3 +289,818 @@
+@@ -275,3 +275,27 @@
      assert_eq!(ime.input_method_type(), InputMethodType::Text);
      assert!(ime.multiline());
  }
@@ -306,6 +305,198 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +            InputMethodEvent::Input("insertText".to_owned(), Some("世界".to_owned())),
 +        ]
 +    );
++}
+diff --git a/tests/mercury_ime.rs b/tests/mercury_ime.rs
+new file mode 100644
+--- /dev/null
++++ b/tests/mercury_ime.rs
+@@ -0,0 +1,1141 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: new file (lane txt-1, EB11). The IME sequences of Mercury's input-method events
++// (`SetMarkedText`, `Commit`, `InsertText`) and of the text state message, kept out of Servo's own
++// `input_methods.rs` so that a Servo bump does not conflict with them. Run by `make engine-tests`.
++
++//! Mercury IME tests: Pinyin, Japanese clauses, Korean, dead keys, replacement ranges, state messages.
++mod common;
++
++use std::rc::Rc;
++
++// Mercury: the clause and replacement types, the preferences and the state message of the IME
++// tests (EB11).
++use servo::{
++    CompositionEvent, CompositionState, ImeClause, ImeClauseKind, ImeEvent, ImeReplacement,
++    InputEvent, JSValue, Key, KeyState, KeyboardEvent, Preferences, TextInputState, WebView,
++    WebViewBuilder,
++};
++use url::Url;
++
++use crate::common::{
++    ServoTest, WebViewDelegateImpl, evaluate_javascript,
++    show_webview_and_wait_for_rendering_to_be_ready,
++};
++
++#[derive(Debug, Clone, PartialEq)]
++enum InputMethodEvent {
++    CompositionStart,
++    CompositionUpdate(String),
++    CompositionEnd(String),
++    Input(String, Option<String>),
++    BeforeInput(String, Option<String>),
++}
++
++struct InputMethodTest {
++    servo_test: ServoTest,
++    webview: WebView,
++    delegate: Rc<WebViewDelegateImpl>,
++}
++
++impl InputMethodTest {
++    fn new(body: &str) -> Self {
++        Self::with_servo_test(ServoTest::new(), body)
++    }
++
++    // Mercury: a Servo with `execCommand` on, which editing hosts (contenteditable) need (EB11).
++    fn new_with_editing_hosts(body: &str) -> Self {
++        Self::with_servo_test(
++            ServoTest::new_with_builder(|builder| builder.preferences(editing_preferences())),
++            body,
++        )
++    }
++
++    fn with_servo_test(servo_test: ServoTest, body: &str) -> Self {
++        let delegate = Rc::new(WebViewDelegateImpl::default());
++        let webview = WebViewBuilder::new(servo_test.servo(), servo_test.rendering_context.clone())
++            .delegate(delegate.clone())
++            .url(Url::parse(format!("data:text/html,{body}").as_str()).unwrap())
++            .build();
++        show_webview_and_wait_for_rendering_to_be_ready(&servo_test, &webview, &delegate);
++        evaluate_javascript(
++            &servo_test,
++            webview.clone(),
++            "window.input_method_test_received = [];",
++        )
++        .expect("JS evaluation should not fail");
++        Self {
++            servo_test,
++            webview,
++            delegate,
++        }
++    }
++
++    fn send_input_event(&self, event: InputEvent) {
++        *self.delegate.input_event_result.borrow_mut() = None;
++        self.webview.notify_input_event(event);
++        // A lost answer must fail this test, not hang the whole test binary.
++        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
++        self.servo_test.spin(move || {
++            assert!(
++                std::time::Instant::now() < deadline,
++                "timed out waiting for the answer to an input event"
++            );
++            self.delegate.input_event_result.borrow().is_none()
++        });
++    }
++
++    fn focus(&self, id: &str) {
++        evaluate_javascript(
++            &self.servo_test,
++            self.webview.clone(),
++            format!("document.getElementById('{id}').focus();"),
++        )
++        .expect("JS evaluation should not fail");
++    }
++
++    fn install_event_listeners(&self, id: &str) {
++        for event in &["beforeinput", "input"] {
++            evaluate_javascript(
++                &self.servo_test,
++                self.webview.clone(),
++                format!("document.getElementById('{id}').addEventListener('{event}', (event) => {{ \
++                        window.input_method_test_received.push({{ name: '{event}', inputType: event.inputType, data: event.data }}); \
++                    }});"),
++            ).expect("JS evaluation should not fail");
++        }
++        for event in &["compositionstart", "compositionupdate", "compositionend"] {
++            evaluate_javascript(
++                &self.servo_test,
++                self.webview.clone(),
++                format!("document.getElementById('{id}').addEventListener('{event}', (event) => {{ \
++                        window.input_method_test_received.push({{ name: '{event}', data: event.data }}); \
++                    }});"),
++            ).expect("JS evaluation should not fail");
++        }
++    }
++
++    fn get_text_control_value(&self, id: &str) -> String {
++        let value = evaluate_javascript(
++            &self.servo_test,
++            self.webview.clone(),
++            format!("document.getElementById('{id}').value"),
++        );
++        let Ok(JSValue::String(content)) = value else {
++            panic!("Should get a string from JS");
++        };
++        content
++    }
++
++    fn drain_received_events(&self) -> Vec<InputMethodEvent> {
++        let raw_events = evaluate_javascript(
++            &self.servo_test,
++            self.webview.clone(),
++            "(() => { let received = window.input_method_test_received; \
++            window.input_method_test_received = []; \
++            return received; })()",
++        )
++        .expect("JS evaluation should not fail");
++        let js_events = match raw_events {
++            JSValue::Array(values) => values,
++            _ => return Vec::new(),
++        };
++        js_events
++            .into_iter()
++            .filter_map(|js_value| {
++                let JSValue::Object(mut object) = js_value else {
++                    panic!("Should not put non-object into window.input_method_test_received");
++                };
++                let Some(JSValue::String(name)) = object.remove("name") else {
++                    panic!("name should be a string");
++                };
++                let event = match name.as_str() {
++                    "beforeinput" | "input" => {
++                        let Some(JSValue::String(input_type)) = object.remove("inputType") else {
++                            panic!("inputType should be a string");
++                        };
++                        let data = match object.remove("data").unwrap() {
++                            JSValue::String(data) => Some(data),
++                            JSValue::Null => None,
++                            _ => panic!("data should be null or a string"),
++                        };
++                        if name == "beforeinput" {
++                            InputMethodEvent::BeforeInput(input_type, data)
++                        } else {
++                            InputMethodEvent::Input(input_type, data)
++                        }
++                    },
++                    "compositionstart" => InputMethodEvent::CompositionStart,
++                    "compositionupdate" | "compositionend" => {
++                        let Some(JSValue::String(data)) = object.remove("data") else {
++                            panic!("data should be null or a string");
++                        };
++                        if name == "compositionupdate" {
++                            InputMethodEvent::CompositionUpdate(data)
++                        } else {
++                            InputMethodEvent::CompositionEnd(data)
++                        }
++                    },
++                    _ => panic!("Shouldn't receive any other event"),
++                };
++                Some(event)
++            })
++            .collect()
++    }
 +}
 +
 +// ---- Mercury: IME sequences (EB11, the text lane) -------------------------------------------
@@ -389,8 +580,8 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +    /// document's, and an editing host needs one).
 +    fn focus_editing_host(&self, id: &str) {
 +        self.eval(format!(
-+            "const el = document.getElementById('{id}'); el.focus(); \
-+             getSelection().collapse(el, el.childNodes.length);"
++            "{{ const el = document.getElementById('{id}'); el.focus(); \
++             getSelection().collapse(el, el.childNodes.length); }}"
 +        ));
 +    }
 +
@@ -410,7 +601,8 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +
 +    fn drain_flags(&self) -> Vec<EventFlagsSeen> {
 +        let raw = self.eval(
-+            "let flags = window.input_method_test_flags; window.input_method_test_flags = []; flags",
++            "(() => { let flags = window.input_method_test_flags; \
++             window.input_method_test_flags = []; return flags; })()",
 +        );
 +        let JSValue::Array(values) = raw else {
 +            return Vec::new();
@@ -443,7 +635,10 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +    fn wait_until(&self, what: &str, done: impl Fn() -> bool) {
 +        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
 +        self.servo_test.spin(|| {
-+            assert!(std::time::Instant::now() < deadline, "timed out waiting for {what}");
++            assert!(
++                std::time::Instant::now() < deadline,
++                "timed out waiting for {what}"
++            );
 +            !done()
 +        });
 +    }
@@ -726,12 +921,19 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +    assert_eq!(test.drain_received_events(), expected);
 +}
 +
++// One test per kind of control: Servo allows one engine per process, so a test cannot build two.
 +#[test]
-+fn test_an_empty_commit_cancels_the_composition() {
-+    for body in [
-+        "<input id=\"my-input\" />",
-+        "<textarea id=\"my-input\"></textarea>",
-+    ] {
++fn test_an_empty_commit_cancels_the_composition_in_an_input() {
++    an_empty_commit_cancels_the_composition("<input id=\"my-input\" />");
++}
++
++#[test]
++fn test_an_empty_commit_cancels_the_composition_in_a_textarea() {
++    an_empty_commit_cancels_the_composition("<textarea id=\"my-input\"></textarea>");
++}
++
++fn an_empty_commit_cancels_the_composition(body: &str) {
++    {
 +        let test = InputMethodTest::new(&format!("<!DOCTYPE html> {body}"));
 +        test.install_event_listeners("my-input");
 +        test.focus("my-input");
@@ -744,7 +946,10 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +        assert_eq!(
 +            &events[events.len() - 3..],
 +            &[
-+                InputMethodEvent::BeforeInput("insertCompositionText".to_owned(), Some(String::new())),
++                InputMethodEvent::BeforeInput(
++                    "insertCompositionText".to_owned(),
++                    Some(String::new())
++                ),
 +                InputMethodEvent::Input("insertCompositionText".to_owned(), Some(String::new())),
 +                InputMethodEvent::CompositionEnd(String::new()),
 +            ]
@@ -1025,7 +1230,8 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +    // The composition shows in the state.
 +    test.set_marked("ni");
 +    let composing = test.last_state();
-+    assert_eq!(composing.text, "ani");
++    // The caret was moved to the start of "a": the marked text goes in front of it.
++    assert_eq!(composing.text, "nia");
 +    assert_eq!(composing.marked, Some(0..2));
 +
 +    // On blur: nothing editable has focus.
@@ -1098,6 +1304,164 @@ diff --git a/tests/input_methods.rs b/tests/input_methods.rs
 +    assert_eq!(count_composition_ends(&events), 1);
 +    assert_eq!(events.first(), Some(&InputMethodEvent::CompositionStart));
 +}
++
++impl InputMethodTest {
++    /// Wait for a frame to be painted after the page changed something, so that the
++    /// rendering update (and the text state flush that follows its reflow) has run.
++    fn wait_for_a_frame(&self) {
++        self.delegate.new_frame_ready.set(false);
++        self.eval(
++            "requestAnimationFrame(() => { \
++               document.body.style.outline = document.body.style.outline ? '' : '1px solid red'; \
++             });",
++        );
++        self.servo_test
++            .spin(|| !self.delegate.new_frame_ready.get());
++    }
++}
++
++#[test]
++fn test_a_reflow_that_changes_nothing_about_the_field_sends_no_message() {
++    // The flush after a reflow compares what the state is made of before it copies any text: a
++    // page that animates elsewhere does not make a focused text area send (or rebuild) its state.
++    let test = InputMethodTest::new(
++        "<!DOCTYPE html> \
++        <textarea id=\"my-input\" style=\"width: 200px; height: 100px;\"></textarea> \
++        <p id=\"other\">x</p>",
++    );
++    test.eval(
++        "const area = document.getElementById('my-input'); \
++         area.value = 'x'.repeat(100000); area.setSelectionRange(5, 5); area.focus();",
++    );
++    test.wait_for_state_messages(1);
++    test.wait_for_a_frame();
++    let count = test.state_messages().len();
++    for round in 0..3 {
++        test.eval(format!(
++            "document.getElementById('other').textContent = 'y'.repeat({});",
++            10 + round
++        ));
++        test.wait_for_a_frame();
++    }
++    assert_eq!(test.state_messages().len(), count);
++
++    // A real change still gets through.
++    test.key(Key::Character("z".to_owned()));
++    assert!(test.state_messages().len() > count);
++    assert_eq!(test.last_state().selection, 6..6);
++}
++
++#[test]
++fn test_a_cleared_state_names_its_document_and_each_document_has_its_own_id() {
++    let test = InputMethodTest::new(
++        "<!DOCTYPE html> \
++        <input id=\"parent-input\" /> \
++        <iframe id=\"frame\" srcdoc=\"&lt;input id='frame-input'&gt;\"></iframe>",
++    );
++    test.wait_until("the iframe to load", || {
++        test.eval_string(
++            "(document.getElementById('frame').contentDocument && \
++              document.getElementById('frame').contentDocument.getElementById('frame-input')) \
++             ? 'yes' : 'no'",
++        ) == "yes"
++    });
++
++    test.focus("parent-input");
++    test.wait_for_state_messages(1);
++    let parent = test.last_state();
++
++    test.eval(
++        "document.getElementById('frame').contentDocument.getElementById('frame-input').focus();",
++    );
++    test.wait_until("the iframe's field to report", || {
++        test.state_messages()
++            .iter()
++            .flatten()
++            .any(|state| state.document != parent.document)
++    });
++    test.wait_until("the page to say that its field lost the focus", || {
++        test.delegate
++            .text_cleared_documents
++            .borrow()
++            .contains(&parent.document)
++    });
++
++    let in_frame = test
++        .state_messages()
++        .into_iter()
++        .flatten()
++        .find(|state| state.document != parent.document)
++        .expect("a state from the frame");
++    assert_ne!(in_frame.document, parent.document);
++    // The "cleared" message of the page names the page, never the frame: that is what lets the
++    // browser ignore it when it arrives after the frame's state.
++    assert!(
++        !test
++            .delegate
++            .text_cleared_documents
++            .borrow()
++            .contains(&in_frame.document)
++    );
++}
++
++#[test]
++fn test_a_composition_left_behind_by_a_focus_change_ends_with_compositionend() {
++    let test = InputMethodTest::new_with_editing_hosts(
++        "<!DOCTYPE html> \
++        <div id=\"a\" contenteditable></div> \
++        <div id=\"b\" contenteditable></div>",
++    );
++    test.install_event_listeners("a");
++    test.install_event_listeners("b");
++    test.focus_editing_host("a");
++    test.set_marked("ni");
++    // The page moves the focus; the next input method event is for the other element.
++    test.focus_editing_host("b");
++    test.set_marked("wo");
++    test.commit("我");
++
++    let events = test.drain_received_events();
++    let position = |wanted: &InputMethodEvent, from: usize| {
++        events[from..]
++            .iter()
++            .position(|event| event == wanted)
++            .map(|found| found + from)
++    };
++    let first_end = position(&InputMethodEvent::CompositionEnd("ni".to_owned()), 0)
++        .expect("the first composition ends with its own text");
++    let second_start = events
++        .iter()
++        .enumerate()
++        .filter(|(_, event)| **event == InputMethodEvent::CompositionStart)
++        .map(|(index, _)| index)
++        .nth(1)
++        .expect("the second composition starts");
++    assert!(
++        first_end < second_start,
++        "compositionend of the left composition comes before the next compositionstart: {events:?}"
++    );
++    let ends = events
++        .iter()
++        .filter(|event| matches!(event, InputMethodEvent::CompositionEnd(_)))
++        .count();
++    assert_eq!(ends, 2, "one compositionend per composition: {events:?}");
++    let (in_a, in_b) = (test.get_text_content("a"), test.get_text_content("b"));
++    assert_eq!(
++        (in_a.as_str(), in_b.as_str()),
++        ("ni", "我"),
++        "the text of the two elements; events: {events:?}"
++    );
++}
+diff --git a/tests/rustfmt.toml b/tests/rustfmt.toml
+new file mode 100644
+--- /dev/null
++++ b/tests/rustfmt.toml
+@@ -0,0 +1,5 @@
++# Mercury: Servo's own rustfmt settings (servo/servo rustfmt.toml, v0.8.0), so that `cargo fmt --all` leaves the
++# upstream test files of this crate alone. `crates/mercury-engine-tests` builds them (see its Cargo.toml).
++match_block_trailing_comma = true
++reorder_imports = true
++style_edition = "2024"
 diff --git a/webview_delegate.rs b/webview_delegate.rs
 --- a/webview_delegate.rs
 +++ b/webview_delegate.rs

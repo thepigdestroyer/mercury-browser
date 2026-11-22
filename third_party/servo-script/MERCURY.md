@@ -254,11 +254,24 @@ Drop at the bump that contains #49885 (B1).
   composition finish it with that text. The caret rectangle is an estimate (layout has no query for a range's box; it is exact for
   monospace text), measured once for a newly focused editable and while composing, and after a reflow; it is relative to the frame
   like `ShowEmbedderControl`'s rectangle. The text of an editing host's state is the plain text of the block that holds the
-  selection; a state costs one copy of the control's text per change.
+  selection. **Cost:** a flush first compares a *stamp* (a text control keeps a content counter bumped at the two places that write
+  its text, plus its edit point, selection origin and composition; an editing host's block has the DOM version number of
+  `inclusive_descendants_version`, plus the selection and marked ranges) with the last one, and returns before it copies any
+  text when nothing changed and the caret rectangle needs no new measurement; so a reflow caused elsewhere on the page (an
+  animation) costs one comparison, whatever the size of the text. A state costs one copy of the control's text per change.
+  `SetMarkedText` and `InsertText` force a style reflow once each (`is_still_rendered`: an event listener may have hidden the
+  element); that is one per keystroke of an input method, not per frame. **Document id:** every state carries the document's
+  pipeline id and "nothing focused" is the separate `TextMsg::InputCleared(id)`, so the browser can ignore the late "cleared" of a
+  page after the state of an iframe's field arrived. A composition left behind by a focus change between two input method events
+  ends with its own `compositionend` before the next event is handled.
 - **Why:** Chinese, Japanese and Korean input, dead keys, the emoji picker, dictation and the accent menu (R14 EB11, P0).
 - **Upstream:** the Commit part is servo/servo#49400 (merge commit `13fbe153e`, drop at the bump that has it); the rest is Mercury's.
-  **Tested by:** `servo/tests/input_methods.rs` (22 tests) and the `#[cfg(test)]` module of `composition.rs`; nothing was seen in a
-  window. **Drop when:** never as a whole; if a bump brings composition for editing hosts, `composition.rs` and the host half of
+  **Tested by:** `servo/tests/mercury_ime.rs` (25 tests; `make engine-tests`, see `servo/MERCURY.md`) and the `#[cfg(test)]` modules of
+  `composition.rs` and `text_input_state.rs` (`make engine-tests` runs `cargo test -p servo-script --lib`); nothing was seen in a
+  window. **Unverified against Chromium or WPT:** the order of the composition events (on a commit there is no `compositionupdate`
+  that carries the final text, and a commit of the text that is already marked still fires a second `beforeinput`/`input`) and
+  the order of `compositionend` and `blur` (here `compositionend` can follow `blur`, from the blur handler's flush): run WPT
+  `uievents/composition` and `editing/` composition tests and align, or soften the wording. **Drop when:** never as a whole; if a bump brings composition for editing hosts, `composition.rs` and the host half of
   `ImeState` go.
 
 ## Warnings
