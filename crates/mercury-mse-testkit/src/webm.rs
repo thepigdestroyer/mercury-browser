@@ -460,6 +460,9 @@ fn codec_of(
         }
         "A_OPUS" => Ok("opus".to_string()),
         "A_VORBIS" => Ok("vorbis".to_string()),
+        "A_FLAC" => Ok("flac".to_string()),
+        "A_AC3" => Ok("ac-3".to_string()),
+        "A_EAC3" => Ok("ec-3".to_string()),
         other => Err(SplitError::Unsupported(format!(
             "no codec string for the WebM codec {other:?}"
         ))),

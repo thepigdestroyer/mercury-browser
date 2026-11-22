@@ -35,20 +35,24 @@
 //!   `mvex`, or whose tracks already hold samples, is `Malformed` (a progressive file), and so is sample data
 //!   inside the `moof` or running past its `mdat`. Samples with no data are dropped (their time passes).
 //! * One track per kind (decision D3): a second video or audio track is `TooManyTracks`. Tracks that are
-//!   neither (text, timecode, hint) are ignored, and so are their samples. A track whose codec decision D4
-//!   leaves out (HEVC, AC-3, E-AC-3, MP3, FLAC, ...) is `Unsupported`. Edit lists are not applied.
-//! * `pssh` boxes of the `moov` are copied out raw ([`InitSegment::pssh`]). Protected sample entries
-//!   (`encv`/`enca`) are read through their `frma` as the codec they wrap and are not decrypted.
+//!   neither (text, timecode, hint) are ignored, and so are their samples. The codecs are H.264, HEVC
+//!   (`hvc1`, `hev1`), VP9, AV1, AAC, MP3 (`mp4a` with object type 0x6B or 0x69), Opus, FLAC (`fLaC` +
+//!   `dfLa`), AC-3 (`ac-3` + `dac3`) and E-AC-3 (`ec-3` + `dec3`); the others (Dolby Vision, AC-4, ...) are
+//!   `Unsupported`. Edit lists are not applied.
+//! * `pssh` boxes of the `moov` are copied out raw ([`InitSegment::pssh`]); the stream plays without
+//!   decrypting anything. A protected sample entry (`encv`/`enca`) is `Unsupported` (decision D16 of lane
+//!   med-1b: no decryptor exists before MED-5), so the append fails with a clear error.
 
 use crate::api::{
-    ByteStreamParser, CodecConfig, CodedFrame, Container, InitSegment, Ns, ParseError, ParseEvent,
-    TrackConfig, TrackKind,
+    ByteStreamParser, CodecConfig, CodecId, CodedFrame, Container, InitSegment, Ns, ParseError,
+    ParseEvent, TrackConfig, TrackKind,
 };
 
 use super::bmff::{BoxRef, Reader, boxes, find_path, full_box, peek_header, type_str};
 use super::config::{
-    aac_codec_string, av1_codec_string, avc_codec_string, dops_to_opus_head, language_from_mdhd,
-    parse_asc, parse_esds, parse_opus_head, vp9_codec_string,
+    aac_codec_string, av1_codec_string, avc_codec_string, dops_to_opus_head, hevc_codec_string,
+    language_from_mdhd, parse_asc, parse_dac3, parse_dec3, parse_esds, parse_flac_blocks,
+    parse_opus_head, vp9_codec_string,
 };
 use super::{
     ByteQueue, FEED_SLICE, MAX_BOX_BYTES, MAX_CODEC_CONFIG_BYTES, MAX_PSSH_BYTES,
@@ -719,14 +723,20 @@ fn parse_entry(kind: TrackKind, entry: &BoxRef<'_>) -> PResult<Entry> {
         .get(children_at..)
         .ok_or_else(|| malformed("a sample entry shorter than its fixed fields"))?;
 
-    // A protected entry (`encv`, `enca`) names the format it wraps in `sinf/frma`.
-    let mut format = entry.typ;
-    if matches!(&entry.typ, b"encv" | b"enca")
-        && let Some(sinf) = entry_child(kids, b"sinf")
-        && let Some(frma) = entry_child(sinf.payload(), b"frma")
-        && let Some(f) = frma.payload().get(..4)
-    {
-        format = [f[0], f[1], f[2], f[3]];
+    // A protected entry (`encv`, `enca`) names the format it wraps in `sinf/frma`. No decryptor exists
+    // until MED-5 (decision D16), so the append fails with a clear error instead of playing noise or
+    // nothing.
+    let format = entry.typ;
+    if matches!(&entry.typ, b"encv" | b"enca") {
+        let wrapped = entry_child(kids, b"sinf")
+            .and_then(|sinf| entry_child(sinf.payload(), b"frma"))
+            .and_then(|frma| frma.payload().get(..4).map(<[u8]>::to_vec))
+            .map(|f| type_str(&[f[0], f[1], f[2], f[3]]))
+            .unwrap_or_else(|| "an unknown format".to_string());
+        return Err(unsupported(format!(
+            "a protected '{}' track ({wrapped} under Common Encryption): decryption is not available (decision D16)",
+            type_str(&entry.typ)
+        )));
     }
     let name = type_str(&format);
     let need = |typ: &[u8; 4]| {
@@ -793,20 +803,39 @@ fn parse_entry(kind: TrackKind, entry: &BoxRef<'_>) -> PResult<Entry> {
                 return Err(wrong_handler());
             }
             let esds = parse_esds(need(b"esds")?.payload())?;
-            if esds.object_type != 0x40 {
-                return Err(unsupported(format!(
-                    "an mp4a track with object type {:#04x} (only MPEG-4 AAC is supported)",
-                    esds.object_type
-                )));
+            match esds.object_type {
+                0x40 => {
+                    let asc = parse_asc(&esds.asc)?;
+                    if sample_rate == 0 {
+                        sample_rate = asc.sample_rate;
+                    }
+                    if channels == 0 {
+                        channels = asc.channels;
+                    }
+                    (CodecConfig::Aac { asc: esds.asc }, aac_codec_string(&asc))
+                }
+                // MPEG-2 audio (0x69) and MPEG-1 audio (0x6B): MP3 in MP4. The frames carry everything a
+                // decoder needs, so there is no configuration; the entry gives the rate and channels.
+                0x69 | 0x6B => {
+                    if sample_rate == 0 || channels == 0 {
+                        return Err(malformed(
+                            "an MP3 sample entry with no sample rate or no channels",
+                        ));
+                    }
+                    (
+                        CodecConfig::Other {
+                            codec: CodecId::Mp3,
+                            config: Vec::new(),
+                        },
+                        format!("mp4a.{:02X}", esds.object_type),
+                    )
+                }
+                other => {
+                    return Err(unsupported(format!(
+                        "an mp4a track with object type {other:#04x} (only MPEG-4 AAC and MP3 are supported)"
+                    )));
+                }
             }
-            let asc = parse_asc(&esds.asc)?;
-            if sample_rate == 0 {
-                sample_rate = asc.sample_rate;
-            }
-            if channels == 0 {
-                channels = asc.channels;
-            }
-            (CodecConfig::Aac { asc: esds.asc }, aac_codec_string(&asc))
         }
         b"Opus" => {
             if kind != TrackKind::Audio {
@@ -820,13 +849,75 @@ fn parse_entry(kind: TrackKind, entry: &BoxRef<'_>) -> PResult<Entry> {
             }
             (CodecConfig::Opus { head }, "opus".to_string())
         }
-        b"hvc1" | b"hev1" | b"dvh1" | b"dvhe" => {
-            return Err(unsupported("HEVC is not supported (decision D4)"));
+        b"hvc1" | b"hev1" => {
+            if kind != TrackKind::Video {
+                return Err(wrong_handler());
+            }
+            let hvcc = need(b"hvcC")?.payload();
+            (
+                CodecConfig::Hevc {
+                    hvcc: hvcc.to_vec(),
+                },
+                hevc_codec_string(&format, hvcc)?,
+            )
         }
-        b"ac-3" | b"ec-3" | b"ac-4" => {
-            return Err(unsupported(format!(
-                "{name} audio is not supported (decision D4; EA2 decides)"
-            )));
+        b"dvh1" | b"dvhe" => {
+            return Err(unsupported(
+                "Dolby Vision (dvh1, dvhe) is not supported; the base layer is HEVC as hvc1 or hev1",
+            ));
+        }
+        b"ac-3" => {
+            if kind != TrackKind::Audio {
+                return Err(wrong_handler());
+            }
+            let dac3 = need(b"dac3")?.payload();
+            let info = parse_dac3(dac3)?;
+            sample_rate = info.sample_rate;
+            channels = info.channels;
+            (
+                CodecConfig::Other {
+                    codec: CodecId::Ac3,
+                    config: dac3.to_vec(),
+                },
+                "ac-3".to_string(),
+            )
+        }
+        b"ec-3" => {
+            if kind != TrackKind::Audio {
+                return Err(wrong_handler());
+            }
+            let dec3 = need(b"dec3")?.payload();
+            let info = parse_dec3(dec3)?;
+            sample_rate = info.sample_rate;
+            if channels == 0 {
+                channels = info.channels;
+            }
+            (
+                CodecConfig::Other {
+                    codec: CodecId::Eac3,
+                    config: dec3.to_vec(),
+                },
+                "ec-3".to_string(),
+            )
+        }
+        b"fLaC" => {
+            if kind != TrackKind::Audio {
+                return Err(wrong_handler());
+            }
+            let (_, _, blocks) = full_box(need(b"dfLa")?.payload())?;
+            let info = parse_flac_blocks(blocks)?;
+            sample_rate = info.sample_rate;
+            channels = info.channels;
+            (
+                CodecConfig::Other {
+                    codec: CodecId::Flac,
+                    config: blocks.to_vec(),
+                },
+                "flac".to_string(),
+            )
+        }
+        b"ac-4" => {
+            return Err(unsupported("AC-4 audio is not supported"));
         }
         _ => {
             return Err(unsupported(format!(

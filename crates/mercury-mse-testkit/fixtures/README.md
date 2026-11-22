@@ -7,7 +7,7 @@ committed bytes (listed with their SHA-256 in [`SHA256SUMS`](SHA256SUMS)) are th
 muxers write the current time into the movie header, so rerunning `gen.sh` gives equivalent files, not
 identical ones. Committed bytes make the Intel and the Apple Silicon runs comparable.
 
-Total size: 639,615 bytes (budget 1.5 MB). Read them from Rust through `mercury_mse_testkit::load(name)`, which
+Total size: 1,017,025 bytes (budget 1.5 MB). Read them from Rust through `mercury_mse_testkit::load(name)`, which
 splits a fixture into its initialisation segment and media segments and derives the type string.
 
 ## Content
@@ -89,6 +89,42 @@ Priorities in the lane brief: P0 `h264-low`, `h264-high`, `aac`; P1 `h264-aac`, 
   not bit-reproducible: 52,957 against 52,986 bytes); the four fixed bytes and the type string are the same.
   `gen.sh <dir> av1c` makes only this file. Tests: `mercury_mse_testkit::av1` (the two records, the OBU walk, the
   sequence header found again in the first media segment).
+
+## The fixtures of decision D7 (lane med-1b: HEVC, AC-3, E-AC-3, FLAC, MP3, Vorbis)
+
+Seven more files, made by `gen.sh <dir> d7` (the other ten keep their committed bytes). Each is **8 s and at
+most 100 KB** (the brief's limit; the seven together are about 350 KB). The video is the same red/blue ball
+(320x180, 25 fps, a key frame every 50 frames); the audio is the same 440 Hz mono sine. Items that need a
+playing stream use them through `mercury_mse_testkit::load(name)`; the parser tests check each one whole and
+under every chunk plan (`crates/mercury-mse/tests/parse_codecs.rs`).
+
+| Name | File | Bytes | Media segments | Type string (derived from the file) | Notes |
+|---|---|---:|---|---|---|
+| `hevc-low` | `fmp4/video-hevc-low.mp4` | 32,273 | 4 x 2000 ms | `video/mp4; codecs="hvc1.1.6.L60.B0"` | `vtenc_h265`, hvc1, no B-frames |
+| `ac3` | `fmp4/audio-ac3.mp4` | 65,116 | 63, 63, 63, 61 frames of 32 ms | `audio/mp4; codecs="ac-3"` | `avenc_ac3 bitrate=64000`, 48 kHz mono |
+| `eac3` | `fmp4/audio-eac3.mp4` | 65,118 | the same | `audio/mp4; codecs="ec-3"` | `avenc_eac3 bitrate=64000`, 48 kHz mono |
+| `flac` | `fmp4/audio-flac.mp4` | 81,018 | 4 | `audio/mp4; codecs="flac"` | **16 kHz** mono (see below) |
+| `mp3` | `fmp4/audio-mp3.mp4` | 38,572 | 84, 84, 84, 83 frames of 24 ms | `audio/mp4; codecs="mp4a.6B"` | `lamemp3enc bitrate=48`, 334 frames of 1152 samples in, 335 out (8.040 s) |
+| `vorbis` | `webm/audio-vorbis.webm` | 14,435 | 16 (the last 299 ms) | `audio/webm; codecs="vorbis"` | `vorbisenc bitrate=32000` |
+| `flac-webm` | `webm/audio-flac.webm` | 80,878 | 14 x 576 ms | `audio/webm; codecs="flac"` | `matroskamux`: DocType `matroska` |
+
+* **Why FLAC is 16 kHz.** A full-band 440 Hz sine at 48 kHz does not compress below 170 KB in 8 s (FLAC is
+  lossless and the sine's rounding noise costs about 3.7 bits per sample); at 16 kHz the file is 81 KB. The
+  rate is part of what the parser reads (`TrackConfig::sample_rate` comes from STREAMINFO), so the fixture
+  also checks that a rate other than 48 kHz survives.
+* **Segments.** The Rust muxers close a fragment before it would exceed `fragment-duration`, so the audio
+  fragment duration is set just above a whole number of frames (2.017 s for 63 AC-3 frames), as for `aac`.
+* **`mp3` comes from `mp4mux`** (gst-plugins-good): the Rust MP4 muxers do not take MPEG audio. It writes no
+  `styp`, and ends the file with an `mfra` index that no live stream carries; `gen.sh` cuts it (the last four
+  bytes of its `mfro` box give its size), so that init segment plus media segments are the whole file.
+* **`flac-webm` is Matroska.** `webmmux` takes only Vorbis and Opus audio; FLAC goes through `matroskamux`, so
+  the EBML DocType is `matroska` (the parser accepts both). The type string is still `audio/webm`.
+* **Codecs of the new files:** `hvcC` with VPS, SPS and PPS arrays; `dac3` (3 bytes); `dec3` (5 bytes); `dfLa`
+  with STREAMINFO; `mp4a` with `esds` object type 0x6B; WebM `A_VORBIS` (Xiph-laced `CodecPrivate`) and
+  `A_FLAC` (`fLaC` marker and blocks).
+* Encoders: `vtenc_h265` (VideoToolbox, part of macOS), `avenc_ac3` and `avenc_eac3` (libav, LGPL,
+  dynamically linked in the bundle), `flacenc`, `vorbisenc` (Xiph, BSD-3-Clause), `lamemp3enc` (LAME, LGPL).
+  **`x265enc` is GPL and is not used.** Like the others, they run at generation time only.
 
 ## Encoders and settings
 

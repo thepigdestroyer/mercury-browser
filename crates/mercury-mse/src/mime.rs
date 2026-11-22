@@ -17,14 +17,17 @@
 //!
 //! | container | codecs |
 //! |---|---|
-//! | `video/mp4`, `audio/mp4` | `avc1.PPCCLL`, `avc3.PPCCLL`, `vp09[.PP.LL.DD...]`, `vp9`, `av01.P.LLT.DD...`, `mp4a.40.2`, `mp4a.40.5`, `mp4a.40.29`, `opus` |
-//! | `video/webm`, `audio/webm` | `vp8`, `vp08...`, `vp09...`, `vp9`, `av01...`, `opus` |
+//! | `video/mp4`, `audio/mp4` | `avc1.PPCCLL`, `avc3.PPCCLL`, `hvc1.P.C.LNN[.B...]`, `hev1...`, `vp09[.PP.LL.DD...]`, `vp9`, `av01.P.LLT.DD...`, `mp4a.40.2`, `mp4a.40.5`, `mp4a.40.29`, `mp4a.6B`, `mp4a.69`, `mp3`, `opus`, `flac`, `ac-3`, `ec-3` |
+//! | `video/webm`, `audio/webm` | `vp8`, `vp08...`, `vp09...`, `vp9`, `av01...`, `opus`, `vorbis`, `flac`, `ac-3`, `ec-3` |
 //!
-//! At most one video and one audio codec (decision D3); no video codec in `audio/*`. HEVC, AC-3,
-//! E-AC-3, MP3 (`mp4a.69`, `mp4a.6B`, `mp3`), FLAC, Vorbis, MPEG-TS and the raw `audio/mpeg` and
-//! `audio/aac` streams are refused (decision D4). Codec names and the hex digits in them are matched
-//! without regard to case; parameters other than `codecs` are accepted and ignored; when `codecs` is
-//! given twice the first wins.
+//! At most one video and one audio codec (decision D3); no video codec in `audio/*`. HEVC, MP3 and the
+//! codecs of lane med-1b's decision D7 (AC-3, E-AC-3, FLAC, Vorbis) are accepted where the container
+//! carries them (HEVC and MP3 in MP4 only, Vorbis in WebM only, as in the byte stream format
+//! registry). Dolby Vision, MPEG-TS and the raw `audio/mpeg`, `audio/mp3` and `audio/aac` streams are
+//! refused with a note (decision D7: they need container parsers this round does not have, and the
+//! players that use them transmux to fragmented MP4 themselves). Codec names and the hex digits in them
+//! are matched without regard to case; parameters other than `codecs` are accepted and ignored; when
+//! `codecs` is given twice the first wins.
 
 use crate::api::{CodecId, Container, MseError, TrackKind, TypeSupport};
 
@@ -75,6 +78,12 @@ pub fn parse_type(mime: &str) -> Result<ParsedType, MseError> {
     let container = match (major.as_str(), minor.as_str()) {
         ("video" | "audio", "mp4") => Container::Mp4,
         ("video" | "audio", "webm") => Container::WebM,
+        ("audio", "mpeg" | "mp3" | "aac" | "aacp" | "x-aac" | "x-mpeg")
+        | ("video" | "audio", "mp2t") => {
+            return Err(MseError::NotSupported(format!(
+                "the media type {major}/{minor} is not supported: raw MPEG audio, ADTS and MPEG-TS streams are not parsed (decision D7)"
+            )));
+        }
         _ => {
             return Err(MseError::NotSupported(format!(
                 "the media type {major}/{minor} is not supported"
@@ -241,19 +250,81 @@ fn container_has(container: Container, codec: CodecId) -> bool {
     match container {
         Container::Mp4 => matches!(
             codec,
-            CodecId::H264 | CodecId::Vp9 | CodecId::Av1 | CodecId::Aac | CodecId::Opus
+            CodecId::H264
+                | CodecId::Hevc
+                | CodecId::Vp9
+                | CodecId::Av1
+                | CodecId::Aac
+                | CodecId::Opus
+                | CodecId::Mp3
+                | CodecId::Flac
+                | CodecId::Ac3
+                | CodecId::Eac3
         ),
         Container::WebM => matches!(
             codec,
-            CodecId::Vp8 | CodecId::Vp9 | CodecId::Av1 | CodecId::Opus
+            CodecId::Vp8
+                | CodecId::Vp9
+                | CodecId::Av1
+                | CodecId::Opus
+                | CodecId::Vorbis
+                | CodecId::Flac
+                | CodecId::Ac3
+                | CodecId::Eac3
         ),
     }
 }
 
 fn refused(codec: &str, what: &str) -> MseError {
     MseError::NotSupported(format!(
-        "the codec {codec:?} ({what}) is not supported yet (decision D4)"
+        "the codec {codec:?} ({what}) is not supported (decision D7)"
     ))
+}
+
+/// `PP.C.LNN[.B...]` of an `hvc1` or `hev1` string (ISO/IEC 14496-15 Annex E, lower-cased): the profile
+/// (an optional space letter `a`, `b` or `c` and one or two decimal digits, up to 31), one to eight hex
+/// digits of compatibility flags, the tier (`l` or `h`) with the level idc (1 to 255), then at most six
+/// constraint bytes of one or two hex digits.
+fn check_hevc_fields(codec: &str, rest: Option<&str>) -> Result<(), MseError> {
+    let bad = |why: &str| bad_codec(codec, why);
+    let Some(rest) = rest else {
+        return Err(bad(
+            "expected hvc1.P.C.LNN with the profile, compatibility flags and level",
+        ));
+    };
+    let f: Vec<&str> = rest.split('.').collect();
+    if f.len() < 3 || f.len() > 9 {
+        return Err(bad(
+            "expected profile, compatibility flags, tier and level, then up to six constraint bytes",
+        ));
+    }
+    let profile = f[0].strip_prefix(['a', 'b', 'c']).unwrap_or(f[0]);
+    let profile_ok = (1..=2).contains(&profile.len())
+        && profile.bytes().all(|b| b.is_ascii_digit())
+        && profile.parse::<u32>().is_ok_and(|p| p <= 31);
+    if !profile_ok {
+        return Err(bad(
+            "the profile is a number up to 31, optionally after a space letter A, B or C",
+        ));
+    }
+    let hex = |s: &str, max: usize| {
+        (1..=max).contains(&s.len()) && s.bytes().all(|b| b.is_ascii_hexdigit())
+    };
+    if !hex(f[1], 8) {
+        return Err(bad("the compatibility flags are one to eight hex digits"));
+    }
+    let level_ok = f[2].strip_prefix(['l', 'h']).is_some_and(|l| {
+        (1..=3).contains(&l.len())
+            && l.bytes().all(|b| b.is_ascii_digit())
+            && l.parse::<u32>().is_ok_and(|v| (1..=255).contains(&v))
+    });
+    if !level_ok {
+        return Err(bad("the tier and level are L or H and a level of 1 to 255"));
+    }
+    if f[3..].iter().any(|c| !hex(c, 2)) {
+        return Err(bad("the constraint bytes are one or two hex digits"));
+    }
+    Ok(())
 }
 
 fn bad_codec(codec: &str, why: &str) -> MseError {
@@ -301,7 +372,11 @@ fn classify(codec: &str) -> Result<CodecId, MseError> {
                 "avc1 and avc3 need profile, constraints and level as six hex digits",
             )),
         },
-        "hev1" | "hvc1" | "dvh1" | "dvhe" => Err(refused(codec, "HEVC")),
+        "hev1" | "hvc1" => {
+            check_hevc_fields(codec, rest)?;
+            Ok(CodecId::Hevc)
+        }
+        "dvh1" | "dvhe" => Err(refused(codec, "Dolby Vision")),
         "vp09" => {
             if let Some(r) = rest {
                 check_vp_fields(codec, r)?;
@@ -339,20 +414,30 @@ fn classify(codec: &str) -> Result<CodecId, MseError> {
                 Ok(_) => Err(refused(codec, "an AAC variant other than LC, HE and HE v2")),
                 Err(_) => Err(bad_codec(codec, "the audio object type is not a number")),
             },
-            Some("69" | "6b") => Err(refused(codec, "MP3")),
-            Some("a5") => Err(refused(codec, "AC-3")),
-            Some("a6") => Err(refused(codec, "E-AC-3")),
+            Some("69" | "6b") => Ok(CodecId::Mp3),
+            Some("a5") => Err(refused(
+                codec,
+                "AC-3 as an MPEG-4 audio object type; the string is \"ac-3\"",
+            )),
+            Some("a6") => Err(refused(
+                codec,
+                "E-AC-3 as an MPEG-4 audio object type; the string is \"ec-3\"",
+            )),
             _ => Err(refused(
                 codec,
-                "an MPEG-4 audio object type that is not AAC",
+                "an MPEG-4 audio object type that is not AAC or MP3",
             )),
         },
         "opus" if rest.is_none() => Ok(CodecId::Opus),
-        "mp3" => Err(refused(codec, "MP3")),
-        "flac" => Err(refused(codec, "FLAC")),
-        "vorbis" => Err(refused(codec, "Vorbis")),
-        "ac-3" | "ac3" => Err(refused(codec, "AC-3; EA2 decides")),
-        "ec-3" | "ec3" => Err(refused(codec, "E-AC-3; EA2 decides")),
+        "mp3" if rest.is_none() => Ok(CodecId::Mp3),
+        "flac" if rest.is_none() => Ok(CodecId::Flac),
+        "vorbis" if rest.is_none() => Ok(CodecId::Vorbis),
+        "ac-3" if rest.is_none() => Ok(CodecId::Ac3),
+        "ec-3" if rest.is_none() => Ok(CodecId::Eac3),
+        "ac3" | "ec3" => Err(bad_codec(
+            codec,
+            "the registered names are \"ac-3\" and \"ec-3\"",
+        )),
         _ => Err(MseError::NotSupported(format!(
             "the codec {codec:?} is not recognised"
         ))),
@@ -444,6 +529,18 @@ mod tests {
             "mp4a.40.5",
             "mp4a.40.29",
             "opus",
+            "hvc1.1.6.L93.B0",
+            "hev1.1.6.L93.B0",
+            "hvc1.2.4.L153.B0",
+            "hvc1.A1.6.H120",
+            "HVC1.1.6.l93.b0",
+            "hvc1.1.6.L93.B0.00.00.00.00.80",
+            "mp4a.6B",
+            "mp4a.69",
+            "mp3",
+            "flac",
+            "ac-3",
+            "ec-3",
         ] {
             let mime = format!(r#"video/mp4; codecs="{good}""#);
             let r = parse_type(&mime);
@@ -472,6 +569,28 @@ mod tests {
             "opus.1",
             "vp9.1",
             "foo.bar",
+            "hvc1",
+            "hvc1.1",
+            "hvc1.1.6",
+            "hvc1.1.6.L0",
+            "hvc1.1.6.X93",
+            "hvc1.1.6.L256",
+            "hvc1.32.6.L93",
+            "hvc1.D1.6.L93",
+            "hvc1.1.G.L93",
+            "hvc1.1.123456789.L93",
+            "hvc1.1.6.L93.B0.B0.B0.B0.B0.B0.B0",
+            "hvc1.1.6.L93.B00",
+            "hvc1.1.6.L93.",
+            "mp4a.6B.1",
+            "mp4a.6C",
+            "mp3.1",
+            "flac.1",
+            "ac3",
+            "ec3",
+            "ac-3.1",
+            "vorbis",
+            "dvh1.05.06",
         ] {
             let mime = format!(r#"video/mp4; codecs="{bad}""#);
             assert!(
@@ -483,26 +602,73 @@ mod tests {
     }
 
     #[test]
-    fn what_decision_d4_leaves_out_says_so() {
+    fn what_decision_d7_leaves_out_says_so() {
         for (codec, word) in [
-            ("hvc1.1.6.L93.B0", "HEVC"),
-            ("hev1.1.6.L93.B0", "HEVC"),
-            ("mp4a.69", "MP3"),
-            ("mp4a.6B", "MP3"),
-            ("mp3", "MP3"),
-            ("flac", "FLAC"),
-            ("vorbis", "Vorbis"),
-            ("ac-3", "AC-3"),
-            ("ec-3", "E-AC-3"),
+            ("dvh1.05.06", "Dolby Vision"),
+            ("dvhe.05.06", "Dolby Vision"),
+            ("mp4a.A5", "AC-3"),
+            ("mp4a.A6", "E-AC-3"),
+            ("mp4a.40.34", "AAC variant"),
         ] {
-            let mime = format!(r#"audio/mp4; codecs="{codec}""#);
+            let mime = format!(r#"video/mp4; codecs="{codec}""#);
             match parse_type(&mime) {
                 Err(MseError::NotSupported(m)) => {
-                    assert!(m.contains(word) && m.contains("D4"), "{codec}: {m}")
+                    assert!(m.contains(word) && m.contains("D7"), "{codec}: {m}")
                 }
                 other => panic!("{codec}: {other:?}"),
             }
         }
+        for mime in [
+            "audio/mpeg",
+            "audio/mp3",
+            "audio/aac",
+            "audio/x-aac",
+            "video/mp2t",
+            r#"video/mp2t; codecs="avc1.42E01E,mp4a.40.2""#,
+            r#"audio/mpeg; codecs="mp3""#,
+        ] {
+            match parse_type(mime) {
+                Err(MseError::NotSupported(m)) => assert!(m.contains("D7"), "{mime}: {m}"),
+                other => panic!("{mime}: {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn the_codecs_of_d7_are_accepted_in_the_containers_that_carry_them() {
+        for (mime, codec) in [
+            (r#"video/mp4; codecs="hvc1.1.6.L93.B0""#, CodecId::Hevc),
+            (r#"video/mp4; codecs="hev1.2.4.L153.B0""#, CodecId::Hevc),
+            (r#"audio/mp4; codecs="mp4a.6B""#, CodecId::Mp3),
+            (r#"audio/mp4; codecs="mp4a.69""#, CodecId::Mp3),
+            (r#"audio/mp4; codecs="mp3""#, CodecId::Mp3),
+            (r#"audio/mp4; codecs="flac""#, CodecId::Flac),
+            (r#"audio/webm; codecs="flac""#, CodecId::Flac),
+            (r#"audio/mp4; codecs="ac-3""#, CodecId::Ac3),
+            (r#"audio/webm; codecs="ac-3""#, CodecId::Ac3),
+            (r#"audio/mp4; codecs="ec-3""#, CodecId::Eac3),
+            (r#"audio/webm; codecs="ec-3""#, CodecId::Eac3),
+            (r#"audio/webm; codecs="vorbis""#, CodecId::Vorbis),
+        ] {
+            assert_eq!(ok(mime).codecs, vec![codec], "{mime}");
+            assert!(is_type_supported(mime, &AllDecoders), "{mime}");
+        }
+        // Not in the other container: HEVC and MP3 are not WebM codecs, Vorbis is not an MP4 one.
+        for mime in [
+            r#"video/webm; codecs="hvc1.1.6.L93.B0""#,
+            r#"audio/webm; codecs="mp3""#,
+            r#"audio/webm; codecs="mp4a.6B""#,
+            r#"audio/mp4; codecs="vorbis""#,
+        ] {
+            assert!(
+                matches!(parse_type(mime), Err(MseError::NotSupported(_))),
+                "{mime}"
+            );
+        }
+        // HEVC is video and a pair with audio is one source buffer.
+        let p = ok(r#"video/mp4; codecs="hvc1.1.6.L93.B0, ec-3""#);
+        assert_eq!(p.kinds, vec![TrackKind::Video, TrackKind::Audio]);
+        assert!(parse_type(r#"audio/mp4; codecs="hvc1.1.6.L93.B0""#).is_err());
     }
 
     #[test]

@@ -26,19 +26,23 @@
 //!   `ReferenceBlock`; every audio frame is a keyframe.
 //! * One track per kind (decision D3); other kinds (subtitles) are ignored, with their blocks. A block of a
 //!   track number the initialization segment does not list at all is `Malformed`, and a block with no data
-//!   is dropped. VP8, VP9, AV1 and Opus are
-//!   fed; any other codec is `Unsupported`. Lacing is `Unsupported`. `ContentEncodings` (protection) are
+//!   is dropped. VP8, VP9, AV1, Opus, Vorbis (`A_VORBIS`), FLAC (`A_FLAC`), AC-3 (`A_AC3`) and E-AC-3
+//!   (`A_EAC3`) are fed; any other codec is `Unsupported`, HEVC (`V_MPEGH/ISO/HEVC`, a Matroska codec
+//!   that WebM does not have) with a note. Lacing is `Unsupported`. `ContentEncodings` (protection) are
 //!   not looked at. A VP9 track gets the short codec string `vp9` unless its `CodecPrivate` lists profile,
 //!   level and bit depth (libvpx's muxer writes none).
 
 use std::sync::Arc;
 
 use crate::api::{
-    ByteStreamParser, CodecConfig, CodedFrame, Container, InitSegment, Ns, ParseError, ParseEvent,
-    TrackConfig, TrackKind,
+    ByteStreamParser, CodecConfig, CodecId, CodedFrame, Container, InitSegment, Ns, ParseError,
+    ParseEvent, TrackConfig, TrackKind,
 };
 
-use super::config::{av1_codec_string, parse_opus_head, vp9_webm_codec_string};
+use super::config::{
+    av1_codec_string, parse_flac_blocks, parse_opus_head, parse_vorbis_codec_private,
+    vp9_webm_codec_string,
+};
 use super::ebml::{
     BlockHeader, ID_AUDIO, ID_BLOCK, ID_BLOCK_DURATION, ID_BLOCK_GROUP, ID_CHANNELS, ID_CLUSTER,
     ID_CODEC_ID, ID_CODEC_PRIVATE, ID_DEFAULT_DURATION, ID_DOC_TYPE, ID_DURATION, ID_EBML,
@@ -861,6 +865,69 @@ fn build_track(raw: &RawTrack, scale: u64) -> PResult<(TrackConfig, Option<Ns>)>
                 "opus".to_string(),
             )
         }
+        "V_MPEGH/ISO/HEVC" => {
+            return Err(unsupported(
+                "HEVC (V_MPEGH/ISO/HEVC) is a Matroska codec, not a WebM one: use fragmented MP4 (hvc1)",
+            ));
+        }
+        "A_FLAC" => {
+            want(TrackKind::Audio)?;
+            // The Matroska mapping: `CodecPrivate` is the `fLaC` marker and the metadata blocks; the
+            // table of decision D7 keeps the blocks only.
+            let blocks = raw
+                .codec_private
+                .strip_prefix(b"fLaC")
+                .unwrap_or(&raw.codec_private);
+            let info = parse_flac_blocks(blocks)?;
+            sample_rate = info.sample_rate;
+            channels = info.channels;
+            (
+                CodecConfig::Other {
+                    codec: CodecId::Flac,
+                    config: blocks.to_vec(),
+                },
+                "flac".to_string(),
+            )
+        }
+        "A_VORBIS" => {
+            want(TrackKind::Audio)?;
+            let info = parse_vorbis_codec_private(&raw.codec_private)?;
+            sample_rate = info.sample_rate;
+            channels = info.channels;
+            (
+                CodecConfig::Other {
+                    codec: CodecId::Vorbis,
+                    config: raw.codec_private.clone(),
+                },
+                "vorbis".to_string(),
+            )
+        }
+        // AC-3 and E-AC-3 in Matroska carry no configuration record: the Audio element has the rate and
+        // the channels, and the frames carry the rest.
+        id @ ("A_AC3" | "A_EAC3") => {
+            want(TrackKind::Audio)?;
+            let rate = match raw.sample_rate {
+                Some(r) if r.is_finite() && (8_000.0..=192_000.0).contains(&r) => r as u32,
+                _ => {
+                    return Err(malformed(format!(
+                        "an {id} track without a usable SamplingFrequency"
+                    )));
+                }
+            };
+            sample_rate = rate;
+            let (codec, string) = if id == "A_AC3" {
+                (CodecId::Ac3, "ac-3")
+            } else {
+                (CodecId::Eac3, "ec-3")
+            };
+            (
+                CodecConfig::Other {
+                    codec,
+                    config: Vec::new(),
+                },
+                string.to_string(),
+            )
+        }
         other => {
             return Err(unsupported(format!("the WebM codec {other:?}")));
         }
@@ -870,6 +937,9 @@ fn build_track(raw: &RawTrack, scale: u64) -> PResult<(TrackConfig, Option<Ns>)>
             .channels
             .and_then(|c| u32::try_from(c).ok())
             .unwrap_or(0);
+    }
+    if kind == TrackKind::Audio && channels == 0 {
+        return Err(malformed("an audio track with no channels"));
     }
     if kind != TrackKind::Video {
         width = 0;

@@ -12,7 +12,7 @@ mod parse_support;
 
 mod parse_errors {
     use super::parse_support::*;
-    use mercury_mse::api::{CodecConfig, Container, ParseError, TrackKind};
+    use mercury_mse::api::{Container, ParseError, ParseEvent};
     use mercury_mse::parse::new_parser;
     use mercury_mse_testkit::{ChunkPlan, load, with_cenc_protection, with_pssh};
 
@@ -449,19 +449,42 @@ mod parse_errors {
         }
     }
 
+    /// Decision D16 of lane med-1b: a track that declares itself protected (`encv`/`enca`, `sinf`, `tenc`)
+    /// fails at the initialization segment with `Unsupported` under every chunk plan (no decryptor exists
+    /// before MED-5), instead of being read as the clear codec it wraps; the clear stream next to it and
+    /// the `pssh`-only stream are untouched.
     #[test]
-    fn t08_a_protected_sample_entry_is_read_as_the_codec_it_wraps() {
-        let stream = load("h264-low").unwrap();
-        let clear = init_of(&feed_stream(&stream, &ChunkPlan::Whole).unwrap().events)[0].clone();
-        for iv in [8u8, 16] {
-            let protected = with_cenc_protection(&stream.init, [9; 16], iv).unwrap();
-            let events =
-                parse_parts(Container::Mp4, &[&protected.bytes], &ChunkPlan::Fixed(33)).unwrap();
-            let init = init_of(&events)[0].clone();
-            assert_eq!(init.tracks[0].codec_string, "avc1.42C00C");
-            assert!(matches!(init.tracks[0].codec, CodecConfig::H264 { .. }));
-            assert_eq!(init.tracks[0].kind, TrackKind::Video);
-            assert_eq!(init.tracks, clear.tracks, "iv {iv}");
+    fn t08_a_protected_sample_entry_is_unsupported_and_names_what_it_wraps() {
+        for (name, wrapped) in [("h264-low", "avc1"), ("aac", "mp4a"), ("h264-aac", "avc1")] {
+            let stream = load(name).unwrap();
+            for iv in [8u8, 16] {
+                let protected = with_cenc_protection(&stream.init, [9; 16], iv).unwrap();
+                let e = error_of(same_under_all_plans(Container::Mp4, &[&protected.bytes]));
+                match e {
+                    ParseError::Unsupported(m) => {
+                        assert!(
+                            m.contains("protected") && m.contains(wrapped),
+                            "{name}: {m}"
+                        )
+                    }
+                    other => panic!("{name} iv {iv}: {other:?}"),
+                }
+                // A pssh box next to a protected track changes nothing: still refused.
+                let with_box = with_pssh(&protected, [7; 16], b"x").unwrap();
+                let e = error_of(same_under_all_plans(Container::Mp4, &[&with_box.bytes]));
+                assert!(matches!(e, ParseError::Unsupported(_)), "{name}: {e:?}");
+            }
+            // The clear stream is still read and the error sticks only until a reset.
+            let mut parser = new_parser(Container::Mp4);
+            let protected = with_cenc_protection(&stream.init, [9; 16], 8).unwrap();
+            assert!(parser.push(&protected.bytes).is_err());
+            assert!(parser.push(&stream.init.bytes).is_err(), "the error sticks");
+            parser.reset();
+            let clear = parser.push(&stream.init.bytes).unwrap();
+            assert!(
+                matches!(clear[0], ParseEvent::Init(_)),
+                "{name}: usable after a reset"
+            );
         }
         // WebM carries protection in ContentEncodings: the testkit refuses to build it, so there is
         // nothing to compare; the WebM init has no pssh.

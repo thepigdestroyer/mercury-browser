@@ -63,8 +63,9 @@ fn every_fixture_name_is_unique_and_loads() {
     names.dedup();
     assert_eq!(names.len(), FIXTURES.len());
     assert!(matches!(load("nope"), Err(SplitError::UnknownFixture(_))));
-    // Nine fixtures of the lane plus `av1-low-av1c`, the control added after the AV1 review.
-    assert_eq!(all().len(), 10);
+    // Nine fixtures of the lane plus `av1-low-av1c`, the control added after the AV1 review, plus the seven
+    // of lane med-1b's decision D7 (HEVC, AC-3, E-AC-3, FLAC, MP3, Vorbis, FLAC in Matroska).
+    assert_eq!(all().len(), 17);
 }
 
 #[test]
@@ -103,6 +104,7 @@ fn video_fixtures_have_four_two_second_segments() {
         "h264-low",
         "h264-high",
         "h264-bframes",
+        "hevc-low",
         "vp9-low",
         "vp9-high",
         "av1-low",
@@ -140,6 +142,50 @@ fn audio_fixtures_have_the_documented_segments() {
     let opus = load("opus").unwrap();
     let want: Vec<(u64, u64)> = (0..16).map(|i| (i * 500, 500)).collect();
     assert_eq!(timing(&opus), want);
+}
+
+#[test]
+fn the_d7_fixtures_have_the_documented_size_segments_and_boxes() {
+    // Decision D7 of lane med-1b: at most 100 KB each, 8 s, the codec's own configuration box in the init.
+    for (name, config) in [
+        ("hevc-low", &b"hvcC"[..]),
+        ("ac3", b"dac3"),
+        ("eac3", b"dec3"),
+        ("flac", b"dfLa"),
+        ("mp3", b"esds"),
+        ("vorbis", b"\x63\xA2"),
+        ("flac-webm", b"\x63\xA2"),
+    ] {
+        let data = read_fixture(name).unwrap();
+        assert!(data.len() <= 100_000, "{name}: {} bytes", data.len());
+        let s = load(name).unwrap();
+        assert!(
+            s.init.bytes.windows(config.len()).any(|w| w == config),
+            "{name}: no configuration box in the init segment"
+        );
+        let (start, end) = s.span_ms().unwrap();
+        assert_eq!(start, 0, "{name}");
+        assert!((8000..=8064).contains(&end), "{name}: {end} ms");
+    }
+    // AC-3, E-AC-3 and FLAC frames do not divide 2 s: fragments of 63 AC-3 frames (2.016 s), and the same
+    // length for FLAC; MP3 has 84 frames of 24 ms in three of them and 83 in the last.
+    let ac3_like = [(0, 2016), (2016, 2016), (4032, 2016), (6048, 1952)];
+    for name in ["ac3", "eac3", "flac"] {
+        assert_eq!(timing(&load(name).unwrap()), ac3_like, "{name}");
+    }
+    assert_eq!(
+        timing(&load("mp3").unwrap()),
+        [(0, 2016), (2016, 2016), (4032, 2016), (6048, 1992)]
+    );
+    // The audio-only WebM files start a Cluster every ~0.5 s (FLAC: 576 ms, Vorbis: 511 ms).
+    let flac_webm = timing(&load("flac-webm").unwrap());
+    assert_eq!(flac_webm.len(), 14);
+    assert!(flac_webm.iter().all(|&(_, d)| d == 576));
+    assert_eq!(load("vorbis").unwrap().media.len(), 16);
+    // The MP3 file has no mfra index at its end: init + media segments are the file (also
+    // `init_plus_media_is_the_file`).
+    let mp3 = read_fixture("mp3").unwrap();
+    assert!(!mp3.windows(4).any(|w| w == b"mfra"));
 }
 
 #[test]

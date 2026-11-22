@@ -307,6 +307,230 @@ pub(crate) fn vp9_webm_codec_string(codec_private: &[u8]) -> String {
     }
 }
 
+// ----------------------------------------------------------------------------------------------
+// The codecs of lane med-1b (decision D7): HEVC, AC-3, E-AC-3, FLAC, Vorbis. Written from ISO/IEC
+// 14496-15 (`hvcC`, Annex E codec strings), ETSI TS 102 366 Annex F (`dac3`, `dec3`), the "Encapsulation
+// of FLAC in ISO Base Media File Format" (`dfLa`), the FLAC format specification (metadata blocks, the
+// STREAMINFO layout) and the Matroska codec mapping (`A_FLAC`, `A_VORBIS` `CodecPrivate`, Xiph lacing).
+
+/// `hvc1.<space><profile>.<compatibility>.<tier><level>[.<constraint byte>...]` from an `hvcC` record
+/// (ISO/IEC 14496-15 Annex E): the general profile space (none, `A`, `B`, `C`), profile idc, the 32
+/// compatibility flags in bit-reversed order as hex without leading zeros, the tier (`L` or `H`) and level
+/// idc, then the six constraint indicator bytes as hex with the trailing zero bytes left out. `entry` is
+/// the sample entry type (`hvc1` or `hev1`). The record is checked as far as a decoder needs it: at least
+/// the 23 fixed bytes, version 1, and parameter set arrays that fit in the record.
+pub(crate) fn hevc_codec_string(entry: &[u8; 4], hvcc: &[u8]) -> PResult<String> {
+    let bad =
+        || malformed("an hvcC record that is too short, not version 1 or cut inside its arrays");
+    if hvcc.len() < 23 || hvcc[0] != 1 {
+        return Err(bad());
+    }
+    let mut r = Reader::new(&hvcc[23..]);
+    for _ in 0..hvcc[22] {
+        r.skip(1).map_err(|_| bad())?; // array_completeness, reserved, NAL_unit_type
+        let count = r.u16().map_err(|_| bad())?;
+        for _ in 0..count {
+            let len = r.u16().map_err(|_| bad())?;
+            r.skip(usize::from(len)).map_err(|_| bad())?;
+        }
+    }
+    let space = match hvcc[1] >> 6 {
+        1 => "A",
+        2 => "B",
+        3 => "C",
+        _ => "",
+    };
+    let profile = hvcc[1] & 0x1f;
+    let tier = if hvcc[1] & 0x20 != 0 { 'H' } else { 'L' };
+    let compatibility = u32::from_be_bytes([hvcc[2], hvcc[3], hvcc[4], hvcc[5]]).reverse_bits();
+    let level = hvcc[12];
+    let mut constraints = hvcc[6..12].to_vec();
+    while constraints.last() == Some(&0) {
+        constraints.pop();
+    }
+    let mut s = format!(
+        "{}.{space}{profile}.{compatibility:X}.{tier}{level}",
+        String::from_utf8_lossy(entry)
+    );
+    for c in constraints {
+        s.push_str(&format!(".{c:X}"));
+    }
+    Ok(s)
+}
+
+/// What an AC-3 or E-AC-3 configuration box says about the audio.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Ac3Info {
+    pub sample_rate: u32,
+    /// Full-bandwidth channels, plus the low-frequency effects channel(s).
+    pub channels: u32,
+}
+
+const AC3_RATES: [u32; 3] = [48_000, 44_100, 32_000];
+/// Full-bandwidth channels of each `acmod` (1+1 is two mono programs, counted as two channels).
+const AC3_ACMOD_CHANNELS: [u32; 8] = [2, 1, 2, 3, 3, 4, 4, 5];
+
+/// The payload of a `dac3` box (ETSI TS 102 366 F.4): `fscod`(2) `bsid`(5) `bsmod`(3) `acmod`(3)
+/// `lfeon`(1) `bit_rate_code`(5) and five reserved bits.
+pub(crate) fn parse_dac3(dac3: &[u8]) -> PResult<Ac3Info> {
+    let bad = || malformed("a dac3 box that is too short or names a reserved sample rate");
+    let mut b = Bits { d: dac3, pos: 0 };
+    let fscod = b.bits(2).ok_or_else(bad)?;
+    b.bits(5).ok_or_else(bad)?; // bsid
+    b.bits(3).ok_or_else(bad)?; // bsmod
+    let acmod = b.bits(3).ok_or_else(bad)?;
+    let lfeon = b.bits(1).ok_or_else(bad)?;
+    b.bits(10).ok_or_else(bad)?; // bit_rate_code and the reserved bits
+    let sample_rate = *AC3_RATES.get(fscod as usize).ok_or_else(bad)?;
+    Ok(Ac3Info {
+        sample_rate,
+        channels: AC3_ACMOD_CHANNELS[acmod as usize] + lfeon,
+    })
+}
+
+/// The payload of a `dec3` box (ETSI TS 102 366 F.6): `data_rate`(13), `num_ind_sub`(3), then per
+/// independent substream `fscod`(2) `bsid`(5) a reserved bit, `asvc`(1) `bsmod`(3) `acmod`(3) `lfeon`(1),
+/// three reserved bits, `num_dep_sub`(4) and `chan_loc`(9) when there are dependent substreams (else one
+/// reserved bit). Every substream is read, so a record that is cut anywhere is refused. The sample rate
+/// and the channels are the first independent substream's: the channels of its dependent substreams
+/// (`chan_loc`, which adds speakers beyond 5.1) are not counted, so a stream with them is better described
+/// by its sample entry's channel count, which the parser prefers when it is not 0.
+pub(crate) fn parse_dec3(dec3: &[u8]) -> PResult<Ac3Info> {
+    let bad = || malformed("a dec3 box that is too short or names a reserved sample rate");
+    let mut b = Bits { d: dec3, pos: 0 };
+    b.bits(13).ok_or_else(bad)?; // data_rate
+    let num_ind_sub = b.bits(3).ok_or_else(bad)?;
+    let mut first = None;
+    for i in 0..=num_ind_sub {
+        let fscod = b.bits(2).ok_or_else(bad)?;
+        b.bits(5).ok_or_else(bad)?; // bsid
+        b.bits(2).ok_or_else(bad)?; // reserved, asvc
+        b.bits(3).ok_or_else(bad)?; // bsmod
+        let acmod = b.bits(3).ok_or_else(bad)?;
+        let lfeon = b.bits(1).ok_or_else(bad)?;
+        b.bits(3).ok_or_else(bad)?; // reserved
+        let num_dep_sub = b.bits(4).ok_or_else(bad)?;
+        // chan_loc (9 bits) with dependent substreams, else one reserved bit.
+        b.bits(if num_dep_sub > 0 { 9 } else { 1 })
+            .ok_or_else(bad)?;
+        if i == 0 {
+            let sample_rate = *AC3_RATES.get(fscod as usize).ok_or_else(bad)?;
+            first = Some((sample_rate, AC3_ACMOD_CHANNELS[acmod as usize] + lfeon));
+        }
+    }
+    let (sample_rate, channels) = first.ok_or_else(bad)?;
+    Ok(Ac3Info {
+        sample_rate,
+        channels,
+    })
+}
+
+/// What a FLAC STREAMINFO block says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FlacInfo {
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+/// Checks the FLAC metadata blocks of a `dfLa` box or a Matroska `A_FLAC` `CodecPrivate` (after the
+/// `fLaC` marker): each block has its 4-byte header (last-block flag, type, 24-bit length) and its data
+/// within the record, the first is STREAMINFO (type 0, 34 bytes) and no block has the reserved type 127.
+/// Reads the sample rate and channel count from STREAMINFO (an `fLaC` sample entry's own 16.16 rate field
+/// cannot hold rates over 65,535 Hz, so STREAMINFO is the authority).
+pub(crate) fn parse_flac_blocks(blocks: &[u8]) -> PResult<FlacInfo> {
+    let bad = |why: &str| malformed(format!("FLAC metadata that {why}"));
+    let mut r = Reader::new(blocks);
+    let mut info = None;
+    loop {
+        let header = r.u32().map_err(|_| bad("is cut inside a block header"))?;
+        let (last, kind, len) = (header >> 31 != 0, (header >> 24) & 0x7f, header & 0xff_ffff);
+        let data = r
+            .take(len as usize)
+            .map_err(|_| bad("has a block that runs past the record"))?;
+        if info.is_none() {
+            if kind != 0 || len != 34 {
+                return Err(bad("does not start with a 34-byte STREAMINFO block"));
+            }
+            let sample_rate =
+                (u32::from(data[10]) << 12) | (u32::from(data[11]) << 4) | u32::from(data[12] >> 4);
+            let channels = u32::from((data[12] >> 1) & 0x07) + 1;
+            if sample_rate == 0 {
+                return Err(bad("has a sample rate of 0"));
+            }
+            info = Some(FlacInfo {
+                sample_rate,
+                channels,
+            });
+        } else if kind == 127 {
+            return Err(bad("has a block of the invalid type 127"));
+        }
+        if last || r.remaining() == 0 {
+            break;
+        }
+    }
+    info.ok_or_else(|| bad("has no STREAMINFO block"))
+}
+
+/// What the Vorbis identification header says.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct VorbisInfo {
+    pub sample_rate: u32,
+    pub channels: u32,
+}
+
+/// Checks a Matroska `A_VORBIS` `CodecPrivate` (the three header packets in Xiph lacing: a count byte
+/// of 2, the sizes of the first two packets as runs of 255 closed by a smaller byte, then the packets)
+/// and reads the channel count and sample rate from the identification header. The packets must have the
+/// types 1, 3 and 5 with the `vorbis` signature, and their sizes must add up to the record.
+pub(crate) fn parse_vorbis_codec_private(p: &[u8]) -> PResult<VorbisInfo> {
+    let bad = |why: &str| malformed(format!("a Vorbis CodecPrivate that {why}"));
+    if p.first() != Some(&2) {
+        return Err(bad("does not announce three header packets"));
+    }
+    let mut at = 1usize;
+    let mut sizes = [0usize; 2];
+    for size in &mut sizes {
+        loop {
+            let b = *p.get(at).ok_or_else(|| bad("is cut inside its lacing"))?;
+            at += 1;
+            *size += usize::from(b);
+            if b != 255 {
+                break;
+            }
+        }
+    }
+    let ident = p
+        .get(at..)
+        .and_then(|d| d.get(..sizes[0]))
+        .ok_or_else(|| bad("has an identification header that runs past the record"))?;
+    let comment = p
+        .get(at + sizes[0]..)
+        .and_then(|d| d.get(..sizes[1]))
+        .ok_or_else(|| bad("has a comment header that runs past the record"))?;
+    let setup = p
+        .get(at + sizes[0] + sizes[1]..)
+        .ok_or_else(|| bad("is cut"))?;
+    for (packet, kind) in [(ident, 1u8), (comment, 3), (setup, 5)] {
+        if packet.len() < 7 || packet[0] != kind || &packet[1..7] != b"vorbis" {
+            return Err(bad(
+                "has a header packet that is missing or of the wrong type",
+            ));
+        }
+    }
+    if ident.len() < 30 {
+        return Err(bad("has an identification header shorter than 30 bytes"));
+    }
+    let channels = u32::from(ident[11]);
+    let sample_rate = u32::from_le_bytes([ident[12], ident[13], ident[14], ident[15]]);
+    if channels == 0 || sample_rate == 0 {
+        return Err(bad("has no channels or a sample rate of 0"));
+    }
+    Ok(VorbisInfo {
+        sample_rate,
+        channels,
+    })
+}
+
 /// An `mdhd` language code (three letters of five bits each, offset 0x60) as a tag; `und` and 0 give an
 /// empty string.
 pub(crate) fn language_from_mdhd(code: u16) -> String {

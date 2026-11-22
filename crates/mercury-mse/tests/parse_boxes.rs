@@ -878,11 +878,19 @@ mod parse_boxes {
         assert_eq!(init.tracks[0].codec_string, "av01.0.00M.08");
         assert!(matches!(&init.tracks[0].codec, CodecConfig::Av1 { av1c: r } if r == &av1c));
 
-        // A protected entry is read through `sinf/frma` as the codec it wraps.
+        // A protected entry (`encv`/`enca` with a `sinf`) is refused since lane med-1b (decision D16): no
+        // decryptor exists, so it names the wrapped format and says so.
         let sinf = bx("sinf", &cat(&[&bx("frma", b"avc1"), &bx("schi", &[0; 8])]));
         let encv = visual_entry("encv", 320, 180, &cat(&[&bx("avcC", &avcc()), &sinf]));
-        let init = only_init(&init_of_tracks(&[entry_track("vide", 90_000, encv)]));
-        assert_eq!(init.tracks[0].codec_string, "avc1.42C01E");
+        match unsupported_entry("vide", 90_000, encv) {
+            ParseError::Unsupported(m) => {
+                assert!(
+                    m.contains("protected") && m.contains("encv") && m.contains("avc1"),
+                    "{m}"
+                )
+            }
+            other => panic!("{other:?}"),
+        }
 
         // Text and other handlers are ignored next to a video track.
         let text = TrackSpec {
@@ -968,48 +976,37 @@ mod parse_boxes {
         ))
     }
 
+    /// What the parser still does not feed after lane med-1b's decision D7 (HEVC, AC-3, E-AC-3, FLAC and
+    /// MP3 are in: `parse_codecs.rs`).
     #[test]
-    fn codecs_decision_d4_leaves_out_are_unsupported() {
+    fn codecs_this_build_does_not_feed_are_unsupported() {
         let kind = |e: ParseError| matches!(e, ParseError::Unsupported(_));
         assert!(kind(unsupported_entry(
             "vide",
             90_000,
-            visual_entry("hvc1", 640, 360, &bx("hvcC", &[1; 23]))
-        )));
-        assert!(kind(unsupported_entry(
-            "vide",
-            90_000,
-            visual_entry("hev1", 640, 360, &bx("hvcC", &[1; 23]))
+            visual_entry("dvh1", 640, 360, &bx("hvcC", &[1; 23]))
         )));
         assert!(kind(unsupported_entry(
             "soun",
             48_000,
-            audio_entry("ac-3", 2, 48_000, &bx("dac3", &[0; 3]))
-        )));
-        assert!(kind(unsupported_entry(
-            "soun",
-            48_000,
-            audio_entry("ec-3", 2, 48_000, &bx("dec3", &[0; 5]))
-        )));
-        assert!(kind(unsupported_entry(
-            "soun",
-            48_000,
-            audio_entry("fLaC", 2, 48_000, &bx("dfLa", &[0; 5]))
+            audio_entry("ac-4", 2, 48_000, &bx("dac4", &[0; 8]))
         )));
         assert!(kind(unsupported_entry(
             "soun",
             48_000,
             audio_entry("zzzz", 2, 48_000, &[])
         )));
-        // mp4a with the MPEG-1 audio object type (MP3 in MP4).
-        let mut esds = esds_aac();
-        let at = esds.iter().position(|&b| b == 0x40).unwrap();
-        esds[at] = 0x6B;
-        assert!(kind(unsupported_entry(
-            "soun",
-            48_000,
-            audio_entry("mp4a", 2, 44_100, &esds)
-        )));
+        // mp4a with MPEG-2 AAC (object type 0x66) and the object types of AC-3 and E-AC-3 as MPEG-4 audio.
+        for oti in [0x66u8, 0xA5, 0xA6] {
+            let mut esds = esds_aac();
+            let at = esds.iter().position(|&b| b == 0x40).unwrap();
+            esds[at] = oti;
+            assert!(kind(unsupported_entry(
+                "soun",
+                48_000,
+                audio_entry("mp4a", 2, 44_100, &esds)
+            )));
+        }
         // A sample entry that lacks its configuration box, a video entry in a sound track.
         let e = unsupported_entry("vide", 90_000, visual_entry("avc1", 640, 360, &[]));
         assert!(matches!(e, ParseError::Malformed(_)), "{e:?}");

@@ -7,10 +7,11 @@
 # bytes and fixtures/SHA256SUMS are the reference (the MP4 muxers write the current time into the
 # movie header, so a rerun gives equivalent files, not identical bytes).
 #
-#   crates/mercury-mse-testkit/fixtures/gen.sh [output-directory] [av1c]   default: this directory, all fixtures
+#   crates/mercury-mse-testkit/fixtures/gen.sh [output-directory] [av1c|d7]   default: this directory, all fixtures
 #
 # With the word `av1c` as the second argument only the AV1 control fixture is made (see the end of the
-# script): the other fixtures keep their committed bytes, because the MP4 muxers write the time.
+# script); with `d7` only the fixtures of lane med-1b's decision D7 (HEVC, AC-3, E-AC-3, FLAC, MP3,
+# Vorbis). The other fixtures keep their committed bytes, because the MP4 muxers write the time.
 #
 # Content: 8.0 s, 25 fps, a key frame every 2 s (50 frames), fragments of 2 s (4 media segments). The
 # video background is red for the first 4 s and blue for the last 4 s, with a small black ball, so
@@ -20,9 +21,17 @@
 #
 # Tools: gst-launch-1.0 from the bundled GStreamer (scripts/macos/gstreamer.sh), in a private plugin
 # registry in a scratch directory (deleted at the end), with no sound, no window and no network.
-# Encoders: openh264enc (BSD), vtenc_h264 (Apple VideoToolbox), voaacenc, vp9enc (libvpx), opusenc,
-# svtav1enc (BSD-3-Clause + patent grant); muxers cmafmux and isofmp4mux (gst-plugins-rs, MPL-2.0) and
-# webmmux. Never x264enc or x265enc: they are GPL.
+# Encoders: openh264enc (BSD), vtenc_h264 and vtenc_h265 (Apple VideoToolbox), voaacenc, vp9enc (libvpx),
+# opusenc, svtav1enc (BSD-3-Clause + patent grant), and for the D7 fixtures avenc_ac3 and avenc_eac3
+# (libav, LGPL, linked dynamically in the bundle), flacenc, vorbisenc and lamemp3enc (LAME, LGPL);
+# muxers cmafmux and isofmp4mux (gst-plugins-rs, MPL-2.0), mp4mux (gst-plugins-good, for MP3 in MP4: the
+# Rust muxers do not take it), webmmux and matroskamux (FLAC). Never x264enc or x265enc: they are GPL.
+#
+# The D7 fixtures (lane med-1b): 8 s, at most 100 KB each. The video is the same red/blue ball as the
+# others (320x180, HEVC), the audio the same 440 Hz sine, mono. FLAC is 16 kHz because a full-band sine
+# at 48 kHz does not compress below 170 KB in 8 s; the others are 48 kHz. Each is cut into four fragments
+# of about 2 s by setting the fragment duration just above a whole number of frames (the muxer closes a
+# fragment before it would exceed the duration).
 
 set -eu
 
@@ -48,7 +57,8 @@ trap 'rm -rf "$scratch"' EXIT INT TERM
 # hang inside MoltenVK (vkCreateInstance) for minutes; none of the fixtures needs it.
 mkdir -p "$scratch/plugins"
 for name in coreelements videoconvertscale videotestsrc audiotestsrc audioconvert audioresample \
-    openh264 videoparsersbad audioparsers isobmff voaacenc vpx opus matroska svtav1 applemedia; do
+    openh264 videoparsersbad audioparsers isobmff isomp4 voaacenc vpx opus matroska svtav1 applemedia \
+    flac lame libav vorbis; do
     ln -s "$MERCURY_GSTREAMER_PREFIX/lib/gstreamer-1.0/libgst$name.dylib" "$scratch/plugins/libgst$name.dylib"
 done
 GST_REGISTRY_1_0="$scratch/registry.bin"
@@ -158,9 +168,66 @@ av1c_control() {
     fi
 }
 
+# strip_mfra <file>: mp4mux ends a fragmented file with an mfra index (random access boxes) that no live
+# or DASH/CMAF stream carries; the last 16 bytes are its mfro box, whose last four bytes give the size of
+# the whole mfra. Cuts it, so that init segment + media segments are the whole file again.
+strip_mfra() {
+    total="$(wc -c <"$1" | tr -d ' ')"
+    mfro="$(tail -c 16 "$1" | od -An -v -tx1 | tr -d ' \n')"
+    case "$mfro" in
+        000000106d66726f00000000????????)
+            size=$((0x$(printf '%s' "$mfro" | cut -c25-32)))
+            head -c $((total - size)) "$1" >"$1.cut"
+            mv "$1.cut" "$1"
+            ;;
+    esac
+}
+
+# d7_fixtures: HEVC, AC-3, E-AC-3, FLAC and MP3 in fragmented MP4, FLAC and Vorbis in WebM (decision D7).
+d7_fixtures() {
+    # HEVC: VideoToolbox, no B-frames (the parser test of composition offsets is the H.264 one), a key frame
+    # every 50 frames, hvc1 (parameter sets in the sample entry, as DASH and CMAF carry it).
+    # shellcheck disable=SC2046
+    gl concat name=c ! videoconvert ! video/x-raw,format=NV12 \
+        ! vtenc_h265 realtime=false allow-frame-reordering=false max-keyframe-interval=50 bitrate=150 \
+        ! h265parse config-interval=-1 ! video/x-h265,stream-format=hvc1,alignment=au \
+        ! cmafmux fragment-duration=$FRAGMENT ! filesink location="$out/fmp4/video-hevc-low.mp4" \
+        $(video_sources 320 180)
+    # AC-3 and E-AC-3 frames are 1536 samples (32 ms): 250 of them are 8 s, 63 of them make 2.016 s, so
+    # fragments of 63, 63, 63 and 61 frames.
+    D7_FRAGMENT=2017000000
+    gl audiotestsrc wave=sine freq=440 num-buffers=250 samplesperbuffer=1536 ! audio/x-raw,rate=48000,channels=1 \
+        ! audioconvert ! avenc_ac3 bitrate=64000 ! ac3parse ! audio/x-ac3,framed=true,alignment=frame \
+        ! isofmp4mux fragment-duration=$D7_FRAGMENT ! filesink location="$out/fmp4/audio-ac3.mp4"
+    gl audiotestsrc wave=sine freq=440 num-buffers=250 samplesperbuffer=1536 ! audio/x-raw,rate=48000,channels=1 \
+        ! audioconvert ! avenc_eac3 bitrate=64000 ! ac3parse ! audio/x-eac3,framed=true \
+        ! isofmp4mux fragment-duration=$D7_FRAGMENT ! filesink location="$out/fmp4/audio-eac3.mp4"
+    # FLAC at 16 kHz: 125 buffers of 1024 samples are 8 s.
+    gl audiotestsrc wave=sine freq=440 num-buffers=125 samplesperbuffer=1024 ! audio/x-raw,rate=16000,channels=1 \
+        ! flacenc ! flacparse ! isofmp4mux fragment-duration=$D7_FRAGMENT ! filesink location="$out/fmp4/audio-flac.mp4"
+    # MP3: 334 frames of 1152 samples (24 ms) go in and 335 come out (the encoder flushes one more). mp4mux
+    # counts the fragment duration in milliseconds: 2020 ms takes 84 frames (2.016 s), so fragments of 84, 84,
+    # 84 and 83 frames.
+    gl audiotestsrc wave=sine freq=440 num-buffers=334 samplesperbuffer=1152 ! audio/x-raw,rate=48000,channels=1 \
+        ! lamemp3enc bitrate=48 ! mpegaudioparse ! mp4mux streamable=true fragment-duration=2020 \
+        ! filesink location="$out/fmp4/audio-mp3.mp4"
+    strip_mfra "$out/fmp4/audio-mp3.mp4"
+    # Vorbis in WebM, FLAC in Matroska (webmmux takes only Vorbis and Opus audio; the DocType of the FLAC
+    # file is therefore `matroska`, which the parser accepts as it does `webm`).
+    gl audiotestsrc wave=sine freq=440 num-buffers=375 samplesperbuffer=1024 ! audio/x-raw,rate=48000,channels=1 \
+        ! audioconvert ! vorbisenc bitrate=32000 ! webmmux streamable=true ! filesink location="$out/webm/audio-vorbis.webm"
+    gl audiotestsrc wave=sine freq=440 num-buffers=125 samplesperbuffer=1024 ! audio/x-raw,rate=16000,channels=1 \
+        ! flacenc ! flacparse ! matroskamux streamable=true ! filesink location="$out/webm/audio-flac.webm"
+}
+
 if [ "$only" = av1c ]; then
     av1c_control
     printf '%s\n' "gen.sh: wrote the AV1 control fixture to $out/webm"
+    exit 0
+fi
+if [ "$only" = d7 ]; then
+    d7_fixtures
+    printf '%s\n' "gen.sh: wrote the D7 fixtures to $out"
     exit 0
 fi
 
@@ -215,5 +282,6 @@ gl concat name=c ! identity single-segment=true ! videoconvert ! video/x-raw,for
     $(video_sources 320 180)
 
 av1c_control
+d7_fixtures
 
 printf '%s\n' "gen.sh: wrote the fixtures to $out"

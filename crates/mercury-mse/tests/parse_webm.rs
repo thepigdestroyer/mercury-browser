@@ -467,14 +467,13 @@ mod parse_webm {
                 ]),
             )
         };
-        // Codecs this round does not feed.
+        // Codecs this build does not feed (Vorbis, FLAC, AC-3 and E-AC-3 are fed since lane med-1b's
+        // decision D7: `parse_codecs.rs`).
         for codec in [
             &b"V_MPEG4/ISO/AVC"[..],
-            b"A_VORBIS",
             b"A_AAC",
-            b"A_FLAC",
             b"V_MPEGH/ISO/HEVC",
-            b"A_AC3",
+            b"A_DTS",
         ] {
             let ty = if codec.starts_with(b"V") { 1 } else { 2 };
             let r = same_under_all_plans(W, &[&webm_init(&[entry(1, ty, codec)])]);
