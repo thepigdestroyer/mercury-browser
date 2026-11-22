@@ -872,8 +872,8 @@ mod switched {
         let mut m = switched();
         // The held S itself repeats.
         assert_eq!(autorepeat(&mut m, 600, S, ALT), swallowed());
-        // A letter that was held before and repeats is consumed as well, and switches nothing.
-        assert_eq!(autorepeat(&mut m, 650, A, ALT), swallowed());
+        // A letter that was held before ⌥ repeats: the page's, so it passes and switches nothing.
+        assert_eq!(autorepeat(&mut m, 650, A, ALT), PASS);
         assert_eq!(m.phase(), Phase::Switched);
         assert_eq!(press(&mut m, 700, digit(1), ALT), switch_to(tab(SEARCH, 0)));
     }
@@ -909,7 +909,8 @@ mod switched {
         let mut m = switched();
         assert_eq!(press(&mut m, 100, digit(2), ALT), switch_to(tab(SEARCH, 1)));
         assert_eq!(autorepeat(&mut m, 150, digit(2), ALT), swallowed());
-        assert_eq!(autorepeat(&mut m, 200, digit(3), ALT), swallowed());
+        // A digit held before ⌥ is the page's, whatever it would have picked.
+        assert_eq!(autorepeat(&mut m, 200, digit(3), ALT), PASS);
     }
 
     #[test]
@@ -985,6 +986,26 @@ mod switched {
     }
 
     #[test]
+    fn the_repeat_of_a_key_pressed_before_option_is_the_pages_in_every_phase() {
+        // Armed: a letter held before ⌥ repeats, passes and makes the hold the page's.
+        let mut m = armed();
+        assert_eq!(autorepeat(&mut m, 60, S, ALT), PASS);
+        assert_eq!(m.phase(), Phase::PassThrough);
+        assert_eq!(m.deadline(), None);
+        // Switched: another assigned letter and a digit held before ⌥ pass, and change nothing.
+        let mut m = switched();
+        assert_eq!(autorepeat(&mut m, 100, A, ALT), PASS);
+        assert_eq!(autorepeat(&mut m, 110, digit(1), ALT), PASS);
+        assert_eq!(m.phase(), Phase::Switched);
+        assert_eq!(press(&mut m, 120, digit(1), ALT), switch_to(tab(SEARCH, 0)));
+        // Overlay: the same, and nothing is selected.
+        let mut m = overlay();
+        assert_eq!(autorepeat(&mut m, 500, A, ALT), PASS);
+        assert_eq!(autorepeat(&mut m, 510, Q, ALT), PASS);
+        assert_eq!(m.view(), shown(None, None));
+    }
+
+    #[test]
     fn a_composition_opening_ends_the_capture_and_the_page_gets_the_keys() {
         let mut m = switched();
         assert_eq!(m.set_focus(composing()), PASS);
@@ -1054,8 +1075,8 @@ mod overlay {
         let mut m = overlay();
         press(&mut m, 500, S, ALT);
         assert_eq!(autorepeat(&mut m, 700, S, ALT), swallowed());
-        // A letter that was held before the card opened and repeats does not select anything.
-        assert_eq!(autorepeat(&mut m, 710, A, ALT), swallowed());
+        // A letter held before ⌥ is the page's: its repeat passes and selects nothing.
+        assert_eq!(autorepeat(&mut m, 710, A, ALT), PASS);
         assert_eq!(m.view(), shown(Some(SEARCH), None));
     }
 

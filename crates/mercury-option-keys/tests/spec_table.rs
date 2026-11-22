@@ -278,6 +278,9 @@ impl Phases for AnyPhase {
 }
 
 const IDLE_OR_PASS_THROUGH: [Phase; 2] = [Phase::Idle, Phase::PassThrough];
+/// With ⌥ down, the hold that composing ends is the page's, never Idle: Idle would let the next
+/// ⌥ press re-arm.
+const PASS_THROUGH: Phase = Phase::PassThrough;
 
 /// A machine and the script that is running on it.
 struct Rig {
@@ -642,10 +645,10 @@ fn ime_composition_blocks_capture() {
         let mut r =
             Rig::new(config(capture), TEXT).named(&format!("composing while armed, {capture:?}"));
         r.step(0, mods(ALT), PASS, Phase::Armed, HIDDEN);
-        r.set_focus(IME, PASS, IDLE_OR_PASS_THROUGH, HIDDEN);
+        r.set_focus(IME, PASS, PASS_THROUGH, HIDDEN);
         r.deadline_is(None);
-        r.poll(400, PASS, IDLE_OR_PASS_THROUGH, HIDDEN);
-        r.tap(500, S_KEY, ALT, PASS, IDLE_OR_PASS_THROUGH, HIDDEN);
+        r.poll(400, PASS, PASS_THROUGH, HIDDEN);
+        r.tap(500, S_KEY, ALT, PASS, PASS_THROUGH, HIDDEN);
         r.step(600, mods(NONE), PASS, Phase::Idle, HIDDEN);
     }
 }
@@ -2859,12 +2862,12 @@ fn set_focus_composing_while_the_card_is_up_closes_it() {
 fn set_focus_composing_while_armed_cancels_the_hold() {
     let mut r = Rig::new(default_config(), TEXT);
     r.step(0, mods(ALT), PASS, Phase::Armed, HIDDEN);
-    r.set_focus(IME, PASS, IDLE_OR_PASS_THROUGH, HIDDEN);
+    r.set_focus(IME, PASS, PASS_THROUGH, HIDDEN);
     r.deadline_is(None);
-    r.set_focus(TEXT, PASS, IDLE_OR_PASS_THROUGH, HIDDEN);
+    r.set_focus(TEXT, PASS, PASS_THROUGH, HIDDEN);
     r.deadline_is(None);
-    r.poll(2000, PASS, IDLE_OR_PASS_THROUGH, HIDDEN);
-    r.tap(2100, S_KEY, ALT, PASS, IDLE_OR_PASS_THROUGH, HIDDEN);
+    r.poll(2000, PASS, PASS_THROUGH, HIDDEN);
+    r.tap(2100, S_KEY, ALT, PASS, PASS_THROUGH, HIDDEN);
     r.step(2200, mods(NONE), PASS, Phase::Idle, HIDDEN);
 }
 
@@ -2935,4 +2938,65 @@ fn set_groups_outside_the_card_is_silent() {
         HIDDEN,
     );
     r.tap(300, digit(2), ALT, EAT, Phase::Switched, HIDDEN);
+}
+
+/// IME composition blocks capture in Switched too: the hold becomes the page's, nothing more is
+/// captured or activated, and the key-up of the letter that was captured is still consumed.
+#[test]
+fn ime_composition_during_switched_blocks_capture() {
+    let mut r = Rig::new(default_config(), PLAIN);
+    r.step(0, mods(ALT), PASS, Phase::Armed, HIDDEN);
+    r.step(
+        50,
+        down(S_KEY, ALT),
+        goto(group(RESEARCH)),
+        Phase::Switched,
+        HIDDEN,
+    );
+    r.set_focus(IME, PASS, PASS_THROUGH, HIDDEN);
+    r.deadline_is(None);
+    r.step(100, down(digit(1), ALT), PASS, PASS_THROUGH, HIDDEN);
+    r.step(110, up(digit(1), ALT), PASS, PASS_THROUGH, HIDDEN);
+    r.step(120, down(A_KEY, ALT), PASS, PASS_THROUGH, HIDDEN);
+    r.step(
+        130,
+        up(S_KEY, ALT),
+        Outcome {
+            consume: true,
+            ..PASS
+        },
+        PASS_THROUGH,
+        HIDDEN,
+    );
+    r.step(200, mods(NONE), PASS, Phase::Idle, HIDDEN);
+}
+
+/// A repeat of a key whose press the page already saw (it went down before ⌥) is the page's: it
+/// passes in Armed (the hold becomes the page's), Switched and Overlay, and captures nothing.
+#[test]
+fn the_repeat_of_a_key_pressed_before_option_passes() {
+    // Armed: S was passed (held before ⌥), its repeat must not switch group.
+    let mut r = Rig::new(default_config(), PLAIN);
+    r.step(0, mods(ALT), PASS, Phase::Armed, HIDDEN);
+    r.step(50, again(S_KEY, ALT), PASS, PASS_THROUGH, HIDDEN);
+    r.step(60, up(S_KEY, ALT), PASS, PASS_THROUGH, HIDDEN);
+    r.step(100, mods(NONE), PASS, Phase::Idle, HIDDEN);
+
+    // Switched: A was held before ⌥; its repeat passes and the group stays RESEARCH.
+    let mut r = Rig::new(default_config(), PLAIN);
+    r.step(0, mods(ALT), PASS, Phase::Armed, HIDDEN);
+    r.step(
+        50,
+        down(S_KEY, ALT),
+        goto(group(RESEARCH)),
+        Phase::Switched,
+        HIDDEN,
+    );
+    r.step(60, again(A_KEY, ALT), PASS, Phase::Switched, HIDDEN);
+    r.step(70, again(digit(1), ALT), PASS, Phase::Switched, HIDDEN);
+
+    // Overlay: the same, and nothing is selected by it.
+    let mut r = Rig::overlay(default_config(), PLAIN);
+    r.step(450, again(S_KEY, ALT), PASS, Phase::Overlay, BARE);
+    r.step(460, again(A_KEY, ALT), PASS, Phase::Overlay, BARE);
 }

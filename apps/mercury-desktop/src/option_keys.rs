@@ -163,7 +163,10 @@ thread_local! {
 pub(crate) fn with_machine<R>(f: impl FnOnce(&mut OptionKeys) -> R) -> R {
     MACHINE.with(|machine| match machine.try_borrow_mut() {
         Ok(mut machine) => f(&mut machine),
-        Err(_) => f(&mut OptionKeys::new(Config::default())),
+        Err(_) => {
+            log::warn!("option_keys::with_machine was called again from inside itself");
+            f(&mut OptionKeys::new(Config::default()))
+        }
     })
 }
 

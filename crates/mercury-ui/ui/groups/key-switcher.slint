@@ -262,7 +262,8 @@ export component KeySwitcher inherits Rectangle {
     in property <length> tiles-top: 66px;
     // A tile was clicked or pressed through VoiceOver: the group's id.
     callback tile-clicked(int);
-    // A tab chip was clicked or pressed: its digit, 1-based.
+    // A tab chip was clicked or pressed: its digit, 1-based (the chip's `index`). The state
+    // machine's `Event::ChipClicked.index` is 0-based: the caller sends `digit - 1`.
     callback chip-clicked(int);
     // "Change keys…".
     callback change-keys();

@@ -31,6 +31,16 @@ enum State {
 }
 
 /// The state machine of the ⌥ group keys. See the brief's section 5.4 for every transition.
+///
+/// Two things the caller must know:
+///
+/// - Only [`OptionKeys::on_event`] and [`OptionKeys::poll`] apply the hold deadline. The hook
+///   must call `poll(now)` before [`OptionKeys::set_config`], [`OptionKeys::set_groups`] and
+///   [`OptionKeys::set_focus`], or a deadline that has passed but not yet fired is lost when one of
+///   them removes the hold path or starts a composition.
+/// - `Digit` and numpad digits are one [`Key`], so holding both `2` and numpad `2` and releasing one
+///   of them gives a key-up that is consumed for the first and passed for the second. Very rare;
+///   nothing is done about it.
 #[derive(Debug)]
 pub struct OptionKeys {
     config: Config,
@@ -289,8 +299,14 @@ impl OptionKeys {
             outcome.consume = self.forget(key);
             return outcome;
         }
-        if repeat && self.captured.contains(&key) {
-            outcome.consume = true;
+        if repeat {
+            // The repeat of a captured key is consumed with no effect. The repeat of any other
+            // key is the page's: its press came before ⌥ and the page has seen it, so it passes.
+            if self.captured.contains(&key) {
+                outcome.consume = true;
+            } else if matches!(self.state, State::Armed(_)) {
+                self.state = State::PassThrough;
+            }
             return outcome;
         }
         let step = match self.state {
@@ -418,7 +434,9 @@ impl OptionKeys {
         Outcome::PASS
     }
 
-    /// `Event::ChipClicked`: a click on a tab chip of the chosen group opens that tab.
+    /// `Event::ChipClicked`: a click on a tab chip of the chosen group opens that tab. `index` is
+    /// 0-based; the card's `chip-clicked` callback gives the 1-based digit, so the caller sends
+    /// `index = digit - 1`.
     fn chip_clicked(&mut self, index: usize) -> Outcome {
         if let State::Overlay {
             group: Some(group), ..
