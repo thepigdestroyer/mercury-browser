@@ -105,6 +105,7 @@ flowchart TB
 | `crates/mercury-pdfium` | The PDFium backend of the PDF viewer and the helper process's entry point (`mercury-browser --pdf-worker`); PDFium is loaded at run time from a prebuilt library, not linked |
 | `crates/mercury-credits` | A build tool: writes `credits.html`, the licence texts of every crate built into the app, and checks that every crate can be credited (`make credits-check`) |
 | `crates/mercury-tab-snapshots` | Small pictures of the open tabs, for the Orbit view, with no engine inside: shrinking a frame to at most 480 by 300 pixels, a store kept in memory under a 128 MB cap, and the rules for when a picture is taken |
+| `crates/mercury-option-keys` | The ⌥ group-key state machine with no engine inside: from the keys, the focus and the groups it says whether a key goes to the page, which group or tab to switch to, and when the "Switch group" card shows; time is passed in, so it is tested without a clock |
 | `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset (`scripts/macos/make-icns.sh`) |
 | `crates/mercury-release` | A release tool: writes and signs the update manifest (`update.json`) published with each release |
 | `crates/mercury-servo-patches` | A build tool: vendors a Servo crate exactly as published, exports Mercury's changes to it as a patch and checks them (`make servo-patches-check`) |

@@ -42,6 +42,7 @@ mod macos_app_delegate;
 mod macos_terminate;
 #[cfg(target_os = "macos")]
 mod media_buffers;
+mod option_keys; // key-switcher
 // media-capture
 mod media_capture;
 #[cfg(target_os = "macos")]
