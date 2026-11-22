@@ -177,11 +177,14 @@ impl HttpState {
         // If this is not actually a navigation request return None.
         // Mercury: except a `fetch` or XHR 401 from the page's own origin, which prompts too, under the limits of
         // `mercury_auth.rs` (EC29, decision D12). A navigation is asked as before, a 407 never.
-        let subresource_prompt = request.mode != RequestMode::Navigate;
-        if subresource_prompt &&
-            (for_proxy || !crate::mercury_auth::subresource_prompt_allowed(self, request))
-        {
-            return None;
+        let mut prompt_guard = None;
+        if request.mode != RequestMode::Navigate {
+            if for_proxy || !crate::mercury_auth::subresource_prompt_allowed(self, request) {
+                return None;
+            }
+            // Dropped with this future (an aborted `fetch`, a navigation away) it silences the pair, so a
+            // prompt that is never finished cannot block every later one (net-1 review, minor 5).
+            prompt_guard = crate::mercury_auth::PromptGuard::of(self, request);
         }
 
         let (sender, receiver) = tokio::sync::oneshot::channel();
@@ -194,8 +197,8 @@ impl HttpState {
             ));
         // Mercury: the answer is looked at before it is returned, so that the limits know the prompt is over.
         let answer = receiver.await.ok().flatten();
-        if subresource_prompt {
-            crate::mercury_auth::prompt_finished(self, request, answer.is_some());
+        if let Some(guard) = prompt_guard {
+            guard.finish(answer.is_some());
         }
         answer
     }
@@ -1590,10 +1593,6 @@ async fn http_network_or_cache_fetch(
     set_default_accept_encoding(&mut http_request.headers);
 
     let current_url = http_request.current_url();
-
-    // Mercury: a top-level navigation tells the policy which site its web view is on, once per hop, before the
-    // cookies below are judged (net_policy.rs, decision D3).
-    context.state.net_policy.note_main_frame(http_request);
 
     // Step 8.21: If includeCredentials is true, then:
     // TODO some of this step can't be implemented yet

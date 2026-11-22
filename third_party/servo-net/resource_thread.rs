@@ -556,33 +556,21 @@ impl ResourceChannelManager {
             },
             // Mercury: `document.cookie`, judged by the network policy (EC5, EC6; mercury_cookies.rs). The
             // messages above carry no site and stay for WebDriver and tests.
-            CoreResourceMsg::GetCookieStringForDocument(
-                url,
-                partition_key,
-                web_view_id,
-                consumer,
-                source,
-            ) => {
+            // The web view id of the message is not used: the document's own partition key is the only
+            // source of its top-level site.
+            CoreResourceMsg::GetCookieStringForDocument(url, partition_key, _web_view_id, consumer, source) => {
                 consumer.send_or_ignore(mercury_cookies::document_cookie_string(
                     http_state,
                     &url,
                     &partition_key,
-                    web_view_id,
                     source,
                 ));
             },
-            CoreResourceMsg::SetCookiesForDocument(
-                url,
-                partition_key,
-                web_view_id,
-                cookies,
-                source,
-            ) => {
+            CoreResourceMsg::SetCookiesForDocument(url, partition_key, _web_view_id, cookies, source) => {
                 mercury_cookies::store_document_cookies(
                     http_state,
                     &url,
                     &partition_key,
-                    web_view_id,
                     cookies,
                     source,
                 );

@@ -200,6 +200,7 @@ fn client(origin: ImmutableOrigin, nested: bool, partition_key: Option<Site>) ->
         insecure_requests_policy: InsecureRequestsPolicy::DoNotUpgrade,
         has_trustworthy_ancestor_origin: false,
         network_partition_key: partition_key,
+        browser_initiated_navigation: false,
     }
 }
 
@@ -223,9 +224,26 @@ fn document_request(page: &str, target: &str, destination: Destination) -> Reque
     .build()
 }
 
-/// A request of a worker of the page at `page`: its client has no partition key (a worker's never has),
-/// but the request names its web view.
+/// A request of a worker of the page at `page`: its client carries the key of the document that created it.
 fn worker_request(page: &str, target: &str) -> Request {
+    let page = parse(page);
+    RequestBuilder::new(
+        Some(TEST_WEBVIEW_ID),
+        UrlWithBlobClaim::new(parse(target), None),
+        Referrer::NoReferrer,
+    )
+    .origin(page.origin())
+    .client(client(
+        page.origin(),
+        false,
+        Some(Site::from_origin(&page.origin())),
+    ))
+    .policy_container(Default::default())
+    .build()
+}
+
+/// A request of a worker whose creator is not known: no key.
+fn keyless_worker_request(page: &str, target: &str) -> Request {
     let page = parse(page);
     RequestBuilder::new(
         Some(TEST_WEBVIEW_ID),
@@ -240,7 +258,8 @@ fn worker_request(page: &str, target: &str) -> Request {
 
 /// A navigation to `target`. `initiator` is the origin of the script that started it (none for a typed
 /// address, whose origin is opaque); `nested` says whether the browsing context that is navigated is a
-/// frame. Like the engine's navigations, it has no partition key.
+/// frame. A frame's navigation carries the key of its parent document (`ScriptThread::network_partition_key_of_load`),
+/// a top-level one has none.
 fn navigation(target: &str, initiator: Option<&str>, nested: bool) -> Request {
     let origin = initiator
         .map(|initiator| parse(initiator).origin())
@@ -252,14 +271,24 @@ fn navigation(target: &str, initiator: Option<&str>, nested: bool) -> Request {
     )
     .destination(Destination::Document)
     .mode(RequestMode::Navigate)
-    .client(client(origin, nested, None))
+    .client(client(
+        origin,
+        nested,
+        // The parent is the initiator in these tests.
+        initiator
+            .filter(|_| nested)
+            .map(|initiator| Site::from_origin(&parse(initiator).origin())),
+    ))
     .policy_container(Default::default())
     .build()
 }
 
-/// The request as the network thread has it when it reaches `http_network_or_cache_fetch`.
-fn populated(mut request: Request) -> Request {
-    request.populate_request_from_client();
+/// A nested navigation whose parent document is not in the script thread: no key.
+fn keyless_nested_navigation(target: &str, initiator: &str) -> Request {
+    let mut request = navigation(target, Some(initiator), true);
+    if let Some(client) = request.client.as_mut() {
+        client.network_partition_key = None;
+    }
     request
 }
 
@@ -366,22 +395,15 @@ fn a_navigation_started_by_a_script_of_another_site_reports_that_initiator() {
 }
 
 #[test]
-fn a_nested_navigation_with_the_destination_document_is_judged_by_the_web_view_record() {
-    // The main frame started loading `http://top.example/`; the engine's `http_network_or_cache_fetch` tells
-    // the policy (`note_main_frame`), and here the test does. Then a frame that a script navigated to another
-    // site arrives with the destination `Document`.
+fn a_nested_navigation_with_the_destination_document_is_judged_by_its_parents_key() {
+    // A frame that a script navigated to another site arrives with the destination `Document` and the key of its
+    // parent document.
     let frame = navigation(
         "http://ads.example/frame.html",
         Some("http://top.example"),
         true,
     );
-    let seen = observe(
-        |context| {
-            let main = populated(navigation("http://top.example/", None, false));
-            context.state.net_policy.note_main_frame(&main);
-        },
-        vec![frame],
-    );
+    let seen = observe(|_| {}, vec![frame]);
     let request = requested(&seen)[0];
     assert_eq!(request.destination, Destination::Document);
     assert!(
@@ -403,28 +425,30 @@ fn a_nested_navigation_to_the_top_level_site_is_first_party() {
         Some("http://top.example"),
         true,
     );
-    let seen = observe(
-        |context| {
-            let main = populated(navigation("http://top.example/", None, false));
-            context.state.net_policy.note_main_frame(&main);
-        },
-        vec![frame],
-    );
+    let seen = observe(|_| {}, vec![frame]);
     let request = requested(&seen)[0];
     assert!(!request.is_for_main_frame);
     assert_eq!(request.is_third_party, Some(false));
 }
 
 #[test]
-fn a_worker_request_is_placed_by_its_web_view_alone() {
-    // A worker's client has no partition key; the request has only `target_webview_id`.
-    let worker = || worker_request("http://top.example/", "http://cdn.example/api");
+fn a_nested_navigation_whose_parent_was_not_visible_has_an_unknown_top_level_site() {
+    let frame = keyless_nested_navigation("http://top.example/embedded.html", "http://top.example");
+    let seen = observe(|_| {}, vec![frame]);
+    let request = requested(&seen)[0];
+    assert!(!request.is_for_main_frame);
+    assert_eq!(request.top_level_site, None);
+    assert_eq!(request.is_third_party, None);
+}
+
+#[test]
+fn a_worker_request_is_placed_by_the_key_of_its_creator() {
     let seen = observe(
-        |context| {
-            let main = populated(navigation("http://top.example/", None, false));
-            context.state.net_policy.note_main_frame(&main);
-        },
-        vec![worker()],
+        |_| {},
+        vec![worker_request(
+            "http://top.example/",
+            "http://cdn.example/api",
+        )],
     );
     let Seen::Requested(webview_id, request) = &seen[0] else {
         panic!("expected a request: {seen:?}");
@@ -434,9 +458,15 @@ fn a_worker_request_is_placed_by_its_web_view_alone() {
     assert_eq!(request.is_third_party, Some(true));
     assert!(!request.is_for_main_frame);
 
-    // Without a record the site of the top-level document is unknown, and the embedder is told that it is,
-    // not that the request is first party.
-    let seen = observe(|_| {}, vec![worker()]);
+    // With no key the site of the top-level document is unknown, and the embedder is told that it is, not that
+    // the request is first party.
+    let seen = observe(
+        |_| {},
+        vec![keyless_worker_request(
+            "http://top.example/",
+            "http://cdn.example/api",
+        )],
+    );
     let Seen::Requested(webview_id, request) = &seen[0] else {
         panic!("expected a request: {seen:?}");
     };
@@ -650,6 +680,37 @@ fn a_rewrite_to_another_origin_is_accepted_for_a_top_level_navigation() {
     assert!(start_uris.is_empty(), "the original address was contacted");
     assert_eq!(landing_uris, vec!["/landing?ok=1".to_owned()]);
     assert_eq!(body_of(&responses[0]), b"landing".to_vec());
+}
+
+/// The bad-port check ran on the address that was typed; a rewrite that moves the navigation to a port that browsers
+/// refuse (6667, IRC) must meet it again (net-1 review, minor 6).
+#[test]
+fn a_rewrite_of_a_top_level_navigation_to_a_bad_port_is_blocked_after_it() {
+    let start = Recording::new(b"start");
+    let bad = ServoUrl::parse("http://127.0.0.1:6667/landing").unwrap();
+
+    let (responses, _) = run(
+        move |_| rewrite_to(bad.clone()),
+        |_| {},
+        vec![navigation(
+            start.url.join("click").unwrap().as_str(),
+            None,
+            false,
+        )],
+    );
+    let start_uris = start.uris();
+    start.close();
+
+    assert!(start_uris.is_empty(), "the original address was contacted");
+    assert!(responses[0].is_network_error());
+    assert!(
+        matches!(
+            responses[0].get_network_error(),
+            Some(NetworkError::InvalidPort)
+        ),
+        "the bad port is the reason: {:?}",
+        responses[0].get_network_error()
+    );
 }
 
 #[test]
@@ -1159,11 +1220,11 @@ fn the_allow_is_for_the_site_it_names() {
 
 #[test]
 fn a_request_whose_top_level_site_is_unknown_is_not_allowed() {
-    // A worker's request with no record of its web view: the site is unknown, so the allow cannot apply.
+    // A worker's request with no key (its creator is not known): the site is unknown, so the allow cannot apply.
     let (responses, seen) = run(
         |_| do_not_intercept(),
         allow_mixed_content,
-        vec![worker_request(SECURE, INSECURE_SCRIPT)],
+        vec![keyless_worker_request(SECURE, INSECURE_SCRIPT)],
     );
     assert!(is_mixed_content_error(&responses[0]));
     assert_eq!(reports(&seen).len(), 1);

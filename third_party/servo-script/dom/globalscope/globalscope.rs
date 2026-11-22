@@ -40,6 +40,7 @@ use net_traits::filemanager_thread::{
 };
 use net_traits::image_cache::ImageCache;
 use net_traits::policy_container::PolicyContainer;
+use net_traits::pub_domains::Site;
 use net_traits::request::{
     InsecureRequestsPolicy, Origin as RequestOrigin, Referrer, RequestBuilder, RequestClient,
 };
@@ -2312,8 +2313,24 @@ impl GlobalScope {
             is_nested_browsing_context: false,
             insecure_requests_policy: self.insecure_requests_policy(),
             has_trustworthy_ancestor_origin: false,
-            network_partition_key: None,
+            // Mercury: a worker's key is the one of the document that created it (net-1 review, finding 1).
+            network_partition_key: self.network_partition_key(),
+            browser_initiated_navigation: false,
         }
+    }
+
+    // Mercury: the top-level site that requests of this global carry as their network partition key: the
+    // document's for a window, the creator's for a worker. A worklet global scope has none (its module
+    // fetches carry the document's key themselves, see `worklet.rs`), and a request without a key is third
+    // party in the network layer.
+    pub(crate) fn network_partition_key(&self) -> Option<Site> {
+        if let Some(window) = self.downcast::<Window>() {
+            return window.Document().determine_the_network_partition_key();
+        }
+        if let Some(worker) = self.downcast::<WorkerGlobalScope>() {
+            return worker.network_partition_key();
+        }
+        None
     }
 
     /// <https://html.spec.whatwg.org/multipage/#concept-settings-object-policy-container>

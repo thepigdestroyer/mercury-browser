@@ -103,7 +103,7 @@ impl NetPolicyControl {
     pub fn site_of(&self, url: &Url) -> Option<String> {
         let sites = self
             .policy
-            .sites_of_document(&ServoUrl::from_url(url.clone()), &None, None);
+            .sites_of_document(&ServoUrl::from_url(url.clone()), &None);
         Some(sites.request).filter(|site| !site.is_empty())
     }
 

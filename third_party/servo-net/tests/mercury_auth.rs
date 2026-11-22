@@ -13,7 +13,7 @@ use std::sync::Mutex as StdMutex;
 use std::time::{Duration, Instant};
 
 use net::mercury_auth::{
-    AuthLimiter, Clock, MAX_ENTRIES, PromptDecision, REFUSAL_SILENCE, prompt_finished,
+    AuthLimiter, Clock, MAX_ENTRIES, PromptDecision, PromptGuard, REFUSAL_SILENCE, prompt_finished,
     subresource_prompt_allowed,
 };
 use net::net_policy::NetPolicy;
@@ -76,6 +76,7 @@ fn client(top_level: &str, page: &str) -> RequestClient {
         insecure_requests_policy: InsecureRequestsPolicy::DoNotUpgrade,
         has_trustworthy_ancestor_origin: false,
         network_partition_key: Some(Site::from_origin(&origin_of(top_level))),
+        browser_initiated_navigation: false,
     }
 }
 
@@ -612,4 +613,67 @@ fn the_default_bound_holds_under_many_pairs() {
             limiter.len()
         );
     }
+}
+
+// ---------------------------------------------------------------------------------------------
+// The guard of a prompt in flight (net-1 review, minor 5)
+// ---------------------------------------------------------------------------------------------
+
+#[test]
+fn a_guard_dropped_without_an_answer_silences_the_pair_instead_of_leaving_it_in_flight() {
+    let state = create_http_state(None);
+    assert!(subresource_prompt_allowed(&state, &own_fetch()));
+    let guard = PromptGuard::of(&state, &own_fetch()).expect("a fetch to its own origin");
+    // While the prompt is open a second one is refused.
+    assert!(!subresource_prompt_allowed(&state, &own_fetch()));
+    assert_eq!(
+        state
+            .net_policy
+            .auth_limiter()
+            .begin(TEST_WEBVIEW_ID, "https://app.example"),
+        PromptDecision::InFlight
+    );
+
+    // The fetch future is dropped (an aborted `fetch`, a navigation away): the mark does not stay for good.
+    drop(guard);
+    assert_eq!(
+        state
+            .net_policy
+            .auth_limiter()
+            .begin(TEST_WEBVIEW_ID, "https://app.example"),
+        PromptDecision::Silenced,
+        "a refusal: silenced for the refusal period, not stuck in flight"
+    );
+}
+
+#[test]
+fn a_guard_that_is_finished_with_an_answer_forgets_the_pair() {
+    let state = create_http_state(None);
+    assert!(subresource_prompt_allowed(&state, &own_fetch()));
+    PromptGuard::of(&state, &own_fetch())
+        .expect("a fetch to its own origin")
+        .finish(true);
+    assert!(state.net_policy.auth_limiter().is_empty());
+    assert!(subresource_prompt_allowed(&state, &own_fetch()));
+}
+
+#[test]
+fn a_guard_that_is_finished_without_an_answer_silences_the_pair() {
+    let state = create_http_state(None);
+    assert!(subresource_prompt_allowed(&state, &own_fetch()));
+    PromptGuard::of(&state, &own_fetch())
+        .expect("a fetch to its own origin")
+        .finish(false);
+    assert!(!subresource_prompt_allowed(&state, &own_fetch()));
+}
+
+#[test]
+fn there_is_no_guard_for_a_navigation_or_a_request_that_could_not_prompt() {
+    let state = create_http_state(None);
+    let other_origin = fetch_request(
+        "https://other.example/api",
+        "https://app.example",
+        "https://app.example",
+    );
+    assert!(PromptGuard::of(&state, &other_origin).is_none());
 }

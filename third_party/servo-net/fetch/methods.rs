@@ -330,6 +330,31 @@ pub(crate) fn convert_request_to_csp_request(request: &Request) -> Option<csp::R
     Some(csp_request)
 }
 
+// Mercury: steps 6 and 7 of main fetch (the bad-port check and the Content Security Policy check) for a request
+// whose URL an interceptor rewrite changed after they ran: a network error, or `None` when the new URL passes
+// (net-1 review, minor 6).
+fn network_error_after_rewrite(
+    request: &Request,
+    target: &mut (dyn FetchTaskTarget + Send),
+) -> Option<Response> {
+    if should_request_be_blocked_due_to_a_bad_port(&request.current_url()) {
+        return Some(Response::network_error(NetworkError::InvalidPort));
+    }
+    let csp_request = convert_request_to_csp_request(request)?;
+    let (check_result, violations) = should_request_be_blocked_by_csp(
+        &csp_request,
+        request
+            .policy_container
+            .policy_container()
+            .expect("Always has a valid policy container"),
+    );
+    if !violations.is_empty() {
+        target.process_csp_violations(request, violations);
+    }
+    (check_result == csp::CheckResult::Blocked)
+        .then(|| Response::network_error(NetworkError::ContentSecurityPolicy))
+}
+
 /// <https://www.w3.org/TR/CSP/#should-block-request>
 pub fn should_request_be_blocked_by_csp(
     csp_request: &csp::Request,
@@ -551,6 +576,9 @@ pub async fn main_fetch(
     // Step 11. If recursive is false, then run the remaining steps in parallel.
     // Not applicable: see fetch_async.
 
+    // Mercury: the URL before the interceptor, to know whether it rewrote it (EC37).
+    let url_before_interceptor = request.current_url();
+
     // Intercept the request and maybe override the response.
     context
         .request_interceptor
@@ -573,6 +601,12 @@ pub async fn main_fetch(
         .hsts_list
         .read()
         .apply_hsts_rules(request.current_url_mut());
+    // Mercury: a rewrite that moved a top-level navigation to another origin has not been through the bad-port
+    // check and the Content Security Policy check of steps 6 and 7, which ran on the old URL: run them again
+    // for the new one (net-1 review, minor 6). Nothing changed, nothing to do.
+    if request.current_url() != url_before_interceptor && response.is_none() {
+        response = network_error_after_rewrite(request, &mut *target);
+    }
     let current_url = request.current_url();
     let current_scheme = current_url.scheme();
 

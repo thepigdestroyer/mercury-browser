@@ -45,8 +45,9 @@ use servo_base::id::{
 };
 
 use crate::net_policy::{
-    PROCESS_POLICY_LOCK, claim, client, navigation, nested_navigation, origin_of, parse, site_of,
-    subresource, top_level_navigation, web_view,
+    PROCESS_POLICY_LOCK, claim, client, navigation, nested_navigation, nested_navigation_without_key,
+    origin_of, parse, script_navigation_from_opaque_origin, site_of, subresource,
+    top_level_navigation, web_view, worker_request,
 };
 use crate::{
     create_generic_embedder_proxy, fetch_with_context, make_body, make_server, make_ssl_server,
@@ -126,6 +127,7 @@ fn answer_probe(
         });
 
         let mut location = None;
+        let mut status = None;
         for (key, value) in
             url::form_urlencoded::parse(request.uri().query().unwrap_or("").as_bytes())
         {
@@ -136,6 +138,14 @@ fn answer_probe(
                         .append(header::SET_COOKIE, HeaderValue::from_str(&value).unwrap());
                 },
                 "to" => location = Some(value.into_owned()),
+                // A navigation that does not commit: 204 No Content (the page stays), or a download.
+                "status" => status = value.parse::<u16>().ok(),
+                "attachment" => {
+                    response.headers_mut().insert(
+                        header::CONTENT_DISPOSITION,
+                        HeaderValue::from_static("attachment; filename=\"x.bin\""),
+                    );
+                },
                 _ => {},
             }
         }
@@ -162,7 +172,12 @@ fn answer_probe(
                     .headers_mut()
                     .insert(header::LOCATION, HeaderValue::from_str(&location).unwrap());
             },
-            None => *response.body_mut() = make_body(b"ok".to_vec()),
+            None => match status {
+                Some(status) => {
+                    *response.status_mut() = StatusCode::from_u16(status).unwrap();
+                },
+                None => *response.body_mut() = make_body(b"ok".to_vec()),
+            },
         }
     }
 }
@@ -337,7 +352,7 @@ fn from_page(url: &str, page: &str) -> RequestBuilder {
     with_credentials(navigation(url, Some(page), false, TEST_WEBVIEW_ID))
 }
 
-/// A frame that navigates, inside the page the policy has recorded for the web view.
+/// A frame of the page `parent` that navigates: the request carries the parent's key.
 fn in_frame(url: &str, parent: &str) -> RequestBuilder {
     with_credentials(nested_navigation(url, parent, TEST_WEBVIEW_ID))
 }
@@ -351,14 +366,6 @@ fn run(context: &mut FetchContext, builder: RequestBuilder) -> Response {
         response.get_network_error()
     );
     response
-}
-
-/// Records, as a load of the web view's main frame would, the page the web view is on.
-fn the_web_view_is_on(context: &FetchContext, page: &str) {
-    context
-        .state
-        .net_policy
-        .note_main_frame(&typed(page).build());
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -442,8 +449,8 @@ fn a_request_with_no_known_top_level_site_gets_no_cookies_and_sets_none() {
     let mut context = blocking();
     seed(&context, &probe.localhost("/"), &["session=1"]);
 
-    // A client with no partition key and a web view no main frame has loaded in: what a worker started by a
-    // page the policy has not seen would look like. Unknown is third party.
+    // A client with no partition key: what a worker whose creator is not known would look like. Unknown is
+    // third party.
     let origin = origin_of(PAGE_LOCALHOST);
     let unknown = with_credentials(
         RequestBuilder::new(
@@ -558,44 +565,20 @@ fn a_top_level_navigation_is_first_party_whatever_site_it_goes_to() {
 }
 
 // ---------------------------------------------------------------------------------------------------
-// The record of the web view's main frame: frames navigated by script or by a link have the destination
-// `Document` and are not top level (fact 8a of the lane brief).
+// Frames navigated by script or by a link have the destination `Document` and are not top level (fact 8a of the
+// lane brief); a navigation that does not commit changes nothing (net-1 review, finding 1).
 // ---------------------------------------------------------------------------------------------------
 
 #[test]
-fn a_top_level_navigation_teaches_the_policy_the_page_of_its_web_view_at_every_hop() {
-    let probe = Probe::new();
-    let mut context = blocking();
-
-    // localhost redirects to 127.0.0.1: the record follows the hops, and ends on the last one.
-    let landing = probe.loopback("/landing");
-    run(
-        &mut context,
-        typed(&probe.localhost(&redirect("/hop", &landing, &[]))),
-    );
-    assert_eq!(
-        context
-            .state
-            .net_policy
-            .recorded_top_level_site(TEST_WEBVIEW_ID)
-            .as_deref(),
-        Some("127.0.0.1")
-    );
-}
-
-#[test]
-fn a_frame_navigated_by_script_is_judged_by_the_record_and_not_as_top_level() {
+fn a_frame_navigated_by_script_is_judged_by_its_parents_key_and_not_as_top_level() {
     let probe = Probe::new();
     let mut context = blocking();
     seed(&context, &probe.localhost("/"), &["session=1"]);
     seed(&context, &probe.loopback("/"), &["tracker=1"]);
 
-    // The web view is on localhost, loaded through the fetch path so that the hook that writes the record runs.
-    run(&mut context, typed(&probe.localhost("/page")));
-    assert_eq!(probe.only("/page").cookie.as_deref(), Some("session=1"));
-
-    // An iframe of that page navigates to 127.0.0.1. It has the destination `Document` like the page, but its
-    // client is nested: third party. No cookie goes, and the one it sets is ignored.
+    // An iframe of a page on localhost navigates to 127.0.0.1. It has the destination `Document` like the
+    // page, but its client is nested, with the parent's key: third party. No cookie goes, and the one it sets
+    // is ignored.
     let tracker = probe.loopback(&sets("/frame-third", &["frame-cookie=1"]));
     run(&mut context, in_frame(&tracker, PAGE_LOCALHOST));
     assert_eq!(probe.only("/frame-third").cookie, None);
@@ -611,6 +594,15 @@ fn a_frame_navigated_by_script_is_judged_by_the_record_and_not_as_top_level() {
         Some("session=1")
     );
 
+    // A frame whose parent the script thread could not see has no key: no cookie, not even for its own site.
+    let keyless = with_credentials(nested_navigation_without_key(
+        &probe.localhost("/frame-keyless"),
+        PAGE_LOCALHOST,
+        TEST_WEBVIEW_ID,
+    ));
+    run(&mut context, keyless);
+    assert_eq!(probe.only("/frame-keyless").cookie, None);
+
     // The same navigation by the web view itself (a link in the top-level page) goes to 127.0.0.1 with its
     // cookies, because it is top level.
     run(
@@ -621,6 +613,129 @@ fn a_frame_navigated_by_script_is_judged_by_the_record_and_not_as_top_level() {
         probe.only("/top-level").cookie.as_deref(),
         Some("tracker=1")
     );
+}
+
+/// A worker request of the page `PAGE_LOCALHOST`, as `prepare_workerscope_init` and the worker's own client give
+/// it: the key of the creator.
+fn from_worker(url: &str) -> RequestBuilder {
+    with_credentials(worker_request(url, PAGE_LOCALHOST, TEST_WEBVIEW_ID))
+}
+
+/// A worker request with no key at all (what every worker had before the key was passed down).
+fn from_keyless_worker(url: &str) -> RequestBuilder {
+    let origin = origin_of(PAGE_LOCALHOST);
+    with_credentials(
+        RequestBuilder::new(Some(TEST_WEBVIEW_ID), claim(url), Referrer::NoReferrer)
+            .origin(origin.clone())
+            .client(client(origin, false, None)),
+    )
+}
+
+/// What a page on localhost, whose navigation to 127.0.0.1 (a tracker) does not commit, can still make its workers
+/// and frames send: the tracker's cookie must never go, and nothing the tracker sets may be stored. At the head that
+/// the review found, the navigation's start wrote "this web view is on 127.0.0.1" and every later request of the
+/// page's workers and frames was first party to the tracker.
+fn assert_the_tracker_stays_third_party(context: &mut FetchContext, probe: &Probe) {
+    // A worker of the page (with the key of the page) fetches from the tracker with credentials.
+    run(
+        context,
+        from_worker(&probe.loopback(&sets("/worker-key", &["from-worker=1"]))),
+    );
+    assert_eq!(probe.only("/worker-key").cookie, None);
+    // A worker with no key does not get the tracker's cookie either, and not the page's own.
+    run(
+        context,
+        from_keyless_worker(&probe.loopback(&sets("/worker-keyless", &["from-keyless=1"]))),
+    );
+    assert_eq!(probe.only("/worker-keyless").cookie, None);
+    // A frame of the page that navigates to the tracker.
+    run(
+        context,
+        in_frame(
+            &probe.loopback(&sets("/frame-tracker", &["from-frame=1"])),
+            PAGE_LOCALHOST,
+        ),
+    );
+    assert_eq!(probe.only("/frame-tracker").cookie, None);
+    // Nothing the tracker set on these requests was stored.
+    assert_eq!(jar(context, &probe.loopback("/")), names(&["tracker"]));
+    // The page's own workers and frames still count the real site as theirs.
+    run(context, from_worker(&probe.localhost("/worker-own")));
+    assert_eq!(
+        probe.only("/worker-own").cookie.as_deref(),
+        Some("session=1")
+    );
+    run(
+        context,
+        in_frame(&probe.localhost("/frame-own"), PAGE_LOCALHOST),
+    );
+    assert_eq!(
+        probe.only("/frame-own").cookie.as_deref(),
+        Some("session=1")
+    );
+}
+
+fn context_of_a_page_on_localhost(probe: &Probe) -> FetchContext {
+    let context = blocking();
+    seed(&context, &probe.localhost("/"), &["session=1"]);
+    seed(&context, &probe.loopback("/"), &["tracker=1"]);
+    context
+}
+
+#[test]
+fn a_navigation_answered_204_does_not_make_the_tracker_first_party_for_workers_and_frames() {
+    let probe = Probe::new();
+    let mut context = context_of_a_page_on_localhost(&probe);
+    // The page sets `location` to the tracker and the tracker answers 204: the page stays.
+    let response = run(
+        &mut context,
+        typed_or_script(&probe.loopback("/no-content?status=204")),
+    );
+    assert_eq!(response.status.code(), StatusCode::NO_CONTENT);
+    assert_the_tracker_stays_third_party(&mut context, &probe);
+}
+
+#[test]
+fn a_navigation_that_becomes_a_download_does_not_make_the_tracker_first_party() {
+    let probe = Probe::new();
+    let mut context = context_of_a_page_on_localhost(&probe);
+    run(
+        &mut context,
+        typed_or_script(&probe.loopback("/file?attachment=1")),
+    );
+    assert_the_tracker_stays_third_party(&mut context, &probe);
+}
+
+#[test]
+fn a_navigation_that_redirects_and_then_fails_does_not_make_the_tracker_first_party() {
+    let probe = Probe::new();
+    let mut context = context_of_a_page_on_localhost(&probe);
+    // localhost -> 127.0.0.1 -> an answer without content.
+    let landing = probe.loopback("/landing?status=204");
+    run(
+        &mut context,
+        typed_or_script(&probe.localhost(&redirect("/hop", &landing, &[]))),
+    );
+    assert_the_tracker_stays_third_party(&mut context, &probe);
+}
+
+#[test]
+fn a_navigation_that_is_stalled_or_cancelled_leaves_the_policy_as_it_was() {
+    // A navigation that never gets an answer, or whose future is dropped, is not seen by the policy at all:
+    // the network layer asks it for the sites of a request and tells it nothing. So nothing can be left
+    // behind, and the same checks as above hold with the navigation merely built and judged.
+    let probe = Probe::new();
+    let mut context = context_of_a_page_on_localhost(&probe);
+    let started = typed_or_script(&probe.loopback("/stalled")).build();
+    let sites = context.state.net_policy.sites_of_request(&started);
+    assert!(sites.top_level_navigation);
+    drop(started);
+    assert_the_tracker_stays_third_party(&mut context, &probe);
+}
+
+/// The navigation that the page starts to the tracker: a link or `location.href` of a page on localhost.
+fn typed_or_script(url: &str) -> RequestBuilder {
+    from_page(url, PAGE_LOCALHOST)
 }
 
 // ---------------------------------------------------------------------------------------------------
@@ -673,6 +788,50 @@ fn a_typed_address_sends_its_strict_cookies() {
     );
 }
 
+/// A page of `attacker.example` (or a `data:` document, whose origin is opaque too) frames itself in `<iframe sandbox="allow-scripts allow-top-navigation allow-forms">` and
+/// runs `top.location = "https://bank.example/..."`, or posts a form with `target=_top`: the navigation has an opaque
+/// origin, like a typed address, but a script started it. Strict cookies of the bank must not go with it (net-1 review,
+/// finding 2: before, they did).
+#[test]
+fn a_script_navigation_from_an_opaque_origin_is_not_a_typed_address() {
+    let probe = Probe::new();
+    let mut context = same_site();
+    seed(&context, &probe.localhost("/"), &KINDS);
+
+    // A GET: Lax goes (a top-level navigation with a safe method), Strict does not.
+    run(
+        &mut context,
+        with_credentials(script_navigation_from_opaque_origin(
+            &probe.localhost("/script-get"),
+            TEST_WEBVIEW_ID,
+        )),
+    );
+    assert_eq!(
+        probe.only("/script-get").cookie_names(),
+        names(&["l", "n", "u"])
+    );
+
+    // A POST (`target=_top` form): neither Lax nor Strict.
+    run(
+        &mut context,
+        with_credentials(script_navigation_from_opaque_origin(
+            &probe.localhost("/script-post"),
+            TEST_WEBVIEW_ID,
+        ))
+        .method(Method::POST),
+    );
+    let seen = probe.only("/script-post");
+    assert_eq!(seen.method, Method::POST);
+    assert_eq!(seen.cookie_names(), names(&["n", "u"]));
+
+    // The browser's own navigations still send everything: a typed address (a bookmark, a reload).
+    run(&mut context, typed(&probe.localhost("/typed")));
+    assert_eq!(
+        probe.only("/typed").cookie_names(),
+        names(&["s", "l", "n", "u"])
+    );
+}
+
 #[test]
 fn a_cross_site_top_level_get_sends_lax_cookies_and_not_strict_ones() {
     let probe = Probe::new();
@@ -704,9 +863,7 @@ fn a_frame_navigated_by_a_cross_site_page_does_not_get_lax_cookies_although_it_i
     let probe = Probe::new();
     let mut context = same_site();
     seed(&context, &probe.localhost("/"), &KINDS);
-    // The web view is on 127.0.0.1 (as a main-frame load would have recorded).
-    the_web_view_is_on(&context, &probe.loopback("/page"));
-    // A frame of that page navigates to localhost: destination `Document`, method GET, but not top level.
+    // A frame of a page on 127.0.0.1 navigates to localhost: destination `Document`, method GET, but not top level.
     run(
         &mut context,
         in_frame(&probe.localhost("/x"), PAGE_LOOPBACK),
@@ -861,7 +1018,6 @@ fn a_cross_site_top_level_navigation_may_set_a_strict_or_lax_cookie() {
 fn a_frame_navigated_by_script_cannot_set_a_strict_or_lax_cookie_across_sites() {
     let probe = Probe::new();
     let mut context = same_site();
-    the_web_view_is_on(&context, &probe.loopback("/page"));
     let url = probe.localhost(&sets("/x", &KINDS));
     run(&mut context, in_frame(&url, PAGE_LOOPBACK));
     assert_eq!(jar(&context, &probe.localhost("/")), names(&["u"]));

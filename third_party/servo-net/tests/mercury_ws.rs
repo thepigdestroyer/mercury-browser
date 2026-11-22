@@ -461,6 +461,7 @@ fn client(top_level: &str, page: &str) -> RequestClient {
         insecure_requests_policy: InsecureRequestsPolicy::DoNotUpgrade,
         has_trustworthy_ancestor_origin: false,
         network_partition_key: Some(Site::from_origin(&origin_of(top_level))),
+        browser_initiated_navigation: false,
     }
 }
 

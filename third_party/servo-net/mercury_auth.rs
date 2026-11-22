@@ -55,7 +55,7 @@ use parking_lot::Mutex;
 use servo_base::id::WebViewId;
 
 use crate::http_loader::HttpState;
-use crate::net_policy::Party;
+use crate::net_policy::{NetPolicy, Party};
 
 /// How many (web view, origin) pairs the limiter remembers.
 pub const MAX_ENTRIES: usize = 256;
@@ -310,4 +310,49 @@ pub fn prompt_finished(state: &HttpState, request: &Request, answered: bool) {
         .net_policy
         .auth_limiter()
         .finish(webview, &origin, answered);
+}
+
+/// The mark "a prompt for this (web view, origin) is open" that [`subresource_prompt_allowed`] set, owned by
+/// the fetch that waits for the answer. [`PromptGuard::finish`] ends it with the user's answer; when the guard
+/// is dropped without that (the fetch future was dropped while the prompt was open: an aborted `fetch`, a
+/// navigation away) it ends it as a refusal, so the pair is silenced for [`REFUSAL_SILENCE`] and not stuck "in
+/// flight" for the life of the web view. A silence, not a release, because the prompt of the embedder may still
+/// be on screen: a page must not be able to stack prompts by aborting its own requests.
+#[must_use = "dropping the guard ends the prompt as a refusal"]
+pub struct PromptGuard {
+    policy: NetPolicy,
+    webview: WebViewId,
+    origin: String,
+    finished: bool,
+}
+
+impl PromptGuard {
+    /// The guard of the prompt that [`subresource_prompt_allowed`] allowed for `request`. `None` for a request
+    /// that cannot have been allowed (a navigation, no web view, not its own origin).
+    pub fn of(state: &HttpState, request: &Request) -> Option<PromptGuard> {
+        Some(PromptGuard {
+            policy: state.net_policy.clone(),
+            webview: request.target_webview_id?,
+            origin: own_origin_of_subresource(request)?,
+            finished: false,
+        })
+    }
+
+    /// The prompt is over; `answered` is whether the user supplied credentials (see [`prompt_finished`]).
+    pub fn finish(mut self, answered: bool) {
+        self.finished = true;
+        self.policy
+            .auth_limiter()
+            .finish(self.webview, &self.origin, answered);
+    }
+}
+
+impl Drop for PromptGuard {
+    fn drop(&mut self) {
+        if !self.finished {
+            self.policy
+                .auth_limiter()
+                .finish(self.webview, &self.origin, false);
+        }
+    }
 }

@@ -6,15 +6,13 @@
 //!
 //! No network is used: the tests build requests by hand (as script would, with a client, an origin and a
 //! partition key) and ask the policy who is first party. The party matrix is the contract of decisions D3
-//! and D4 of the net-1 lane: the top-level site comes from the client's key, then from a top-level
-//! navigation, then from the policy's own record of the web view, and otherwise is unknown, which every
-//! security decision treats as third party.
+//! and D4 of the net-1 lane: the top-level site comes from the client's key (script fills it for documents,
+//! workers and nested navigations), then from a top-level navigation, and otherwise is unknown, which every
+//! security decision treats as third party. The policy keeps no record of what a web view loads.
 
 use std::sync::Arc;
 
-use net::net_policy::{
-    MAX_RECORDED_WEB_VIEWS, NetPolicy, NetPolicyStats, Party, RequestSites, site_key_of_url,
-};
+use net::net_policy::{NetPolicy, NetPolicyStats, Party, RequestSites, site_key_of_url};
 use net_traits::ReferrerPolicy;
 use net_traits::blob_url_store::UrlWithBlobClaim;
 use net_traits::policy_container::PolicyContainer;
@@ -58,6 +56,7 @@ pub(crate) fn client(origin: ImmutableOrigin, nested: bool, key: Option<Site>) -
         insecure_requests_policy: InsecureRequestsPolicy::DoNotUpgrade,
         has_trustworthy_ancestor_origin: false,
         network_partition_key: key,
+        browser_initiated_navigation: false,
     }
 }
 
@@ -78,8 +77,10 @@ pub(crate) fn subresource(url: &str, document: &str, top_level: &str) -> Request
         .client(client(origin, false, Some(site_of(top_level))))
 }
 
-/// A navigation request as `navigation.rs` builds it: no partition key, the initiator's origin as the
-/// client's origin (opaque when the browser started it, as for a typed URL), the destination `Document`.
+/// A navigation request as `navigation.rs` builds it: the initiator's origin as the client's origin (opaque when
+/// the browser started it, as for a typed URL), the destination `Document`, and no partition key (a top-level
+/// load has none; `nested_navigation` is the one that carries the parent's). A load with no initiator is the
+/// browser's own: `browser_initiated_navigation`.
 pub(crate) fn navigation(
     url: &str,
     initiator: Option<&str>,
@@ -87,11 +88,13 @@ pub(crate) fn navigation(
     web_view: WebViewId,
 ) -> RequestBuilder {
     let origin = initiator.map_or_else(ImmutableOrigin::new_opaque, origin_of);
+    let mut request_client = client(origin.clone(), nested, None);
+    request_client.browser_initiated_navigation = initiator.is_none();
     RequestBuilder::new(Some(web_view), claim(url), Referrer::NoReferrer)
         .destination(Destination::Document)
         .mode(RequestMode::Navigate)
-        .origin(origin.clone())
-        .client(client(origin, nested, None))
+        .origin(origin)
+        .client(request_client)
 }
 
 /// The request that loads the page of a top-level browsing context, started by the browser (a typed URL).
@@ -100,9 +103,48 @@ pub(crate) fn top_level_navigation(url: &str, web_view: WebViewId) -> RequestBui
 }
 
 /// The request that loads a frame by a navigation (`<iframe src>`, `location.href`, a link): destination
-/// `Document` like a top-level page, but the client is in a nested browsing context.
+/// `Document` like a top-level page, but the client is in a nested browsing context. It carries the partition
+/// key of the parent document, as `ScriptThread::network_partition_key_of_load` gives it.
 pub(crate) fn nested_navigation(url: &str, parent: &str, web_view: WebViewId) -> RequestBuilder {
+    let mut builder = navigation(url, Some(parent), true, web_view);
+    if let Some(request_client) = builder.client.as_mut() {
+        request_client.network_partition_key = Some(site_of(parent));
+    }
+    builder
+}
+
+/// A nested navigation whose parent document the script thread could not see (it lives in another process):
+/// no key.
+pub(crate) fn nested_navigation_without_key(
+    url: &str,
+    parent: &str,
+    web_view: WebViewId,
+) -> RequestBuilder {
     navigation(url, Some(parent), true, web_view)
+}
+
+/// A navigation that a script started from an opaque origin (a sandboxed frame, a `data:` document): the
+/// client's origin is opaque, like a typed URL's, but it is not the browser's own.
+pub(crate) fn script_navigation_from_opaque_origin(
+    url: &str,
+    web_view: WebViewId,
+) -> RequestBuilder {
+    let origin = ImmutableOrigin::new_opaque();
+    RequestBuilder::new(Some(web_view), claim(url), Referrer::NoReferrer)
+        .destination(Destination::Document)
+        .mode(RequestMode::Navigate)
+        .origin(origin.clone())
+        .client(client(origin, false, None))
+}
+
+/// A request of a worker (or of a document) whose page is `creator`: the client carries the key of the
+/// document that created it, as `prepare_workerscope_init` hands it to the worker.
+pub(crate) fn worker_request(url: &str, creator: &str, web_view: WebViewId) -> RequestBuilder {
+    let origin = origin_of(creator);
+    RequestBuilder::new(Some(web_view), claim(url), Referrer::NoReferrer)
+        .destination(Destination::None)
+        .origin(origin.clone())
+        .client(client(origin, false, Some(site_of(creator))))
 }
 
 pub(crate) fn sites(policy: &NetPolicy, builder: RequestBuilder) -> RequestSites {
@@ -234,7 +276,7 @@ fn the_initiator_is_the_site_of_the_requests_origin() {
 fn a_request_without_a_top_level_site_is_unknown() {
     let policy = NetPolicy::new();
 
-    // A client that has no key (a worker's), a web view that no main frame has loaded in.
+    // A client that has no key (a worker whose creator the script could not name).
     let origin = origin_of("https://a.example/");
     let builder = RequestBuilder::new(
         Some(web_view(900)),
@@ -246,7 +288,6 @@ fn a_request_without_a_top_level_site_is_unknown() {
     let found = sites(&policy, builder);
     assert_eq!(found.party, Party::Unknown);
     assert_eq!(found.top_level, None);
-    assert_eq!(found.top_level_origin, None);
 
     // No client and no web view at all (an internal request).
     let builder = RequestBuilder::new(None, claim("https://a.example/x"), Referrer::NoReferrer)
@@ -266,8 +307,6 @@ fn a_top_level_navigation_is_first_party_by_construction_at_every_hop() {
     assert_eq!(found.party, Party::First);
     assert_eq!(found.top_level.as_deref(), Some("a.example"));
     assert_eq!(found.request, "a.example");
-    // The record is only what note_main_frame writes: asking does not write it.
-    assert_eq!(policy.recorded_web_views(), 0);
 
     // After a redirect the current URL is on another site, and so is the top level.
     let builder = top_level_navigation("https://a.example/page", TEST_WEBVIEW_ID).url_list(vec![
@@ -284,45 +323,31 @@ fn a_top_level_navigation_is_first_party_by_construction_at_every_hop() {
 #[test]
 fn the_destination_document_alone_does_not_make_a_top_level_navigation() {
     let policy = NetPolicy::new();
-    let recorded = web_view(1);
-    policy.note_main_frame(&top_level_navigation("https://top.example/", recorded).build());
+    let web_view = web_view(1);
 
-    // Each of these has the destination `Document` and is judged by the record, not as top level.
-    let nested = nested_navigation(
-        "https://ads.example/frame",
-        "https://top.example/",
-        recorded,
-    );
+    // A frame navigation carries the parent's key: third party to the top-level page, or first party.
+    let nested = nested_navigation("https://ads.example/frame", "https://top.example/", web_view);
     let found = sites(&policy, nested);
     assert!(!found.top_level_navigation);
     assert_eq!(found.party, Party::Third);
     assert_eq!(found.top_level.as_deref(), Some("top.example"));
-    assert_eq!(
-        found.top_level_origin.as_deref(),
-        Some("https://top.example")
-    );
 
-    // A frame that navigates to the top-level page's own site is first party.
-    let nested = nested_navigation(
-        "https://top.example/other",
-        "https://top.example/",
-        recorded,
-    );
+    let nested = nested_navigation("https://top.example/other", "https://top.example/", web_view);
     assert_eq!(sites(&policy, nested).party, Party::First);
 
-    // The same frame in a web view the policy has not seen is unknown.
-    let nested = nested_navigation(
-        "https://ads.example/frame",
-        "https://top.example/",
-        web_view(2),
-    );
-    let found = sites(&policy, nested);
-    assert_eq!(found.party, Party::Unknown);
-    assert_eq!(found.top_level, None);
+    // A frame whose parent the script thread could not see has no key: unknown, never first party, even when
+    // it goes to the site of its initiator.
+    for target in ["https://ads.example/frame", "https://top.example/other"] {
+        let nested = nested_navigation_without_key(target, "https://top.example/", web_view);
+        let found = sites(&policy, nested);
+        assert!(!found.top_level_navigation);
+        assert_eq!(found.party, Party::Unknown, "{target}");
+        assert_eq!(found.top_level, None);
+    }
 
-    // Mode `Navigate` and destination `Document` with no client at all: not top level either.
+    // Mode `Navigate` and destination `Document` with no client at all: not a top-level navigation either.
     let no_client = RequestBuilder::new(
-        Some(recorded),
+        Some(web_view),
         claim("https://ads.example/frame"),
         Referrer::NoReferrer,
     )
@@ -331,13 +356,13 @@ fn the_destination_document_alone_does_not_make_a_top_level_navigation() {
     .origin(origin_of("https://top.example/"));
     let found = sites(&policy, no_client);
     assert!(!found.top_level_navigation);
-    assert_eq!(found.party, Party::Third);
+    assert_eq!(found.party, Party::Unknown);
 
     // A top-level client, but the mode is not `Navigate` (a `fetch` of a document), or the initiator is set (a
     // prefetch): not a navigation of the top-level browsing context.
     let origin = origin_of("https://top.example/");
     let fetch_of_a_document = RequestBuilder::new(
-        Some(recorded),
+        Some(web_view),
         claim("https://ads.example/doc"),
         Referrer::NoReferrer,
     )
@@ -346,77 +371,131 @@ fn the_destination_document_alone_does_not_make_a_top_level_navigation() {
     .client(client(origin.clone(), false, None));
     let found = sites(&policy, fetch_of_a_document);
     assert!(!found.top_level_navigation);
-    assert_eq!(found.party, Party::Third);
+    assert_eq!(found.party, Party::Unknown);
 
     let prefetch =
-        top_level_navigation("https://ads.example/doc", recorded).initiator(Initiator::Prefetch);
+        top_level_navigation("https://ads.example/doc", web_view).initiator(Initiator::Prefetch);
     let found = sites(&policy, prefetch);
     assert!(!found.top_level_navigation);
-    assert_eq!(found.party, Party::Third);
+    assert_eq!(found.party, Party::Unknown);
 }
 
 #[test]
-fn a_nested_frame_with_the_destination_iframe_is_judged_by_the_record_too() {
+fn a_nested_frame_with_the_destination_iframe_is_judged_by_its_parents_key_too() {
     let policy = NetPolicy::new();
-    let recorded = web_view(3);
-    policy.note_main_frame(&top_level_navigation("https://top.example/", recorded).build());
-    let frame = nested_navigation(
-        "https://ads.example/frame",
-        "https://top.example/",
-        recorded,
-    )
-    .destination(Destination::IFrame);
+    let frame = nested_navigation("https://ads.example/frame", "https://top.example/", web_view(3))
+        .destination(Destination::IFrame);
     let found = sites(&policy, frame);
     assert!(!found.top_level_navigation);
     assert_eq!(found.party, Party::Third);
 }
 
 #[test]
-fn a_worker_request_is_judged_by_the_record_of_its_web_view() {
+fn a_worker_request_is_judged_by_the_key_of_the_document_that_created_it() {
     let policy = NetPolicy::new();
-    let recorded = web_view(4);
-    policy.note_main_frame(&top_level_navigation("https://top.example/", recorded).build());
+    let web_view = web_view(4);
 
-    // A worker's requests have no client key and no initiator, but they have a web view id.
-    let worker_request = |url: &str, web_view: WebViewId| {
-        let origin = origin_of("https://top.example/");
-        RequestBuilder::new(Some(web_view), claim(url), Referrer::NoReferrer)
-            .destination(Destination::None)
-            .origin(origin.clone())
-            .client(client(origin, false, None))
-    };
     assert_eq!(
-        sites(&policy, worker_request("https://top.example/api", recorded)).party,
+        sites(
+            &policy,
+            worker_request("https://top.example/api", "https://top.example/", web_view)
+        )
+        .party,
         Party::First
     );
-    assert_eq!(
-        sites(
-            &policy,
-            worker_request("https://tracker.example/api", recorded)
-        )
-        .party,
-        Party::Third
+    let tracker = sites(
+        &policy,
+        worker_request("https://tracker.example/api", "https://top.example/", web_view),
     );
+    assert_eq!(tracker.party, Party::Third);
+    assert_eq!(tracker.top_level.as_deref(), Some("top.example"));
+
+    // A worker with no key (its creator is not known) is unknown, whatever the web view did or does.
+    let origin = origin_of("https://top.example/");
+    let keyless = RequestBuilder::new(
+        Some(web_view),
+        claim("https://top.example/api"),
+        Referrer::NoReferrer,
+    )
+    .origin(origin.clone())
+    .client(client(origin, false, None));
+    assert_eq!(sites(&policy, keyless).party, Party::Unknown);
+}
+
+/// The page that a web view shows is the key of its documents, and nothing else: a page that starts a
+/// navigation and never finishes it (cancelled, answered 204, turned into a download, stalled) leaves the
+/// policy exactly as it was (net-1 review, finding 1). The first version recorded the site of every
+/// top-level navigation when it started, so a worker or a frame of the old page then counted the new site as
+/// its own.
+#[test]
+fn a_navigation_that_is_started_and_never_finished_changes_nothing_for_workers_and_frames() {
+    let policy = NetPolicy::new();
+    let web_view = web_view(5);
+    let judged = |policy: &NetPolicy| {
+        [
+            // The page's own workers, with the key of the page they were created by.
+            sites(
+                policy,
+                worker_request("https://page.example/api", "https://page.example/", web_view),
+            )
+            .party,
+            sites(
+                policy,
+                worker_request("https://tracker.example/p", "https://page.example/", web_view),
+            )
+            .party,
+            // A frame of the page that navigates.
+            sites(
+                policy,
+                nested_navigation("https://tracker.example/f", "https://page.example/", web_view),
+            )
+            .party,
+            sites(
+                policy,
+                nested_navigation("https://page.example/f", "https://page.example/", web_view),
+            )
+            .party,
+            // A worker with no key.
+            sites(
+                policy,
+                RequestBuilder::new(
+                    Some(web_view),
+                    claim("https://tracker.example/p"),
+                    Referrer::NoReferrer,
+                )
+                .client(client(origin_of("https://page.example/"), false, None)),
+            )
+            .party,
+        ]
+    };
+    let before = judged(&policy);
     assert_eq!(
-        sites(
-            &policy,
-            worker_request("https://top.example/api", web_view(5))
-        )
-        .party,
-        Party::Unknown
+        before,
+        [
+            Party::First,
+            Party::Third,
+            Party::Third,
+            Party::First,
+            Party::Unknown
+        ]
     );
+
+    // The page starts a top-level navigation to the tracker. Whatever becomes of it, the policy has seen
+    // requests (asking for their sites is all that the network layer does with one) and nothing else.
+    for _ in 0..3 {
+        let navigation = top_level_navigation("https://tracker.example/x", web_view);
+        assert_eq!(sites(&policy, navigation).party, Party::First);
+        assert_eq!(judged(&policy), before);
+    }
 }
 
 #[test]
-fn a_documents_own_key_wins_over_the_record() {
+fn a_documents_own_key_decides_and_nothing_else_does() {
     let policy = NetPolicy::new();
-    let recorded = web_view(6);
-    // The web view is on `old.example` as far as the record knows...
-    policy.note_main_frame(&top_level_navigation("https://old.example/", recorded).build());
-    // ...but the document asking is in a page whose top level is `new.example`.
+    let web_view = web_view(6);
     let origin = origin_of("https://new.example/");
     let builder = RequestBuilder::new(
-        Some(recorded),
+        Some(web_view),
         claim("https://new.example/api"),
         Referrer::NoReferrer,
     )
@@ -425,124 +504,27 @@ fn a_documents_own_key_wins_over_the_record() {
     let found = sites(&policy, builder);
     assert_eq!(found.party, Party::First);
     assert_eq!(found.top_level.as_deref(), Some("new.example"));
-    // The origin is filled from the record only.
-    assert_eq!(found.top_level_origin, None);
-}
 
-#[test]
-fn the_record_follows_the_main_frame_of_each_web_view() {
-    let policy = NetPolicy::new();
-    let first = web_view(10);
-    let second = web_view(11);
-    policy.note_main_frame(&top_level_navigation("https://a.example/", first).build());
-    policy.note_main_frame(&top_level_navigation("https://b.example/", second).build());
-    assert_eq!(
-        policy.recorded_top_level_site(first).as_deref(),
-        Some("a.example")
+    // Another web view's navigation changes nothing here.
+    let _ = sites(
+        &policy,
+        top_level_navigation("https://old.example/", web_view),
     );
-    assert_eq!(
-        policy.recorded_top_level_site(second).as_deref(),
-        Some("b.example")
-    );
-
-    // The web view navigates: the record follows, at every hop.
-    policy.note_main_frame(&top_level_navigation("https://c.example/", first).build());
-    assert_eq!(
-        policy.recorded_top_level_site(first).as_deref(),
-        Some("c.example")
-    );
-    let redirected = top_level_navigation("https://c.example/", first).url_list(vec![
-        claim("https://c.example/"),
-        claim("https://d.example/"),
-    ]);
-    policy.note_main_frame(&redirected.build());
-    assert_eq!(
-        policy.recorded_top_level_site(first).as_deref(),
-        Some("d.example")
-    );
-    assert_eq!(
-        policy.recorded_top_level_site(second).as_deref(),
-        Some("b.example")
-    );
-    assert_eq!(policy.recorded_web_views(), 2);
-}
-
-#[test]
-fn only_a_top_level_navigation_of_a_web_view_writes_the_record() {
-    let policy = NetPolicy::new();
-    let recorded = web_view(20);
-
-    // A subresource, a nested navigation and a navigation without a web view write nothing.
-    policy.note_main_frame(
-        &subresource(
-            "https://a.example/x",
-            "https://a.example/",
-            "https://a.example/",
-        )
-        .build(),
-    );
-    policy.note_main_frame(
-        &nested_navigation("https://ads.example/", "https://a.example/", recorded).build(),
-    );
-    let without_web_view =
-        RequestBuilder::new(None, claim("https://a.example/"), Referrer::NoReferrer)
-            .destination(Destination::Document)
-            .mode(RequestMode::Navigate)
-            .origin(ImmutableOrigin::new_opaque())
-            .client(client(ImmutableOrigin::new_opaque(), false, None));
-    policy.note_main_frame(&without_web_view.build());
-    assert_eq!(policy.recorded_web_views(), 0);
-    assert_eq!(policy.recorded_top_level_site(recorded), None);
-}
-
-#[test]
-fn the_record_is_bounded_and_the_least_recently_written_web_view_goes_first() {
-    let policy = NetPolicy::new();
-    for n in 1..=MAX_RECORDED_WEB_VIEWS as u32 {
-        policy.note_main_frame(
-            &top_level_navigation(&format!("https://site{n}.example/"), web_view(n)).build(),
-        );
-    }
-    assert_eq!(policy.recorded_web_views(), MAX_RECORDED_WEB_VIEWS);
-    assert_eq!(MAX_RECORDED_WEB_VIEWS, 256);
-
-    // Web view 1 is the oldest. It navigates again, so it is now the newest and web view 2 is the oldest.
-    policy.note_main_frame(&top_level_navigation("https://again.example/", web_view(1)).build());
-    assert_eq!(policy.recorded_web_views(), MAX_RECORDED_WEB_VIEWS);
-
-    // One more web view than the bound: the oldest, web view 2, is evicted.
-    policy.note_main_frame(&top_level_navigation("https://extra.example/", web_view(1000)).build());
-    assert_eq!(policy.recorded_web_views(), MAX_RECORDED_WEB_VIEWS);
-    assert_eq!(policy.recorded_top_level_site(web_view(2)), None);
-    assert_eq!(
-        policy.recorded_top_level_site(web_view(1)).as_deref(),
-        Some("again.example")
-    );
-    assert_eq!(
-        policy.recorded_top_level_site(web_view(3)).as_deref(),
-        Some("site3.example")
-    );
-    assert_eq!(
-        policy.recorded_top_level_site(web_view(1000)).as_deref(),
-        Some("extra.example")
-    );
-
-    // A flood of web views never grows the record past the bound.
-    for n in 2000..2600 {
-        policy
-            .note_main_frame(&top_level_navigation("https://flood.example/", web_view(n)).build());
-    }
-    assert_eq!(policy.recorded_web_views(), MAX_RECORDED_WEB_VIEWS);
-    // The evicted web view is unknown again, and unknown is third party.
-    let nested = nested_navigation("https://a.example/", "https://site3.example/", web_view(3));
-    assert_eq!(sites(&policy, nested).party, Party::Unknown);
+    let origin = origin_of("https://new.example/");
+    let builder = RequestBuilder::new(
+        Some(web_view),
+        claim("https://old.example/api"),
+        Referrer::NoReferrer,
+    )
+    .origin(origin.clone())
+    .client(client(origin, false, Some(site_of("https://new.example/"))));
+    assert_eq!(sites(&policy, builder).party, Party::Third);
 }
 
 #[test]
 fn a_builder_and_the_request_built_from_it_have_the_same_sites() {
     let policy = NetPolicy::new();
-    let recorded = web_view(30);
-    policy.note_main_frame(&top_level_navigation("https://top.example/", recorded).build());
+    let web_view = web_view(30);
 
     let builders = [
         subresource(
@@ -555,13 +537,14 @@ fn a_builder_and_the_request_built_from_it_have_the_same_sites() {
             "https://a.example/",
             "https://a.example/",
         ),
-        top_level_navigation("https://a.example/", recorded),
-        top_level_navigation("https://a.example/", recorded).url_list(vec![
+        top_level_navigation("https://a.example/", web_view),
+        top_level_navigation("https://a.example/", web_view).url_list(vec![
             claim("https://a.example/"),
             claim("https://b.example/"),
         ]),
-        nested_navigation("https://ads.example/", "https://top.example/", recorded),
-        nested_navigation("https://ads.example/", "https://top.example/", web_view(31)),
+        nested_navigation("https://ads.example/", "https://top.example/", web_view),
+        nested_navigation_without_key("https://ads.example/", "https://top.example/", web_view),
+        worker_request("https://ads.example/", "https://top.example/", web_view),
     ];
     for builder in builders {
         assert_eq!(
@@ -574,45 +557,25 @@ fn a_builder_and_the_request_built_from_it_have_the_same_sites() {
 }
 
 #[test]
-fn the_sites_of_a_document_come_from_its_key_then_from_the_record() {
+fn the_sites_of_a_document_come_from_its_key_alone() {
     let policy = NetPolicy::new();
-    let recorded = web_view(40);
-    policy.note_main_frame(&top_level_navigation("https://top.example/", recorded).build());
-
     let own_page = parse("https://top.example/page");
     let frame = parse("https://frame.example/page");
     let top_key = Some(site_of("https://top.example/"));
 
-    let found = policy.sites_of_document(&own_page, &top_key, None);
+    let found = policy.sites_of_document(&own_page, &top_key);
     assert_eq!(found.party, Party::First);
     assert_eq!(found.top_level.as_deref(), Some("top.example"));
     assert!(!found.top_level_navigation);
 
     assert_eq!(
-        policy.sites_of_document(&frame, &top_key, None).party,
+        policy.sites_of_document(&frame, &top_key).party,
         Party::Third
     );
 
-    // No key: the record of the web view.
-    let found = policy.sites_of_document(&frame, &None, Some(recorded));
-    assert_eq!(found.party, Party::Third);
-    assert_eq!(found.top_level.as_deref(), Some("top.example"));
+    // No key: unknown.
     assert_eq!(
-        policy
-            .sites_of_document(&own_page, &None, Some(recorded))
-            .party,
-        Party::First
-    );
-
-    // No key and no record: unknown.
-    assert_eq!(
-        policy.sites_of_document(&own_page, &None, None).party,
-        Party::Unknown
-    );
-    assert_eq!(
-        policy
-            .sites_of_document(&own_page, &None, Some(web_view(41)))
-            .party,
+        policy.sites_of_document(&own_page, &None).party,
         Party::Unknown
     );
 }

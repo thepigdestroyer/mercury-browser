@@ -47,11 +47,11 @@ use embedder_traits::WebResourceRewrite;
 use http::Method;
 use http::header::{HeaderName, HeaderValue};
 use log::warn;
-use net_traits::request::{Destination, Origin, Referrer, Request, RequestMode};
+use net_traits::request::{Origin, Referrer, Request, RequestMode};
 use servo_url::ServoUrl;
 
 use crate::http_loader::determine_requests_referrer;
-use crate::net_policy::{NetPolicy, Party};
+use crate::net_policy::{NetPolicy, Party, RequestParts};
 
 /// A rewritten URL may be this long even if the original was shorter; a longer original may only shrink.
 const MAX_URL_BYTES: usize = 8 * 1024;
@@ -93,11 +93,8 @@ const FORBIDDEN_HEADERS: [&str; 22] = [
 /// alone. A frame navigated by a script or a link has the destination `Document` as well, but its client
 /// is nested.
 pub(crate) fn is_top_level_document(request: &Request) -> bool {
-    matches!(request.destination, Destination::Document) &&
-        request
-            .client
-            .as_ref()
-            .is_none_or(|client| !client.is_nested_browsing_context)
+    // One definition, shared with the network policy's "top-level navigation" (net-1 review, minor 8).
+    RequestParts::of_request(request).is_top_level_document()
 }
 
 /// The ASCII serialisation of the origin that started the request: the request's origin, or the client's
@@ -350,7 +347,9 @@ mod tests {
     use net_traits::ReferrerPolicy;
     use net_traits::blob_url_store::UrlWithBlobClaim;
     use net_traits::pub_domains::Site;
-    use net_traits::request::{InsecureRequestsPolicy, RequestBuilder, RequestClient};
+    use net_traits::request::{
+        Destination, InsecureRequestsPolicy, RequestBuilder, RequestClient,
+    };
 
     use super::*;
 
@@ -367,6 +366,7 @@ mod tests {
             insecure_requests_policy: InsecureRequestsPolicy::DoNotUpgrade,
             has_trustworthy_ancestor_origin: false,
             network_partition_key: Some(Site::from_origin(&origin_url.origin())),
+            browser_initiated_navigation: false,
         }
     }
 
@@ -445,6 +445,34 @@ mod tests {
         assert!(is_top_level_document(&no_client));
         no_client.destination = Destination::IFrame;
         assert!(!is_top_level_document(&no_client));
+    }
+
+    /// "Top-level document" (the embedder's `is_for_main_frame`, the rewrite rules) and "top-level navigation" (the
+    /// network policy's rule 2 for the site of a request) share one definition and differ in exactly three
+    /// deliberate ways: a request without a client, a mode other than `Navigate` and an initiator make a request
+    /// a top-level document but not a top-level navigation (net-1 review, minor 8). Every top-level navigation is a
+    /// top-level document.
+    #[test]
+    fn a_top_level_navigation_is_a_top_level_document_and_the_difference_is_pinned() {
+        let policy = NetPolicy::new();
+        let is_navigation = |request: &Request| policy.sites_of_request(request).top_level_navigation;
+
+        let top_level = navigation("http://a.example/", false);
+        assert!(is_top_level_document(&top_level) && is_navigation(&top_level));
+        let nested = navigation("http://a.example/", true);
+        assert!(!is_top_level_document(&nested) && !is_navigation(&nested));
+
+        let mut no_client = navigation("http://a.example/", false);
+        no_client.client = None;
+        assert!(is_top_level_document(&no_client) && !is_navigation(&no_client));
+
+        let mut fetched = navigation("http://a.example/", false);
+        fetched.mode = RequestMode::CorsMode;
+        assert!(is_top_level_document(&fetched) && !is_navigation(&fetched));
+
+        let mut prefetched = navigation("http://a.example/", false);
+        prefetched.initiator = net_traits::request::Initiator::Prefetch;
+        assert!(is_top_level_document(&prefetched) && !is_navigation(&prefetched));
     }
 
     #[test]

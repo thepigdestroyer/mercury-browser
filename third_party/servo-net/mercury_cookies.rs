@@ -21,9 +21,9 @@
 //!   is unrestricted (Lax-by-default, [`NetPolicy::same_site_lax_default`], stays off in Mercury, decision D8).
 //!
 //! A request is **same-site** when the site that started it, every site in its URL list (so no redirect
-//! crossed sites) and the top-level site are one site. An opaque initiator on a top-level navigation also
-//! counts (a typed URL, a bookmark, a link in the interface: decision D8), which is what lets a typed URL send
-//! its `Strict` cookies. A document that reads `document.cookie` is same-site when its own site is the
+//! crossed sites) and the top-level site are one site. An opaque initiator on a top-level navigation that the
+//! **browser** started also counts (a typed URL, a bookmark, a reload: decision D8), which is what lets a typed
+//! URL send its `Strict` cookies; a script navigation from an opaque origin does not. A document that reads `document.cookie` is same-site when its own site is the
 //! top-level site.
 //!
 //! The functions here are pure over [`RequestContext`] and the cookie, so the rules are tested without a
@@ -35,7 +35,6 @@ use hyper_serde::Serde;
 use net_traits::CookieSource;
 use net_traits::pub_domains::Site;
 use net_traits::request::{Request, RequestBuilder};
-use servo_base::id::WebViewId;
 use servo_url::ServoUrl;
 
 use crate::cookie::ServoCookie;
@@ -69,9 +68,8 @@ impl RequestContext {
         policy: &NetPolicy,
         url: &ServoUrl,
         partition_key: &Option<Site>,
-        web_view: Option<WebViewId>,
     ) -> RequestContext {
-        let sites = policy.sites_of_document(url, partition_key, web_view);
+        let sites = policy.sites_of_document(url, partition_key);
         RequestContext {
             // A document is same-site with the top-level page when its site is the top-level site.
             same_site: sites.party == Party::First,
@@ -98,9 +96,16 @@ fn is_safe_method(method: &Method) -> bool {
     )
 }
 
-/// RFC 6265bis section 5.2, as decided in the lane brief (D8): the initiator's site, every site in the URL
-/// list and the top-level site are one site. An opaque initiator counts only on a top-level navigation. An
-/// unknown or opaque top-level site never counts (fail closed).
+/// RFC 6265bis section 5.2, as decided in the lane brief (D8) and tightened by the net-1 review: the
+/// initiator's site, every site in the URL list and the top-level site are one site. An initiator with no
+/// site (an opaque origin) counts only for a top-level navigation that **the browser** started (a typed
+/// address, a bookmark, a reload): a script that navigates from a sandboxed frame or a `data:` document has an
+/// opaque origin too and is cross-site (finding 2). An unknown or opaque top-level site never counts (fail
+/// closed).
+///
+/// Not covered: the ancestor chain. A frame of `a.test` inside `b.test` inside `a.test` has the top-level site
+/// `a.test` and is judged same-site, where a browser that walks the ancestors would call it cross-site (finding
+/// 9). The chain is not on the request; it needs the ancestor list of the document, like the partition key.
 fn is_same_site_request(parts: &RequestParts<'_>, sites: &RequestSites) -> bool {
     let Some(top_level) = sites.top_level.as_deref().filter(|site| !site.is_empty()) else {
         return false;
@@ -116,7 +121,7 @@ fn is_same_site_request(parts: &RequestParts<'_>, sites: &RequestSites) -> bool 
     match sites.initiator.as_deref() {
         Some(initiator) => initiator == top_level,
         // Opaque or missing: only a navigation that the browser itself started is same-site.
-        None => sites.top_level_navigation,
+        None => sites.top_level_navigation && parts.is_browser_initiated_navigation(),
     }
 }
 
@@ -187,11 +192,10 @@ pub(crate) fn document_cookie_string(
     state: &HttpState,
     url: &ServoUrl,
     partition_key: &Option<Site>,
-    web_view: Option<WebViewId>,
     source: CookieSource,
 ) -> Option<String> {
     let policy = &state.net_policy;
-    let context = RequestContext::of_document(policy, url, partition_key, web_view);
+    let context = RequestContext::of_document(policy, url, partition_key);
     if !policy.cookies_allowed(&context.sites) {
         return None;
     }
@@ -208,12 +212,11 @@ pub(crate) fn store_document_cookies(
     state: &HttpState,
     url: &ServoUrl,
     partition_key: &Option<Site>,
-    web_view: Option<WebViewId>,
     cookies: Vec<Serde<Cookie<'static>>>,
     source: CookieSource,
 ) {
     let policy = &state.net_policy;
-    let context = RequestContext::of_document(policy, url, partition_key, web_view);
+    let context = RequestContext::of_document(policy, url, partition_key);
     if !policy.cookies_allowed(&context.sites) {
         return;
     }
