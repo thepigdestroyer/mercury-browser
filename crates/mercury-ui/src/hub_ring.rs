@@ -94,4 +94,3 @@ pub trait HubRingHost {
     /// "Search the web for ...": a new tab with the default search engine.
     fn search_web(&self, query: &str);
 }
-
