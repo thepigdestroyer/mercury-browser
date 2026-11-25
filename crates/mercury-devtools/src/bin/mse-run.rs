@@ -6,6 +6,10 @@
 //!
 //!     scripts/dev/mse-window-run.sh pages|players|wpt|all [--resume] [--timeout SECONDS] ...
 //!
+//!     scripts/dev/mse-window-run.sh verdict [--gates-green] [--review-ok] [--allow-engine-gap NAME]...
+//!
+//! The last one says whether the flip conditions F1 to F5 hold (`mse-run verdict`).
+//!
 //! See `mse-run --help` and `docs/developer-guide/mse-testing.md`. Process groups, signals and
 //! `ps` are Unix APIs, so on other systems this prints a message and exits with status 1.
 
@@ -27,7 +31,7 @@ mod unix {
     use std::process::ExitCode;
 
     use mercury_devtools::mse_run::cli::{self, Command, Environment};
-    use mercury_devtools::mse_run::{runner, summary};
+    use mercury_devtools::mse_run::{runner, summary, verdict};
     use mercury_devtools::serve::mse_tools_dir;
 
     pub fn main() -> ExitCode {
@@ -63,6 +67,28 @@ mod unix {
                     ExitCode::from(2)
                 }
             },
+            Ok(Command::Verdict(config)) => {
+                match verdict::run(&config, &summary::utc_now()) {
+                    Ok(finished) => {
+                        print!("{}", finished.text);
+                        match &finished.write_error {
+                            None => eprintln!(
+                                "mse-run: verdict written to {}",
+                                finished.report.display()
+                            ),
+                            Some(error) => eprintln!(
+                                "mse-run: cannot write {}: {error}",
+                                finished.report.display()
+                            ),
+                        }
+                        ExitCode::from(finished.exit_code as u8)
+                    }
+                    Err(error) => {
+                        eprintln!("mse-run: {error}");
+                        ExitCode::from(2)
+                    }
+                }
+            }
             Ok(Command::Run { config, report }) => {
                 let _ = std::fs::create_dir_all(&config.out_dir);
                 let mut log = |line: &str| eprintln!("mse-run: {line}");

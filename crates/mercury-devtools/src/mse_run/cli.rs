@@ -56,6 +56,8 @@ pub enum Command {
     Help,
     List(Config),
     Run { config: Config, report: PathBuf },
+    /// `mse-run verdict`: judge the journal of a finished run (`verdict.rs`).
+    Verdict(super::verdict::VerdictConfig),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -69,7 +71,7 @@ pub struct Environment {
     pub now_stamp: String,
 }
 
-fn value(
+pub(super) fn value(
     arguments: &[String],
     index: &mut usize,
     option: &str,
@@ -101,6 +103,13 @@ pub fn parse_arguments(
     arguments: &[String],
     environment: &Environment,
 ) -> Result<Command, UsageError> {
+    if arguments.first().map(String::as_str) == Some("verdict") {
+        if arguments[1..].iter().any(|a| a == "-h" || a == "--help") {
+            return Ok(Command::Help);
+        }
+        return super::verdict::parse_arguments(&arguments[1..], environment)
+            .map(Command::Verdict);
+    }
     let repo = &environment.repo;
     let mut phases: Option<Vec<Phase>> = None;
     let mut browser = repo.join("target/release/mercury-browser");
@@ -215,7 +224,7 @@ mod tests {
         match parse(list).expect("parses") {
             Command::Run { config, report } => (config, Some(report)),
             Command::List(config) => (config, None),
-            Command::Help => panic!("help"),
+            Command::Help | Command::Verdict(_) => panic!("not a run"),
         }
     }
 

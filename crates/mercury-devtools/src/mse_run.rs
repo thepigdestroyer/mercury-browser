@@ -9,7 +9,8 @@
 //! - `reports`: what a page posts, and how a finished page is judged;
 //! - `expect`: `tests/wpt/media-source.expect.toml` and the comparison of a WPT file with it;
 //! - `lock`: the check for a locked screen; `watchdog`: SIGTERM, SIGKILL, and state `U`;
-//! - `phases`, `runner`, `summary`, `cli`: the plan, the run, the report and the command line.
+//! - `phases`, `runner`, `summary`, `cli`: the plan, the run, the report and the command line;
+//! - `verdict`: after the window run, whether the flip conditions F1 to F5 hold (`mse-run verdict`).
 //!
 //! Nothing here needs a browser to be tested; the tests use a stub browser (a script that posts
 //! canned reports) and a fake `ioreg`. How to run it for real: `docs/developer-guide/mse-testing.md`.
@@ -23,4 +24,5 @@ pub mod phases;
 pub mod reports;
 pub mod runner;
 pub mod summary;
+pub mod verdict;
 pub mod watchdog;
