@@ -8,11 +8,13 @@ use std::f64::consts::PI;
 use std::mem;
 use std::time::{Duration, Instant};
 
+// Mercury: backport of servo/servo#49400 (13fbe153e): `EditingAction` is used by `handle_ime_commit`.
 use embedder_traits::{
-    Cursor, EmbedderMsg, ImeEvent, InputEvent, InputEventId, InputEventOutcome, InputEventResult,
-    KeyboardEvent as EmbedderKeyboardEvent, MouseButton, MouseButtonAction, MouseButtonEvent,
-    MouseLeftViewportEvent, MouseMoveEvent, TouchEvent as EmbedderTouchEvent, TouchEventType,
-    TouchId, TouchPointerType, UntrustedNodeAddress, WheelEvent as EmbedderWheelEvent,
+    Cursor, EditingAction, EmbedderMsg, ImeEvent, InputEvent, InputEventId, InputEventOutcome,
+    InputEventResult, KeyboardEvent as EmbedderKeyboardEvent, MouseButton, MouseButtonAction,
+    MouseButtonEvent, MouseLeftViewportEvent, MouseMoveEvent, TouchEvent as EmbedderTouchEvent,
+    TouchEventType, TouchId, TouchPointerType, UntrustedNodeAddress,
+    WheelEvent as EmbedderWheelEvent,
 };
 #[cfg(feature = "gamepad")]
 use embedder_traits::{
@@ -61,6 +63,8 @@ use crate::dom::document::editing::{
     editing_action_from_composition_event, editing_action_from_keyboard_event,
 };
 use crate::dom::document::focus::FocusableArea;
+// Mercury: the IME state of a document and its text state message (EB11).
+use crate::dom::document::text_input_state::{FlushMode, ImeState};
 use crate::dom::document::interactive_element_command::InteractiveElementCommand;
 use crate::dom::event::{EventBubbles, EventCancelable, EventComposed, EventFlags};
 #[cfg(feature = "gamepad")]
@@ -258,6 +262,8 @@ pub(crate) struct DocumentEventHandler {
     /// The current drag gesture, if one exists. Events that affect this drag
     /// gesture will be forwarded to it.
     drag_gesture: DomRefCell<Option<DragGesture>>,
+    // Mercury: the IME composition and the text state message of this document (EB11).
+    ime: ImeState,
 }
 
 impl DocumentEventHandler {
@@ -285,7 +291,28 @@ impl DocumentEventHandler {
             pending_pointer_capture: Default::default(),
             pointer_capture_target: Default::default(),
             drag_gesture: Default::default(),
+            ime: Default::default(),
         }
+    }
+
+    // Mercury: the IME state of this document (EB11).
+    pub(crate) fn ime(&self) -> &ImeState {
+        &self.ime
+    }
+
+    // Mercury: tell the browser what the focused editable holds if that changed, after an input
+    // event or a focus change (EB11). Does not force layout except for a newly focused
+    // editable or an open composition.
+    pub(crate) fn flush_text_input_state_after_input(&self, cx: &mut JSContext) {
+        self.ime
+            .flush(cx, &self.window.Document(), FlushMode::AfterInput);
+    }
+
+    // Mercury: the same after a reflow, when layout is up to date (EB11); `Document::update_the_rendering()`
+    // calls this after its reflow.
+    pub(crate) fn flush_text_input_state_after_reflow(&self, cx: &mut JSContext) {
+        self.ime
+            .flush(cx, &self.window.Document(), FlushMode::AfterReflow);
     }
 
     /// Note a pending input event, to be processed at the next `update_the_rendering` task.
@@ -390,6 +417,16 @@ impl DocumentEventHandler {
         for event in pending_input_events {
             self.active_keyboard_modifiers
                 .set(event.active_keyboard_modifiers);
+            // Mercury: input that can change the text, the selection or the focus of an editable
+            // (EB11).
+            let may_change_text_state = matches!(
+                event.event.event,
+                InputEvent::Keyboard(_) |
+                    InputEvent::Ime(_) |
+                    InputEvent::MouseButton(_) |
+                    InputEvent::Touch(_) |
+                    InputEvent::EditingAction(_)
+            );
             let result = match event.event.event {
                 InputEvent::MouseButton(mouse_button_event) => {
                     self.handle_native_mouse_button_event(cx, mouse_button_event, &event);
@@ -440,6 +477,11 @@ impl DocumentEventHandler {
                     document.handle_clipboard_action(cx, &editing_context, clipboard_action)
                 },
             };
+
+            // Mercury: tell the browser what the focused editable holds (EB11).
+            if may_change_text_state {
+                self.flush_text_input_state_after_input(cx);
+            }
 
             input_event_outcomes.push(InputEventOutcome {
                 id: event.event.id,
@@ -1826,18 +1868,52 @@ impl DocumentEventHandler {
         self.run_default_keydown_handler(cx, target, &keyboard_event, flags.into())
     }
 
+    // Mercury: backport of servo/servo#49400 (13fbe153e): `ImeEvent::Commit`, and the composition
+    // handling moves into `handle_ime_composition`. Drop at the bump that has it.
     fn handle_ime_event(&self, cx: &mut JSContext, event: ImeEvent) -> InputEventResult {
-        let document = self.window.Document();
-        let composition_event = match event {
+        match event {
             ImeEvent::Dismissed => {
-                document
-                    .focus_handler()
-                    .focus(cx, &FocusableArea::Viewport, FocusTrigger::Script);
-                return Default::default();
+                // Mercury: an open composition ends first, its text stays (EB11).
+                self.ime.dismiss(cx, &self.window.Document());
+                self.window.Document().focus_handler().focus(
+                    cx,
+                    &FocusableArea::Viewport,
+                    FocusTrigger::Script,
+                );
+                Default::default()
             },
-            ImeEvent::Composition(composition_event) => composition_event,
-        };
+            ImeEvent::Commit(text) => self.handle_ime_commit(cx, text),
+            // Mercury: marked text and insertions from the system (EB11).
+            ImeEvent::SetMarkedText {
+                text,
+                selected,
+                clauses,
+                replacement,
+            } => self.ime.set_marked_text(
+                cx,
+                &self.window.Document(),
+                text,
+                selected,
+                clauses,
+                replacement,
+            ),
+            ImeEvent::InsertText { text, replacement } => {
+                self.ime
+                    .insert_text(cx, &self.window.Document(), text, replacement)
+            },
+            ImeEvent::Composition(composition_event) => {
+                self.handle_ime_composition(cx, composition_event)
+            },
+        }
+    }
 
+    // Mercury: backport of servo/servo#49400 (13fbe153e): the former body of `handle_ime_event`.
+    fn handle_ime_composition(
+        &self,
+        cx: &mut JSContext,
+        composition_event: keyboard_types::CompositionEvent,
+    ) -> InputEventResult {
+        let document = self.window.Document();
         // spec: https://w3c.github.io/uievents/#compositionstart
         // spec: https://w3c.github.io/uievents/#compositionupdate
         // spec: https://w3c.github.io/uievents/#compositionend
@@ -1878,6 +1954,26 @@ impl DocumentEventHandler {
         }
 
         composition_event_result
+    }
+
+    // Mercury: backport of servo/servo#49400 (13fbe153e): text committed by an input method, with or
+    // without a composition.
+    fn handle_ime_commit(&self, cx: &mut JSContext, text: String) -> InputEventResult {
+        let document = self.window.Document();
+        // Mercury: with a composition open the text replaces the marked text and ends it (EB11).
+        if self.ime.has_open_composition(cx, &document) {
+            return self.ime.commit(cx, &document, text);
+        }
+        let focused_area = document.focus_handler().focused_area();
+        let Some(focused_element) = focused_area.element() else {
+            // Event is only dispatched if there is a focused element.
+            return Default::default();
+        };
+        let editing_host = document.editing_context(cx.no_gc(), focused_element.upcast());
+        if editing_host.perform_editing_action(cx, EditingAction::InsertText(text)) {
+            return InputEventResult::Consumed;
+        }
+        Default::default()
     }
 
     fn handle_wheel_event(

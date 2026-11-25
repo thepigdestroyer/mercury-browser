@@ -102,7 +102,7 @@ use crate::http_cache::{
 // Mercury: the cookie rules of the network policy (EC5, EC6).
 use crate::mercury_cookies::{self, RequestContext};
 // Mercury: redacts cookie and credential header values in the debug logs (EC13).
-use crate::mercury_log::{header_for_log, headers_for_log};
+use crate::mercury_log::{header_for_log, headers_for_log, url_for_log};
 // Mercury: the network policy handle (net_policy.rs).
 use crate::net_policy::NetPolicy;
 use crate::resource_thread::{AuthCache, AuthCacheEntry};
@@ -2022,9 +2022,10 @@ fn spawn_stale_while_revalidate(
     revalidation_request.service_workers_mode = ServiceWorkersMode::None;
 
     let context = context.clone();
+    // Mercury: no query string or credentials in the log (EC13).
     debug!(
-        "spawning stale-while-revalidate background revalidation for {:?}",
-        revalidation_request.current_url()
+        "spawning stale-while-revalidate background revalidation for {}",
+        url_for_log(&revalidation_request.current_url())
     );
     spawn_task(async move {
         let mut target = DiscardFetch;
@@ -2236,7 +2237,8 @@ async fn http_network_fetch(
     let url = request.current_url();
     let request_id = request.id.0;
     if log_enabled!(log::Level::Info) {
-        info!("{:?} request for {}", request.method, url);
+        // Mercury: no query string or credentials in the log (EC13).
+        info!("{:?} request for {}", request.method, url_for_log(&url));
         // Mercury: the values of Cookie and Authorization are not logged (EC13).
         for (name, value) in request.headers.iter() {
             debug!(" - {}", header_for_log(name, value));
@@ -2333,7 +2335,11 @@ async fn http_network_fetch(
     let request = &mut fetch_params.request;
 
     if log_enabled!(log::Level::Info) {
-        debug!("{:?} response for {}", response_stream.version(), url);
+        debug!(
+            "{:?} response for {}",
+            response_stream.version(),
+            url_for_log(&url)
+        );
         // Mercury: the values of Set-Cookie are not logged (EC13).
         for (name, value) in response_stream.headers().iter() {
             debug!(" - {}", header_for_log(name, value));
@@ -2382,9 +2388,9 @@ async fn http_network_fetch(
     response.status = HttpStatus::new(response_stream.status(), status_text);
 
     info!(
-        "got {:?} response for {:?}",
+        "got {:?} response for {}",
         response_stream.status(),
-        request.url()
+        url_for_log(&request.url())
     );
     response.headers = response_stream.headers().clone();
     response.referrer = request.referrer.to_url().cloned();
@@ -2466,7 +2472,7 @@ async fn http_network_fetch(
                 future::ready(Ok(response_body_accumulator))
             })
             .and_then(move |complete_response_body| {
-                debug!("successfully finished response for {:?}", url1);
+                debug!("successfully finished response for {}", url_for_log(&url1));
                 let mut body = complete_response_body.lock();
                 let mut completed_body = match *body {
                     ResponseBody::Receiving(ref mut body) => std::mem::take(body),
@@ -2495,13 +2501,13 @@ async fn http_network_fetch(
             })
             .map_err(move |error| {
                 if let std::io::ErrorKind::InvalidData = error.kind() {
-                    debug!("Content decompression error for {:?}", url2);
+                    debug!("Content decompression error for {}", url_for_log(&url2));
                     let _ = done_sender3.send(Data::Error(NetworkError::DecompressionError));
                     let mut body = response_body2.lock();
 
                     *body = ResponseBody::Done(vec![]);
                 }
-                debug!("finished response for {:?}", url2);
+                debug!("finished response for {}", url_for_log(&url2));
                 let mut body = response_body2.lock();
                 let completed_body = match *body {
                     ResponseBody::Receiving(ref mut body) => std::mem::take(body),

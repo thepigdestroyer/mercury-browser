@@ -163,8 +163,14 @@ pub const RULES: &[Rule] = &[
     ),
     text(
         R::TextMuted,
-        on_surfaces![R::SearchFieldBackground, R::ItemHover],
-        "captions, counts and dates on the surfaces, the fields and a hovered row",
+        on_surfaces![
+            R::SearchFieldBackground,
+            R::ItemHover,
+            R::TabHover,
+            R::ButtonHover,
+            R::ButtonPressed
+        ],
+        "captions, counts and dates on the surfaces, the fields, a hovered row, tab or button and a pressed button",
     ),
     text(
         R::Placeholder,

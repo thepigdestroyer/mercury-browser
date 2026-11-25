@@ -146,7 +146,7 @@ fn the_constants_are_the_documented_ones() {
     assert_eq!(LAYOUT_CLASSIC, "classic");
     assert_eq!(LAYOUT_IDS, ["mercury", "classic"]);
     assert_eq!(DEFAULT_LAYOUT, "mercury");
-    assert_eq!(DEFAULT_PALETTE, "mercury-b2");
+    assert_eq!(DEFAULT_PALETTE, "signal");
     assert_eq!(MAX_PALETTE_ID_BYTES, 64);
     assert_eq!(
         (MIN_KEY_HOLD_MS, DEFAULT_KEY_HOLD_MS, MAX_KEY_HOLD_MS),
@@ -172,8 +172,8 @@ fn the_defaults_are_the_documented_ones() {
         appearance.layout, "mercury",
         "Mercury layout is the default"
     );
-    assert_eq!(appearance.palette_light, "mercury-b2");
-    assert_eq!(appearance.palette_dark, "mercury-b2");
+    assert_eq!(appearance.palette_light, "signal");
+    assert_eq!(appearance.palette_dark, "signal");
 
     let groups = &appearance.tab_groups;
     assert!(groups.dock, "the group dock is on in the Mercury layout");
@@ -388,13 +388,13 @@ fn a_palette_id_that_is_not_well_formed_becomes_the_default_with_one_repair() {
         too_long.as_str(),
     ] {
         let (light, light_repairs) = validate(|a| a.palette_light = id.to_owned());
-        assert_eq!(light.palette_light, "mercury-b2", "{id:?}");
+        assert_eq!(light.palette_light, "signal", "{id:?}");
         assert_eq!(fields(&light_repairs), vec![PALETTE_LIGHT], "{id:?}");
-        assert_eq!(light.palette_dark, "mercury-b2", "the other is untouched");
+        assert_eq!(light.palette_dark, "signal", "the other is untouched");
         assert_stable(&light);
 
         let (dark, dark_repairs) = validate(|a| a.palette_dark = id.to_owned());
-        assert_eq!(dark.palette_dark, "mercury-b2", "{id:?}");
+        assert_eq!(dark.palette_dark, "signal", "{id:?}");
         assert_eq!(fields(&dark_repairs), vec![PALETTE_DARK], "{id:?}");
         assert_stable(&dark);
     }
@@ -410,7 +410,7 @@ fn the_palette_length_limit_is_64_bytes_inclusive() {
     let one_over = "z".repeat(MAX_PALETTE_ID_BYTES + 1);
     let (appearance, repairs) = validate(|a| a.palette_light = one_over.clone());
     assert_eq!(fields(&repairs), vec![PALETTE_LIGHT]);
-    assert_eq!(appearance.palette_light, "mercury-b2");
+    assert_eq!(appearance.palette_light, "signal");
 }
 
 #[test]
@@ -420,14 +420,14 @@ fn the_palettes_are_checked_one_by_one() {
         a.palette_dark = "BAD".to_owned();
     });
     assert_eq!(appearance.palette_light, "hermes", "a good one is kept");
-    assert_eq!(appearance.palette_dark, "mercury-b2");
+    assert_eq!(appearance.palette_dark, "signal");
     assert_eq!(fields(&repairs), vec![PALETTE_DARK]);
 
     let (appearance, repairs) = validate(|a| {
         a.palette_light = "".to_owned();
         a.palette_dark = "later-palette".to_owned();
     });
-    assert_eq!(appearance.palette_light, "mercury-b2");
+    assert_eq!(appearance.palette_light, "signal");
     assert_eq!(appearance.palette_dark, "later-palette");
     assert_eq!(fields(&repairs), vec![PALETTE_LIGHT]);
 }
@@ -472,7 +472,7 @@ fn a_malformed_palette_id_in_a_file_is_repaired_not_damaging() {
     let Loaded::Ok { value, repairs } = loaded else {
         panic!("a bad palette id must not damage the file");
     };
-    assert_eq!(value.appearance.palette_light, "mercury-b2");
+    assert_eq!(value.appearance.palette_light, "signal");
     assert_eq!(value.appearance.palette_dark, "ok-2");
     assert_eq!(fields(&repairs), vec![PALETTE_LIGHT]);
     assert_eq!(names_in(dir.path()), vec!["settings.json"]);
@@ -788,12 +788,12 @@ fn one_wrong_field_does_not_disturb_the_others() {
         (
             PALETTE_LIGHT,
             |a| a.palette_light = "X".to_owned(),
-            |a| a.palette_light = "mercury-b2".to_owned(),
+            |a| a.palette_light = "signal".to_owned(),
         ),
         (
             PALETTE_DARK,
             |a| a.palette_dark = "X".to_owned(),
-            |a| a.palette_dark = "mercury-b2".to_owned(),
+            |a| a.palette_dark = "signal".to_owned(),
         ),
         (
             SNAPSHOT_CAP,
@@ -1149,8 +1149,8 @@ fn the_old_file_keeps_its_own_choices_and_gains_the_new_fields_on_the_next_save(
     assert_eq!(value.appearance.default_zoom_percent, 125);
     assert!(value.appearance.show_home_button);
     assert_eq!(value.appearance.layout, "mercury");
-    assert_eq!(value.appearance.palette_light, "mercury-b2");
-    assert_eq!(value.appearance.palette_dark, "mercury-b2");
+    assert_eq!(value.appearance.palette_light, "signal");
+    assert_eq!(value.appearance.palette_dark, "signal");
     assert_eq!(value.appearance.tab_groups, TabGroupSettings::default());
 
     SettingsStore::new(dir.path()).save(&value).expect("save");
@@ -1158,7 +1158,7 @@ fn the_old_file_keeps_its_own_choices_and_gains_the_new_fields_on_the_next_save(
         serde_json::from_slice(&fs::read(settings_path(dir.path())).expect("read")).expect("json");
     assert_eq!(written["format_version"], 1);
     assert_eq!(written["appearance"]["layout"], "mercury");
-    assert_eq!(written["appearance"]["palette_light"], "mercury-b2");
+    assert_eq!(written["appearance"]["palette_light"], "signal");
     assert_eq!(written["appearance"]["tab_groups"]["dial"], true);
     assert_eq!(written["appearance"]["theme"], "dark");
 }

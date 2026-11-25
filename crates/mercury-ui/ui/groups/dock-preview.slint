@@ -1,0 +1,77 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// A window around one GroupDockBar, with every property and callback forwarded, for the lane's
+// examples and tests and for the other lanes' renders. Not used by the browser's own windows.
+// The bar sits at the bottom of the window, in its reserved band, over a page-coloured area,
+// as in the mockups (design/ui-final/bar/bar-open-*.png).
+
+import { DockGeometry, DockHit, DockPill, DockSliver, DockStateKind } from "dock-models.slint";
+import { GroupDockBar, StateDot } from "dock.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export component GroupDockPreview inherits Window {
+    preferred-width: 1440px;
+    preferred-height: 900px;
+    background: ChromePalette.content-background;
+
+    in property <[DockPill]> pills <=> bar.pills;
+    in property <length> dock-x <=> bar.dock-x;
+    in property <length> dock-width <=> bar.dock-width;
+    in property <length> dock-height <=> bar.dock-height;
+    in property <length> new-tab-x <=> bar.new-tab-x;
+    in property <length> shrink-x <=> bar.shrink-x;
+    in property <int> hovered-tab <=> bar.hovered-tab;
+    in property <int> focused-group <=> bar.focused-group;
+    in property <string> tooltip <=> bar.tooltip;
+    in property <length> tooltip-x <=> bar.tooltip-x;
+    in property <bool> held <=> bar.held;
+    in property <bool> reduce-motion <=> bar.reduce-motion;
+    in property <string> accessible-name <=> bar.accessible-name;
+    // The height of the bar's box (its bottom edge stays the window's bottom edge): the box of
+    // GroupDock is `DockGeometry.box-height`, a host may give it the 72 px band or less.
+    in property <length> bar-height: DockGeometry.box-height;
+    in property <[DockSliver]> slivers <=> bar.slivers;
+    in property <string> count-text <=> bar.count-text;
+    in property <string> capsule-label <=> bar.capsule-label;
+    in-out property <bool> shrunk <=> bar.shrunk;
+    out property <length> target-band <=> bar.target-band;
+
+    pure callback hit <=> bar.hit;
+    callback pointer-moved <=> bar.pointer-moved;
+    callback pointer-left <=> bar.pointer-left;
+    callback pill-activated <=> bar.pill-activated;
+    callback tab-activated <=> bar.tab-activated;
+    callback tab-close <=> bar.tab-close;
+    callback new-tab-in <=> bar.new-tab-in;
+    callback pill-peek-requested <=> bar.pill-peek-requested;
+    callback shrunk-changed <=> bar.shrunk-changed;
+    callback shrink-requested <=> bar.shrink-requested;
+    callback expand-requested <=> bar.expand-requested;
+
+    bar := GroupDockBar {
+        x: 0px;
+        width: parent.width;
+        // The box of GroupDock is the band plus the overshoot of the magnified dock; its bottom
+        // edge is the window's bottom edge.
+        height: root.bar-height;
+        y: parent.height - self.height;
+    }
+}
+
+// One state marker, for the test that every kind has a shape of its own (same colour for all).
+export component DockStateDotPreview inherits Window {
+    preferred-width: 24px;
+    preferred-height: 24px;
+    background: ChromePalette.window-background;
+
+    in property <DockStateKind> kind;
+
+    StateDot {
+        x: 3px;
+        y: 3px;
+        width: 18px;
+        height: 18px;
+        colour: ChromePalette.text;
+        kind: root.kind;
+    }
+}

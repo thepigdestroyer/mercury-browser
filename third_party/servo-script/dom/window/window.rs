@@ -15,7 +15,8 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use accesskit::Action;
+// Mercury: a11y-1 EE5: upstream's `use accesskit::Action;` is gone, its one use moved to
+// `dom/document/accessibility_actions.rs`.
 use app_units::Au;
 use base64::Engine;
 use content_security_policy::Violation;
@@ -2780,6 +2781,8 @@ impl Window {
         if let Some(selection) = document.selection() {
             selection.update_overlaps_document_selection_flags(cx.no_gc());
         }
+        // Mercury: lane txt-1 (EB7). Push the typed highlights (IME composition, find, ...) to layout.
+        document.update_highlights(cx.no_gc());
 
         let restyle_reason = document.restyle_reason(cx.no_gc());
         document.clear_restyle_reasons();
@@ -4018,19 +4021,14 @@ impl Window {
         }
     }
 
-    #[expect(unsafe_code)]
     fn handle_accessibility_actions(
         &self,
         actions: Vec<AccessibilityActionRequest>,
         cx: &mut JSContext,
     ) {
-        for action_request in actions {
-            let target_opaque = action_request.target;
-            let target = unsafe { from_untrusted_node_address(target_opaque.into()) };
-            if action_request.action == Action::Click {
-                target.fire_synthetic_pointer_event_not_trusted(cx, atom!("click"));
-            }
-        }
+        // Mercury: a11y-1 EE5. Servo performs `Action::Click` here, as an untrusted click, and
+        // nothing else; the whole set of actions is in `dom/document/accessibility_actions.rs`.
+        self.perform_accessibility_actions(actions, cx);
     }
 
     /// <https://html.spec.whatwg.org/multipage/#sticky-activation>

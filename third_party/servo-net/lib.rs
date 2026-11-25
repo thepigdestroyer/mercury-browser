@@ -39,7 +39,7 @@ mod websocket_loader;
 // mixed-content allow and report (EC17); `mercury_ws` WebSockets through the proxy (EC23a); `mercury_auth`
 // the limits on sign-in prompts for `fetch` and XHR (EC29). All are Mercury files.
 pub mod mercury_auth;
-mod mercury_cookies;
+pub mod mercury_cookies;
 mod mercury_mixed_content;
 mod mercury_rewrite;
 pub mod mercury_ws;

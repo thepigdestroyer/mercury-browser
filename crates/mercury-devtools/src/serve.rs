@@ -15,6 +15,8 @@
 //! - `/private`, which asks for HTTP Basic authentication (realm `Mercury test realm`) and
 //!   accepts only `alice` / `secret`;
 //! - `Accept-Ranges: bytes` and `Cache-Control: no-store` on every response;
+//! - `/mse-fixtures/<path>`, the Media Source Extensions fixtures of `crates/mercury-mse-testkit`
+//!   (read-only, the same range support), which `tests/pages/mse-*.html` load their media from;
 //! - the downloads routes (`/download/<name>`, `POST /form-result`) and the request log
 //!   (`--log FILE`), which the Python script gained after this crate was written (see
 //!   `downloads`);
@@ -65,6 +67,14 @@ pub const PRIVATE_CREDENTIALS: &str = "Basic YWxpY2U6c2VjcmV0";
 /// The repository's `tests/` directory, as the crate was built from.
 pub fn default_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("../../tests")
+}
+
+/// The route that serves the Media Source Extensions fixtures.
+pub const MSE_FIXTURES_PREFIX: &str = "/mse-fixtures/";
+
+/// The fixtures [`MSE_FIXTURES_PREFIX`] serves, as the crate was built from.
+pub fn mse_fixtures_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../mercury-mse-testkit/fixtures")
 }
 
 /// A bound server: 127.0.0.1 on the requested or an ephemeral port.
@@ -245,7 +255,10 @@ fn respond(
     if request.command == "GET" && url_path(&request.path).starts_with(DOWNLOAD_PREFIX) {
         return send_download(responder, request, log);
     }
-    let path = translate_path(root, &request.path);
+    let path = match url_path(&request.path).strip_prefix(MSE_FIXTURES_PREFIX) {
+        Some(rest) => translate_path(&mse_fixtures_root(), &format!("/{rest}")),
+        None => translate_path(root, &request.path),
+    };
     let result = if let Some(header) = request.header("Range")
         && !path.is_dir()
         && path.is_file()

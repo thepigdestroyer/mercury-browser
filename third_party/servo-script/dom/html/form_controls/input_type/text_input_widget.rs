@@ -5,6 +5,8 @@ use std::cell::Ref;
 
 use html5ever::{local_name, ns};
 use js::context::JSContext;
+// Mercury: the typed highlights of a text run (EB7, EB11).
+use layout_api::{HighlightKind, TextHighlight, TextHighlights};
 use markup5ever::QualName;
 use script_bindings::cell::DomRefCell;
 use script_bindings::codegen::GenericBindings::CharacterDataBinding::CharacterDataMethods;
@@ -71,6 +73,43 @@ impl TextInputWidget {
             updated |= character_data.set_text_run_selection(new_range, true);
         }
         updated
+    }
+
+    // Mercury: the IME composition highlights of the control's value (EB11). The marked text is
+    // underlined (`Composition`) and the clause the input method works on more thickly
+    // (`CompositionSelected`); never painted as a selection.
+    /// Returns whether the highlights were set on an existing text run. An empty set clears them.
+    pub(crate) fn set_text_run_highlights(
+        &self,
+        composition: Option<RangeAny<Utf32CodeUnits>>,
+        selected: Option<RangeAny<Utf32CodeUnits>>,
+    ) -> bool {
+        let Some(shadow_tree) = &*self.shadow_tree.borrow() else {
+            return false;
+        };
+        let Some(character_data) = shadow_tree.value_character_data() else {
+            return false;
+        };
+
+        let mut highlights = TextHighlights::new();
+        if let Some(range) = composition {
+            highlights.push(TextHighlight {
+                kind: HighlightKind::Composition,
+                range,
+            });
+        }
+        if let Some(range) = selected {
+            highlights.push(TextHighlight {
+                kind: HighlightKind::CompositionSelected,
+                range,
+            });
+        }
+        character_data.set_text_run_highlights(highlights)
+    }
+
+    // Mercury: the text node of the control's value, for the caret rectangle of the IME (EB11).
+    pub(crate) fn value_text_node(&self) -> Option<DomRoot<CharacterData>> {
+        self.shadow_tree.borrow().as_ref()?.value_character_data()
     }
 }
 

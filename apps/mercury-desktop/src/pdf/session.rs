@@ -272,13 +272,17 @@ impl Session {
         self.client_find = None;
     }
 
-    /// Ends the helper to free its process; the model keeps the view, and showing the tab again
-    /// opens the file again.
+    /// Ends the helper to free its process, and lets go of the page pictures, text and links the
+    /// model held (up to about 150 MB for a document that was read through); the model keeps the
+    /// view, and showing the tab again opens the file again and asks for what the screen needs.
     pub(super) fn suspend(&mut self) {
         if self.client.is_none() {
             return;
         }
         self.end_helper();
+        if let Some(model) = self.model.as_mut() {
+            model.release_caches();
+        }
         self.phase = Phase::Idle;
     }
 

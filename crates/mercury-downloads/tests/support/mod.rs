@@ -528,7 +528,9 @@ pub const TEST_TIMEOUT: Duration = Duration::from_secs(20);
 /// A manager whose events arrive on a channel.
 pub fn manager_with(timeouts: Timeouts) -> (DownloadManager, Receiver<DownloadEvent>) {
     let (sender, receiver) = mpsc::channel();
-    let manager = DownloadManager::with_timeouts(timeouts, move |event| {
+    // No proxy, whatever `http_proxy` says in the environment the tests run in: they talk to a
+    // loopback server. `tests/proxy.rs` covers the proxy.
+    let manager = DownloadManager::with_proxy(timeouts, Default::default(), move |event| {
         let _ = sender.send(event);
     })
     .expect("start the download manager");

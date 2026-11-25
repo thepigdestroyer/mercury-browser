@@ -1,0 +1,32 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frames: dynamic</title>
+</head>
+<body>
+<h1>Dynamic page</h1>
+<p>A page with no frame, until the script of the test adds one with addFrame() and takes it away
+again with removeFrame(): the heading "Child page" appears in the tree and goes.</p>
+<div id="slot"></div>
+<script>
+  function addFrame() {
+    const frame = document.createElement("iframe");
+    frame.id = "added";
+    frame.title = "Added frame";
+    frame.src = "frames-child.html";
+    frame.width = "400";
+    frame.height = "200";
+    document.getElementById("slot").append(frame);
+  }
+  function removeFrame() {
+    const frame = document.getElementById("added");
+    if (frame) {
+      frame.remove();
+    }
+  }
+</script>
+</body>
+</html>

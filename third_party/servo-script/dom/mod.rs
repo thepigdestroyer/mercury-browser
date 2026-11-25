@@ -276,6 +276,8 @@ pub(crate) mod geometry;
 pub(crate) use self::geometry::*;
 pub(crate) mod globalscope;
 pub(crate) use self::globalscope::*;
+// Mercury: new module (lane txt-1, EB7), the typed highlights of a document.
+pub(crate) mod highlights;
 pub(crate) mod html;
 pub(crate) use self::html::*;
 pub(crate) mod indexeddb;
@@ -288,6 +290,9 @@ pub(crate) mod media;
 pub(crate) use self::media::*;
 pub(crate) mod mimetype;
 pub(crate) use self::mimetype::*;
+// Mercury: (MED-1) Media Source Extensions (dom/mse/), behind `dom_media_source_enabled`.
+pub(crate) mod mse;
+pub(crate) use self::mse::*;
 pub(crate) mod mutationobserver;
 pub(crate) use self::mutationobserver::*;
 pub(crate) mod navigator;

@@ -44,6 +44,7 @@ use std::time::{Duration, Instant};
 use zeroize::Zeroize as _;
 
 use crate::backend::PdfBackend;
+use crate::clean::{accept_document, clean_error, clean_hits, clean_links, clean_outline};
 use crate::error::PdfError;
 use crate::protocol::{
     PROTOCOL_VERSION, Reply, Request, decode_list, decode_page_sizes, decode_page_text, read_reply,
@@ -216,6 +217,8 @@ struct State {
     timed_out: bool,
     /// The helper reported a failure of its own before it ended.
     helper_error: Option<PdfError>,
+    /// The pages of the document the helper opened, for checking the page targets it sends.
+    page_count: usize,
     /// When the oldest wait for the helper started or when it last answered, while a request is
     /// outstanding.
     waiting_since: Option<Instant>,
@@ -389,7 +392,7 @@ impl Inner {
                     Reply::Error { id: None, error } => {
                         // The helper could not start (no library, for instance) and says why
                         // before it ends; that is the reason the loss reports.
-                        state.helper_error = Some(error);
+                        state.helper_error = Some(clean_error(error));
                         return Ok(());
                     }
                     _ => return Err("the helper did not start with a ready message".to_owned()),
@@ -408,14 +411,19 @@ impl Inner {
                     return Err("an answer to an open request nobody made".to_owned());
                 };
                 let result = match error {
-                    Some(error) => Err(error),
+                    Some(error) => Err(clean_error(error)),
                     None => {
                         if page_count == 0 || page_count > limits::MAX_PAGES {
                             return Err("the helper reported an impossible page count".to_owned());
                         }
                         let pages = decode_page_sizes(&blob, page_count)
                             .map_err(|error| error.to_string())?;
-                        Ok(DocumentInfo { pages, title })
+                        // The same acceptance as the helper's: sizes that can be laid out, a
+                        // title of bounded length without control characters.
+                        let info = accept_document(DocumentInfo { pages, title })
+                            .map_err(|error| error.to_string())?;
+                        self.state().page_count = info.pages.len();
+                        Ok(info)
                     }
                 };
                 self.emit(ClientEvent::Opened(result));
@@ -433,7 +441,7 @@ impl Inner {
                 let result = match error {
                     // The answer to a cancel: the caller does not want it.
                     Some(PdfError::Cancelled) => None,
-                    Some(error) => Some(Err(error)),
+                    Some(error) => Some(Err(clean_error(error))),
                     None => {
                         let tile = Tile {
                             width,
@@ -469,7 +477,7 @@ impl Inner {
                     return Err("an answer to a text request nobody made".to_owned());
                 };
                 let result = match error {
-                    Some(error) => Err(error),
+                    Some(error) => Err(clean_error(error)),
                     None => {
                         if page != asked || chars as usize > limits::MAX_TEXT_CHARS {
                             return Err("the helper sent text for the wrong page".to_owned());
@@ -488,14 +496,15 @@ impl Inner {
                     return Err("an answer to a links request nobody made".to_owned());
                 };
                 let result = match error {
-                    Some(error) => Err(error),
+                    Some(error) => Err(clean_error(error)),
                     None => {
                         let links =
                             decode_list::<Link>(&blob).map_err(|error| error.to_string())?;
                         if page != asked || links.len() > limits::MAX_LINKS_PER_PAGE {
                             return Err("the helper sent links that do not fit".to_owned());
                         }
-                        Ok(links)
+                        let page_count = self.state().page_count;
+                        Ok(clean_links(links, page_count))
                     }
                 };
                 self.emit(ClientEvent::Links {
@@ -509,9 +518,13 @@ impl Inner {
                     return Err("an answer to an outline request nobody made".to_owned());
                 };
                 let result = match error {
-                    Some(error) => Err(error),
+                    Some(error) => Err(clean_error(error)),
                     None => {
-                        Ok(decode_list::<OutlineItem>(&blob).map_err(|error| error.to_string())?)
+                        let items =
+                            decode_list::<OutlineItem>(&blob).map_err(|error| error.to_string())?;
+                        let page_count = self.state().page_count;
+                        let mut budget = limits::MAX_OUTLINE_ITEMS;
+                        Ok(clean_outline(items, page_count, &mut budget, 1))
                     }
                 };
                 self.emit(ClientEvent::Outline(result));
@@ -538,7 +551,7 @@ impl Inner {
                 self.changed.notify_all();
                 let hits = match error {
                     Some(error) => {
-                        log::warn!("pdf client: a search failed: {error:?}");
+                        log::warn!("pdf client: a search failed: {:?}", clean_error(error));
                         Vec::new()
                     }
                     None => {
@@ -547,7 +560,7 @@ impl Inner {
                         if hits.len() > limits::MAX_HITS_PER_PAGE {
                             return Err("the helper sent too many search hits".to_owned());
                         }
-                        hits
+                        clean_hits(hits, page)
                     }
                 };
                 self.emit(ClientEvent::Found {
@@ -561,13 +574,14 @@ impl Inner {
             }
             Reply::Closed { .. } => Ok(()),
             Reply::Error { id: None, error } => {
-                self.state().helper_error = Some(error);
+                self.state().helper_error = Some(clean_error(error));
                 Ok(())
             }
             Reply::Error {
                 id: Some(id),
                 error,
             } => {
+                let error = clean_error(error);
                 // The helper failed this request in a way that ends it (a panic): the request
                 // gets the error, then the end of the helper is reported as the loss.
                 match self.take_pending(id) {
@@ -1332,6 +1346,263 @@ mod tests {
             events.recv_timeout(Duration::from_millis(300)),
             Err(mpsc::RecvTimeoutError::Disconnected | mpsc::RecvTimeoutError::Timeout)
         ));
+    }
+
+    /// A client whose helper is the test: the replies are written by hand, as a compromised
+    /// helper could write them, without the cleaning the real one does.
+    struct Scripted {
+        client: PdfClient,
+        replies: crate::testing::PipeWriter,
+        events: Receiver<ClientEvent>,
+        _requests: crate::testing::PipeReader,
+    }
+
+    impl Scripted {
+        fn start() -> Self {
+            let killed = Arc::new(AtomicBool::new(false));
+            let (request_writer, requests) = pipe();
+            let (mut replies, reply_reader) = pipe();
+            let (events, receiver) = collect();
+            let client = PdfClient::assemble(
+                ClientConfig::default(),
+                events,
+                Box::new(request_writer),
+                Box::new(reply_reader.with_cancel(Arc::clone(&killed))),
+                None,
+                None,
+                killed,
+                None,
+            );
+            let ready = Reply::Ready {
+                protocol_version: PROTOCOL_VERSION,
+                engine: "scripted".to_owned(),
+            };
+            crate::protocol::write_reply(&mut replies, &ready, &[]).expect("ready");
+            Self {
+                client,
+                replies,
+                events: receiver,
+                _requests: requests,
+            }
+        }
+
+        fn say(&mut self, reply: Reply, blob: &[u8]) {
+            crate::protocol::write_reply(&mut self.replies, &reply, blob).expect("a reply");
+        }
+
+        /// Opens a document of `pages` pages (request 1).
+        fn open(&mut self, pages: u32, title: Option<String>) -> DocumentInfo {
+            self.client.open(Path::new("x.pdf"), None);
+            let sizes = vec![crate::types::PageSize::new(100.0, 100.0); pages as usize];
+            self.say(
+                Reply::Opened {
+                    id: 1,
+                    title,
+                    page_count: pages,
+                    error: None,
+                },
+                &crate::protocol::encode_page_sizes(&sizes),
+            );
+            let ClientEvent::Opened(Ok(info)) = next(&self.events) else {
+                panic!("expected the document");
+            };
+            info
+        }
+    }
+
+    #[test]
+    fn a_title_from_the_helper_is_cut_and_cleaned_here_too() {
+        let mut helper = Scripted::start();
+        let title = format!("  Paper\n\u{7}{}", "x".repeat(10_000));
+
+        let info = helper.open(2, Some(title));
+
+        let title = info.title.expect("a title");
+        assert!(title.len() <= limits::MAX_STRING_BYTES, "{}", title.len());
+        assert!(!title.chars().any(char::is_control), "{title:?}");
+        assert!(title.starts_with("Paper"), "{title:?}");
+    }
+
+    #[test]
+    fn page_sizes_that_cannot_be_laid_out_are_refused_here_too() {
+        let mut helper = Scripted::start();
+        helper.client.open(Path::new("x.pdf"), None);
+        let sizes = [crate::types::PageSize::new(0.0, 100.0)];
+        helper.say(
+            Reply::Opened {
+                id: 1,
+                title: None,
+                page_count: 1,
+                error: None,
+            },
+            &crate::protocol::encode_page_sizes(&sizes),
+        );
+
+        assert!(matches!(
+            next(&helper.events),
+            ClientEvent::WorkerLost(PdfError::WorkerLost(_))
+        ));
+    }
+
+    #[test]
+    fn links_from_the_helper_are_cleaned_here_too() {
+        use crate::types::{LinkTarget, Rect};
+        let mut helper = Scripted::start();
+        helper.open(3, None);
+        helper.client.request_links(0);
+        let good = Link {
+            rect: Rect::new(1.0, 1.0, 5.0, 5.0),
+            target: LinkTarget::Uri("https://example.test/".to_owned()),
+        };
+        let links = vec![
+            good.clone(),
+            // A page that does not exist, an address with a control character, one that is
+            // far too long, and a rectangle with no area.
+            Link {
+                rect: Rect::new(1.0, 1.0, 5.0, 5.0),
+                target: LinkTarget::Page { page: 3, y: None },
+            },
+            Link {
+                rect: Rect::new(1.0, 1.0, 5.0, 5.0),
+                target: LinkTarget::Uri("https://example.test/\nx".to_owned()),
+            },
+            Link {
+                rect: Rect::new(1.0, 1.0, 5.0, 5.0),
+                target: LinkTarget::Uri(format!("https://e.test/{}", "a".repeat(5_000))),
+            },
+            Link {
+                rect: Rect::new(2.0, 2.0, 2.0, 2.0),
+                target: LinkTarget::Uri("https://example.test/empty".to_owned()),
+            },
+        ];
+        helper.say(
+            Reply::Links {
+                id: 2,
+                page: 0,
+                error: None,
+            },
+            &crate::protocol::encode_list(&links).unwrap(),
+        );
+
+        let ClientEvent::Links { result, .. } = next(&helper.events) else {
+            panic!("expected links");
+        };
+        assert_eq!(result.unwrap(), vec![good]);
+    }
+
+    #[test]
+    fn an_outline_from_the_helper_is_bounded_here_too() {
+        let mut helper = Scripted::start();
+        helper.open(1, None);
+        helper.client.request_outline();
+        // Twenty levels deep (the limit is 16), each with a long title, and a flat list after it
+        // that is more than the limit of entries.
+        let mut item = OutlineItem {
+            title: "y".repeat(10_000),
+            target: None,
+            children: Vec::new(),
+        };
+        for _ in 0..20 {
+            item = OutlineItem {
+                title: "y".repeat(10_000),
+                target: None,
+                children: vec![item],
+            };
+        }
+        let mut items = vec![item];
+        items.extend(
+            (0..limits::MAX_OUTLINE_ITEMS + 10).map(|number| OutlineItem {
+                title: format!("entry {number}"),
+                target: None,
+                children: Vec::new(),
+            }),
+        );
+        helper.say(
+            Reply::Outline { id: 2, error: None },
+            &crate::protocol::encode_list(&items).unwrap(),
+        );
+
+        let ClientEvent::Outline(Ok(cleaned)) = next(&helper.events) else {
+            panic!("expected the outline");
+        };
+        fn count(items: &[OutlineItem]) -> usize {
+            items.iter().map(|item| 1 + count(&item.children)).sum()
+        }
+        fn depth(items: &[OutlineItem]) -> usize {
+            items
+                .iter()
+                .map(|item| 1 + depth(&item.children))
+                .max()
+                .unwrap_or(0)
+        }
+        assert!(
+            count(&cleaned) <= limits::MAX_OUTLINE_ITEMS,
+            "{}",
+            count(&cleaned)
+        );
+        assert!(
+            depth(&cleaned) <= limits::MAX_OUTLINE_DEPTH + 1,
+            "{}",
+            depth(&cleaned)
+        );
+        assert!(cleaned[0].title.len() <= limits::MAX_STRING_BYTES);
+    }
+
+    #[test]
+    fn an_error_text_from_the_helper_is_cut_here_too() {
+        let mut helper = Scripted::start();
+        helper.client.open(Path::new("x.pdf"), None);
+        helper.say(
+            Reply::Opened {
+                id: 1,
+                title: None,
+                page_count: 0,
+                error: Some(PdfError::Corrupt(format!("bad\n{}", "z".repeat(30_000)))),
+            },
+            &[],
+        );
+
+        let ClientEvent::Opened(Err(error)) = next(&helper.events) else {
+            panic!("expected the error");
+        };
+        assert!(error.detail().len() <= 512, "{}", error.detail().len());
+        assert!(!error.detail().contains('\n'));
+    }
+
+    #[test]
+    fn search_hits_from_the_helper_are_cleaned_here_too() {
+        use crate::types::Rect;
+        let mut helper = Scripted::start();
+        helper.open(2, None);
+        let find = helper.client.find("a", FindOptions::default(), 0);
+        let hit = SearchHit {
+            // The helper says another page than the one the answer is for.
+            page: 1,
+            char_start: 0,
+            char_len: 1,
+            rects: std::iter::once(Rect::new(0.0, 0.0, 0.0, 0.0))
+                .chain(std::iter::repeat_n(Rect::new(1.0, 1.0, 2.0, 2.0), 1_000))
+                .collect(),
+        };
+        helper.say(
+            Reply::Found {
+                find,
+                page: 0,
+                finished: true,
+                error: None,
+            },
+            &crate::protocol::encode_list(&[hit]).unwrap(),
+        );
+
+        let ClientEvent::Found { hits, .. } = next(&helper.events) else {
+            panic!("expected hits");
+        };
+        assert_eq!(hits[0].page, 0);
+        assert_eq!(
+            hits[0].rects.len(),
+            256,
+            "the empty one is gone, the rest is cut"
+        );
     }
 
     #[test]

@@ -119,9 +119,7 @@ pub(super) struct Config {
 pub(super) fn configure(profile_root: Option<&Path>, automated: bool) {
     let cache_dir = match profile_root {
         Some(root) => root.join("pdf-view"),
-        None => {
-            std::env::temp_dir().join(format!("mercury-browser-pdf-view-{}", std::process::id()))
-        }
+        None => temporary_cache_dir(),
     };
     CONFIG.with(|config| {
         *config.borrow_mut() = Some(Config {
@@ -131,15 +129,27 @@ pub(super) fn configure(profile_root: Option<&Path>, automated: bool) {
     });
 }
 
-/// What `configure` set, or a folder in the temporary directory before it ran.
+/// A folder of this run in the temporary directory, with a name nobody can guess (the process
+/// number is not secret), so that another user cannot make it first on a system whose temporary
+/// directory is shared. `create_private_dir` still checks whose it is.
+fn temporary_cache_dir() -> PathBuf {
+    let random = crate::profile_data::new_guid()
+        .unwrap_or_else(|| format!("{}-{}", crate::profile_data::now_ms(), std::process::id()));
+    std::env::temp_dir().join(format!("mercury-browser-pdf-view-{random}"))
+}
+
+/// What `configure` set, or a folder in the temporary directory before it ran (chosen once, so
+/// that every caller names the same one).
 pub(super) fn configured() -> Config {
-    CONFIG
-        .with(|config| config.borrow().clone())
-        .unwrap_or_else(|| Config {
-            cache_dir: std::env::temp_dir()
-                .join(format!("mercury-browser-pdf-view-{}", std::process::id())),
-            automated: true,
-        })
+    CONFIG.with(|config| {
+        config
+            .borrow_mut()
+            .get_or_insert_with(|| Config {
+                cache_dir: temporary_cache_dir(),
+                automated: true,
+            })
+            .clone()
+    })
 }
 
 /// Opens a finished download with the system's PDF app. The real one is LaunchServices through
@@ -732,7 +742,10 @@ fn make_private(path: &Path) {
     let _ = path;
 }
 
-/// The private folder, readable by the user only (mode 0700).
+/// The private folder, readable by the user only (mode 0700). A folder that was there already is
+/// accepted only if it is a real folder (not a link) that belongs to the user; one that is more
+/// open than 0700 is closed. Anything else is an error, so files are never put in a folder
+/// someone else made.
 fn create_private_dir(path: &Path) -> std::io::Result<()> {
     let mut builder = fs::DirBuilder::new();
     builder.recursive(true);
@@ -741,7 +754,24 @@ fn create_private_dir(path: &Path) -> std::io::Result<()> {
         use std::os::unix::fs::DirBuilderExt;
         builder.mode(0o700);
     }
-    builder.create(path)
+    builder.create(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let metadata = fs::symlink_metadata(path)?;
+        // SAFETY: `geteuid` has no arguments and cannot fail.
+        let me = unsafe { libc::geteuid() };
+        if !metadata.file_type().is_dir() || metadata.uid() != me {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::PermissionDenied,
+                "the folder is not a real folder of this user",
+            ));
+        }
+        if metadata.permissions().mode() & 0o077 != 0 {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700))?;
+        }
+    }
+    Ok(())
 }
 
 /// Start-up: removes the files an earlier run left in the private folder, on a thread of its own.
@@ -1755,6 +1785,64 @@ mod tests {
         );
         assert!(dir.join("sub").join("inner.pdf").exists());
         assert_eq!(clear_private_folder(), 0);
+    }
+
+    #[test]
+    fn the_folder_without_a_profile_has_a_name_nobody_can_guess() {
+        let first = temporary_cache_dir();
+        let second = temporary_cache_dir();
+        assert_ne!(first, second, "a random part, not only the process number");
+        let name = first.file_name().unwrap().to_string_lossy().into_owned();
+        assert!(name.starts_with("mercury-browser-pdf-view-"), "{name}");
+        assert_ne!(
+            name,
+            format!("mercury-browser-pdf-view-{}", std::process::id())
+        );
+        assert_eq!(first.parent(), Some(std::env::temp_dir().as_path()));
+    }
+
+    #[test]
+    fn the_folder_made_before_configure_is_the_same_for_every_caller() {
+        CONFIG.with(|config| *config.borrow_mut() = None);
+        assert_eq!(configured().cache_dir, configured().cache_dir);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_folder_must_be_a_real_folder_and_is_closed_to_others() {
+        use std::os::unix::fs::{PermissionsExt, symlink};
+        let parent = tempfile::tempdir().unwrap();
+
+        // New: made with mode 0700.
+        let fresh = parent.path().join("fresh");
+        create_private_dir(&fresh).unwrap();
+        assert_eq!(
+            fs::metadata(&fresh).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+
+        // One that exists and is too open is closed, and the call goes on.
+        let open = parent.path().join("open");
+        fs::create_dir(&open).unwrap();
+        fs::set_permissions(&open, fs::Permissions::from_mode(0o755)).unwrap();
+        create_private_dir(&open).unwrap();
+        assert_eq!(
+            fs::metadata(&open).unwrap().permissions().mode() & 0o777,
+            0o700
+        );
+
+        // A link, even to a folder of the user's own, is refused: someone may point it elsewhere.
+        let target = parent.path().join("target");
+        fs::create_dir(&target).unwrap();
+        let link = parent.path().join("link");
+        symlink(&target, &link).unwrap();
+        let error = create_private_dir(&link).unwrap_err();
+        assert_eq!(error.kind(), std::io::ErrorKind::PermissionDenied);
+
+        // A file in the way is an error too.
+        let file = parent.path().join("file");
+        fs::write(&file, b"x").unwrap();
+        assert!(create_private_dir(&file).is_err());
     }
 
     #[test]

@@ -37,9 +37,26 @@ path = "lib.rs"
 test = true
 doctest = false
 
+# Mercury: lane txt-1, the pure tests of ED5, ED7 and EB7 (see MERCURY.md).
+[[test]]
+name = "counter_styles"
+path = "tests/counter_styles.rs"
+
+[[test]]
+name = "counters"
+path = "tests/counters.rs"
+
+[[test]]
+name = "ellipsis"
+path = "tests/ellipsis.rs"
+
 [[test]]
 name = "floats"
 path = "tests/floats.rs"
+
+[[test]]
+name = "highlights"
+path = "tests/highlights.rs"
 
 [[test]]
 name = "tables"
@@ -52,6 +69,17 @@ path = "tests/text.rs"
 [dependencies.accesskit]
 version = "0.24.0"
 features = ["serde"]
+
+# Mercury: a11y-1: roles, names, states and relations are computed by `mercury-a11y`, which needs no engine; this crate only
+# adapts its DOM to `a11y-dom`'s traits and copies the result onto its accessibility nodes. See MERCURY.md.
+[dependencies.a11y-dom]
+version = "=0.30.12"
+
+# Mercury: a11y-1: `version` keeps cargo-deny's wildcard ban quiet for a path dependency of a crate that looks published; `>=` so a
+# workspace version bump does not break resolution.
+[dependencies.mercury-a11y]
+path = "../../crates/mercury-a11y"
+version = ">=0.2.0"
 
 [dependencies.app_units]
 version = "0.7"
@@ -230,6 +258,10 @@ version = "0.3.18"
 
 [dependencies.unicode-script]
 version = "0.5"
+
+# Mercury: lane txt-1 (ED7), the grapheme clusters `text-overflow` never cuts inside.
+[dependencies.unicode-segmentation]
+version = "1.12"
 
 [dependencies.unicode_categories]
 version = "0.1.1"

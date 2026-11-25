@@ -13,6 +13,11 @@ pub mod context;
 pub mod metadata;
 pub mod video;
 
+// Mercury: (MED-1) the Media Source Extensions contract, `MediaSourceBackend`, `MseEvent`, `MseError`,
+// `FrameFeed` and the rest of crates/mercury-mse, re-exported so that servo-media, servo-media-gstreamer
+// and the script crate name it through the player crate they already depend on.
+pub use mercury_mse as mse;
+
 use serde::{Deserialize, Serialize};
 use servo_base::generic_channel::{self, GenericSender};
 use servo_media_traits::MediaInstance;
@@ -94,6 +99,10 @@ pub enum StreamType {
     Stream,
     /// The stream is seekable.
     Seekable,
+    /// Mercury: (MED-1) the data comes from a MediaSource (Media Source Extensions): the player pulls
+    /// coded frames from the source's feed (`Player::connect_media_source`) instead of being pushed
+    /// bytes (`push_data` is never used). It is seekable.
+    MediaSource,
 }
 
 pub trait Player: Send + MediaInstance {
@@ -131,4 +140,17 @@ pub trait Player: Send + MediaInstance {
     fn render_use_gl(&self) -> bool;
     fn set_audio_track(&self, stream_index: i32, enabled: bool) -> Result<(), PlayerError>;
     fn set_video_track(&self, stream_index: i32, enabled: bool) -> Result<(), PlayerError>;
+    /// Mercury: (MED-1) connects the player to the MediaSource backend whose frames it plays. It must
+    /// be the first call on a player created with `StreamType::MediaSource` (the pipeline is built by
+    /// it); a player of another stream type, or one already set up, refuses it. A default body keeps
+    /// the backends that know nothing of MSE (the dummy one) compiling.
+    fn connect_media_source(
+        &self,
+        source: std::sync::Arc<dyn mse::MediaSourceBackend>,
+    ) -> Result<(), PlayerError> {
+        let _ = source;
+        Err(PlayerError::Backend(
+            "this media backend cannot play a MediaSource".to_owned(),
+        ))
+    }
 }

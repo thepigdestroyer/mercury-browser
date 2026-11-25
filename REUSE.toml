@@ -23,10 +23,25 @@ path = [
   "apps/mercury-desktop/resources/macos/entitlements-adhoc.plist",
   "apps/mercury-desktop/resources/mercury-browser.svg",
   "CONTRIBUTING.md",
+  "crates/mercury-a11y/tests/data/aria-roles.txt",
+  "crates/mercury-a11y/tests/data/names.txt",
+  "crates/mercury-a11y/tests/data/roles.txt",
   "crates/mercury-import/tests/fixtures/chrome_export.html",
   "crates/mercury-import/tests/fixtures/chromium_Bookmarks.json",
   "crates/mercury-import/tests/fixtures/firefox_export.html",
   "crates/mercury-import/tests/fixtures/safari_export.html",
+  "crates/mercury-mse-testkit/fixtures/README.md",
+  "crates/mercury-mse-testkit/fixtures/SHA256SUMS",
+  "crates/mercury-mse-testkit/fixtures/fmp4/audio-aac.mp4",
+  "crates/mercury-mse-testkit/fixtures/fmp4/muxed-h264-aac.mp4",
+  "crates/mercury-mse-testkit/fixtures/fmp4/video-h264-bframes.mp4",
+  "crates/mercury-mse-testkit/fixtures/fmp4/video-h264-high.mp4",
+  "crates/mercury-mse-testkit/fixtures/fmp4/video-h264-low.mp4",
+  "crates/mercury-mse-testkit/fixtures/webm/audio-opus.webm",
+  "crates/mercury-mse-testkit/fixtures/webm/video-av1-low-av1c.webm",
+  "crates/mercury-mse-testkit/fixtures/webm/video-av1-low.webm",
+  "crates/mercury-mse-testkit/fixtures/webm/video-vp9-high.webm",
+  "crates/mercury-mse-testkit/fixtures/webm/video-vp9-low.webm",
   "crates/mercury-ui/ui/media/speaker-muted.svg",
   "crates/mercury-ui/ui/media/speaker.svg",
   "crates/talaria-servo/resources/page-defaults.css",
@@ -38,6 +53,7 @@ path = [
   "docs/developer-guide/hands-on-checklist.md",
   "docs/developer-guide/licence-compliance.md",
   "docs/developer-guide/media-capture.md",
+  "docs/developer-guide/media-source.md",
   "docs/developer-guide/origins.md",
   "docs/developer-guide/passwords.md",
   "docs/developer-guide/pdf.md",
@@ -69,7 +85,9 @@ path = [
   "tests/pages/colors.html",
   "tests/pages/colour-partial.html",
   "tests/pages/compat-editing.html",
+  "tests/pages/compat-ellipsis.html",
   "tests/pages/compat-features.html",
+  "tests/pages/compat-lists.html",
   "tests/pages/compat-indexeddb.html",
   "tests/pages/compat-locks.html",
   "tests/pages/controls.html",
@@ -96,6 +114,13 @@ path = [
   "tests/pages/login-iframe.html",
   "tests/pages/media-session.html",
   "tests/pages/media.html",
+  "tests/pages/mse-basic.html",
+  "tests/pages/mse-object-url.html",
+  "tests/pages/mse-quota.html",
+  "tests/pages/mse-remove.html",
+  "tests/pages/mse-seek.html",
+  "tests/pages/mse-split-av.html",
+  "tests/pages/mse-switch.html",
   "tests/pages/navigate-then-head-alert.html",
   "tests/pages/net-cookies.html",
   "tests/pages/net-request-path.html",
@@ -123,6 +148,7 @@ path = [
   "tests/pages/webgl2-textures.html",
   "THIRD-PARTY-NOTICES.md",
   "crates/talaria-servo/resources/adblock/manifest.json",
+  "crates/talaria-servo/resources/hsts_preload.manifest.json",
   "tests/filter-lists/brave-unbreak.txt",
   "tests/pages/blocklists.html",
   "tests/pages/blocklists/__utm.gif",
@@ -184,3 +210,14 @@ path = [
 ]
 SPDX-FileCopyrightText = "The brave/adblock-lists contributors (https://github.com/brave/adblock-lists)"
 SPDX-License-Identifier = "MPL-2.0"
+
+# The HSTS preload list: the host names of Chromium's net/http/transport_security_state_static.json
+# (BSD-3-Clause), compiled into the executable (see THIRD-PARTY-NOTICES.md, "Bundled data"). Its
+# manifest, hsts_preload.manifest.json, is Mercury's own record of where the data came from (dates,
+# hashes, counts), so it sits in the PolyForm list above, like adblock/manifest.json.
+[[annotations]]
+path = [
+  "crates/talaria-servo/resources/hsts_preload.fstmap",
+]
+SPDX-FileCopyrightText = "The Chromium Authors"
+SPDX-License-Identifier = "BSD-3-Clause"

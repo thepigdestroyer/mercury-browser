@@ -5,6 +5,7 @@
 // by the application (`talaria_core::tab_matches_query`), which sets `rows`.
 // Colours come only from `ChromePalette`.
 import { ChromePalette } from "../theme/chrome-palette.slint";
+import { MercuryMark } from "../theme/mercury-mark.slint"; // themes
 
 export struct TabSearchRow {
     // The tab's id in the controller.
@@ -52,13 +53,28 @@ component TabSearchRowView inherits Rectangle {
         padding-right: 10px;
         spacing: 10px;
 
-        Image {
+        Rectangle {
             width: 18px;
             height: 18px;
             y: (parent.height - self.height) / 2;
-            source: root.item.has-icon ? root.item.icon : @image-url("../../../../apps/mercury-desktop/resources/mercury-browser-small.svg");
-            image-fit: contain;
             accessible-role: none;
+
+            if root.item.has-icon: Image {
+                width: parent.width;
+                height: parent.height;
+                source: root.item.icon;
+                image-fit: contain;
+                accessible-role: none;
+            }
+
+            // themes: a tab without a favicon shows the Mercury mark in the theme's accent.
+            if !root.item.has-icon: MercuryMark {
+                width: parent.width;
+                height: parent.height;
+                heavy: true;
+                // On the highlighted row (the fill accent itself) an accent disc would vanish.
+                inverted: root.highlighted;
+            }
         }
 
         VerticalLayout {

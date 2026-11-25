@@ -64,6 +64,24 @@ pub trait Backend: Send + Sync {
     ) -> Result<Arc<Mutex<AudioContext>>, AudioSinkError>;
     fn create_webrtc(&self, signaller: Box<dyn WebRtcSignaller>) -> WebRtcController;
     fn can_play_type(&self, media_type: &str) -> SupportsMediaType;
+    /// Mercury: (MED-1) creates the backend of one MediaSource (Media Source Extensions). Its events
+    /// (an initialization segment parsed, an append done or failed, the duration changed, ...) are sent
+    /// to `events`, from the backend's own worker thread; the callback must only queue a task. Defaults
+    /// to "not supported" so the backends that know nothing of MSE (the dummy one) compile unchanged.
+    fn create_media_source(
+        &self,
+        events: GenericCallback<player::mse::MseEvent>,
+    ) -> Result<Arc<dyn player::mse::MediaSourceBackend>, player::mse::MseError> {
+        let _ = events;
+        Err(player::mse::MseError::NotSupported(
+            "this media backend has no Media Source Extensions".to_owned(),
+        ))
+    }
+    /// Mercury: (MED-1) `MediaSource.isTypeSupported(mime)`: the container and every codec of the type
+    /// are ones Mercury's MSE backend feeds and this machine can decode.
+    fn is_type_supported_mse(&self, _mime: &str) -> bool {
+        false
+    }
     fn set_capture_mocking(&self, _mock: bool) {}
     /// Allow muting/unmuting the media instances associated with the given client context identifier.
     /// Backend implementations are responsible for keeping a match between client contexts

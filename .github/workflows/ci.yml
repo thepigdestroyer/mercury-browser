@@ -481,6 +481,19 @@ jobs:
         if: ${{ !cancelled() && steps.build.outcome == 'success' }}
         run: scripts/macos/test-capture.sh
 
+      # a11y-1: the accessibility test pages (tests/pages/a11y/) read in a headless Servo, by
+      # crates/talaria-servo/tests/a11y_*.rs. Each test starts a Servo with a software rendering
+      # context, which is a GL context, so the Test step above skips them (`#[ignore]`) and this step
+      # runs them, one after the other, with the GStreamer libraries collected above. Until the first
+      # run on a runner that renders, nothing has run them anywhere: read a failure here as a page or
+      # a property to look at, not as a regression.
+      # continue-on-error: this step has never run, and a GitHub macOS runner may not give surfman a
+      # GL context at all. Remove the line after one green run.
+      - name: Accessibility test pages
+        if: ${{ !cancelled() && steps.build.outcome == 'success' }}
+        continue-on-error: true
+        run: make test-a11y-pages CARGO_FLAGS=--release
+
   scripts:
     name: Scripts
     runs-on: ubuntu-24.04
@@ -650,10 +663,13 @@ jobs:
   # workspace): its own tests, among them the Web Locks and the IndexedDB schema
   # ones of the net-1 lane, run on the crate's own manifest and lock with the
   # vendored servo-storage-traits patched in (`make test-servo-storage`). Its own
-  # job, so that it does not depend on the servo-net one.
+  # job, so that it does not depend on the servo-net one. It runs on Ubuntu 24.04: the
+  # crate's graph builds FreeType through webrender, so the `fonts/bundled_freetype`
+  # feature that fixes the servo-net job on 22.04 cannot be applied here, and 22.04's
+  # FreeType is too old for freetype-sys.
   servo-storage:
     name: Vendored servo-storage tests
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 60
     env:
       CLANG_PATH: /usr/bin/clang-14

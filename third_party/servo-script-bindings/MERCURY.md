@@ -54,3 +54,16 @@ or Servo gives capture its own preference.
    `third_party/servo-script/MERCURY.md`, change 8. Drop at the Servo bump that contains it (B1).
 5. **SpiderMonkey 153.7.0:** the `js` dependency (package `mozjs`) is `=0.27.0` instead of `=0.26.13` in `Cargo.toml`
    (servo/servo#49907); see `third_party/servo-script-webcrypto/MERCURY.md`. Drop at B1.
+
+### MED-1: Media Source Extensions (20 Nov 2026)
+
+6. **WebIDL for Media Source Extensions**, carried from servo/servo#47269 by decomoraes (MPL-2.0; that pull request was closed unmerged on 16 Aug 2026 after its author said it was written with an LLM, so Servo never reviewed it: the IDL was compared with the W3C WebIDL), behind
+   `dom_media_source_enabled` (default off): new `webidls/MediaSource.webidl` (the constructor may throw: a
+   backend that cannot play MSE refuses it), `webidls/SourceBuffer.webidl` (without `textTracks`: this Servo's
+   `TextTrackList` is bound to a media element), `webidls/SourceBufferList.webidl`; `webidls/URL.webidl` gains
+   `createObjectURL(MediaSource)`; `webidls/HTMLMediaElement.webidl` puts `MediaSource` in the `MediaProvider`
+   union (`MediaStreamOrMediaSourceOrBlob`, `srcObject = mediaSource`). `codegen/Bindings.conf`: `cx` method lists for
+   `MediaSource` (`AddSourceBuffer`, `EndOfStream`, `RemoveSourceBuffer`) and `SourceBuffer` (`GetBuffered`), and
+   `weakReferenceable` for `MediaSource` (the backend's event callback holds a weak reference). The Rust side is
+   `third_party/servo-script/dom/mse/`; see `third_party/servo-script/MERCURY.md`. Drop when a Servo release has
+   its own MSE (servo/servo#44403).

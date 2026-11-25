@@ -9,6 +9,8 @@ use layout_api::{
     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutElementType, LayoutNodeType,
     SVGElementData,
 };
+// Mercury: lane txt-1 (EB7).
+use layout_api::{HighlightKind, TextHighlight, TextHighlights};
 use net_traits::image_cache::Image;
 use pixels::ImageMetadata;
 use script_bindings::codegen::InheritTypes::{
@@ -280,6 +282,40 @@ impl<'dom> LayoutDom<'dom, Node> {
         Some(RangeAny::new(start, end))
     }
 
+    // Mercury: lane txt-1 (EB7). Beside `selection_for_text_node`, which is unchanged.
+    /// The typed highlights that cover this text node: the ranges of its document's
+    /// [`HighlightSet`](crate::dom::highlights::HighlightSet) that script resolved for it at the
+    /// last reflow, or, for the text of a text control, the marked text of the control's IME
+    /// composition. Offsets are in `char`s of the node's text.
+    pub(crate) fn highlights_for_text_node(&self) -> TextHighlights {
+        if let Some(shadow_root) = self.containing_shadow_root_for_layout() {
+            let host = shadow_root.get_host_for_layout();
+            let composition = if let Some(input) = host.downcast::<HTMLInputElement>() {
+                Some(input.composition_for_layout())
+            } else {
+                host.downcast::<HTMLTextAreaElement>()
+                    .map(|textarea| textarea.composition_for_layout())
+            };
+            if let Some(composition) = composition {
+                // The text of a text control is in a user agent widget: no range of the
+                // document reaches it, only the composition of the control does.
+                return composition
+                    .map(|range| TextHighlight {
+                        kind: HighlightKind::Composition,
+                        range,
+                    })
+                    .into_iter()
+                    .collect();
+            }
+        }
+
+        if !self.unsafe_get().get_flag(NodeFlags::OVERLAPS_HIGHLIGHT) {
+            return TextHighlights::new();
+        }
+        self.owner_doc_for_layout()
+            .highlights_for_node_for_layout(self.opaque())
+    }
+
     pub(crate) fn text_node_paints_caret(&self) -> bool {
         // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
         self.parent_node_ref()
@@ -300,8 +336,21 @@ impl<'dom> LayoutDom<'dom, Node> {
 
     pub(crate) fn replaced_is_selected(&self) -> bool {
         let unsafe_self = self.unsafe_get();
-        unsafe_self.get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION) &&
-            !unsafe_self.get_flag(NodeFlags::SELECTION_INHIBITED)
+        // Mercury: backport of servo/servo#49613 (af5f54ba7). Drop at the bump that has it.
+        if !unsafe_self.get_flag(NodeFlags::OVERLAPS_DOCUMENT_SELECTION) ||
+            unsafe_self.get_flag(NodeFlags::SELECTION_INHIBITED)
+        {
+            return false;
+        }
+
+        let Some(selection) = self.owner_doc_for_layout().visible_selection_for_layout() else {
+            return false;
+        };
+        let Some(range) = selection.range_for_layout() else {
+            return false;
+        };
+
+        !range.is_collapsed()
     }
 
     pub(crate) fn image_url(self) -> Option<ServoUrl> {

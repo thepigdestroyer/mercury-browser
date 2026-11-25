@@ -1,4 +1,6 @@
 // SPDX-License-Identifier: MPL-2.0
+// a11y-1: the page's accessibility tree on its way out of the engine.
+mod accessibility;
 mod adblocker;
 mod clipboard;
 mod content_process;
@@ -34,21 +36,26 @@ mod page_feedback;
 mod page_requests;
 mod page_tabs;
 mod panics;
-mod proxy;
 mod runtime;
 mod screen;
 mod session_data;
 mod site_data;
+// text lane (txt-1): the engine's text input state as a browser event.
+mod text_messages;
 mod web_view;
 // site security
 mod certificate_exceptions;
 mod resources;
 mod site_information;
 mod site_security;
+// sh-pages
+mod site_images;
+mod view_source;
 
 pub use resources::record_error_page_secret;
 pub use site_information::SiteDataSummary;
 
+pub use accessibility::AccessibilitySink; // a11y-1
 pub use adblocker::FilterEngineSlot;
 pub use clipboard::{ActivationUse, UserActivationCheck};
 pub use content_process::{
@@ -66,6 +73,7 @@ pub use geolocation::{
     FakeLocation, FixedPosition, GeolocationDiagnostic, GeolocationSetup, LocationError,
 };
 pub use http_disk_cache::remove_http_disk_cache;
+pub use mercury_proxy::{ProxyPreferences, ProxyServer, SystemProxySettings};
 // net
 pub use net_policy::{NetPolicyControl, NetPolicySetup};
 pub use opengl_context::ViewportSize;
@@ -74,8 +82,11 @@ pub use page_tabs::{
     AdoptedWebView, DocumentRequestListener, DocumentStartedListener, NewTabAllocator,
 };
 pub use panics::{hard_fail_in_single_process, should_panic_hook_suppress_termination};
-pub use proxy::{ProxyPreferences, ProxyServer, SystemProxySettings};
 pub use runtime::{EventLoopWaker, NEW_TAB_URL, RuntimeOptions, ServoRuntime};
 pub use screen::ScreenMetrics;
 pub use site_data::SiteDataKinds;
+// sh-pages: the sites whose images are refused (the desktop app fills it); the `view-source:`
+// handler's registration, public for the engine test (`tests/view_source_engine.rs`).
+pub use site_images::SiteImagesHandle;
+pub use view_source::{ViewSourceConfig, register as register_view_source};
 pub use web_view::ServoWebView;

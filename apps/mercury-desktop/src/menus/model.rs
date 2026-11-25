@@ -30,6 +30,13 @@ pub(crate) enum MenuCommand {
     // tabs-plus
     /// Pinning and "close other tabs" for the active tab (`tab_strip.rs`).
     TabStrip(crate::tab_strip::TabStripCommand),
+    // sh-pages
+    /// View ▸ "Block Images on This Site" (`block`) and "Show Images on This Site": images per
+    /// site for the active tab's page (`site_images.rs`). One of the two is enabled at a time,
+    /// like Pin Tab and Unpin Tab; neither is, on a page that is not a web page.
+    SiteImages {
+        block: bool,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -494,6 +501,19 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                 action("Zoom In", key('=', CMD), Shortcut(A::ZoomIn)),
                 action("Zoom Out", key('-', CMD), Shortcut(A::ZoomOut)),
                 Separator,
+                // sh-pages: the page's source in a new tab, and images per site
+                action("View Source", key('u', OPTION_CMD), Shortcut(A::ViewSource)),
+                action(
+                    "Block Images on This Site",
+                    None,
+                    SiteImages { block: true },
+                ),
+                action(
+                    "Show Images on This Site",
+                    None,
+                    SiteImages { block: false },
+                ),
+                Separator,
                 // AppKit retitles it "Exit Full Screen" while the window is full screen.
                 action(
                     "Enter Full Screen",
@@ -596,6 +616,8 @@ pub(crate) const fn is_available(command: MenuCommand) -> bool {
         Stop => false,
         // tabs-plus
         TabStrip(_) => true,
+        // sh-pages
+        SiteImages { .. } => true,
     }
 }
 
@@ -645,6 +667,14 @@ pub(crate) struct MenuSnapshot {
     pub(crate) can_reopen_closed_tab: bool,
     /// The last run's session was kept and not yet restored.
     pub(crate) can_restore_previous_session: bool,
+    // sh-pages
+    /// The active tab shows a page whose source can be viewed (`view_source::can_view_source`).
+    pub(crate) can_view_source: bool,
+    /// The active tab shows a web page, whose images can be turned off or on
+    /// (`site_images::can_set_site_images`).
+    pub(crate) can_set_site_images: bool,
+    /// Images are off for the active tab's site (`site_images::active_site_blocks_images`).
+    pub(crate) active_site_blocks_images: bool,
 }
 
 pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: EditTarget) -> bool {
@@ -667,6 +697,14 @@ pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: Ed
         // session
         Shortcut(ShortcutAction::ReopenClosedTab) => snapshot.can_reopen_closed_tab,
         Shortcut(ShortcutAction::RestorePreviousSession) => snapshot.can_restore_previous_session,
+        // sh-pages: the source of a web page; images on or off for its site, one row at a time
+        Shortcut(ShortcutAction::ViewSource) => snapshot.can_view_source,
+        SiteImages { block: true } => {
+            snapshot.can_set_site_images && !snapshot.active_site_blocks_images
+        }
+        SiteImages { block: false } => {
+            snapshot.can_set_site_images && snapshot.active_site_blocks_images
+        }
         Edit(command) => match edit {
             EditTarget::AddressBar => true,
             EditTarget::Page => {
@@ -1488,5 +1526,111 @@ mod tests {
         assert!(!enabled(&snapshot, PinTab));
         assert!(enabled(&snapshot, UnpinTab));
         assert!(enabled(&snapshot, CloseOtherTabs));
+    }
+
+    // sh-pages
+    fn view_menu_actions() -> Vec<(&'static str, Option<KeyEquivalent>, MenuCommand)> {
+        let view = menu_bar()
+            .into_iter()
+            .find(|menu| menu.title == "View")
+            .expect("a View menu");
+        view.items
+            .into_iter()
+            .filter_map(|item| match item {
+                MenuItem::Action {
+                    title,
+                    key,
+                    command,
+                } => Some((title, key, command)),
+                _ => None,
+            })
+            .collect()
+    }
+
+    // sh-pages
+    #[test]
+    fn view_source_is_in_the_view_menu_with_its_key_and_follows_the_page() {
+        let command = MenuCommand::Shortcut(ShortcutAction::ViewSource);
+        let shown = KeyEquivalent::new('u', OPTION_CMD);
+        assert!(
+            view_menu_actions().contains(&("View Source", Some(shown), command)),
+            "the View menu has View Source with Option+Command+U"
+        );
+        assert_eq!(shown.mac_label(), "⌥⌘U");
+        assert_eq!(shortcut_label(command, Platform::MacOs), "⌥⌘U");
+        // The window's key path runs it (`shortcuts.rs`); the menu shows the key and declines it.
+        assert_eq!(shown.owner(), KeyOwner::Window);
+        assert_eq!(
+            item_for_key(&Key::Character("u".into()), OPTION_CMD, 1),
+            Some(command)
+        );
+        assert_eq!(item_for_key(&Key::Character("u".into()), CMD, 1), None);
+
+        // Enabled only for a page that has a source.
+        let mut snapshot = MenuSnapshot::default();
+        assert!(is_available(command));
+        assert!(!is_enabled(command, &snapshot, EditTarget::None));
+        snapshot.can_view_source = true;
+        assert!(is_enabled(command, &snapshot, EditTarget::None));
+        // Not through the edit target or any other part of the snapshot.
+        assert!(!is_enabled(
+            command,
+            &MenuSnapshot {
+                can_set_site_images: true,
+                ..MenuSnapshot::default()
+            },
+            EditTarget::Page
+        ));
+    }
+
+    // sh-pages
+    #[test]
+    fn the_images_rows_are_a_pair_and_one_is_enabled_at_a_time() {
+        let block = MenuCommand::SiteImages { block: true };
+        let show = MenuCommand::SiteImages { block: false };
+        let images_rows = view_menu_actions()
+            .into_iter()
+            .filter(|(_, _, command)| matches!(command, MenuCommand::SiteImages { .. }))
+            .collect::<Vec<_>>();
+        // In the View menu, no key, Block first (the Pin Tab / Unpin Tab pattern).
+        assert_eq!(
+            images_rows,
+            vec![
+                ("Block Images on This Site", None, block),
+                ("Show Images on This Site", None, show),
+            ]
+        );
+        assert!(is_available(block) && is_available(show));
+        assert_eq!(shortcut_label(block, Platform::MacOs), "");
+        assert_eq!(shortcut_label(show, Platform::Other), "");
+
+        let enabled = |snapshot: &MenuSnapshot| {
+            (
+                is_enabled(block, snapshot, EditTarget::None),
+                is_enabled(show, snapshot, EditTarget::None),
+            )
+        };
+        // Not a web page (a new tab, an internal page, a source page): neither, whatever the
+        // flag about images says.
+        assert_eq!(enabled(&MenuSnapshot::default()), (false, false));
+        assert_eq!(
+            enabled(&MenuSnapshot {
+                active_site_blocks_images: true,
+                ..MenuSnapshot::default()
+            }),
+            (false, false)
+        );
+        // A web page whose images are shown: "Block" only.
+        let web = MenuSnapshot {
+            can_set_site_images: true,
+            ..MenuSnapshot::default()
+        };
+        assert_eq!(enabled(&web), (true, false));
+        // The same page with images off: "Show" only.
+        let blocked = MenuSnapshot {
+            active_site_blocks_images: true,
+            ..web
+        };
+        assert_eq!(enabled(&blocked), (false, true));
     }
 }

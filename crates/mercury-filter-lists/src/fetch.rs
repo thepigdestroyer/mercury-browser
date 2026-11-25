@@ -162,10 +162,28 @@ pub struct Fetcher {
 }
 
 impl Fetcher {
+    /// A fetcher that goes through the proxy of this process (`mercury_proxy::process_preferences`,
+    /// the one Servo and the downloads use).
     pub fn new(
         sources: Sources,
         timeouts: Timeouts,
         canceller: Canceller,
+    ) -> std::io::Result<Self> {
+        Self::with_proxy(
+            sources,
+            timeouts,
+            canceller,
+            &mercury_proxy::process_preferences(),
+        )
+    }
+
+    /// [`Fetcher::new`] with the proxy given; tests pass the default (none) so that a proxy
+    /// variable in the environment cannot change where a loopback request goes.
+    pub fn with_proxy(
+        sources: Sources,
+        timeouts: Timeouts,
+        canceller: Canceller,
+        proxy: &mercury_proxy::ProxyPreferences,
     ) -> std::io::Result<Self> {
         let runtime = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -173,7 +191,7 @@ impl Fetcher {
         let redirect_sources = sources.clone();
         let client = {
             let _context = runtime.enter();
-            reqwest::Client::builder()
+            let builder = reqwest::Client::builder()
                 .connect_timeout(timeouts.connect)
                 .redirect(reqwest::redirect::Policy::custom(move |attempt| {
                     let allowed = attempt.previous().first().is_some_and(|first| {
@@ -186,14 +204,13 @@ impl Fetcher {
                     }
                 }))
                 .referer(false)
-                // Servo and the downloads make their own connections without a proxy.
-                .no_proxy()
                 .user_agent(concat!(
                     "MercuryBrowser/",
                     env!("CARGO_PKG_VERSION"),
                     " (filter-list updater)"
-                ))
-                .build()
+                ));
+            mercury_proxy::apply(builder, proxy)
+                .and_then(reqwest::ClientBuilder::build)
                 .map_err(std::io::Error::other)?
         };
         Ok(Self {
@@ -291,7 +308,7 @@ mod tests {
 
     fn fetcher_with(server: &TestServer, timeouts: Timeouts, canceller: Canceller) -> Fetcher {
         let sources = Sources::local_server(&server.url("/lists/")).expect("loopback");
-        Fetcher::new(sources, timeouts, canceller).expect("a fetcher")
+        Fetcher::with_proxy(sources, timeouts, canceller, &Default::default()).expect("a fetcher")
     }
 
     #[test]

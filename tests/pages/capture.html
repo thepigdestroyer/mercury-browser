@@ -38,19 +38,36 @@
       .map((device) => `${device.kind}:${device.label || "-"}:${device.deviceId ? "id" : "-"}`)
       .join(",") || "none";
   }
+  // A fingerprint of every pixel of the video's current frame. (Summing every 97th pixel, as this
+  // page once did, gave the same number for frames with the ball in different places, so a
+  // camera that moved could look frozen.)
   function sample(video, canvas) {
     const context = canvas.getContext("2d");
     context.drawImage(video, 0, 0, canvas.width, canvas.height);
     const data = context.getImageData(0, 0, canvas.width, canvas.height).data;
-    let sum = 0;
+    let hash = 0x811c9dc5;
     const seen = new Set();
-    for (let i = 0; i < data.length; i += 4 * 97) {
-      sum += data[i] + data[i + 1] + data[i + 2];
-      seen.add(data[i] * 65536 + data[i + 1] * 256 + data[i + 2]);
+    for (let i = 0; i < data.length; i += 4) {
+      const colour = data[i] * 65536 + data[i + 1] * 256 + data[i + 2];
+      seen.add(colour);
+      hash = Math.imul(hash ^ colour, 0x01000193);
     }
-    return { sum, colours: seen.size };
+    return { hash: hash >>> 0, colours: seen.size };
   }
   const delay = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+  // Whether the video shows frames that change: three different frames within `limit` ms. The
+  // wait is for that condition (a runner that is busy for a while only delays it), and a
+  // frozen picture, or one that went blank when its source was released, never reaches it.
+  async function watchFrames(video, canvas, limit = 5000) {
+    const first = sample(video, canvas);
+    const seen = new Set([first.hash]);
+    const start = performance.now();
+    while (seen.size < 3 && performance.now() - start < limit) {
+      await delay(50);
+      seen.add(sample(video, canvas).hash);
+    }
+    return { colours: first.colours, distinct: seen.size, moving: seen.size >= 3 };
+  }
 
   async function run() {
     note("mediaDevices", typeof navigator.mediaDevices);
@@ -106,12 +123,10 @@
     audio.play().catch((error) => note("audioPlay", error.name));
     for (let i = 0; i < 50 && !(video.videoWidth > 0); i++) await delay(100);
     note("videoSize", `${video.videoWidth}x${video.videoHeight}`);
-    const first = sample(video, canvas);
-    await delay(500);
-    const second = sample(video, canvas);
-    note("frames", `colours=${first.colours},${second.colours} moving=${first.sum !== second.sum}`);
+    const frames = await watchFrames(video, canvas);
+    note("frames", `colours=${frames.colours} distinct=${frames.distinct} moving=${frames.moving}`);
 
-    const framesOk = first.colours > 1 && first.sum !== second.sum;
+    const framesOk = frames.colours > 1 && frames.moving;
     // ?then=<url>: leave the page with the devices still open (the engine must release them).
     if (params.has("then")) {
       note("verdict", framesOk ? "PASS-LEAVING" : "FAIL");
@@ -130,10 +145,8 @@
       videoTrack.stop();
       audioTrack.stop();
       await delay(1500);
-      const third = sample(video, canvas);
-      await delay(500);
-      const fourth = sample(video, canvas);
-      note("clone", `${videoTrack.readyState},${clone.readyState} moving=${third.sum !== fourth.sum}`);
+      const afterStop = await watchFrames(video, canvas);
+      note("clone", `${videoTrack.readyState},${clone.readyState} moving=${afterStop.moving}`);
       // test-capture.sh checks that the camera source is still there when this title is shown.
       await delay(1500);
       clone.stop();
