@@ -355,6 +355,10 @@ pub struct WinitWindowAdapter {
     winit_window_or_none: RefCell<WinitWindowOrNone>,
     window_existence_wakers: RefCell<Vec<core::task::Waker>>,
 
+    // Mercury: a11y-1: what the window keeps for the page's accessibility tree; set before the winit window exists.
+    #[cfg(enable_accesskit)]
+    pub(crate) mercury_page: Rc<crate::accesskit::mercury_graft::PageShared>,
+
     #[cfg(target_os = "macos")]
     macos_color_observer: OnceCell<
         objc2::rc::Retained<objc2::runtime::ProtocolObject<dyn objc2::runtime::NSObjectProtocol>>,
@@ -406,6 +410,8 @@ impl WinitWindowAdapter {
             #[cfg(any(enable_accesskit, muda))]
             event_loop_proxy: proxy,
             window_event_filter: Cell::new(None),
+            #[cfg(enable_accesskit)] // Mercury: a11y-1
+            mercury_page: crate::accesskit::mercury_graft::PageShared::new(),
             #[cfg(target_os = "macos")]
             macos_color_observer: OnceCell::new(),
             #[cfg(muda)]
@@ -547,6 +553,7 @@ impl WinitWindowAdapter {
                 active_event_loop,
                 &winit_window,
                 self.event_loop_proxy.clone(),
+                self.mercury_page.clone(), // Mercury: a11y-1
             )
             .into(),
             #[cfg(muda)]

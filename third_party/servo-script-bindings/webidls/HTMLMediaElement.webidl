@@ -5,7 +5,8 @@
 // https://html.spec.whatwg.org/multipage/#htmlmediaelement
 
 enum CanPlayTypeResult { "" /* empty string */, "maybe", "probably" };
-typedef (MediaStream /*or MediaSource */ or Blob) MediaProvider;
+// Mercury: (MED-1) MediaSource joins the union (the generated name is MediaStreamOrMediaSourceOrBlob).
+typedef (MediaStream or MediaSource or Blob) MediaProvider;
 
 [Exposed=Window, Abstract]
 interface HTMLMediaElement : HTMLElement {

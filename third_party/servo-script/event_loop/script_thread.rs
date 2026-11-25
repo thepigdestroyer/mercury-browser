@@ -65,7 +65,7 @@ use metrics::MAX_TASK_NS;
 use net_traits::blob_url_store::UrlWithBlobClaim;
 use net_traits::fetch::fetch_controller::FetchController;
 use net_traits::image_cache::{ImageCacheFactory, ImageCacheResponseMessage};
-use net_traits::pub_domains::is_same_site;
+use net_traits::pub_domains::{Site, is_same_site};
 use net_traits::request::{Referrer, RequestId};
 use net_traits::response::ResponseInit;
 use net_traits::{
@@ -4172,7 +4172,8 @@ impl ScriptThread {
             .borrow_mut()
             .push((incomplete.pipeline_id, context));
 
-        let request_builder = incomplete.request_builder();
+        let network_partition_key = self.network_partition_key_of_load(&incomplete);
+        let request_builder = incomplete.request_builder(network_partition_key);
         incomplete.controller = FetchController::new(
             request_builder.id,
             false,
@@ -4312,6 +4313,17 @@ impl ScriptThread {
         }
     }
 
+    /// Mercury: the top-level site of the frame that `load` loads, for its navigation request: the partition key
+    /// of the parent document. `None` for a top-level load and for a parent that is not in this script thread
+    /// (the network layer then treats the request as third party). Net-1 review, finding 1.
+    fn network_partition_key_of_load(&self, load: &InProgressLoad) -> Option<Site> {
+        let parent = load.parent_info?;
+        self.documents
+            .borrow()
+            .find_document(parent)?
+            .determine_the_network_partition_key()
+    }
+
     fn handle_navigation_redirect(&self, id: PipelineId, metadata: &Metadata) {
         // TODO(mrobinson): This tries to accomplish some steps from
         // <https://html.spec.whatwg.org/multipage/#process-a-navigate-fetch>, but it's
@@ -4334,7 +4346,8 @@ impl ScriptThread {
                 metadata.final_url.clone(),
             ));
 
-        let mut request_builder = incomplete_load.request_builder();
+        let network_partition_key = self.network_partition_key_of_load(incomplete_load);
+        let mut request_builder = incomplete_load.request_builder(network_partition_key);
         request_builder.referrer = metadata
             .referrer
             .clone()

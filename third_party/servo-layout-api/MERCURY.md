@@ -23,6 +23,32 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
 - **Tested by:** `tests/pages/compat-editing.html`.
 - **Drop when:** the Servo bump that contains PR #48253 (B1).
 
+## Changes: page accessibility (lane a11y-1, 21 Nov 2026)
+
+### `SUPPORTED_ARIA_ROLES` is no longer consulted — `accessibility.rs`
+
+- **What:** a comment only. Layout no longer limits a node's role to the safe list; `mercury_a11y::roles` maps the whole
+  ARIA role set. The statics stay for script's `computedRole`.
+- **Drop when:** upstream servo#46241 lands.
+Changes made by lane txt-1 (text, 21 Nov 2026).
+
+### Typed highlights for text runs (EB7) — new `highlights.rs`, `lib.rs`, `layout_node.rs`
+
+- **What:** new module `highlights.rs`: `HighlightKind` (`Composition`, `CompositionSelected`, `FindMatch`, `ActiveFindMatch`,
+  `TextFragment`, `Spelling`, `Grammar`, `Custom(u32)`), `TextHighlight { kind, range }`, `TextHighlights = Vec<TextHighlight>`,
+  `Decoration`/`DecorationSet`, `Segment` and `resolve_segments(run_range, highlights)`, which clips highlights to a text run,
+  drops empty ones and splits overlaps: the winning background is `FindMatch < TextFragment < ActiveFindMatch` (`Custom` ranks
+  below all), decorations stack and paint in the order composition, selected composition, spelling, grammar. `lib.rs`: the module,
+  its re-exports, `malloc_size_of_is_0!` for the two plain types, and the trait method
+  `GenericLayoutDataTrait::set_text_run_highlights(&self, TextHighlights) -> bool` next to `set_text_run_selection`.
+  `layout_node.rs`: `LayoutNode::text_node_highlights` next to `text_node_selection`, so layout can ask for the initial value
+  of a run it builds.
+- **Why:** layout paints one range per text run (the selection). IME composition is underlined now; find in page, text fragments
+  and spell check need typed ranges that script owns and layout only paints.
+- **Upstream:** none (the CSS Custom Highlight API is not implemented in 0.8).
+- **Tested by:** 13 unit tests in `highlights.rs` and `servo-layout/tests/highlights.rs`.
+- **Drop when:** never as a whole; reconcile if upstream adds highlights.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

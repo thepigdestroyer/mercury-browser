@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="182 182 660 660" width="512" height="512">
+  <!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+  <!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+  <!-- The disc of the Mercury Browser mark, one flat colour: MercuryMark (mercury-mark.slint) tints it with the theme's accent. The geometry is that of apps/mercury-desktop/resources/mercury-browser.svg. -->
+  <circle cx="512" cy="512" r="330" fill="#000000"/>
+</svg>

@@ -11,6 +11,8 @@ use atomic_refcell::AtomicRefCell;
 use icu_properties::CodePointMapData;
 use icu_properties::props::BidiClass;
 use layout_api::LayoutNode;
+// Mercury: lane txt-1 (EB7).
+use layout_api::TextHighlights;
 use servo_base::text::{AssumeUnder4GB, RangeAny, Utf8CodeUnits, Utf32CodeUnits};
 use style::computed_values::direction::T as Direction;
 use style::computed_values::white_space_collapse::T as WhiteSpaceCollapse;
@@ -33,6 +35,8 @@ use crate::flow::float::FloatBox;
 use crate::flow::inline::text_run::SharedTextRunData;
 use crate::flow::inline::text_transform::{OffsetMap, TextTransformationIterator};
 use crate::formatting_contexts::IndependentFormattingContext;
+// Mercury: lane txt-1 (EB7).
+use crate::highlights::highlights_in_window;
 use crate::positioned::AbsolutelyPositionedBox;
 use crate::style_ext::ComputedValuesExt;
 
@@ -331,15 +335,18 @@ impl InlineFormattingContextBuilder {
         layout_context: &LayoutContext,
     ) -> bool {
         let selection = info.node.text_node_selection();
+        // Mercury: lane txt-1 (EB7). The typed highlights are split between the pieces like the
+        // selection is.
+        let highlights = info.node.text_node_highlights();
         if !self.should_process_first_letter || !container_info.pseudo_element_chain().is_empty() {
-            self.push_text(text, info, selection);
+            self.push_text_with_highlights(text, info, selection, highlights);
             return false;
         }
 
         let Some(first_letter_info) =
             container_info.with_pseudo_element(layout_context, PseudoElement::FirstLetter)
         else {
-            self.push_text(text, info, selection);
+            self.push_text_with_highlights(text, info, selection, highlights);
             return false;
         };
 
@@ -362,10 +369,16 @@ impl InlineFormattingContextBuilder {
                 range.intersect(leading_whitespace_range_u32)
             });
 
-            self.push_text(
+            // Mercury: lane txt-1 (EB7).
+            let leading_whitespace_highlights = highlights_in_window(
+                &highlights,
+                RangeAny::from_start_to(first_letter_range_u32.start),
+            );
+            self.push_text_with_highlights(
                 Cow::Borrowed(&text[leading_whitespace_range]).into(),
                 info,
                 leading_whitespace_selection_range,
+                leading_whitespace_highlights,
             );
         }
 
@@ -383,10 +396,14 @@ impl InlineFormattingContextBuilder {
                 .intersect((*first_letter_range_u32).clone().into())
                 .map(|range| range.map(|offset| offset - first_letter_range_u32.start))
         });
-        self.push_text(
+        // Mercury: lane txt-1 (EB7).
+        let first_letter_highlights =
+            highlights_in_window(&highlights, (*first_letter_range_u32).clone().into());
+        self.push_text_with_highlights(
             first_letter_text.into(),
             &first_letter_info,
             first_letter_selection_range,
+            first_letter_highlights,
         );
         self.end_inline_box();
         self.should_process_first_letter = false;
@@ -399,10 +416,16 @@ impl InlineFormattingContextBuilder {
                 .intersect(remaining_text_range_u32)
                 .map(|range| range.map(|offset| offset - first_letter_range_u32.end))
         });
-        self.push_text(
+        // Mercury: lane txt-1 (EB7).
+        let remaining_highlights = highlights_in_window(
+            &highlights,
+            RangeAny::new(Some(first_letter_range_u32.end), None),
+        );
+        self.push_text_with_highlights(
             Cow::Borrowed(&text[first_letter_range.end..]).into(),
             info,
             remaining_selection_range,
+            remaining_highlights,
         );
 
         true
@@ -413,6 +436,20 @@ impl InlineFormattingContextBuilder {
         text: BoxTreeString<'dom>,
         info: &NodeAndStyleInfo<'dom>,
         selection: Option<RangeAny<Utf32CodeUnits>>,
+    ) {
+        // Mercury: lane txt-1 (EB7). `push_text` is the entry point of the callers that never
+        // split a node (flex items); the typed highlights come from the node.
+        self.push_text_with_highlights(text, info, selection, info.node.text_node_highlights());
+    }
+
+    // Mercury: lane txt-1 (EB7). The body of `push_text`, with the typed highlights of this
+    // piece of the text node (offsets relative to the piece, like `selection`) as a parameter.
+    pub(crate) fn push_text_with_highlights<'dom>(
+        &mut self,
+        text: BoxTreeString<'dom>,
+        info: &NodeAndStyleInfo<'dom>,
+        selection: Option<RangeAny<Utf32CodeUnits>>,
+        highlights: TextHighlights,
     ) {
         let mut offset_map = self.offset_map.borrow_mut();
         let original_size_before = offset_map.total_original_size();
@@ -496,6 +533,8 @@ impl InlineFormattingContextBuilder {
                 needs_caret_placeholder,
                 // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
                 paints_caret: info.node.text_node_paints_caret().into(),
+                // Mercury: lane txt-1 (EB7).
+                highlights: AtomicRefCell::new(highlights),
                 offset_map: self.offset_map.clone(),
             }
             .into(),

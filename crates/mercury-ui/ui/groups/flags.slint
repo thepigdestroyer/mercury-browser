@@ -1,0 +1,232 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The small markers on a tab-group ring (SPEC design/ui-final/SPEC.md §3.2 and §4.2): the loading
+// spinner, the speaker and muted badges, the unread dot, the crash and capture badges, the dot of
+// the current tab and the digit chips shown while ⌥ is held. Rust (src/ring_bands/flags.rs)
+// decides which pin a tab gets and where it sits; this file only draws what it is given.
+//
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// The enum and the struct are part of the pinned contract of lane ring-bands (sdd/lane-ring-bands-brief.md
+// §3.1): later lanes may rely on them. The component body is filled in by the ring-bands lane.
+
+export enum FlagKind {
+    spinner,
+    audible,
+    muted,
+    unread,
+    crashed,
+    capture,
+    current,
+    digit,
+}
+
+// One marker, centred on (x, y) in the ring's own coordinates (the same as `ArcSeg`). `tab` is a
+// `TabRow.id`. `size` is the diameter. `progress` is 0..1 for a spinner, -1 when it is unknown.
+// `label` is the digit of a `digit` chip.
+export struct FlagPin {
+    tab: int,
+    kind: FlagKind,
+    x: length,
+    y: length,
+    size: length,
+    progress: float,
+    label: string,
+}
+
+// A round plate with a hairline edge: the ground of the spinner, speaker, crash and capture marks.
+component Badge inherits Rectangle {
+    in property <brush> fill: ChromePalette.popup-background;
+    in property <brush> edge: ChromePalette.separator;
+
+    background: root.fill;
+    border-width: 1px;
+    border-color: root.edge;
+    border-radius: root.width / 2;
+}
+
+// The speaker of the mockup (a 16 x 16 box, stroke 2 in box units), with an optional slash.
+component Speaker inherits Rectangle {
+    in property <bool> slashed;
+
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        commands: "M2.5 6 H5 L8.5 3 V13 L5 10 H2.5 Z M10.8 5.6 A3.4 3.4 0 0 1 10.8 10.4 M12.7 3.7 A6 6 0 0 1 12.7 12.3";
+        stroke: ChromePalette.text;
+        stroke-width: self.width / 8;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+    }
+
+    if root.slashed: Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 16;
+        viewbox-height: 16;
+        commands: "M3 3 L13 13";
+        stroke: ChromePalette.danger;
+        stroke-width: self.width / 8;
+        stroke-line-cap: round;
+    }
+}
+
+// Draws the pins; fills its parent. Speaker and muted pins are touch targets (`mute-clicked`).
+export component RingFlags inherits Rectangle {
+    in property <[FlagPin]> flags;
+    // false: a spinner stands still (renders and tests).
+    in property <bool> animate-spinners: true;
+    // true: no animation at all (R12 §7); until the settings lane adds a global.
+    in property <bool> reduce-motion: false;
+    callback mute-clicked(int /* tab id */);
+
+    private property <bool> spinning: root.animate-spinners && !root.reduce-motion;
+
+    for pin in root.flags: Rectangle {
+        x: pin.x - pin.size / 2;
+        y: pin.y - pin.size / 2;
+        width: pin.size;
+        height: pin.size;
+        accessible-role: none;
+
+        if pin.kind == FlagKind.spinner: Badge {
+            width: parent.width;
+            height: parent.height;
+
+            // A 270 degree arc from 12 o'clock round to 9 o'clock, turning once a second.
+            Path {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: pin.size * 0.55;
+                height: pin.size * 0.55;
+                viewbox-width: 100;
+                viewbox-height: 100;
+                commands: "M50 0 A50 50 0 1 1 0 50";
+                stroke: ChromePalette.accent;
+                stroke-width: 2.2px;
+                stroke-line-cap: round;
+                transform-rotation: root.spinning ? 360deg * (mod(animation-tick(), 1s) / 1s) : 0deg;
+            }
+        }
+
+        if pin.kind == FlagKind.audible || pin.kind == FlagKind.muted: Badge {
+            width: parent.width;
+            height: parent.height;
+
+            Speaker {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: pin.size * 0.6;
+                height: pin.size * 0.6;
+                slashed: pin.kind == FlagKind.muted;
+            }
+
+            TouchArea {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                width: max(parent.width, 20px);
+                height: max(parent.height, 20px);
+                mouse-cursor: pointer;
+                accessible-role: none;
+                clicked => {
+                    root.mute-clicked(pin.tab);
+                }
+            }
+        }
+
+        if pin.kind == FlagKind.unread: Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: pin.size * 0.5 + 1.5px;
+            height: self.width;
+            background: ChromePalette.accent;
+            border-width: 1.5px;
+            border-color: ChromePalette.popup-background;
+            border-radius: self.width / 2;
+        }
+
+        if pin.kind == FlagKind.crashed: Badge {
+            width: parent.width;
+            height: parent.height;
+            fill: ChromePalette.danger;
+            edge: ChromePalette.danger;
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: parent.height * 0.2;
+                width: max(parent.width * 0.13, 1px);
+                height: parent.height * 0.36;
+                background: ChromePalette.primary-button-text;
+                border-radius: self.width / 2;
+            }
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: parent.height * 0.64;
+                width: max(parent.width * 0.14, 1px);
+                height: self.width;
+                background: ChromePalette.primary-button-text;
+                border-radius: self.width / 2;
+            }
+        }
+
+        if pin.kind == FlagKind.capture: Badge {
+            width: parent.width;
+            height: parent.height;
+            fill: ChromePalette.capture-indicator;
+            edge: ChromePalette.capture-indicator;
+
+            Rectangle {
+                x: parent.width * 0.2;
+                y: (parent.height - self.height) / 2;
+                width: parent.width * 0.4;
+                height: parent.height * 0.3;
+                background: ChromePalette.capture-indicator-glyph;
+                border-radius: parent.width * 0.06;
+            }
+
+            Path {
+                x: parent.width * 0.64;
+                y: (parent.height - self.height) / 2;
+                width: parent.width * 0.16;
+                height: parent.height * 0.22;
+                viewbox-width: 100;
+                viewbox-height: 100;
+                commands: "M0 50 L100 0 L100 100 Z";
+                fill: ChromePalette.capture-indicator-glyph;
+            }
+        }
+
+        if pin.kind == FlagKind.current: Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: ChromePalette.text;
+            border-radius: self.width / 2;
+        }
+
+        if pin.kind == FlagKind.digit: Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: ChromePalette.popup-background;
+            border-width: 1px;
+            border-color: ChromePalette.popup-border;
+            border-radius: 4px;
+
+            Text {
+                width: parent.width;
+                height: parent.height;
+                text: pin.label;
+                font-size: pin.size * 0.6;
+                font-weight: 700;
+                color: ChromePalette.text;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                // A Text is `text` to assistive technology by default; the chips are decoration
+                // (the segment label has the number and the key switcher announces the digits).
+                accessible-role: none;
+            }
+        }
+    }
+}

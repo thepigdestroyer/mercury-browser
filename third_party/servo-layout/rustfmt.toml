@@ -1,0 +1,5 @@
+# Mercury: Servo's own rustfmt settings (servo/servo rustfmt.toml, v0.8.0), so that `cargo fmt --all` leaves the
+# upstream test files of this crate alone. `crates/mercury-engine-tests` builds them (see its Cargo.toml).
+match_block_trailing_comma = true
+reorder_imports = true
+style_edition = "2024"

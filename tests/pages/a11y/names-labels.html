@@ -1,0 +1,34 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Names</title>
+</head>
+<body>
+<h1>Names</h1>
+<p>A screen reader reads each control with the name its label gives: "Email address", "Full name",
+"Search the site", "Close dialog", "Company", "Company (optional)", "Title name", "Placeholder name",
+"Save", the group "Delivery" with the field "Street", the table "Sales", the figure "Cat figure" and the
+link "Home page".</p>
+<label for="email">Email address</label><input id="email">
+<label>Full name <input id="full"></label>
+<input id="search" aria-label="Search the site">
+<button id="close"><img alt="Close dialog" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="></button>
+<span id="company-label">Company</span><span id="company-hint">(optional)</span>
+<input id="company" aria-labelledby="company-label">
+<input id="company-full" aria-labelledby="company-label company-hint">
+<input id="titled" title="Title name">
+<input id="holder" placeholder="Placeholder name">
+<button id="save">Save</button>
+<fieldset><legend>Delivery</legend><input id="street" aria-label="Street"></fieldset>
+<table><caption>Sales</caption><tr><td>1</td></tr></table>
+<figure><img alt="A cat" src="data:image/gif;base64,R0lGODlhAQABAAAAACH5BAEKAAEALAAAAAABAAEAAAICTAEAOw=="><figcaption>Cat figure</figcaption></figure>
+<a id="home" href="#home" aria-label="Home page">Home</a>
+<script>
+  function renameSave(name) { document.getElementById("save").setAttribute("aria-label", name); }
+  function relabelEmail(text) { document.querySelector("label[for=email]").textContent = text; }
+</script>
+</body>
+</html>

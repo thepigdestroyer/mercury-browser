@@ -31,6 +31,9 @@ use uuid::Uuid;
 use webrender_api::ImageKey;
 use webrender_api::units::{DeviceIntSize, DeviceSize};
 
+// Mercury: ED5 (lane txt-1). The table of the counter pass, `counters.rs`.
+use crate::counters::CounterTable;
+
 pub(crate) type CachedImageOrError = Result<CachedImage, ResolveImageError>;
 
 pub(crate) struct LayoutContext<'a> {
@@ -63,9 +66,20 @@ pub(crate) struct LayoutContext<'a> {
 
     /// The device dimensions on which this layout is running, in device pixels.
     pub device_size: Size2D<f32, DevicePixel>,
+
+    /// Mercury: ED5 (lane txt-1). What the counter pass found: the number of every list item and
+    /// the value of every `counter()` and `counters()`. It starts as the table of the last
+    /// reflow and is replaced by the pass of this reflow, after styling and before boxes are
+    /// built (`lists.rs`, `layout_impl.rs`).
+    pub counter_table: RwLock<Arc<CounterTable>>,
 }
 
 impl LayoutContext<'_> {
+    /// Mercury: ED5. The current counter table.
+    pub(crate) fn counter_table(&self) -> Arc<CounterTable> {
+        self.counter_table.read().clone()
+    }
+
     pub(crate) fn should_parallelize(&self, number_of_jobs: usize) -> bool {
         self.allow_parallel_layout && number_of_jobs >= self.parallelism_job_count_minimum
     }

@@ -655,7 +655,7 @@ mod tests {
         save(&passwords, "https://a.test", "alice", "fake-a");
         save(&passwords, "https://b.test", "bob", "fake-b");
         let window = SettingsWindow::new().expect("a window");
-        window.set_section(4);
+        window.set_section(mercury_ui::settings_sections::section::PASSWORDS);
         connect_settings_window(&window);
         (passwords, authenticator, pasteboard, window)
     }
@@ -879,7 +879,7 @@ mod worker_tests {
         save_login(&passwords, key("alice"), Password::new("fake-a".to_owned()));
         save_login(&passwords, key("bob"), Password::new("fake-b".to_owned()));
         let window = SettingsWindow::new().expect("a window");
-        window.set_section(4);
+        window.set_section(mercury_ui::settings_sections::section::PASSWORDS);
         connect_settings_window(&window);
         passwords.worker.run_queued();
         let ui = ui(&window);
@@ -902,7 +902,7 @@ mod worker_tests {
         let long = "aB3#".repeat(32);
         save_login(&passwords, key("alice"), Password::new(long.clone()));
         let window = SettingsWindow::new().expect("a window");
-        window.set_section(4);
+        window.set_section(mercury_ui::settings_sections::section::PASSWORDS);
         connect_settings_window(&window);
         passwords.worker.run_queued();
 

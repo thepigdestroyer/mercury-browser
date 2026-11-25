@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+#
+# Media Source Extensions for Mercury (lane med-1, R14 EA1 by Plan B). Servo-free and GStreamer-free on
+# purpose: it builds and tests in the light pool, and the DOM and the GStreamer feed talk to it through
+# the traits in src/api.rs. The test-only crate mercury-mse-testkit holds the fixtures.
+[package]
+name = "mercury-mse"
+description = "Media Source Extensions: byte-stream parsers, coded-frame processing, track buffers, the MediaSource model and a threaded backend. No GStreamer, no Servo."
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+log.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+mercury-mse-testkit = { path = "../mercury-mse-testkit" }

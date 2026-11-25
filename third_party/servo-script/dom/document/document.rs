@@ -44,7 +44,8 @@ use layout_api::{
 use malloc_size_of::MallocSizeOfOps;
 use metrics::{InteractiveFlag, InteractiveWindow, ProgressiveWebMetrics};
 use net_traits::CookieSource::NonHTTP;
-use net_traits::CoreResourceMsg::{GetCookieStringForUrl, SetCookiesForUrl};
+// Mercury: `document.cookie` sends its partition key and web view, for the network policy (EC5, EC6).
+use net_traits::CoreResourceMsg::{GetCookieStringForDocument, SetCookiesForDocument};
 use net_traits::image_cache::ImageCache;
 use net_traits::policy_container::PolicyContainer;
 use net_traits::pub_domains::{Site, is_pub_domain};
@@ -625,6 +626,8 @@ pub(crate) struct Document {
     has_pending_animated_image_update: Cell<bool>,
     /// <https://w3c.github.io/slection-api/#dfn-selection>
     selection: MutNullableDom<Selection>,
+    // Mercury: lane txt-1 (EB7). The typed highlights (IME composition, find, ...) of this document.
+    highlights: crate::dom::highlights::HighlightSet,
     /// A timeline for animations which is used for synchronizing animations.
     /// <https://drafts.csswg.org/web-animations/#timeline>
     timeline: Dom<DocumentTimeline>,
@@ -1160,6 +1163,12 @@ impl Document {
     #[inline]
     pub(crate) fn selection(&self) -> Option<DomRoot<Selection>> {
         self.selection.get()
+    }
+
+    // Mercury: lane txt-1 (EB7). The field is private to this module; the accessor is the way in.
+    /// The typed highlights of this [`Document`]: IME composition, find matches, spelling, ...
+    pub(crate) fn highlights(&self) -> &crate::dom::highlights::HighlightSet {
+        &self.highlights
     }
 
     pub(crate) fn set_activity(&self, cx: &mut JSContext, activity: DocumentActivity) {
@@ -3435,6 +3444,8 @@ impl Document {
         }
 
         let (reflow_phases, statistics) = self.window().reflow(cx, ReflowGoal::UpdateTheRendering);
+        // Mercury: lane txt-1 (EB11). Send the focused editable's text state when layout is current.
+        self.event_handler().flush_text_input_state_after_reflow(cx);
         let phases = phases.union(reflow_phases);
 
         self.window().paint_api().update_epoch(
@@ -4352,6 +4363,8 @@ impl Document {
             dirty_canvases: DomRefCell::new(Default::default()),
             has_pending_animated_image_update: Cell::new(false),
             selection: MutNullableDom::new(None),
+            // Mercury: lane txt-1 (EB7).
+            highlights: Default::default(),
             timeline: Dom::from_ref(timeline),
             animation_manager: AnimationManager::new(),
             dirty_root: Default::default(),
@@ -6814,11 +6827,18 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
         let url = self.url();
         let (tx, rx) =
             profile_generic_channel::channel(self.global().time_profiler_chan().clone()).unwrap();
+        // Mercury: the document's top-level site and web view let the policy judge it (EC5, EC6).
         let _ = self
             .window
             .as_global_scope()
             .resource_threads()
-            .send(GetCookieStringForUrl(url, tx, NonHTTP));
+            .send(GetCookieStringForDocument(
+                url,
+                self.determine_the_network_partition_key(),
+                Some(self.window().webview_id()),
+                tx,
+                NonHTTP,
+            ));
         let cookies = rx.recv().unwrap();
         Ok(cookies.map_or(DOMString::new(), DOMString::from))
     }
@@ -6843,11 +6863,18 @@ impl DocumentMethods<crate::DomTypeHolder> for Document {
             vec![]
         };
 
+        // Mercury: the document's top-level site and web view let the policy judge it (EC5, EC6).
         let _ = self
             .window
             .as_global_scope()
             .resource_threads()
-            .send(SetCookiesForUrl(self.url(), cookies, NonHTTP));
+            .send(SetCookiesForDocument(
+                self.url(),
+                self.determine_the_network_partition_key(),
+                Some(self.window().webview_id()),
+                cookies,
+                NonHTTP,
+            ));
         Ok(())
     }
 

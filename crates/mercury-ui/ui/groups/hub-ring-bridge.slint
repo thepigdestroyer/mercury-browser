@@ -1,0 +1,146 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The one channel between the hub ring popover and Rust (SPEC design/ui-final/SPEC.md §4.3; lane
+// hub-ring brief sdd/lane-hub-ring-brief.md §3.1). `RingPopover` and `HubButton` read and write only
+// this global; `mercury_ui::hub_ring::HubRing` fills it and handles its callbacks from any window
+// that has it. The hosts therefore forward nothing.
+//
+// THE NAMES AND TYPES BELOW ARE THE CONTRACT BETWEEN THE ITEMS of lane hub-ring: only additions are
+// allowed, through the lane lead.
+
+import { ArcGlyph, ArcSeg, GroupRow, TabRow } from "models.slint";
+import { FlagPin } from "flags.slint";
+import { RingDropTarget, RingHit } from "ring-bands.slint";
+
+// What the centre disc shows (`hub_ring::centre`).
+export enum CentreMode {
+    rest,
+    searching,
+    audio,
+    held,
+}
+
+// One row of the centre's result list. `tab` is a `TabRow.id`; -1 is the "Search the web for ..." row.
+export struct SearchRow {
+    tab: int,
+    title: string,
+    // "Lisbon trip · ⌥S 3 · ⏎ opens"
+    path: string,
+    selected: bool,
+}
+
+// One pinned tab as a bead at 12 o'clock, ring-local like `ArcSeg`. `more` > 0 makes it the
+// "+more" chip (`more` hidden beads), `tab` then being the first hidden one.
+export struct BeadRow {
+    tab: int,
+    title: string,
+    letter: string,
+    mark: color,
+    favicon: image,
+    has-favicon: bool,
+    x: length,
+    y: length,
+    size: length,
+    focused: bool,
+    dimmed: bool,
+    more: int,
+}
+
+// One arc of the hub button's donut (a group's share), in the button's own 30 px box.
+export struct DonutArc {
+    commands: string,
+    colour: color,
+}
+
+export global HubRingBridge {
+    // The ring. Set once from `RingBandsModels`: the ModelRcs never change, the rows do. Same names
+    // and types as `RingBands`.
+    in property <[GroupRow]> groups;
+    in property <[TabRow]> tabs;
+    in property <[ArcSeg]> segments;
+    in property <[ArcSeg]> lifted-segments;
+    in property <[string]> segment-labels;
+    in property <[ArcSeg]> label-bands;
+    in property <[ArcGlyph]> label-glyphs;
+    in property <[FlagPin]> flags;
+    in property <[BeadRow]> beads;
+    in property <[SearchRow]> results;
+    in property <[DonutArc]> donut;
+    in property <length> ring-size: 516px;
+
+    // State written by Rust.
+    in property <CentreMode> mode;
+    // ⌥ held: solid label bands, big key letters, digits (also drives `RingBands.held`).
+    in property <bool> held;
+    in property <int> selected-group: -1;
+    in property <bool> query-active;
+    in property <int> focused-tab: -1;
+    in property <int> focused-bead: -1;
+    in-out property <int> hovered-tab: -1;
+    // The centre's lines: "Essay on maps" and "Reading · ⌥D 2 · essays.example.net".
+    in property <string> title;
+    in property <string> subtitle;
+    // The snapshot of the shown tab, or (has-preview false) a placeholder card in `preview-mark`.
+    in property <image> preview;
+    in property <bool> has-preview;
+    in property <color> preview-mark;
+    // One label next to a flag: "WebRender overview · loading 64%"; empty = none. Ring-local.
+    in property <string> tooltip;
+    in property <length> tooltip-x;
+    in property <length> tooltip-y;
+    // Audio mode: "Playing · 12:40 of 48:00", "Playing", "Paused", "Muted".
+    in property <string> play-state;
+    in property <bool> can-pause;
+    in property <bool> paused;
+    in property <bool> muted;
+    // "Search 22 tabs".
+    in property <string> field-placeholder;
+    // Held mode: "⌥ S", "Lisbon trip", "press 1–4 for a tab".
+    in property <string> held-key;
+    in property <string> held-name;
+    in property <string> held-help;
+    // The hint line of the centre: "Hold ⌥ to see group keys", "↑ ↓ choose · esc clears", ...
+    in property <string> footer;
+    // "See everything" is drawn only while this is true (the host sets it when Orbit exists).
+    in property <bool> orbit-available: false;
+    in property <bool> reduce-motion: false;
+    // The hub button: "Tab groups, 6 groups, 22 tabs".
+    in property <string> hub-label;
+    // The accent fill of the hub button while the popover is open.
+    in property <bool> hub-open;
+    // Rust asks the popover to close by adding 1 (the popup closes itself on `changed`).
+    in property <int> close-request: 0;
+
+    // Written by Slint (the search field); Rust sets it to "" when it clears the query.
+    in-out property <string> query;
+    // Written by Slint: the search field has the keyboard focus. While it has, Rust does not take
+    // printable keys, so the field (and an input method) receives them first.
+    in-out property <bool> field-focused;
+
+    // Forwarded to ring_bands::RingBandsData::{hit, drop_target}.
+    pure callback hit-test(length, length, int) -> RingHit;
+    pure callback drop-target(length, length, int) -> RingDropTarget;
+
+    // Events to Rust.
+    // KeyEvent.text, alt, control, meta, shift; true = handled (the key goes no further).
+    callback key-pressed(string, bool, bool, bool, bool) -> bool;
+    callback key-released(string, bool, bool, bool, bool);
+    callback query-edited(string);
+    callback tab-activated(int);
+    callback tab-hovered(int);
+    callback group-activated(int);
+    callback tab-close(int);
+    callback tab-mute(int);
+    callback bead-activated(int);
+    // group id, index-in-group.
+    callback drop(int, int);
+    callback drag-cancelled();
+    callback pause-clicked();
+    callback mute-clicked();
+    callback see-everything();
+    // The row index of `results` (the last row is the web search).
+    callback result-activated(int);
+    // The popup opened / closed (Slint -> Rust).
+    callback opened();
+    callback closed();
+}

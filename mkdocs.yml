@@ -76,6 +76,7 @@ nav:
       - Servo integration: developer-guide/servo-integration.md
       - Saved logins: developer-guide/passwords.md
       - Camera and microphone: developer-guide/media-capture.md
+      - Media Source Extensions: developer-guide/media-source.md
       - PDF viewer: developer-guide/pdf.md
       - Testing and quality: developer-guide/testing.md
       - Hands-on checklist: developer-guide/hands-on-checklist.md

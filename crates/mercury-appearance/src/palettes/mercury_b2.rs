@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-//! `mercury-b2`: Mercury's own look, the default palette (SPEC §1, owner decision of 18 Nov 2026).
+//! `mercury-b2`: Mercury's own look as designed on 18 Nov 2026 (SPEC §1). **Not selectable and not
+//! the default** since 22 Nov 2026: the owner rejected it and chose Signal, Forest, Abyss and
+//! Glacier instead. Kept as data (its tests and the `Sun` brand colours stay).
 //!
 //! Light is warm paper with plum-black ink and the brand's orange; dark is the "night plate",
 //! a deep violet with the Sun's amber. Where the owner gave a value it is used as given:
@@ -42,7 +44,7 @@ pub const ID: &str = "mercury-b2";
 pub const PALETTE: Palette = Palette {
     id: ID,
     name: "Mercury",
-    selectable: true,
+    selectable: false,
     light,
     dark,
 };
@@ -62,7 +64,7 @@ const fn light(role: Role) -> Colour {
         // Text.
         Role::Text => Colour::hex(0x1a1230),
         Role::TextSecondary => Colour::hex(0x5b5168),
-        Role::TextMuted => Colour::hex(0x6a6077),
+        Role::TextMuted => Colour::hex(0x635970),
         Role::Placeholder => Colour::hex(0x736982),
         // Accent text and buttons.
         Role::Accent => Colour::hex(0xa03c14),
@@ -132,7 +134,7 @@ const fn dark(role: Role) -> Colour {
         // Text.
         Role::Text => Colour::hex(0xf3eef8),
         Role::TextSecondary => Colour::hex(0xb4aac6),
-        Role::TextMuted => Colour::hex(0x9e94b4),
+        Role::TextMuted => Colour::hex(0xa198b7),
         Role::Placeholder => Colour::hex(0x9a90b0),
         // Accent text and buttons.
         Role::Accent => Colour::hex(0xffb547),

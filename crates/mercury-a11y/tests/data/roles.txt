@@ -1,0 +1,406 @@
+# Element and context cases for `roles::role`. One row per line: `html => Role`.
+# The element under test is the one with `id=t`. The fragment is parsed by `TestDom::from_html`
+# (wrapped in a `body`). Written from HTML-AAM section 4, ARIA 1.2 and the decisions in the header
+# of `src/roles.rs`; a row marked "Mercury" is a decision where the specification leaves a choice
+# or where Mercury differs from the `accname` crate.
+
+# --- landmarks: header and footer by scope (HTML-AAM)
+<header id=t></header> => Banner
+<article><header id=t></header></article> => GenericContainer
+<aside><header id=t></header></aside> => GenericContainer
+<main><header id=t></header></main> => GenericContainer
+<nav><header id=t></header></nav> => GenericContainer
+<section><header id=t></header></section> => GenericContainer
+<div role=main><header id=t></header></div> => GenericContainer
+<div role=complementary><header id=t></header></div> => GenericContainer
+<div role=navigation><header id=t></header></div> => GenericContainer
+<div role=region><header id=t></header></div> => GenericContainer
+<div role=article><header id=t></header></div> => GenericContainer
+<div role=banner><header id=t></header></div> => Banner
+<div role=group><header id=t></header></div> => Banner
+<div><div><header id=t></header></div></div> => Banner
+<footer id=t></footer> => ContentInfo
+<article><footer id=t></footer></article> => GenericContainer
+<aside><footer id=t></footer></aside> => GenericContainer
+<main><footer id=t></footer></main> => GenericContainer
+<nav><footer id=t></footer></nav> => GenericContainer
+<section><footer id=t></footer></section> => GenericContainer
+<div role=main><footer id=t></footer></div> => GenericContainer
+<div role=contentinfo><footer id=t></footer></div> => ContentInfo
+<main id=t></main> => Main
+<nav id=t></nav> => Navigation
+<aside id=t></aside> => Complementary
+<article id=t></article> => Article
+<search id=t></search> => Search
+
+# --- landmarks: section and form are landmarks only when named (Mercury)
+<section id=t></section> => GenericContainer
+<section id=t aria-label=News></section> => Region
+<section id=t aria-labelledby=h></section> => Region
+<section id=t title=News></section> => Region
+<section id=t aria-label="   "></section> => GenericContainer
+<section id=t aria-labelledby=""></section> => GenericContainer
+<form id=t></form> => GenericContainer
+<form id=t aria-label=Login></form> => Form
+<form id=t aria-labelledby=h></form> => Form
+<form id=t title=Login></form> => Form
+<form id=t aria-label=" "></form> => GenericContainer
+<div id=t role=form></div> => Form
+<section id=t role=region></section> => Region
+<section id=t role=navigation></section> => Navigation
+
+# --- grouping and text-level elements
+<address id=t></address> => Group
+<hgroup id=t></hgroup> => Group
+<fieldset id=t></fieldset> => Group
+<optgroup id=t></optgroup> => Group
+<details id=t></details> => Details
+<details><summary id=t>x</summary></details> => DisclosureTriangle
+<details><summary>a</summary><summary id=t>b</summary></details> => GenericContainer
+<summary id=t>x</summary> => GenericContainer
+<dialog id=t></dialog> => Dialog
+<figure id=t></figure> => Figure
+<figure><figcaption id=t>c</figcaption></figure> => FigureCaption
+<blockquote id=t></blockquote> => Blockquote
+<hr id=t> => Splitter
+<p id=t></p> => Paragraph
+<div id=t></div> => GenericContainer
+<span id=t></span> => GenericContainer
+<code id=t></code> => Code
+<em id=t></em> => Emphasis
+<strong id=t></strong> => Strong
+<mark id=t></mark> => Mark
+<time id=t></time> => Time
+<del id=t></del> => ContentDeletion
+<ins id=t></ins> => ContentInsertion
+<sub id=t></sub> => GenericContainer
+<sup id=t></sup> => GenericContainer
+<dfn id=t></dfn> => Term
+<math id=t></math> => Math
+<b id=t></b> => GenericContainer
+<i id=t></i> => GenericContainer
+<u id=t></u> => GenericContainer
+<s id=t></s> => GenericContainer
+<small id=t></small> => GenericContainer
+<kbd id=t></kbd> => GenericContainer
+<samp id=t></samp> => GenericContainer
+<var id=t></var> => GenericContainer
+<cite id=t></cite> => GenericContainer
+<q id=t></q> => GenericContainer
+<abbr id=t></abbr> => GenericContainer
+<bdi id=t></bdi> => GenericContainer
+<data id=t></data> => GenericContainer
+<ruby id=t></ruby> => GenericContainer
+<pre id=t></pre> => GenericContainer
+<br id=t> => GenericContainer
+<wbr id=t> => GenericContainer
+<label id=t></label> => GenericContainer
+<legend id=t></legend> => Legend
+<body id=t></body> => GenericContainer
+<html id=t></html> => GenericContainer
+<custom-element id=t></custom-element> => GenericContainer
+<slot id=t></slot> => GenericContainer
+<template id=t></template> => GenericContainer
+
+# --- headings
+<h1 id=t></h1> => Heading
+<h2 id=t></h2> => Heading
+<h3 id=t></h3> => Heading
+<h4 id=t></h4> => Heading
+<h5 id=t></h5> => Heading
+<h6 id=t></h6> => Heading
+<div id=t role=heading aria-level=2></div> => Heading
+
+# --- links
+<a id=t href=x></a> => Link
+<a id=t></a> => GenericContainer
+<a id=t name=anchor></a> => GenericContainer
+<a id=t href=""></a> => Link
+<area id=t href=x> => Link
+<area id=t> => GenericContainer
+
+# --- lists
+<ul id=t></ul> => List
+<ol id=t></ol> => List
+<menu id=t></menu> => List
+<ul><li id=t></li></ul> => ListItem
+<ol><li id=t></li></ol> => ListItem
+<dl id=t></dl> => DescriptionList
+<dl><dt id=t></dt></dl> => Term
+<dl><dd id=t></dd></dl> => Definition
+<div id=t role=list></div> => List
+<div id=t role=listitem></div> => ListItem
+<div id=t role=directory></div> => List
+
+# --- presentational children of a list or a table whose role is none or presentation
+<ul role=none><li id=t></li></ul> => GenericContainer
+<ul role=presentation><li id=t></li></ul> => GenericContainer
+<ol role=none><li id=t></li></ol> => GenericContainer
+<menu role=none><li id=t></li></menu> => GenericContainer
+<ul role=none id=t></ul> => GenericContainer
+<ul role=none><li><ul><li id=t></li></ul></li></ul> => ListItem
+<ul role=list><li id=t></li></ul> => ListItem
+<dl role=none><dt id=t></dt></dl> => GenericContainer
+<dl role=none><dd id=t></dd></dl> => GenericContainer
+<table role=presentation><tr id=t></tr></table> => GenericContainer
+<table role=none><tbody><tr><td id=t></td></tr></tbody></table> => GenericContainer
+<table role=none><tbody id=t></tbody></table> => GenericContainer
+<table role=none><thead><tr><th id=t></th></tr></thead></table> => GenericContainer
+<table role=none><caption id=t></caption></table> => Caption
+<table role=none id=t></table> => GenericContainer
+<table><tr><td id=t></td></tr></table> => Cell
+<ul role=none aria-label=Menu><li id=t></li></ul> => ListItem
+
+# --- tables
+<table id=t></table> => Table
+<table><caption id=t></caption></table> => Caption
+<table><thead id=t></thead></table> => RowGroup
+<table><tbody id=t></tbody></table> => RowGroup
+<table><tfoot id=t></tfoot></table> => RowGroup
+<table><tr id=t></tr></table> => Row
+<table><tr><td id=t></td></tr></table> => Cell
+<table><tr><th id=t></th></tr></table> => ColumnHeader
+<table><tr><th id=t scope=col></th></tr></table> => ColumnHeader
+<table><tr><th id=t scope=row></th></tr></table> => RowHeader
+<table><tr><th id=t scope=rowgroup></th></tr></table> => RowHeader
+<table><tr><th id=t scope=colgroup></th></tr></table> => ColumnHeader
+<table role=grid><tr><td id=t></td></tr></table> => GridCell
+<table role=treegrid><tr><td id=t></td></tr></table> => GridCell
+<table role=table><tr><td id=t></td></tr></table> => Cell
+<table role=grid><tr><th id=t></th></tr></table> => ColumnHeader
+<table role=grid id=t></table> => Grid
+<table><colgroup id=t></colgroup></table> => GenericContainer
+<table><col id=t></table> => GenericContainer
+<div id=t role=table></div> => Table
+<div id=t role=row></div> => Row
+<div id=t role=cell></div> => Cell
+<div id=t role=gridcell></div> => GridCell
+<div id=t role=rowgroup></div> => RowGroup
+<div id=t role=columnheader></div> => ColumnHeader
+<div id=t role=rowheader></div> => RowHeader
+
+# --- form controls: input by type
+<input id=t> => TextInput
+<input id=t type=text> => TextInput
+<input id=t type=TEXT> => TextInput
+<input id=t type=" text "> => TextInput
+<input id=t type=unknown> => TextInput
+<input id=t type=""> => TextInput
+<input id=t type=search> => SearchInput
+<input id=t type=email> => EmailInput
+<input id=t type=tel> => PhoneNumberInput
+<input id=t type=url> => UrlInput
+<input id=t type=password> => PasswordInput
+<input id=t type=PASSWORD> => PasswordInput
+<input id=t type=number> => SpinButton
+<input id=t type=range> => Slider
+<input id=t type=checkbox> => CheckBox
+<input id=t type=radio> => RadioButton
+<input id=t type=button> => Button
+<input id=t type=submit> => Button
+<input id=t type=reset> => Button
+<input id=t type=image> => Button
+<input id=t type=file> => Button
+<input id=t type=color> => ColorWell
+<input id=t type=date> => DateInput
+<input id=t type=datetime-local> => DateTimeInput
+<input id=t type=month> => MonthInput
+<input id=t type=week> => WeekInput
+<input id=t type=time> => TimeInput
+<input id=t type=hidden> => GenericContainer
+<input id=t list=l> => EditableComboBox
+<input id=t type=text list=l> => EditableComboBox
+<input id=t type=search list=l> => EditableComboBox
+<input id=t type=email list=l> => EditableComboBox
+<input id=t type=tel list=l> => EditableComboBox
+<input id=t type=url list=l> => EditableComboBox
+<input id=t type=number list=l> => SpinButton
+<input id=t type=checkbox list=l> => CheckBox
+<datalist id=t></datalist> => ListBox
+
+# --- form controls: other elements
+<button id=t></button> => Button
+<button id=t type=submit></button> => Button
+<textarea id=t></textarea> => MultilineTextInput
+<select id=t></select> => ComboBox
+<select id=t size=1></select> => ComboBox
+<select id=t size=4></select> => ListBox
+<select id=t multiple></select> => ListBox
+<select id=t size=""></select> => ComboBox
+<select><option id=t>a</option></select> => MenuListOption
+<select multiple><option id=t>a</option></select> => ListBoxOption
+<select size=3><option id=t>a</option></select> => ListBoxOption
+<select><optgroup><option id=t>a</option></optgroup></select> => MenuListOption
+<datalist><option id=t>a</option></datalist> => ListBoxOption
+<progress id=t></progress> => ProgressIndicator
+<meter id=t></meter> => Meter
+<output id=t></output> => Status
+<div id=t role=option></div> => ListBoxOption
+<div id=t role=combobox></div> => ComboBox
+<div id=t role=combobox tabindex=0></div> => ComboBox
+<input id=t role=combobox> => EditableComboBox
+<div id=t role=combobox contenteditable></div> => EditableComboBox
+<select id=t role=combobox></select> => ComboBox
+
+# --- text boxes and editing hosts
+<div id=t role=textbox></div> => TextInput
+<div id=t role=textbox aria-multiline=true></div> => MultilineTextInput
+<div id=t role=textbox aria-multiline=false></div> => TextInput
+<input id=t role=textbox aria-multiline=true> => TextInput
+<div id=t role=searchbox></div> => SearchInput
+<div id=t contenteditable></div> => MultilineTextInput
+<div id=t contenteditable=true></div> => MultilineTextInput
+<div id=t contenteditable=""></div> => MultilineTextInput
+<div id=t contenteditable=false></div> => GenericContainer
+<div id=t contenteditable role=textbox></div> => MultilineTextInput
+<p id=t contenteditable></p> => Paragraph
+<h1 id=t contenteditable></h1> => Heading
+
+# --- images and embedded content
+<img id=t src=a.png alt=x> => Image
+<img id=t src=a.png> => Image
+<img id=t src=a.png alt=""> => GenericContainer
+<img id=t src=a.png alt="" title=x> => Image
+<img id=t src=a.png alt="" aria-label=x> => Image
+<img id=t src=a.png alt="" tabindex=0> => Image
+<img id=t src=a.png alt="" role=presentation> => GenericContainer
+<img id=t src=a.png alt=x role=presentation> => GenericContainer
+<img id=t src=a.png alt=x role=none> => GenericContainer
+<img id=t src=a.png alt=x aria-label=y role=none> => Image
+<svg id=t></svg> => SvgRoot
+<svg><g id=t></g></svg> => GenericContainer
+<canvas id=t></canvas> => Canvas
+<audio id=t></audio> => Audio
+<video id=t></video> => Video
+<iframe id=t></iframe> => Iframe
+<embed id=t> => EmbeddedObject
+<object id=t></object> => EmbeddedObject
+<picture id=t></picture> => GenericContainer
+<span id=t role=img></span> => Image
+<span id=t role=image></span> => Image
+
+# --- the role attribute: token lists, invalid and abstract roles, case
+<div id=t role="foo button"></div> => Button
+<div id=t role="button link"></div> => Button
+<div id=t role="  button  "></div> => Button
+<div id=t role="foo"></div> => GenericContainer
+<div id=t role=""></div> => GenericContainer
+<div id=t role=" "></div> => GenericContainer
+<h1 id=t role=foo></h1> => Heading
+<h1 id=t role="foo bar"></h1> => Heading
+<div id=t role=widget></div> => GenericContainer
+<div id=t role=landmark></div> => GenericContainer
+<div id=t role=structure></div> => GenericContainer
+<div id=t role=roletype></div> => GenericContainer
+<div id=t role="widget button"></div> => Button
+<div id=t role=Button></div> => GenericContainer
+<div id=t role=BUTTON></div> => GenericContainer
+<a id=t href=x role=button></a> => Button
+<button id=t role=link></button> => Link
+<li id=t role=menuitem></li> => MenuItem
+<h2 id=t role=tab></h2> => Tab
+
+# --- presentational roles conflict resolution (ARIA 1.2 section 5.4)
+<h1 id=t role=none></h1> => GenericContainer
+<h1 id=t role=presentation></h1> => GenericContainer
+<h1 id=t role=none aria-label=x></h1> => Heading
+<h1 id=t role=none aria-label=""></h1> => Heading
+<h1 id=t role=presentation aria-labelledby=x></h1> => Heading
+<h1 id=t role=presentation aria-describedby=x></h1> => Heading
+<h1 id=t role=none aria-live=polite></h1> => Heading
+<h1 id=t role=none tabindex=0></h1> => Heading
+<h1 id=t role=none tabindex=-1></h1> => Heading
+<h1 id=t role=none tabindex=x></h1> => GenericContainer
+<h1 id=t role=none aria-hidden=true></h1> => GenericContainer
+<h1 id=t role=none data-x=y></h1> => GenericContainer
+<button id=t role=none></button> => Button
+<button id=t role=presentation></button> => Button
+<button id=t role=none disabled></button> => GenericContainer
+<a id=t href=x role=none></a> => Link
+<a id=t role=none></a> => GenericContainer
+<input id=t role=none> => TextInput
+<input id=t role=presentation type=checkbox> => CheckBox
+<div id=t role=none contenteditable></div> => MultilineTextInput
+<fieldset disabled><button id=t role=none></button></fieldset> => GenericContainer
+<h1 id=t role="none button"></h1> => GenericContainer
+<h1 id=t role="none button" aria-label=x></h1> => Heading
+
+# --- ARIA roles on elements with other native roles: the explicit role wins
+<h1 id=t role=button></h1> => Button
+<ul id=t role=menu></ul> => Menu
+<li id=t role=tab></li> => Tab
+<nav id=t role=tablist></nav> => TabList
+<div id=t role=tabpanel></div> => TabPanel
+<input id=t type=checkbox role=switch> => Switch
+<input id=t type=checkbox role=menuitemcheckbox> => MenuItemCheckBox
+<input id=t type=radio role=menuitemradio> => MenuItemRadio
+<input id=t type=text role=spinbutton> => SpinButton
+<span id=t role=progressbar></span> => ProgressIndicator
+<span id=t role=meter></span> => Meter
+<div id=t role=slider></div> => Slider
+<div id=t role=scrollbar></div> => ScrollBar
+<div id=t role=alert></div> => Alert
+<div id=t role=log></div> => Log
+<div id=t role=status></div> => Status
+<div id=t role=timer></div> => Timer
+<div id=t role=tooltip></div> => Tooltip
+<div id=t role=dialog></div> => Dialog
+<div id=t role=alertdialog></div> => AlertDialog
+<div id=t role=tree></div> => Tree
+<div id=t role=treeitem></div> => TreeItem
+<div id=t role=toolbar></div> => Toolbar
+<div id=t role=menubar></div> => MenuBar
+<div id=t role=feed></div> => Feed
+<div id=t role=application></div> => Application
+<div id=t role=document></div> => Document
+<div id=t role=note></div> => Note
+<div id=t role=math></div> => Math
+<div id=t role=marquee></div> => Marquee
+<div id=t role=radiogroup></div> => RadioGroup
+<div id=t role=listbox></div> => ListBox
+<div id=t role=separator></div> => Splitter
+<div id=t role=term></div> => Term
+<div id=t role=definition></div> => Definition
+<div id=t role=blockquote></div> => Blockquote
+<div id=t role=caption></div> => Caption
+<div id=t role=paragraph></div> => Paragraph
+<div id=t role=code></div> => Code
+<div id=t role=emphasis></div> => Emphasis
+<div id=t role=strong></div> => Strong
+<div id=t role=subscript></div> => GenericContainer
+<div id=t role=superscript></div> => GenericContainer
+<div id=t role=deletion></div> => ContentDeletion
+<div id=t role=insertion></div> => ContentInsertion
+<div id=t role=mark></div> => Mark
+<div id=t role=time></div> => Time
+<div id=t role=figure></div> => Figure
+<div id=t role=group></div> => Group
+<div id=t role=contentinfo></div> => ContentInfo
+<div id=t role=complementary></div> => Complementary
+<div id=t role=banner></div> => Banner
+<div id=t role=navigation></div> => Navigation
+<div id=t role=main></div> => Main
+<div id=t role=region></div> => Region
+<div id=t role=search></div> => Search
+<div id=t role=link></div> => Link
+<div id=t role=button></div> => Button
+<div id=t role=checkbox></div> => CheckBox
+<div id=t role=radio></div> => RadioButton
+<div id=t role=switch></div> => Switch
+<div id=t role=spinbutton></div> => SpinButton
+<div id=t role=menu></div> => Menu
+<div id=t role=menuitem></div> => MenuItem
+<div id=t role=tab></div> => Tab
+<div id=t role=tablist></div> => TabList
+
+# --- Digital Publishing and Graphics roles on any element
+<section id=t role=doc-chapter></section> => DocChapter
+<div id=t role=doc-toc></div> => DocToc
+<a id=t href=x role=doc-backlink></a> => DocBackLink
+<a id=t href=x role=doc-noteref></a> => DocNoteRef
+<aside id=t role=doc-footnote></aside> => DocFootnote
+<div id=t role="doc-pagebreak"></div> => DocPageBreak
+<svg id=t role=graphics-document></svg> => GraphicsDocument
+<g id=t role=graphics-symbol></g> => GraphicsSymbol
+<div id=t role="doc-nonsense"></div> => GenericContainer
+<h1 id=t role="doc-nonsense"></h1> => Heading

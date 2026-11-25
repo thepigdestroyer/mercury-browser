@@ -1,0 +1,16 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Frames: srcdoc</title>
+</head>
+<body>
+<h1>Srcdoc parent</h1>
+<p>A screen reader reads the heading "Srcdoc parent", then a frame called "Srcdoc frame" whose
+document comes from the srcdoc attribute: the heading "Srcdoc page" and a button "Srcdoc button".</p>
+<iframe id="frame" title="Srcdoc frame" width="400" height="200"
+  srcdoc="&lt;h1&gt;Srcdoc page&lt;/h1&gt;&lt;button type=&quot;button&quot;&gt;Srcdoc button&lt;/button&gt;"></iframe>
+</body>
+</html>

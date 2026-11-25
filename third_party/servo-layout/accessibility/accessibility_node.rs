@@ -2,7 +2,8 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
-use std::collections::VecDeque;
+// Mercury: a11y-1 item 4: `VecDeque` and `FxHashSet` were only used by the name-from-descendants code
+// that `semantics::update_semantics` replaces.
 use std::fmt::Debug;
 use std::sync::LazyLock;
 
@@ -16,7 +17,7 @@ use layout_api::{
 };
 use log::trace;
 use num_traits::ToPrimitive;
-use rustc_hash::{FxHashMap, FxHashSet};
+use rustc_hash::FxHashMap;
 use script::layout_dom::{ServoLayoutElement, ServoLayoutNode};
 use servo_base::print_tree::PrintTree;
 use servo_config::pref;
@@ -26,6 +27,8 @@ use web_atoms::{LocalName, local_name, ns};
 use webrender_api::units::LayoutVector2D;
 
 use super::accessibility_tree::{AccessibilityTree, AccessibilityUpdate, TreeChange};
+// Mercury: a11y-1 item 4: roles, names, states and relations are computed in `semantics.rs`.
+use super::{dom_adapter, semantics};
 use crate::ArcRefCell;
 use crate::accessibility::AccessibilityContext;
 use crate::cell::WeakRefCell;
@@ -100,6 +103,14 @@ pub(super) struct AccessibilityNode {
     scroll_offset: Option<LayoutVector2D>,
     /// Any dirty state for the current update.
     dirty_state: DirtyState,
+    // Mercury: a11y-1 item 4: a node is hidden when layout hides it (`display: none`) or its semantics
+    // do (`aria-hidden`, `inert`, `visibility: hidden`); two flags, so that one does not clear the other.
+    layout_hidden: bool,
+    semantic_hidden: bool,
+    // Mercury: a11y-1 item 4: what the node's `id` (and, for a `<label>`, `for`) were when its semantics
+    // were last computed, so that a change tells `semantics::apply_followups` that elements which
+    // referred to the old value must be computed again.
+    id_signature: Option<Box<str>>,
 }
 
 impl AccessibilityNode {
@@ -116,6 +127,9 @@ impl AccessibilityNode {
             opaque_node: None,
             scroll_offset: None,
             dirty_state: DirtyState::empty(),
+            layout_hidden: false,   // Mercury: a11y-1 item 4
+            semantic_hidden: false, // Mercury: a11y-1 item 4
+            id_signature: None,     // Mercury: a11y-1 item 4
         }
     }
 
@@ -142,13 +156,26 @@ impl AccessibilityNode {
         let mut local_damage = LocalAccessibilityDamage::empty();
 
         let dom_node = update.take_dom_node(&self.id);
-        let damage = update.take_damage(&self.id) | damage_from_parent;
+        let mut damage = update.take_damage(&self.id) | damage_from_parent; // Mercury: a11y-1 item 4: `mut`
         let mut children_changed = false;
 
         if let Some(dom_node) = dom_node {
             local_damage.insert(self.update_properties_and_children_from_dom_node(
                 &ref_self, &dom_node, damage, tree, update,
             ));
+            // Mercury: a11y-1 item 4: a node that is no longer hidden by its semantics has no bounds
+            // yet (they are not computed in a hidden subtree), nor have its descendants: treat it as
+            // having layout damage. `update_properties_and_children_from_dom_node` already walked the
+            // children for the same reason.
+            if local_damage.contains(LocalAccessibilityDamage::VisibilityChanged) &&
+                !self.is_hidden()
+            {
+                damage |= AccessibilityDamage::Layout;
+            }
+            // Mercury: a11y-1 item 4: other nodes' names may depend on this node's children.
+            if local_damage.contains(LocalAccessibilityDamage::SubtreeChanged) {
+                update.semantics.note_children_changed(dom_node);
+            }
             local_damage
                 .insert(self.update_node_from_layout(&dom_node, damage, hidden, context, update));
 
@@ -232,7 +259,7 @@ impl AccessibilityNode {
         &mut self,
         ref_self: &ArcRefCell<Self>,
         dom_node: &ServoLayoutNode<'update>,
-        dom_damage: AccessibilityDamage,
+        mut dom_damage: AccessibilityDamage, // Mercury: a11y-1 item 4: `mut`
         tree: &mut AccessibilityTree,
         update: &mut AccessibilityUpdate<'update>,
     ) -> LocalAccessibilityDamage {
@@ -254,7 +281,14 @@ impl AccessibilityNode {
         update.counters.nodes_updated_from_dom += 1;
 
         if dom_damage.intersects(AccessibilityDamage::Node) {
-            local_damage.insert(self.update_properties_from_dom_node(dom_node));
+            // Mercury: a11y-1 item 4: the semantics need the tree (relations) and the update (the id index).
+            local_damage.insert(self.update_properties_from_dom_node(dom_node, tree, update));
+        }
+
+        // Mercury: a11y-1 item 4: a node that stopped being hidden by its semantics needs its
+        // children and their bounds again (see `update_subtree`).
+        if local_damage.contains(LocalAccessibilityDamage::VisibilityChanged) && !self.is_hidden() {
+            dom_damage |= AccessibilityDamage::Layout;
         }
 
         if dom_damage.intersects(AccessibilityDamage::Children | AccessibilityDamage::Layout) {
@@ -276,7 +310,8 @@ impl AccessibilityNode {
         tree: &mut AccessibilityTree,
         update: &mut AccessibilityUpdate<'update>,
     ) -> LocalAccessibilityDamage {
-        let mut remaining_dom_children = dom_node.flat_tree_children().peekable();
+        // Mercury: a11y-1 item 4: an `<iframe>` has no children here: its node is a graft.
+        let mut remaining_dom_children = dom_adapter::flat_children(dom_node).peekable();
         let mut old_child_ids = self.child_ids().iter().peekable();
 
         // Iterate over existing children and DOM children while they match. No action is necessary
@@ -345,12 +380,17 @@ impl AccessibilityNode {
     }
 
     /// Update this node's properties from its corresponding DOM node.
-    fn update_properties_from_dom_node(
+    // Mercury: a11y-1 item 4: takes the tree and the update, which `semantics::update_semantics` needs.
+    fn update_properties_from_dom_node<'update>(
         &mut self,
-        dom_node: &ServoLayoutNode,
+        dom_node: &ServoLayoutNode<'update>,
+        tree: &mut AccessibilityTree,
+        update: &mut AccessibilityUpdate<'update>,
     ) -> LocalAccessibilityDamage {
         let mut local_damage = LocalAccessibilityDamage::empty();
-        local_damage.insert(self.set_role(role_from_dom_node(dom_node)));
+        // Mercury: a11y-1 item 4: role, name, description, states, value, relations and actions come
+        // from `mercury_a11y` (was: `self.set_role(role_from_dom_node(dom_node))`).
+        local_damage.insert(semantics::update_semantics(self, dom_node, tree, update));
         if dom_node.type_id() == Some(LayoutNodeType::Text) {
             let text_content = dom_node.text_content();
             trace!("node text content = {text_content:?}");
@@ -439,50 +479,20 @@ impl AccessibilityNode {
         local_damage: LocalAccessibilityDamage,
         update: &mut AccessibilityUpdate,
     ) -> LocalAccessibilityDamage {
-        let mut new_damage = LocalAccessibilityDamage::empty();
+        let new_damage = LocalAccessibilityDamage::empty(); // Mercury: a11y-1 item 4: no longer `mut`
         if local_damage.is_empty() {
             return new_damage;
         }
         update.counters.nodes_updated_from_tree += 1;
 
-        if local_damage.contains(LocalAccessibilityDamage::SubtreeChanged) ||
-            local_damage.contains(LocalAccessibilityDamage::RoleChanged)
-        {
-            if let Some(text) = self.label_from_descendants() {
-                new_damage.insert(self.set_label(text.as_str()));
-            } else {
-                new_damage.insert(self.clear_label());
-            }
-        }
+        // Mercury: a11y-1 item 4: upstream recomputed the name of a heading or link here from its
+        // descendants' text runs when the subtree or the role changed. Names are computed from the
+        // DOM now (`semantics::update_semantics`), and `semantics::apply_followups` recomputes the
+        // nodes whose name depends on a node that changed (an ancestor that names itself from its
+        // content, a control and its `<label>`, ...). Removed: `label_from_descendants`,
+        // `NAME_FROM_CONTENTS_ROLES`, `set_label`, `clear_label` and `value`.
 
         new_damage
-    }
-
-    fn label_from_descendants(&self) -> Option<String> {
-        if !NAME_FROM_CONTENTS_ROLES.contains(&self.role()) {
-            return None;
-        }
-        let mut children = VecDeque::from_iter(self.children().cloned());
-        let mut text = String::new();
-        while let Some(child) = children.pop_front() {
-            let child = child.borrow();
-            if child.is_hidden() {
-                continue;
-            }
-            match child.role() {
-                Role::TextRun => {
-                    if let Some(child_text) = child.value() {
-                        text.push_str(child_text);
-                    }
-                },
-                _ => {
-                    for node in child.children().rev() {
-                        children.push_front(node.clone());
-                    }
-                },
-            }
-        }
-        Some(text.trim().to_owned())
     }
 
     pub(super) fn print(&self, print_tree: &mut PrintTree, tree: &AccessibilityTree) {
@@ -594,22 +604,31 @@ impl AccessibilityNode {
         self.accesskit_node.label()
     }
 
-    fn set_label(&mut self, label: &str) -> LocalAccessibilityDamage {
-        if Some(label) == self.accesskit_node.label() {
-            return LocalAccessibilityDamage::empty();
-        }
-        self.accesskit_node.set_label(label);
-        self.dirty_state |= DirtyState::Updated;
-        LocalAccessibilityDamage::TextChanged
+    // Mercury: a11y-1 item 4: `set_label` and `clear_label` are removed (the name is part of the node
+    // that `semantics::update_semantics` computes); `accesskit_node` and `replace_accesskit_node` below
+    // are how it reads and replaces that node.
+
+    /// Remember the `id`/`for` signature of the DOM node. Returns whether the node had one before and it
+    /// is different now (the node lost an id that other elements may have referred to).
+    pub(super) fn replace_id_signature(&mut self, signature: Option<String>) -> bool {
+        let changed = self
+            .id_signature
+            .as_deref()
+            .is_some_and(|old| Some(old) != signature.as_deref());
+        self.id_signature = signature.map(String::into_boxed_str);
+        changed
     }
 
-    fn clear_label(&mut self) -> LocalAccessibilityDamage {
-        if self.accesskit_node.label().is_none() {
-            return LocalAccessibilityDamage::empty();
-        }
-        self.accesskit_node.clear_label();
+    /// The accesskit node as it is now.
+    pub(super) fn accesskit_node(&self) -> &accesskit::Node {
+        &self.accesskit_node
+    }
+
+    /// Replace the accesskit node with a computed one (see `semantics::merge_computed`, which keeps
+    /// the children, bounds, transform and hidden flag this node owns).
+    pub(super) fn replace_accesskit_node(&mut self, accesskit_node: accesskit::Node) {
+        self.accesskit_node = accesskit_node;
         self.dirty_state |= DirtyState::Updated;
-        LocalAccessibilityDamage::TextChanged
     }
 
     fn html_tag(&self) -> Option<&str> {
@@ -622,10 +641,6 @@ impl AccessibilityNode {
         }
         self.accesskit_node.set_html_tag(html_tag);
         self.dirty_state |= DirtyState::Updated;
-    }
-
-    fn value(&self) -> Option<&str> {
-        self.accesskit_node.value()
     }
 
     fn set_value(&mut self, value: &str) -> LocalAccessibilityDamage {
@@ -641,21 +656,36 @@ impl AccessibilityNode {
         self.accesskit_node.is_hidden()
     }
 
+    // Mercury: a11y-1 item 4: layout's `display: none` and the semantics' hide are two flags and the
+    // node is hidden when either is set, so that `clear_hidden` (layout says visible) never clears a
+    // hide that `aria-hidden` or `inert` asked for.
     fn set_hidden(&mut self) -> LocalAccessibilityDamage {
-        if self.is_hidden() {
-            return LocalAccessibilityDamage::empty();
-        }
-        self.accesskit_node.set_hidden();
-        self.dirty_state |= DirtyState::Updated;
-        LocalAccessibilityDamage::VisibilityChanged
+        self.layout_hidden = true;
+        self.sync_hidden()
     }
 
     fn clear_hidden(&mut self) -> LocalAccessibilityDamage {
-        if !self.is_hidden() {
+        self.layout_hidden = false;
+        self.sync_hidden()
+    }
+
+    /// Set whether the node's semantics hide it (`aria-hidden`, `inert`, `visibility: hidden`, ...).
+    pub(super) fn set_semantic_hidden(&mut self, hidden: bool) -> LocalAccessibilityDamage {
+        self.semantic_hidden = hidden;
+        self.sync_hidden()
+    }
+
+    /// Make the accesskit node's hidden flag the OR of the two flags.
+    fn sync_hidden(&mut self) -> LocalAccessibilityDamage {
+        let hidden = self.layout_hidden || self.semantic_hidden;
+        if hidden == self.is_hidden() {
             return LocalAccessibilityDamage::empty();
         }
-
-        self.accesskit_node.clear_hidden();
+        if hidden {
+            self.accesskit_node.set_hidden();
+        } else {
+            self.accesskit_node.clear_hidden();
+        }
         self.dirty_state |= DirtyState::Updated;
         LocalAccessibilityDamage::VisibilityChanged
     }
@@ -756,6 +786,9 @@ impl Debug for AccessibilityNode {
 }
 
 /// <https://w3c.github.io/aria/#host_general_role>
+// Mercury: a11y-1 item 4: superseded by `mercury_a11y::roles`, kept so that the upstream text stays
+// diffable until servo#46241 lands.
+#[allow(dead_code)]
 fn role_from_role_attribute(dom_element: &ServoLayoutElement<'_>) -> Option<Role> {
     let role_attribute = dom_element.attribute(&ns!(), &local_name!("role"))?;
     role_attribute
@@ -767,6 +800,7 @@ fn role_from_role_attribute(dom_element: &ServoLayoutElement<'_>) -> Option<Role
         .cloned()
 }
 
+#[allow(dead_code)] // Mercury: a11y-1 item 4: see `role_from_role_attribute`.
 fn role_from_dom_node(dom_node: &ServoLayoutNode<'_>) -> Role {
     if let Some(dom_element) = dom_node.as_element() {
         role_from_role_attribute(&dom_element).unwrap_or_else(|| {
@@ -837,6 +871,7 @@ impl DirtyState {
     }
 }
 
+#[allow(dead_code)] // Mercury: a11y-1 item 4: see `role_from_role_attribute`.
 static HTML_ELEMENT_ROLE_MAPPINGS: LazyLock<FxHashMap<LocalName, Role>> = LazyLock::new(|| {
     [
         // FIXME: only a with href!
@@ -861,6 +896,5 @@ static HTML_ELEMENT_ROLE_MAPPINGS: LazyLock<FxHashMap<LocalName, Role>> = LazyLo
     .collect()
 });
 
-/// <https://w3c.github.io/aria/#namefromcontent>
-static NAME_FROM_CONTENTS_ROLES: LazyLock<FxHashSet<Role>> =
-    LazyLock::new(|| [(Role::Heading), (Role::Link)].into_iter().collect());
+// Mercury: a11y-1 item 4: `NAME_FROM_CONTENTS_ROLES` is removed; `accname` decides which roles take
+// their name from their content (see `semantics.rs`).

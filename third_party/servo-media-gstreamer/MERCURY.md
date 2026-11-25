@@ -30,3 +30,55 @@ It is part of the media-capture patch described in
    typed `property` panics when given a string for them. It panicked the script
    thread (a crashed tab) as soon as a capture stream was shown in a `<video>`.
    Found by the fake-device runs.
+
+## Backports from post-0.8 Servo (lane med-1, EA0)
+
+Three small fixes from merged upstream pull requests, applied unchanged apart from a `Mercury:` marker
+comment at each (they apply cleanly to 0.8.0 and fall away at the next Servo bump):
+
+4. **`player.rs`, servo/servo#49784:** the `GstPlay` signal handlers and the `source-setup` closure hold
+   weak references to the player's inner state and to the `ServoSrc`, a new `seek_lock` field lets teardown
+   release a `seek_data` that is blocked waiting for the script thread, and `Drop for GStreamerPlayer`
+   disposes the `GstPlay` from the dropping thread (so its thread is joined there) and checks that nothing
+   else holds it. Fixes crashes and hangs when a media element is torn down while GStreamer is still posting
+   messages (it matters more once a second source type, MSE, exists).
+5. **`player.rs`, servo/servo#49889:** progressive download is attempted only when the user cache directory
+   can be created (`ensure_download_directory`; Windows is no longer excluded, upstream issue #43421 for
+   Android), and a duration that arrives together with the metadata is reported as `DurationChanged` (the
+   two GstPlay signals have no guaranteed order).
+6. **`render.rs`, servo/servo#49661:** a frame whose rows are padded (VideoToolbox aligns them) is copied
+   row by row into a packed buffer, so the consumer of `VideoFrame` sees the picture it expects. Reads the
+   stride from the mapped frame, not from the caps.
+
+## Media Source Extensions glue (lane med-1, MSE by Plan B)
+
+MSE is Mercury's own code, not GStreamer's `mse` plugin (the spike said no, R17): `crates/mercury-mse`
+holds the parsers, the coded-frame processing, the track buffers and the MediaSource model, and
+`crates/mercury-mse-gst` holds `MseSrc`, a source element (a `GstBin` with one `appsrc` per track) registered
+as the URI handler of `mercury-mse://`. This crate only connects them to Servo's player. `Cargo.toml` gains
+path dependencies on both crates. Everything new is in `mercury_mse.rs`; the hooks in upstream files are:
+
+7. **`mercury_mse.rs` (new file):** `register()` (the element and its URI handler; a failure is logged and
+   leaves MSE unsupported), `create_media_source(events)` (an `MseBackend` whose `EventSink` sends on the
+   `GenericCallback`, with `GstTypeSupport`, the default quota `Limits` and one 1 GiB memory budget shared by every MediaSource of the
+   process), `is_type_supported(mime)`,
+   `uri_for(player id)` and `attach(source element, backend)`.
+8. **`lib.rs`:** `mod mercury_mse`, `register()` after the plugins are loaded, and the two `Backend`
+   methods `create_media_source` and `is_type_supported_mse`.
+9. **`player.rs`:** `StreamType::MediaSource` builds the same `playbin3` with `uri=mercury-mse://<id>` and
+   no download buffering; the `source-setup` closure attaches the feed (`mercury_mse::attach`) and releases
+   the caller of `setup` (there is no `need-data` to wait for before the page appends anything);
+   `Player::connect_media_source` stores the backend and runs `setup`, so it must come first; `seek` and
+   `set_playback_rate` accept the new stream type (the duration check in `seek` is skipped for it: the
+   MediaSource owns the duration); `push_data` is never used. A seek of a MediaSource player goes
+   through `mercury_mse::SeekHold` (`seek_hold`; its tests are in the crate): `GstPlay` drops a seek before it
+   has media info and `playbin3` refuses one until its first buffer has arrived, so the seek is held and sent
+   with the first seekable metadata (the backend's `seeking` points the feed at the target, so that buffer
+   comes), freed when the pipeline settles (Paused, Playing) if it never said "seekable" (`SeekDone` is then
+   reported, so the element's seek ends), and given to `GstPlay` only after the player's lock is released
+   (`run_seek_decision`). Hunks are marked `Mercury: (MED-1)`.
+
+Tested by `mercury-mse` and `mercury-mse-gst`'s own suites (light pool, no Servo). The Servo-side glue
+compiles (`cargo check -p servo-media-gstreamer`) and has **not been run in a window** (the screen was locked);
+`tests/pages/mse-*.html` and `docs/developer-guide/media-source.md` say how to run it. Dropped when a Servo
+release has its own MSE (servo/servo#44403) and Mercury moves to it.

@@ -44,8 +44,9 @@ pub const LAYOUT_CLASSIC: &str = "classic";
 pub const LAYOUT_IDS: [&str; 2] = [LAYOUT_MERCURY, LAYOUT_CLASSIC];
 /// The layout of a profile that does not name one.
 pub const DEFAULT_LAYOUT: &str = LAYOUT_MERCURY;
-/// The palette (for both colour schemes) of a profile that does not name one.
-pub const DEFAULT_PALETTE: &str = "mercury-b2";
+/// The palette (for both colour schemes) of a profile that does not name one: Signal, since the
+/// owner's choice of 22 Nov 2026. `mercury-appearance` checks that it exists and can be chosen.
+pub const DEFAULT_PALETTE: &str = "signal";
 /// The longest palette id, in bytes.
 pub const MAX_PALETTE_ID_BYTES: usize = 64;
 

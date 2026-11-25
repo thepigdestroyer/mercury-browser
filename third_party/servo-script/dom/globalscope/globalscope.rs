@@ -40,6 +40,7 @@ use net_traits::filemanager_thread::{
 };
 use net_traits::image_cache::ImageCache;
 use net_traits::policy_container::PolicyContainer;
+use net_traits::pub_domains::Site;
 use net_traits::request::{
     InsecureRequestsPolicy, Origin as RequestOrigin, Referrer, RequestBuilder, RequestClient,
 };
@@ -122,6 +123,7 @@ use crate::dom::globalscope::listeners::{
 };
 use crate::dom::idbfactory::IDBFactory;
 use crate::dom::messageport::MessagePort;
+use crate::dom::mse::mediasource::MediaSource; // Mercury: (MED-1)
 use crate::dom::paintworkletglobalscope::PaintWorkletGlobalScope;
 use crate::dom::performance::performance::Performance;
 use crate::dom::performance::performanceentry::EntryType;
@@ -183,6 +185,15 @@ pub(crate) struct GlobalScope {
 
     /// The blobs managed by this global, if any.
     blob_state: DomRefCell<HashMapTracedValues<BlobId, BlobInfo, FxBuildHasher>>,
+
+    /// Mercury: (MED-1) carried from servo/servo#47269 (decomoraes), MPL-2.0.
+    /// The media source object URLs created by this global, keyed by their serialization.
+    ///
+    /// A `MediaSource` never leaves the thread that created it, so unlike blob URLs these
+    /// entries cannot live in the file manager.
+    ///
+    /// <https://w3c.github.io/media-source/#dfn-media-source-object-url>
+    media_source_url_store: DomRefCell<HashMapTracedValues<String, Dom<MediaSource>, FxBuildHasher>>,
 
     /// <https://w3c.github.io/ServiceWorker/#environment-settings-object-service-worker-registration-object-map>
     registration_map: DomRefCell<
@@ -411,6 +422,7 @@ impl GlobalScope {
             broadcast_channel_state: DomRefCell::new(BroadcastChannelState::UnManaged),
             constellation_interest_counts: Default::default(),
             blob_state: Default::default(),
+            media_source_url_store: Default::default(), // Mercury: (MED-1)
             eventtarget: EventTarget::new_inherited(),
             registration_map: DomRefCell::new(HashMapTracedValues::new_fx()),
             indexeddb: Default::default(),
@@ -1485,6 +1497,29 @@ impl GlobalScope {
         self.blob_state.borrow_mut().insert(blob_id, blob_info);
     }
 
+    /// Mercury: (MED-1) <https://w3c.github.io/media-source/#dom-url-createobjecturl>
+    pub(crate) fn track_media_source_url(&self, url: String, media_source: &MediaSource) {
+        self.media_source_url_store
+            .borrow_mut()
+            .insert(url, Dom::from_ref(media_source));
+    }
+
+    /// Mercury: (MED-1) <https://w3c.github.io/media-source/#dfn-media-source-object-url>
+    pub(crate) fn media_source_for_url(&self, url: &str) -> Option<DomRoot<MediaSource>> {
+        self.media_source_url_store
+            .borrow()
+            .get(url)
+            .map(|media_source| DomRoot::from_ref(&**media_source))
+    }
+
+    /// Mercury: (MED-1) <https://w3c.github.io/FileAPI/#dfn-revokeObjectURL>
+    pub(crate) fn forget_media_source_url(&self, url: &str) -> bool {
+        self.media_source_url_store
+            .borrow_mut()
+            .remove(url)
+            .is_some()
+    }
+
     /// Start tracking a blob
     pub(crate) fn track_blob(&self, dom_blob: &Blob, blob_impl: BlobImpl) {
         let blob_id = blob_impl.blob_id();
@@ -2312,8 +2347,24 @@ impl GlobalScope {
             is_nested_browsing_context: false,
             insecure_requests_policy: self.insecure_requests_policy(),
             has_trustworthy_ancestor_origin: false,
-            network_partition_key: None,
+            // Mercury: a worker's key is the one of the document that created it (net-1 review, finding 1).
+            network_partition_key: self.network_partition_key(),
+            browser_initiated_navigation: false,
         }
+    }
+
+    // Mercury: the top-level site that requests of this global carry as their network partition key: the
+    // document's for a window, the creator's for a worker. A worklet global scope has none (its module
+    // fetches carry the document's key themselves, see `worklet.rs`), and a request without a key is third
+    // party in the network layer.
+    pub(crate) fn network_partition_key(&self) -> Option<Site> {
+        if let Some(window) = self.downcast::<Window>() {
+            return window.Document().determine_the_network_partition_key();
+        }
+        if let Some(worker) = self.downcast::<WorkerGlobalScope>() {
+            return worker.network_partition_key();
+        }
+        None
     }
 
     /// <https://html.spec.whatwg.org/multipage/#concept-settings-object-policy-container>

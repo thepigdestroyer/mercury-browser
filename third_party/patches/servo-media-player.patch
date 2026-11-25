@@ -1,3 +1,65 @@
 # Mercury's changes to servo-media-player 0.8.0, against the crate as published on crates.io
 # (SHA-256 fd072c0c9456f27cd17e9b3a752bf3a6e570468e806bc7d085d1a521e76f9083). Written by `mercury-servo-patches export`; do not edit by hand.
 # The changed files stay under the licence of servo-media-player.
+diff --git a/Cargo.toml b/Cargo.toml
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -39,6 +39,14 @@
+ [dependencies.malloc_size_of_derive]
+ version = "0.1"
+
++# Mercury: (MED-1) the contract of Mercury's Media Source Extensions backend (`MediaSourceBackend`,
++# `MseEvent`, `MseError`) lives in the workspace crate crates/mercury-mse, which has no Servo or
++# GStreamer dependency. A vendored crate depending on a workspace member is the allowed direction
++# (the reverse would be formatted by `cargo fmt --all`; see docs/developer-guide/vendored-patches.md).
++[dependencies.mercury-mse]
++path = "../../crates/mercury-mse"
++version = ">=0.2.0"
++
+ [dependencies.serde]
+ version = "1.0.228"
+ features = ["derive"]
+diff --git a/lib.rs b/lib.rs
+--- a/lib.rs
++++ b/lib.rs
+@@ -13,6 +13,11 @@
+ pub mod metadata;
+ pub mod video;
+
++// Mercury: (MED-1) the Media Source Extensions contract, `MediaSourceBackend`, `MseEvent`, `MseError`,
++// `FrameFeed` and the rest of crates/mercury-mse, re-exported so that servo-media, servo-media-gstreamer
++// and the script crate name it through the player crate they already depend on.
++pub use mercury_mse as mse;
++
+ use serde::{Deserialize, Serialize};
+ use servo_base::generic_channel::{self, GenericSender};
+ use servo_media_traits::MediaInstance;
+@@ -94,6 +99,10 @@
+     Stream,
+     /// The stream is seekable.
+     Seekable,
++    /// Mercury: (MED-1) the data comes from a MediaSource (Media Source Extensions): the player pulls
++    /// coded frames from the source's feed (`Player::connect_media_source`) instead of being pushed
++    /// bytes (`push_data` is never used). It is seekable.
++    MediaSource,
+ }
+
+ pub trait Player: Send + MediaInstance {
+@@ -131,4 +140,17 @@
+     fn render_use_gl(&self) -> bool;
+     fn set_audio_track(&self, stream_index: i32, enabled: bool) -> Result<(), PlayerError>;
+     fn set_video_track(&self, stream_index: i32, enabled: bool) -> Result<(), PlayerError>;
++    /// Mercury: (MED-1) connects the player to the MediaSource backend whose frames it plays. It must
++    /// be the first call on a player created with `StreamType::MediaSource` (the pipeline is built by
++    /// it); a player of another stream type, or one already set up, refuses it. A default body keeps
++    /// the backends that know nothing of MSE (the dummy one) compiling.
++    fn connect_media_source(
++        &self,
++        source: std::sync::Arc<dyn mse::MediaSourceBackend>,
++    ) -> Result<(), PlayerError> {
++        let _ = source;
++        Err(PlayerError::Backend(
++            "this media backend cannot play a MediaSource".to_owned(),
++        ))
++    }
+ }

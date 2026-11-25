@@ -10,7 +10,10 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 use serde_json::Value;
 
 /// The crates that make a workspace member heavy when anything in its closure depends on them.
-pub const HEAVY: [&str; 2] = ["servo", "slint"];
+/// `gstreamer` is one because the fast CI jobs install no GStreamer: a member that links it (the
+/// MSE source element `mercury-mse-gst`) cannot be built or tested there, and its tests need the
+/// bundled plugins, so it belongs to the jobs that have them.
+pub const HEAVY: [&str; 3] = ["servo", "slint", "gstreamer"];
 
 /// The `manifest_path` of every package called `name`, in the order cargo lists them.
 pub fn manifest_paths(metadata: &str, name: &str) -> Result<Vec<String>, String> {
@@ -148,16 +151,19 @@ mod tests {
     }
 
     /// Members `app` (through `ui` on slint and, through a dev-dependency, on servo), `ui`
-    /// (slint), `core` and `tools` (light; `tools` depends on `core`), and an unrelated cycle.
+    /// (slint), `media` (gstreamer, through `gstreamer-app`), `core` and `tools` (light; `tools`
+    /// depends on `core`), and an unrelated cycle.
     const GRAPH: &str = r#"{
         "packages": [
             {"id": "app 0.1", "name": "app"}, {"id": "ui 0.1", "name": "ui"},
             {"id": "core 0.1", "name": "core"}, {"id": "tools 0.1", "name": "tools"},
             {"id": "slint 1.17", "name": "slint"}, {"id": "servo 0.8", "name": "servo"},
             {"id": "servo-media 0.8", "name": "servo-media"},
+            {"id": "media 0.1", "name": "media"}, {"id": "gstreamer-app 0.25", "name": "gstreamer-app"},
+            {"id": "gstreamer 0.25", "name": "gstreamer"},
             {"id": "a 1", "name": "a"}, {"id": "b 1", "name": "b"}
         ],
-        "workspace_members": ["ui 0.1", "app 0.1", "tools 0.1", "core 0.1"],
+        "workspace_members": ["ui 0.1", "app 0.1", "tools 0.1", "core 0.1", "media 0.1"],
         "resolve": {"nodes": [
             {"id": "app 0.1", "deps": [{"pkg": "ui 0.1"}, {"pkg": "a 1"}]},
             {"id": "ui 0.1", "deps": [{"pkg": "slint 1.17"}]},
@@ -165,6 +171,9 @@ mod tests {
             {"id": "b 1", "deps": [{"pkg": "a 1"}, {"pkg": "servo 0.8"}]},
             {"id": "tools 0.1", "deps": [{"pkg": "core 0.1"}, {"pkg": "servo-media 0.8"}]},
             {"id": "core 0.1", "deps": []},
+            {"id": "media 0.1", "deps": [{"pkg": "core 0.1"}, {"pkg": "gstreamer-app 0.25"}]},
+            {"id": "gstreamer-app 0.25", "deps": [{"pkg": "gstreamer 0.25"}]},
+            {"id": "gstreamer 0.25", "deps": []},
             {"id": "slint 1.17", "deps": []}, {"id": "servo 0.8", "deps": []},
             {"id": "servo-media 0.8", "deps": []}
         ]}
@@ -179,6 +188,7 @@ mod tests {
             [
                 "app                      heavy (depends on servo and slint)",
                 "core                     light",
+                "media                    heavy (depends on gstreamer)",
                 "tools                    light",
                 "ui                       heavy (depends on slint)",
             ]

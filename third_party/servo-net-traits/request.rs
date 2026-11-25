@@ -232,6 +232,13 @@ pub struct RequestClient {
     pub has_trustworthy_ancestor_origin: bool,
     /// <https://fetch.spec.whatwg.org/#determining-the-network-partition-key>
     pub network_partition_key: NetworkPartitionKey,
+    // Mercury: true only for a navigation that the browser started (a typed address, a reload, a history
+    // traversal, WebDriver) and not one that a script started. The network policy uses it for SameSite: a
+    // script that navigates from an opaque origin (a sandboxed frame, a `data:` document) has the same opaque
+    // client origin as the browser and must not count as the user (net-1 review, finding 2). Set only by
+    // `servo-script/navigation.rs`; every other client is false.
+    /// Whether the browser itself, and not a script, started this navigation.
+    pub browser_initiated_navigation: bool,
 }
 
 /// <https://html.spec.whatwg.org/multipage/#system-visibility-state>

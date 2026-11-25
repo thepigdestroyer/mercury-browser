@@ -17,6 +17,7 @@ use http::header;
 use js::context::JSContext;
 use net_traits::blob_url_store::UrlWithBlobClaim;
 use net_traits::fetch::fetch_controller::FetchController;
+use net_traits::pub_domains::Site;
 use net_traits::request::{
     CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
     RequestBuilder, RequestClient, RequestMode,
@@ -219,7 +220,15 @@ impl InProgressLoad {
         self.webview_state.id
     }
 
-    pub(crate) fn request_builder(&mut self) -> RequestBuilder {
+    // Mercury: `network_partition_key` is the top-level site of the frame that is being loaded, found by the
+    // script thread from the parent document (`None` for a top-level load, which is first party by
+    // construction in the network layer, and for a parent that this script thread cannot see). Before, a nested
+    // navigation had no key and the network thread guessed it from its own record of the web view (net-1
+    // review, finding 1).
+    pub(crate) fn request_builder(
+        &mut self,
+        network_partition_key: Option<Site>,
+    ) -> RequestBuilder {
         let client_origin = match self.load_data.load_origin {
             LoadOrigin::Script(ref initiator_origin) => initiator_origin.immutable().clone(),
             _ => ImmutableOrigin::new_opaque(),
@@ -240,7 +249,10 @@ impl InProgressLoad {
             is_nested_browsing_context: self.parent_info.is_some(),
             insecure_requests_policy,
             has_trustworthy_ancestor_origin: self.load_data.has_trustworthy_ancestor_origin,
-            network_partition_key: None,
+            network_partition_key,
+            // Mercury: only a load that did not come from a script is the browser's own (a typed address, a
+            // reload, a history traversal, WebDriver); see `RequestClient::browser_initiated_navigation`.
+            browser_initiated_navigation: !matches!(self.load_data.load_origin, LoadOrigin::Script(_)),
         };
 
         let mut request_builder = RequestBuilder::new(

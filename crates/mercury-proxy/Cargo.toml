@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-proxy"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Where Mercury's proxy settings come from, with no engine inside: the system's settings as
+# plain data (`system.rs`, moved here from talaria-servo), the choice between them and the
+# `http_proxy`, `https_proxy` and `no_proxy` environment variables that Servo makes too, and the
+# one function that gives any reqwest client the same settings Servo got. talaria-servo takes the
+# choice for Servo's preferences; every reqwest client in Mercury calls `apply_process_proxy`.
+
+[dependencies]
+reqwest.workspace = true

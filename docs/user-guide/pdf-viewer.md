@@ -72,7 +72,11 @@ has to open the file again later, it asks again. A wrong password says so and le
 
 ## Where the file goes
 
-Mercury fetches the PDF again for the viewer, with the same cookies as the page, and keeps it in a
+Mercury fetches the PDF again for the viewer, with the same cookies as the page and through the
+same proxy (the one in your Mac's network settings, or the `http_proxy`, `https_proxy` and
+`no_proxy` environment variables, which win), so the file is requested from the address your proxy
+shows and not from your own. If a PDF's server needed an exception for its certificate, the second
+fetch does not use it: the PDF is not opened and the downloads list says why. Mercury keeps it in a
 private folder inside your Mercury profile that only you can read. That fetch is not listed as a
 download, and it stops at 512 MiB, the largest file the viewer opens: a PDF that is bigger, or a
 server that never stops sending, is not opened, and the downloads list says "The PDF could not be
@@ -107,9 +111,10 @@ Without the PDF library (some development builds), PDFs go to the system's PDF a
 
 Each open PDF is shown by a separate helper program, so a PDF that crashes the viewer cannot crash
 the browser or take another tab with it. To keep memory low, at most four PDFs keep their helper
-running: the one in a tab you have not looked at for longest lets go of it, and opens again, at the
-same place and zoom, when you come back to the tab. A PDF in a background tab is not opened until
-you first show its tab.
+running: the one in a tab you have not looked at for longest lets go of it, together with the page
+pictures, text and links it was holding in memory (up to about 150 MB for a PDF you read through),
+and opens again, at the same place and zoom, when you come back to the tab. A PDF in a background
+tab is not opened until you first show its tab.
 
 If the helper stops (a damaged file can do that), the viewer says "The PDF viewer stopped working
 on this file" and offers **Try again**, **Save a copy** and **Open in Preview**. Mercury never

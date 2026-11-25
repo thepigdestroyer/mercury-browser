@@ -57,6 +57,8 @@ mod read;
 mod search;
 mod session;
 mod settings;
+// sh-pages
+mod site_images;
 mod store;
 
 pub use appearance::{
@@ -83,6 +85,11 @@ pub use settings::{
     MAX_ZOOM_PERCENT, MIN_ZOOM_PERCENT, PasswordSettings, PdfAction, PrivacySettings, Repair,
     SearchSettings, Settings, StartupBehavior, Theme, WebSettings, canonical_origin, homepage_url,
     is_plausible_language_tag,
+};
+// sh-pages
+pub use site_images::{
+    MAX_SITE_IMAGE_HOSTS, MAX_SITE_IMAGES_FILE_BYTES, SITE_IMAGES_FORMAT_VERSION, SiteImagesFile,
+    SiteImagesStore,
 };
 pub use store::{
     Loaded, MAX_SESSION_FILE_BYTES, MAX_SETTINGS_FILE_BYTES, PreviousSession,

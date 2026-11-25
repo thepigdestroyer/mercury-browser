@@ -3685,8 +3685,6 @@ dependencies = [
 [[package]]
 name = "servo-storage-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e74add8ac3dcd4bd29c91f6f06e4aaeb9d047e903d74d3324d4dbfe8d3447640"
 dependencies = [
  "malloc_size_of_derive",
  "serde",

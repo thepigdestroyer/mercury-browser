@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-option-keys"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The state machine of the ⌥ group keys (design/ui-final/SPEC.md section 5.1) with no engine, no
+# Slint and no winit inside: plain data in (modifiers, keys, focus, the groups' keys), plain data
+# out (pass or swallow the key, switch now, show or hide the card). Time is an argument. The
+# desktop's `src/option_keys.rs` translates winit's events into this crate's `Event`s.
+[dependencies]
+mercury-appearance = { path = "../mercury-appearance" }
+mercury-settings = { path = "../mercury-settings" }

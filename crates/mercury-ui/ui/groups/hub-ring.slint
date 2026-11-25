@@ -1,0 +1,460 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The hub ring (SPEC design/ui-final/SPEC.md §4.3): `HubButton` (the toolbar's 30 px donut),
+// `RingPopoverContent` (the 516 px ring: `RingBands`, the pinned beads, the centre disc, the
+// tooltip and the keys), `RingPopover` (that content in a `PopupWindow` with a tail) and
+// `RingPopoverPreview` (a window around the content for examples and tests). Everything comes from
+// and goes to the `HubRingBridge` global (hub-ring-bridge.slint); hosts forward nothing.
+//
+// Geometry (the `ring-open` mockup, 1440 x 900): the circle box is 516 x 516; the tail's tip is
+// 44 px above it, `tail-x` from its left edge; the page backdrop, toolbar and hub button of
+// `RingPopoverPreview { show-chrome: true }` use the mockup's own positions.
+
+import { ChromePalette } from "../theme/chrome-palette.slint";
+import { RingBands } from "ring-bands.slint";
+import { BeadRow, CentreMode, HubRingBridge } from "hub-ring-bridge.slint";
+import { RingCentre } from "hub-ring-centre.slint";
+
+// The toolbar's hub button: 30 px, a donut of the group colours at rest, an accent fill while the
+// popover is open. `clicked` opens the popover (the host binds it).
+export component HubButton inherits Rectangle {
+    callback clicked();
+    width: 30px;
+    height: 30px;
+    accessible-role: button;
+    accessible-label: HubRingBridge.hub-label;
+    accessible-action-default => {
+        root.clicked();
+    }
+
+    if HubRingBridge.hub-open: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.width / 2;
+        background: ChromePalette.accent;
+    }
+
+    for arc in HubRingBridge.donut: Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 30;
+        viewbox-height: 30;
+        commands: arc.commands;
+        fill: arc.colour;
+    }
+
+    TouchArea {
+        clicked => {
+            root.clicked();
+        }
+    }
+}
+
+// One pinned tab: a 20 px circle with a rounded-square mark and the initial (or the favicon), or the
+// "+N" chip when `spec.more` > 0. The bead's x and y are its top-left corner, ring-local.
+component RingBead inherits Rectangle {
+    in property <BeadRow> spec;
+    callback activated(int);
+    x: root.spec.x;
+    y: root.spec.y;
+    width: root.spec.size;
+    height: root.spec.size;
+    border-radius: root.width / 2;
+    background: ChromePalette.popup-background;
+    border-width: 1px;
+    border-color: ChromePalette.text-muted;
+    opacity: root.spec.dimmed ? 0.18 : 1;
+    animate opacity {
+        duration: HubRingBridge.reduce-motion ? 0ms : 120ms;
+    }
+    accessible-role: button;
+    accessible-label: root.spec.more > 0 ? "\{root.spec.more} more pinned tabs" : "Pinned tab, \{root.spec.title}";
+    accessible-action-default => {
+        root.activated(root.spec.tab);
+    }
+
+    if root.spec.more > 0: Text {
+        accessible-role: none;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        text: "+\{root.spec.more}";
+        font-size: 8px;
+        font-weight: 700;
+        color: ChromePalette.text-muted;
+    }
+
+    if root.spec.more <= 0 && !root.spec.has-favicon: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+        border-radius: 3px;
+        background: root.spec.mark;
+
+        Text {
+            accessible-role: none;
+            width: parent.width;
+            height: parent.height;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            text: root.spec.letter;
+            font-size: 7.4px;
+            font-weight: 700;
+            color: ChromePalette.capture-indicator-glyph;
+        }
+    }
+
+    if root.spec.more <= 0 && root.spec.has-favicon: Image {
+        accessible-role: none;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: 12px;
+        height: 12px;
+        source: root.spec.favicon;
+    }
+
+    if root.spec.focused: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: ChromePalette.focus-ring;
+    }
+
+    TouchArea {
+        clicked => {
+            root.activated(root.spec.tab);
+        }
+    }
+}
+
+// The label next to a loading or sound flag: "WebRender overview · loading 64%". Drawn by the
+// popover, not by RingBands. `tooltip-x` and `tooltip-y` are its top-left corner, ring-local.
+component RingTooltip inherits Rectangle {
+    x: HubRingBridge.tooltip-x;
+    y: HubRingBridge.tooltip-y;
+    width: label.preferred-width + 16px;
+    height: 22px;
+    border-radius: 6px;
+    background: ChromePalette.popup-background;
+    border-width: 1px;
+    border-color: ChromePalette.popup-border;
+    accessible-role: none;
+
+    label := Text {
+        x: 8px;
+        height: parent.height;
+        vertical-alignment: center;
+        text: HubRingBridge.tooltip;
+        font-size: 11px;
+        color: ChromePalette.text;
+    }
+}
+
+// The tail of the popover: a filled triangle above the circle whose tip is `tip-x` from the circle
+// box's left edge and 44 px above its top. The element's own top-left corner is the circle box's
+// point (0, -44); the mockup's triangle is M196 40 L201.6 125.3 L258.1 98.8 with the box at (80, 84).
+component RingTail inherits Path {
+    in property <length> tip-x: 116px;
+    width: 516px;
+    height: 86px;
+    viewbox-x: 0;
+    viewbox-y: -44;
+    viewbox-width: 516;
+    viewbox-height: 86;
+    commands: "M \{root.tip-x / 1px} -44 L \{root.tip-x / 1px + 5.6} 41.3 L \{root.tip-x / 1px + 62.1} 14.8 Z";
+    fill: ChromePalette.popup-background;
+}
+
+// The ring and the centre, without the popup: 516 x 516. A `FocusScope` over everything sends every
+// key to Rust first (`capture-key-pressed`), which answers whether it used it; a key it leaves
+// goes on to the search field.
+export component RingPopoverContent inherits Rectangle {
+    width: HubRingBridge.ring-size;
+    height: HubRingBridge.ring-size;
+    forward-focus: keys;
+
+    // Ends a drag in progress as a release outside would (the popup calls it when it closes).
+    public function cancel-drag() {
+        ring.cancel-drag();
+    }
+
+    // A query starts (by the field or by Rust's fallback typing): the caret is in the field, its
+    // border turns accent.
+    property <bool> searching: HubRingBridge.query-active;
+    changed searching => {
+        if root.searching {
+            centre.focus-field();
+        }
+    }
+
+    // The search field is on screen (rest and searching). It is hidden in the audio and key-look
+    // states, and a hidden item cannot hold the keyboard focus: the key scope takes it back there
+    // so that the keys (and the ⌥ release) still arrive, and the field gets it again when it returns.
+    property <bool> field-shown: HubRingBridge.mode == CentreMode.rest || HubRingBridge.mode == CentreMode.searching;
+    changed field-shown => {
+        if root.field-shown {
+            centre.focus-field();
+        } else {
+            keys.focus();
+        }
+    }
+
+    // Gives the keyboard focus to the search field, so an input method can begin with the first key
+    // (to the key scope while the field is hidden). Rust still sees every key first and leaves the
+    // printable ones to the field. A popup calls it when it opens.
+    public function focus-keys() {
+        if root.field-shown {
+            centre.focus-field();
+        } else {
+            keys.focus();
+        }
+    }
+
+    // The round popover with its shadow (dy 12, blur 44).
+    Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.width / 2;
+        background: ChromePalette.popup-background;
+        drop-shadow-color: ChromePalette.shadow;
+        drop-shadow-blur: 44px;
+        drop-shadow-offset-y: 12px;
+    }
+
+    keys := FocusScope {
+        width: parent.width;
+        height: parent.height;
+        capture-key-pressed(event) => {
+            // The first Esc only ends a drag in progress (the ring's own cancel); the query and the
+            // popover are left alone. The next Esc is Rust's (clear the query, then close).
+            if event.text == Key.Escape && ring.drag-source >= 0 {
+                ring.cancel-drag();
+                return accept;
+            }
+            if HubRingBridge.key-pressed(event.text, event.modifiers.alt, event.modifiers.control, event.modifiers.meta, event.modifiers.shift) {
+                return accept;
+            }
+            return reject;
+        }
+        capture-key-released(event) => {
+            HubRingBridge.key-released(event.text, event.modifiers.alt, event.modifiers.control, event.modifiers.meta, event.modifiers.shift);
+            return reject;
+        }
+
+        ring := RingBands {
+            width: parent.width;
+            height: parent.height;
+            ring-size: HubRingBridge.ring-size;
+            groups: HubRingBridge.groups;
+            tabs: HubRingBridge.tabs;
+            segments: HubRingBridge.segments;
+            lifted-segments: HubRingBridge.lifted-segments;
+            segment-labels: HubRingBridge.segment-labels;
+            label-bands: HubRingBridge.label-bands;
+            label-glyphs: HubRingBridge.label-glyphs;
+            flags: HubRingBridge.flags;
+            held: HubRingBridge.held;
+            selected-group: HubRingBridge.selected-group;
+            dim-others: HubRingBridge.held && HubRingBridge.selected-group >= 0;
+            query-active: HubRingBridge.query-active;
+            focused-tab: HubRingBridge.focused-tab;
+            reduce-motion: HubRingBridge.reduce-motion;
+            hovered-tab <=> HubRingBridge.hovered-tab;
+            hit-test(x, y, hovered) => {
+                return HubRingBridge.hit-test(x, y, hovered);
+            }
+            drop-target(x, y, dragging) => {
+                return HubRingBridge.drop-target(x, y, dragging);
+            }
+            tab-activated(id) => {
+                HubRingBridge.tab-activated(id);
+            }
+            tab-hovered(id) => {
+                HubRingBridge.tab-hovered(id);
+            }
+            group-activated(id) => {
+                HubRingBridge.group-activated(id);
+            }
+            tab-close(id) => {
+                HubRingBridge.tab-close(id);
+            }
+            tab-mute(id) => {
+                HubRingBridge.tab-mute(id);
+            }
+            drop(group, index) => {
+                HubRingBridge.drop(group, index);
+            }
+            drag-cancelled() => {
+                HubRingBridge.drag-cancelled();
+            }
+        }
+
+        for bead in HubRingBridge.beads: RingBead {
+            spec: bead;
+            activated(tab) => {
+                HubRingBridge.bead-activated(tab);
+            }
+        }
+
+        centre := RingCentre {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+        }
+
+        if HubRingBridge.tooltip != "": RingTooltip { }
+    }
+}
+
+// The popover: a `PopupWindow` (close on click outside) with the tail towards the hub button. The
+// host places this element where the circle box must appear (the popup reaches 44 px above it for
+// the tail) and calls `show()`; the popup closes itself when Rust adds to `close-request`.
+// Opening is 160 ms (ease-out, scale .92 to 1, opacity 0 to 1), closing from Rust 120 ms; both 0 ms
+// with `reduce-motion`. A click outside closes at once.
+export component RingPopover inherits Rectangle {
+    width: HubRingBridge.ring-size;
+    height: HubRingBridge.ring-size;
+    // The distance from the left edge of the popover to the tip of the tail.
+    in property <length> tail-x: 116px;
+    property <int> close-request: HubRingBridge.close-request;
+    property <bool> closing: false;
+    property <bool> popup-open: popup.is-open;
+
+    public function show() {
+        root.closing = false;
+        popup.show();
+    }
+
+    changed close-request => {
+        if HubRingBridge.reduce-motion {
+            popup.close();
+        } else {
+            root.closing = true;
+            close-timer.running = true;
+        }
+    }
+    changed popup-open => {
+        if !root.popup-open {
+            close-timer.running = false;
+            root.closing = false;
+            content.cancel-drag();
+            HubRingBridge.closed();
+        }
+    }
+
+    close-timer := Timer {
+        interval: 120ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            popup.close();
+        }
+    }
+
+    popup := PopupWindow {
+        close-policy: close-on-click-outside;
+        x: 0px;
+        y: -44px;
+        width: HubRingBridge.ring-size;
+        height: HubRingBridge.ring-size + 44px;
+
+        frame := Rectangle {
+            property <bool> shown: false;
+            width: parent.width;
+            height: parent.height;
+            opacity: root.closing || !self.shown ? 0 : 1;
+            transform-scale-x: root.closing || !self.shown ? 92% : 100%;
+            transform-scale-y: root.closing || !self.shown ? 92% : 100%;
+            transform-origin: {
+                x: root.tail-x,
+                y: 44px
+            };
+            animate opacity, transform-scale-x, transform-scale-y {
+                duration: HubRingBridge.reduce-motion ? 0ms : (root.closing ? 120ms : 160ms);
+                easing: ease-out;
+            }
+            init => {
+                HubRingBridge.opened();
+                content.focus-keys();
+                if HubRingBridge.reduce-motion {
+                    self.shown = true;
+                }
+            }
+
+            Timer {
+                interval: 1ms;
+                running: !frame.shown;
+                triggered => {
+                    frame.shown = true;
+                }
+            }
+
+            content := RingPopoverContent {
+                x: 0px;
+                y: 44px;
+            }
+
+            RingTail {
+                tip-x: root.tail-x;
+            }
+        }
+    }
+}
+
+// A window around `RingPopoverContent` on the page colour, for the examples and the tests
+// (the `PopupWindow` itself cannot be rendered headless). With `show-chrome` the window is the
+// 1000 x 640 detail of the `ring-open` mockup: the page backdrop, the toolbar strip, the hub
+// button and the popover with its tail under it (circle box at (80, 84), tail tip at (196, 40)).
+export component RingPopoverPreview inherits Window {
+    in property <bool> show-chrome: false;
+    in property <length> tail-x: 116px;
+    // Clicks on the hub button (the examples and tests may count them).
+    callback hub-clicked();
+    // What a popup does when it opens: the keyboard focus goes to the search field.
+    public function focus-keys() {
+        content.focus-keys();
+    }
+    preferred-width: root.show-chrome ? 1000px : 516px;
+    preferred-height: root.show-chrome ? 640px : 516px;
+    background: root.show-chrome ? ChromePalette.content-background : ChromePalette.window-background;
+    forward-focus: content;
+
+    if root.show-chrome: Rectangle {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: 47px;
+        background: ChromePalette.toolbar-background;
+        accessible-role: none;
+
+        Rectangle {
+            y: parent.height - 1px;
+            width: parent.width;
+            height: 1px;
+            background: ChromePalette.toolbar-divider;
+        }
+    }
+
+    if root.show-chrome: HubButton {
+        x: 181px;
+        y: 8px;
+        clicked => {
+            root.hub-clicked();
+        }
+    }
+
+    content := RingPopoverContent {
+        x: root.show-chrome ? 80px : (parent.width - self.width) / 2;
+        y: root.show-chrome ? 84px : (parent.height - self.height) / 2;
+    }
+
+    if root.show-chrome: RingTail {
+        x: 80px;
+        y: 40px;
+        tip-x: root.tail-x;
+    }
+}
