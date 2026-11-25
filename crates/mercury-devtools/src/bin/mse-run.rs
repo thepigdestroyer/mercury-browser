@@ -67,28 +67,25 @@ mod unix {
                     ExitCode::from(2)
                 }
             },
-            Ok(Command::Verdict(config)) => {
-                match verdict::run(&config, &summary::utc_now()) {
-                    Ok(finished) => {
-                        print!("{}", finished.text);
-                        match &finished.write_error {
-                            None => eprintln!(
-                                "mse-run: verdict written to {}",
-                                finished.report.display()
-                            ),
-                            Some(error) => eprintln!(
-                                "mse-run: cannot write {}: {error}",
-                                finished.report.display()
-                            ),
+            Ok(Command::Verdict(config)) => match verdict::run(&config, &summary::utc_now()) {
+                Ok(finished) => {
+                    print!("{}", finished.text);
+                    match &finished.write_error {
+                        None => {
+                            eprintln!("mse-run: verdict written to {}", finished.report.display())
                         }
-                        ExitCode::from(finished.exit_code as u8)
+                        Some(error) => eprintln!(
+                            "mse-run: cannot write {}: {error}",
+                            finished.report.display()
+                        ),
                     }
-                    Err(error) => {
-                        eprintln!("mse-run: {error}");
-                        ExitCode::from(2)
-                    }
+                    ExitCode::from(finished.exit_code as u8)
                 }
-            }
+                Err(error) => {
+                    eprintln!("mse-run: {error}");
+                    ExitCode::from(2)
+                }
+            },
             Ok(Command::Run { config, report }) => {
                 let _ = std::fs::create_dir_all(&config.out_dir);
                 let mut log = |line: &str| eprintln!("mse-run: {line}");

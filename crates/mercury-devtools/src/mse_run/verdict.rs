@@ -457,10 +457,8 @@ mod tests {
             inputs.gates_green = gates;
             inputs.review_ok = review;
             let evaluation = evaluate(&inputs);
-            let expected: Vec<(&'static str, Status)> = unproven
-                .iter()
-                .map(|id| (*id, Status::NotProven))
-                .collect();
+            let expected: Vec<(&'static str, Status)> =
+                unproven.iter().map(|id| (*id, Status::NotProven)).collect();
             only(&evaluation, &expected);
             assert_eq!(evaluation.verdict, Verdict::NoGo);
             assert_eq!(evaluation.verdict.exit_code(), 1);
@@ -539,9 +537,17 @@ mod tests {
     #[test]
     fn an_interrupted_test_makes_the_journal_incomplete_and_says_how_to_resume() {
         let mut inputs = green();
-        set(&mut inputs, Phase::Pages, "mse-seek.html", Outcome::Interrupted);
+        set(
+            &mut inputs,
+            Phase::Pages,
+            "mse-seek.html",
+            Outcome::Interrupted,
+        );
         let evaluation = evaluate(&inputs);
-        only(&evaluation, &[("F2", Status::Incomplete), ("F5", Status::Incomplete)]);
+        only(
+            &evaluation,
+            &[("F2", Status::Incomplete), ("F5", Status::Incomplete)],
+        );
         assert_eq!(evaluation.verdict, Verdict::Incomplete);
         let text = evaluation.incomplete.join("\n");
         assert!(text.contains("mse-seek.html"), "{text}");
@@ -556,10 +562,7 @@ mod tests {
         let evaluation = evaluate(&inputs);
         only(
             &evaluation,
-            &[
-                ("F4", Status::Incomplete),
-                ("F5", Status::Fail),
-            ],
+            &[("F4", Status::Incomplete), ("F5", Status::Fail)],
         );
         assert_eq!(evaluation.verdict, Verdict::Incomplete);
         assert!(evaluation.incomplete.join("\n").contains("restart"));
@@ -591,10 +594,20 @@ mod tests {
     #[test]
     fn a_planned_wpt_file_with_no_result_is_incomplete() {
         let mut inputs = green();
-        inputs.plan.wpt.as_mut().unwrap().push("media-source/z.html".into());
+        inputs
+            .plan
+            .wpt
+            .as_mut()
+            .unwrap()
+            .push("media-source/z.html".into());
         let evaluation = evaluate(&inputs);
         only(&evaluation, &[("F3", Status::Incomplete)]);
-        assert!(evaluation.incomplete.join("\n").contains("media-source/z.html"));
+        assert!(
+            evaluation
+                .incomplete
+                .join("\n")
+                .contains("media-source/z.html")
+        );
     }
 
     #[test]
@@ -616,7 +629,12 @@ mod tests {
     fn f3_an_unexpected_wpt_failure_fails_and_a_known_one_does_not() {
         let mut inputs = green();
         inputs.results.push(wpt("media-source/c.html", 99, 1));
-        inputs.plan.wpt.as_mut().unwrap().push("media-source/c.html".into());
+        inputs
+            .plan
+            .wpt
+            .as_mut()
+            .unwrap()
+            .push("media-source/c.html".into());
         only(&evaluate(&inputs), &[("F3", Status::Fail)]);
 
         inputs.expectations = expectations(vec![entry("media-source/c.html", "test-bug", None, 1)]);
@@ -630,7 +648,11 @@ mod tests {
         let evaluation = evaluate(&inputs);
         only(&evaluation, &[("F3", Status::Fail)]);
         assert!(
-            evaluation.condition("F3").details.join("\n").contains("unexpected pass"),
+            evaluation
+                .condition("F3")
+                .details
+                .join("\n")
+                .contains("unexpected pass"),
             "{:?}",
             evaluation.condition("F3").details
         );
@@ -639,16 +661,29 @@ mod tests {
     fn with_share(pass: usize, fail: usize) -> Evaluation {
         let mut inputs = green();
         inputs.results.retain(|r| r.phase != Phase::Wpt);
-        inputs.results.push(wpt("media-source/share.html", pass, fail));
+        inputs
+            .results
+            .push(wpt("media-source/share.html", pass, fail));
         inputs.plan.wpt = Some(vec!["media-source/share.html".into()]);
-        inputs.expectations = expectations(vec![entry("media-source/share.html", "test-bug", None, fail)]);
+        inputs.expectations = expectations(vec![entry(
+            "media-source/share.html",
+            "test-bug",
+            None,
+            fail,
+        )]);
         evaluate(&inputs)
     }
 
     #[test]
     fn f3_the_85_percent_floor_is_exact() {
         let below = with_share(849, 151);
-        assert_eq!(below.share, Share { subtests: 1000, passing: 849 });
+        assert_eq!(
+            below.share,
+            Share {
+                subtests: 1000,
+                passing: 849
+            }
+        );
         only(&below, &[("F3", Status::Fail)]);
         assert!(
             below.condition("F3").details.join("\n").contains("84.9%"),
@@ -661,8 +696,21 @@ mod tests {
         assert!(at.condition("F3").details.join("\n").contains("85.0%"));
 
         // 84.99% never prints as the floor.
-        assert_eq!(Share { subtests: 10_000, passing: 8_499 }.percent_text(), "84.9");
-        assert!(!Share { subtests: 10_000, passing: 8_499 }.meets_floor());
+        assert_eq!(
+            Share {
+                subtests: 10_000,
+                passing: 8_499
+            }
+            .percent_text(),
+            "84.9"
+        );
+        assert!(
+            !Share {
+                subtests: 10_000,
+                passing: 8_499
+            }
+            .meets_floor()
+        );
     }
 
     #[test]
@@ -694,7 +742,13 @@ mod tests {
             expected_broken,
         ]);
         let evaluation = evaluate(&inputs);
-        assert_eq!(evaluation.share, Share { subtests: 100, passing: 90 });
+        assert_eq!(
+            evaluation.share,
+            Share {
+                subtests: 100,
+                passing: 90
+            }
+        );
         only(&evaluation, &[]);
         let details = evaluation.condition("F3").details.join("\n");
         assert!(details.contains("did not load"), "{details}");
@@ -715,7 +769,10 @@ mod tests {
             let evaluation = evaluate(&inputs);
             only(&evaluation, &[("F3", Status::Fail)]);
             let details = evaluation.condition("F3").details.join("\n");
-            assert!(details.contains("mediasource-append-buffer.html"), "{details}");
+            assert!(
+                details.contains("mediasource-append-buffer.html"),
+                "{details}"
+            );
             assert!(details.contains("issue"), "{details}");
 
             inputs.expectations = expectations(vec![entry(
@@ -732,15 +789,35 @@ mod tests {
     fn f3_other_classes_and_other_areas_do_not_need_an_issue() {
         let mut inputs = green();
         inputs.expectations = expectations(vec![
-            entry("media-source/mediasource-append-buffer.html", "engine-gap", None, 0),
-            entry("media-source/mediasource-append-buffer.html.x", "player", None, 0),
+            entry(
+                "media-source/mediasource-append-buffer.html",
+                "engine-gap",
+                None,
+                0,
+            ),
+            entry(
+                "media-source/mediasource-append-buffer.html.x",
+                "player",
+                None,
+                0,
+            ),
             // A `dom` entry outside the core areas.
-            entry("media-source/mediasource-getvideoplaybackquality.html", "dom", None, 0),
+            entry(
+                "media-source/mediasource-getvideoplaybackquality.html",
+                "dom",
+                None,
+                0,
+            ),
             // The match is on the file name, not on the directory.
             entry("media-source/append-tests/idlharness.html", "dom", None, 0),
         ]);
         let evaluation = evaluate(&inputs);
-        assert_ne!(evaluation.condition("F3").status, Status::Fail, "{:?}", evaluation.condition("F3"));
+        assert_ne!(
+            evaluation.condition("F3").status,
+            Status::Fail,
+            "{:?}",
+            evaluation.condition("F3")
+        );
     }
 
     #[test]
@@ -764,7 +841,13 @@ mod tests {
             set(&mut inputs, Phase::Players, player, Outcome::Fail);
             let evaluation = evaluate(&inputs);
             only(&evaluation, &[("F4", Status::Fail)]);
-            assert!(evaluation.condition("F4").details.join("\n").contains(player));
+            assert!(
+                evaluation
+                    .condition("F4")
+                    .details
+                    .join("\n")
+                    .contains(player)
+            );
         }
     }
 
@@ -784,7 +867,10 @@ mod tests {
         let allowed = evaluate(&inputs);
         only(&allowed, &[]);
         let details = allowed.condition("F4").details.join("\n");
-        assert!(details.contains("hlsjs.html"), "reported separately: {details}");
+        assert!(
+            details.contains("hlsjs.html"),
+            "reported separately: {details}"
+        );
         assert!(details.contains("engine-gap"), "{details}");
         assert_eq!(allowed.verdict, Verdict::Go);
     }
@@ -808,7 +894,10 @@ mod tests {
         set(&mut inputs, Phase::Players, "dashjs.html", Outcome::Crash);
         inputs.engine_gap_players = ["dashjs".to_owned()].into();
         inputs.allow_engine_gap = ["dashjs".to_owned()].into();
-        only(&evaluate(&inputs), &[("F4", Status::Fail), ("F5", Status::Fail)]);
+        only(
+            &evaluate(&inputs),
+            &[("F4", Status::Fail), ("F5", Status::Fail)],
+        );
     }
 
     #[test]
@@ -818,21 +907,41 @@ mod tests {
         crashed.outcome = Outcome::Crash;
         crashed.harness = Some("CRASH".into());
         inputs.results.push(crashed);
-        inputs.plan.wpt.as_mut().unwrap().push("media-source/crash.html".into());
+        inputs
+            .plan
+            .wpt
+            .as_mut()
+            .unwrap()
+            .push("media-source/crash.html".into());
         let mut crash_entry = entry("media-source/crash.html", "player", None, 0);
         crash_entry.harness = "CRASH".into();
         inputs.expectations = expectations(vec![crash_entry]);
         let evaluation = evaluate(&inputs);
         only(&evaluation, &[("F5", Status::Fail)]);
-        assert!(evaluation.condition("F5").details.join("\n").contains("crash.html"));
+        assert!(
+            evaluation
+                .condition("F5")
+                .details
+                .join("\n")
+                .contains("crash.html")
+        );
     }
 
     #[test]
     fn f5_prints_every_peak_rss_and_warns_above_1_5_gib_without_failing() {
         let mut inputs = green();
-        inputs.results.iter_mut().find(|r| r.id == "mse-quota.html").unwrap().peak_rss_kb =
-            Some(RSS_SOFT_LIMIT_KB + 1);
-        inputs.results.iter_mut().find(|r| r.id == "mse-seek.html").unwrap().peak_rss_kb = None;
+        inputs
+            .results
+            .iter_mut()
+            .find(|r| r.id == "mse-quota.html")
+            .unwrap()
+            .peak_rss_kb = Some(RSS_SOFT_LIMIT_KB + 1);
+        inputs
+            .results
+            .iter_mut()
+            .find(|r| r.id == "mse-seek.html")
+            .unwrap()
+            .peak_rss_kb = None;
         let evaluation = evaluate(&inputs);
         only(&evaluation, &[]);
         assert_eq!(evaluation.verdict, Verdict::Go);
@@ -840,15 +949,24 @@ mod tests {
         assert_eq!(evaluation.rss.len(), inputs.results.len() - 1);
         assert_eq!(evaluation.tests_without_rss, 1);
         let warnings = evaluation.warnings.join("\n");
-        assert!(warnings.contains("mse-quota.html") && warnings.contains("1.5 GiB"), "{warnings}");
+        assert!(
+            warnings.contains("mse-quota.html") && warnings.contains("1.5 GiB"),
+            "{warnings}"
+        );
         let text = render(&evaluation, "2026-11-22T12:00:00Z", "j.jsonl");
         for result in &inputs.results {
             assert!(text.contains(&result.id), "{} is in the report", result.id);
         }
 
         let mut quiet = green();
-        quiet.results.iter_mut().for_each(|r| r.peak_rss_kb = Some(RSS_SOFT_LIMIT_KB));
-        assert!(evaluate(&quiet).warnings.is_empty(), "exactly 1.5 GiB is not above it");
+        quiet
+            .results
+            .iter_mut()
+            .for_each(|r| r.peak_rss_kb = Some(RSS_SOFT_LIMIT_KB));
+        assert!(
+            evaluate(&quiet).warnings.is_empty(),
+            "exactly 1.5 GiB is not above it"
+        );
     }
 
     #[test]
@@ -861,9 +979,15 @@ mod tests {
         assert_eq!(text.trim_end().lines().last(), Some("FLIP: NO-GO"));
         let order: Vec<usize> = ["F1", "F2", "F6", "F3"]
             .iter()
-            .map(|id| text.find(&format!("- **{id}**")).unwrap_or_else(|| panic!("{id}\n{text}")))
+            .map(|id| {
+                text.find(&format!("- **{id}**"))
+                    .unwrap_or_else(|| panic!("{id}\n{text}"))
+            })
             .collect();
-        assert!(order.windows(2).all(|w| w[0] < w[1]), "FAIL, FAIL, NOT PROVEN, PASS: {order:?}\n{text}");
+        assert!(
+            order.windows(2).all(|w| w[0] < w[1]),
+            "FAIL, FAIL, NOT PROVEN, PASS: {order:?}\n{text}"
+        );
     }
 
     #[test]
@@ -891,8 +1015,14 @@ mod tests {
         assert_eq!(
             rows,
             [
-                EngineGapRow { found_by: "hls.js".into(), blocks_mse: false },
-                EngineGapRow { found_by: "Shaka Player".into(), blocks_mse: true },
+                EngineGapRow {
+                    found_by: "hls.js".into(),
+                    blocks_mse: false
+                },
+                EngineGapRow {
+                    found_by: "Shaka Player".into(),
+                    blocks_mse: true
+                },
             ]
         );
         let players: Vec<String> = PLAYER_ORDER.iter().map(|s| (*s).to_owned()).collect();
@@ -930,9 +1060,15 @@ mod tests {
     fn the_command_line_defaults_to_the_run_output_directory() {
         let config = parse(&[]).unwrap();
         assert_eq!(config.journal, Path::new("/out/journal.jsonl"));
-        assert_eq!(config.report, Path::new("/out/flip-verdict-20261122T100000Z.md"));
+        assert_eq!(
+            config.report,
+            Path::new("/out/flip-verdict-20261122T100000Z.md")
+        );
         assert_eq!(config.engine_gaps, Path::new("/out/engine-gaps.md"));
-        assert_eq!(config.expect, Path::new("/repo/tests/wpt/media-source.expect.toml"));
+        assert_eq!(
+            config.expect,
+            Path::new("/repo/tests/wpt/media-source.expect.toml")
+        );
         assert_eq!(config.tests_root, Path::new("/repo/tests"));
         assert_eq!(config.tools_dir, Path::new("/cache/mse"));
         assert!(!config.gates_green && !config.review_ok);
@@ -954,7 +1090,10 @@ mod tests {
         .unwrap();
         assert_eq!(config.out_dir, Path::new("/o"));
         assert_eq!(config.journal, Path::new("/j.jsonl"));
-        assert_eq!(config.report, Path::new("/o/flip-verdict-20261122T100000Z.md"));
+        assert_eq!(
+            config.report,
+            Path::new("/o/flip-verdict-20261122T100000Z.md")
+        );
         assert!(config.gates_green && config.review_ok);
         assert_eq!(config.allow_engine_gap, ["hls.js", "shaka"]);
         for (list, needle) in [

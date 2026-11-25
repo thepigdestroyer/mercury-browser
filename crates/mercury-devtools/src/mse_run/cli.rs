@@ -55,7 +55,10 @@ tests not run).
 pub enum Command {
     Help,
     List(Config),
-    Run { config: Config, report: PathBuf },
+    Run {
+        config: Config,
+        report: PathBuf,
+    },
     /// `mse-run verdict`: judge the journal of a finished run (`verdict.rs`).
     Verdict(super::verdict::VerdictConfig),
 }
@@ -107,8 +110,7 @@ pub fn parse_arguments(
         if arguments[1..].iter().any(|a| a == "-h" || a == "--help") {
             return Ok(Command::Help);
         }
-        return super::verdict::parse_arguments(&arguments[1..], environment)
-            .map(Command::Verdict);
+        return super::verdict::parse_arguments(&arguments[1..], environment).map(Command::Verdict);
     }
     let repo = &environment.repo;
     let mut phases: Option<Vec<Phase>> = None;
