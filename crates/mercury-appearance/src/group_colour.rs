@@ -6,7 +6,9 @@
 //! **A group colour is an identification mark, not text.** The group's name is always written
 //! next to it, so the colour is not required to reach 3:1 against the chrome (amber measures
 //! 2.3:1 on paper). What is guaranteed is what is drawn *on* a colour: [`Swatch`] gives a `tint`
-//! that the chrome's ink still reads on at 4.5:1 and a `deep` that white reads on at 4.5:1.
+//! that the chrome's ink still reads on at 4.5:1, a `mark` that white reads on at 4.5:1 and a
+//! `deep` for writing the group's name on the chrome (the `mark` in the light scheme, the colour
+//! lightened until it reads on the surface in the dark one).
 //!
 //! Colour ids are strings kept in `session.json`. A preset's id (`"blue"`) is lower-case ASCII
 //! and part of the file format forever; a custom colour's id is its `#rrggbb` in lower case.
@@ -19,6 +21,7 @@
 
 use crate::colour::Colour;
 use crate::oklab::Oklab;
+use crate::palette::Scheme;
 
 /// The smallest contrast ratio at which text counts as readable (WCAG 2.2 AA, normal text).
 pub const MIN_TEXT_CONTRAST: f64 = 4.5;
@@ -198,6 +201,11 @@ impl GroupColour {
     pub fn swatch(&self, surface: Colour, ink: Colour) -> Swatch {
         Swatch::new(self.base(), surface, ink)
     }
+
+    /// The swatch to draw on `surface` in the given scheme. See [`Swatch::for_scheme`].
+    pub fn swatch_for_scheme(&self, surface: Colour, ink: Colour, scheme: Scheme) -> Swatch {
+        Swatch::for_scheme(self.base(), surface, ink, scheme)
+    }
 }
 
 /// [`GroupColour::parse`] as a free function.
@@ -215,27 +223,53 @@ pub struct Swatch {
     /// The colour mixed into the chrome surface as far as [`TINT_STRENGTH_MAX`] and legibility
     /// allow: the chrome's ink reads on it at 4.5:1 or better.
     pub tint: Colour,
-    /// The colour darkened just until white reads on it at 4.5:1 or better; the colour itself
-    /// when it already does.
+    /// The colour to write the group's name in on the surface the swatch was built for.
+    ///
+    /// In the light scheme: the colour darkened just until white reads on it at 4.5:1 or
+    /// better; the colour itself when it already does (the same as [`mark`](Self::mark)). In
+    /// the dark scheme: the colour lightened just until it reads on the surface at 4.5:1; the
+    /// colour itself when it already does, white when not even white does.
     pub deep: Colour,
-    /// What to draw on [`deep`](Self::deep): white.
+    /// What to draw on [`deep`](Self::deep): white in the light scheme; in the dark scheme the
+    /// better of black and white, which always reaches 4.5:1.
     pub on_deep: Colour,
+    /// A fill that white reads on at 4.5:1 or better, in either scheme: the colour darkened
+    /// just until it does (the colour itself when it already does). The bead of a pinned tab is
+    /// drawn with it and a white letter (`Role::PinnedBeadLetter`).
+    pub mark: Colour,
 }
 
 impl Swatch {
-    /// Builds the swatch of `base` for a chrome with this `surface` and `ink`.
+    /// Builds the swatch of `base` for a light chrome with this `surface` and `ink`: the same as
+    /// [`for_scheme`](Self::for_scheme) with [`Scheme::Light`].
+    pub fn new(base: Colour, surface: Colour, ink: Colour) -> Self {
+        Self::for_scheme(base, surface, ink, Scheme::Light)
+    }
+
+    /// Builds the swatch of `base` for a chrome of the given `scheme` with this `surface` and
+    /// `ink`.
     ///
     /// The guarantees hold when `ink` already reads on `surface` at 4.5:1, which the chrome
     /// palettes enforce; when it does not, `tint` is the surface itself. Mixing is the straight
-    /// sRGB interpolation of [`Colour::mix`]; alpha is ignored.
-    pub fn new(base: Colour, surface: Colour, ink: Colour) -> Self {
+    /// sRGB interpolation of [`Colour::mix`]; alpha is ignored. Only
+    /// [`deep`](Self::deep) and [`on_deep`](Self::on_deep) depend on the scheme.
+    pub fn for_scheme(base: Colour, surface: Colour, ink: Colour, scheme: Scheme) -> Self {
         let base = opaque(base);
         let steps = legible_tint_steps(base, surface, ink, TINT_STEPS_MAX);
+        let mark = deep_of(base);
+        let (deep, on_deep) = match scheme {
+            Scheme::Light => (mark, Colour::WHITE),
+            Scheme::Dark => {
+                let deep = lightened_to_read_on(base, surface);
+                (deep, better_of_black_and_white(deep))
+            }
+        };
         Self {
             colour: base,
             tint: tint_at(base, surface, steps),
-            deep: deep_of(base),
-            on_deep: Colour::WHITE,
+            deep,
+            on_deep,
+            mark,
         }
     }
 }
@@ -275,6 +309,25 @@ fn deep_of(base: Colour) -> Colour {
         .map(|step| base.darker(f64::from(step) / 255.0))
         .find(|candidate| Colour::WHITE.contrast_ratio(*candidate) >= MIN_TEXT_CONTRAST)
         .unwrap_or(Colour::BLACK)
+}
+
+/// `base` lightened by the smallest 1/255 step at which it reads on `surface` at 4.5:1; white
+/// when no step does (a surface so light that not even white reads on it).
+fn lightened_to_read_on(base: Colour, surface: Colour) -> Colour {
+    (0..=255_u32)
+        .map(|step| base.lighter(f64::from(step) / 255.0))
+        .find(|candidate| candidate.contrast_ratio(surface) >= MIN_TEXT_CONTRAST)
+        .unwrap_or(Colour::WHITE)
+}
+
+/// Black or white, whichever reads better on `colour`; the better of the two is always 4.5:1 or
+/// more.
+fn better_of_black_and_white(colour: Colour) -> Colour {
+    if Colour::WHITE.contrast_ratio(colour) >= Colour::BLACK.contrast_ratio(colour) {
+        Colour::WHITE
+    } else {
+        Colour::BLACK
+    }
 }
 
 /// `colour` with alpha 255.
