@@ -15,6 +15,10 @@ in `NOTICE`.
 - Servo, post-0.8.0 changes — https://github.com/servo/servo, pull requests #49541, #47459, #49649, #48253, #49797, #49818, #49884, #49917, #49920, #49632, #49912, #49436, #49981 and #49907 (merge commits are listed in the `MERCURY.md` of each crate) — MPL-2.0 — carried as patches in `third_party/servo-script`, `servo-script-bindings`, `servo-script-webcrypto`, `servo-layout`, `servo-layout-api`, `servo-net` and `servo-webgl` until the next Servo release contains them; each hunk starts with a `Mercury: backport of servo/servo#<n>` comment and each `MERCURY.md` says when it is dropped. #49884, #49917 and #49920 are hand-ported to 0.8.0 APIs. The new file `outdent.rs` (`third_party/servo-script/dom/execcommand/commands/`) is upstream's and keeps its MPL-2.0 header.
 - Servo, post-0.8.0 changes for text (lane txt-1) — https://github.com/servo/servo, pull requests #49613 (merge commit `af5f54ba7`, by sabbCodes), #49885 (`afc9224b1`, by Martin Robinson, hand-ported), #49400 (`13fbe153e`, `ImeEvent::Commit`) and #42394 (RichardTjokroutomo, `text-overflow: ellipsis`, open; its layout half is hand-ported, not applied) — MPL-2.0 — carried in `third_party/servo-script`, `servo-layout`, `servo-embedder-traits` and `servo` (tests) until the next Servo release contains them; each hunk starts with a `Mercury:` comment naming the pull request, and each `MERCURY.md` says when it is dropped.
 - Mozilla Firefox (Gecko) — https://github.com/mozilla-firefox/firefox — MPL-2.0 — `layout/base/nsCounterManager.cpp` (the starting value of `reversed()` counters, the implicit creation of a counter, the implicit `list-item` increment and its -1 in a reversed scope), `layout/style/CounterStyleManager.cpp` (the longhand East Asian algorithm, the Ethiopic numerals, the length limit and the order of the steps of the counter text), with the symbol tables checked against `layout/style/res/counterstyles.css`, translated into the new files `third_party/servo-layout/counters.rs` and `third_party/servo-layout/counter_styles.rs`; and `layout/generic/TextOverflow.cpp` (the choice of the end side, `shouldToggleDirection`, `mIStart`, `mIEnd`) translated into `end_side` of `third_party/servo-layout/ellipsis.rs`. Each file names its source at the top and stays under the MPL-2.0 (a vendored crate's file). The algorithms themselves are those of CSS Lists Level 3, CSS Counter Styles Level 3 and CSS Overflow Level 4 / CSS UI Level 3 (W3C specifications, not code). No Ladybird code is copied.
+- Servo pull request #47981 "storages: implement Web Locks API" — https://github.com/servo/servo/pull/47981 (draft, by xbwwj, branch head `a900121be5f6a255c82ad6778bdb978ad7d3b331`) — MPL-2.0 — the storage-thread design of the Web Locks API, carried and reworked in `third_party/servo-script/dom/weblock/`, `third_party/servo-storage/weblocks/` and `third_party/servo-storage-traits/weblocks.rs` (the files keep the upstream MPL-2.0 header and name the source); the draft did not work as written and the differences are listed in `third_party/servo-storage/MERCURY.md`. Dropped at the Servo bump that contains it.
+- LunarWerxs `servo` fork, branches `pr/indexeddb` (commits `860d2eff1`, `4b07849e2`, `098e8a02c`, `c609fcd06`) and `pr/web-locks` (commit `23583d753a471785ec133079e54d3d9029d0ca69`) — https://github.com/LunarWerxs/servo — MPL-2.0 (written by L0garithmic with an AI assistant; the branches are not reviewed upstream, which is why Mercury's unit tests are the evidence) — `860d2eff1` is applied as it is, the others are hand-ported onto Servo 0.8.0 in `third_party/servo-script/dom/indexeddb/` (index queries and cursors) and used for the idea and the test scenarios of the Web Locks release rules in `third_party/servo-storage/weblocks/`; see `third_party/servo-script/MERCURY.md` (changes 14 and 15).
+- Servo pull request #45559 (IndexedDB multiEntry keys, by skyz1, open) — https://github.com/servo/servo/pull/45559 — MPL-2.0 — `convert_value_to_multientry_key` hand-ported into `third_party/servo-script/dom/indexeddb/key.rs` (the pull request targets the old path `components/script/indexeddb.rs`); the one difference (an entry whose `Get` throws is skipped, as the specification says) is in `third_party/servo-script/MERCURY.md`.
+- Servo pull request #44469 (third-party cookie blocking) — https://github.com/servo/servo/pull/44469 — considered, **not carried**: it classifies third party by origin rather than site, covers only `Set-Cookie` of responses and adds a global setter message; Mercury's own policy is in `third_party/servo-net/net_policy.rs` and `mercury_cookies.rs` (see `third_party/servo-net/MERCURY.md`, change 5).
 - Zervo `patches/servo/0002-script-show-notification-without-resources.patch` — https://github.com/Goddv/Zervo — MPL-2.0 — the idea (show a notification at once when it has no icon, image, badge or action icon to fetch) in `third_party/servo-script/dom/serviceworker/notification.rs`; the code is written from its description, not copied; see `third_party/servo-script/MERCURY.md`.
 - Servo `python/servo/gstreamer.py` — https://github.com/servo/servo, tag `v0.8.0` (commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), functions `package_gstreamer_dylibs` and `load_plugin_libraries_from_text_file` — Apache-2.0 OR MIT, Copyright 2013 The Servo Project Developers — adapted as `scripts/macos/collect-gstreamer.sh`.
 - Servo `ports/servoshell/build.rs` — https://github.com/servo/servo, tag `v0.8.0` — MPL-2.0 — the macOS `@executable_path/lib/` rpath in `apps/mercury-desktop/build.rs`.
@@ -35,6 +39,9 @@ in `NOTICE`.
 - Servo's servoshell 0.8.0 — https://github.com/servo/servo, tag `v0.8.0` (commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), path `ports/servoshell/prefs.rs` lines 29-53 (`EXPERIMENTAL_PREFS`, the list of experimental web-platform preferences) — MPL-2.0 — copied into `crates/talaria-servo/src/runtime.rs`.
 - Zervo — https://github.com/Goddv/Zervo, commit `86cb71267066f3b1f402abbd5c26faaf24ddf165` — MPL-2.0 — adapted from its files of the same names: `rust-toolchain.toml`; `deny.toml`; `.github/workflows/ci.yml` (from `.github/workflows/check.yml` and `.github/workflows/macos.yml`); `.github/workflows/release.yml` (macOS signing and publishing, from `.github/workflows/macos.yml` and `.github/workflows/release.yml`); `scripts/ci/check-macos-bundle.sh` (from the "Check the bundle" step of `.github/workflows/macos.yml`).
 - Servo `servo-default-resources` 0.8.0 — https://github.com/servo/servo, commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`, path `components/default-resources` — MPL-2.0 — vendored in `third_party/servo-default-resources` without its resource-reader registration, so that Mercury can register its own (site security: Mercury's error pages); see `third_party/servo-default-resources/MERCURY.md`.
+- Servo 0.8.0 — https://github.com/servo/servo, tag `v0.8.0` (commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`), paths `tests/common/mod.rs` and `tests/accessibility.rs` — MPL-2.0 — adapted in `crates/talaria-servo/tests/common/mod.rs` (`ServoTest`, the delegate, the JavaScript and scene helpers) and `crates/talaria-servo/tests/common/a11y_harness.rs` (the accessibility tree building, the update loop and the node search) for the headless page-accessibility tests.
+- Servo's servoshell 0.8.0 — https://github.com/servo/servo, tag `v0.8.0`, path `ports/servoshell/desktop/gui.rs` — MPL-2.0 — the idea of holding an accessibility subtree back until the update that grafts it has gone out, in `crates/mercury-a11y/src/graft.rs` and `third_party/i-slint-backend-winit/mercury_graft.rs`; the code is written fresh, no line is copied (`mercury_graft.rs` is Mercury's own and is under PolyForm).
+- `accname` and `a11y-dom` 0.30.12 — https://crates.io/crates/accname and https://crates.io/crates/a11y-dom — MIT — dependencies of `crates/mercury-a11y` (accessible names and descriptions, the DOM trait), pinned to this exact version; not vendored and not modified. Their licence texts are on the credits page like every other crate.
 
 ## Bundled libraries (macOS application)
 
@@ -121,11 +128,12 @@ table does not match what it collected):
 | Project (cerbero recipe) | Version | Licence | Bundled files |
 |---|---|---|---|
 | bzip2 | 1.0.8 | bzip2-1.0.6 | `libbz2.1.dylib` |
+| dav1d | 1.4.1 | BSD-2-Clause | `libdav1d.7.dylib` |
 | ffmpeg | 7.1 | LGPL-2.1-or-later | `libavcodec.61.dylib`, `libavfilter.10.dylib`, `libavformat.61.dylib`, `libavutil.59.dylib`, `libswresample.5.dylib`, `libswscale.8.dylib` |
 | glib | 2.82.4 | LGPL-2.0-or-later | `libgio-2.0.0.dylib`, `libglib-2.0.0.dylib`, `libgmodule-2.0.0.dylib`, `libgobject-2.0.0.dylib` |
 | graphene | 1.10.8 | MIT | `libgraphene-1.0.0.dylib` |
 | gst-libav-1.0 | 1.28.9 | LGPL-2.1-or-later | `libgstlibav.dylib` |
-| gst-plugins-bad-1.0 | 1.28.9 | LGPL-2.0-or-later (usrsctp in libgstsctp: BSD-3-Clause) | `libgstapplemedia.dylib`, `libgstaudiobuffersplit.dylib`, `libgstcodecparsers-1.0.0.dylib`, `libgstdtls.dylib`, `libgstid3tag.dylib`, `libgstplay-1.0.0.dylib`, `libgstproxy.dylib`, `libgstsctp-1.0.0.dylib`, `libgstvideoparsersbad.dylib`, `libgstvulkan-1.0.0.dylib`, `libgstwebrtc-1.0.0.dylib`, `libgstwebrtc.dylib`, `libgstwebrtcnice-1.0.0.dylib` |
+| gst-plugins-bad-1.0 | 1.28.9 | LGPL-2.0-or-later (usrsctp in libgstsctp: BSD-3-Clause) | `libgstapplemedia.dylib`, `libgstaudiobuffersplit.dylib`, `libgstcodecparsers-1.0.0.dylib`, `libgstdav1d.dylib`, `libgstdtls.dylib`, `libgstid3tag.dylib`, `libgstplay-1.0.0.dylib`, `libgstproxy.dylib`, `libgstsctp-1.0.0.dylib`, `libgstvideoparsersbad.dylib`, `libgstvulkan-1.0.0.dylib`, `libgstwebrtc-1.0.0.dylib`, `libgstwebrtc.dylib`, `libgstwebrtcnice-1.0.0.dylib` |
 | gst-plugins-base-1.0 | 1.28.9 | LGPL-2.0-or-later | `libgstapp-1.0.0.dylib`, `libgstapp.dylib`, `libgstaudio-1.0.0.dylib`, `libgstaudioconvert.dylib`, `libgstaudioresample.dylib`, `libgstfft-1.0.0.dylib`, `libgstgio.dylib`, `libgstgl-1.0.0.dylib`, `libgstopengl.dylib`, `libgstopus.dylib`, `libgstpbutils-1.0.0.dylib`, `libgstplayback.dylib`, `libgstriff-1.0.0.dylib`, `libgstrtp-1.0.0.dylib`, `libgstsdp-1.0.0.dylib`, `libgsttag-1.0.0.dylib`, `libgsttheora.dylib`, `libgsttypefindfunctions.dylib`, `libgstvideo-1.0.0.dylib`, `libgstvideoconvertscale.dylib`, `libgstvolume.dylib`, `libgstvorbis.dylib` |
 | gst-plugins-good-1.0 | 1.28.9 | LGPL-2.1-or-later | `libgstaudiofx.dylib`, `libgstaudioparsers.dylib`, `libgstautodetect.dylib`, `libgstdeinterlace.dylib`, `libgstid3demux.dylib`, `libgstinterleave.dylib`, `libgstisomp4.dylib`, `libgstmatroska.dylib`, `libgstosxaudio.dylib`, `libgstosxvideo.dylib`, `libgstrtp.dylib`, `libgstrtpmanager.dylib`, `libgstvideofilter.dylib`, `libgstvpx.dylib`, `libgstwavparse.dylib` |
 | gstreamer-1.0 | 1.28.9 | LGPL-2.0-or-later | `libgstbase-1.0.0.dylib`, `libgstcontroller-1.0.0.dylib`, `libgstcoreelements.dylib`, `libgstnet-1.0.0.dylib`, `libgstreamer-1.0.0.dylib` |
@@ -170,6 +178,19 @@ Mercury Browser ships can be used in a commercial product.
 - Brave Firstparty specific filters — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-firstparty.txt`) — local file `brave-firstparty.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-firstparty.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
 - Brave Specific — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-specific.txt`) — local file `brave-specific.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-specific.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
 - Brave unbreak list (its only line is `! Brave desktop filters`) — Brave, https://github.com/brave/adblock-lists (`brave-lists/brave-unbreak.txt`) — local file `brave-unbreak.txt` — fetched from https://raw.githubusercontent.com/brave/adblock-lists/master/brave-lists/brave-unbreak.txt — MPL-2.0, the repository's `LICENSE` file (read at commit `a190fe07fe27b697dc796d54a54b58dfd75e7b1c`); the list itself has no licence line. Text: `LICENSES/MPL-2.0.txt`.
+
+The HSTS preload list is data too, but it is compiled into the executable, not shipped as a file
+beside it: the host names that sites asked browsers, in advance, to open only over HTTPS, in the
+`fst` map format Servo reads. `crates/talaria-servo/src/resources.rs` serves it to Servo's network
+stack in place of the copy in the vendored `servo-default-resources`. It is regenerated before
+releases by the `hsts-preload` tool (`crates/mercury-devtools`) from Chromium's published list;
+`crates/talaria-servo/resources/hsts_preload.manifest.json` records where the data came from, the
+date it was fetched and the SHA-256 of the input and of the data file. Since 22 Nov 2026 it
+is Chromium's list itself (95,544 hosts, commit `f87e0ffc32f5358a0cb05b1e10b8c1235c935a5e`), fetched by that tool; before that it was
+the copy that Servo 0.8.0 publishes, an earlier snapshot of that list of a date nobody recorded,
+which stays unchanged in the vendored `servo-default-resources`.
+
+- Chromium HSTS preload list — The Chromium Authors, https://www.chromium.org/ (file `net/http/transport_security_state_static.json` of https://chromium.googlesource.com/chromium/src, the list maintained with https://hstspreload.org/) — local file `crates/talaria-servo/resources/hsts_preload.fstmap`, compiled into the executable — regenerated by `hsts-preload` from that JSON as fetched on the date in `hsts_preload.manifest.json`; the host names and the include-subdomains flag are the data, the file format is the `fst` crate's — BSD-3-Clause, Copyright 2012 The Chromium Authors (the header of that JSON file; the licence text is Chromium's `LICENSE` file, which says Copyright 2015 The Chromium Authors). Text: `LICENSES/BSD-3-Clause-chromium.txt`.
 
 ## Build tools
 
@@ -251,6 +272,41 @@ Rust crates that load and wrap the library are compiled into `mercury-browser` a
 - `vecmath` 1.0.0 — https://github.com/pistondevelopers/vecmath — MIT (Copyright (c) 2014 PistonDevelopers;
   `LICENSES/MIT-vecmath.txt`) — a dependency of `pdfium-render`.
 
+## View source (tree-sitter)
+
+The View Source page (`crates/mercury-view-source`) colours HTML, JavaScript and CSS with **tree-sitter**, a parsing
+library written in C. It is not downloaded as a binary: the C core and each grammar's `parser.c` are compiled into
+`mercury-browser` by their crates' build scripts (with `cc`), on Intel and on Apple Silicon alike, so there is nothing
+to pin by checksum. Each grammar's `src/parser.c` (and its `grammar.json` and `node-types.json`) is **generated** by
+`tree-sitter generate` from the grammar's `grammar.js` and shipped in the crate as generated output, not written by
+hand; Mercury compiles it as it is and does not edit it. The generated parser carries the licence of its grammar. Every crate below is under the MIT licence, read in the package as it is in the cargo registry on
+20 Nov 2026, and keeps it; the copyright lines are the ones the packages give.
+
+- `tree-sitter` 0.27.2 — https://github.com/tree-sitter/tree-sitter — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — the parsing library: the C core and its Rust binding. It also carries a small part
+  of ICU, the UTF-8 and UTF-16 macros in `src/unicode/` (Copyright © 1991-2019 Unicode, Inc., under the ICU 58 and later
+  licence, whose text is `src/unicode/LICENSE` in the package and is on the credits page), and `src/portable/endian.h`,
+  which its author, Mathias Panzenböck, put in the public domain (his header says so). The `wasm` feature (Wasmtime, and
+  the libc stub in `src/wasm-stdlib/`) is off.
+- `tree-sitter-highlight` 0.27.2 — the same repository — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — turns a parse tree and a highlight query into highlighted ranges, with the
+  injection of one language into another (`<script>` as JavaScript, `<style>` as CSS).
+- `tree-sitter-language` 0.1.9 — the same repository — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — the small crate through which a grammar hands its language to the library.
+- `tree-sitter-html` 0.23.2 — https://github.com/tree-sitter/tree-sitter-html — MIT (Copyright (c) 2014 Max
+  Brunsfeld; `LICENSES/MIT-tree-sitter-html.txt`) — the HTML grammar and its highlight and injection queries.
+  **The crates.io package ships no licence file** (`Cargo.toml` and `tree-sitter.json` say `MIT`, and `grammar.js` says
+  `@license MIT`), so the file in `LICENSES/` is the `LICENSE` of the upstream repository at tag `v0.23.2`
+  (https://github.com/tree-sitter/tree-sitter-html/blob/v0.23.2/LICENSE, read on 22 Nov 2026), with its copyright line
+  as it is there; the credits page does the same (`[[clarify]]` in `crates/mercury-credits/credits.toml`).
+- `tree-sitter-javascript` 0.25.0 — https://github.com/tree-sitter/tree-sitter-javascript — MIT (Copyright (c) 2014 Max
+  Brunsfeld; `LICENSES/MIT-tree-sitter.txt`) — the JavaScript grammar and its queries.
+- `tree-sitter-css` 0.25.0 — https://github.com/tree-sitter/tree-sitter-css — MIT (Copyright (c) 2018 Max Brunsfeld;
+  `LICENSES/MIT-tree-sitter.txt`) — the CSS grammar and its queries.
+- `streaming-iterator` 0.1.9 — https://github.com/sfackler/streaming-iterator — MIT OR Apache-2.0 (used under MIT;
+  Copyright (c) 2016 Steven Fackler; its own `LICENSE-MIT`, which the credits page shows) — an iterator trait that
+  `tree-sitter` and `tree-sitter-highlight` use. Rust only.
+
 ## Vendored crates (`third_party/`)
 
 Mercury Browser carries 26 crates in `third_party/`. Each is the crate exactly as published on
@@ -262,8 +318,10 @@ them with its licence text and a pointer to its source.
 
 - `gaol` 0.2.1 — https://github.com/servo/gaol, commit `4544946c5c922ee619a932ae5c3fd1d26f143384` — MIT/Apache-2.0, used under the MIT licence (Copyright (c) 2012-2013 Mozilla Foundation); the texts are in `third_party/gaol/LICENSE-MIT` and `third_party/gaol/LICENSE-APACHE`.
 - `surfman` 0.14.0 — https://github.com/servo/surfman, commit `ca64434fb50cab45d9eda38a00f01fa0ddc43fe4` — MIT OR Apache-2.0 OR MPL-2.0, used under the MIT licence (Copyright (c) 2010 The Rust Project Developers) or the Apache-2.0 licence; the texts are in `third_party/surfman/LICENSE-MIT`, `LICENSE-APACHE` and `LICENSE-MPL`.
-- `i-slint-backend-winit` 1.17.1 — https://github.com/slint-ui/slint, commit `cf62c975c311e7036d599ed8ed0b7e6a8386a934`, path `internal/backends/winit` — offered under `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`, used under the Slint Royalty-free Desktop, Mobile and Web Applications License 2.0 like the rest of Slint (see "Slint" below). Mercury's changes to it stay under that licence. Its `LICENSES/` directory is kept as published; `third_party/i-slint-backend-winit/MERCURY.md` has the conditions every change must keep.
+- `i-slint-backend-winit` 1.17.1 — https://github.com/slint-ui/slint, commit `cf62c975c311e7036d599ed8ed0b7e6a8386a934`, path `internal/backends/winit` — offered under `GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0`, used under the Slint Royalty-free Desktop, Mobile and Web Applications License 2.0 like the rest of Slint (see "Slint" below). Mercury's changes to its existing files stay under that licence; its one new file, `mercury_graft.rs`, copies no Slint source and is PolyForm. Its `LICENSES/` directory is kept as published; `third_party/i-slint-backend-winit/MERCURY.md` has the conditions every change must keep.
 - The Servo crates `servo`, `servo-canvas`, `servo-config`, `servo-constellation`, `servo-constellation-traits`, `servo-default-resources`, `servo-embedder-traits`, `servo-layout`, `servo-layout-api`, `servo-media`, `servo-media-gstreamer`, `servo-media-player`, `servo-media-streams`, `servo-media-webrtc`, `servo-net`, `servo-net-traits`, `servo-script`, `servo-script-bindings`, `servo-script-webcrypto`, `servo-storage`, `servo-storage-traits` and `servo-webgl` (all 0.8.0, from https://github.com/servo/servo, commit `4e136d8ef31b7c4748fbfac606ca463f3efd7537`) and `stylo_static_prefs` 0.23.0 (from https://github.com/servo/stylo, commit `2dca34592ced37c6aa01733e94206a767194cf9d`) — MPL-2.0 (`servo-script-bindings` also BSD-3-Clause for the PLY library its build script runs, which is not part of the executable). Where Mercury changed one of them, the changed files stay under the MPL-2.0 and are published with the release tag in the Mercury repository (https://github.com/thepigdestroyer/mercury-browser, `third_party/`), as the MPL-2.0 requires; the unchanged files are at the upstream commit named above.
+
+Media Source Extensions (the `MediaSource`, `SourceBuffer` and `SourceBufferList` interfaces, off by default): Servo pull request #47269, "script: Implement the Media Source API", by decomoraes (https://github.com/servo/servo/pull/47269), MPL-2.0 like the crates it was carried into. The pull request was closed unmerged on 16 Aug 2026 after its author told a Servo maintainer that it was written with a large language model, which Servo's policy does not accept; Servo never reviewed it, so nothing here is endorsed upstream. Mercury carries it because it is MPL-2.0 as published and gives a head start on the WebIDL and the object URL store; it re-checked what it carried (the three interfaces against the W3C WebIDL, the object URL store, the event plumbing and its `unsafe` sender) and rewrote the rest (see `docs/developer-guide/media-source.md`). The structure, attach and detach steps, event queuing and method list are carried into `third_party/servo-script/dom/mse/` (`mediasource.rs`, `sourcebuffer.rs`, `sourcebufferlist.rs`, `mod.rs`), the media source object URL store into `dom/globalscope/globalscope.rs` and `dom/url/url.rs`, and the WebIDL (`MediaSource`, `SourceBuffer` without `textTracks`, `SourceBufferList`, the `URL` and `HTMLMediaElement` additions) and `Bindings.conf` entries into `third_party/servo-script-bindings/`. The pull request's byte-stream parser, its `push_data` data plane and its test expectation files are not carried: the data plane is Mercury's own `crates/mercury-mse` (written from the W3C Media Source Extensions specification; Ladybird's and Firefox's implementations were read as references and no code was copied). Each carried file names the pull request in its header. The Servo backports servo/servo#49784, #49889 and #49661 in `servo-media-gstreamer` are MPL-2.0 as well.
 
 ## Slint
 
@@ -292,8 +350,8 @@ standard text of its licence with a copyright line taken from the crate's metada
 Several of these crates compile native code into the application, whose licence files the page
 includes: SpiderMonkey (`mozjs_sys`, with LZ4, xsum, Zydis, irregexp, double-conversion, fdlibm,
 {fmt}, function2, gemmology and xsimd), ANGLE (`mozangle`), AWS-LC (`aws-lc-sys`), HarfBuzz
-(`harfbuzz-sys`), the OpenType Sanitiser and LZ4 (`fontsan`), Zstandard (`zstd-sys`) and zlib
-(`libz-sys`).
+(`harfbuzz-sys`), the OpenType Sanitiser and LZ4 (`fontsan`), Zstandard (`zstd-sys`), zlib
+(`libz-sys`) and tree-sitter (`tree-sitter`, with ICU's UTF macros; see "View source (tree-sitter)" above).
 
 - **SQLite** (`libsqlite3-sys`) is in the public domain (https://www.sqlite.org/copyright.html) and has no licence text.
 - **The Linux archive** also contains FreeType 2.13.3 (bundled by the `freetype-sys` crate), used under the FreeType License. Portions of this software are copyright © 2024 The FreeType Project (www.freetype.org). All rights reserved.

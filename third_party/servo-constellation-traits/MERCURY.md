@@ -28,6 +28,19 @@ Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message 
 - **Tested by:** `cargo test --release -p servo-constellation-traits mercury` (3 tests).
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
+Changes made by lane net-1 (21 Nov 2026).
+
+### The creator's partition key in `WorkerGlobalScopeInit` — `from_script_message.rs`
+
+- **What:** `WorkerGlobalScopeInit` gets `network_partition_key: Option<Site>` (0.8.0 line about 580), filled by
+  `prepare_workerscope_init` in `servo-script` from the document (or worker) that creates the worker, and used as the
+  `network_partition_key` of the worker's own requests (dedicated and shared workers; a worklet's module fetch takes the
+  document's key too).
+- **Why:** a worker's request had no key, so the network layer could not tell its first-party requests from its third-party ones
+  without guessing from a record of what its web view was loading, which a page could poison (net-1 review, finding 1).
+- **Tested by:** compiling `servo-script`; the network policy's side is `servo-net/tests/net_policy.rs` and `cookie_policy.rs`.
+- **Drop when:** Servo gives workers the network partition key of their creator.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

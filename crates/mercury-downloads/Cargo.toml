@@ -9,6 +9,7 @@ license.workspace = true
 [dependencies]
 futures-util.workspace = true
 log.workspace = true
+mercury-proxy = { path = "../mercury-proxy" }
 mime_guess.workspace = true
 percent-encoding.workspace = true
 reqwest.workspace = true

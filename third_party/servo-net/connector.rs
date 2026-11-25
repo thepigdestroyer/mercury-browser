@@ -631,7 +631,8 @@ pub struct ProxyConnector {
 }
 
 impl ProxyConnector {
-    fn new() -> Self {
+    // Mercury: `pub(crate)` so that `mercury_ws::connect_tcp` opens a WebSocket through the same proxy as HTTP (EC23a).
+    pub(crate) fn new() -> Self {
         let matcher_builder = hyper_util::client::proxy::matcher::Matcher::builder()
             .http(servo_config::pref!(network_http_proxy_uri))
             .https(servo_config::pref!(network_https_proxy_uri))

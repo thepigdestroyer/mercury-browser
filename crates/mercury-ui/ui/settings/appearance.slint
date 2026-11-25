@@ -1,0 +1,712 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The Appearance section's layout cards and tab-group controls (lane settings-ui, SPEC §4.8).
+//
+// The `AppearanceUi` global is the frozen contract (brief section 7): everything the section shows comes from
+// `mercury_appearance::panels::layout_panel`, through `mercury_ui::settings_sections::appearance::fill`; what the
+// user does goes back through the two callbacks, which `settings_sections::appearance::connect` turns into an
+// `AppearanceAction`. This file only draws values and reports clicks: no logic of its own.
+//
+// Colours: `ChromePalette` roles and the window's own `Palette`, nothing else (brief D16). A card is drawn on
+// `field-background`; a muted line is `text-secondary`; the note that the interface is not in yet sits on
+// `notice-background` with `text`.
+import { ComboBox, Palette } from "std-widgets.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export global AppearanceUi {
+    // Layout: 0 Mercury, 1 Classic.
+    in-out property <int> layout-index;
+
+    // Group dock: the switch of the chosen layout (`dock` or `dock_in_classic`), its note, and where it starts
+    // (0 open, 1 shrunk).
+    in-out property <bool> dock;
+    in property <string> dock-note;
+    in-out property <int> dock-starts-index;
+
+    in-out property <bool> ring;
+    in-out property <bool> orbit;
+    // Pinch to open Orbit; only usable while Orbit is on.
+    in-out property <bool> orbit-pinch;
+    in property <bool> orbit-pinch-enabled: true;
+    // Group keys (⌥ + letter): `keys.enabled`.
+    in-out property <bool> keys;
+    in-out property <bool> dial;
+    // The dial's corner: 0 top left, 1 top right, 2 bottom left, 3 bottom right; only usable while the dial is on.
+    in-out property <int> dial-corner-index;
+    in property <bool> dial-corner-enabled: true;
+    // Memory for Orbit previews: the choices as text ("128 MB") and the chosen one.
+    in property <[string]> snapshot-cap-choices;
+    in-out property <int> snapshot-cap-index;
+
+    // The one note that says the tab-group interface is not in yet; empty when it is.
+    in property <string> note;
+
+    // A switch: "dock", "ring", "orbit", "orbit-pinch", "keys", "dial", and its new state.
+    callback toggled(string, bool);
+    // A list: "layout", "dock-starts", "dial-corner", "snapshot-cap", and the chosen index.
+    callback chosen(string, int);
+}
+
+component GroupTitle inherits Text {
+    font-size: 13px;
+    font-weight: 650;
+    color: Palette.foreground;
+}
+
+// A short explanation under a control.
+component Note inherits Text {
+    font-size: 12px;
+    color: ChromePalette.text-secondary;
+    wrap: word-wrap;
+}
+
+// The 2 px outline of the control that has keyboard focus, drawn just outside `parent`.
+component FocusRing inherits Rectangle {
+    in property <length> outset: 3px;
+    in property <length> corner: 8px;
+    // The size of the control it surrounds (a component root cannot name its `parent`).
+    in property <length> target-width;
+    in property <length> target-height;
+
+    x: -root.outset;
+    y: -root.outset;
+    width: root.target-width + 2 * root.outset;
+    height: root.target-height + 2 * root.outset;
+    border-radius: root.corner;
+    border-width: 2px;
+    border-color: ChromePalette.focus-ring;
+    accessible-role: none;
+}
+
+// A small drawing of one layout: the window's bars as plain shapes, no image file. Mercury has the toolbar on
+// top with the hub and the group dock at the bottom; Classic has the tab strip with group labels above the
+// toolbar and no dock. Decorative: hidden from assistive technology (the card says it in words).
+component LayoutDrawing inherits Rectangle {
+    in property <bool> classic;
+
+    property <length> strip: root.classic ? 15px : 0px;
+    property <length> toolbar: 17px;
+    property <[color]> chips: [
+        ChromePalette.accent,
+        ChromePalette.text-secondary,
+        ChromePalette.info-border,
+        ChromePalette.field-border,
+    ];
+
+    background: ChromePalette.window-background;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: ChromePalette.field-border;
+    clip: true;
+    accessible-role: none;
+
+    // Classic: the tab strip, two groups of two tabs with a label line above each.
+    if root.classic: Rectangle {
+        y: 0px;
+        width: parent.width;
+        height: root.strip;
+
+        Rectangle {
+            x: 6px;
+            y: 2px;
+            width: parent.width * 0.35 + 3px;
+            height: 2px;
+            background: ChromePalette.accent;
+        }
+
+        Rectangle {
+            x: 6px + parent.width * 0.35 + 9px;
+            y: 2px;
+            width: parent.width * 0.35 + 3px;
+            height: 2px;
+            background: ChromePalette.text-secondary;
+        }
+
+        for tab in 4: Rectangle {
+            x: 6px + tab * (parent.width * 0.175 + 3px);
+            y: 6px;
+            width: parent.width * 0.175;
+            height: root.strip - 6px;
+            border-top-left-radius: 3px;
+            border-top-right-radius: 3px;
+            background: tab == 0 ? ChromePalette.tab-active : ChromePalette.tab-hover;
+
+            if tab == 0: Rectangle {
+                y: parent.height - 2px;
+                height: 2px;
+                background: ChromePalette.accent;
+            }
+        }
+    }
+
+    // The toolbar: the buttons, the hub (Mercury only) and the address field.
+    Rectangle {
+        y: root.strip;
+        width: parent.width;
+        height: root.toolbar;
+        background: ChromePalette.toolbar-background;
+
+        for dot in 3: Rectangle {
+            x: 7px + dot * 8px;
+            y: (parent.height - 5px) / 2;
+            width: 5px;
+            height: 5px;
+            border-radius: 2.5px;
+            background: ChromePalette.button-label;
+        }
+
+        if !root.classic: Rectangle {
+            x: 34px;
+            y: (parent.height - 8px) / 2;
+            width: 8px;
+            height: 8px;
+            border-radius: 4px;
+            background: ChromePalette.accent;
+        }
+
+        Rectangle {
+            x: root.classic ? 34px : 48px;
+            y: (parent.height - 10px) / 2;
+            width: parent.width - self.x - 12px;
+            height: 10px;
+            border-radius: 5px;
+            border-width: 1px;
+            border-color: ChromePalette.field-border;
+            background: ChromePalette.field-background;
+        }
+    }
+
+    // The page: a heading, a picture, lines of text and a side box.
+    Rectangle {
+        y: root.strip + root.toolbar;
+        width: parent.width;
+        height: parent.height - root.strip - root.toolbar;
+        background: ChromePalette.content-background;
+
+        Rectangle {
+            x: parent.width * 0.08;
+            y: 7px;
+            width: parent.width * 0.36;
+            height: 4px;
+            border-radius: 2px;
+            background: ChromePalette.text-secondary;
+        }
+
+        Rectangle {
+            x: parent.width * 0.08;
+            y: 16px;
+            width: parent.width * 0.5;
+            height: parent.height * 0.34;
+            border-radius: 3px;
+            background: ChromePalette.item-hover;
+        }
+
+        for line in 3: Rectangle {
+            x: parent.width * 0.08;
+            y: 16px + parent.height * 0.34 + 6px + line * 6px;
+            width: parent.width * (line == 2 ? 0.3 : 0.5);
+            height: 3px;
+            border-radius: 1.5px;
+            background: ChromePalette.field-border;
+        }
+
+        Rectangle {
+            x: parent.width * 0.64;
+            y: 7px;
+            width: parent.width * 0.28;
+            height: parent.height * 0.42;
+            border-radius: 3px;
+            border-width: 1px;
+            border-color: ChromePalette.field-border;
+            background: ChromePalette.field-background;
+        }
+
+        // Mercury: the group dock, a capsule at the bottom with a chip for each group.
+        if !root.classic: Rectangle {
+            width: parent.width * 0.62;
+            height: 13px;
+            x: (parent.width - self.width) / 2;
+            y: parent.height - self.height - 5px;
+            border-radius: 6.5px;
+            border-width: 1px;
+            border-color: ChromePalette.toolbar-divider;
+            background: ChromePalette.toolbar-background;
+
+            for chip[index] in root.chips: Rectangle {
+                x: 8px + index * (parent.width - 16px) / 4;
+                y: (parent.height - 5px) / 2;
+                width: (parent.width - 16px) / 4 - 4px;
+                height: 5px;
+                border-radius: 2.5px;
+                background: chip;
+            }
+        }
+    }
+}
+
+// A layout the user can choose: its drawing, a radio and its name and description. The selected card has a 2 px
+// accent border; the focused one a 2 px focus ring outside it.
+component LayoutCard inherits Rectangle {
+    in property <string> label;
+    in property <string> description;
+    in property <bool> selected;
+    in property <bool> classic;
+    // Its place among the layouts, for "n of m".
+    in property <int> index;
+    in property <int> count;
+    callback chosen;
+
+    background: ChromePalette.field-background;
+    border-radius: 10px;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? ChromePalette.accent : ChromePalette.field-border;
+    accessible-role: radio-button;
+    accessible-label: root.label;
+    accessible-description: root.description;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.pick();
+    }
+
+    // Choosing the chosen layout again is not a change.
+    function pick() {
+        if !root.selected {
+            root.chosen();
+        }
+    }
+
+    LayoutDrawing {
+        x: 14px;
+        y: 14px;
+        width: parent.width - 28px;
+        height: 84px;
+        classic: root.classic;
+    }
+
+    HorizontalLayout {
+        x: 14px;
+        y: 108px;
+        width: parent.width - 28px;
+        height: parent.height - 108px - 10px;
+        spacing: 8px;
+
+        VerticalLayout {
+            alignment: start;
+            padding-top: 1px;
+
+            Rectangle {
+                width: 16px;
+                height: 16px;
+                border-radius: 8px;
+                border-width: 2px;
+                border-color: root.selected ? ChromePalette.accent : ChromePalette.text-secondary;
+                accessible-role: none;
+
+                if root.selected: Rectangle {
+                    x: 4px;
+                    y: 4px;
+                    width: 8px;
+                    height: 8px;
+                    border-radius: 4px;
+                    background: ChromePalette.accent;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: start;
+            spacing: 1px;
+
+            Text {
+                text: root.label;
+                color: ChromePalette.text;
+                font-size: 13px;
+                font-weight: 650;
+                overflow: elide;
+                accessible-role: none;
+            }
+
+            Text {
+                text: root.description;
+                color: ChromePalette.text-secondary;
+                font-size: 12px;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.pick();
+        }
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.pick();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    if focus.has-focus: FocusRing {
+        target-width: parent.width;
+        target-height: parent.height;
+        corner: 13px;
+    }
+}
+
+// The two layout cards side by side, or stacked when the section is narrow (the window can be as narrow as 560 px).
+component LayoutCards inherits Rectangle {
+    in-out property <int> layout-index;
+    callback chosen(int);
+
+    property <length> gap: 12px;
+    property <length> card-height: 160px;
+    property <bool> wide: root.width >= 460px;
+
+    height: root.wide ? root.card-height : 2 * root.card-height + root.gap;
+
+    LayoutCard {
+        x: 0px;
+        y: 0px;
+        width: root.wide ? (root.width - root.gap) / 2 : root.width;
+        height: root.card-height;
+        label: "Mercury (default)";
+        description: "Toolbar on top, group dock at the bottom";
+        classic: false;
+        index: 0;
+        count: 2;
+        selected: root.layout-index == 0;
+        chosen => {
+            root.chosen(0);
+        }
+    }
+
+    LayoutCard {
+        x: root.wide ? (root.width + root.gap) / 2 : 0px;
+        y: root.wide ? 0px : root.card-height + root.gap;
+        width: root.wide ? (root.width - root.gap) / 2 : root.width;
+        height: root.card-height;
+        label: "Classic";
+        description: "Tabs in the title strip, group labels";
+        classic: true;
+        index: 1;
+        count: 2;
+        selected: root.layout-index == 1;
+        chosen => {
+            root.chosen(1);
+        }
+    }
+}
+
+// A switch with its label and a note under it. The switch is an outline when off and accent-filled when on; its knob
+// is the primary button's text colour on the accent. Pressing it from assistive technology does what a click does,
+// and nothing while it is disabled. A dependent control is `indented`, under the text of its parent.
+component SwitchRow inherits Rectangle {
+    in property <string> label;
+    in property <string> note;
+    in-out property <bool> checked;
+    in property <bool> enabled: true;
+    in property <bool> indented: false;
+    callback toggled(bool);
+
+    height: row.preferred-height;
+    opacity: root.enabled ? 1.0 : 0.5;
+    accessible-role: switch;
+    accessible-label: root.label;
+    accessible-description: root.note;
+    accessible-checkable: true;
+    accessible-checked: root.checked;
+    accessible-enabled: root.enabled;
+    accessible-action-default => {
+        root.flip();
+    }
+
+    function flip() {
+        // Disabled: nothing happens, even if assistive technology presses it.
+        if root.enabled {
+            root.checked = !root.checked;
+            root.toggled(root.checked);
+        }
+    }
+
+    row := HorizontalLayout {
+        padding-left: root.indented ? 52px : 0px;
+        padding-top: 1px;
+        padding-bottom: 1px;
+        spacing: 12px;
+
+        VerticalLayout {
+            alignment: start;
+
+            Rectangle {
+                width: 40px;
+                height: 22px;
+                border-radius: 11px;
+                border-width: 2px;
+                border-color: root.checked ? ChromePalette.accent : ChromePalette.text-secondary;
+                background: root.checked ? ChromePalette.accent : transparent;
+                accessible-role: none;
+
+                Rectangle {
+                    x: root.checked ? 22px : 4px;
+                    y: 4px;
+                    width: 14px;
+                    height: 14px;
+                    border-radius: 7px;
+                    background: root.checked ? ChromePalette.primary-button-text : ChromePalette.text-secondary;
+                }
+            }
+        }
+
+        VerticalLayout {
+            alignment: start;
+            spacing: 2px;
+
+            Text {
+                text: root.label;
+                color: Palette.foreground;
+                font-size: 13px;
+                font-weight: 600;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+
+            if root.note != "": Note {
+                text: root.note;
+                accessible-role: none;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        enabled: root.enabled;
+        clicked => {
+            root.flip();
+        }
+    }
+
+    focus := FocusScope {
+        enabled: root.enabled;
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.flip();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    if focus.has-focus: FocusRing {
+        x: root.indented ? 52px - self.outset : -self.outset;
+        target-width: parent.width - (root.indented ? 52px : 0px);
+        target-height: parent.height;
+        outset: 4px;
+        corner: 8px;
+    }
+}
+
+// A choice under a switch ("Starts", "Corner"): a caption and a list, in line with the text of its parent.
+component SubChoiceRow inherits HorizontalLayout {
+    in property <string> label;
+    // What assistive technology calls the list.
+    in property <string> control-label;
+    in property <[string]> model;
+    in-out property <int> current-index;
+    in property <bool> enabled: true;
+    callback selected(int);
+
+    padding-left: 52px;
+    spacing: 12px;
+    alignment: start;
+
+    Text {
+        width: 52px;
+        text: root.label;
+        color: Palette.foreground;
+        font-size: 13px;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    ComboBox {
+        width: 140px;
+        enabled: root.enabled;
+        accessible-label: root.control-label;
+        model: root.model;
+        current-index <=> root.current-index;
+        selected => {
+            root.selected(self.current-index);
+        }
+    }
+}
+
+export component AppearanceSection inherits VerticalLayout {
+    spacing: 12px;
+
+    // The one note that the interface is not in yet (brief D4): the warning bar's colours with ordinary text.
+    if AppearanceUi.note != "": Rectangle {
+        border-radius: 6px;
+        border-width: 1px;
+        border-color: ChromePalette.notice-border;
+        background: ChromePalette.notice-background;
+        height: interface-note.preferred-height + 16px;
+
+        interface-note := Text {
+            x: 10px;
+            width: parent.width - 20px;
+            text: AppearanceUi.note;
+            color: ChromePalette.text;
+            font-size: 12px;
+            wrap: word-wrap;
+            vertical-alignment: center;
+        }
+    }
+
+    GroupTitle {
+        text: "Layout";
+    }
+
+    LayoutCards {
+        layout-index <=> AppearanceUi.layout-index;
+        chosen(index) => {
+            AppearanceUi.layout-index = index;
+            AppearanceUi.chosen("layout", index);
+        }
+    }
+
+    GroupTitle {
+        text: "Tab group controls";
+    }
+
+    SwitchRow {
+        label: "Group dock";
+        note: AppearanceUi.dock-note;
+        checked <=> AppearanceUi.dock;
+        toggled(on) => {
+            AppearanceUi.toggled("dock", on);
+        }
+    }
+
+    SubChoiceRow {
+        label: "Starts";
+        control-label: "Dock starts";
+        model: ["Open", "Shrunk"];
+        enabled: AppearanceUi.dock;
+        current-index <=> AppearanceUi.dock-starts-index;
+        selected(index) => {
+            AppearanceUi.chosen("dock-starts", index);
+        }
+    }
+
+    SwitchRow {
+        label: "Ring from the toolbar hub";
+        note: "Click the hub or hold Control-Tab. Search, status flags and ⌥ keys.";
+        checked <=> AppearanceUi.ring;
+        toggled(on) => {
+            AppearanceUi.toggled("ring", on);
+        }
+    }
+
+    SwitchRow {
+        label: "Orbit overview";
+        note: "⌘E, or “See everything” in the ring.";
+        checked <=> AppearanceUi.orbit;
+        toggled(on) => {
+            AppearanceUi.toggled("orbit", on);
+        }
+    }
+
+    SwitchRow {
+        indented: true;
+        label: "Pinch to open Orbit";
+        note: "Pinch in on a page at 100% zoom.";
+        enabled: AppearanceUi.orbit-pinch-enabled;
+        checked <=> AppearanceUi.orbit-pinch;
+        toggled(on) => {
+            AppearanceUi.toggled("orbit-pinch", on);
+        }
+    }
+
+    SwitchRow {
+        label: "Group keys (⌥ + letter)";
+        note: "Assign letters in Tab groups.";
+        checked <=> AppearanceUi.keys;
+        toggled(on) => {
+            AppearanceUi.toggled("keys", on);
+        }
+    }
+
+    SwitchRow {
+        label: "Corner dial";
+        note: "Group colour and page loading in a corner; fans out into the ring.";
+        checked <=> AppearanceUi.dial;
+        toggled(on) => {
+            AppearanceUi.toggled("dial", on);
+        }
+    }
+
+    SubChoiceRow {
+        label: "Corner";
+        control-label: "Dial corner";
+        model: ["Top left", "Top right", "Bottom left", "Bottom right"];
+        enabled: AppearanceUi.dial-corner-enabled;
+        current-index <=> AppearanceUi.dial-corner-index;
+        selected(index) => {
+            AppearanceUi.chosen("dial-corner", index);
+        }
+    }
+
+    // Memory for Orbit previews: a title and note on the left, the sizes on the right.
+    HorizontalLayout {
+        spacing: 12px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: start;
+            spacing: 2px;
+
+            Text {
+                text: "Memory for Orbit previews";
+                color: Palette.foreground;
+                font-size: 13px;
+                font-weight: 600;
+                wrap: word-wrap;
+                accessible-role: none;
+            }
+
+            Note {
+                text: "The most memory Orbit's tab previews may use.";
+                accessible-role: none;
+            }
+        }
+
+        VerticalLayout {
+            alignment: start;
+
+            ComboBox {
+                width: 130px;
+                accessible-label: "Memory for Orbit previews";
+                accessible-description: "The most memory Orbit's tab previews may use.";
+                model: AppearanceUi.snapshot-cap-choices;
+                current-index <=> AppearanceUi.snapshot-cap-index;
+                selected => {
+                    AppearanceUi.chosen("snapshot-cap", self.current-index);
+                }
+            }
+        }
+    }
+
+    Note {
+        text: "Classic keeps every control above: the hub, the ring, Orbit and group keys all work there too. The dock has its own switch in each layout.";
+    }
+}

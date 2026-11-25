@@ -238,6 +238,50 @@ fn answers_single_byte_ranges() {
 }
 
 #[test]
+fn serves_the_mse_fixtures_read_only_with_ranges() {
+    let (_dir, port) = fixture();
+    let on_disk =
+        fs::read(mercury_devtools::serve::mse_fixtures_root().join("fmp4/video-h264-low.mp4"))
+            .expect("the MSE fixture is in the repository");
+    let whole = get(port, "GET", "/mse-fixtures/fmp4/video-h264-low.mp4", &[]);
+    assert_eq!(whole.status_line, "HTTP/1.0 200 OK");
+    assert_eq!(whole.header("Content-Type"), Some("video/mp4"));
+    assert_eq!(whole.body, on_disk);
+    let part = get(
+        port,
+        "GET",
+        "/mse-fixtures/fmp4/video-h264-low.mp4?x=1",
+        &["Range: bytes=8-23"],
+    );
+    assert_eq!(part.status_line, "HTTP/1.0 206 Partial Content");
+    assert_eq!(part.body, on_disk[8..24]);
+    // Nothing outside the fixtures is reachable through the route, and the route has no writes.
+    let escape = get(port, "GET", "/mse-fixtures/../../Cargo.toml", &[]);
+    assert_eq!(escape.status_line, "HTTP/1.0 404 File not found");
+    // Percent-encoded dots, slashes and backslashes are decoded before the path is cleaned, so they
+    // cannot name a file outside the fixtures either.
+    for encoded in [
+        "/mse-fixtures/%2e%2e/%2e%2e/Cargo.toml",
+        "/mse-fixtures/%2E%2E/%2E%2E/Cargo.toml",
+        "/mse-fixtures/..%2f..%2fCargo.toml",
+        "/mse-fixtures/fmp4/%2e%2e/%2e%2e/%2e%2e/Cargo.toml",
+        "/mse-fixtures/%2e%2e%5c%2e%2e%5cCargo.toml",
+    ] {
+        let response = get(port, "GET", encoded, &[]);
+        assert_eq!(
+            response.status_line, "HTTP/1.0 404 File not found",
+            "{encoded}"
+        );
+        assert!(
+            !response.text().contains("[workspace]"),
+            "{encoded} served a file outside the fixtures"
+        );
+    }
+    let missing = get(port, "GET", "/mse-fixtures/nope.mp4", &[]);
+    assert_eq!(missing.status_line, "HTTP/1.0 404 File not found");
+}
+
+#[test]
 fn refuses_unsatisfiable_ranges() {
     let (_dir, port) = fixture();
     for (path, range, size) in [

@@ -9,6 +9,8 @@ WorkerNavigator includes NavigatorID;
 WorkerNavigator includes NavigatorLanguage;
 WorkerNavigator includes NavigatorOnLine;
 WorkerNavigator includes NavigatorConcurrentHardware;
+// Mercury: Global Privacy Control (the mixin is defined in Navigator.webidl).
+WorkerNavigator includes NavigatorGPC;
 
 // https://w3c.github.io/permissions/#navigator-and-workernavigator-extension
 

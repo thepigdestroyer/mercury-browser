@@ -220,7 +220,9 @@ impl ServoCookie {
 
         // TODO: Step 16, Ignore cookies from insecure request uris based on existing cookies
 
-        // TODO: Steps 17-19, same-site-flag
+        // Mercury: Steps 17-19 (the same-site-flag) need the request that carried the cookie, which this
+        // function does not have. They are enforced by `mercury_cookies::accept_set_cookie`, at the
+        // places that store a cookie (a `Set-Cookie` header, `document.cookie`).
 
         // Step 20. If the cookie-name begins with a case-insensitive match for the string "__Secure-",
         // abort these steps and ignore the cookie entirely unless the cookie's secure-only-flag is true.
@@ -377,7 +379,8 @@ impl ServoCookie {
         if self.cookie.http_only().unwrap_or(false) && source == CookieSource::NonHTTP {
             return false;
         }
-        // TODO: Apply same site checks
+        // Mercury: the same site checks need the request, which this function does not have. They are
+        // applied by `mercury_cookies::cookie_may_be_sent` through `CookieStorage::cookies_for_request`.
         // TOOD: Apply Partitioning checks
 
         true

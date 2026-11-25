@@ -290,6 +290,9 @@ pub(crate) mod media;
 pub(crate) use self::media::*;
 pub(crate) mod mimetype;
 pub(crate) use self::mimetype::*;
+// Mercury: (MED-1) Media Source Extensions (dom/mse/), behind `dom_media_source_enabled`.
+pub(crate) mod mse;
+pub(crate) use self::mse::*;
 pub(crate) mod mutationobserver;
 pub(crate) use self::mutationobserver::*;
 pub(crate) mod navigator;
@@ -360,6 +363,9 @@ pub(crate) use self::webgpu::*;
 pub(crate) mod gpucanvascontext;
 pub(crate) mod webcrypto;
 pub(crate) use self::webcrypto::*;
+// Mercury: Web Locks (servo/servo#47981).
+pub(crate) mod weblock;
+pub(crate) use self::weblock::*;
 pub(crate) mod webrtc;
 pub(crate) use self::webrtc::*;
 pub(crate) mod webvtt;

@@ -11,6 +11,7 @@ license.workspace = true
 [dependencies]
 adblock.workspace = true
 log.workspace = true
+mercury-proxy = { path = "../mercury-proxy" }
 mercury-settings = { path = "../mercury-settings" }
 reqwest.workspace = true
 serde = { workspace = true, features = ["derive"] }

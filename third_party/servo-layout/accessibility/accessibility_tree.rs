@@ -24,6 +24,9 @@ use webrender_api::ExternalScrollId;
 use webrender_api::units::LayoutVector2D;
 
 use super::accessibility_node::{AccessibilityNode, DirtyState};
+// Mercury: a11y-1 item 4: the per-update state of `semantics.rs` and the adapter's id table.
+use super::semantics::SemanticsCache;
+use super::{dom_adapter, semantics};
 use crate::ArcRefCell;
 use crate::accessibility::{AccessibilityContext, AccessibilityDamageMap};
 
@@ -79,6 +82,10 @@ pub struct AccessibilityTree {
     /// Debug options, copied from configuration to this `AccessibilityTree` in order
     /// to avoid having to constantly access the thread-safe global options.
     debug: DiagnosticsLogging,
+    /// Mercury: a11y-1 item 4: whether any element of the document has had an IDREF attribute
+    /// (`aria-labelledby`, ...) or been a `<label for>`. Once set it stays set; until it is, the
+    /// reverse maps of "whose name depends on this node" are not built (see `semantics.rs`).
+    uses_idrefs: bool,
 }
 
 /// Changes which have occurred during the current update, and data required to process the update.
@@ -101,6 +108,9 @@ pub(super) struct AccessibilityUpdate<'update> {
     /// Map of [`NodeId`] to the corresponding [`ServoLayoutNode`]. This is populated for nodes
     /// which have damage, including nodes which are newly added to the accessibility tree.
     dom_node_map: RefCell<FxHashMap<NodeId, ServoLayoutNode<'update>>>,
+    /// Mercury: a11y-1 item 4: the id index of the document, the nodes whose recomputation may change
+    /// other nodes and the like; see `semantics.rs`.
+    pub(super) semantics: SemanticsCache<'update>,
 }
 
 /// Tracks changes to a node's relation to the tree within an update.
@@ -150,7 +160,18 @@ impl AccessibilityTree {
             embedder_epoch,
             pending_actions: vec![],
             debug: opts::get().debug.clone(),
+            uses_idrefs: false, // Mercury: a11y-1 item 4
         }
+    }
+
+    /// Mercury: a11y-1 item 4: see [`Self::uses_idrefs`].
+    pub(super) fn note_idrefs_used(&mut self) {
+        self.uses_idrefs = true;
+    }
+
+    /// Mercury: a11y-1 item 4: whether the document uses IDREF attributes at all.
+    pub(super) fn uses_idrefs(&self) -> bool {
+        self.uses_idrefs
     }
 
     /// Update this tree based on the current state of the given DOM tree, and if anything changed,
@@ -167,6 +188,9 @@ impl AccessibilityTree {
         self.ensure_root_node(root_dom_node, &context, &mut update);
 
         self.apply_changes_from_dom_tree(&context, &mut update);
+
+        // Mercury: a11y-1 item 4: recompute the nodes whose name depends on a node that changed.
+        semantics::apply_followups(self, &mut update);
 
         self.update_focused_node(context.focused_element, &mut update);
 
@@ -459,7 +483,11 @@ impl AccessibilityTree {
         node.clone()
     }
 
-    fn node_for_opaque(&self, opaque: OpaqueNode) -> Option<ArcRefCell<AccessibilityNode>> {
+    // Mercury: a11y-1 item 4: `pub(super)`, `semantics.rs` looks nodes up by opaque node.
+    pub(super) fn node_for_opaque(
+        &self,
+        opaque: OpaqueNode,
+    ) -> Option<ArcRefCell<AccessibilityNode>> {
         self.nodes
             .get(&self.existing_id_for_opaque(opaque)?)
             .cloned()
@@ -639,6 +667,8 @@ impl AccessibilityTree {
 
 impl<'update> AccessibilityUpdate<'update> {
     fn new(dom_damage: AccessibilityDamageMap<'update>, tree: &AccessibilityTree) -> Self {
+        // Mercury: a11y-1 item 4: the adapter's node ids are only valid within one update.
+        dom_adapter::begin_update();
         let damage_map = dom_damage
             .iter()
             .filter_map(|(&opaque, &(_dom_node, damage))| {
@@ -661,7 +691,14 @@ impl<'update> AccessibilityUpdate<'update> {
             counters: UpdateCounters::default(),
             damage_map,
             dom_node_map: RefCell::new(dom_node_map),
+            semantics: SemanticsCache::default(), // Mercury: a11y-1 item 4
         }
+    }
+
+    /// Mercury: a11y-1 item 4: whether this update builds the whole tree (a new root node), in which
+    /// case every node is computed from the final DOM and nothing needs recomputing afterwards.
+    pub(super) fn is_full_rebuild(&self) -> bool {
+        self.accesskit_tree.is_some()
     }
 
     pub(super) fn add(&mut self, node: &mut AccessibilityNode) {

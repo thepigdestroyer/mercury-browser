@@ -35,12 +35,17 @@
 //!    (`<use>`). 32 MiB is ten times what 1024 levels of nested `<svg>` need, for each of the four nested
 //!    documents. Rendering (`resvg::render`) needs less than 512 KiB for the same trees (measured at 1024
 //!    levels), and dropping a tree is a loop over a vector per level, so they stay on the worker.
+//! 4. **A size limit on SVGZ.** usvg 0.48.1 unpacks gzip with `read_to_end` and no limit, so a few kilobytes of
+//!    gzip in `<img src="x.svgz">` (or in a nested `data:` image) could fill the memory before the depth count
+//!    starts. [`unpack`] reads through `flate2`'s `GzDecoder` limited to [`MAX_SVG_BYTES`] + 1 bytes and refuses
+//!    anything larger; a nested image over the limit is left out before usvg's own resolver can unpack it.
 //!
 //! This is a Mercury file. Drop it (with the two calls in `image_cache.rs` and the `mod mercury_svg;` line
 //! in `lib.rs`) at the Servo bump that takes resvg 0.50, and set `max_depth: 500` there as upstream does.
 
 use std::borrow::Cow;
 use std::cell::Cell;
+use std::io::Read;
 use std::sync::Arc;
 
 use log::warn;
@@ -62,6 +67,10 @@ pub(crate) const TOO_DEEP: &str = "SVG is nested too deeply";
 
 /// The error for any other document usvg or roxmltree cannot read.
 pub(crate) const INVALID: &str = "Not a valid SVG document";
+
+/// The most an SVG may be once unpacked: 32 MiB. An SVGZ can be a thousand times smaller than its content, and
+/// usvg 0.48.1 unpacks without a limit, so one `<img src="x.svgz">` could otherwise take the memory of the process.
+pub(crate) const MAX_SVG_BYTES: usize = 32 << 20;
 
 /// The two magic bytes at the start of a gzip stream (an `.svgz` file).
 const GZIP_MAGIC: [u8; 2] = [0x1f, 0x8b];
@@ -116,14 +125,44 @@ fn xml_options<'a>() -> roxmltree::ParsingOptions<'a> {
     }
 }
 
-/// The bytes of an SVG, unpacked when they are gzip. `Err` for malformed gzip. A gzip stream inside a gzip
-/// stream comes out as gzip, which is not UTF-8, so it is never read as XML afterwards.
-fn unpack(bytes: &[u8]) -> Result<Cow<'_, [u8]>, usvg::Error> {
-    if bytes.starts_with(&GZIP_MAGIC) {
-        usvg::decompress_svgz(bytes).map(Cow::Owned)
-    } else {
-        Ok(Cow::Borrowed(bytes))
+/// Why an SVGZ stream was refused by [`unpack`].
+#[derive(Debug)]
+enum UnpackError {
+    /// Not a valid gzip stream.
+    Gzip(std::io::Error),
+    /// More than [`MAX_SVG_BYTES`] come out of it.
+    TooLarge,
+}
+
+impl std::fmt::Display for UnpackError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            UnpackError::Gzip(error) => write!(formatter, "{error}"),
+            UnpackError::TooLarge => write!(
+                formatter,
+                "the SVGZ file unpacks to more than {MAX_SVG_BYTES} bytes"
+            ),
+        }
     }
+}
+
+/// The bytes of an SVG, unpacked when they are gzip. `Err` for malformed gzip, or when more than
+/// [`MAX_SVG_BYTES`] come out of it: the reader stops one byte past the limit, so a few kilobytes of gzip
+/// cannot be made to fill the memory (`usvg::decompress_svgz` reads to the end without a limit). A gzip stream
+/// inside a gzip stream comes out as gzip, which is not UTF-8, so it is never read as XML afterwards.
+fn unpack(bytes: &[u8]) -> Result<Cow<'_, [u8]>, UnpackError> {
+    if !bytes.starts_with(&GZIP_MAGIC) {
+        return Ok(Cow::Borrowed(bytes));
+    }
+    let mut unpacked = Vec::new();
+    flate2::read::GzDecoder::new(bytes)
+        .take(MAX_SVG_BYTES as u64 + 1)
+        .read_to_end(&mut unpacked)
+        .map_err(UnpackError::Gzip)?;
+    if unpacked.len() > MAX_SVG_BYTES {
+        return Err(UnpackError::TooLarge);
+    }
+    Ok(Cow::Owned(unpacked))
 }
 
 /// The nesting of the elements of `document`: the root element is 1. Stops counting when the depth is over
@@ -156,7 +195,10 @@ fn element_depth(document: &roxmltree::Document<'_>) -> u32 {
 /// Parses SVG `bytes` as `usvg::Tree::from_data` does, refusing a document that is nested too deeply (see the
 /// module documentation), on a thread with a large stack. The error is [`TOO_DEEP`] or [`INVALID`]; the
 /// reason is logged.
-pub(crate) fn parse_tree(bytes: &[u8], options: &usvg::Options) -> Result<usvg::Tree, &'static str> {
+pub(crate) fn parse_tree(
+    bytes: &[u8],
+    options: &usvg::Options,
+) -> Result<usvg::Tree, &'static str> {
     std::thread::scope(|scope| {
         let spawned = std::thread::Builder::new()
             .name("MercurySvgParse".to_owned())
@@ -208,9 +250,15 @@ pub(crate) fn data_resolver() -> ImageHrefDataResolverFn<'static> {
                 return default(mime, data, options);
             }
             let _entered = match nested_depth(&data) {
+                // Bad gzip, or more than MAX_SVG_BYTES once unpacked: usvg's resolver would unpack it
+                // again without a limit, so it never sees it. The `<image>` draws nothing.
+                Err(error) => {
+                    warn!("Leaving out an SVG image inside an SVG image: {error}");
+                    return None;
+                },
                 // Not XML at all (a PNG sent as `text/plain`, say): usvg decides what it is.
-                None => None,
-                Some(depth) => {
+                Ok(None) => None,
+                Ok(Some(depth)) => {
                     let entered = Entered::new(depth);
                     if entered.is_none() {
                         warn!(
@@ -228,12 +276,16 @@ pub(crate) fn data_resolver() -> ImageHrefDataResolverFn<'static> {
     )
 }
 
-/// The nesting of the XML in `data` (unpacked if it is gzip), or `None` if it is not XML that roxmltree reads.
-fn nested_depth(data: &[u8]) -> Option<u32> {
-    let data = unpack(data).ok()?;
-    let text = std::str::from_utf8(&data).ok()?;
-    let document = roxmltree::Document::parse_with_options(text, xml_options()).ok()?;
-    Some(element_depth(&document))
+/// The nesting of the XML in `data` (unpacked if it is gzip): `Ok(None)` if it is not XML that roxmltree reads,
+/// `Err` if it is gzip that cannot be unpacked within [`MAX_SVG_BYTES`].
+fn nested_depth(data: &[u8]) -> Result<Option<u32>, UnpackError> {
+    let data = unpack(data)?;
+    let Ok(text) = std::str::from_utf8(&data) else {
+        return Ok(None);
+    };
+    Ok(roxmltree::Document::parse_with_options(text, xml_options())
+        .ok()
+        .map(|document| element_depth(&document)))
 }
 
 #[cfg(test)]
@@ -251,7 +303,8 @@ mod tests {
 
     /// `levels` elements deep: the `<svg>` root, `levels - 1` nested `<g>`, and a `<rect>` beside them.
     fn nested(levels: usize) -> Vec<u8> {
-        let mut svg = format!(r#"<?xml version="1.0"?>{HEAD}<rect width="10" height="10" fill="green"/>"#);
+        let mut svg =
+            format!(r#"<?xml version="1.0"?>{HEAD}<rect width="10" height="10" fill="green"/>"#);
         svg.push_str(&"<g>".repeat(levels - 1));
         svg.push_str(&"</g>".repeat(levels - 1));
         svg.push_str("</svg>");
@@ -390,7 +443,11 @@ mod tests {
         // usvg alone accepts all of these (it refuses from 1025 levels). 600 is the case the first version of
         // this guard could not tell from usvg and no test covered; 1000 and 1024 are the edge of usvg's limit.
         for levels in [501, 600, 700, 800, 1000, 1024] {
-            assert_eq!(parse(&nested(levels)).unwrap_err(), TOO_DEEP, "{levels} nested g");
+            assert_eq!(
+                parse(&nested(levels)).unwrap_err(),
+                TOO_DEEP,
+                "{levels} nested g"
+            );
             assert_eq!(
                 parse(&nested_svg(levels)).unwrap_err(),
                 TOO_DEEP,
@@ -427,7 +484,10 @@ mod tests {
         assert_eq!(counted, MAX_SVG_DEPTH + 1);
         assert_eq!(parse(&nested(100_000)).unwrap_err(), TOO_DEEP);
         // Opened and never closed: not well formed, refused as invalid, again without recursing.
-        assert_eq!(parse("<g>".repeat(100_000).as_bytes()).unwrap_err(), INVALID);
+        assert_eq!(
+            parse("<g>".repeat(100_000).as_bytes()).unwrap_err(),
+            INVALID
+        );
     }
 
     #[test]
@@ -462,7 +522,11 @@ mod tests {
             "<g>".repeat(10_000),
             "<g>".repeat(10_000)
         );
-        assert_eq!(depth_of(&hidden), 2, "svg and style: the rest is text, comment and PI");
+        assert_eq!(
+            depth_of(&hidden),
+            2,
+            "svg and style: the rest is text, comment and PI"
+        );
         assert!(parse(hidden.as_bytes()).is_ok());
     }
 
@@ -565,17 +629,89 @@ mod tests {
         assert_eq!(parse(&gzip(&gzip(&nested(20)))).unwrap_err(), INVALID);
     }
 
+    /// A gzip stream of `len` zero bytes, written in pieces so that the test never holds them.
+    fn gzip_of_zeros(len: usize) -> Vec<u8> {
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        let piece = vec![0u8; 1 << 20];
+        let mut left = len;
+        while left > 0 {
+            let now = left.min(piece.len());
+            encoder.write_all(&piece[..now]).unwrap();
+            left -= now;
+        }
+        encoder.finish().unwrap()
+    }
+
+    /// An SVG document of exactly `len` bytes (blanks after the root element).
+    fn svg_of_length(len: usize) -> Vec<u8> {
+        let mut svg = format!("{HEAD}</svg>").into_bytes();
+        svg.resize(len, b' ');
+        svg
+    }
+
+    #[test]
+    fn a_gzip_bomb_is_refused_before_it_is_unpacked() {
+        // A gigabyte of zeros is a few megabytes of gzip. Unbounded, `unpack` returns the whole gigabyte.
+        let bomb = gzip_of_zeros(1 << 30);
+        assert!(bomb.len() < 8 << 20, "{} bytes", bomb.len());
+        assert!(matches!(unpack(&bomb), Err(UnpackError::TooLarge)));
+        assert_eq!(parse(&bomb).unwrap_err(), INVALID);
+    }
+
+    #[test]
+    fn the_unpacked_size_limit_is_32_mib_exactly() {
+        assert_eq!(MAX_SVG_BYTES, 32 << 20);
+        let at_the_limit = unpack_len(&gzip(&svg_of_length(MAX_SVG_BYTES)));
+        assert_eq!(at_the_limit.unwrap(), MAX_SVG_BYTES);
+        let over = unpack_len(&gzip(&svg_of_length(MAX_SVG_BYTES + 1)));
+        assert!(matches!(over, Err(UnpackError::TooLarge)));
+        // Plain (not packed) bytes are not this function's business: the caller's own size limits apply.
+        assert_eq!(unpack_len(b"<svg/>").unwrap(), 6);
+    }
+
+    fn unpack_len(bytes: &[u8]) -> Result<usize, UnpackError> {
+        unpack(bytes).map(|unpacked| unpacked.len())
+    }
+
+    #[test]
+    fn an_svgz_at_the_limit_still_loads() {
+        assert!(parse(&gzip(&svg_of_length(MAX_SVG_BYTES))).is_ok());
+    }
+
+    #[test]
+    fn a_gzip_bomb_in_a_nested_data_url_leaves_the_image_out() {
+        // Over the limit, so refused here and never handed to usvg's own (unbounded) resolver: the outer
+        // document loads and the `<image>` draws nothing.
+        let bomb = gzip_of_zeros(MAX_SVG_BYTES + (16 << 20));
+        for mime in ["image/svg+xml", "text/plain"] {
+            let tree = parse(&with_image(&data_url(mime, &bomb))).expect("the outer one loads");
+            assert_eq!(images(&tree), (0, 0), "{mime}");
+        }
+        // Just under the limit, a nested SVGZ is as before.
+        let tree = parse(&with_image(&data_url("image/svg+xml", &gzip(&nested(20))))).unwrap();
+        assert_eq!(images(&tree), (1, 0));
+    }
+
     #[test]
     fn a_nested_svg_in_a_data_url_is_counted_too() {
         // The outer document is 2 levels deep and loads; what it embeds is 600 deep (usvg alone loads it).
         for mime in ["image/svg+xml", "text/plain"] {
-            let tree = parse(&with_image(&data_url(mime, &nested(600)))).expect("the outer one loads");
-            assert_eq!(images(&tree), (0, 0), "{mime}: the 600-level image is left out");
+            let tree =
+                parse(&with_image(&data_url(mime, &nested(600)))).expect("the outer one loads");
+            assert_eq!(
+                images(&tree),
+                (0, 0),
+                "{mime}: the 600-level image is left out"
+            );
         }
         // Packed, and 100,000 levels packed into a few hundred bytes.
         let tree = parse(&with_image(&data_url("image/svg+xml", &gzip(&nested(600))))).unwrap();
         assert_eq!(images(&tree), (0, 0), "an SVGZ data URL is unpacked first");
-        let tree = parse(&with_image(&data_url("image/svg+xml", &gzip(&nested(100_000))))).unwrap();
+        let tree = parse(&with_image(&data_url(
+            "image/svg+xml",
+            &gzip(&nested(100_000)),
+        )))
+        .unwrap();
         assert_eq!(images(&tree), (0, 0));
         // A shallow image is kept, as an SVG image.
         for mime in ["image/svg+xml", "text/plain"] {
@@ -584,8 +720,8 @@ mod tests {
         }
         // Raster data is not touched: a PNG under its own type and under text/plain.
         let png: &[u8] = &[
-            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R', 0, 0, 0, 1,
-            0, 0, 0, 1, 8, 6, 0, 0, 0,
+            0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 0x0d, b'I', b'H', b'D', b'R',
+            0, 0, 0, 1, 0, 0, 0, 1, 8, 6, 0, 0, 0,
         ];
         for mime in ["image/png", "text/plain"] {
             let tree = parse(&with_image(&data_url(mime, png))).unwrap();
@@ -644,7 +780,10 @@ mod tests {
         let options = options();
         assert!(parse_tree_here(&nested(10), &options).is_ok());
         assert_eq!(CHAIN.get(), Chain::default());
-        assert_eq!(parse_tree_here(&nested(501), &options).unwrap_err(), TOO_DEEP);
+        assert_eq!(
+            parse_tree_here(&nested(501), &options).unwrap_err(),
+            TOO_DEEP
+        );
         assert_eq!(CHAIN.get(), Chain::default());
         assert_eq!(parse_tree_here(b"<svg", &options).unwrap_err(), INVALID);
         assert_eq!(CHAIN.get(), Chain::default());
@@ -675,9 +814,8 @@ mod tests {
 
     /// `groups` groups of `levels` nested `<svg>` elements, each ending in a `<use>` of the one before.
     fn use_amplified_document(groups: usize, levels: usize) -> Vec<u8> {
-        let mut svg = format!(
-            r#"{HEAD}<defs><g id="g0"><rect width="10" height="10" fill="green"/></g>"#
-        );
+        let mut svg =
+            format!(r#"{HEAD}<defs><g id="g0"><rect width="10" height="10" fill="green"/></g>"#);
         for group in 1..=groups {
             svg.push_str(&format!(r#"<g id="g{group}">"#));
             svg.push_str(&r#"<svg width="10" height="10">"#.repeat(levels));
@@ -701,7 +839,9 @@ mod tests {
         );
         assert!(parse(&doc).is_ok());
         // Called from a worker's own 2 MiB stack, which is where Servo calls it.
-        assert!(on_a_worker_stack(|| parse(&use_amplified_document(4, 200)).is_ok()));
+        assert!(on_a_worker_stack(
+            || parse(&use_amplified_document(4, 200)).is_ok()
+        ));
     }
 
     #[test]

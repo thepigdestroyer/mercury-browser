@@ -201,24 +201,55 @@ The `js` dependency (package `mozjs`) is `=0.27.0` instead of `=0.26.13`, with a
 SpiderMonkey's security fixes); the same line is changed in `servo-script-bindings` and `servo-script-webcrypto`. See
 `third_party/servo-script-webcrypto/MERCURY.md`. Drop at the bump that contains it (B1).
 
+## Changes: page accessibility (lane a11y-1, 21 Nov 2026)
+
+### 12. What an assistive technology can do to a page (EE5) — new `dom/document/accessibility_actions.rs`, `dom/window/window.rs`
+
+- **What:** upstream performs one accessibility action, an untrusted `click`, in `Window::handle_accessibility_actions`.
+  The new file performs the 16 actions that `mercury_a11y::actions::SUPPORTED_ACTIONS` advertises (Focus, Blur, Click,
+  SetValue, ReplaceSelectedText, ScrollIntoView, ScrollToPoint, ScrollUp/Down/Left/Right, Increment, Decrement, Expand,
+  Collapse, ShowContextMenu) with an exhaustive `match` on `accesskit::Action`. `Click` also sets the window's last
+  activation time (decision OD-5/D6: assistive-technology actions that click count as user activation; the action
+  channel is embedder-only, so a page cannot grant itself activation). `window.rs` has one hook: the body of
+  `handle_accessibility_actions` is one call, and the `use accesskit::Action` it needed is gone. No page content is
+  logged.
+- **Why:** VoiceOver's "activate", "set value", "scroll to" and so on have to do something on a page.
+- **Upstream:** `dom/window/window.rs` `handle_accessibility_actions` (about line 4021 in 0.8.0).
+- **Tested by:** unit tests of the pure helpers in the file; `crates/talaria-servo/tests/a11y_actions.rs`
+  (`headless_servo_*`, ignored, run by `make test-a11y-pages` where Servo can render).
+- **Drop when:** upstream Servo performs the actions itself.
+
+### 13. When a node's accessibility properties are stale (EE3, EE4) — new `dom/document/accessibility_attributes.rs`, `dom/element/element.rs`, `dom/html/form_controls/{htmlinputelement,htmltextareaelement,htmlselectelement}.rs`, `dom/html/embedded_content/htmliframeelement.rs`
+
+- **What:** upstream damages the accessibility tree for a `role` change and a text change only. The new file decides which
+  attribute changes (`aria-*`, `alt`, `title`, `for`, `id`, `value`, `hidden`, `disabled`, ...), which native state flags
+  and which value changes (typed text, a range's number, a select's selection) damage the node. Hook lines: one call in
+  `Element::attribute_mutated`, one in `Element::set_state`, one `damage_for_value_change` call in each
+  place a form control's value changes (`handle_text_content_changed`, `value_changed`, `update_shadow_tree`), and one
+  `add_pending_accessibility_damage` where an `<iframe>` gets a new pipeline (its node grafts that document's tree).
+  `dom/document/mod.rs` declares the two modules. All cost nothing while no assistive technology is attached
+  (`add_pending_accessibility_damage` records only for an active document).
+- **Why:** names, states and values are computed from the DOM; a stale answer is a wrong reading.
+- **Tested by:** `headless_servo_state_changes_reach_the_tree` and the frames tests in `crates/talaria-servo/tests/`.
+- **Drop when:** upstream servo#46241 and its follow-ups damage the tree for the same changes.
 ## Changes: text, lane txt-1 (21 Nov 2026)
 
 Typed highlights (EB7), IME composition (EB11) and two post-0.8 selection fixes. Nothing here is a backport of a pull request
 unless it says so.
 
-### 12. Selection on replaced elements (servo/servo#49613) — `dom/node/layout_dom.rs`, `dom/selection.rs`, `dom/selection_range.rs`
+### 14. Selection on replaced elements (servo/servo#49613) — `dom/node/layout_dom.rs`, `dom/selection.rs`, `dom/selection_range.rs`
 
 Merge commit `af5f54ba7` (sabbCodes, 14 Nov 2026). `replaced_is_selected` also requires a non-collapsed range;
 `FlatTreeSelection::is_collapsed` and `SelectionRange::is_collapsed` are new; the element branch of `set_node_selection` follows.
 Needs the `servo-layout` hunk. Drop at the Servo bump that contains #49613 (B1).
 
-### 13. UA widgets are not selected (servo/servo#49885) — `dom/selection.rs`
+### 15. UA widgets are not selected (servo/servo#49885) — `dom/selection.rs`
 
 Hand-port (merge commit `afc9224b1`, Martin Robinson, 13 Nov 2026): `VisibleSelectionTraversal` skips the subtree of an element whose
 shadow root is a UA widget (`Element` joins the `use crate::dom::{..}` line). Needs the `user-agent.css` hunk of `servo-layout`.
 Drop at the bump that contains #49885 (B1).
 
-### 14. Typed highlights (EB7) — new `dom/highlights.rs`; `dom/mod.rs`, `dom/document/document.rs`, `dom/window/window.rs`, `dom/node/node.rs`, `dom/node/layout_dom.rs`, `dom/characterdata/characterdata.rs`, `layout_dom/servo_layout_node.rs`
+### 16. Typed highlights (EB7) — new `dom/highlights.rs`; `dom/mod.rs`, `dom/document/document.rs`, `dom/window/window.rs`, `dom/node/node.rs`, `dom/node/layout_dom.rs`, `dom/characterdata/characterdata.rs`, `layout_dom/servo_layout_node.rs`
 
 - **What:** a `HighlightSet` of live `Range`s per `Document` (field, initialiser and accessor `Document::highlights()` in
   `document.rs`: `#[dom_struct]` forbids public fields, so a sibling module cannot read the field). Once per reflow, right after the
@@ -233,7 +264,7 @@ Drop at the bump that contains #49885 (B1).
   by `servo/tests/input_methods.rs` (composition in an editing host registers its range here). **Drop when:** never as a whole.
 - **Cost:** `update` recomputes per reflow while the set is not empty; producers so far are small ranges. Not measured.
 
-### 15. IME composition and the text input state (EB11) — new `dom/document/text_input_state.rs`, `dom/execcommand/composition.rs`; `dom/document/{document_event_handler,editing,document,mod}.rs`, `dom/execcommand/execcommands.rs`, `dom/html/form_controls/{text_input,text_control,htmlinputelement,htmltextareaelement}.rs`, `dom/html/form_controls/input_type/text_input_widget.rs`
+### 17. IME composition and the text input state (EB11) — new `dom/document/text_input_state.rs`, `dom/execcommand/composition.rs`; `dom/document/{document_event_handler,editing,document,mod}.rs`, `dom/execcommand/execcommands.rs`, `dom/html/form_controls/{text_input,text_control,htmlinputelement,htmltextareaelement}.rs`, `dom/html/form_controls/input_type/text_input_widget.rs`
 
 - **What:** `ImeEvent::{Commit, SetMarkedText, InsertText}` (see `servo-embedder-traits/MERCURY.md`) and the events in the order
   Chromium fires them (`compositionstart`, `compositionupdate`, a non-cancelable `beforeinput`, `input` with `insertCompositionText`
@@ -273,6 +304,152 @@ Drop at the bump that contains #49885 (B1).
   the order of `compositionend` and `blur` (here `compositionend` can follow `blur`, from the blur handler's flush): run WPT
   `uievents/composition` and `editing/` composition tests and align, or soften the wording. **Drop when:** never as a whole; if a bump brings composition for editing hosts, `composition.rs` and the host half of
   `ImeState` go.
+
+## Changes: Media Source Extensions (lane med-1, MSE by Plan B, 20 Nov 2026)
+
+Behind `dom_media_source_enabled` (off by default; `MERCURY_DEV_MSE=1` turns it on for development, see
+`docs/developer-guide/media-source.md`). The DOM objects are carried from servo/servo#47269
+(decomoraes, MPL-2.0; the pull request was closed unmerged on 16 Aug 2026 after its author said it was written with an LLM, so Servo never reviewed the carried code, and Mercury re-checked it: see the guide: `MediaSource`, `SourceBuffer`, `SourceBufferList`, the object URL store, the
+`HTMLMediaElement` attach and detach steps) and **thinned**: Mercury's own Servo-free crate
+`crates/mercury-mse` owns every spec algorithm that needs no DOM object (readyState, duration,
+`endOfStream`, the buffered intersection, abort, remove, `changeType`, the append window, the timestamp
+offset, the mode, the track buffers, the byte-stream parsers, quota and eviction), and a GStreamer source
+element in `crates/mercury-mse-gst` feeds the player. The DOM calls `MediaSourceBackend` and turns its
+`MseEvent`s into events and media element notifications. The PR's `bytestream.rs`, its parser and its
+`push_data` data plane are not carried; nothing is ever pushed to the player.
+
+1. **`dom/mse/` (new directory):** `mediasource.rs`, `sourcebuffer.rs`, `sourcebufferlist.rs`, `mod.rs`, and
+   `mediaelement.rs` (Mercury's own element side, declared by `htmlmediaelement.rs`, see item 5).
+   Each file's header names the PR. `MediaSource` creates its backend through
+   `ServoMedia::create_media_source` with a `GenericCallback` that only queues a media element task (the
+   media element's own player-callback pattern, with a weak reference so the object stays collectable),
+   and handles the `MseEvent`s there. `SourceBuffer` keeps the JavaScript-visible `updating` flag as the
+   specification's tasks publish it (cleared by the task that handles `AppendDone`, `AppendError`,
+   `RemoveDone`), the last known attribute values for a removed buffer, and empty `audioTracks` and
+   `videoTracks`. Left out: `textTracks` (this Servo's `TextTrackList` needs a media element), the
+   contents of the track lists, `ManagedMediaSource`, `BufferedChangeEvent`, `MediaSourceHandle`, MSE in
+   workers (`canConstructInDedicatedWorker` is false).
+2. **`dom/mod.rs`:** `pub(crate) mod mse;` and its glob re-export (the bindings look interfaces up as
+   `crate::dom::<lowercase name>::<Name>`).
+3. **`dom/globalscope/globalscope.rs`:** `media_source_url_store` and `track_media_source_url`,
+   `media_source_for_url`, `forget_media_source_url` (a `MediaSource` never leaves its thread, so unlike a
+   blob URL its entry cannot live in the file manager). Carried from the PR.
+4. **`dom/url/url.rs`:** `URL.createObjectURL(MediaSource)` (`CreateObjectURL_`) and `revokeObjectURL` for
+   it. Carried from the PR.
+5. **`dom/html/embedded_content/htmlmediaelement.rs`** (hot file, every hunk marked `Mercury (MED-1)`;
+   the line numbers are approximate (they date from the first MED-1 commit and moved when the `media_source_*`
+   block left the file): `grep -n "Mercury (MED-1)"` finds every hook, for the next Servo bump):
+   * 36, 63, 93: imports. 134-155: `SrcObject::MediaSource` and the union conversion
+     (`MediaStreamOrMediaSourceOrBlob`; the IDL union gained `MediaSource`). 300-304, 475: the
+     `media_source` field. 1353-1360: `load_from_src_attribute` makes `Resource::MediaSource` for a URL in
+     the object URL store. 1669-1690: `resource_fetch_algorithm` attaches first (failure steps when the
+     source is not closed or was attached before), then creates the player, and detaches if that fails.
+     1746-1752: the new `Resource::MediaSource` and `SrcObject::MediaSource` arms fetch nothing. 1840:
+     `in_error_state` is `pub(crate)`.
+   * The `media_source_*` functions are **not in this file**: they are in the new `dom/mse/mediaelement.rs`
+     (an `impl HTMLMediaElement` that this file declares as a child module with one `#[path =
+     "../../mse/mediaelement.rs"] mod mediaelement_mse;` line, so it sees the element's private items and no
+     upstream item changed its visibility), and a three-line comment marks the place where they used to be
+     (after `in_error_state`). They are `media_source_for_resource`,
+     `queue_media_source_stop_delaying_the_load_event`, `detach_media_source`,
+     `media_source_position_changed`, `media_source_seeking`, `media_source_update_ready_state` (readiness
+     from `element_ready_state` around the position: HAVE_METADATA outside the buffered ranges, HAVE_ENOUGH_DATA
+     once ended, HAVE_CURRENT_DATA at the end), `media_source_metadata_received` (the "once enough of the
+     media data has been fetched" steps), `media_source_init_received`, `media_source_duration_changed`
+     (idempotent), `media_source_end_of_stream`, `media_source_error`. The first seven are `pub(super)`, the rest
+     `pub(crate)`.
+   * 2498-2503: `seek` calls `media_source_seeking` after setting the new position. 2565-2573, 2636-2670:
+     `create_media_player` (`StreamType::MediaSource`, `connect_media_source` as the player's first call, no
+     download buffering). 2713: `reset_media_player` detaches the MediaSource after the player is dropped.
+   * 2887, 3133, 3300-3315: `playback_metadata_updated` and `playback_duration_changed` ignore the media
+     engine for a MediaSource element; `playback_state_changed` never upgrades readiness from the
+     pipeline's state. 3338, 3966: `seekable` and `Buffered` come from the backend. 3735: `GetSrcObject`.
+     4247: the `Resource::MediaSource` variant. 4784: `PositionChanged` tells the backend and re-evaluates the
+     readiness.
+6. **`servo-script-bindings` (see its `MERCURY.md`):** `MediaSource.webidl`, `SourceBuffer.webidl`,
+   `SourceBufferList.webidl`, `URL.webidl` (the overload), `HTMLMediaElement.webidl` (the union),
+   `Bindings.conf` (`cx` lists and `weakReferenceable` for `MediaSource`).
+
+**Not run in a window** (the screen was locked): the DOM compiles and its pure logic is tested in
+`crates/mercury-mse`; the pages `tests/pages/mse-*.html` are written and unrun. Dropped when a Servo release
+has its own MSE (servo/servo#44403) and Mercury moves to it.
+
+## Changes: network, storage and web-compat (lane net-1, 21 Nov 2026)
+
+### 18. `document.cookie` goes through the network policy (EC5, EC6) — `dom/document/document.rs`
+
+`Document::GetCookie` and `SetCookie` (0.8.0 lines about 6805 and 6827) send the two new messages
+`GetCookieStringForDocument` / `SetCookiesForDocument` (see `servo-net-traits/MERCURY.md`) with `determine_the_network_partition_key()` and
+the window's web view id, instead of `GetCookieStringForUrl` / `SetCookiesForUrl`. One import line (47) and the sends. Tested by
+`servo-net/tests/cookie_policy.rs` (the resource thread's side). Drop when Servo filters `document.cookie` by site itself.
+
+### 19. `navigator.globalPrivacyControl` (EC25) — `dom/navigator/navigator.rs`, `dom/workers/workernavigator.rs`
+
+A `NavigatorGPC` mixin (`Navigator.webidl`, no `Pref`: the attribute is always there and reads `false` when the signal is off, as the
+specification says; <https://privacycg.github.io/gpc-spec/>) included by `Navigator` and `WorkerNavigator`; both implement it as
+`pref!(privacy_gpc_enabled)`. Mercury sets the preference and the network policy's header switch from one place
+(`talaria-servo/src/net_policy.rs`), so the header and the attribute agree. Tested by `talaria-servo`'s `net_policy` tests (the
+agreement) and, in a window, `tests/pages/compat-locks.html` and `net-cookies.html` (they print the attribute; not run here).
+Drop when Servo ships the attribute.
+
+### 20. The Web Locks API (ED4) — new `dom/weblock/` (`mod.rs`, `lock.rs`, `lockmanager.rs`), `dom/mod.rs`, `dom/abort/abortsignal.rs`, `tasks/task_manager.rs`, `tasks/task_source.rs`, `dom/navigator/navigator.rs`, `dom/workers/workernavigator.rs`
+
+Carried from servo/servo#47981 (xbwwj, draft, MPL-2.0; the files keep the upstream header and name the source), reworked because the
+draft does not work as written: a lock was never released and the promise of `request()` never settled, `ifAvailable` was inverted,
+`steal` told nobody, the argument checks never all ran, `as_window()` panicked in a worker and an abort after the grant still rejected
+the promise. `LockManager`, `Lock` and `navigator.locks` carry `Pref="dom_web_locks_enabled"`; **Mercury pins that preference off**
+(`talaria-servo/src/engine_prefs.rs`) until `tests/pages/compat-locks.html` has run in a window, so nothing is exposed yet. A lock is
+released when its window, worker or process goes away (see `servo-storage/MERCURY.md`). The hook lines in upstream files:
+`dom/mod.rs` 360, `dom/abort/abortsignal.rs` 21-223 (`AbortAlgorithm::AbortLockRequest`; one hunk of the draft did not apply and was
+redone by hand), `tasks/task_manager.rs` 169 and `tasks/task_source.rs` 58, 91 (a task source for locks), the two navigators. Tested
+by 8 unit tests in `dom/weblock/mod.rs` (they need this crate to compile; run with `cargo test --release -p servo-script --lib
+weblock`) and the storage tests. Drop at the Servo bump that contains PR #47981.
+
+### 21. IndexedDB: index queries, multiEntry, no panics (ED3) — `dom/indexeddb/{idbcursor,idbdatabase,idbfactory,idbindex,idbobjectstore,idbopendbrequest,idbrequest,idbtransaction,key}.rs`
+
+WhatsApp Web hangs at "Loading your chats" partly on IndexedDB (servo/servo#47893). Sources, all MPL-2.0: LunarWerxs `pr/indexeddb`
+commit `860d2eff1` (no panic in `clear_upgrade_transaction`, applied as it is; the fork's branches are written with an AI assistant,
+so this is unreviewed upstream-adjacent code); LunarWerxs `4b07849e2`, `098e8a02c` and `c609fcd06` hand-ported onto 0.8's `idbindex.rs`,
+`idbcursor.rs` and `idbrequest.rs` (they are stacked on that branch's own cursor code and do not apply; `223fd9c09` and `8ba38afaa`
+are already in 0.8); servo/servo#45559 (skyz1, open) hand-ported into `key.rs` for multiEntry key extraction. What it does:
+`IDBIndex.get`, `getKey`, `getAll`, `getAllKeys` and `count` (the IDL lines are uncommented), `get`/`getKey` require a key
+(`DataError`), index cursors keep their position and ask through their index (in 0.8 an index cursor walked the store's keys),
+multiEntry indexes, `IDBRequest.source` as the `(IDBObjectStore or IDBIndex or IDBCursor)?` union, and every backend failure on
+the paths that were `unwrap()`/`expect()` becomes a DOM exception (`QuotaExceededError`, `AbortError`, `ConstraintError`, else
+`OperationError`; the backend's details are logged, not handed to the page) instead of a panic of the content process.
+**Limits (ED3 is partial; net-1 review, finding 3).** 0.8's SQLite backend creates the index tables but writes only what Mercury now
+sends for *unique* indexes (below), and it cannot evaluate key paths (values are opaque structured-clone blobs), so the records of
+an index are **derived in script from the whole object store**. A query (`get`, `getAll`, `count`, ...) asks the backend for the whole
+store once and reads and sorts every value: linear in the size of the store. An index cursor derives its records on its first step and
+keeps them (`IDBCursor::index_snapshot`, dropped when a request writes to the store, `IDBObjectStore::write_generation`); later steps
+ask the backend for an empty range and read the kept records, so a full walk is one scan and not one per step (it still compares
+keys from the start of the list on every step, which is cheap next to reading values). The cost is paid on the script thread and grows with the number of
+records (every value is read and every key extracted); nothing has been measured, because nothing was run in a window, so the
+size at which a large store (WhatsApp's) makes a query or the first step of a cursor visibly slow is not known. **Unique indexes are enforced
+on `put`/`add`/`cursor.update`**: the script sends the keys of the value in each unique index with the put and the backend refuses a
+duplicate (`ConstraintError`; `servo-storage/MERCURY.md`, "Unique indexes"), except that it does not see records that existed before
+the index (no backfill) or before this change. A real index writer for non-unique indexes and a backfill are not done.
+`IDBTransaction.commit()` already exists in 0.8 and is unchanged apart from its failure paths. Tested by the unit tests in `key.rs`
+(`index_keys_of`, error mapping), `idbindex.rs` (`build_index_records`: order, multiEntry, unique, no value copies) and `idbcursor.rs`
+(the kept records and their generation, the empty range), the engine tests in `servo-storage` (`unique_index_rows.rs`), and the page
+`tests/pages/compat-indexeddb.html`, which replays the WhatsApp sequence (not run in a window).
+Drop when upstream completes IndexedDB indexes (servo#47893's gaps).
+
+### 22. The network partition key of nested navigations, workers and worklets (EC5, EC6) — `navigation.rs`, `event_loop/script_thread.rs`, `dom/globalscope/globalscope.rs`, `dom/window/window.rs`, `dom/workers/{workerglobalscope,dedicatedworkerglobalscope,sharedworkerglobalscope}.rs`, `dom/worklet/worklet.rs`
+
+- **What:** every `RequestClient` now carries the top-level site (the network partition key) of the page it belongs to. A document's
+  already did; a **worker's** is the creator's (`WorkerGlobalScopeInit.network_partition_key`, filled in
+  `prepare_workerscope_init`, stored in `WorkerGlobalScope`, read by `GlobalScope::request_client`), a **worklet's** module fetch takes
+  the document's, and the navigation request of a **nested frame** takes its parent document's
+  (`ScriptThread::network_partition_key_of_load`; `None` for a top-level load and for a parent that is not in this script thread).
+  `InProgressLoad::request_builder` takes the key and sets `RequestClient::browser_initiated_navigation` (false for a load that came from a
+  script, true for the browser's own: a typed address, a reload, a traversal, WebDriver).
+- **Why:** the network policy used to guess the top-level site of such a request from a record of what the web view had started
+  to load, which a page could poison (net-1 review, finding 1), and could not tell a typed address from a script navigation that
+  starts from an opaque origin (finding 2).
+- **Tested by:** compiling this crate; the network side in `servo-net/tests` (`net_policy.rs`, `cookie_policy.rs`). Nothing here has been run in a
+  window: a worker's first-party request carrying its cookie, a nested frame's navigation and a sandboxed script navigation are open items.
+- **Drop when:** Servo fills the partition key of nested navigations and workers itself.
 
 ## Warnings
 

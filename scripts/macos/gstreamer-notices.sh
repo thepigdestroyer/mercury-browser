@@ -60,7 +60,7 @@ project_of() {
             libgstvulkan-1.0.0.dylib | libgstwebrtc-1.0.0.dylib | \
             libgstwebrtcnice-1.0.0.dylib | libgstaudiobuffersplit.dylib | libgstdtls.dylib | \
             libgstid3tag.dylib | libgstproxy.dylib | libgstvideoparsersbad.dylib | \
-            libgstwebrtc.dylib | libgstapplemedia.dylib)
+            libgstwebrtc.dylib | libgstapplemedia.dylib | libgstdav1d.dylib)
             echo gst-plugins-bad-1.0 ;;
         libgstlibav.dylib) echo gst-libav-1.0 ;;
         libavcodec.*.dylib | libavfilter.*.dylib | libavformat.*.dylib | libavutil.*.dylib | \
@@ -78,6 +78,7 @@ project_of() {
         libvorbis.*.dylib | libvorbisenc.*.dylib) echo libvorbis ;;
         libtheoradec.*.dylib | libtheoraenc.*.dylib) echo libtheora ;;
         libopus.*.dylib) echo opus ;;
+        libdav1d.*.dylib) echo dav1d ;;
         libvpx.*.dylib) echo libvpx ;;
         libcrypto.*.dylib | libssl.*.dylib) echo openssl ;;
         liborc-0.4.*.dylib) echo orc ;;
@@ -105,7 +106,7 @@ licence_of() {
         libogg | libvorbis | libtheora | opus) echo "BSD-3-Clause" ;;
         libvpx) echo "BSD-3-Clause (with the WebM patent grant)" ;;
         openssl | moltenvk) echo "Apache-2.0" ;;
-        orc) echo "BSD-2-Clause" ;;
+        orc | dav1d) echo "BSD-2-Clause" ;;
         pcre2) echo "BSD-3-Clause WITH PCRE2-exception" ;;
         libpng) echo "libpng-2.0" ;;
         zlib) echo "Zlib" ;;

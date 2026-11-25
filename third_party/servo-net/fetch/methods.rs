@@ -330,6 +330,31 @@ pub(crate) fn convert_request_to_csp_request(request: &Request) -> Option<csp::R
     Some(csp_request)
 }
 
+// Mercury: steps 6 and 7 of main fetch (the bad-port check and the Content Security Policy check) for a request
+// whose URL an interceptor rewrite changed after they ran: a network error, or `None` when the new URL passes
+// (net-1 review, minor 6).
+fn network_error_after_rewrite(
+    request: &Request,
+    target: &mut (dyn FetchTaskTarget + Send),
+) -> Option<Response> {
+    if should_request_be_blocked_due_to_a_bad_port(&request.current_url()) {
+        return Some(Response::network_error(NetworkError::InvalidPort));
+    }
+    let csp_request = convert_request_to_csp_request(request)?;
+    let (check_result, violations) = should_request_be_blocked_by_csp(
+        &csp_request,
+        request
+            .policy_container
+            .policy_container()
+            .expect("Always has a valid policy container"),
+    );
+    if !violations.is_empty() {
+        target.process_csp_violations(request, violations);
+    }
+    (check_result == csp::CheckResult::Blocked)
+        .then(|| Response::network_error(NetworkError::ContentSecurityPolicy))
+}
+
 /// <https://www.w3.org/TR/CSP/#should-block-request>
 pub fn should_request_be_blocked_by_csp(
     csp_request: &csp::Request,
@@ -501,7 +526,13 @@ pub async fn main_fetch(
     if should_request_be_blocked_due_to_a_bad_port(&request.current_url()) {
         response = Some(Response::network_error(NetworkError::InvalidPort));
     }
-    if should_request_be_blocked_as_mixed_content(request, &context.protocols) {
+    // Mercury: step 1.3 of the mixed content algorithm (the user allowed mixed content on the page's
+    // site) and the report of a block to the embedder (EC17); see mercury_mixed_content.rs.
+    if crate::mercury_mixed_content::request_is_blocked(
+        context,
+        request,
+        should_request_be_blocked_as_mixed_content(request, &context.protocols),
+    ) {
         response = Some(Response::network_error(NetworkError::MixedContent));
     }
 
@@ -522,7 +553,12 @@ pub async fn main_fetch(
         Referrer::ReferrerUrl(referrer_source) | Referrer::Client(referrer_source) => {
             request.headers.remove(header::REFERER);
             determine_requests_referrer(
-                request.referrer_policy,
+                // Mercury: a page may tighten the referrer policy but not loosen it below
+                // `strict-origin-when-cross-origin` when the cap is on (EC14).
+                context
+                    .state
+                    .net_policy
+                    .cap_referrer_policy(request.referrer_policy),
                 referrer_source,
                 request.current_url(),
             )
@@ -540,16 +576,39 @@ pub async fn main_fetch(
     // Step 11. If recursive is false, then run the remaining steps in parallel.
     // Not applicable: see fetch_async.
 
-    let current_url = request.current_url();
-    let current_scheme = current_url.scheme();
+    // Mercury: the URL before the interceptor, to know whether it rewrote it (EC37).
+    let url_before_interceptor = request.current_url();
 
     // Intercept the request and maybe override the response.
     context
         .request_interceptor
         .lock()
         .await
-        .intercept_request(request, &mut response, &fetch_params.timing_info)
+        .intercept_request(
+            request,
+            &mut response,
+            &fetch_params.timing_info,
+            // Mercury: the policy for the frame identity and the rewrite (EC38, EC37).
+            &context.state.net_policy,
+        )
         .await;
+
+    // Mercury: the interceptor may have rewritten the URL (EC37, `WebResourceResponseMsg::Rewrite`), so
+    // step 10 is applied again (the rewrite kept the scheme, and an HSTS host is upgraded now) and the URL
+    // and scheme that the steps below look at are read after it, not before.
+    context
+        .state
+        .hsts_list
+        .read()
+        .apply_hsts_rules(request.current_url_mut());
+    // Mercury: a rewrite that moved a top-level navigation to another origin has not been through the bad-port
+    // check and the Content Security Policy check of steps 6 and 7, which ran on the old URL: run them again
+    // for the new one (net-1 review, minor 6). Nothing changed, nothing to do.
+    if request.current_url() != url_before_interceptor && response.is_none() {
+        response = network_error_after_rewrite(request, &mut *target);
+    }
+    let current_url = request.current_url();
+    let current_scheme = current_url.scheme();
 
     let mut response = match response {
         Some(response) => response,
@@ -702,8 +761,17 @@ pub async fn main_fetch(
             should_be_blocked_due_to_nosniff(request.destination, &response.headers);
         let should_replace_with_mime_type_error = !response_is_network_error &&
             should_be_blocked_due_to_mime_type(request.destination, &response.headers);
+        // Mercury: the per-site allow and the report to the embedder (EC17), as for the request above.
         let should_replace_with_mixed_content = !response_is_network_error &&
-            should_response_be_blocked_as_mixed_content(request, &response, &context.protocols);
+            crate::mercury_mixed_content::response_is_blocked(
+                context,
+                request,
+                should_response_be_blocked_as_mixed_content(
+                    request,
+                    &response,
+                    &context.protocols,
+                ),
+            );
         let should_replace_with_csp_error = csp_request.is_some_and(|csp_request| {
             let (check_result, violations) = should_response_be_blocked_by_csp(
                 &csp_request,

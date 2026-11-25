@@ -1,0 +1,32 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+text | Group keys | |
+switch | Show keys beside names | | checked
+text | Hold ⌥ and tap a group's key to switch to it. Keys appear beside each group's name. | |
+text | Research | |
+text | 5 tabs | |
+text-input | Key for Research | | value "A"
+text | Option types å | |
+text | Lisbon trip | |
+text | 4 tabs | |
+text-input | Key for Lisbon trip | | value "S"
+text | Option types ß | |
+text | Reading | |
+text | 6 tabs | |
+text-input | Key for Reading | | value "D"
+text | Option types ∂ | |
+text | Shopping | |
+text | 3 tabs | |
+text-input | Key for Shopping | Type a letter from A to Z. |
+text | Work | |
+text | 2 tabs | |
+text-input | Key for Work | ⌥E is an accent key on the U.S. layout: it switches groups only outside text fields, or after the 0.4 s hold. | value "E"
+text | Option types ´ (accent key) | |
+text | When ⌥ switches groups | |
+radio-button | Outside text fields, and anywhere after holding ⌥ for 0.4 s (recommended) | | checked, item 0 of 3
+radio-button | Only outside text fields | | unchecked, item 1 of 3
+radio-button | Always: ⌥ + letter never types a character in Mercury | | unchecked, item 2 of 3
+combobox | Hold time | How long to hold ⌥ before a letter switches groups inside a text field. | collapsed, value "0.4 s"
+button | Reset to A, S, D, F, G… | |

@@ -16,7 +16,17 @@ diff --git a/lib.rs b/lib.rs
  mod network_manager;
  mod proxies;
  mod responders;
-@@ -112,6 +117,9 @@
+@@ -74,6 +79,9 @@
+     GlApi as MediaGlApi, GlContext as MediaGlContext, NativeDisplay as MediaNativeDisplay,
+ };
+ pub use net::image_cache::should_panic_hook_suppress_termination;
++// Mercury: the network policy handle (third-party cookies, GPC, referrer cap, mixed content), which
++// Mercury configures through `NetPolicy::process()` (net-1 brief section 5.4).
++pub use net::net_policy::{NetPolicy, NetPolicyStats, SiteKey};
+ pub use net_traits::CookieSource;
+ // This API should probably not be exposed in this way. Instead there should be a fully
+ // fleshed out public domains API if we want to expose it.
+@@ -112,6 +120,9 @@
      GamepadDelegate, GamepadHapticEffectRequest, GamepadHapticEffectRequestType,
  };
  pub use crate::geolocation_delegate::{GeolocationDelegate, PositionRequest, PositionWatch};
@@ -154,7 +164,21 @@ diff --git a/servo.rs b/servo.rs
  use crate::network_manager::NetworkManager;
  use crate::proxies::ConstellationProxy;
  use crate::responders::ServoErrorChannel;
-@@ -853,6 +855,12 @@
+@@ -527,6 +529,13 @@
+                 self.site_data_manager
+                     .handle_cookie_response(operation_id, CookieOperationResponse::Done);
+             },
++            // Mercury: the net lane's messages go through the same delivery as every other lane's
++            // (mercury/mod.rs).
++            NetToEmbedderMsg::Mercury(webview_id, message) => {
++                let webview =
++                    webview_id.and_then(|webview_id| self.get_webview_handle(webview_id));
++                mercury::deliver(webview_id, webview, &self.delegate.borrow(), message);
++            },
+         }
+     }
+
+@@ -853,6 +862,12 @@
                      webview.process_accessibility_tree_update(tree_update, epoch);
                  }
              },
@@ -167,7 +191,7 @@ diff --git a/servo.rs b/servo.rs
          }
      }
 
-@@ -951,6 +959,12 @@
+@@ -951,6 +966,12 @@
                          .notify_media_session_event(webview, media_session_event);
                  }
              },
@@ -1462,6 +1486,39 @@ new file mode 100644
 +match_block_trailing_comma = true
 +reorder_imports = true
 +style_edition = "2024"
+diff --git a/webview.rs b/webview.rs
+--- a/webview.rs
++++ b/webview.rs
+@@ -1025,6 +1025,29 @@
+     }
+
+     pub(crate) fn process_accessibility_tree_update(&self, tree_update: TreeUpdate, epoch: Epoch) {
++        // Mercury: a11y-1 EE7 (iframes). A child (iframe) document sends its updates with its
++        // top-level document's epoch plus a flag (the constellation activates it that way, see
++        // `servo-constellation/mercury/a11y.rs`). Upstream treats "an update with a newer epoch" as
++        // "a new top-level document, graft this tree as the page", and a child's first update can
++        // arrive before the top-level document's own: it must never be grafted as the page. It is
++        // handed to the delegate as it is (the embedder holds a tree until a graft names it), and
++        // dropped only when the top-level document it belonged to has been replaced.
++        if let Some(top_level_epoch) = embedder_traits::top_level_epoch_of_child_document(epoch) {
++            if self
++                .inner()
++                .grafted_accesskit_tree_epoch
++                .is_some_and(|current| top_level_epoch < current)
++            {
++                debug!(
++                    "Ignoring stale tree update of a child document for {:?}",
++                    tree_update.tree_id
++                );
++                return;
++            }
++            self.delegate()
++                .notify_accessibility_tree_update(self.clone(), tree_update);
++            return;
++        }
+         if self
+             .inner()
+             .grafted_accesskit_tree_epoch
 diff --git a/webview_delegate.rs b/webview_delegate.rs
 --- a/webview_delegate.rs
 +++ b/webview_delegate.rs
@@ -1479,7 +1536,29 @@ diff --git a/webview_delegate.rs b/webview_delegate.rs
  };
  use paint_api::rendering_context::RenderingContext;
  use servo_base::generic_channel::{GenericCallback, GenericSender, SendError};
-@@ -1073,6 +1074,13 @@
+@@ -277,6 +278,21 @@
+             error_sender: self.error_sender,
+         }
+     }
++
++    // Mercury: change the request and let it go on (EC37); the network thread decides what it accepts.
++    /// Let this load go on to the network after changing it as `rewrite` says: a new URL (same scheme
++    /// and, unless this is a top-level navigation, same origin) and header changes (never cookies,
++    /// credentials or connection headers). The network thread applies the whole rewrite or none of it,
++    /// logs a refusal without the values, and does not ask the embedder about the load again. HSTS is
++    /// applied to the new URL, so a rewrite to an HSTS host is upgraded to `https`.
++    pub fn rewrite(mut self, rewrite: embedder_traits::WebResourceRewrite) {
++        if let Err(error) = self
++            .responder
++            .send(WebResourceResponseMsg::Rewrite(rewrite))
++        {
++            self.error_sender.raise_response_send_error(error);
++        }
++    }
+ }
+
+ /// An intercepted web resource load. This struct allows the client to send an alternative response
+@@ -1073,6 +1089,13 @@
      /// <https://developer.mozilla.org/en-US/docs/Web/API/Console_API>
      fn show_console_message(&self, _webview: WebView, _level: ConsoleLogLevel, _message: String) {}
 
@@ -1493,3 +1572,81 @@ diff --git a/webview_delegate.rs b/webview_delegate.rs
      /// There is a new accessibility tree update from this [`WebView`].
      ///
      /// Generally the impl should send this update to an AccessKit adapter, but it may need to queue
+@@ -1223,6 +1246,10 @@
+             referrer_url: None,
+             is_for_main_frame: false,
+             is_redirect: false,
++            // Mercury: frame identity fields (EC38).
++            top_level_site: None,
++            initiator_origin: None,
++            is_third_party: None,
+         };
+         let web_resource_response = || {
+             WebResourceResponse::new(
+@@ -1299,4 +1326,66 @@
+         drop(request);
+         assert!(errors.try_recv().is_none());
+     }
++
++    // Mercury: `WebResourceLoad::rewrite` (EC37) sends the rewrite as the one terminal answer.
++    #[test]
++    fn test_web_resource_load_rewrite() {
++        use http::{HeaderMap, Method};
++
++        use crate::responders::ServoErrorChannel;
++
++        let web_resource_request = || WebResourceRequest {
++            method: Method::GET,
++            headers: HeaderMap::default(),
++            url: Url::parse("https://example.com/?utm_source=x")
++                .expect("Guaranteed by argument")
++                .into(),
++            destination: content_security_policy::Destination::None,
++            referrer_url: None,
++            is_for_main_frame: false,
++            is_redirect: false,
++            top_level_site: None,
++            initiator_origin: None,
++            is_third_party: None,
++        };
++        let rewrite = || embedder_traits::WebResourceRewrite {
++            url: Some(
++                Url::parse("https://example.com/")
++                    .expect("Guaranteed by argument")
++                    .into(),
++            ),
++            set_headers: vec![("X-Mercury".to_owned(), "1".to_owned())],
++            remove_headers: vec!["X-Remove".to_owned()],
++        };
++
++        // A rewrite yields Rewrite and nothing else: no DoNotIntercept follows when the load is dropped
++        let errors = ServoErrorChannel::default();
++        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
++        let request = WebResourceLoad::new(web_resource_request(), sender, errors.sender());
++        request.rewrite(rewrite());
++        match receiver.try_recv() {
++            Ok(WebResourceResponseMsg::Rewrite(sent)) => {
++                assert_eq!(
++                    sent.url.as_ref().map(|url| url.as_str()),
++                    Some("https://example.com/")
++                );
++                assert_eq!(
++                    sent.set_headers,
++                    vec![("X-Mercury".to_owned(), "1".to_owned())]
++                );
++                assert_eq!(sent.remove_headers, vec!["X-Remove".to_owned()]);
++            },
++            _ => panic!("expected the Rewrite message"),
++        }
++        assert!(receiver.try_recv().is_err());
++        assert!(errors.try_recv().is_none());
++
++        // A rewrite when the receiver is disconnected yields an error
++        let errors = ServoErrorChannel::default();
++        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
++        let request = WebResourceLoad::new(web_resource_request(), sender, errors.sender());
++        drop(receiver);
++        request.rewrite(rewrite());
++        assert!(errors.try_recv().is_some());
++    }
+ }

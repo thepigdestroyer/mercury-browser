@@ -1,0 +1,287 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+//! The feeder: the one thread of an `MseSrc` that pulls from the [`FrameFeed`] and pushes into the
+//! appsrc of each track.
+//!
+//! It sleeps on a condition variable, never on a timer, and wakes for: the backend's `wake` closure
+//! (new data, a new configuration, the end of the stream), an appsrc's `need-data` (after it said
+//! `enough-data`, or after a seek), a seek, and the request to stop. It pulls a batch of frames of the
+//! kind that needs data, turns it into buffers, and pushes them without blocking (the appsrc's `block`
+//! is off; it tells us to stop with `enough-data`). `WaitingForData` parks the track until the next
+//! wake; `Ended` queues the end of stream after the last frame.
+//!
+//! The thread is joined when the element is disposed (`element.rs`); nothing in here sleeps, so the
+//! join is immediate.
+
+use std::sync::Arc;
+
+use gstreamer as gst;
+use gstreamer_app as gst_app;
+use mercury_mse::{FeedItem, FeedState, FrameFeed, TrackKind};
+
+use crate::buffers::buffer_for;
+use crate::caps::caps_for;
+use crate::element::MseSrc;
+use crate::shared::{Shared, State, index};
+
+/// Frames asked of the feed in one pull, by kind.
+const VIDEO_BATCH: usize = 8;
+const AUDIO_BATCH: usize = 48;
+/// Pulls in a row that returned no item and said `More`: a feed that does this is treated as waiting,
+/// so a faulty feed cannot make the thread spin.
+const EMPTY_MORE_LIMIT: u32 = 3;
+
+/// One track's appsrc and what the feeder keeps with it.
+pub(crate) struct TrackOut {
+    pub kind: TrackKind,
+    pub appsrc: gst_app::AppSrc,
+    /// A configuration change seen in the feed, applied to the appsrc just before the next frame.
+    pub pending_caps: Option<gst::Caps>,
+}
+
+/// What `wait_for_work` found.
+struct Work {
+    kick: bool,
+    seek: Option<u64>,
+}
+
+pub(crate) struct Feeder {
+    shared: Arc<Shared>,
+    feed: Arc<dyn FrameFeed>,
+    element: glib::WeakRef<MseSrc>,
+    tracks: Vec<TrackOut>,
+    announced: bool,
+    duration: Option<u64>,
+}
+
+impl Feeder {
+    pub(crate) fn new(
+        shared: Arc<Shared>,
+        feed: Arc<dyn FrameFeed>,
+        element: glib::WeakRef<MseSrc>,
+    ) -> Self {
+        Feeder {
+            shared,
+            feed,
+            element,
+            tracks: Vec::new(),
+            announced: false,
+            duration: None,
+        }
+    }
+
+    /// The thread's body: returns when the element asks it to stop.
+    pub(crate) fn run(mut self) {
+        let _ = self.shared.feeder_thread.set(std::thread::current().id());
+        while let Some(work) = self.wait_for_work() {
+            if work.kick {
+                if !self.announced {
+                    self.try_announce();
+                }
+                self.sync_duration();
+            }
+            if let Some(position) = work.seek {
+                // The one call per seek: both tracks' seek-data callbacks recorded the same position.
+                self.feed.seek(i64::try_from(position).unwrap_or(i64::MAX));
+            }
+            for track in 0..self.tracks.len() {
+                self.pump(track);
+            }
+        }
+        log::debug!("mercury-mse-gst: feeder thread ends");
+    }
+
+    fn any_runnable(&self, state: &State) -> bool {
+        self.tracks.iter().any(|track| {
+            let flags = &state.tracks[index(track.kind)];
+            flags.present
+                && flags.need
+                && !flags.flushing
+                && !flags.ended
+                && flags.waiting_seq != Some(state.wake_seq)
+        })
+    }
+
+    /// Blocks until there is something to do; `None` when asked to stop.
+    fn wait_for_work(&self) -> Option<Work> {
+        let mut state = self.shared.lock();
+        loop {
+            if state.stop {
+                return None;
+            }
+            if state.seek.is_some() || state.kick || self.any_runnable(&state) {
+                return Some(Work {
+                    kick: std::mem::take(&mut state.kick),
+                    seek: state.seek.take(),
+                });
+            }
+            state = self
+                .shared
+                .cond
+                .wait(state)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+    }
+
+    /// Announces the streams once the feed knows its tracks.
+    fn try_announce(&mut self) {
+        if !self.feed.all_initialized() {
+            return;
+        }
+        let configs = self.feed.tracks();
+        if configs.is_empty() {
+            return;
+        }
+        let Some(element) = self.element.upgrade() else {
+            return;
+        };
+        let duration = self.read_duration();
+        // Whatever the outcome, the feed's tracks are announced once: a retry would add the pads twice.
+        self.announced = true;
+        match element.announce(&self.shared, &configs, duration) {
+            Ok(tracks) => {
+                self.duration = duration;
+                self.shared.set_duration(duration);
+                self.tracks = tracks;
+            }
+            Err(message) => element.fail(&message),
+        }
+    }
+
+    fn read_duration(&self) -> Option<u64> {
+        // Infinity and absurd values mean "no duration" for GStreamer.
+        self.feed
+            .duration()
+            .and_then(|ns| u64::try_from(ns).ok())
+            .filter(|&ns| ns < u64::MAX / 4)
+    }
+
+    /// Gives the appsrcs and the queries the feed's duration when it changed.
+    fn sync_duration(&mut self) {
+        let duration = self.read_duration();
+        if duration == self.duration {
+            return;
+        }
+        self.duration = duration;
+        self.shared.set_duration(duration);
+        for track in &self.tracks {
+            track
+                .appsrc
+                .set_duration(duration.map(gst::ClockTime::from_nseconds));
+        }
+    }
+
+    /// Feeds one track for as long as its appsrc wants data and the feed has some.
+    fn pump(&mut self, track: usize) {
+        let kind = self.tracks[track].kind;
+        let appsrc = self.tracks[track].appsrc.clone();
+        let batch_size = match kind {
+            TrackKind::Video | TrackKind::Text => VIDEO_BATCH,
+            TrackKind::Audio => AUDIO_BATCH,
+        };
+        let slot = index(kind);
+        let mut empty_streak = 0u32;
+        loop {
+            let epoch = self.shared.epoch();
+            let seq = {
+                let state = self.shared.lock();
+                let flags = &state.tracks[slot];
+                if state.stop
+                    || state.seek.is_some()
+                    || !flags.need
+                    || flags.flushing
+                    || flags.ended
+                    || flags.waiting_seq == Some(state.wake_seq)
+                {
+                    return;
+                }
+                state.wake_seq
+            };
+
+            let batch = self.feed.pull(kind, batch_size);
+            let item_count = batch.items.len();
+            let mut stale = false;
+            let mut refused = false;
+            for item in batch.items {
+                match item {
+                    FeedItem::Config(config) => match caps_for(&config) {
+                        Ok(caps) => self.tracks[track].pending_caps = Some(caps),
+                        Err(message) => {
+                            if let Some(element) = self.element.upgrade() {
+                                element.fail(&message);
+                            }
+                        }
+                    },
+                    FeedItem::Frame { frame, discont } => {
+                        let buffer = buffer_for(&frame, discont);
+                        let _push = self.shared.push_locks[slot]
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if epoch != self.shared.epoch() {
+                            // A seek began after the pull: this frame is from before it.
+                            stale = true;
+                            break;
+                        }
+                        if let Some(caps) = self.tracks[track].pending_caps.take() {
+                            appsrc.set_caps(Some(&caps));
+                        }
+                        match appsrc.push_buffer(buffer) {
+                            Ok(_) => {}
+                            Err(error) => {
+                                log::debug!(
+                                    "mercury-mse-gst: push on the {} track refused: {error:?}",
+                                    kind.name()
+                                );
+                                refused = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            if stale {
+                // Back to the top: the seek's position is waiting for `wait_for_work`. A configuration seen
+                // before the seek is not the one the pipeline needs after it (the feed says it again).
+                self.tracks[track].pending_caps = None;
+                return;
+            }
+            if refused {
+                // The appsrc is flushing or at its end (a state change): it says need-data again when
+                // it runs.
+                self.shared.lock().tracks[slot].need = false;
+                return;
+            }
+
+            match batch.state {
+                FeedState::More => {
+                    if item_count == 0 {
+                        empty_streak += 1;
+                        if empty_streak >= EMPTY_MORE_LIMIT {
+                            self.shared.lock().tracks[slot].waiting_seq = Some(seq);
+                            return;
+                        }
+                    } else {
+                        empty_streak = 0;
+                    }
+                }
+                FeedState::WaitingForData => {
+                    // If a wake came in since the pull, the counter moved and the track stays runnable.
+                    self.shared.lock().tracks[slot].waiting_seq = Some(seq);
+                    return;
+                }
+                FeedState::Ended => {
+                    let _push = self.shared.push_locks[slot]
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    if epoch == self.shared.epoch() {
+                        // After the last queued buffer: the appsrc drains its queue first.
+                        let _ = appsrc.end_of_stream();
+                        self.shared.lock().tracks[slot].ended = true;
+                    }
+                    return;
+                }
+            }
+        }
+    }
+}

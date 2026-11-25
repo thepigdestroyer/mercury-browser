@@ -17,6 +17,7 @@ use talaria_servo::{RuntimeOptions, record_browser_process_id, run_content_proce
 use ui_sync::sync_ui;
 
 mod about;
+mod accessibility; // a11y-1: the shown tab's page, read by assistive technology
 mod automated_render; // orbit-view
 // activation (tabs lane)
 mod activation;
@@ -28,6 +29,8 @@ mod clipboard;
 // controls
 mod controls;
 mod crash_handler;
+#[cfg(target_os = "macos")]
+mod dock_icon; // themes: the Dock icon follows the theme
 mod downloads; // downloads-ui lane
 mod engine;
 mod filter_lists; // blocklists
@@ -37,6 +40,9 @@ mod history_ui;
 mod ctrl_tab; // input-hooks
 mod focus_regions; // input-hooks
 mod ime; // txt-1: the IME composition state machine
+// hub-ring: installed by layout-switch (brief D7)
+#[allow(dead_code)]
+mod hub_ring;
 mod import_ui; // import-ui lane
 mod input_hooks; // input-hooks
 mod keyboard;
@@ -85,6 +91,7 @@ mod shutdown;
 mod tab_close;
 // tabs
 mod signals;
+mod site_images; // sh-pages
 // site-security
 mod site_security;
 #[cfg(target_os = "macos")]
@@ -93,6 +100,7 @@ mod tab_snapshots; // tab-snapshots lane
 mod tab_strip; // tabs-plus
 mod tab_switch_frame;
 mod ui_sync;
+mod view_source; // sh-pages
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
     // (1) Before the content-process branch, so that content processes report their crashes
@@ -215,6 +223,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     settings::prepare_controller(&settings, &mut controller.borrow_mut(), &options.urls);
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
     profile_data::start(&profile, &mut controller.borrow_mut()); // history lane
+    // sh-pages: the sites whose images are off, read once from the profile, before any page loads
+    if let Some(paths) = &profile.paths {
+        site_images::init(&paths.root);
+    }
     import_ui::configure(
         options.is_automated(),
         options.import_from.as_deref(),
@@ -243,6 +255,11 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             &settings,
         ),
     )?;
+    accessibility::install(&window); // a11y-1: the page's tree hangs from the "Page content" node
+    // sh-pages: the engine learns which sites have their images off, before any page is created
+    if !engine::with_runtime(site_images::attach_engine) {
+        log::warn!("the engine was not reachable: images stay on for every site");
+    }
     // blocklists: builds the content blocker's engine off the UI thread and updates the lists.
     filter_lists::start(&options, &profile, &settings);
     // settings-ui
@@ -403,12 +420,15 @@ fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeO
 }
 
 /// Adds the system's proxy settings (macOS). Elsewhere Servo reads the proxy environment
-/// variables itself, which also win on macOS.
+/// variables itself, which also win on macOS. The same choice is recorded for the other HTTP
+/// clients (`mercury_proxy::install`), so a download or a PDF re-fetch never goes out directly
+/// when the page's own request goes through a proxy.
 fn with_system_proxy(runtime_options: RuntimeOptions) -> RuntimeOptions {
     #[cfg(target_os = "macos")]
     let system_proxy = system_proxy::read_system_proxy();
     #[cfg(not(target_os = "macos"))]
     let system_proxy = None;
+    mercury_proxy::install(system_proxy.as_ref());
     RuntimeOptions {
         system_proxy,
         ..runtime_options

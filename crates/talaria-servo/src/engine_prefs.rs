@@ -12,7 +12,39 @@
 //! Every preference named here must exist: `Preferences::set_value` panics on an unknown name,
 //! which the tests below catch.
 
+use std::sync::OnceLock;
+
 use servo::{PrefValue, Preferences};
+
+/// The environment variable that turns Media Source Extensions on for development (`MERCURY_DEV_MSE=1`).
+/// MSE is Mercury's own backend (`crates/mercury-mse`), written but not yet run in a window, so the
+/// preference `dom_media_source_enabled` stays pinned off for everyone; this switch is the only way
+/// to turn it on, until the lane that runs the pages (`tests/pages/mse-*.html`) flips the pin.
+pub(crate) const DEV_MSE_ENV: &str = "MERCURY_DEV_MSE";
+
+/// Whether `value`, the content of [`DEV_MSE_ENV`], asks for MSE: exactly `1`.
+fn dev_mse_from(value: Option<&str>) -> bool {
+    value == Some("1")
+}
+
+/// [`DEV_MSE_ENV`], read once per process.
+fn dev_mse_requested() -> bool {
+    static REQUESTED: OnceLock<bool> = OnceLock::new();
+    *REQUESTED.get_or_init(|| {
+        let requested = dev_mse_from(std::env::var(DEV_MSE_ENV).ok().as_deref());
+        if requested {
+            // Decision (review of lane med-1, S6): the switch works in release builds too, because the
+            // owner runs the pages in the same release build the lanes use; the pinned preference is the
+            // product default and this is a development door. It is loud so that it is never on by
+            // accident, and it goes when the preference is flipped (the pin is then removed).
+            log::warn!(
+                "{DEV_MSE_ENV}=1: Media Source Extensions are ON. They are unfinished and unreviewed; \
+                 this is for development only"
+            );
+        }
+        requested
+    })
+}
 
 /// Stylo (style system) preferences, by their Gecko names, that Mercury sets. They are joined into
 /// `Preferences::stylo_prefs`, which `servo::prefs::set` applies to Stylo (Servo forwards only
@@ -64,15 +96,26 @@ const PINNED_OFF: &[&str] = &[
     // report what is not there, until their items land.
     "dom_serviceworker_enabled",
     "dom_web_animations_enabled",
-    // The accessibility tree is built for the active tab only, by its own lane.
-    "accessibility_enabled",
+    // The tree integrity checks walk the whole tree on every update: for Servo's own tests only.
+    // (`accessibility_enabled` itself is on, in [`apply`]: the tree is still built only for the tab
+    // whose page assistive technology reads, see `accessibility.rs`.)
     "expensive_accessibility_test_assertions_enabled",
 ];
 
 /// Sets Mercury's engine preferences on `preferences`.
 pub(crate) fn apply(preferences: &mut Preferences) {
+    apply_with(preferences, dev_mse_requested());
+}
+
+/// [`apply`] with the development switch for Media Source Extensions given (`dev_mse`).
+fn apply_with(preferences: &mut Preferences, dev_mse: bool) {
     for name in PINNED_OFF {
         preferences.set_value(name, PrefValue::Bool(false));
+    }
+    // The development switch (see [`DEV_MSE_ENV`]) is the one exception to the pin above, and only
+    // for `dom_media_source_enabled`: the MSE DOM is compiled in either way.
+    if dev_mse {
+        preferences.dom_media_source_enabled = true;
     }
     // Global Privacy Control (owner decision O-18): on for every site. Nothing reads it before the
     // network lane's header and `navigator.globalPrivacyControl` (EC25), which then need no edit
@@ -98,11 +141,22 @@ pub(crate) fn apply(preferences: &mut Preferences) {
     preferences.dom_composition_event_enabled = true;
     preferences.dom_adoptedstylesheet_enabled = true;
     preferences.dom_visual_viewport_enabled = true;
+    // Page accessibility (lane a11y-1): lets a web view build an accessibility tree when asked
+    // (`WebView::set_accessibility_active`). Nothing is built until assistive technology attaches
+    // to the window and the tab is the shown one: activation is lazy per document, and a document
+    // that was never activated records no accessibility damage.
+    preferences.accessibility_enabled = true;
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // The tests run with the development switch off whatever the environment of the test run says
+    // (this shadows `super::apply`, which reads `MERCURY_DEV_MSE`); the switch has its own tests below.
+    fn apply(preferences: &mut Preferences) {
+        apply_with(preferences, false);
+    }
 
     fn applied() -> Preferences {
         let mut preferences = Preferences::default();
@@ -158,6 +212,26 @@ mod tests {
         assert!(preferences.dom_composition_event_enabled);
         assert!(preferences.dom_adoptedstylesheet_enabled);
         assert!(preferences.dom_visual_viewport_enabled);
+    }
+
+    #[test]
+    fn page_accessibility_is_on_and_the_expensive_checks_stay_off() {
+        let preferences = applied();
+        assert!(preferences.accessibility_enabled);
+        assert!(!preferences.expensive_accessibility_test_assertions_enabled);
+        // A value set before does not matter: the product's value wins.
+        let mut before = Preferences::default();
+        before.set_value("accessibility_enabled", PrefValue::Bool(false));
+        before.set_value(
+            "expensive_accessibility_test_assertions_enabled",
+            PrefValue::Bool(true),
+        );
+        apply(&mut before);
+        assert!(before.accessibility_enabled);
+        assert!(!before.expensive_accessibility_test_assertions_enabled);
+        // It is not a pinned-off name any more, but the other one is.
+        assert!(!PINNED_OFF.contains(&"accessibility_enabled"));
+        assert!(PINNED_OFF.contains(&"expensive_accessibility_test_assertions_enabled"));
     }
 
     #[test]
@@ -225,6 +299,59 @@ mod tests {
             "stylo_prefs",
         ] {
             assert!(Preferences::exists(name), "{name}");
+        }
+    }
+
+    #[test]
+    fn media_source_is_off_by_default_and_pinned() {
+        assert!(Preferences::exists("dom_media_source_enabled"));
+        assert!(PINNED_OFF.contains(&"dom_media_source_enabled"));
+        assert!(!Preferences::default().dom_media_source_enabled);
+        assert!(!applied().dom_media_source_enabled);
+    }
+
+    #[test]
+    fn the_development_switch_turns_media_source_on_and_nothing_else() {
+        let mut on = Preferences::default();
+        apply_with(&mut on, true);
+        assert!(on.dom_media_source_enabled);
+        // A value set before does not matter either way.
+        let mut set_before = Preferences::default();
+        set_before.set_value("dom_media_source_enabled", PrefValue::Bool(true));
+        apply_with(&mut set_before, false);
+        assert!(!set_before.dom_media_source_enabled);
+        // Every other pin holds with the switch on.
+        for name in PINNED_OFF {
+            if *name != "dom_media_source_enabled" {
+                assert_eq!(on.get_value(name), PrefValue::Bool(false), "{name}");
+            }
+        }
+        // And nothing else differs from the default launch.
+        let off = applied();
+        assert_eq!(
+            on.get_value("dom_media_source_enabled"),
+            PrefValue::Bool(true)
+        );
+        assert_eq!(
+            off.get_value("dom_media_source_enabled"),
+            PrefValue::Bool(false)
+        );
+        on.dom_media_source_enabled = false;
+        assert!(on.diff(&off).is_empty());
+    }
+
+    #[test]
+    fn only_a_one_turns_the_development_switch_on() {
+        assert!(dev_mse_from(Some("1")));
+        for value in [
+            None,
+            Some(""),
+            Some("0"),
+            Some("true"),
+            Some("yes"),
+            Some(" 1"),
+        ] {
+            assert!(!dev_mse_from(value), "{value:?}");
         }
     }
 

@@ -330,7 +330,11 @@ mod tests {
         for entry in std::fs::read_dir(crate_dir.join("src")).unwrap() {
             let path = entry.unwrap().path();
             let text = std::fs::read_to_string(&path).unwrap_or_default();
-            assert!(!text.contains("include_bytes!"), "{}", path.display());
+            // The one file that is compiled in is Mercury's HSTS preload list (`resources.rs`), which
+            // is not a filter list.
+            for line in text.lines().filter(|line| line.contains("include_bytes!")) {
+                assert!(line.contains("hsts_preload"), "{}: {line}", path.display());
+            }
             assert!(!text.contains("adblock-engine.dat"), "{}", path.display());
         }
     }

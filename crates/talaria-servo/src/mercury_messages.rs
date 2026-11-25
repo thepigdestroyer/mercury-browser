@@ -34,8 +34,8 @@ pub(crate) fn handle(tab: Option<TabId>, message: MercuryEmbedderMsg, emit: &dyn
         MercuryEmbedderMsg::A11y(message) => unhandled(tab, &message),
         // The media lane: replace this call with the lane's handler.
         MercuryEmbedderMsg::Media(message) => unhandled(tab, &message),
-        // The net lane: replace this call with the lane's handler.
-        MercuryEmbedderMsg::Net(message) => unhandled(tab, &message),
+        // The net lane: `net_messages.rs` counts the mixed content blocked in each tab.
+        MercuryEmbedderMsg::Net(message) => crate::net_messages::handle(tab, message),
         // The page lane: replace this call with the lane's handler.
         MercuryEmbedderMsg::Page(message) => unhandled(tab, &message),
         // The text lane (txt-1): `text_messages.rs`.

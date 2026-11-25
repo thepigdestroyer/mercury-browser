@@ -29,13 +29,35 @@ which every change here must keep:
 - The application must show Slint's attribution (the AboutSlint widget or the
   "Made with Slint" badge), as Mercury already does for Slint as a whole.
 
-Mercury's changes to this crate stay under the same Slint licence; they are not
-relicensed under PolyForm or the MPL.
+Mercury's changes to the crate's existing files stay under the same Slint licence; they are not
+relicensed under PolyForm or the MPL. A **new** file that Mercury adds and that copies no Slint
+source (today only `mercury_graft.rs`) is Mercury's own code and carries the PolyForm header, as
+every new Mercury file does (`AGENTS.md`); it is linked into this crate, and it is not offered under
+Slint's licences or the GPL.
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane a11y-1 (21 Nov 2026). The hook lines in the existing files stay under the Slint licence; the new file `mercury_graft.rs` is PolyForm (see "Licence").
+
+### Grafting a web page's accessibility tree into the window's tree (EE1) — `accesskit.rs`, `lib.rs`, `winitwindowadapter.rs`, new `mercury_graft.rs`
+
+- **What:** the window's AccessKit tree has a node for the page ("Page content", role `main`). The backend marks the node
+  matching a configured `(role, label)` as a graft, pushes the page's trees (the web view's, the document's, iframes')
+  as subtrees only after a graft names them, routes an action aimed at another tree to the embedder, tells the embedder when
+  assistive technology attaches or detaches, and moves Slint's focus to the page node on a `Focus` request. Every call
+  that gives foreign data to `accesskit_winit` is wrapped in `catch_unwind`; a panic switches page accessibility off for
+  the window. A work-around keeps `accesskit_consumer` 0.38 from panicking when the window gains or loses focus while the
+  focus is inside a page (`before_host_focus_change`). The new public API is one sealed trait,
+  `MercuryPageAccessibility`, implemented for `slint::Window` (`mercury_graft.rs`); the order logic is in
+  `mercury_a11y::graft` (PolyForm, tested without winit), behind the crate's `accessibility` feature. `accesskit.rs`
+  has about 14 hook sites, `lib.rs` one, `winitwindowadapter.rs` three, each tagged `Mercury: a11y-1`. The idea of
+  holding a subtree until its graft is in is that of servoshell's graft queue (`ports/servoshell/desktop/gui.rs`, v0.8.0,
+  MPL-2.0); no line of it was used.
+- **Why:** Slint's backend builds the window's tree itself and has no way to hang a foreign subtree from it (OD-3).
+- **Rebase cost on a Slint upgrade:** the hook sites above; Slint is held at 1.17.
+- **Tested by:** `mercury-a11y` graft and bridge tests (checked against `accesskit_consumer`), the `mercury-ui` page-node
+  tests (compile the backend with the feature on). **The graft through the real adapter has not been run** (it opens a window).
+- **Drop when:** Slint offers a foreign-subtree API (to be asked upstream), and `accesskit_consumer` fixes the host-focus panic.
 
 ## Removing this directory
 

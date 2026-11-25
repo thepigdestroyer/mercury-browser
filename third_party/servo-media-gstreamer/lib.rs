@@ -10,6 +10,7 @@ mod device_monitor;
 pub mod media_capture;
 pub mod media_stream;
 mod media_stream_source;
+mod mercury_mse; // Mercury: (MED-1) the glue to Mercury's Media Source Extensions backend
 pub mod player;
 mod registry_scanner;
 mod render;
@@ -135,6 +136,10 @@ impl GStreamerBackend {
         if !errors.is_empty() {
             return Err(ErrorLoadingPlugins(errors));
         }
+
+        // Mercury: (MED-1) register the `MseSrc` element (the `mercury-mse://` URI handler) that Media
+        // Source Extensions play through. A failure is logged and only leaves MSE unsupported.
+        mercury_mse::register();
 
         type MediaInstancesVec = Vec<(usize, Weak<Mutex<dyn MediaInstance>>)>;
         let instances: HashMap<ClientContextId, MediaInstancesVec> = Default::default();
@@ -302,6 +307,20 @@ impl Backend for GStreamerBackend {
             }
         }
         SupportsMediaType::No
+    }
+
+    // Mercury: (MED-1) Media Source Extensions, see `mercury_mse.rs`.
+    fn create_media_source(
+        &self,
+        events: GenericCallback<servo_media_player::mse::MseEvent>,
+    ) -> Result<Arc<dyn servo_media_player::mse::MediaSourceBackend>, servo_media_player::mse::MseError>
+    {
+        mercury_mse::create_media_source(events)
+    }
+
+    // Mercury: (MED-1)
+    fn is_type_supported_mse(&self, mime: &str) -> bool {
+        mercury_mse::is_type_supported(mime)
     }
 
     fn set_capture_mocking(&self, mock: bool) {

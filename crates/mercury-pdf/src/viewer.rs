@@ -165,6 +165,8 @@ pub struct CacheUsage {
     pub placeholders: usize,
     pub placeholder_bytes: usize,
     pub text_chars: usize,
+    /// Pages whose links are kept (a page with none counts).
+    pub link_pages: usize,
 }
 
 /// What to ask the helper process for next.
@@ -746,7 +748,21 @@ impl ViewerModel {
             placeholders: self.placeholders.len(),
             placeholder_bytes: self.placeholders.bytes(),
             text_chars: self.texts.cost(),
+            link_pages: self.links.len(),
         }
+    }
+
+    /// Lets go of everything that was fetched from the helper (tiles, placeholders, page text and
+    /// links, and what was asked for), for a document whose helper has ended, so that a tab nobody
+    /// is looking at holds no page pictures. The view (scroll, zoom, rotation, page, selection and
+    /// find) stays; when the helper comes back, the next `plan` asks again for what the viewport
+    /// needs.
+    pub fn release_caches(&mut self) {
+        self.tiles.clear();
+        self.placeholders.clear();
+        self.texts.clear();
+        self.links.clear();
+        self.forget_pending();
     }
 
     /// Forgets what was asked for and not yet answered (and what failed), for the shell to call
