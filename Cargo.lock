@@ -3,6 +3,12 @@
 version = 4
 
 [[package]]
+name = "a11y-dom"
+version = "0.30.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "95fa5d0258620ca496a2783746ab035e48719db43d5f355bc32f0edccbcce66d"
+
+[[package]]
 name = "ab_glyph"
 version = "0.2.32"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -126,6 +132,15 @@ dependencies = [
  "accesskit_windows",
  "raw-window-handle",
  "winit",
+]
+
+[[package]]
+name = "accname"
+version = "0.30.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "550cfa865a3dac16e59b1ae727eac1e1db7a5802da51195f5440f2fdc3e723ec"
+dependencies = [
+ "a11y-dom",
 ]
 
 [[package]]
@@ -4360,6 +4375,7 @@ dependencies = [
  "i-slint-renderer-software",
  "imgref",
  "lyon_path",
+ "mercury-a11y",
  "muda",
  "objc2 0.6.5",
  "objc2-app-kit 0.3.2",
@@ -5914,6 +5930,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-a11y"
+version = "0.2.0"
+dependencies = [
+ "a11y-dom",
+ "accesskit",
+ "accesskit_consumer",
+ "accname",
+]
+
+[[package]]
 name = "mercury-appearance"
 version = "0.2.0"
 dependencies = [
@@ -5936,6 +5962,7 @@ dependencies = [
 name = "mercury-desktop"
 version = "0.2.0"
 dependencies = [
+ "accesskit",
  "arboard",
  "ash",
  "backtrace",
@@ -5948,17 +5975,22 @@ dependencies = [
  "gleam",
  "glow",
  "i-slint-backend-testing",
+ "i-slint-backend-winit",
  "image",
  "libc",
  "log",
+ "mercury-a11y",
+ "mercury-appearance",
  "mercury-downloads",
  "mercury-filter-lists",
+ "mercury-iconset",
  "mercury-import",
  "mercury-option-keys",
  "mercury-password-manager",
  "mercury-passwords",
  "mercury-pdf",
  "mercury-pdfium",
+ "mercury-proxy",
  "mercury-settings",
  "mercury-site-security",
  "mercury-store",
@@ -5988,12 +6020,15 @@ dependencies = [
 name = "mercury-devtools"
 version = "0.2.0"
 dependencies = [
+ "base64 0.22.1",
+ "fst",
  "getrandom 0.4.3",
  "httpdate",
  "image",
  "libc",
  "percent-encoding",
  "serde_json",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
@@ -6004,6 +6039,7 @@ dependencies = [
  "futures-util",
  "libc",
  "log",
+ "mercury-proxy",
  "mime_guess",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
@@ -6042,6 +6078,7 @@ version = "0.2.0"
 dependencies = [
  "adblock",
  "log",
+ "mercury-proxy",
  "mercury-settings",
  "reqwest",
  "serde",
@@ -6057,6 +6094,7 @@ dependencies = [
 name = "mercury-iconset"
 version = "0.2.0"
 dependencies = [
+ "mercury-appearance",
  "resvg 0.48.1",
  "tempfile",
  "thiserror 2.0.21",
@@ -6073,6 +6111,36 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.21",
  "url",
+]
+
+[[package]]
+name = "mercury-mse"
+version = "0.2.0"
+dependencies = [
+ "log",
+ "mercury-mse-testkit",
+ "serde",
+ "thiserror 2.0.21",
+]
+
+[[package]]
+name = "mercury-mse-gst"
+version = "0.2.0"
+dependencies = [
+ "glib",
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-base",
+ "log",
+ "mercury-mse",
+ "mercury-mse-testkit",
+]
+
+[[package]]
+name = "mercury-mse-testkit"
+version = "0.2.0"
+dependencies = [
+ "thiserror 2.0.21",
 ]
 
 [[package]]
@@ -6128,6 +6196,13 @@ dependencies = [
  "log",
  "mercury-pdf",
  "pdfium-render",
+]
+
+[[package]]
+name = "mercury-proxy"
+version = "0.2.0"
+dependencies = [
+ "reqwest",
 ]
 
 [[package]]
@@ -6198,11 +6273,31 @@ dependencies = [
  "i-slint-backend-testing",
  "image",
  "mercury-appearance",
+ "mercury-settings",
  "objc2 0.6.5",
  "objc2-foundation 0.3.2",
+ "serde_json",
  "slint",
  "slint-build",
  "talaria-core",
+]
+
+[[package]]
+name = "mercury-view-source"
+version = "0.2.0"
+dependencies = [
+ "encoding_rs",
+ "log",
+ "mercury-proxy",
+ "reqwest",
+ "thiserror 2.0.21",
+ "tokio",
+ "tree-sitter",
+ "tree-sitter-css",
+ "tree-sitter-highlight",
+ "tree-sitter-html",
+ "tree-sitter-javascript",
+ "url",
 ]
 
 [[package]]
@@ -9953,6 +10048,7 @@ dependencies = [
 name = "servo-layout"
 version = "0.8.0"
 dependencies = [
+ "a11y-dom",
  "accesskit",
  "app_units",
  "arrayvec",
@@ -9969,6 +10065,7 @@ dependencies = [
  "kurbo",
  "log",
  "malloc_size_of_derive",
+ "mercury-a11y",
  "num-derive",
  "num-traits",
  "once_cell",
@@ -10181,6 +10278,8 @@ dependencies = [
  "gstreamer-video",
  "gstreamer-webrtc",
  "log",
+ "mercury-mse",
+ "mercury-mse-gst",
  "servo-base",
  "servo-media",
  "servo-media-audio",
@@ -10263,6 +10362,7 @@ name = "servo-media-player"
 version = "0.8.0"
 dependencies = [
  "malloc_size_of_derive",
+ "mercury-mse",
  "serde",
  "servo-base",
  "servo-malloc-size-of",
@@ -10351,6 +10451,7 @@ dependencies = [
  "cookie 0.18.2",
  "crossbeam-channel",
  "data-url",
+ "flate2",
  "fst",
  "futures",
  "futures-core",
@@ -11507,6 +11608,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "streaming-iterator"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2b2231b7c3057d5e4ad0156fb3dc807d900806020c5ffa3ee6ff2c8c76fb8520"
+
+[[package]]
 name = "strength_reduce"
 version = "0.2.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -11895,17 +12002,23 @@ dependencies = [
 name = "talaria-servo"
 version = "0.2.0"
 dependencies = [
+ "accesskit",
+ "accesskit_consumer",
  "adblock",
  "boa_engine",
  "content-security-policy",
  "dpi",
  "euclid",
+ "futures-util",
  "getrandom 0.4.3",
  "gstreamer",
  "http",
  "libc",
  "log",
+ "mercury-a11y",
+ "mercury-proxy",
  "mercury-site-security",
+ "mercury-view-source",
  "objc2 0.6.5",
  "objc2-core-location 0.3.2",
  "objc2-foundation 0.3.2",
@@ -11914,8 +12027,11 @@ dependencies = [
  "serde_json",
  "servo",
  "servo-default-resources",
+ "servo-net",
+ "servo-net-traits",
  "talaria-core",
  "tempfile",
+ "tokio",
  "url",
 ]
 
@@ -12457,6 +12573,67 @@ dependencies = [
  "num-integer",
  "strength_reduce",
 ]
+
+[[package]]
+name = "tree-sitter"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "37b2bed8f39a73439f3b0b7ed8f452be5d2911b5e9da69d352ef113bb7448fb8"
+dependencies = [
+ "cc",
+ "regex",
+ "serde_json",
+ "streaming-iterator",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-css"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5cbc5e18f29a2c6d6435891f42569525cf95435a3e01c2f1947abcde178686f"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-highlight"
+version = "0.27.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e307e63afde73bb842097e97725f1956a88b371f7d81517557a1949a2d02d9a"
+dependencies = [
+ "regex",
+ "streaming-iterator",
+ "thiserror 2.0.21",
+ "tree-sitter",
+]
+
+[[package]]
+name = "tree-sitter-html"
+version = "0.23.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "261b708e5d92061ede329babaaa427b819329a9d427a1d710abb0f67bbef63ee"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-javascript"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "68204f2abc0627a90bdf06e605f5c470aa26fdcb2081ea553a04bdad756693f5"
+dependencies = [
+ "cc",
+ "tree-sitter-language",
+]
+
+[[package]]
+name = "tree-sitter-language"
+version = "0.1.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d0af592be68c579aa78a16846bd19422978c3c52e438523d45ff5d1bff1f9d4a"
 
 [[package]]
 name = "tree_magic_mini"

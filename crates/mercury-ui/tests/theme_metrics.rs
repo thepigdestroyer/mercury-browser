@@ -97,10 +97,8 @@ fn distinct() -> Metrics {
 }
 
 fn look(metrics: Metrics) -> Look {
-    Look {
-        metrics,
-        ..Look::hermes_roomy()
-    }
+    let hermes = Look::hermes_roomy();
+    Look::new(hermes.palette_light, hermes.palette_dark, metrics)
 }
 
 #[test]

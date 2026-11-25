@@ -7,6 +7,8 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+# a11y-1: the page tree reaches the window (`src/accessibility.rs`).
+accesskit.workspace = true
 adblock.workspace = true
 content-security-policy.workspace = true
 dpi.workspace = true
@@ -20,9 +22,20 @@ rusqlite.workspace = true
 serde_json.workspace = true
 servo.workspace = true
 talaria-core = { path = "../talaria-core" }
+# a11y-1: which tab's page tree reaches the window (`src/accessibility.rs`).
+mercury-a11y = { path = "../mercury-a11y" }
 # site security: Mercury's error pages, and Servo's other resources (patched, see Cargo.toml).
 getrandom.workspace = true
+mercury-proxy = { path = "../mercury-proxy" }
 mercury-site-security = { path = "../mercury-site-security" }
+# sh-pages: the view-source handler (`view_source.rs`) fetches, highlights and renders with this crate.
+futures-util.workspace = true
+mercury-view-source = { path = "../mercury-view-source" }
+# sh-pages: the engine's own bad-port list (`should_request_be_blocked_due_to_a_bad_port`), HSTS
+# list, cookie jar type and locale, reused by the re-fetch so that it follows the same rules.
+servo-net = "=0.8.0"
+servo-net-traits = "=0.8.0"
+tokio = { workspace = true, features = ["rt", "sync", "time"] }
 servo-default-resources = "=0.8.0"
 url.workspace = true
 
@@ -64,6 +77,9 @@ objc2-foundation = { workspace = true, features = [
 ] }
 
 [dev-dependencies]
+# a11y-1: the headless-Servo accessibility tests (`tests/a11y_*.rs`, all `#[ignore]`d) read the tree with the
+# consumer AccessKit's own adapters use.
+accesskit_consumer.workspace = true
 # find: runs the find-in-page script's tests in a JavaScript engine written in Rust.
 boa_engine.workspace = true
 tempfile.workspace = true

@@ -96,6 +96,9 @@ mod renderer {
 
 #[cfg(enable_accesskit)]
 mod accesskit;
+// Mercury: a11y-1: the one new public item: how the embedder hangs a page's accessibility tree from the window's (see MERCURY.md).
+#[cfg(enable_accesskit)]
+pub use crate::accesskit::mercury_graft::MercuryPageAccessibility;
 #[cfg(muda)]
 mod muda;
 #[cfg(xdg_desktop_settings)]

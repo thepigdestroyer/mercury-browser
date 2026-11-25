@@ -43,7 +43,7 @@ use crate::dom::globalscope::GlobalScope;
 use crate::dom::indexeddb::idbdatabase::IDBDatabase;
 use crate::dom::indexeddb::idbobjectstore::{IDBObjectStore, IDBObjectStoreAbortState};
 use crate::dom::indexeddb::idbrequest::IDBRequest;
-use crate::dom::indexeddb::key::map_backend_error_to_dom_error;
+use crate::dom::indexeddb::key::map_backend_error_to_request_error;
 
 #[dom_struct]
 pub struct IDBTransaction {
@@ -141,10 +141,12 @@ impl IDBTransaction {
         mode: IDBTransactionMode,
         durability: IDBTransactionDurability,
         scope: &DOMStringList,
-    ) -> DomRoot<IDBTransaction> {
+    ) -> Fallible<DomRoot<IDBTransaction>> {
+        // Mercury: a failure of the backend to create the transaction is an exception for the
+        // page now, it used to panic the content process.
         let serial_number =
-            IDBTransaction::create_transaction(global, connection.get_name(), mode, scope);
-        IDBTransaction::new_with_serial(
+            IDBTransaction::create_transaction(global, connection.get_name(), mode, scope)?;
+        Ok(IDBTransaction::new_with_serial(
             cx,
             global,
             connection,
@@ -152,7 +154,7 @@ impl IDBTransaction {
             durability,
             scope,
             serial_number,
-        )
+        ))
     }
 
     pub(crate) fn new_with_serial(
@@ -182,7 +184,7 @@ impl IDBTransaction {
         db_name: DOMString,
         mode: IDBTransactionMode,
         scope: &DOMStringList,
-    ) -> u64 {
+    ) -> Fallible<u64> {
         let backend_mode = match mode {
             IDBTransactionMode::Readonly => IndexedDBTxnMode::Readonly,
             IDBTransactionMode::Readwrite => IndexedDBTxnMode::Readwrite,
@@ -192,7 +194,16 @@ impl IDBTransaction {
             .filter_map(|i| scope.Item(i))
             .map(String::from)
             .collect();
-        let (sender, receiver) = channel(global.time_profiler_chan().clone()).unwrap();
+        // Mercury: the failures below were `unwrap()` and `expect()`: a backend that cannot be
+        // reached is an AbortError, one that refuses the transaction is the error it reports.
+        let backend_unreachable = || {
+            Error::Abort(Some(
+                "The IndexedDB backend could not create the transaction".to_owned(),
+            ))
+        };
+        let Some((sender, receiver)) = channel(global.time_profiler_chan().clone()) else {
+            return Err(backend_unreachable());
+        };
 
         global
             .storage_threads()
@@ -203,9 +214,15 @@ impl IDBTransaction {
                 mode: backend_mode,
                 scope,
             }))
-            .expect("Failed to send IndexedDBThreadMsg::Sync");
+            .map_err(|_| backend_unreachable())?;
 
-        receiver.recv().unwrap().expect("CreateTransaction failed")
+        receiver
+            .recv()
+            .map_err(|_| backend_unreachable())?
+            .map_err(|error| {
+                warn!("indexeddb: CreateTransaction failed: {error}");
+                map_backend_error_to_request_error(error)
+            })
     }
 
     /// <https://w3c.github.io/IndexedDB/#transaction-lifecycle>
@@ -327,14 +344,23 @@ impl IDBTransaction {
             let task_source = task_source.clone();
             task_source.queue(task!(handle_commit_result: move |cx| {
                 let this = this.root();
-                let message = message.expect("Could not unwrap message");
-                match message.result {
+                // Mercury: a commit result that cannot be received aborts the transaction, it used
+                // to panic the content process.
+                let result = match message {
+                    Ok(message) => message.result,
+                    Err(error) => Err(BackendError::DbErr(format!(
+                        "the commit result could not be received: {error:?}"
+                    ))),
+                };
+                match result {
                     Ok(()) => {
                         this.finalize_commit();
                     }
-                    Err(_err) => {
-                         // TODO: Map backend commit/rollback failure to an appropriate DOMException
-                        this.initiate_abort(cx, Error::Operation(None));
+                    Err(error) => {
+                        // Mercury: the abort carries the error the backend reported, not an
+                        // OperationError whatever went wrong.
+                        warn!("indexeddb: a commit failed: {error}");
+                        this.initiate_abort(cx, map_backend_error_to_request_error(error));
 
                         this.finalize_abort();
                     }
@@ -342,8 +368,12 @@ impl IDBTransaction {
                 // TODO: https://w3c.github.io/IndexedDB/#commit-a-transaction
                 // Backend commit/rollback is not yet atomic.
             }));
-        })
-        .expect("Could not create callback");
+        });
+        // Mercury: no panic; the caller aborts the transaction when this returns false.
+        let Ok(callback) = callback else {
+            error!("Could not create the callback of an IndexedDB commit");
+            return false;
+        };
 
         let commit_operation = SyncOperation::Commit(
             callback,
@@ -534,20 +564,35 @@ impl IDBTransaction {
             let task_source = task_source.clone();
             task_source.queue(task!(handle_abort_result: move || {
                 let this = this.root();
-                let _ = message.expect("Could not unwrap message");
+                // Mercury: an abort result that cannot be received still ends the abort; it used
+                // to panic the content process.
+                if let Err(error) = message {
+                    warn!("indexeddb: the result of an abort could not be received: {error:?}");
+                }
                 this.finalize_abort();
             }));
-        })
-        .expect("Could not create callback");
+        });
+        // Mercury: no panic; without a callback nobody would finish the abort, so finish it here.
+        let Ok(callback) = callback else {
+            error!("Could not create the callback of an IndexedDB abort");
+            self.finalize_abort();
+            return;
+        };
         let operation = SyncOperation::Abort(
             callback,
             global.origin().immutable().clone(),
             String::from(self.db.get_name()),
             self.serial_number,
         );
-        let _ = self
+        if self
             .get_idb_thread()
-            .send(IndexedDBThreadMsg::Sync(operation));
+            .send(IndexedDBThreadMsg::Sync(operation))
+            .is_err()
+        {
+            // Mercury: the storage thread is gone and will never answer: finish the abort here.
+            error!("Could not send an IndexedDB abort to the storage thread");
+            self.finalize_abort();
+        }
     }
 
     fn notify_backend_transaction_finished(&self) {
@@ -697,8 +742,8 @@ impl IDBTransaction {
     ) -> Option<(IDBObjectStoreParameters, Vec<IndexedDBIndex>, Option<i64>)> {
         let global = self.global();
         let idb_sender = global.storage_threads().sender();
-        let (sender, receiver) =
-            channel(global.time_profiler_chan().clone()).expect("failed to create channel");
+        // Mercury: no panic when the channel cannot be created; the caller handles `None`.
+        let (sender, receiver) = channel(global.time_profiler_chan().clone())?;
 
         let origin = global.origin().immutable().clone();
         let db_name = String::from(self.db.get_name());
@@ -730,7 +775,13 @@ impl IDBTransaction {
         ))
     }
 
-    pub(crate) fn create_abort_callback(&self) -> GenericCallback<BackendError> {
+    /// The callback that a schema operation (create or delete an object store or an index) gets:
+    /// when the backend fails the operation, the transaction aborts with the error it reported.
+    ///
+    /// Mercury: returns an error instead of panicking when the callback cannot be created, and the
+    /// abort carries the DOMException of the backend's error (a ConstraintError for a schema
+    /// constraint failure) instead of an OperationError that says the open failed.
+    pub(crate) fn create_abort_callback(&self) -> Fallible<GenericCallback<BackendError>> {
         let trusted_transaction = Trusted::new(self);
         let task_source = self
             .global()
@@ -744,11 +795,15 @@ impl IDBTransaction {
             let trusted_transaction = trusted_transaction.clone();
             task_source.queue(task!(delete_failed: move |cx| {
                 let transaction = trusted_transaction.root();
-                transaction.initiate_abort(cx, map_backend_error_to_dom_error(error));
+                warn!("indexeddb: a schema operation failed: {error}");
+                transaction.initiate_abort(cx, map_backend_error_to_request_error(error));
                 transaction.request_backend_abort();
             }));
         })
-        .expect("Could not create GenericCallback")
+        .map_err(|error| {
+            error!("Could not create the callback of an IndexedDB schema operation: {error:?}");
+            Error::Operation(Some("The storage thread cannot be reached".to_owned()))
+        })
     }
 }
 

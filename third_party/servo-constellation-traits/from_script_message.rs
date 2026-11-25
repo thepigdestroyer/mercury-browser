@@ -21,6 +21,7 @@ use fonts_traits::SystemFontServiceProxySender;
 use http::{HeaderMap, Method};
 use malloc_size_of_derive::MallocSizeOf;
 use net_traits::policy_container::PolicyContainer;
+use net_traits::pub_domains::Site;
 use net_traits::request::{Destination, InsecureRequestsPolicy, Referrer, RequestBody};
 use net_traits::{ReferrerPolicy, ResourceThreads};
 use paint_api::CrossProcessPaintApi;
@@ -583,6 +584,11 @@ pub struct WorkerGlobalScopeInit {
     pub webgl_chan: Option<WebGLChan>,
     /// Whether or not Servo is online.
     pub online: bool,
+    // Mercury: the top-level site of the document (or worker) that created the worker, for the network
+    // partition key of the worker's own requests. Without it the network layer cannot tell a worker's
+    // first-party request from a third-party one (net-1 review, finding 1).
+    /// The network partition key of the creator.
+    pub network_partition_key: Option<Site>,
 }
 
 /// Message delivered to a worker event loop to run animation frame callbacks.

@@ -218,6 +218,17 @@ impl ServoWebView {
             geolocation.set_visible(false); // geolocation
         }
     }
+
+    // a11y-1
+    /// Tells the engine to build this page's accessibility tree (`true`) or to stop (`false`),
+    /// and returns the tree id of the web view's own tree while it is on. The window must graft
+    /// that tree **before** it passes on any update of this web view, or AccessKit panics:
+    /// `ServoRuntime::set_accessibility_sink` delivers the updates, and `mercury_a11y::graft`
+    /// holds each until its graft is in. `None` when the engine did not turn it on (the
+    /// preference is off). Cheap while off: an inactive document records nothing.
+    pub fn set_page_accessible(&self, accessible: bool) -> Option<servo::accesskit::TreeId> {
+        self.inner.set_accessibility_active(accessible)
+    }
 }
 
 impl Drop for ServoWebView {

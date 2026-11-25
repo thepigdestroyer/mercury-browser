@@ -8,6 +8,8 @@ use url::Url;
 use std::time::Duration;
 
 use crate::PageRequestId;
+// sh-pages
+use crate::view_source::{VIEW_SOURCE_SCHEME, is_view_source, view_source_target};
 
 /// A page's request to open a URL in another app, queued by the controller.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -66,7 +68,8 @@ pub enum NavigationVerdict {
     /// one by script is refused too. A frame's `src` and typed addresses never ask.
     DenyData,
     /// A scheme that is never handed to another app from a page, even after asking (see
-    /// `NEVER_EXTERNAL_SCHEMES`).
+    /// `NEVER_EXTERNAL_SCHEMES`); and `view-source:`, which only a `view-source:` page may open
+    /// (its links) and only for an `http(s)` address.
     DenyScheme,
     /// The engine cannot load the scheme (`mailto:`, `tel:`, an app's own scheme). The engine is
     /// refused; the system's handler for the scheme may open it, after a user gesture and the
@@ -77,6 +80,10 @@ pub enum NavigationVerdict {
 /// `page` is the URL of the page shown in the tab when it asked, if one has committed.
 pub fn navigation_verdict(page: Option<&Url>, target: &Url) -> NavigationVerdict {
     let scheme = target.scheme();
+    // sh-pages: `view-source:` is Mercury's own page; a web page may not open it.
+    if scheme == VIEW_SOURCE_SCHEME {
+        return view_source_verdict(page, target);
+    }
     if NEVER_EXTERNAL_SCHEMES.contains(&scheme) {
         return NavigationVerdict::DenyScheme;
     }
@@ -90,6 +97,19 @@ pub fn navigation_verdict(page: Option<&Url>, target: &Url) -> NavigationVerdict
         return NavigationVerdict::DenyLocalFile;
     }
     NavigationVerdict::Allow
+}
+
+/// sh-pages: the verdict for a `view-source:` target. Only a source page (its links, which are
+/// `view-source:` addresses of `http(s)` pages) may open one, and only for an `http(s)` address;
+/// a web page, a tab whose page has not committed, and `about:blank` may not. Servo's request
+/// names no frame, so a frame is judged as the tab's top-level page; a source page has no frames
+/// (its content security policy allows none) and no script.
+fn view_source_verdict(page: Option<&Url>, target: &Url) -> NavigationVerdict {
+    if page.is_some_and(is_view_source) && view_source_target(target).is_some() {
+        NavigationVerdict::Allow
+    } else {
+        NavigationVerdict::DenyScheme
+    }
 }
 
 /// Whether the engine must not fetch `target` for the tab whose top-level page is `page`: a

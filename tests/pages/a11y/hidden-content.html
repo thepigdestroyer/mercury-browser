@@ -1,0 +1,29 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Hidden content</title>
+</head>
+<body>
+<h1>Hidden content</h1>
+<p>A screen reader reads only the paragraph "Visible paragraph" and the button "Visible button": the five
+hidden blocks below (aria-hidden, display none, visibility hidden, the hidden attribute and inert) are
+skipped, and "Revealed paragraph" appears after the page reveals it.</p>
+<p>Visible paragraph</p>
+<button>Visible button</button>
+<div aria-hidden="true"><p>MARKER-ARIA-HIDDEN</p><button>Hidden button</button></div>
+<div style="display:none"><p>MARKER-DISPLAY-NONE</p></div>
+<div style="visibility:hidden"><p>MARKER-VISIBILITY-HIDDEN</p></div>
+<div hidden><p>MARKER-HIDDEN-ATTRIBUTE</p></div>
+<div inert><p>MARKER-INERT</p></div>
+<div id="later" hidden><p>Revealed paragraph</p></div>
+<p id="toggled">Toggled paragraph</p>
+<script>
+  function reveal() { document.getElementById("later").hidden = false; }
+  function hideToggled() { document.getElementById("toggled").setAttribute("aria-hidden", "true"); }
+  function showToggled() { document.getElementById("toggled").removeAttribute("aria-hidden"); }
+</script>
+</body>
+</html>

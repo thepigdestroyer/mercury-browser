@@ -349,6 +349,11 @@ impl TextControlElement for HTMLTextAreaElement {
     }
 
     fn handle_text_content_changed(&self, cx: &mut JSContext) {
+        // Mercury: a11y-1 item 4: the text a user typed is the value of the control.
+        crate::dom::document::accessibility_attributes::damage_for_value_change(
+            self.upcast::<Node>(),
+            cx.no_gc(),
+        );
         self.validity_state(cx)
             .perform_validation_and_update(cx, ValidationFlags::all());
 

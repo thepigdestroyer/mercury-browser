@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Network request path</title>
+<style>
+  /* Explicit colours: in dark mode Servo 0.8 gives unstyled text a light colour on a white canvas. */
+  html { background: #ffffff; color: #000000; }
+  body { font: 18px/1.35 -apple-system, "Helvetica Neue", Arial, sans-serif; margin: 16px 20px; }
+  h1 { font-size: 22px; margin: 0 0 4px; }
+  p.note { font-size: 13px; color: #444444; margin: 0 0 8px; }
+  #summary { font: bold 20px/1.4 Menlo, monospace; margin: 4px 0 8px; }
+  .line { font: 15px/1.5 Menlo, monospace; margin: 0; word-break: break-all; }
+  .pass { color: #006400; }
+  .fail { color: #b00000; font-weight: bold; }
+  .info { color: #1a4f8b; }
+</style>
+</head>
+<body>
+<!--
+  Mercury test page for the request path of lane net-1 (EC14 referrer cap, EC37 URL rewrite). It is written and
+  has NOT been run: the screen of the development Mac was locked (see the lane report, open items). Mixed
+  content (EC17) is not here: it needs a page on a TLS server that asks for an http resource, and this test
+  server has no TLS (open item in the report). The frame-identity fields (EC38, D17) are not visible to a
+  page; the servo-net tests cover them.
+
+  How to run. Start the test server (scripts/serve-tests.sh, loopback) and open the page through it:
+    http://127.0.0.1:PORT/pages/net-request-path.html
+  It needs the routes of lane net-1 in the test server: GET /net/echo answers a JSON object with the request
+  headers (Referer among them, names in any case) and carries Access-Control-Allow-Origin, so a page on
+  127.0.0.1 can read an answer from localhost. localhost and 127.0.0.1 are two origins and two sites, so
+  no host file is needed.
+
+  Referrer cap (EC14). The page fetches /net/echo with each referrer policy, from its own origin and across
+  origins, and compares the Referer that arrived. Mercury ships the cap on: a page can tighten the policy but
+  unsafe-url, no-referrer-when-downgrade and origin-when-cross-origin act as strict-origin-when-cross-origin,
+  so a cross-origin request carries the origin only. Open it with ?cap=0 for a build or a profile with the
+  cap off (the whole URL for unsafe-url and no-referrer-when-downgrade).
+
+  URL rewrite (EC37). With the custom filter rule
+    ||127.0.0.1^$removeparam=utm_source
+  active in the content blocker, a request for /net/echo?keep=1&utm_source=mercury reaches the server as
+  /net/echo?keep=1, and response.url says so. Open the page with ?removeparam=1 to have that checked; without
+  it the line only prints the response URL. The test server's --log file shows what reached it.
+
+  Expected with Mercury's defaults and no query string: no FAIL line and a title that ends in "0 FAIL".
+-->
+<h1>Network request path</h1>
+<p class="note">PASS means the request path behaves as Mercury ships it. Written, not run (open item).</p>
+<div id="summary">running</div>
+<div id="results"></div>
+<script>
+  "use strict";
+  const results = document.getElementById("results");
+  const params = new URLSearchParams(location.search);
+  const expectCap = params.get("cap") !== "0";
+  const expectStrip = params.get("removeparam") === "1";
+  let passes = 0;
+  let failures = 0;
+
+  function line(kind, text) {
+    const item = document.createElement("div");
+    item.className = "line " + kind;
+    item.textContent = "NETPATH " + kind.toUpperCase() + "  " + text;
+    results.appendChild(item);
+    if (kind === "pass") passes++;
+    if (kind === "fail") failures++;
+  }
+
+  function check(label, value, expected) {
+    const shown = JSON.stringify(value);
+    line(value === expected ? "pass" : "fail",
+         label + " = " + shown + (value === expected ? "" : " (expected " + JSON.stringify(expected) + ")"));
+  }
+
+  // The value of a request header in the echo, whatever the case of its name or whether the answer nests
+  // the headers under "headers"; "" when the request did not carry it.
+  function headerOf(answer, name) {
+    const wanted = name.toLowerCase();
+    const scan = (object) => {
+      for (const key of Object.keys(object)) {
+        if (key.toLowerCase() === wanted) return object[key];
+      }
+      return undefined;
+    };
+    let value;
+    if (answer && typeof answer === "object") {
+      value = scan(answer);
+      if (value === undefined && answer.headers && typeof answer.headers === "object") {
+        value = scan(answer.headers);
+      }
+    }
+    return value === undefined || value === null ? "" : String(value);
+  }
+
+  async function echo(base, path, init) {
+    const response = await fetch(base + path, Object.assign({ credentials: "omit" }, init));
+    const answer = await response.json();
+    return { url: response.url, answer: answer };
+  }
+
+  const origin = location.origin;
+  const here = location.href.split("#")[0];
+  // The other origin: 127.0.0.1 and localhost are different origins and different sites.
+  const otherHost = location.hostname === "localhost" ? "127.0.0.1" : "localhost";
+  const other = location.protocol + "//" + otherHost + (location.port ? ":" + location.port : "");
+
+  // [label, referrer policy, "same" or "cross" origin, Referer expected with the cap, Referer expected without it]
+  const referrerCases = [
+    ["unsafe-url, cross-origin", "unsafe-url", "cross", origin + "/", here],
+    ["no-referrer-when-downgrade, cross-origin", "no-referrer-when-downgrade", "cross", origin + "/", here],
+    ["origin-when-cross-origin, cross-origin", "origin-when-cross-origin", "cross", origin + "/", origin + "/"],
+    // Never loosened by the cap:
+    ["strict-origin, cross-origin", "strict-origin", "cross", origin + "/", origin + "/"],
+    ["strict-origin-when-cross-origin, cross-origin", "strict-origin-when-cross-origin", "cross", origin + "/", origin + "/"],
+    ["same-origin, cross-origin", "same-origin", "cross", "", ""],
+    ["no-referrer, cross-origin", "no-referrer", "cross", "", ""],
+    // Within the origin the path stays:
+    ["unsafe-url, same origin", "unsafe-url", "same", here, here],
+    ["same-origin, same origin", "same-origin", "same", here, here],
+  ];
+
+  async function main() {
+    line("info", "cap expected " + (expectCap ? "on (Mercury's default)" : "off (?cap=0)") +
+         "; page " + here + "; other origin " + other);
+
+    for (const [label, policy, where, withCap, withoutCap] of referrerCases) {
+      try {
+        const base = where === "same" ? origin : other;
+        const result = await echo(base, "/net/echo", { referrerPolicy: policy, mode: "cors" });
+        check("Referer, " + label, headerOf(result.answer, "referer"), expectCap ? withCap : withoutCap);
+      } catch (error) {
+        line("fail", "Referer, " + label + ": threw " + error);
+      }
+    }
+
+    // The rewrite: strip a tracking parameter from a subresource, within its origin.
+    try {
+      const result = await echo(origin, "/net/echo?keep=1&utm_source=mercury", {});
+      if (expectStrip) {
+        check("response URL after the $removeparam rule", result.url, origin + "/net/echo?keep=1");
+      } else {
+        line("info", "response URL without ?removeparam=1: " + result.url);
+      }
+    } catch (error) {
+      line(expectStrip ? "fail" : "info", "the rewrite request threw " + error);
+    }
+  }
+
+  main().then(() => {
+    const summary = document.getElementById("summary");
+    summary.textContent = passes + " PASS, " + failures + " FAIL";
+    summary.className = failures === 0 ? "pass" : "fail";
+    document.title = "net-request-path: " + passes + " PASS, " + failures + " FAIL";
+  });
+</script>
+</body>
+</html>

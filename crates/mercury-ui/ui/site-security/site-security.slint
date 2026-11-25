@@ -203,6 +203,13 @@ export component SiteInfoPanel inherits Rectangle {
     callback reset-permission(int);
     callback clear-site-data();
     callback remove-https-exception();
+    // --- sh-pages ---
+    // Images per site. The row below exists only while `images-available` (the tab shows a web
+    // page); it says whether images are shown or blocked on this site and offers the other.
+    in property <bool> images-available: false;
+    in property <bool> images-blocked: false;
+    callback toggle-images();
+    // --- end sh-pages ---
 
     background: ChromePalette.popup-background;
     border-radius: 10px;
@@ -357,6 +364,34 @@ export component SiteInfoPanel inherits Rectangle {
                 }
             }
         }
+
+        // sh-pages: images per site (not instantiated while unavailable)
+        if root.images-available: Separator { }
+
+        if root.images-available: SectionTitle {
+            text: "Images";
+        }
+
+        if root.images-available: HorizontalLayout {
+            spacing: 8px;
+
+            Text {
+                horizontal-stretch: 1;
+                text: root.images-blocked ? "Blocked" : "Shown";
+                color: ChromePalette.text-secondary;
+                font-size: 12px;
+                vertical-alignment: center;
+                wrap: word-wrap;
+            }
+
+            TextButton {
+                text: root.images-blocked ? "Show" : "Block";
+                accessible-label: root.images-blocked ? "Show images on this site" : "Block images on this site";
+                clicked => {
+                    root.toggle-images();
+                }
+            }
+        }
     }
 }
 
@@ -366,6 +401,11 @@ export component SiteInfoPopover inherits PopupWindow {
     callback reset-permission(int);
     callback clear-site-data();
     callback remove-https-exception();
+    // --- sh-pages ---
+    in property <bool> images-available: false;
+    in property <bool> images-blocked: false;
+    callback toggle-images();
+    // --- end sh-pages ---
 
     close-policy: close-on-click-outside;
     width: 320px;
@@ -381,6 +421,12 @@ export component SiteInfoPopover inherits PopupWindow {
         }
         remove-https-exception => {
             root.remove-https-exception();
+        }
+        // sh-pages
+        images-available: root.images-available;
+        images-blocked: root.images-blocked;
+        toggle-images => {
+            root.toggle-images();
         }
     }
 }

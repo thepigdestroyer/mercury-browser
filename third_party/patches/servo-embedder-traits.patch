@@ -124,11 +124,47 @@ diff --git a/lib.rs b/lib.rs
  }
 
  impl Debug for EmbedderMsg {
+@@ -701,11 +710,24 @@
+         serialize_with = "::hyper_serde::serialize"
+     )]
+     pub headers: HeaderMap,
++    // Mercury: this is the URL of the request's current hop (Servo 0.8 reported the first URL of the
++    // redirect chain here, which made a rewrite of a redirect hop meaningless); see request_interceptor.rs.
+     pub url: ServoUrl,
+     pub destination: Destination,
+     pub referrer_url: Option<ServoUrl>,
++    // Mercury: true only for a navigation of the top-level frame; a frame navigated by a script or a link
++    // also has the destination `Document` and is not the main frame (D17).
+     pub is_for_main_frame: bool,
+     pub is_redirect: bool,
++    // Mercury: frame identity of the request (EC38, net-1 brief section 5.4). The network thread fills
++    // these three from its policy handle; see `servo-net/mercury_rewrite.rs`.
++    /// The site (scheme-less registrable domain) of the top-level document the request belongs to;
++    /// `None` when the network thread cannot tell.
++    pub top_level_site: Option<String>,
++    /// The ASCII serialisation of the origin that started the request; `None` for an opaque origin.
++    pub initiator_origin: Option<String>,
++    /// Whether the request's site differs from the top-level site; `None` when `top_level_site` is `None`.
++    pub is_third_party: Option<bool>,
+ }
+
+ #[derive(Clone, Deserialize, Serialize)]
+@@ -722,6 +744,10 @@
+     CancelLoad,
+     /// Signal that this load will not be intercepted.
+     DoNotIntercept,
++    // Mercury: change the request's URL and headers, then let it go on (EC37). Terminal like
++    // `DoNotIntercept`; the rules for what may change are in `servo-net/mercury_rewrite.rs`.
++    /// Signal that this load will not be intercepted but that the request is to be changed first.
++    Rewrite(WebResourceRewrite),
+ }
+
+ #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
 diff --git a/mercury/a11y.rs b/mercury/a11y.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury/a11y.rs
-@@ -0,0 +1,26 @@
+@@ -0,0 +1,97 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -139,6 +175,7 @@ new file mode 100644
 +use std::fmt;
 +
 +use serde::{Deserialize, Serialize};
++use servo_base::Epoch;
 +use strum::IntoStaticStr;
 +
 +/// Messages from the engine to Mercury for the `a11y` lane (accessibility).
@@ -153,6 +190,76 @@ new file mode 100644
 +    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
 +        let variant: &'static str = self.into();
 +        write!(formatter, "{variant}")
++    }
++}
++
++// Mercury: a11y-1 item 5 (EE7, iframes). The epoch of an iframe's accessibility tree. No message is
++// needed: the constellation chooses the epoch it activates a child document with, layout sends it
++// back with every update (`EmbedderMsg::AccessibilityTreeUpdate`), and `WebView` reads it.
++
++/// The bit of an [`Epoch`] that says "this update comes from a child (iframe) document".
++///
++/// A top-level document's epoch counts navigations (`Epoch::next()` once per document the
++/// `WebView` shows), so it never gets near 2^31.
++const CHILD_DOCUMENT_BIT: u32 = 1 << 31;
++
++/// The epoch the constellation activates the accessibility of a child (iframe) document with,
++/// given the epoch of the top-level document of its `WebView`.
++///
++/// `WebView::process_accessibility_tree_update()` treats an update with a newer epoch than the
++/// grafted one as "a new top-level document: graft its tree as the page". A child document's
++/// update must never do that, and may arrive before the top-level document's own first update, so
++/// the child's epoch carries a flag that [`top_level_epoch_of_child_document`] reads: the
++/// `WebView` passes such an update to the embedder untouched and drops it only when the top-level
++/// document it belonged to is already gone.
++pub fn epoch_for_child_document(top_level_epoch: Epoch) -> Epoch {
++    Epoch(top_level_epoch.0 | CHILD_DOCUMENT_BIT)
++}
++
++/// The epoch of the top-level document that a child document's update belongs to, when `epoch`
++/// is the epoch of a child document (see [`epoch_for_child_document`]); `None` for the epoch of a
++/// top-level document.
++pub fn top_level_epoch_of_child_document(epoch: Epoch) -> Option<Epoch> {
++    (epoch.0 & CHILD_DOCUMENT_BIT != 0).then_some(Epoch(epoch.0 & !CHILD_DOCUMENT_BIT))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn a_child_epoch_names_its_top_level_epoch() {
++        for value in [0, 1, 2, 37, 1 << 20, (1 << 31) - 1] {
++            let top_level = Epoch(value);
++            let child = epoch_for_child_document(top_level);
++            assert_ne!(child, top_level);
++            assert_eq!(top_level_epoch_of_child_document(child), Some(top_level));
++        }
++    }
++
++    #[test]
++    fn a_top_level_epoch_is_not_a_child_epoch() {
++        for value in [0, 1, 2, 37, 1 << 20, (1 << 31) - 1] {
++            assert_eq!(top_level_epoch_of_child_document(Epoch(value)), None);
++        }
++    }
++
++    #[test]
++    fn the_flag_does_not_change_which_top_level_a_child_belongs_to() {
++        // The comparisons `WebView` makes are on the decoded top-level epoch, so an older
++        // document's child is stale and a newer one is not, whatever the flag does to the order
++        // of the raw numbers.
++        let older = top_level_epoch_of_child_document(epoch_for_child_document(Epoch(3))).unwrap();
++        let newer = top_level_epoch_of_child_document(epoch_for_child_document(Epoch(4))).unwrap();
++        assert!(older < newer);
++        assert!(older < Epoch(4));
++    }
++
++    #[test]
++    fn the_epoch_is_a_plain_number_that_crosses_a_process_boundary() {
++        // `Epoch` is `Serialize`: the flag is part of the number, nothing else travels with it.
++        let child = epoch_for_child_document(Epoch(5));
++        assert_eq!(child.0, 5 | (1 << 31));
 +    }
 +}
 diff --git a/mercury/core.rs b/mercury/core.rs
@@ -368,7 +475,7 @@ diff --git a/mercury/net.rs b/mercury/net.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury/net.rs
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,135 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -378,22 +485,130 @@ new file mode 100644
 +
 +use std::fmt;
 +
++use content_security_policy::Destination;
 +use serde::{Deserialize, Serialize};
++use servo_url::ServoUrl;
 +use strum::IntoStaticStr;
 +
 +/// Messages from the engine to Mercury for the `net` lane (network policy, cookies, privacy).
 +///
-+/// Empty until that lane adds its variants. Messages that come from the network thread rather than
-+/// from script or the constellation keep using `NetToEmbedderMsg` in `servo-net`.
++/// Messages that come from the network thread rather than from script or the constellation reach the
++/// embedder as `NetToEmbedderMsg::Mercury` in `servo-net`, which carries a [`MercuryEmbedderMsg`] and
++/// ends in the same delivery function as the other lanes' messages.
 +///
 +/// `Debug` prints only the variant name, never a payload.
++///
++/// [`MercuryEmbedderMsg`]: crate::MercuryEmbedderMsg
 +#[derive(Deserialize, IntoStaticStr, Serialize)]
-+pub enum NetMsg {}
++pub enum NetMsg {
++    /// A request was blocked as mixed content: a secure page asked for something that is not
++    /// potentially trustworthy, and the user has not allowed mixed content on the page's site (EC17).
++    /// Sent once for each blocked request, naming the web view the request belongs to when it has one.
++    MixedContentBlocked {
++        /// The URL of the blocked request (of the request, not of a response that was blocked after
++        /// it was answered).
++        url: ServoUrl,
++        /// What the blocked request was for (script, image, fetch and so on).
++        destination: Destination,
++    },
++}
 +
 +impl fmt::Debug for NetMsg {
 +    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
 +        let variant: &'static str = self.into();
 +        write!(formatter, "{variant}")
++    }
++}
++
++/// How the embedder changes a request before it goes on: the payload of
++/// `WebResourceResponseMsg::Rewrite` (EC37).
++///
++/// The network thread applies it with the rules of `servo-net/mercury_rewrite.rs` (the scheme must stay,
++/// the origin must stay unless the request is a top-level navigation, only `http` and `https`, no
++/// credential, cookie or connection headers, bounded sizes) and refuses the whole rewrite, leaving the
++/// request as it was, when any part breaks a rule. An empty rewrite changes nothing.
++///
++/// `Debug` shows only which parts are set, never a URL or a header value.
++#[derive(Clone, Default, Deserialize, Serialize)]
++pub struct WebResourceRewrite {
++    /// The new URL of the request's current hop. Must keep the scheme and, unless the request is a
++    /// top-level navigation, the origin.
++    pub url: Option<ServoUrl>,
++    /// Headers to set (replacing any value the request has), as (name, value).
++    pub set_headers: Vec<(String, String)>,
++    /// Names of headers to remove. Removals are done before the headers are set.
++    pub remove_headers: Vec<String>,
++}
++
++impl fmt::Debug for WebResourceRewrite {
++    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
++        formatter
++            .debug_struct("WebResourceRewrite")
++            .field("url", &self.url.as_ref().map(|_| "<set>"))
++            .field("set_headers", &self.set_headers.len())
++            .field("remove_headers", &self.remove_headers.len())
++            .finish()
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++
++    #[test]
++    fn mixed_content_message_debug_is_the_variant_name_only() {
++        let message = NetMsg::MixedContentBlocked {
++            url: ServoUrl::parse("http://insecure.example/script.js?token=secret").unwrap(),
++            destination: Destination::Script,
++        };
++        assert_eq!(format!("{message:?}"), "MixedContentBlocked");
++        let wrapped = crate::MercuryEmbedderMsg::Net(message);
++        assert_eq!(format!("{wrapped:?}"), "Net::MixedContentBlocked");
++    }
++
++    #[test]
++    fn mixed_content_message_is_send_and_static() {
++        fn assert_send_static<T: Send + 'static>() {}
++        assert_send_static::<NetMsg>();
++        assert_send_static::<WebResourceRewrite>();
++    }
++
++    #[test]
++    fn an_empty_rewrite_is_the_default_and_sets_nothing() {
++        let rewrite = WebResourceRewrite::default();
++        assert!(rewrite.url.is_none());
++        assert!(rewrite.set_headers.is_empty());
++        assert!(rewrite.remove_headers.is_empty());
++    }
++
++    #[test]
++    fn rewrite_debug_shows_no_url_and_no_header_value() {
++        let rewrite = WebResourceRewrite {
++            url: Some(ServoUrl::parse("https://a.example/?session=hunter2").unwrap()),
++            set_headers: vec![("X-Token".to_owned(), "hunter2".to_owned())],
++            remove_headers: vec!["X-Other".to_owned()],
++        };
++        let printed = format!("{rewrite:?}");
++        assert!(!printed.contains("hunter2"), "{printed}");
++        assert!(!printed.contains("a.example"), "{printed}");
++        assert!(!printed.contains("X-Token"), "{printed}");
++        assert!(printed.contains("set_headers: 1"), "{printed}");
++        assert!(printed.contains("remove_headers: 1"), "{printed}");
++    }
++
++    #[test]
++    fn the_net_message_did_not_make_the_wrapper_large() {
++        // `EmbedderMsg` and `NetToEmbedderMsg` carry `(Option<WebViewId>, MercuryEmbedderMsg)`; the
++        // scaffold's own test pins 32 bytes for that pair, and this variant (a URL pointer and a
++        // one-byte destination) has to fit.
++        #[cfg(target_pointer_width = "64")]
++        {
++            let size = std::mem::size_of::<(
++                Option<servo_base::id::WebViewId>,
++                crate::MercuryEmbedderMsg,
++            )>();
++            assert!(size <= 32, "{size} bytes");
++        }
 +    }
 +}
 diff --git a/mercury/page.rs b/mercury/page.rs

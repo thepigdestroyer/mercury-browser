@@ -18,6 +18,8 @@ use crate::dom::navigator::hardware_concurrency;
 use crate::dom::navigatorinfo;
 use crate::dom::permissions::Permissions;
 use crate::dom::storagemanager::StorageManager;
+// Mercury: Web Locks (servo/servo#47981).
+use crate::dom::types::LockManager;
 #[cfg(feature = "webgpu")]
 use crate::dom::webgpu::gpu::GPU;
 use crate::dom::workerglobalscope::WorkerGlobalScope;
@@ -30,6 +32,8 @@ pub(crate) struct WorkerNavigator {
     storage: MutNullableDom<StorageManager>,
     #[cfg(feature = "webgpu")]
     gpu: MutNullableDom<GPU>,
+    // Mercury: Web Locks (servo/servo#47981).
+    locks: MutNullableDom<LockManager>,
 }
 
 impl WorkerNavigator {
@@ -40,6 +44,8 @@ impl WorkerNavigator {
             storage: Default::default(),
             #[cfg(feature = "webgpu")]
             gpu: Default::default(),
+            // Mercury: Web Locks (servo/servo#47981).
+            locks: Default::default(),
         }
     }
 
@@ -138,5 +144,17 @@ impl WorkerNavigatorMethods<crate::DomTypeHolder> for WorkerNavigator {
     /// <https://html.spec.whatwg.org/multipage/#dom-navigator-hardwareconcurrency>
     fn HardwareConcurrency(&self) -> u64 {
         hardware_concurrency()
+    }
+
+    /// Mercury: <https://w3c.github.io/web-locks/#navigator-mixins> (servo/servo#47981, with the
+    /// exposure in workers after LunarWerxs `pr/web-locks`).
+    fn Locks(&self, cx: &mut JSContext) -> DomRoot<LockManager> {
+        self.locks.or_init(|| LockManager::new(cx, &self.global()))
+    }
+
+    /// Mercury: <https://privacycg.github.io/gpc-spec/#js-dom>. The same preference as
+    /// `Navigator.globalPrivacyControl` and the `Sec-GPC` request header.
+    fn GlobalPrivacyControl(&self) -> bool {
+        pref!(privacy_gpc_enabled)
     }
 }

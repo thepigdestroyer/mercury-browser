@@ -12,8 +12,13 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+1. **`lib.rs`: `Backend::create_media_source` and `Backend::is_type_supported_mse`** (lane med-1, MSE by Plan B).
+   Two new trait methods with default bodies ("not supported", `false`), so a backend that knows nothing of
+   Media Source Extensions (the dummy one) compiles unchanged. `create_media_source` takes a
+   `GenericCallback<MseEvent>` and returns an `Arc<dyn MediaSourceBackend>`: the script thread makes the callback
+   (it queues a media-element task), the backend sends its events from its own worker thread. The types are
+   Mercury's (`crates/mercury-mse`, re-exported as `servo_media_player::mse`). Not in upstream; stays while
+   Mercury carries its own MSE (the drop condition is in `third_party/servo-script/MERCURY.md`).
 
 ## Removing this directory
 

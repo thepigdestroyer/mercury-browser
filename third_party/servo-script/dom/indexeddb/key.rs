@@ -2,6 +2,11 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: this file carries upstream code from servo/servo pull request #45559 "script: Support
+// extraction of `multiEntry` keys." (author skyz1, MPL-2.0, open when it was taken):
+// `convert_value_to_multientry_key` and its use in `extract_key`. Mercury's other changes to this
+// file are marked `Mercury:` where they are.
+
 use std::ffi::CString;
 use std::ptr;
 
@@ -13,9 +18,10 @@ use js::jsapi::{
     JS_GetStringLength, JS_IsArrayBufferViewObject, NewArrayObject1, PropertyKey,
 };
 use js::jsval::{DoubleValue, ObjectValue, UndefinedValue};
+// Mercury: JS_ClearPendingException, for convert_value_to_multientry_key.
 use js::rust::wrappers2::{
-    GetArrayLength, IsArrayObject, JS_HasOwnPropertyById, JS_IndexToId, JS_IsIdentifier,
-    NewDateObject, ObjectIsDate, SameValue,
+    GetArrayLength, IsArrayObject, JS_ClearPendingException, JS_HasOwnPropertyById, JS_IndexToId,
+    JS_IsIdentifier, NewDateObject, ObjectIsDate, SameValue,
 };
 use js::rust::{HandleValue, MutableHandleValue};
 use js::typedarray::{ArrayBuffer, ArrayBufferU8, ArrayBufferView};
@@ -379,6 +385,106 @@ pub fn convert_value_to_key(
     Ok(ConversionResult::Invalid)
 }
 
+/// <https://www.w3.org/TR/IndexedDB-3/#convert-a-value-to-a-multientry-key>
+///
+/// Mercury: hand-ported from servo/servo#45559 "script: Support extraction of `multiEntry` keys."
+/// (author skyz1, MPL-2.0, open) onto Servo 0.8's `key.rs`, which takes `JS_GetPropertyById` from
+/// `script_bindings::js`. It differs from the pull request where the specification says that an
+/// abrupt completion of `Get` or of converting one entry only skips that entry: the pending
+/// exception is cleared and the entry dropped, instead of failing the whole conversion.
+#[expect(unsafe_code)]
+pub(crate) fn convert_value_to_multientry_key(
+    cx: &mut JSContext,
+    input: HandleValue,
+) -> Result<ConversionResult, Error> {
+    // Step 1: If input is an Array exotic object, then:
+    if input.is_object() {
+        let mut is_array = false;
+        if unsafe { !IsArrayObject(cx, input, &mut is_array) } {
+            return Err(Error::JSFailed);
+        }
+        if is_array {
+            rooted!(&in(cx) let object = input.to_object());
+
+            // Step 1.1: Let len be ? ToLength( ? Get(input, "length")).
+            let mut len = 0;
+            if unsafe { !GetArrayLength(cx, object.handle(), &mut len) } {
+                return Err(Error::JSFailed);
+            }
+
+            // Step 1.2: Let seen be a new set containing only input.
+            let seen: Vec<HandleValue> = vec![input];
+
+            // Step 1.3: Let keys be a new empty list.
+            let mut keys: Vec<IndexedDBKeyType> = vec![];
+
+            // Step 1.4: Let index be 0.
+            // Step 1.5: While index is less than len:
+            for index in 0..len {
+                // Step 1.5.1: Let entry be Get(input, index).
+                rooted!(&in(cx) let mut id: PropertyKey);
+                rooted!(&in(cx) let mut entry = UndefinedValue());
+                if unsafe { !JS_IndexToId(cx, index, id.handle_mut()) } {
+                    return Err(Error::JSFailed);
+                }
+                if !JS_GetPropertyById(cx, object.handle(), id.handle(), entry.handle_mut()) {
+                    // Step 1.5.2: If entry is not an abrupt completion, then: this one is, so skip it.
+                    unsafe { JS_ClearPendingException(cx) };
+                    continue;
+                }
+
+                // Step 1.5.2.1: Let key be the result of converting a value to a key with
+                // arguments entry and seen.
+                match convert_value_to_key(cx, entry.handle(), Some(seen.clone())) {
+                    // Step 1.5.2.2: If key is not "invalid value" or "invalid type" or an abrupt
+                    // completion, and there is no item in keys equal to key, then append key to keys.
+                    Ok(ConversionResult::Valid(key)) => {
+                        if !keys.contains(&key) {
+                            keys.push(key);
+                        }
+                    },
+                    Ok(ConversionResult::Invalid) => {},
+                    Err(Error::JSFailed) => unsafe { JS_ClearPendingException(cx) },
+                    Err(error) => return Err(error),
+                }
+
+                // Step 1.5.3: Increase index by 1. (The loop does.)
+            }
+
+            // Step 1.6: Return a new array key with value set to keys.
+            return Ok(ConversionResult::Valid(IndexedDBKeyType::Array(keys)));
+        }
+    }
+
+    // Step 2: Otherwise, return the result of running the steps to convert a value to a key
+    // with argument input. Rethrow any exceptions.
+    convert_value_to_key(cx, input, None)
+}
+
+/// Drops the JavaScript exception that a failed conversion or extraction left pending.
+///
+/// Mercury: a record whose key cannot be extracted is skipped, not propagated (the specification
+/// says the exception is swallowed), so the context must not be left with it pending.
+#[expect(unsafe_code)]
+pub(crate) fn clear_pending_exception(cx: &mut JSContext) {
+    unsafe { JS_ClearPendingException(cx) };
+}
+
+/// The keys one record contributes to an index, from the key that
+/// [`extract_key`] returned for it.
+///
+/// <https://www.w3.org/TR/IndexedDB-3/#store-a-record-into-an-object-store> steps 6 and 7 (the
+/// index keys): a multiEntry index stores one record for each member of an array key, any other
+/// index one record for the key.
+///
+/// Mercury: written for the index queries in `idbindex.rs`, which derive index records in script.
+pub(crate) fn index_keys_of(key: IndexedDBKeyType, multi_entry: bool) -> Vec<IndexedDBKeyType> {
+    match key {
+        IndexedDBKeyType::Array(members) if multi_entry => members,
+        other => vec![other],
+    }
+}
+
 /// <https://www.w3.org/TR/IndexedDB-3/#convert-a-value-to-a-key-range>
 pub fn convert_value_to_key_range(
     cx: &mut JSContext,
@@ -427,6 +533,40 @@ pub(crate) fn map_backend_error_to_dom_error(error: BackendError) -> Error {
             Error::Operation(Some(format!("IndexedDB open failed: {details}")))
         },
         other => Error::Operation(Some(format!("IndexedDB open failed: {other:?}"))),
+    }
+}
+
+/// The error of a request, or of a transaction, that the backend failed.
+///
+/// <https://www.w3.org/TR/IndexedDB-3/#async-execute-request> step 5.4.2.1: "If result is an
+/// error, then ... set the error of request to result". The details of the backend's error are
+/// logged by the caller, not handed to the page.
+///
+/// Mercury: Servo 0.8 turned every backend error into a DataError. A backend failure that is
+/// unrelated to the database ("UnknownError" in the specification) has no DOMException of its own
+/// in this version (script_bindings has no `Error::Unknown`), so it is an OperationError.
+pub(crate) fn map_backend_error_to_request_error(error: BackendError) -> Error {
+    match error {
+        BackendError::QuotaExceeded => Error::QuotaExceeded {
+            quota: None,
+            requested: None,
+        },
+        BackendError::Abort => Error::Abort(Some("The transaction was aborted".to_owned())),
+        BackendError::DbNotFound | BackendError::StoreNotFound => Error::NotFound(Some(
+            "The database or the object store no longer exists".to_owned(),
+        )),
+        // sqlite.rs reports `format!("{:?}", rusqlite::Error)`; the extended result code names the
+        // class of the failure.
+        BackendError::DbErr(details) if details.contains("ConstraintViolation") => {
+            Error::Constraint(Some("The storage backend refused the record".to_owned()))
+        },
+        BackendError::DbErr(details) if details.contains("DiskFull") => Error::QuotaExceeded {
+            quota: None,
+            requested: None,
+        },
+        BackendError::DbErr(_) => {
+            Error::Operation(Some("The storage backend reported an error".to_owned()))
+        },
     }
 }
 
@@ -805,18 +945,105 @@ pub(crate) fn extract_key(
     // Step 3. Let key be the result of running the steps to convert a value to a key with r if the
     // multiEntry flag is unset, and the result of running the steps to convert a value to a
     // multiEntry key with r otherwise. Rethrow any exceptions.
-    let key = match multi_entry {
-        Some(true) => {
-            // TODO: implement convert_value_to_multientry_key
-            unimplemented!("multiEntry keys are not yet supported");
-        },
-        _ => match convert_value_to_key(cx, r.handle(), None)? {
-            ConversionResult::Valid(key) => key,
-            // Step 4. If key is invalid, return invalid.
-            ConversionResult::Invalid => return Ok(ExtractionResult::Invalid),
-        },
+    // Mercury: servo/servo#45559 (skyz1, MPL-2.0): a multiEntry index no longer reaches
+    // `unimplemented!()`, which took the content process down.
+    let ConversionResult::Valid(key) = (match multi_entry {
+        Some(true) => convert_value_to_multientry_key(cx, r.handle())?,
+        _ => convert_value_to_key(cx, r.handle(), None)?,
+    }) else {
+        // Step 4. If key is invalid, return invalid.
+        return Ok(ExtractionResult::Invalid);
     };
 
     // Step 5. Return key.
     Ok(ExtractionResult::Key(key))
+}
+
+// Mercury: tests for the pure parts of multiEntry handling and of the error mapping (no JavaScript
+// context needed).
+#[cfg(test)]
+mod tests {
+    use storage_traits::indexeddb::{BackendError, IndexedDBKeyType};
+
+    use super::{Error, index_keys_of, map_backend_error_to_request_error};
+
+    fn number(n: f64) -> IndexedDBKeyType {
+        IndexedDBKeyType::Number(n)
+    }
+
+    #[test]
+    fn a_quota_error_of_the_backend_is_a_quota_exceeded_error() {
+        let error = map_backend_error_to_request_error(BackendError::QuotaExceeded);
+        assert!(matches!(error, Error::QuotaExceeded { .. }));
+    }
+
+    #[test]
+    fn an_abort_of_the_backend_is_an_abort_error() {
+        let error = map_backend_error_to_request_error(BackendError::Abort);
+        assert!(matches!(error, Error::Abort(_)));
+    }
+
+    #[test]
+    fn a_missing_store_or_database_is_a_not_found_error() {
+        let store = map_backend_error_to_request_error(BackendError::StoreNotFound);
+        let database = map_backend_error_to_request_error(BackendError::DbNotFound);
+        assert!(matches!(store, Error::NotFound(_)));
+        assert!(matches!(database, Error::NotFound(_)));
+    }
+
+    #[test]
+    fn a_sqlite_constraint_failure_is_a_constraint_error() {
+        let details = "SqliteFailure(Error { code: ConstraintViolation, extended_code: 1555 }, \
+                       Some(\"UNIQUE constraint failed: unique_index_data.index_id\"))";
+        let error = map_backend_error_to_request_error(BackendError::DbErr(details.to_owned()));
+        assert!(matches!(error, Error::Constraint(_)));
+    }
+
+    #[test]
+    fn a_full_disk_is_a_quota_exceeded_error() {
+        let details = "SqliteFailure(Error { code: DiskFull, extended_code: 13 }, None)";
+        let error = map_backend_error_to_request_error(BackendError::DbErr(details.to_owned()));
+        assert!(matches!(error, Error::QuotaExceeded { .. }));
+    }
+
+    #[test]
+    fn any_other_failure_is_an_operation_error_that_hides_the_details() {
+        let secret = "/Users/someone/profile/indexeddb.sqlite";
+        let error = map_backend_error_to_request_error(BackendError::DbErr(secret.to_owned()));
+        match error {
+            Error::Operation(Some(message)) => assert!(!message.contains(secret)),
+            other => panic!("expected an OperationError, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn a_multientry_array_key_gives_one_key_per_member() {
+        let key = IndexedDBKeyType::Array(vec![number(1.0), number(2.0), number(3.0)]);
+        let keys = index_keys_of(key, true);
+        assert_eq!(keys, vec![number(1.0), number(2.0), number(3.0)]);
+    }
+
+    #[test]
+    fn an_empty_multientry_array_gives_no_key() {
+        assert!(index_keys_of(IndexedDBKeyType::Array(vec![]), true).is_empty());
+    }
+
+    #[test]
+    fn a_multientry_non_array_key_stays_single() {
+        let key = IndexedDBKeyType::String("a".to_owned());
+        assert_eq!(index_keys_of(key.clone(), true), vec![key]);
+    }
+
+    #[test]
+    fn without_multientry_an_array_key_stays_one_array_key() {
+        let key = IndexedDBKeyType::Array(vec![number(1.0), number(2.0)]);
+        assert_eq!(index_keys_of(key.clone(), false), vec![key]);
+    }
+
+    #[test]
+    fn nested_array_members_stay_whole_array_keys() {
+        let inner = IndexedDBKeyType::Array(vec![number(1.0)]);
+        let key = IndexedDBKeyType::Array(vec![inner.clone(), number(2.0)]);
+        assert_eq!(index_keys_of(key, true), vec![inner, number(2.0)]);
+    }
 }

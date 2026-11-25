@@ -13,7 +13,7 @@ diff --git a/Cargo.toml b/Cargo.toml
 +name = "counter_styles"
 +path = "tests/counter_styles.rs"
 +
- [[test]]
++[[test]]
 +name = "counters"
 +path = "tests/counters.rs"
 +
@@ -21,7 +21,7 @@ diff --git a/Cargo.toml b/Cargo.toml
 +name = "ellipsis"
 +path = "tests/ellipsis.rs"
 +
-+[[test]]
+ [[test]]
  name = "floats"
  path = "tests/floats.rs"
 
@@ -33,7 +33,25 @@ diff --git a/Cargo.toml b/Cargo.toml
  name = "tables"
  path = "tests/tables.rs"
 
-@@ -231,6 +248,10 @@
+@@ -53,6 +70,17 @@
+ version = "0.24.0"
+ features = ["serde"]
+
++# Mercury: a11y-1: roles, names, states and relations are computed by `mercury-a11y`, which needs no engine; this crate only
++# adapts its DOM to `a11y-dom`'s traits and copies the result onto its accessibility nodes. See MERCURY.md.
++[dependencies.a11y-dom]
++version = "=0.30.12"
++
++# Mercury: a11y-1: `version` keeps cargo-deny's wildcard ban quiet for a path dependency of a crate that looks published; `>=` so a
++# workspace version bump does not break resolution.
++[dependencies.mercury-a11y]
++path = "../../crates/mercury-a11y"
++version = ">=0.2.0"
++
+ [dependencies.app_units]
+ version = "0.7"
+
+@@ -231,6 +259,10 @@
  [dependencies.unicode-script]
  version = "0.5"
 
@@ -44,6 +62,2201 @@ diff --git a/Cargo.toml b/Cargo.toml
  [dependencies.unicode_categories]
  version = "0.1.1"
 
+diff --git a/accessibility/accessibility_node.rs b/accessibility/accessibility_node.rs
+--- a/accessibility/accessibility_node.rs
++++ b/accessibility/accessibility_node.rs
+@@ -2,7 +2,8 @@
+  * License, v. 2.0. If a copy of the MPL was not distributed with this
+  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
+
+-use std::collections::VecDeque;
++// Mercury: a11y-1 item 4: `VecDeque` and `FxHashSet` were only used by the name-from-descendants code
++// that `semantics::update_semantics` replaces.
+ use std::fmt::Debug;
+ use std::sync::LazyLock;
+
+@@ -16,7 +17,7 @@
+ };
+ use log::trace;
+ use num_traits::ToPrimitive;
+-use rustc_hash::{FxHashMap, FxHashSet};
++use rustc_hash::FxHashMap;
+ use script::layout_dom::{ServoLayoutElement, ServoLayoutNode};
+ use servo_base::print_tree::PrintTree;
+ use servo_config::pref;
+@@ -26,6 +27,8 @@
+ use webrender_api::units::LayoutVector2D;
+
+ use super::accessibility_tree::{AccessibilityTree, AccessibilityUpdate, TreeChange};
++// Mercury: a11y-1 item 4: roles, names, states and relations are computed in `semantics.rs`.
++use super::{dom_adapter, semantics};
+ use crate::ArcRefCell;
+ use crate::accessibility::AccessibilityContext;
+ use crate::cell::WeakRefCell;
+@@ -100,6 +103,14 @@
+     scroll_offset: Option<LayoutVector2D>,
+     /// Any dirty state for the current update.
+     dirty_state: DirtyState,
++    // Mercury: a11y-1 item 4: a node is hidden when layout hides it (`display: none`) or its semantics
++    // do (`aria-hidden`, `inert`, `visibility: hidden`); two flags, so that one does not clear the other.
++    layout_hidden: bool,
++    semantic_hidden: bool,
++    // Mercury: a11y-1 item 4: what the node's `id` (and, for a `<label>`, `for`) were when its semantics
++    // were last computed, so that a change tells `semantics::apply_followups` that elements which
++    // referred to the old value must be computed again.
++    id_signature: Option<Box<str>>,
+ }
+
+ impl AccessibilityNode {
+@@ -116,6 +127,9 @@
+             opaque_node: None,
+             scroll_offset: None,
+             dirty_state: DirtyState::empty(),
++            layout_hidden: false,   // Mercury: a11y-1 item 4
++            semantic_hidden: false, // Mercury: a11y-1 item 4
++            id_signature: None,     // Mercury: a11y-1 item 4
+         }
+     }
+
+@@ -142,7 +156,7 @@
+         let mut local_damage = LocalAccessibilityDamage::empty();
+
+         let dom_node = update.take_dom_node(&self.id);
+-        let damage = update.take_damage(&self.id) | damage_from_parent;
++        let mut damage = update.take_damage(&self.id) | damage_from_parent; // Mercury: a11y-1 item 4: `mut`
+         let mut children_changed = false;
+
+         if let Some(dom_node) = dom_node {
+@@ -149,6 +163,19 @@
+             local_damage.insert(self.update_properties_and_children_from_dom_node(
+                 &ref_self, &dom_node, damage, tree, update,
+             ));
++            // Mercury: a11y-1 item 4: a node that is no longer hidden by its semantics has no bounds
++            // yet (they are not computed in a hidden subtree), nor have its descendants: treat it as
++            // having layout damage. `update_properties_and_children_from_dom_node` already walked the
++            // children for the same reason.
++            if local_damage.contains(LocalAccessibilityDamage::VisibilityChanged) &&
++                !self.is_hidden()
++            {
++                damage |= AccessibilityDamage::Layout;
++            }
++            // Mercury: a11y-1 item 4: other nodes' names may depend on this node's children.
++            if local_damage.contains(LocalAccessibilityDamage::SubtreeChanged) {
++                update.semantics.note_children_changed(dom_node);
++            }
+             local_damage
+                 .insert(self.update_node_from_layout(&dom_node, damage, hidden, context, update));
+
+@@ -232,7 +259,7 @@
+         &mut self,
+         ref_self: &ArcRefCell<Self>,
+         dom_node: &ServoLayoutNode<'update>,
+-        dom_damage: AccessibilityDamage,
++        mut dom_damage: AccessibilityDamage, // Mercury: a11y-1 item 4: `mut`
+         tree: &mut AccessibilityTree,
+         update: &mut AccessibilityUpdate<'update>,
+     ) -> LocalAccessibilityDamage {
+@@ -254,9 +281,16 @@
+         update.counters.nodes_updated_from_dom += 1;
+
+         if dom_damage.intersects(AccessibilityDamage::Node) {
+-            local_damage.insert(self.update_properties_from_dom_node(dom_node));
++            // Mercury: a11y-1 item 4: the semantics need the tree (relations) and the update (the id index).
++            local_damage.insert(self.update_properties_from_dom_node(dom_node, tree, update));
+         }
+
++        // Mercury: a11y-1 item 4: a node that stopped being hidden by its semantics needs its
++        // children and their bounds again (see `update_subtree`).
++        if local_damage.contains(LocalAccessibilityDamage::VisibilityChanged) && !self.is_hidden() {
++            dom_damage |= AccessibilityDamage::Layout;
++        }
++
+         if dom_damage.intersects(AccessibilityDamage::Children | AccessibilityDamage::Layout) {
+             // If this node has damage from layout, this ensures that all of its children have
+             // their corresponding DOM nodes in `update`.
+@@ -276,7 +310,8 @@
+         tree: &mut AccessibilityTree,
+         update: &mut AccessibilityUpdate<'update>,
+     ) -> LocalAccessibilityDamage {
+-        let mut remaining_dom_children = dom_node.flat_tree_children().peekable();
++        // Mercury: a11y-1 item 4: an `<iframe>` has no children here: its node is a graft.
++        let mut remaining_dom_children = dom_adapter::flat_children(dom_node).peekable();
+         let mut old_child_ids = self.child_ids().iter().peekable();
+
+         // Iterate over existing children and DOM children while they match. No action is necessary
+@@ -345,12 +380,17 @@
+     }
+
+     /// Update this node's properties from its corresponding DOM node.
+-    fn update_properties_from_dom_node(
++    // Mercury: a11y-1 item 4: takes the tree and the update, which `semantics::update_semantics` needs.
++    fn update_properties_from_dom_node<'update>(
+         &mut self,
+-        dom_node: &ServoLayoutNode,
++        dom_node: &ServoLayoutNode<'update>,
++        tree: &mut AccessibilityTree,
++        update: &mut AccessibilityUpdate<'update>,
+     ) -> LocalAccessibilityDamage {
+         let mut local_damage = LocalAccessibilityDamage::empty();
+-        local_damage.insert(self.set_role(role_from_dom_node(dom_node)));
++        // Mercury: a11y-1 item 4: role, name, description, states, value, relations and actions come
++        // from `mercury_a11y` (was: `self.set_role(role_from_dom_node(dom_node))`).
++        local_damage.insert(semantics::update_semantics(self, dom_node, tree, update));
+         if dom_node.type_id() == Some(LayoutNodeType::Text) {
+             let text_content = dom_node.text_content();
+             trace!("node text content = {text_content:?}");
+@@ -439,52 +479,22 @@
+         local_damage: LocalAccessibilityDamage,
+         update: &mut AccessibilityUpdate,
+     ) -> LocalAccessibilityDamage {
+-        let mut new_damage = LocalAccessibilityDamage::empty();
++        let new_damage = LocalAccessibilityDamage::empty(); // Mercury: a11y-1 item 4: no longer `mut`
+         if local_damage.is_empty() {
+             return new_damage;
+         }
+         update.counters.nodes_updated_from_tree += 1;
+
+-        if local_damage.contains(LocalAccessibilityDamage::SubtreeChanged) ||
+-            local_damage.contains(LocalAccessibilityDamage::RoleChanged)
+-        {
+-            if let Some(text) = self.label_from_descendants() {
+-                new_damage.insert(self.set_label(text.as_str()));
+-            } else {
+-                new_damage.insert(self.clear_label());
+-            }
+-        }
++        // Mercury: a11y-1 item 4: upstream recomputed the name of a heading or link here from its
++        // descendants' text runs when the subtree or the role changed. Names are computed from the
++        // DOM now (`semantics::update_semantics`), and `semantics::apply_followups` recomputes the
++        // nodes whose name depends on a node that changed (an ancestor that names itself from its
++        // content, a control and its `<label>`, ...). Removed: `label_from_descendants`,
++        // `NAME_FROM_CONTENTS_ROLES`, `set_label`, `clear_label` and `value`.
+
+         new_damage
+     }
+
+-    fn label_from_descendants(&self) -> Option<String> {
+-        if !NAME_FROM_CONTENTS_ROLES.contains(&self.role()) {
+-            return None;
+-        }
+-        let mut children = VecDeque::from_iter(self.children().cloned());
+-        let mut text = String::new();
+-        while let Some(child) = children.pop_front() {
+-            let child = child.borrow();
+-            if child.is_hidden() {
+-                continue;
+-            }
+-            match child.role() {
+-                Role::TextRun => {
+-                    if let Some(child_text) = child.value() {
+-                        text.push_str(child_text);
+-                    }
+-                },
+-                _ => {
+-                    for node in child.children().rev() {
+-                        children.push_front(node.clone());
+-                    }
+-                },
+-            }
+-        }
+-        Some(text.trim().to_owned())
+-    }
+-
+     pub(super) fn print(&self, print_tree: &mut PrintTree, tree: &AccessibilityTree) {
+         let focused = if tree.focused_node_id() == Some(self.id) {
+             "[focused] "
+@@ -594,22 +604,31 @@
+         self.accesskit_node.label()
+     }
+
+-    fn set_label(&mut self, label: &str) -> LocalAccessibilityDamage {
+-        if Some(label) == self.accesskit_node.label() {
+-            return LocalAccessibilityDamage::empty();
+-        }
+-        self.accesskit_node.set_label(label);
+-        self.dirty_state |= DirtyState::Updated;
+-        LocalAccessibilityDamage::TextChanged
++    // Mercury: a11y-1 item 4: `set_label` and `clear_label` are removed (the name is part of the node
++    // that `semantics::update_semantics` computes); `accesskit_node` and `replace_accesskit_node` below
++    // are how it reads and replaces that node.
++
++    /// Remember the `id`/`for` signature of the DOM node. Returns whether the node had one before and it
++    /// is different now (the node lost an id that other elements may have referred to).
++    pub(super) fn replace_id_signature(&mut self, signature: Option<String>) -> bool {
++        let changed = self
++            .id_signature
++            .as_deref()
++            .is_some_and(|old| Some(old) != signature.as_deref());
++        self.id_signature = signature.map(String::into_boxed_str);
++        changed
++    }
++
++    /// The accesskit node as it is now.
++    pub(super) fn accesskit_node(&self) -> &accesskit::Node {
++        &self.accesskit_node
+     }
+
+-    fn clear_label(&mut self) -> LocalAccessibilityDamage {
+-        if self.accesskit_node.label().is_none() {
+-            return LocalAccessibilityDamage::empty();
+-        }
+-        self.accesskit_node.clear_label();
++    /// Replace the accesskit node with a computed one (see `semantics::merge_computed`, which keeps
++    /// the children, bounds, transform and hidden flag this node owns).
++    pub(super) fn replace_accesskit_node(&mut self, accesskit_node: accesskit::Node) {
++        self.accesskit_node = accesskit_node;
+         self.dirty_state |= DirtyState::Updated;
+-        LocalAccessibilityDamage::TextChanged
+     }
+
+     fn html_tag(&self) -> Option<&str> {
+@@ -624,10 +643,6 @@
+         self.dirty_state |= DirtyState::Updated;
+     }
+
+-    fn value(&self) -> Option<&str> {
+-        self.accesskit_node.value()
+-    }
+-
+     fn set_value(&mut self, value: &str) -> LocalAccessibilityDamage {
+         if Some(value) == self.accesskit_node.value() {
+             return LocalAccessibilityDamage::empty();
+@@ -641,21 +656,36 @@
+         self.accesskit_node.is_hidden()
+     }
+
++    // Mercury: a11y-1 item 4: layout's `display: none` and the semantics' hide are two flags and the
++    // node is hidden when either is set, so that `clear_hidden` (layout says visible) never clears a
++    // hide that `aria-hidden` or `inert` asked for.
+     fn set_hidden(&mut self) -> LocalAccessibilityDamage {
+-        if self.is_hidden() {
+-            return LocalAccessibilityDamage::empty();
+-        }
+-        self.accesskit_node.set_hidden();
+-        self.dirty_state |= DirtyState::Updated;
+-        LocalAccessibilityDamage::VisibilityChanged
++        self.layout_hidden = true;
++        self.sync_hidden()
+     }
+
+     fn clear_hidden(&mut self) -> LocalAccessibilityDamage {
+-        if !self.is_hidden() {
++        self.layout_hidden = false;
++        self.sync_hidden()
++    }
++
++    /// Set whether the node's semantics hide it (`aria-hidden`, `inert`, `visibility: hidden`, ...).
++    pub(super) fn set_semantic_hidden(&mut self, hidden: bool) -> LocalAccessibilityDamage {
++        self.semantic_hidden = hidden;
++        self.sync_hidden()
++    }
++
++    /// Make the accesskit node's hidden flag the OR of the two flags.
++    fn sync_hidden(&mut self) -> LocalAccessibilityDamage {
++        let hidden = self.layout_hidden || self.semantic_hidden;
++        if hidden == self.is_hidden() {
+             return LocalAccessibilityDamage::empty();
+         }
+-
+-        self.accesskit_node.clear_hidden();
++        if hidden {
++            self.accesskit_node.set_hidden();
++        } else {
++            self.accesskit_node.clear_hidden();
++        }
+         self.dirty_state |= DirtyState::Updated;
+         LocalAccessibilityDamage::VisibilityChanged
+     }
+@@ -756,6 +786,9 @@
+ }
+
+ /// <https://w3c.github.io/aria/#host_general_role>
++// Mercury: a11y-1 item 4: superseded by `mercury_a11y::roles`, kept so that the upstream text stays
++// diffable until servo#46241 lands.
++#[allow(dead_code)]
+ fn role_from_role_attribute(dom_element: &ServoLayoutElement<'_>) -> Option<Role> {
+     let role_attribute = dom_element.attribute(&ns!(), &local_name!("role"))?;
+     role_attribute
+@@ -767,6 +800,7 @@
+         .cloned()
+ }
+
++#[allow(dead_code)] // Mercury: a11y-1 item 4: see `role_from_role_attribute`.
+ fn role_from_dom_node(dom_node: &ServoLayoutNode<'_>) -> Role {
+     if let Some(dom_element) = dom_node.as_element() {
+         role_from_role_attribute(&dom_element).unwrap_or_else(|| {
+@@ -837,6 +871,7 @@
+     }
+ }
+
++#[allow(dead_code)] // Mercury: a11y-1 item 4: see `role_from_role_attribute`.
+ static HTML_ELEMENT_ROLE_MAPPINGS: LazyLock<FxHashMap<LocalName, Role>> = LazyLock::new(|| {
+     [
+         // FIXME: only a with href!
+@@ -861,6 +896,5 @@
+     .collect()
+ });
+
+-/// <https://w3c.github.io/aria/#namefromcontent>
+-static NAME_FROM_CONTENTS_ROLES: LazyLock<FxHashSet<Role>> =
+-    LazyLock::new(|| [(Role::Heading), (Role::Link)].into_iter().collect());
++// Mercury: a11y-1 item 4: `NAME_FROM_CONTENTS_ROLES` is removed; `accname` decides which roles take
++// their name from their content (see `semantics.rs`).
+diff --git a/accessibility/accessibility_tree.rs b/accessibility/accessibility_tree.rs
+--- a/accessibility/accessibility_tree.rs
++++ b/accessibility/accessibility_tree.rs
+@@ -24,6 +24,9 @@
+ use webrender_api::units::LayoutVector2D;
+
+ use super::accessibility_node::{AccessibilityNode, DirtyState};
++// Mercury: a11y-1 item 4: the per-update state of `semantics.rs` and the adapter's id table.
++use super::semantics::SemanticsCache;
++use super::{dom_adapter, semantics};
+ use crate::ArcRefCell;
+ use crate::accessibility::{AccessibilityContext, AccessibilityDamageMap};
+
+@@ -79,6 +82,10 @@
+     /// Debug options, copied from configuration to this `AccessibilityTree` in order
+     /// to avoid having to constantly access the thread-safe global options.
+     debug: DiagnosticsLogging,
++    /// Mercury: a11y-1 item 4: whether any element of the document has had an IDREF attribute
++    /// (`aria-labelledby`, ...) or been a `<label for>`. Once set it stays set; until it is, the
++    /// reverse maps of "whose name depends on this node" are not built (see `semantics.rs`).
++    uses_idrefs: bool,
+ }
+
+ /// Changes which have occurred during the current update, and data required to process the update.
+@@ -101,6 +108,9 @@
+     /// Map of [`NodeId`] to the corresponding [`ServoLayoutNode`]. This is populated for nodes
+     /// which have damage, including nodes which are newly added to the accessibility tree.
+     dom_node_map: RefCell<FxHashMap<NodeId, ServoLayoutNode<'update>>>,
++    /// Mercury: a11y-1 item 4: the id index of the document, the nodes whose recomputation may change
++    /// other nodes and the like; see `semantics.rs`.
++    pub(super) semantics: SemanticsCache<'update>,
+ }
+
+ /// Tracks changes to a node's relation to the tree within an update.
+@@ -150,9 +160,20 @@
+             embedder_epoch,
+             pending_actions: vec![],
+             debug: opts::get().debug.clone(),
++            uses_idrefs: false, // Mercury: a11y-1 item 4
+         }
+     }
+
++    /// Mercury: a11y-1 item 4: see [`Self::uses_idrefs`].
++    pub(super) fn note_idrefs_used(&mut self) {
++        self.uses_idrefs = true;
++    }
++
++    /// Mercury: a11y-1 item 4: whether the document uses IDREF attributes at all.
++    pub(super) fn uses_idrefs(&self) -> bool {
++        self.uses_idrefs
++    }
++
+     /// Update this tree based on the current state of the given DOM tree, and if anything changed,
+     /// return an [`accesskit::TreeUpdate`] representing what changed.
+     pub(crate) fn update_tree<'update>(
+@@ -168,6 +189,9 @@
+
+         self.apply_changes_from_dom_tree(&context, &mut update);
+
++        // Mercury: a11y-1 item 4: recompute the nodes whose name depends on a node that changed.
++        semantics::apply_followups(self, &mut update);
++
+         self.update_focused_node(context.focused_element, &mut update);
+
+         self.handle_pending_scroll_updates(&mut update);
+@@ -459,7 +483,11 @@
+         node.clone()
+     }
+
+-    fn node_for_opaque(&self, opaque: OpaqueNode) -> Option<ArcRefCell<AccessibilityNode>> {
++    // Mercury: a11y-1 item 4: `pub(super)`, `semantics.rs` looks nodes up by opaque node.
++    pub(super) fn node_for_opaque(
++        &self,
++        opaque: OpaqueNode,
++    ) -> Option<ArcRefCell<AccessibilityNode>> {
+         self.nodes
+             .get(&self.existing_id_for_opaque(opaque)?)
+             .cloned()
+@@ -639,6 +667,8 @@
+
+ impl<'update> AccessibilityUpdate<'update> {
+     fn new(dom_damage: AccessibilityDamageMap<'update>, tree: &AccessibilityTree) -> Self {
++        // Mercury: a11y-1 item 4: the adapter's node ids are only valid within one update.
++        dom_adapter::begin_update();
+         let damage_map = dom_damage
+             .iter()
+             .filter_map(|(&opaque, &(_dom_node, damage))| {
+@@ -661,9 +691,16 @@
+             counters: UpdateCounters::default(),
+             damage_map,
+             dom_node_map: RefCell::new(dom_node_map),
++            semantics: SemanticsCache::default(), // Mercury: a11y-1 item 4
+         }
+     }
+
++    /// Mercury: a11y-1 item 4: whether this update builds the whole tree (a new root node), in which
++    /// case every node is computed from the final DOM and nothing needs recomputing afterwards.
++    pub(super) fn is_full_rebuild(&self) -> bool {
++        self.accesskit_tree.is_some()
++    }
++
+     pub(super) fn add(&mut self, node: &mut AccessibilityNode) {
+         self.changed_nodes.insert(node.id());
+         node.remove_dirty_state(DirtyState::Updated);
+diff --git a/accessibility/dom_adapter.rs b/accessibility/dom_adapter.rs
+new file mode 100644
+--- /dev/null
++++ b/accessibility/dom_adapter.rs
+@@ -0,0 +1,904 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++//! Mercury: a11y-1 item 4 (`layout-glue`, EE2-EE4). New file: the adapter that lets the engine-free
++//! crate `mercury-a11y` read Servo's layout DOM.
++//!
++//! [`AccDocument`] and [`AccNode`] implement `a11y_dom::{Document, Node, Rendering}` and
++//! `mercury_a11y::HostState` over [`ServoLayoutNode`] and [`ServoLayoutElement`]. Nothing here
++//! decides anything about roles, names or states: it only answers the questions `mercury-a11y` asks
++//! of a DOM (tag, attributes, text, flat-tree relatives, computed `display` and `visibility`, native
++//! state flags, the value of a form control).
++//!
++//! # What an [`AccNode`] is
++//!
++//! `AccNode<'dom>` is a copyable handle: the layout node plus a small [`NodeId`] that is unique per
++//! node within one accessibility update. The ids are handed out by a thread-local table that
++//! [`begin_update`] clears at the start of each update (the id is *not* stable across updates, and
++//! nothing keeps one across updates). The table is thread-local rather than a field of a document
++//! object so that the handle does not borrow it: an `accname::IdIndex<'dom, AccNode<'dom>>` can then
++//! live in the update next to the layout nodes without a self-referential struct.
++//!
++//! # Borrowed strings
++//!
++//! `a11y_dom::Node::attr` and `::text` must return `&'a str` that outlives the call. The layout
++//! interface (`LayoutElement::attribute_as_str`, `LayoutNode::text_content`) can only lend for the
++//! duration of a `&self` borrow, although the data lives in the DOM, which is not mutated while an
++//! accessibility update runs (it runs inside layout, on the script thread, and no script runs
++//! meanwhile): the underlying accessors return `&'dom str`. [`lend`] widens the borrow back, in one
++//! place. Nothing is copied and nothing is leaked.
++//!
++//! # Known gaps
++//!
++//! * `a11y_dom::Node::attributes()` cannot enumerate: the layout interface looks attributes up by
++//!   name only. It answers from [`KNOWN_ATTRIBUTES`] (every `aria-*` attribute and the HTML ones the
++//!   accessibility rules read); `attr()` itself answers any name. Nothing in `accname` or
++//!   `mercury-a11y` calls `attributes()`.
++//! * Every node is in tree scope 0 (the document): the layout interface does not say which shadow
++//!   root contains a node, so an IDREF resolves across shadow roots, and two shadow roots that repeat
++//!   an id resolve to the first.
++//! * The current value of an `<input type=range>` is read back from the style attribute of the slider
++//!   thumb in its user-agent shadow tree (`inset-inline-start: <percent>%`), because the layout
++//!   interface exposes no accessor for it; `servo/servo` would need a `LayoutNode` method to do better.
++//! * `local_name()` is the element's own local name, not lowercased: HTML elements in HTML documents
++//!   are lowercase already, and the camel-case names of SVG elements correctly match nothing.
++
++use std::cell::RefCell;
++
++use a11y_dom::{ComputedStyle, Document, Node, NodeId, NodeKind, Rect, Rendering};
++use layout_api::{AxesOverflow, LayoutElement, LayoutNode};
++use mercury_a11y::{HostState, NativeFlags, RangeValue};
++use rustc_hash::FxHashMap;
++use script::layout_dom::{ServoLayoutElement, ServoLayoutNode};
++use style::computed_values::visibility::T as Visibility;
++use style::dom::{NodeInfo, OpaqueNode, TElement};
++use style::selector_parser::NonTSPseudoClass;
++use style::values::specified::Overflow;
++use web_atoms::{LocalName, local_name, ns};
++
++/// The attributes `AccNode::attributes()` reports (see the module documentation).
++const KNOWN_ATTRIBUTES: &[&str] = &[
++    "role",
++    "id",
++    "for",
++    "title",
++    "alt",
++    "type",
++    "value",
++    "placeholder",
++    "href",
++    "name",
++    "lang",
++    "tabindex",
++    "hidden",
++    "inert",
++    "disabled",
++    "checked",
++    "selected",
++    "open",
++    "required",
++    "readonly",
++    "multiple",
++    "min",
++    "max",
++    "step",
++    "contenteditable",
++    "aria-activedescendant",
++    "aria-atomic",
++    "aria-autocomplete",
++    "aria-braillelabel",
++    "aria-brailleroledescription",
++    "aria-busy",
++    "aria-checked",
++    "aria-colcount",
++    "aria-colindex",
++    "aria-colspan",
++    "aria-controls",
++    "aria-current",
++    "aria-describedby",
++    "aria-description",
++    "aria-details",
++    "aria-disabled",
++    "aria-errormessage",
++    "aria-expanded",
++    "aria-flowto",
++    "aria-haspopup",
++    "aria-hidden",
++    "aria-invalid",
++    "aria-keyshortcuts",
++    "aria-label",
++    "aria-labelledby",
++    "aria-level",
++    "aria-live",
++    "aria-modal",
++    "aria-multiline",
++    "aria-multiselectable",
++    "aria-orientation",
++    "aria-owns",
++    "aria-placeholder",
++    "aria-posinset",
++    "aria-pressed",
++    "aria-readonly",
++    "aria-relevant",
++    "aria-required",
++    "aria-roledescription",
++    "aria-rowcount",
++    "aria-rowindex",
++    "aria-rowspan",
++    "aria-selected",
++    "aria-setsize",
++    "aria-sort",
++    "aria-valuemax",
++    "aria-valuemin",
++    "aria-valuenow",
++    "aria-valuetext",
++];
++
++/// The attributes whose value is a list of ids of other elements (IDREF lists).
++pub(super) const IDREF_ATTRIBUTES: [&str; 8] = [
++    "aria-labelledby",
++    "aria-describedby",
++    "aria-controls",
++    "aria-owns",
++    "aria-flowto",
++    "aria-details",
++    "aria-errormessage",
++    "aria-activedescendant",
++];
++
++/// How many attribute names the per-thread atom cache keeps. The names asked for come from a fixed
++/// set in `accname` and `mercury-a11y`, so this is a ceiling that is never reached; past it a name is
++/// looked up without being cached.
++const MAX_CACHED_ATTRIBUTE_NAMES: usize = 512;
++
++/// The most nodes of a subtree the check "does this node need the document's ids" looks at before it
++/// answers yes to be safe.
++const IDREF_SCAN_LIMIT: usize = 64;
++
++/// The deepest `UA widget` the value readers climb through (text container, inner container, host).
++const WIDGET_DEPTH: usize = 6;
++
++/// The most nodes the radio-group search looks at; a group in a bigger form has no position.
++const RADIO_SCAN_LIMIT: usize = 5000;
++
++thread_local! {
++    /// Opaque layout node address to the id handed out by [`AccNode::new`] in this update.
++    static NODE_IDS: RefCell<FxHashMap<OpaqueNode, u32>> = RefCell::new(FxHashMap::default());
++    /// Interned attribute names, so a lookup does not intern an atom (and, for an attribute the page
++    /// does not use, allocate and free one) on every call.
++    static ATTRIBUTE_ATOMS: RefCell<FxHashMap<Box<str>, LocalName>> =
++        RefCell::new(FxHashMap::default());
++}
++
++/// Start a new accessibility update: ids handed out before this are forgotten.
++pub(super) fn begin_update() {
++    NODE_IDS.with_borrow_mut(|ids| ids.clear());
++}
++
++fn intern(opaque: OpaqueNode) -> NodeId {
++    NODE_IDS.with_borrow_mut(|ids| {
++        let next = ids.len() as u32;
++        NodeId(*ids.entry(opaque).or_insert(next))
++    })
++}
++
++fn with_attribute_atom<R>(name: &str, f: impl FnOnce(&LocalName) -> R) -> R {
++    ATTRIBUTE_ATOMS.with_borrow_mut(|cache| {
++        if let Some(atom) = cache.get(name) {
++            return f(atom);
++        }
++        let atom = LocalName::from(name);
++        if cache.len() < MAX_CACHED_ATTRIBUTE_NAMES {
++            f(cache.entry(name.into()).or_insert(atom))
++        } else {
++            f(&atom)
++        }
++    })
++}
++
++/// Widen a borrow of DOM data back to the lifetime of the DOM itself.
++///
++/// The strings this is used on (attribute values, text node data, local names) are stored in the DOM
++/// nodes that the `'dom` in [`AccNode<'dom>`] already keeps alive; the layout interface only narrows
++/// their lifetime to a `&self` borrow. They are not modified while the accessibility update runs
++/// (see the module documentation), so a reference to one stays valid for the whole update, which is
++/// the longest any [`AccNode`] or anything derived from one lives.
++#[expect(unsafe_code)]
++fn lend<'a>(string: &str) -> &'a str {
++    // SAFETY: see above; the pointer comes from a live `&str`, only the lifetime changes.
++    unsafe { &*(string as *const str) }
++}
++
++/// The flat-tree parent of a node.
++#[expect(unsafe_code)]
++fn flat_tree_parent(node: ServoLayoutNode<'_>) -> Option<ServoLayoutNode<'_>> {
++    // SAFETY: `dangerous_flat_tree_parent` must only be called from the script thread while no
++    // layout worker threads run. The accessibility update runs on the script thread after layout has
++    // finished (`AccessibilityTree::update_tree`), and already walks parents the same way
++    // (`collect_dom_node_ancestors`).
++    unsafe { node.dangerous_flat_tree_parent() }
++}
++
++/// Whether this element is an `<iframe>` or a `<frame>`: its DOM children are fallback content that
++/// is never rendered, and its accessibility node is a graft (a node with a `tree_id` cannot have
++/// children), so it has none in the accessibility tree either.
++pub(super) fn is_frame_element(node: &ServoLayoutNode<'_>) -> bool {
++    node.as_html_element().is_some_and(|element| {
++        *element.local_name() == local_name!("iframe") ||
++            *element.local_name() == local_name!("frame")
++    })
++}
++
++/// Whether this element is an `<input>` or a `<textarea>` that draws its value in a user-agent
++/// widget (its shadow tree). Its value is a property of the control; the widget's text is the same
++/// value again, and for a password it is one bullet per character, which would give away the length.
++// Mercury: a11y-1 M1 (privacy): the widget of a text control is not part of the accessibility tree.
++fn is_text_control_widget(node: &ServoLayoutNode<'_>) -> bool {
++    node.as_html_element().is_some_and(|element| {
++        (*element.local_name() == local_name!("input") ||
++            *element.local_name() == local_name!("textarea")) &&
++            node.is_root_of_user_agent_widget()
++    })
++}
++
++/// The flat-tree children of a node as the accessibility tree sees them: none for a frame element
++/// and none for a text control's user-agent widget.
++pub(super) fn flat_children<'a, 'dom>(
++    node: &'a ServoLayoutNode<'dom>,
++) -> impl Iterator<Item = ServoLayoutNode<'dom>> + 'a {
++    let none = is_frame_element(node) || is_text_control_widget(node);
++    node.flat_tree_children().filter(move |_| !none)
++}
++
++/// A node of the layout DOM as `mercury-a11y` sees it: an element or a text node.
++#[derive(Clone, Copy)]
++pub(super) struct AccNode<'dom> {
++    node: ServoLayoutNode<'dom>,
++    id: NodeId,
++}
++
++impl PartialEq for AccNode<'_> {
++    fn eq(&self, other: &Self) -> bool {
++        self.id == other.id
++    }
++}
++
++impl Eq for AccNode<'_> {}
++
++impl<'dom> AccNode<'dom> {
++    /// The handle of a layout node. The node must be an element or a text node.
++    pub(super) fn new(node: ServoLayoutNode<'dom>) -> Self {
++        Self {
++            node,
++            id: intern(node.opaque()),
++        }
++    }
++
++    /// The layout node behind the handle.
++    pub(super) fn dom_node(self) -> ServoLayoutNode<'dom> {
++        self.node
++    }
++}
++
++impl<'dom> Node<'dom> for AccNode<'dom> {
++    fn id(self) -> NodeId {
++        self.id
++    }
++
++    fn kind(self) -> NodeKind {
++        if self.node.is_text_node() {
++            NodeKind::Text
++        } else {
++            NodeKind::Element
++        }
++    }
++
++    fn parent(self) -> Option<Self> {
++        let parent = flat_tree_parent(self.node)?;
++        parent.is_element().then(|| AccNode::new(parent))
++    }
++
++    fn children(self) -> impl Iterator<Item = Self> + 'dom {
++        // The accessibility tree has a node for every flat-tree child, comments included; the rules
++        // only know elements and text.
++        flat_children(&self.node)
++            .filter(|child| child.is_element() || child.is_text_node())
++            .map(AccNode::new)
++            .collect::<Vec<_>>()
++            .into_iter()
++    }
++
++    fn local_name(self) -> &'dom str {
++        match self.node.as_element() {
++            Some(element) => lend(element.local_name()),
++            None => "",
++        }
++    }
++
++    fn attributes(self) -> impl Iterator<Item = (&'dom str, &'dom str)> + 'dom {
++        KNOWN_ATTRIBUTES
++            .iter()
++            .filter_map(move |name| self.attr(name).map(|value| (*name, value)))
++    }
++
++    fn text(self) -> &'dom str {
++        if !self.node.is_text_node() {
++            return "";
++        }
++        let content = self.node.text_content();
++        lend(&content)
++    }
++
++    fn attr(self, name: &str) -> Option<&'dom str> {
++        let element = self.node.as_element()?;
++        with_attribute_atom(name, |atom| {
++            element.attribute_as_str(&ns!(), atom).map(lend)
++        })
++    }
++}
++
++/// Whether the element has any IDREF attribute, or is a `<label for>`: the document then uses ids.
++pub(super) fn has_idref_attribute(node: AccNode<'_>) -> bool {
++    IDREF_ATTRIBUTES
++        .iter()
++        .any(|name| node.attr(name).is_some()) ||
++        (node.is_element("label") && node.has_attr("for"))
++}
++
++/// Whether computing this element's semantics may look other elements up by id (`aria-labelledby`,
++/// `<label for>`, ...), so that the document's id index must be built. It is a bounded check: a link
++/// or a heading names itself from its content, which may contain a `aria-labelledby` of its own, so
++/// its small subtree is looked at; a subtree that is not small is assumed to need the index.
++pub(super) fn needs_document_index(node: AccNode<'_>) -> bool {
++    if has_idref_attribute(node) ||
++        matches!(
++            node.local_name(),
++            "input" | "button" | "select" | "textarea" | "meter" | "output" | "progress"
++        )
++    {
++        return true;
++    }
++    if !may_name_from_content(node) {
++        return false;
++    }
++    let mut seen = 0usize;
++    for descendant in a11y_dom::descendants(node) {
++        seen += 1;
++        if seen > IDREF_SCAN_LIMIT {
++            return true;
++        }
++        if descendant.attr("aria-labelledby").is_some() ||
++            descendant.attr("aria-describedby").is_some()
++        {
++            return true;
++        }
++    }
++    false
++}
++
++/// A cheap, over-approximating answer to "may this element take its accessible name from its
++/// content, or from a child such as a `legend`, `caption` or `figcaption`": the tags HTML-AAM gives
++/// such a name to, or any element with an explicit `role`.
++pub(super) fn may_name_from_content(node: AccNode<'_>) -> bool {
++    node.kind() == NodeKind::Element &&
++        (matches!(
++            node.local_name(),
++            "a" | "button" |
++                "h1" |
++                "h2" |
++                "h3" |
++                "h4" |
++                "h5" |
++                "h6" |
++                "summary" |
++                "li" |
++                "td" |
++                "th" |
++                "tr" |
++                "option" |
++                "label" |
++                "legend" |
++                "figcaption" |
++                "figure" |
++                "fieldset" |
++                "caption" |
++                "table" |
++                "svg" |
++                "title" |
++                "dt" |
++                "dfn" |
++                "output"
++        ) || node.has_attr("role"))
++}
++
++/// The deepest first descendant of a node: a node without children, whose id index is empty (it
++/// holds at most that one node).
++pub(super) fn first_leaf(node: AccNode<'_>) -> AccNode<'_> {
++    let mut leaf = node;
++    while let Some(child) = leaf.children().next() {
++        leaf = child;
++    }
++    leaf
++}
++
++/// The document root above a node: the topmost element of the flat tree.
++pub(super) fn document_root(node: AccNode<'_>) -> AccNode<'_> {
++    let mut top = node;
++    while let Some(parent) = top.parent() {
++        top = parent;
++    }
++    top
++}
++
++/// The elements a native control's value can be hosted by: a node inside a user-agent widget (the
++/// text of a text field, the thumb of a slider) belongs to the element that owns the widget. Returns
++/// that element, if the node is inside one.
++pub(super) fn widget_host(node: ServoLayoutNode<'_>) -> Option<ServoLayoutNode<'_>> {
++    let mut current = node;
++    for _ in 0..WIDGET_DEPTH {
++        current = flat_tree_parent(current)?;
++        if current.is_root_of_user_agent_widget() {
++            return Some(current);
++        }
++    }
++    None
++}
++
++/// Node-by-node state of an element, as the selectors read it.
++#[derive(Clone, Copy, Default)]
++struct StateBits {
++    checked: bool,
++    indeterminate: bool,
++    disabled: bool,
++    required: bool,
++    invalid: bool,
++    open: bool,
++}
++
++/// The native state flags of an element (what `:checked`, `:disabled`, ... match).
++#[expect(unsafe_code)]
++fn read_state(element: ServoLayoutElement<'_>) -> StateBits {
++    // SAFETY: `dangerous_style_element` must only be called from the script thread while no layout
++    // worker threads run; see `flat_tree_parent`. Only the state bits are read.
++    let element = unsafe { element.dangerous_style_element() };
++    let state = element.state();
++    StateBits {
++        checked: state.contains(NonTSPseudoClass::Checked.state_flag()),
++        indeterminate: state.contains(NonTSPseudoClass::Indeterminate.state_flag()),
++        disabled: state.contains(NonTSPseudoClass::Disabled.state_flag()),
++        required: state.contains(NonTSPseudoClass::Required.state_flag()),
++        invalid: state.contains(NonTSPseudoClass::Invalid.state_flag()),
++        open: state.contains(NonTSPseudoClass::Open.state_flag()),
++    }
++}
++
++/// The value of an attribute that is not looked up through [`Node::attr`] (static names).
++fn attribute<'e>(element: &'e ServoLayoutElement<'_>, name: &LocalName) -> Option<&'e str> {
++    element.attribute_as_str(&ns!(), name)
++}
++
++/// The `type` of an `<input>`, lowercased, `text` when absent. (An invalid value is not mapped to
++/// `text`: no code here treats it as something else.)
++fn input_type_of(element: &ServoLayoutElement<'_>) -> String {
++    attribute(element, &local_name!("type"))
++        .map(|value| value.to_ascii_lowercase())
++        .unwrap_or_else(|| "text".to_owned())
++}
++
++/// Whether the element is a text-entry control: `<textarea>`, or an `<input>` whose type is text-like.
++fn is_text_entry(name: &str, type_: &str) -> bool {
++    name == "textarea" ||
++        (name == "input" &&
++            matches!(
++                type_,
++                "text" | "search" | "url" | "tel" | "email" | "password" | "number"
++            ))
++}
++
++/// The number in an attribute value, if it is a finite one.
++fn parse_number(value: &str) -> Option<f64> {
++    value.trim().parse::<f64>().ok().filter(|v| v.is_finite())
++}
++
++/// `step` of a range-like input: `None` for `any`, the value when it is a positive number, else 1.
++fn step_of(element: &ServoLayoutElement<'_>) -> Option<f64> {
++    match attribute(element, &local_name!("step")) {
++        Some(step) if step.trim().eq_ignore_ascii_case("any") => None,
++        Some(step) => parse_number(step).filter(|v| *v > 0.0).or(Some(1.0)),
++        None => Some(1.0),
++    }
++}
++
++/// The text of a node's direct text-node children, concatenated.
++fn own_text(node: &ServoLayoutNode<'_>) -> String {
++    let mut text = String::new();
++    for child in node.flat_tree_children() {
++        if child.is_text_node() {
++            text.push_str(&child.text_content());
++        }
++    }
++    text
++}
++
++/// The text a user-agent widget shows for a text control, **never for a password**.
++///
++/// `<input>` and `<textarea>`: the user-agent shadow tree is `inner container > editor > text` (the
++/// placeholder is a later sibling of the editor); number inputs and the like show their value as a
++/// lone text node in the shadow root. Anything else yields `None`.
++fn widget_text(host: ServoLayoutNode<'_>) -> Option<String> {
++    let element = host.as_element()?;
++    let name: &str = element.local_name();
++    if name != "input" && name != "textarea" {
++        return None;
++    }
++    let type_ = if name == "input" {
++        input_type_of(&element)
++    } else {
++        String::new()
++    };
++    // A password field has no value to give (D7), whatever its shadow text is.
++    if type_ == "password" || (name == "input" && !is_text_entry(name, &type_)) {
++        return None;
++    }
++    let first = host.flat_tree_children().next()?;
++    if first.is_text_node() {
++        return Some(first.text_content().to_string());
++    }
++    let editor = first.flat_tree_children().next()?;
++    editor.is_element().then(|| own_text(&editor))
++}
++
++/// The label of an `<option>`: its `label` attribute, else its text with whitespace collapsed.
++fn option_label(option: &ServoLayoutNode<'_>) -> String {
++    if let Some(element) = option.as_element() &&
++        let Some(label) = attribute(&element, &local_name!("label")) &&
++        !label.is_empty()
++    {
++        return label.to_owned();
++    }
++    let mut text = String::new();
++    for child in option.dom_children() {
++        if child.is_text_node() {
++            text.push_str(&child.text_content());
++        }
++    }
++    text.split_whitespace().collect::<Vec<_>>().join(" ")
++}
++
++/// The `<option>` elements of a `<select>`, in order, including those in `<optgroup>`s.
++fn select_options<'dom>(select: &ServoLayoutNode<'dom>) -> Vec<ServoLayoutNode<'dom>> {
++    let mut options = Vec::new();
++    for child in select.dom_children() {
++        let Some(element) = child.as_element() else {
++            continue;
++        };
++        let name: &str = element.local_name();
++        if name == "option" {
++            options.push(child);
++        } else if name == "optgroup" {
++            options.extend(child.dom_children().filter(|grandchild| {
++                grandchild
++                    .as_element()
++                    .is_some_and(|e| *e.local_name() == local_name!("option"))
++            }));
++        }
++    }
++    options
++}
++
++/// The current percentage along the track of an `<input type=range>`, read back from the slider
++/// thumb's style attribute in its user-agent shadow tree (see the module documentation).
++fn slider_percent(input: ServoLayoutNode<'_>) -> Option<f64> {
++    fn visit(node: ServoLayoutNode<'_>, depth: usize) -> Option<f64> {
++        for child in node.flat_tree_children() {
++            if let Some(element) = child.as_element() &&
++                let Some(style) = attribute(&element, &local_name!("style")) &&
++                let Some(rest) = style.trim().strip_prefix("inset-inline-start:") &&
++                let Some(number) = rest.split('%').next() &&
++                let Some(percent) = parse_number(number)
++            {
++                return Some(percent);
++            }
++            if depth < 4 &&
++                let Some(percent) = visit(child, depth + 1)
++            {
++                return Some(percent);
++            }
++        }
++        None
++    }
++    visit(input, 0)
++}
++
++/// The accessibility document: a thin handle on the root of the flat tree.
++pub(super) struct AccDocument<'dom> {
++    root: AccNode<'dom>,
++}
++
++impl<'dom> AccDocument<'dom> {
++    pub(super) fn new(root: AccNode<'dom>) -> Self {
++        Self { root }
++    }
++}
++
++impl<'dom> Document for AccDocument<'dom> {
++    type N<'a>
++        = AccNode<'a>
++    where
++        Self: 'a;
++
++    fn root(&self) -> AccNode<'_> {
++        self.root
++    }
++}
++
++impl Rendering for AccDocument<'_> {
++    /// `display` and `visibility` from the element's primary style, exactly as
++    /// `AccessibilityNode::update_node_from_layout` reads `display`. An element that has no style
++    /// (it is inside a `display: none` subtree, or not styled yet) answers `None`.
++    fn computed_style<'n>(&'n self, node: AccNode<'n>) -> Option<ComputedStyle> {
++        let element = node.node.as_element()?;
++        element.style_data()?;
++        let data = element.element_data();
++        let style = data.styles.get_primary()?;
++        let display = style.get_box().display;
++        let display = if display.is_none() {
++            "none"
++        } else if display.is_contents() {
++            "contents"
++        } else if display.is_inline_flow() {
++            "inline"
++        } else {
++            "block"
++        };
++        let visibility = match style.get_inherited_box().visibility {
++            Visibility::Visible => "visible",
++            Visibility::Hidden => "hidden",
++            Visibility::Collapse => "collapse",
++        };
++        Some(ComputedStyle {
++            display: Some(display.to_owned()),
++            visibility: Some(visibility.to_owned()),
++            ..ComputedStyle::default()
++        })
++    }
++
++    /// Bounds are the accessibility node's own business (`update_node_from_layout`); the rules do not
++    /// read them.
++    fn bounds<'n>(&'n self, _node: AccNode<'n>) -> Option<Rect> {
++        None
++    }
++
++    fn is_rendered<'n>(&'n self, node: AccNode<'n>) -> bool {
++        self.computed_style(node)
++            .is_some_and(|style| style.display.as_deref() != Some("none"))
++    }
++}
++
++impl HostState for AccDocument<'_> {
++    fn native_flags<'n>(&'n self, node: AccNode<'n>) -> NativeFlags {
++        let Some(element) = node.node.as_element() else {
++            return NativeFlags::default();
++        };
++        let state = read_state(element);
++        let name: &str = element.local_name();
++        let input_type = if name == "input" {
++            input_type_of(&element)
++        } else {
++            String::new()
++        };
++        let is_input = name == "input";
++        let text_entry = is_text_entry(name, &input_type);
++        let has = |attribute_name: LocalName| attribute(&element, &attribute_name).is_some();
++
++        let contenteditable =
++            attribute(&element, &local_name!("contenteditable")).is_some_and(|value| {
++                value.is_empty() ||
++                    value.eq_ignore_ascii_case("true") ||
++                    value.eq_ignore_ascii_case("plaintext-only")
++            });
++        let has_tabindex = attribute(&element, &local_name!("tabindex"))
++            .is_some_and(|value| value.trim().parse::<i32>().is_ok());
++        let native_focusable = match name {
++            "a" | "area" => has(local_name!("href")),
++            "button" | "select" | "textarea" => !state.disabled,
++            "input" => input_type != "hidden" && !state.disabled,
++            "summary" => true,
++            "audio" | "video" => has(local_name!("controls")),
++            _ => false,
++        };
++
++        let scroll_container = element.is_root() ||
++            element
++                .style_data()
++                .and_then(|_| {
++                    let data = element.element_data();
++                    let style = data.styles.get_primary()?;
++                    let overflow = AxesOverflow::from(&**style);
++                    Some(
++                        matches!(overflow.x, Overflow::Auto | Overflow::Scroll) ||
++                            matches!(overflow.y, Overflow::Auto | Overflow::Scroll),
++                    )
++                })
++                .unwrap_or(false);
++
++        NativeFlags {
++            checked: state.checked && name != "option",
++            indeterminate: state.indeterminate &&
++                (name == "progress" || (is_input && input_type == "checkbox")),
++            disabled: state.disabled,
++            required: state.required,
++            read_only: text_entry && has(local_name!("readonly")),
++            invalid: state.invalid,
++            open: state.open,
++            selected: state.checked && name == "option",
++            focusable: native_focusable || has_tabindex || contenteditable,
++            editable: contenteditable ||
++                (text_entry && !state.disabled && !has(local_name!("readonly"))),
++            multiline: name == "textarea" || contenteditable,
++            scroll_container,
++            ..NativeFlags::default()
++        }
++    }
++
++    fn control_value<'n>(&'n self, node: AccNode<'n>) -> Option<String> {
++        let element = node.node.as_element()?;
++        let name: &str = element.local_name();
++        match name {
++            "input" | "textarea" => widget_text(node.node),
++            "select" => {
++                if attribute(&element, &local_name!("multiple")).is_some() {
++                    return None;
++                }
++                let options = select_options(&node.node);
++                let selected = options
++                    .iter()
++                    .find(|option| option.as_element().is_some_and(|e| read_state(e).checked))
++                    .or_else(|| options.first())?;
++                Some(option_label(selected))
++            },
++            "output" => {
++                let mut text = String::new();
++                for descendant in a11y_dom::descendants(node).take(IDREF_SCAN_LIMIT * 16) {
++                    if descendant.kind() == NodeKind::Text {
++                        text.push_str(descendant.text());
++                    }
++                }
++                Some(text)
++            },
++            _ => None,
++        }
++    }
++
++    fn range<'n>(&'n self, node: AccNode<'n>) -> Option<RangeValue> {
++        let element = node.node.as_element()?;
++        let name: &str = element.local_name();
++        let number =
++            |attribute_name: LocalName| attribute(&element, &attribute_name).and_then(parse_number);
++        match name {
++            "input" => match input_type_of(&element).as_str() {
++                "range" => {
++                    let min = number(local_name!("min")).unwrap_or(0.0);
++                    let max = number(local_name!("max")).unwrap_or(100.0).max(min);
++                    let value = slider_percent(node.node)
++                        .map(|percent| min + (max - min) * (percent / 100.0).clamp(0.0, 1.0))
++                        .or_else(|| number(local_name!("value")))
++                        .unwrap_or(min + (max - min) / 2.0)
++                        .clamp(min, max);
++                    Some(RangeValue {
++                        value,
++                        min,
++                        max,
++                        step: step_of(&element),
++                    })
++                },
++                "number" => {
++                    let min = number(local_name!("min"))?;
++                    let max = number(local_name!("max"))?;
++                    if max < min {
++                        return None;
++                    }
++                    let value = widget_text(node.node)
++                        .and_then(|text| parse_number(&text))
++                        .or_else(|| number(local_name!("value")))?;
++                    Some(RangeValue {
++                        value: value.clamp(min, max),
++                        min,
++                        max,
++                        step: step_of(&element),
++                    })
++                },
++                _ => None,
++            },
++            "progress" => {
++                let value = number(local_name!("value"))?;
++                let max = number(local_name!("max"))
++                    .filter(|max| *max > 0.0)
++                    .unwrap_or(1.0);
++                Some(RangeValue {
++                    value: value.clamp(0.0, max),
++                    min: 0.0,
++                    max,
++                    step: None,
++                })
++            },
++            "meter" => {
++                let min = number(local_name!("min")).unwrap_or(0.0);
++                let max = number(local_name!("max")).unwrap_or(1.0).max(min);
++                let value = number(local_name!("value")).unwrap_or(0.0).clamp(min, max);
++                Some(RangeValue {
++                    value,
++                    min,
++                    max,
++                    step: None,
++                })
++            },
++            _ => None,
++        }
++    }
++
++    fn position_in_set<'n>(&'n self, node: AccNode<'n>) -> Option<(usize, usize)> {
++        let element = node.node.as_element()?;
++        let name: &str = element.local_name();
++        match name {
++            "li" => {
++                let parent = node.parent()?;
++                if !matches!(parent.local_name(), "ul" | "ol" | "menu") {
++                    return None;
++                }
++                let items: Vec<_> = parent
++                    .children()
++                    .filter(|child| child.is_element("li"))
++                    .collect();
++                let position = items.iter().position(|item| *item == node)?;
++                Some((position + 1, items.len()))
++            },
++            "option" => {
++                let mut select = node.parent()?;
++                for _ in 0..WIDGET_DEPTH {
++                    if select.is_element("select") {
++                        break;
++                    }
++                    select = select.parent()?;
++                }
++                if !select.is_element("select") {
++                    return None;
++                }
++                let options = select_options(&select.node);
++                let position = options
++                    .iter()
++                    .position(|option| option.opaque() == node.node.opaque())?;
++                Some((position + 1, options.len()))
++            },
++            "input" if input_type_of(&element) == "radio" => {
++                let group =
++                    attribute(&element, &local_name!("name")).filter(|group| !group.is_empty())?;
++                let scope = {
++                    let mut scope = node.parent()?;
++                    while !scope.is_element("form") {
++                        match scope.parent() {
++                            Some(parent) => scope = parent,
++                            None => break,
++                        }
++                    }
++                    scope
++                };
++                let mut radios = Vec::new();
++                for candidate in a11y_dom::descendants(scope).take(RADIO_SCAN_LIMIT) {
++                    if candidate.is_element("input") &&
++                        candidate
++                            .attr("type")
++                            .is_some_and(|t| t.eq_ignore_ascii_case("radio")) &&
++                        candidate.attr("name") == Some(group)
++                    {
++                        radios.push(candidate);
++                    }
++                }
++                let position = radios.iter().position(|radio| *radio == node)?;
++                Some((position + 1, radios.len()))
++            },
++            _ => None,
++        }
++    }
++}
+diff --git a/accessibility/frames.rs b/accessibility/frames.rs
+new file mode 100644
+--- /dev/null
++++ b/accessibility/frames.rs
+@@ -0,0 +1,40 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: a11y-1 item 5 (`actions-frames`), EE7 (iframes) owns this file. It is Mercury's own: upstream
++// Servo 0.8 builds no node for the document inside an `<iframe>`, so a page's accessibility tree
++// stops at the frame. See `.superpowers/sdd/lane-a11y-1-brief.md`, item 5, decision D11.
++
++//! The accessibility tree of an `<iframe>`.
++//!
++//! Every document has its own tree (layout builds one per pipeline, with the `TreeId` that is a
++//! pure function of the `PipelineId`: `TreeId::from(pipeline_id)`). The iframe's own node
++//! **is** the graft (decision D11): AccessKit lets a node that carries a `tree_id` keep its other
++//! properties (role `Iframe`, the name from `title`, bounds) and takes the root of the grafted
++//! tree as its only child, so the node needs no synthetic child and no new node id.
++//!
++//! The document inside the frame sends its updates on its own, straight to the embedder (they do
++//! not pass through the parent), and only after the constellation has activated its accessibility
++//! (`servo-constellation/mercury/a11y.rs`). Which tree an update belongs to, and in which order the
++//! graft and the first update reach AccessKit, is the embedder's business: its queue holds a tree
++//! until some update has grafted it.
++
++use accesskit::TreeId;
++use layout_api::{LayoutElementType, LayoutNode, LayoutNodeType};
++use script::layout_dom::ServoLayoutNode;
++
++/// The tree id of the document inside an `<iframe>` node, so that the node can graft it; `None`
++/// for every other node, and for an iframe whose nested document is not known yet (no pipeline,
++/// or it is still being created).
++///
++/// Servo has no `<frame>` element that nests a document (`<frameset>` is an ordinary container),
++/// so the `<iframe>` is the only case.
++pub(super) fn child_tree_id(dom_node: &ServoLayoutNode<'_>) -> Option<TreeId> {
++    // `iframe_pipeline_id()` is only defined for an iframe element; check the type first so that
++    // it is never asked about another node.
++    if dom_node.type_id() != Some(LayoutNodeType::Element(LayoutElementType::HTMLIFrameElement)) {
++        return None;
++    }
++    dom_node.iframe_pipeline_id().map(TreeId::from)
++}
+diff --git a/accessibility/mod.rs b/accessibility/mod.rs
+--- a/accessibility/mod.rs
++++ b/accessibility/mod.rs
+@@ -12,6 +12,12 @@
+
+ mod accessibility_node;
+ mod accessibility_tree;
++// Mercury: a11y-1 item 4 (`dom_adapter`, `semantics`) and item 5 (`frames`): roles, names, states and
++// relations come from `mercury-a11y` through an adapter over the layout DOM, and an `<iframe>`'s node
++// grafts the tree of its document.
++mod dom_adapter;
++mod frames;
++mod semantics;
+
+ pub use accessibility_tree::AccessibilityTree;
+
+diff --git a/accessibility/semantics.rs b/accessibility/semantics.rs
+new file mode 100644
+--- /dev/null
++++ b/accessibility/semantics.rs
+@@ -0,0 +1,776 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++//! Mercury: a11y-1 item 4 (`layout-glue`, EE2-EE4). New file: the one function that puts
++//! `mercury_a11y`'s answer onto an [`AccessibilityNode`], and the follow-up that keeps the names of
++//! other nodes current.
++//!
++//! [`update_semantics`] replaces what upstream does in `update_properties_from_dom_node` (a role from
++//! a 16-entry table, plus a name from the node's descendants for headings and links):
++//!
++//! 1. an element is handed to `mercury_a11y::compute` through the adapter in `dom_adapter.rs`, which
++//!    returns its role, name, description, states, value, advertised actions, relations and whether
++//!    its semantics hide it (`aria-hidden`, `inert`, ...);
++//! 2. [`merge_computed`] puts that onto the node's accesskit node while keeping what layout owns
++//!    (children, bounds, transform, the hidden flag, the HTML tag) and adding what only this crate
++//!    knows (the graft of an `<iframe>`, the relations as accesskit node ids), and says whether
++//!    anything changed and whether the role or a text property did;
++//! 3. a relation to a node that is not in the tree yet is retried at the end of the same update (the
++//!    node may simply come later in the walk); a relation that is still unresolved then is dropped,
++//!    never a panic.
++//!
++//! Names come from the DOM, not from the accessibility tree, so a change in one node can change the
++//! name of another that has no damage of its own: a link whose text changes, a control whose `<label>`
++//! changes, an element that another names with `aria-labelledby`. [`apply_followups`] runs after the
++//! walk and recomputes those nodes (what the brief calls the dependants pass). It is skipped when the
++//! whole tree was built in the update, because every node was then computed from the final DOM.
++//!
++//! The id index of the document (`accname::IdIndex`) is built once per update, lazily, and only when
++//! the node being computed can look other elements up by id (see
++//! `dom_adapter::needs_document_index`); see `SemanticsCache`. A document that never uses an IDREF
++//! attribute or a `<label for>` does not pay for the reverse maps either (`AccessibilityTree::uses_idrefs`).
++//!
++//! # Known gaps
++//!
++//! * Removing a node does not recompute the nodes whose names it contributed to (a `<label>` taken
++//!   out of the document leaves its control's name stale until the control has damage of its own).
++//! * The dependants of a node are over-approximated on purpose (every ancestor that may take its name
++//!   from content, sixteen levels at most): an unneeded recompute is cheap, a missed one is a stale name.
++
++use a11y_dom::{Node as _, NodeId as DomNodeId, NodeKind};
++use accesskit::{NodeId, Role, TreeId};
++use layout_api::LayoutNode;
++use mercury_a11y::names::DependantsIndex;
++use mercury_a11y::{IdIndex, Relations};
++use rustc_hash::{FxHashMap, FxHashSet};
++use script::layout_dom::ServoLayoutNode;
++use style::dom::{NodeInfo, OpaqueNode};
++
++use super::accessibility_node::{AccessibilityNode, LocalAccessibilityDamage};
++use super::accessibility_tree::{AccessibilityTree, AccessibilityUpdate};
++use super::dom_adapter::{
++    AccDocument, AccNode, document_root, first_leaf, has_idref_attribute, is_frame_element,
++    may_name_from_content, needs_document_index, widget_host,
++};
++
++/// The most ancestors of a changed node that are looked at for names taken from content.
++const ANCESTOR_LIMIT: usize = 16;
++
++/// The tags a `<label>` can name (the labelable elements that matter here).
++const LABELABLE: [&str; 7] = [
++    "input", "button", "select", "textarea", "meter", "output", "progress",
++];
++
++/// The relations of a node as accesskit node ids.
++#[derive(Clone, Debug, Default, PartialEq)]
++pub(super) struct ResolvedRelations {
++    pub(super) controls: Vec<NodeId>,
++    pub(super) described_by: Vec<NodeId>,
++    pub(super) details: Vec<NodeId>,
++    pub(super) error_message: Option<NodeId>,
++    pub(super) flow_to: Vec<NodeId>,
++    pub(super) labelled_by: Vec<NodeId>,
++    pub(super) owns: Vec<NodeId>,
++    pub(super) active_descendant: Option<NodeId>,
++}
++
++impl ResolvedRelations {
++    /// Set the relations on the node; an empty relation sets nothing.
++    fn apply(&self, node: &mut accesskit::Node) {
++        if !self.controls.is_empty() {
++            node.set_controls(self.controls.clone());
++        }
++        if !self.described_by.is_empty() {
++            node.set_described_by(self.described_by.clone());
++        }
++        if !self.details.is_empty() {
++            node.set_details(self.details.clone());
++        }
++        if let Some(error_message) = self.error_message {
++            node.set_error_message(error_message);
++        }
++        if !self.flow_to.is_empty() {
++            node.set_flow_to(self.flow_to.clone());
++        }
++        if !self.labelled_by.is_empty() {
++            node.set_labelled_by(self.labelled_by.clone());
++        }
++        if !self.owns.is_empty() {
++            node.set_owns(self.owns.clone());
++        }
++        if let Some(active_descendant) = self.active_descendant {
++            node.set_active_descendant(active_descendant);
++        }
++    }
++}
++
++/// Put what `mercury_a11y` computed onto a node, and say what changed.
++///
++/// `old` is the node as it is in the tree; `computed` is `NodeSemantics::node`, which has no
++/// children, bounds, transform, graft or relation lists. The result keeps from `old` everything
++/// layout owns (children, bounds, transform, the hidden flag, the HTML tag if `computed` has none),
++/// takes the graft from `tree_id` (`None` removes it) and the relations from `relations`.
++///
++/// Returns `None` when the result equals `old`, else the new node and the local damage: `RoleChanged`
++/// if the role changed, `TextChanged` if the label, description or value did (the same bits
++/// `set_role` and `set_label` return upstream). A change of a state only is a change with no damage
++/// bit: the node must be sent again, nothing else needs recomputing.
++pub(super) fn merge_computed(
++    old: &accesskit::Node,
++    computed: accesskit::Node,
++    tree_id: Option<TreeId>,
++    relations: &ResolvedRelations,
++) -> Option<(accesskit::Node, LocalAccessibilityDamage)> {
++    let mut new = computed;
++    if !old.children().is_empty() {
++        new.set_children(old.children().to_vec());
++    }
++    if let Some(bounds) = old.bounds() {
++        new.set_bounds(bounds);
++    }
++    if let Some(transform) = old.transform() {
++        new.set_transform(*transform);
++    }
++    if old.is_hidden() {
++        new.set_hidden();
++    }
++    if new.html_tag().is_none() &&
++        let Some(html_tag) = old.html_tag()
++    {
++        new.set_html_tag(html_tag);
++    }
++    if let Some(tree_id) = tree_id {
++        // A graft node cannot have children (AccessKit panics on a node with both), and a frame
++        // element never has any in the accessibility tree; make sure of it.
++        new.clear_children();
++        new.set_tree_id(tree_id);
++    }
++    relations.apply(&mut new);
++
++    if new == *old {
++        return None;
++    }
++    let mut damage = LocalAccessibilityDamage::empty();
++    if new.role() != old.role() {
++        damage.insert(LocalAccessibilityDamage::RoleChanged);
++    }
++    if new.label() != old.label() ||
++        new.description() != old.description() ||
++        new.value() != old.value()
++    {
++        damage.insert(LocalAccessibilityDamage::TextChanged);
++    }
++    Some((new, damage))
++}
++
++/// Why a node is a reason to recompute other nodes.
++struct Source<'update> {
++    node: ServoLayoutNode<'update>,
++    /// The node's children changed (so the node itself, if it takes its name from content, is stale
++    /// too), as opposed to the node itself having been recomputed.
++    include_self: bool,
++}
++
++/// What an id index needs: the document's elements by their DOM id, and the nodes by the ids the
++/// adapter handed out.
++struct Session<'update> {
++    ids: IdIndex<'update, AccNode<'update>>,
++    by_id: FxHashMap<u32, AccNode<'update>>,
++}
++
++impl<'update> Session<'update> {
++    fn build(root: AccNode<'update>) -> Self {
++        let by_id = a11y_dom::self_and_descendants(root)
++            .map(|node| (node.id().0, node))
++            .collect();
++        Session {
++            ids: IdIndex::build(root),
++            by_id,
++        }
++    }
++}
++
++/// The per-update state of the semantics computation, kept in `AccessibilityUpdate`.
++#[derive(Default)]
++pub(super) struct SemanticsCache<'update> {
++    /// The root of the flat tree, found from the first node computed.
++    root: Option<AccNode<'update>>,
++    /// The id index of the document, built the first time a node needs it.
++    session: Option<Session<'update>>,
++    /// The nodes whose recomputation may change other nodes (see [`apply_followups`]).
++    sources: Vec<Source<'update>>,
++    /// The elements computed in this update: their semantics are final, they need no recompute.
++    computed: FxHashSet<OpaqueNode>,
++    /// The nodes with a relation to a node that was not in the tree when they were computed.
++    retries: Vec<ServoLayoutNode<'update>>,
++    /// A node had an `id` (or a label's `for`) that is not there any more: elements that referred
++    /// to it must be computed again.
++    ids_lost: bool,
++}
++
++impl<'update> SemanticsCache<'update> {
++    fn root_for(&mut self, node: AccNode<'update>) -> AccNode<'update> {
++        *self.root.get_or_insert_with(|| document_root(node))
++    }
++
++    fn session_for(&mut self, node: AccNode<'update>) -> &Session<'update> {
++        let root = self.root_for(node);
++        self.session.get_or_insert_with(|| Session::build(root))
++    }
++
++    /// The id index, if some node was computed in this update (so the root is known).
++    fn session_if_rooted(&mut self) -> Option<&Session<'update>> {
++        let root = self.root?;
++        Some(self.session.get_or_insert_with(|| Session::build(root)))
++    }
++
++    fn note_changed(&mut self, node: ServoLayoutNode<'update>) {
++        self.sources.push(Source {
++            node,
++            include_self: false,
++        });
++    }
++
++    /// The children of this node changed in the update.
++    pub(super) fn note_children_changed(&mut self, node: ServoLayoutNode<'update>) {
++        self.sources.push(Source {
++            node,
++            include_self: true,
++        });
++    }
++}
++
++/// Compute a node's role, name, description, states, value, relations and actions and put them on
++/// the node, replacing what upstream does in `update_properties_from_dom_node`.
++///
++/// Text nodes keep the role `TextRun` (their text is set by the caller); nodes that are neither
++/// elements nor text (comments, ...) are generic containers, as before.
++pub(super) fn update_semantics<'update>(
++    node: &mut AccessibilityNode,
++    dom_node: &ServoLayoutNode<'update>,
++    tree: &mut AccessibilityTree,
++    update: &mut AccessibilityUpdate<'update>,
++) -> LocalAccessibilityDamage {
++    if dom_node.is_text_node() {
++        if !update.is_full_rebuild() {
++            update.semantics.note_changed(*dom_node);
++        }
++        return node.set_role(Role::TextRun);
++    }
++    if !dom_node.is_element() {
++        return node.set_role(Role::GenericContainer);
++    }
++    if !update.is_full_rebuild() {
++        update.semantics.note_changed(*dom_node);
++    }
++    compute_element(node, dom_node, tree, update, false)
++}
++
++/// The accesskit ids of the DOM nodes a relation names, and whether some were not in the tree yet.
++fn resolve_relations(
++    relations: &Relations,
++    session: &Session<'_>,
++    tree: &AccessibilityTree,
++) -> (ResolvedRelations, bool) {
++    let mut unresolved = false;
++    let mut resolve = |ids: &[DomNodeId]| -> Vec<NodeId> {
++        ids.iter()
++            .filter_map(|id| {
++                // Not in the document's flat tree: nothing to link to, nothing to retry.
++                let target = session.by_id.get(&id.0)?;
++                let resolved = tree.existing_id_for_opaque(target.dom_node().opaque());
++                unresolved |= resolved.is_none();
++                resolved
++            })
++            .collect()
++    };
++    let resolved = ResolvedRelations {
++        controls: resolve(&relations.controls),
++        described_by: resolve(&relations.described_by),
++        details: resolve(&relations.details),
++        error_message: resolve(&relations.error_message).into_iter().next(),
++        flow_to: resolve(&relations.flow_to),
++        labelled_by: resolve(&relations.labelled_by),
++        owns: resolve(&relations.owns),
++        active_descendant: relations
++            .active_descendant
++            .and_then(|id| resolve(&[id]).into_iter().next()),
++    };
++    (resolved, unresolved)
++}
++
++/// What the element can be referred to by (`id`), and for a `<label>` what it refers to (`for`).
++fn id_signature(node: AccNode<'_>) -> Option<String> {
++    let id = node.attr("id").filter(|id| !id.is_empty());
++    let target = node
++        .is_element("label")
++        .then(|| node.attr("for"))
++        .flatten()
++        .filter(|target| !target.is_empty());
++    if id.is_none() && target.is_none() {
++        return None;
++    }
++    Some(format!("{}\0{}", id.unwrap_or(""), target.unwrap_or("")))
++}
++
++/// [`update_semantics`] for an element. `last_try` is set when this is already the retry for
++/// unresolved relations (they are then dropped).
++fn compute_element<'update>(
++    node: &mut AccessibilityNode,
++    dom_node: &ServoLayoutNode<'update>,
++    tree: &mut AccessibilityTree,
++    update: &mut AccessibilityUpdate<'update>,
++    last_try: bool,
++) -> LocalAccessibilityDamage {
++    let acc = AccNode::new(*dom_node);
++    let cache = &mut update.semantics;
++    cache.computed.insert(dom_node.opaque());
++    if has_idref_attribute(acc) {
++        tree.note_idrefs_used();
++    }
++    if node.replace_id_signature(id_signature(acc)) {
++        cache.ids_lost = true;
++    }
++    let root = cache.root_for(acc);
++    let doc = AccDocument::new(root);
++
++    let (semantics, resolved, unresolved) = if needs_document_index(acc) {
++        let session = cache.session_for(acc);
++        let semantics = mercury_a11y::compute(&doc, acc, &session.ids);
++        let (resolved, unresolved) = resolve_relations(&semantics.relations, session, tree);
++        (semantics, resolved, unresolved)
++    } else {
++        // Nothing this node reads is looked up by id: an index that holds at most one node does.
++        let ids = IdIndex::build(first_leaf(acc));
++        let semantics = mercury_a11y::compute(&doc, acc, &ids);
++        (semantics, ResolvedRelations::default(), false)
++    };
++    let hidden = semantics.hidden;
++    let computed = semantics.node;
++
++    // `child_tree_id` answers `None` for anything but an iframe; the check keeps a node that is not
++    // a frame element from ever becoming a graft (a graft cannot have children).
++    let tree_id = if is_frame_element(dom_node) {
++        super::frames::child_tree_id(dom_node)
++    } else {
++        None
++    };
++
++    let mut damage = node.set_semantic_hidden(hidden);
++    if let Some((merged, merged_damage)) =
++        merge_computed(node.accesskit_node(), computed, tree_id, &resolved)
++    {
++        node.replace_accesskit_node(merged);
++        damage.insert(merged_damage);
++    }
++    if unresolved && !last_try {
++        update.semantics.retries.push(*dom_node);
++    }
++    damage
++}
++
++/// Recompute the semantics of nodes that other nodes' changes may have made stale; see the module
++/// documentation. Runs after the walk of the damaged nodes, before the update is finalized.
++pub(super) fn apply_followups<'update>(
++    tree: &mut AccessibilityTree,
++    update: &mut AccessibilityUpdate<'update>,
++) {
++    let rebuilt = update.is_full_rebuild();
++    let sources = std::mem::take(&mut update.semantics.sources);
++    let retries = std::mem::take(&mut update.semantics.retries);
++
++    let mut queue: Vec<ServoLayoutNode<'update>> = Vec::new();
++    let mut retried: FxHashSet<OpaqueNode> = FxHashSet::default();
++    for node in retries {
++        retried.insert(node.opaque());
++        queue.push(node);
++    }
++    if !rebuilt && !sources.is_empty() {
++        collect_dependants(tree, update, &sources, &mut queue);
++    }
++    if !rebuilt && update.semantics.ids_lost {
++        // An id (or a label's `for`) went away or changed: whoever referred to the old value
++        // (`aria-labelledby`, `<label for>`, ...) has a stale name. Every element that looks others up by
++        // id is computed again; this happens once per update, not once per changed id.
++        if let Some(session) = update.semantics.session_if_rooted() {
++            queue.extend(
++                session
++                    .by_id
++                    .values()
++                    .filter(|node| {
++                        node.kind() == NodeKind::Element &&
++                            (has_idref_attribute(**node) ||
++                                LABELABLE.iter().any(|tag| *tag == node.local_name()))
++                    })
++                    .map(|node| node.dom_node()),
++            );
++        }
++        update.semantics.ids_lost = false;
++    }
++
++    let mut seen: FxHashSet<OpaqueNode> = FxHashSet::default();
++    for dom_node in queue {
++        let opaque = dom_node.opaque();
++        if !seen.insert(opaque) {
++            continue;
++        }
++        let retry = retried.contains(&opaque);
++        if !retry && update.semantics.computed.contains(&opaque) {
++            // Computed in this update, from the final DOM.
++            continue;
++        }
++        recompute(tree, update, &dom_node, retry);
++    }
++}
++
++/// Compute an element again and send it if it changed.
++fn recompute<'update>(
++    tree: &mut AccessibilityTree,
++    update: &mut AccessibilityUpdate<'update>,
++    dom_node: &ServoLayoutNode<'update>,
++    last_try: bool,
++) {
++    if !dom_node.is_element() {
++        return;
++    }
++    let Some(node_ref) = tree.node_for_opaque(dom_node.opaque()) else {
++        return;
++    };
++    let mut node = node_ref.borrow_mut();
++    compute_element(&mut node, dom_node, tree, update, last_try);
++    if node.dirty_state().updated() {
++        update.add(&mut node);
++    }
++}
++
++/// The nodes to recompute because of what happened to `sources`.
++fn collect_dependants<'update>(
++    tree: &AccessibilityTree,
++    update: &mut AccessibilityUpdate<'update>,
++    sources: &[Source<'update>],
++    out: &mut Vec<ServoLayoutNode<'update>>,
++) {
++    for source in sources {
++        structural_dependants(source, out);
++    }
++    // Elements that name or describe themselves by id (`aria-labelledby`, `aria-describedby`, a
++    // `<label for>`): only a document that uses ids at all has any, and only then is the reverse map
++    // worth building.
++    if !tree.uses_idrefs() {
++        return;
++    }
++    let Some(first) = sources.first() else {
++        return;
++    };
++    let first = AccNode::new(first.node);
++    let cache = &mut update.semantics;
++    let root = cache.root_for(first);
++    let session = cache.session_for(first);
++    let doc = AccDocument::new(root);
++    let index = DependantsIndex::build(&doc, &session.ids);
++    for source in sources {
++        let node = AccNode::new(source.node);
++        for id in index.dependants(node, &session.ids) {
++            if let Some(dependant) = session.by_id.get(&id.0) {
++                out.push(dependant.dom_node());
++            }
++        }
++    }
++}
++
++/// The nodes that depend on `source` by where they are, not by an id: the ancestors that may take
++/// their name from content, the controls of a wrapping `<label>`, the element that owns the
++/// user-agent widget the node is in (the text of a text field, the thumb of a slider), and the
++/// `<select>` of an `<option>`.
++fn structural_dependants<'update>(
++    source: &Source<'update>,
++    out: &mut Vec<ServoLayoutNode<'update>>,
++) {
++    let node = AccNode::new(source.node);
++    if source.include_self && may_name_from_content(node) {
++        out.push(source.node);
++    }
++    if node.is_element("label") {
++        wrapped_controls(node, out);
++    }
++    let mut ancestor = node.parent();
++    let mut depth = 0;
++    while let Some(current) = ancestor {
++        if depth >= ANCESTOR_LIMIT {
++            break;
++        }
++        if may_name_from_content(current) {
++            out.push(current.dom_node());
++            if current.is_element("label") {
++                wrapped_controls(current, out);
++            }
++        }
++        if current.is_element("select") &&
++            (node.is_element("option") || node.is_element("optgroup"))
++        {
++            out.push(current.dom_node());
++        }
++        ancestor = current.parent();
++        depth += 1;
++    }
++    if let Some(host) = widget_host(source.node) {
++        out.push(host);
++    }
++}
++
++/// The controls inside a `<label>` (which the label names without a `for`).
++fn wrapped_controls<'update>(label: AccNode<'update>, out: &mut Vec<ServoLayoutNode<'update>>) {
++    out.extend(
++        a11y_dom::descendants(label)
++            .filter(|descendant| LABELABLE.iter().any(|tag| *tag == descendant.local_name()))
++            .map(AccNode::dom_node),
++    );
++}
++
++#[cfg(test)]
++mod tests {
++    use accesskit::{Affine, Rect, Toggled};
++
++    use super::*;
++
++    fn button(label: &str) -> accesskit::Node {
++        let mut node = accesskit::Node::new(Role::Button);
++        node.set_label(label);
++        node
++    }
++
++    #[test]
++    fn same_node_is_no_change() {
++        let old = button("Save");
++        assert_eq!(
++            merge_computed(&old, button("Save"), None, &ResolvedRelations::default()),
++            None
++        );
++    }
++
++    #[test]
++    fn a_new_label_is_a_text_change() {
++        let old = button("Save");
++        let (new, damage) = merge_computed(
++            &old,
++            button("Save all"),
++            None,
++            &ResolvedRelations::default(),
++        )
++        .expect("a changed label is a change");
++        assert_eq!(new.label(), Some("Save all"));
++        assert_eq!(damage, LocalAccessibilityDamage::TextChanged);
++    }
++
++    #[test]
++    fn a_label_that_goes_away_is_a_text_change() {
++        let old = button("Save");
++        let (new, damage) = merge_computed(
++            &old,
++            accesskit::Node::new(Role::Button),
++            None,
++            &ResolvedRelations::default(),
++        )
++        .expect("a removed label is a change");
++        assert_eq!(new.label(), None);
++        assert_eq!(damage, LocalAccessibilityDamage::TextChanged);
++    }
++
++    #[test]
++    fn description_and_value_count_as_text() {
++        let old = accesskit::Node::new(Role::TextInput);
++        let mut with_description = accesskit::Node::new(Role::TextInput);
++        with_description.set_description("Your name");
++        let (_, damage) =
++            merge_computed(&old, with_description, None, &ResolvedRelations::default()).unwrap();
++        assert_eq!(damage, LocalAccessibilityDamage::TextChanged);
++
++        let mut with_value = accesskit::Node::new(Role::TextInput);
++        with_value.set_value("Ada");
++        let (_, damage) =
++            merge_computed(&old, with_value, None, &ResolvedRelations::default()).unwrap();
++        assert_eq!(damage, LocalAccessibilityDamage::TextChanged);
++    }
++
++    #[test]
++    fn a_new_role_is_a_role_change() {
++        let old = accesskit::Node::new(Role::GenericContainer);
++        let (new, damage) = merge_computed(
++            &old,
++            accesskit::Node::new(Role::Heading),
++            None,
++            &ResolvedRelations::default(),
++        )
++        .unwrap();
++        assert_eq!(new.role(), Role::Heading);
++        assert_eq!(damage, LocalAccessibilityDamage::RoleChanged);
++    }
++
++    #[test]
++    fn a_role_and_a_label_change_together() {
++        let old = accesskit::Node::new(Role::GenericContainer);
++        let (_, damage) =
++            merge_computed(&old, button("Go"), None, &ResolvedRelations::default()).unwrap();
++        assert_eq!(
++            damage,
++            LocalAccessibilityDamage::RoleChanged | LocalAccessibilityDamage::TextChanged
++        );
++    }
++
++    #[test]
++    fn a_state_change_is_a_change_without_damage_bits() {
++        let old = accesskit::Node::new(Role::CheckBox);
++        let mut checked = accesskit::Node::new(Role::CheckBox);
++        checked.set_toggled(Toggled::True);
++        let (new, damage) =
++            merge_computed(&old, checked, None, &ResolvedRelations::default()).unwrap();
++        assert_eq!(new.toggled(), Some(Toggled::True));
++        assert!(damage.is_empty());
++    }
++
++    #[test]
++    fn children_bounds_transform_hidden_and_tag_survive() {
++        let mut old = button("Save");
++        old.set_children(vec![NodeId(7), NodeId(8)]);
++        old.set_bounds(Rect::new(1.0, 2.0, 30.0, 40.0));
++        old.set_transform(Affine::translate((0.0, -5.0)));
++        old.set_hidden();
++        old.set_html_tag("button");
++
++        // Same computed semantics: nothing changed, though the computed node has none of those.
++        assert_eq!(
++            merge_computed(&old, button("Save"), None, &ResolvedRelations::default()),
++            None
++        );
++
++        let (new, damage) =
++            merge_computed(&old, button("Store"), None, &ResolvedRelations::default()).unwrap();
++        assert_eq!(new.children(), &[NodeId(7), NodeId(8)]);
++        assert_eq!(new.bounds(), Some(Rect::new(1.0, 2.0, 30.0, 40.0)));
++        assert_eq!(new.transform(), Some(&Affine::translate((0.0, -5.0))));
++        assert!(new.is_hidden());
++        assert_eq!(new.html_tag(), Some("button"));
++        assert_eq!(damage, LocalAccessibilityDamage::TextChanged);
++    }
++
++    #[test]
++    fn a_tag_the_computation_sets_wins() {
++        let mut old = button("Save");
++        old.set_html_tag("button");
++        let mut computed = button("Save");
++        computed.set_html_tag("input");
++        let (new, _) = merge_computed(&old, computed, None, &ResolvedRelations::default()).unwrap();
++        assert_eq!(new.html_tag(), Some("input"));
++    }
++
++    #[test]
++    fn an_unhidden_node_stays_unhidden() {
++        let old = button("Save");
++        let (new, _) =
++            merge_computed(&old, button("Store"), None, &ResolvedRelations::default()).unwrap();
++        assert!(!new.is_hidden());
++    }
++
++    #[test]
++    fn a_graft_is_set_and_removed() {
++        let old = accesskit::Node::new(Role::Iframe);
++        let (grafted, damage) = merge_computed(
++            &old,
++            accesskit::Node::new(Role::Iframe),
++            Some(TreeId::ROOT),
++            &ResolvedRelations::default(),
++        )
++        .expect("a new graft is a change");
++        assert_eq!(grafted.tree_id(), Some(TreeId::ROOT));
++        assert!(damage.is_empty());
++
++        // The same graft again is no change; no graft removes it.
++        assert_eq!(
++            merge_computed(
++                &grafted,
++                accesskit::Node::new(Role::Iframe),
++                Some(TreeId::ROOT),
++                &ResolvedRelations::default()
++            ),
++            None
++        );
++        let (ungrafted, _) = merge_computed(
++            &grafted,
++            accesskit::Node::new(Role::Iframe),
++            None,
++            &ResolvedRelations::default(),
++        )
++        .expect("removing a graft is a change");
++        assert_eq!(ungrafted.tree_id(), None);
++    }
++
++    #[test]
++    fn a_graft_never_has_children() {
++        let mut old = accesskit::Node::new(Role::Iframe);
++        old.set_children(vec![NodeId(1)]);
++        let (grafted, _) = merge_computed(
++            &old,
++            accesskit::Node::new(Role::Iframe),
++            Some(TreeId::ROOT),
++            &ResolvedRelations::default(),
++        )
++        .unwrap();
++        assert!(grafted.children().is_empty());
++        assert_eq!(grafted.tree_id(), Some(TreeId::ROOT));
++    }
++
++    #[test]
++    fn relations_are_applied_and_compared() {
++        let old = accesskit::Node::new(Role::TextInput);
++        let relations = ResolvedRelations {
++            labelled_by: vec![NodeId(3)],
++            described_by: vec![NodeId(4), NodeId(5)],
++            controls: vec![NodeId(6)],
++            error_message: Some(NodeId(9)),
++            active_descendant: Some(NodeId(10)),
++            ..ResolvedRelations::default()
++        };
++        let (new, damage) = merge_computed(
++            &old,
++            accesskit::Node::new(Role::TextInput),
++            None,
++            &relations,
++        )
++        .unwrap();
++        assert_eq!(new.labelled_by(), &[NodeId(3)]);
++        assert_eq!(new.described_by(), &[NodeId(4), NodeId(5)]);
++        assert_eq!(new.controls(), &[NodeId(6)]);
++        assert_eq!(new.error_message(), Some(NodeId(9)));
++        assert_eq!(new.active_descendant(), Some(NodeId(10)));
++        assert!(damage.is_empty());
++
++        // The same relations again are no change.
++        assert_eq!(
++            merge_computed(
++                &new,
++                accesskit::Node::new(Role::TextInput),
++                None,
++                &relations
++            ),
++            None
++        );
++        // Dropping them is.
++        assert!(
++            merge_computed(
++                &new,
++                accesskit::Node::new(Role::TextInput),
++                None,
++                &ResolvedRelations::default()
++            )
++            .is_some()
++        );
++    }
++
++    #[test]
++    fn empty_relations_set_nothing() {
++        let mut node = accesskit::Node::new(Role::Button);
++        ResolvedRelations::default().apply(&mut node);
++        assert_eq!(node, accesskit::Node::new(Role::Button));
++    }
++}
 diff --git a/context.rs b/context.rs
 --- a/context.rs
 +++ b/context.rs

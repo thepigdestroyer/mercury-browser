@@ -423,7 +423,9 @@ impl SharedWorkerGlobalScope {
                     is_nested_browsing_context,
                     insecure_requests_policy,
                     has_trustworthy_ancestor_origin: current_global_ancestor_trustworthy,
-                    network_partition_key: None,
+                    // Mercury: the creator's key (net-1 review, finding 1).
+                    network_partition_key: init.network_partition_key.clone(),
+                    browser_initiated_navigation: false,
                 };
 
                 let event_loop_sender = ScriptEventLoopSender::SharedWorker(own_sender.clone());

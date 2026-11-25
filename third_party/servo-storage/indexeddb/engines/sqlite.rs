@@ -13,7 +13,7 @@ use servo_base::threadpool::ThreadPool;
 use storage_traits::indexeddb::{
     AsyncOperation, AsyncReadOnlyOperation, AsyncReadWriteOperation, AsyncSchemaOperation,
     BackendError, CreateObjectResult, IndexedDBIndex, IndexedDBKeyRange, IndexedDBKeyType,
-    IndexedDBRecord, IndexedDBTxnMode, KeyPath, PutItemResult,
+    IndexedDBRecord, IndexedDBTxnMode, KeyPath, PutItemResult, UniqueIndexKeys,
 };
 
 use crate::indexeddb::IndexedDBDescription;
@@ -26,6 +26,8 @@ mod encoding;
 mod object_data_model;
 mod object_store_index_model;
 mod object_store_model;
+// Mercury: the rows of unique indexes (net-1 review, finding 3).
+mod unique_index_rows;
 
 fn range_to_query(range: IndexedDBKeyRange) -> Condition {
     // Special case for optimization
@@ -241,6 +243,8 @@ impl SqliteEngine {
         value: Vec<u8>,
         should_overwrite: bool,
         key_generator_current_number: Option<i64>,
+        // Mercury: the record's keys in each unique index of the store (net-1 review, finding 3).
+        unique_index_keys: &[UniqueIndexKeys],
     ) -> Result<PutItemResult, Error> {
         let no_overwrite = !should_overwrite;
         let serialized_key: Vec<u8> = encoding::serialize(&key);
@@ -274,6 +278,8 @@ impl SqliteEngine {
                 params![next_key_generator_current_number, store.id],
             )?;
         }
+        // Mercury: the rows of the unique indexes; a second record with the same key fails here.
+        unique_index_rows::replace_rows(connection, store.id, &serialized_key, unique_index_keys)?;
         Ok(PutItemResult::Key(key))
     }
 
@@ -282,6 +288,11 @@ impl SqliteEngine {
         store: object_store_model::Model,
         key_range: IndexedDBKeyRange,
     ) -> Result<(), Error> {
+        // Mercury: the rows of the unique indexes go with their records (net-1 review, finding 3).
+        if unique_index_rows::store_has_unique_index(connection, store.id)? {
+            let keys = Self::get_all_keys(connection, store.clone(), key_range.clone(), None)?;
+            unique_index_rows::remove_rows_of_records(connection, store.id, &keys)?;
+        }
         let query = range_to_query(key_range);
         let (sql, values) = sea_query::Query::delete()
             .from_table(object_data_model::Column::Table)
@@ -292,6 +303,10 @@ impl SqliteEngine {
     }
 
     fn clear(connection: &Connection, store: object_store_model::Model) -> Result<(), Error> {
+        // Mercury: the rows of the unique indexes go with their records (net-1 review, finding 3).
+        if unique_index_rows::store_has_unique_index(connection, store.id)? {
+            unique_index_rows::remove_rows_of_store(connection, store.id)?;
+        }
         connection.execute(
             "DELETE FROM object_data WHERE object_store_id = ?",
             params![store.id],
@@ -440,6 +455,8 @@ impl SqliteEngine {
             |row| Ok(object_store_model::Model::try_from(row).unwrap()),
         )?;
 
+        // Mercury: the rows of a unique index go with it (net-1 review, finding 3).
+        unique_index_rows::remove_rows_of_index(connection, object_store.id, &index_name)?;
         // Delete the index if it exists
         let _ = connection.execute(
             "DELETE FROM object_store_index WHERE name = ? AND object_store_id = ?",
@@ -554,6 +571,7 @@ impl KvsEngine for SqliteEngine {
                         value,
                         should_overwrite,
                         key_generator_current_number,
+                        unique_index_keys,
                     }) => {
                         let (key, key_generator_current_number) = match key {
                             Some(key) => (key, key_generator_current_number),
@@ -585,13 +603,14 @@ impl KvsEngine for SqliteEngine {
                             },
                         };
                         let _ = callback.send(
-                            Self::put_item(
+                            unique_index_rows::put_item_atomically(
                                 &connection,
                                 object_store,
                                 key,
                                 value,
                                 should_overwrite,
                                 key_generator_current_number,
+                                &unique_index_keys,
                             )
                             .map_err(|e| BackendError::DbErr(format!("{:?}", e))),
                         );
@@ -1139,6 +1158,7 @@ mod tests {
             vec![1, 2, 3],
             true,
             None,
+            &[],
         )
         .expect("Failed to insert item");
 
@@ -1224,6 +1244,7 @@ mod tests {
                             value: vec![1, 2, 3],
                             should_overwrite: false,
                             key_generator_current_number: None,
+                            unique_index_keys: vec![],
                         }),
                     },
                     KvsOperation {
@@ -1234,6 +1255,7 @@ mod tests {
                             value: vec![4, 5, 6],
                             should_overwrite: false,
                             key_generator_current_number: None,
+                            unique_index_keys: vec![],
                         }),
                     },
                     KvsOperation {
@@ -1247,6 +1269,7 @@ mod tests {
                             value: vec![7, 8, 9],
                             should_overwrite: false,
                             key_generator_current_number: None,
+                            unique_index_keys: vec![],
                         }),
                     },
                     // Try to put a duplicate key without overwrite
@@ -1258,6 +1281,7 @@ mod tests {
                             value: vec![10, 11, 12],
                             should_overwrite: false,
                             key_generator_current_number: None,
+                            unique_index_keys: vec![],
                         }),
                     },
                     KvsOperation {
@@ -1268,6 +1292,7 @@ mod tests {
                             value: vec![13, 14, 15],
                             should_overwrite: true,
                             key_generator_current_number: None,
+                            unique_index_keys: vec![],
                         }),
                     },
                     KvsOperation {
@@ -1384,6 +1409,7 @@ mod tests {
                     vec![key as u8],
                     false,
                     None,
+                    &[],
                 )
                 .expect("Failed to seed object store");
             }

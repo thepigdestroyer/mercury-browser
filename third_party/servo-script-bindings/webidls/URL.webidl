@@ -27,6 +27,8 @@ interface URL {
 
   // https://w3c.github.io/FileAPI/#creating-revoking
   static DOMString createObjectURL(Blob blob);
+  // Mercury: (MED-1) https://w3c.github.io/media-source/#dom-url-createobjecturl (servo/servo#47269)
+  static DOMString createObjectURL(MediaSource mediaSource);
   static undefined revokeObjectURL(DOMString url);
 
   USVString toJSON();

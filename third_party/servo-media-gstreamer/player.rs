@@ -21,6 +21,7 @@ use servo_media::MediaInstanceError;
 use servo_media_player::audio::AudioRenderer;
 use servo_media_player::context::PlayerGLContext;
 use servo_media_player::metadata::Metadata;
+use servo_media_player::mse::{MediaSourceBackend, SeekDecision, SeekHold}; // Mercury: (MED-1) MSE
 use servo_media_player::video::VideoFrameRenderer;
 use servo_media_player::{
     PlaybackState, Player, PlayerError, PlayerEvent, SeekLock, SeekLockMsg, StreamType,
@@ -31,6 +32,7 @@ use servo_media_traits::{BackendMsg, ClientContextId, MediaInstance};
 use super::BACKEND_BASE_TIME;
 use crate::media_stream::GStreamerMediaStream;
 use crate::media_stream_source::{ServoMediaStreamSrc, register_servo_media_stream_src};
+use crate::mercury_mse; // Mercury: (MED-1) the MSE glue
 use crate::render::GStreamerRender;
 use crate::source::{ServoSrc, register_servo_src};
 
@@ -139,6 +141,15 @@ struct PlayerInner {
     last_metadata: Option<Metadata>,
     cat: gstreamer::DebugCategory,
     enough_data: Arc<AtomicBool>,
+    /// To allow teardown to free seek_data that is waiting for the script thread.
+    /// Mercury: servo/servo#49784 (EA0 backport), with the weak references and the teardown in `Drop`.
+    seek_lock: Option<SeekLock>,
+    /// Mercury: (MED-1) what to do with a seek of a MediaSource player: `GstPlay` drops a seek until it
+    /// has media info and `playbin3` refuses one until its first buffer has arrived, so a seek asked
+    /// for before that is held and sent later (`mercury_mse::SeekHold`, with its tests).
+    seek_hold: SeekHold,
+    /// Mercury: (MED-1) to report `SeekDone` for a seek that cannot be done (an unseekable pipeline).
+    observer: Arc<Mutex<GenericCallback<PlayerEvent>>>,
 }
 
 impl PlayerInner {
@@ -179,7 +190,8 @@ impl PlayerInner {
     }
 
     pub fn set_playback_rate(&mut self, playback_rate: f64) -> Result<(), PlayerError> {
-        if self.stream_type != StreamType::Seekable {
+        // Mercury: (MED-1) a MediaSource stream is seekable, so it may change its rate too.
+        if self.stream_type == StreamType::Stream {
             return Err(PlayerError::NonSeekableStream);
         }
 
@@ -219,6 +231,7 @@ impl PlayerInner {
         self.paused.set(true);
         self.can_resume.set(false);
         self.last_metadata = None;
+        self.seek_hold.reset(); // Mercury: (MED-1)
         self.source = None;
         Ok(())
     }
@@ -259,15 +272,38 @@ impl PlayerInner {
     }
 
     pub fn seek(&mut self, time: f64) -> Result<(), PlayerError> {
-        if self.stream_type != StreamType::Seekable {
+        // Mercury: (MED-1) a MediaSource stream is seekable; its duration is the MediaSource's, which the
+        // media element clamps the target to, so the duration check below is skipped for it (GstPlay's
+        // own duration lags behind a duration the page changed).
+        if self.stream_type == StreamType::Stream {
             return Err(PlayerError::NonSeekableStream);
         }
-        if let Some(ref metadata) = self.last_metadata &&
+        if self.stream_type == StreamType::Seekable &&
+            let Some(ref metadata) = self.last_metadata &&
             let Some(ref duration) = metadata.duration &&
             duration < &time::Duration::new(time as u64, 0)
         {
             gstreamer::warning!(self.cat, obj = &self.player, "Trying to seek out of range");
             return Err(PlayerError::SeekOutOfRange);
+        }
+
+        // Mercury: (MED-1) a MediaSource seek may have to wait for the pipeline (see `seek_hold`).
+        if self.stream_type == StreamType::MediaSource {
+            match self.seek_hold.seek(time) {
+                SeekDecision::Send(_) => {},
+                SeekDecision::Held { replaced } => {
+                    gstreamer::info!(
+                        self.cat,
+                        obj = &self.player,
+                        "Seek to {time} held until the pipeline can take it (replaces {replaced:?})"
+                    );
+                    return Ok(());
+                },
+                SeekDecision::Unseekable(position) => {
+                    let _ = self.observer.lock().unwrap().send(PlayerEvent::SeekDone(position));
+                    return Ok(());
+                },
+            }
         }
 
         let time = time * 1_000_000_000.;
@@ -401,6 +437,24 @@ impl PlayerInner {
     }
 }
 
+/// Mercury: (MED-1) carries out what `SeekHold` decided, on a thread that holds no lock of the player:
+/// gives the seek to `GstPlay`, or tells the element that a seek on an unseekable pipeline is over.
+fn run_seek_decision(
+    player: &gstreamer_play::Play,
+    observer: &Arc<Mutex<GenericCallback<PlayerEvent>>>,
+    decision: SeekDecision,
+) {
+    match decision {
+        SeekDecision::Send(time) => {
+            player.seek(gstreamer::ClockTime::from_nseconds((time * 1_000_000_000.) as u64));
+        },
+        SeekDecision::Unseekable(position) => {
+            let _ = observer.lock().unwrap().send(PlayerEvent::SeekDone(position));
+        },
+        SeekDecision::Held { .. } => {},
+    }
+}
+
 macro_rules! notify(
     ($observer:expr_2021, $event:expr_2021) => {
         $observer.lock().unwrap().send($event)
@@ -454,6 +508,28 @@ pub struct GStreamerPlayer {
     /// Whether to enable download buffering. This is only enabled heuristically for some media,
     /// because it causes issues in certain situations. See <https://github.com/servo/servo/issues/23241>.
     download_buffering_enabled: AtomicBool,
+    /// Mercury: (MED-1) the MediaSource backend whose frame feed a `StreamType::MediaSource` player
+    /// plays (set by `connect_media_source`, which comes before `setup`; read by `source-setup`).
+    media_source: Mutex<Option<Arc<dyn MediaSourceBackend>>>,
+}
+
+/// Mercury: servo/servo#49889 (EA0 backport).
+/// downloadbuffer keeps the download in the user cache directory and it will
+/// make the whole pipeline fail if it can't be accessed.
+fn ensure_download_directory() -> bool {
+    let cache_dir = glib::user_cache_dir();
+    match std::fs::create_dir_all(&cache_dir) {
+        Ok(()) => true,
+        Err(error) => {
+            gstreamer::warning!(
+                gstreamer::DebugCategory::get("servoplayer").unwrap(),
+                "Can't use cache dir {:?} ({}), won't be able to use progressive download",
+                cache_dir,
+                error
+            );
+            false
+        },
+    }
 }
 
 impl GStreamerPlayer {
@@ -486,6 +562,7 @@ impl GStreamerPlayer {
             stream_type,
             render: Arc::new(Mutex::new(GStreamerRender::new(gl_context))),
             download_buffering_enabled: AtomicBool::new(false),
+            media_source: Mutex::new(None), // Mercury: (MED-1)
         }
     }
 
@@ -509,9 +586,19 @@ impl GStreamerPlayer {
         let signal_adapter = gstreamer_play::PlaySignalAdapter::new_sync_emit(&player);
         let pipeline = player.pipeline();
 
-        // FIXME(#282): The progressive downloading breaks playback on Windows and Android.
-        if !cfg!(any(target_os = "windows", target_os = "android")) &&
-            self.download_buffering_enabled.load(Ordering::Relaxed)
+        // Mercury: (MED-1) a MediaSource has no download to buffer: it is a pull source of coded frames.
+        let media_source = self.media_source.lock().unwrap().clone();
+        if self.stream_type == StreamType::MediaSource && media_source.is_none() {
+            return Err(PlayerError::Backend(
+                "a MediaSource player must be connected to its MediaSource first".to_owned(),
+            ));
+        }
+
+        // FIXME(#43421): The progressive downloading breaks playback on Android.
+        if !cfg!(target_os = "android") &&
+            self.stream_type != StreamType::MediaSource &&
+            self.download_buffering_enabled.load(Ordering::Relaxed) &&
+            ensure_download_directory()
         {
             // Set player to perform progressive downloading. This will make the
             // player store the downloaded media in a local temporary file for
@@ -627,6 +714,9 @@ impl GStreamerPlayer {
                 })?;
                 "servosrc://".to_value()
             },
+            // Mercury: (MED-1) `playbin3` makes the `MseSrc` element for this URI; `source-setup` below
+            // attaches the backend's frame feed to it.
+            StreamType::MediaSource => mercury_mse::uri_for(self.id).to_value(),
         };
         player.set_property("uri", &uri);
 
@@ -652,6 +742,9 @@ impl GStreamerPlayer {
             last_metadata: None,
             cat: gstreamer::DebugCategory::get("servoplayer").unwrap(),
             enough_data: Arc::new(AtomicBool::new(false)),
+            seek_lock: None,
+            seek_hold: SeekHold::new(), // Mercury: (MED-1)
+            observer: self.observer.clone(),
         })));
 
         let inner = self.inner.borrow();
@@ -668,11 +761,30 @@ impl GStreamerPlayer {
             let _ = notify!(observer, PlayerEvent::Error(error.to_string()));
         });
 
-        let inner_clone = inner.clone();
+        let weak_inner = Arc::downgrade(inner);
         let observer = self.observer.clone();
         // Handle `state-changed` signal.
         signal_adapter.connect_state_changed(move |_, play_state| {
-            inner_clone.lock().unwrap().play_state = play_state;
+            let Some(inner_clone) = weak_inner.upgrade() else {
+                return;
+            };
+            // Mercury: (MED-1) a MediaSource player that settles (Paused, Playing) frees a seek that was
+            // held for media info that never said "seekable"; the seek is made after the lock is released.
+            let (released, player) = {
+                let mut inner = inner_clone.lock().unwrap();
+                inner.play_state = play_state;
+                let settled = matches!(
+                    play_state,
+                    gstreamer_play::PlayState::Paused | gstreamer_play::PlayState::Playing
+                ) && inner.stream_type == StreamType::MediaSource;
+                (
+                    settled.then(|| inner.seek_hold.settled()).flatten(),
+                    inner.player.clone(),
+                )
+            };
+            if let Some(decision) = released {
+                run_seek_decision(&player, &observer, decision);
+            }
 
             let state = match play_state {
                 gstreamer_play::PlayState::Buffering => Some(PlaybackState::Buffering),
@@ -701,13 +813,16 @@ impl GStreamerPlayer {
         });
 
         // Handle `media-info-updated` signal.
-        let inner_clone = inner.clone();
+        let weak_inner = Arc::downgrade(inner);
         let observer = self.observer.clone();
         signal_adapter.connect_media_info_updated(move |_, info| {
             let Ok(metadata) = metadata_from_media_info(info) else {
                 return;
             };
 
+            let Some(inner_clone) = weak_inner.upgrade() else {
+                return;
+            };
             let mut inner = inner_clone.lock().unwrap();
 
             if inner.last_metadata.as_ref() == Some(&metadata) {
@@ -730,7 +845,20 @@ impl GStreamerPlayer {
                 }
             }
 
+            // Mercury: servo/servo#49889 (EA0 backport), report a duration that arrives with the metadata.
+            let new_duration = metadata.duration;
+            let duration_changed = new_duration.is_some() &&
+                inner
+                    .last_metadata
+                    .as_ref()
+                    .is_some_and(|last_metadata| last_metadata.duration != new_duration);
+
             inner.last_metadata = Some(metadata.clone());
+            // Mercury: (MED-1) `GstPlay` has media info now: a seek held for it can go. It is done below,
+            // after the lock is released: a signal handler must not call into the player with it held.
+            let released = (inner.stream_type == StreamType::MediaSource)
+                .then(|| inner.seek_hold.metadata(metadata.is_seekable))
+                .flatten();
             gstreamer::info!(
                 inner.cat,
                 obj = &inner.player,
@@ -739,13 +867,35 @@ impl GStreamerPlayer {
             );
             let _ = notify!(observer, PlayerEvent::MetadataUpdated(metadata));
 
+
+            // We need to check this here because there is no guarantee that
+            // duration-changed and media-info-updated come in the same order.
+            // If the latter arrives before the former, it will look like the
+            // new duration was the old one.
+            if duration_changed {
+                gstreamer::info!(
+                    inner.cat,
+                    obj = &inner.player,
+                    "Duration changed with metadata: {:?}",
+                    new_duration
+                );
+                let _ = notify!(observer, PlayerEvent::DurationChanged(new_duration));
+            }
+
             if send_pause_event {
                 let _ = notify!(observer, PlayerEvent::StateChanged(PlaybackState::Paused));
+            }
+
+            // Mercury: (MED-1) the lock is released first.
+            if let Some(decision) = released {
+                let player = inner.player.clone();
+                drop(inner);
+                run_seek_decision(&player, &observer, decision);
             }
         });
 
         // Handle `duration-changed` signal.
-        let inner_clone = inner.clone();
+        let weak_inner = Arc::downgrade(inner);
         let observer = self.observer.clone();
         signal_adapter.connect_duration_changed(move |_, duration| {
             let duration = duration.map(|duration| {
@@ -755,6 +905,9 @@ impl GStreamerPlayer {
                 )
             });
 
+            let Some(inner_clone) = weak_inner.upgrade() else {
+                return;
+            };
             let mut inner = inner_clone.lock().unwrap();
             if let Some(ref mut metadata) = inner.last_metadata &&
                 metadata.duration != duration
@@ -822,7 +975,7 @@ impl GStreamerPlayer {
         };
 
         let (receiver, error_handler_id) = {
-            let inner_clone = inner.clone();
+            let weak_inner = Arc::downgrade(inner);
             let inner = inner.lock().unwrap();
             let pipeline = inner.player.pipeline();
 
@@ -835,6 +988,7 @@ impl GStreamerPlayer {
             pipeline.connect("source-setup", false, move |args| {
                 let source = args[1].get::<gstreamer::Element>().unwrap();
 
+                let inner_clone = weak_inner.upgrade()?;
                 let mut inner = inner_clone.lock().unwrap();
                 let source = match inner.stream_type {
                     StreamType::Seekable => {
@@ -852,10 +1006,11 @@ impl GStreamerPlayer {
                         let observer_ = observer.clone();
                         let observer__ = observer.clone();
                         let observer___ = observer.clone();
-                        let servosrc_ = servosrc.clone();
+                        let weak_servosrc = servosrc.downgrade();
                         let enough_data_ = inner.enough_data.clone();
                         let enough_data__ = inner.enough_data.clone();
                         let seek_channel = Arc::new(Mutex::new(SeekChannel::new()));
+                        inner.seek_lock = Some(seek_channel.lock().unwrap().sender());
                         servosrc.set_callbacks(
                             gstreamer_app::AppSrcCallbacks::builder()
                                 .need_data(move |_, _| {
@@ -876,6 +1031,9 @@ impl GStreamerPlayer {
                                     let _ = notify!(observer__, PlayerEvent::EnoughData);
                                 })
                                 .seek_data(move |_, offset| {
+                                    let Some(servosrc_) = weak_servosrc.upgrade() else {
+                                        return false;
+                                    };
                                     let (ret, ack_channel) = if servosrc_.set_seek_offset(offset) {
                                         let _ = notify!(
                                             observer___,
@@ -911,6 +1069,25 @@ impl GStreamerPlayer {
                             let _ = notify!(sender_clone, Ok(()));
                         });
                         PlayerSource::Stream(media_stream_src)
+                    },
+                    // Mercury: (MED-1) hand the backend's frame feed to the `MseSrc` element. The setup
+                    // caller is released here, like for a stream: there is no `need-data` to wait for
+                    // before the page has appended anything.
+                    StreamType::MediaSource => {
+                        let attached = match media_source.as_ref() {
+                            Some(media_source) => mercury_mse::attach(&source, media_source),
+                            None => Err("no MediaSource is connected to this player".to_owned()),
+                        };
+                        let sender_clone = sender.clone();
+                        is_ready_clone.call_once(|| {
+                            let _ = notify!(
+                                sender_clone,
+                                attached.map_err(|error| PlayerError::Backend(format!(
+                                    "MediaSource attach failed: {error}"
+                                )))
+                            );
+                        });
+                        return None;
                     },
                 };
 
@@ -1019,6 +1196,29 @@ impl Player for GStreamerPlayer {
     fn render_use_gl(&self) -> bool {
         self.render.lock().unwrap().is_gl()
     }
+
+    // Mercury: (MED-1) Connects the player to the MediaSource backend whose frames it plays, and builds
+    // the pipeline (`uri=mercury-mse://<id>`; `source-setup` attaches the feed). It must be the first call.
+    fn connect_media_source(&self, source: Arc<dyn MediaSourceBackend>) -> Result<(), PlayerError> {
+        if self.stream_type != StreamType::MediaSource {
+            return Err(PlayerError::Backend(
+                "only a MediaSource player can be connected to a MediaSource".to_owned(),
+            ));
+        }
+        if self.inner.borrow().is_some() {
+            return Err(PlayerError::Backend(
+                "the player is already set up: connect_media_source must be the first call".to_owned(),
+            ));
+        }
+        if !mercury_mse::is_available() {
+            return Err(PlayerError::Backend(
+                "Media Source Extensions are not available (the MseSrc element is not registered)"
+                    .to_owned(),
+            ));
+        }
+        *self.media_source.lock().unwrap() = Some(source);
+        self.setup()
+    }
 }
 
 impl MediaInstance for GStreamerPlayer {
@@ -1057,5 +1257,41 @@ impl Drop for GStreamerPlayer {
                 tx_ack,
             });
         let _ = rx_ack.recv();
+        // We dispose the GstPlay from this thread while we still have a
+        // reference, so that the GstPlay thread join happens here. Otherwise,
+        // if the last reference was held by a GstPlay message being posted, the
+        // GstPlay dispose would be done from its own thread and it would be
+        // freed while still in use. Besides, the seek_data can be blocked
+        // waiting for the script thread, which is this one, busy disposing the
+        // player. We release it first so that the join does not wait forever.
+        if let Some(inner) = self.inner.borrow_mut().take() {
+            let seek_lock = inner.lock().unwrap().seek_lock.take();
+            let player = inner.lock().unwrap().player.clone();
+            let (ack_sender, _ack_receiver) =
+                generic_channel::channel::<()>().expect("Couldn't create IPC channel");
+            if let Some(seek_lock) = seek_lock {
+                let _ = seek_lock.lock_channel.send((false, ack_sender));
+            }
+            // This code below can be reverted once we ensure we are using the
+            // code at
+            // https://gitlab.freedesktop.org/gstreamer/gstreamer/-/merge_requests/13022
+            // SAFETY: nobody uses the player after this moment. Handlers keep weak refs.
+            unsafe {
+                player.run_dispose();
+            }
+            // Let's ensure the safety we claim above.
+            let unique = Arc::try_unwrap(inner).is_ok();
+            let play_refs = player.ref_count();
+            if !unique || play_refs > 1 {
+                gstreamer::error!(
+                    gstreamer::DebugCategory::get("servoplayer").unwrap(),
+                    "GStreamerPlayer drop: inner is not unique or player has other references, there be dragons!"
+                );
+                debug_assert!(
+                    false,
+                    "GStreamerPlayer drop: inner is not unique or player has other references"
+                );
+            }
+        }
     }
 }

@@ -40,6 +40,9 @@ cleanup() {
 }
 trap cleanup EXIT
 failures=0
+# The logs of the pages that had a failing check, so that a failure on a CI runner (where the
+# temporary directory is gone afterwards) can be read from the job's log.
+failed_logs=()
 
 check() {
     local name="$1" expected="$2" actual="$3"
@@ -48,7 +51,27 @@ check() {
     else
         printf 'FAIL %s: expected [%s], got [%s]\n' "$name" "$expected" "$actual"
         failures=$((failures + 1))
+        if [ -n "${LOG:-}" ] && [ -f "$LOG" ]; then
+            case " ${failed_logs[*]:-} " in
+                *" $LOG "*) ;;
+                *) failed_logs+=("$LOG") ;;
+            esac
+        fi
     fi
+}
+
+# What the browser and the page said, for each page that had a failing check: every title the
+# window had (the page's own progress), the engine's media-capture lines and any warning or
+# error, without GStreamer's plugin-loading noise.
+print_failed_logs() {
+    local log
+    for log in "${failed_logs[@]:-}"; do
+        [ -n "$log" ] || continue
+        printf '::group::log of %s\n' "$(basename -- "$log")"
+        grep -nE 'title="CAPTURE|fake media devices|media_capture|screenshot|removed child|WARN|ERROR|panick|capture stream' "$log" \
+            | grep -vE 'GST_PLUGIN_LOADING|profile_traits|GST_PARENTAGE' | cut -c1-3000 | head -n 600 || true
+        printf '::endgroup::\n'
+    done
 }
 
 [ -f "$EXE" ] || { printf 'FAIL %s is missing; run make build-release\n' "$EXE"; exit 1; }
@@ -245,6 +268,7 @@ check "system-denied: no device source was created" no "$(sources_created)"
 run_page system-denied-notice "$BASE/capture.html" --fake-system-denies-capture
 
 if [ "$failures" -gt 0 ]; then
+    print_failed_logs
     printf '%s check(s) failed (logs were in %s, now removed)\n' "$failures" "$TMP"
     exit 1
 fi

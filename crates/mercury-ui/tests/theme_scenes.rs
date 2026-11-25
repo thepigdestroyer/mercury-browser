@@ -8,23 +8,26 @@
 //!   (the window frame, the toolbar, the address field, the active tab) have the colour the B2
 //!   table gives that role in each scheme, and the picture differs from the built-in one.
 //!
-//! The settings window is drawn with Slint's standard widgets, which do not read the chrome
-//! palette, so only G1 covers it.
+//! The settings window is mostly drawn by Slint's standard widgets: only its accents (selection,
+//! focus ring, danger, notice) come from the chrome palette.
 //!
 //! Set `MERCURY_UI_RENDER_DIR` to also save the pictures (`scene-<scene>-<scheme>-<look>.png`).
 
+use std::cell::Cell;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::time::Duration;
 
-use mercury_appearance::{Role, Scheme, palettes};
+use mercury_appearance::{Metrics, Role, Scheme, palettes};
 use mercury_ui::{
     AboutWindow, BrowserMenuCommand, BrowserMenuEntry, BrowserTab, ChromeMetrics, ChromePalette,
     ChromeTheme, Look, MainWindow, SettingsWindow, TabAudioState, apply_look,
 };
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
-use slint::platform::{Platform, WindowAdapter};
+use slint::platform::{Platform, WindowAdapter, WindowEvent};
 use slint::{
-    ComponentHandle, Global, LogicalSize, ModelRc, Rgba8Pixel, SharedPixelBuffer, VecModel,
+    ComponentHandle, Global, LogicalPosition, LogicalSize, ModelRc, Rgba8Pixel, SharedPixelBuffer,
+    VecModel,
 };
 
 struct SoftwarePlatform;
@@ -33,6 +36,20 @@ impl Platform for SoftwarePlatform {
     fn create_window_adapter(&self) -> Result<Rc<dyn WindowAdapter>, slint::PlatformError> {
         Ok(MinimalSoftwareWindow::new(RepaintBufferType::NewBuffer))
     }
+
+    fn duration_since_start(&self) -> Duration {
+        CLOCK.with(Cell::get)
+    }
+}
+
+thread_local! {
+    /// The platform's clock: each drawing step moves it by a fixed amount, so that an animation
+    /// (a tab's hover fade) is at the same frame whenever the picture is taken.
+    static CLOCK: Cell<Duration> = const { Cell::new(Duration::ZERO) };
+}
+
+fn advance_clock() {
+    CLOCK.with(|clock| clock.set(clock.get() + Duration::from_millis(100)));
 }
 
 fn init_platform() {
@@ -45,20 +62,25 @@ type Pixels = SharedPixelBuffer<Rgba8Pixel>;
 enum Scene {
     NewTab,
     Tabs,
+    TabsHover,
     PopUpBlocked,
     BrowserMenu,
     About,
     Settings,
 }
 
-const SCENES: [Scene; 6] = [
+const SCENES: [Scene; 7] = [
     Scene::NewTab,
     Scene::Tabs,
+    Scene::TabsHover,
     Scene::PopUpBlocked,
     Scene::BrowserMenu,
     Scene::About,
     Scene::Settings,
 ];
+
+/// Where the pointer rests in the hovered-tab scene: the middle of the third tab, "Example Domain".
+const HOVERED_TAB: (f32, f32) = (300.0, 26.0);
 
 const WIDTH: u32 = 900;
 const HEIGHT: u32 = 560;
@@ -81,11 +103,7 @@ impl Lit {
 
 fn look(id: &str) -> Look {
     let palette = palettes::find(id).expect("a palette this build has");
-    Look {
-        palette_light: palette,
-        palette_dark: palette,
-        ..Look::hermes_roomy()
-    }
+    Look::new(palette, palette, Metrics::ROOMY)
 }
 
 fn tab(title: &str, active: bool, pinned: bool, audio: TabAudioState) -> BrowserTab {
@@ -110,7 +128,13 @@ fn entry(title: &str, shortcut: &str, command: BrowserMenuCommand, line: bool) -
 }
 
 /// Gives the window its look and theme, shows it, lets animations settle and takes the picture.
-fn picture<C>(window: &C, theme: ChromeTheme, lit: Lit, size: (u32, u32)) -> Pixels
+fn picture<C>(
+    window: &C,
+    theme: ChromeTheme,
+    lit: Lit,
+    size: (u32, u32),
+    hover: Option<(f32, f32)>,
+) -> Pixels
 where
     C: ComponentHandle,
     for<'a> ChromePalette<'a>: Global<'a, C>,
@@ -124,7 +148,13 @@ where
         .window()
         .set_size(LogicalSize::new(size.0 as f32, size.1 as f32));
     window.show().expect("the window can be shown");
+    if let Some((x, y)) = hover {
+        window.window().dispatch_event(WindowEvent::PointerMoved {
+            position: LogicalPosition::new(x, y),
+        });
+    }
     for _ in 0..3 {
+        advance_clock();
         slint::platform::update_timers_and_animations();
         window.window().request_redraw();
         let _ = window.window().take_snapshot();
@@ -136,7 +166,7 @@ fn main_window(scene: Scene) -> MainWindow {
     let window = MainWindow::new().expect("the main window can be created");
     match scene {
         Scene::NewTab => {}
-        Scene::Tabs | Scene::PopUpBlocked => {
+        Scene::Tabs | Scene::TabsHover | Scene::PopUpBlocked => {
             window.set_tabs(ModelRc::new(VecModel::from(vec![
                 tab("Mail", false, true, TabAudioState::Silent),
                 tab("Opener", true, false, TabAudioState::Silent),
@@ -173,11 +203,11 @@ fn render(scene: Scene, theme: ChromeTheme, lit: Lit) -> Pixels {
         Scene::About => {
             let about = AboutWindow::new().expect("the About window can be created");
             about.set_version_line("Version 0.2.0".into());
-            picture(&about, theme, lit, (520, 480))
+            picture(&about, theme, lit, (520, 480), None)
         }
         Scene::Settings => {
             let settings = SettingsWindow::new().expect("the settings window can be created");
-            picture(&settings, theme, lit, (760, 640))
+            picture(&settings, theme, lit, (760, 640), None)
         }
         _ => {
             let window = main_window(scene);
@@ -189,7 +219,8 @@ fn render(scene: Scene, theme: ChromeTheme, lit: Lit) -> Pixels {
                 window.show().expect("the window can be shown");
                 window.invoke_show_browser_menu();
             }
-            picture(&window, theme, lit, size)
+            let hover = matches!(scene, Scene::TabsHover).then_some(HOVERED_TAB);
+            picture(&window, theme, lit, size, hover)
         }
     };
     save(&pixels, scene, theme, lit);
@@ -290,13 +321,79 @@ fn g3_b2_reaches_the_pixels_of_the_main_window() {
 }
 
 #[test]
+fn g3_b2_reaches_a_hovered_tab() {
+    init_platform();
+    for (theme, scheme) in THEMES {
+        let still = render(Scene::Tabs, theme, Lit::Pushed("mercury-b2"));
+        let hovered = render(Scene::TabsHover, theme, Lit::Pushed("mercury-b2"));
+        // Above the title of the third tab: the strip's own colour, and with the pointer on it
+        // the tab's hover fill.
+        assert_eq!(
+            rgb(&still, 300, 12),
+            role_colour("mercury-b2", scheme, Role::WindowBackground),
+            "an unhovered tab in {scheme:?}"
+        );
+        assert_eq!(
+            rgb(&hovered, 300, 12),
+            role_colour("mercury-b2", scheme, Role::TabHover),
+            "a hovered tab in {scheme:?}"
+        );
+    }
+}
+
+/// How many pixels of the picture are exactly `colour`.
+fn count(pixels: &Pixels, colour: [u8; 3]) -> usize {
+    pixels
+        .as_slice()
+        .iter()
+        .filter(|pixel| [pixel.r, pixel.g, pixel.b] == colour)
+        .count()
+}
+
+#[test]
 fn g3_b2_reaches_the_about_window() {
     init_platform();
-    for scene in [Scene::About] {
+    for (theme, scheme) in THEMES {
+        let built_in = render(Scene::About, theme, Lit::BuiltIn);
+        let b2 = render(Scene::About, theme, Lit::Pushed("mercury-b2"));
+        let colour = |id, role| role_colour(id, scheme, role);
+        // The window's own background fills its corner, and the heading is drawn in `text`.
+        assert_eq!(
+            rgb(&b2, 3, 3),
+            colour("mercury-b2", Role::WindowBackground),
+            "the About window's background in {scheme:?}"
+        );
+        assert_eq!(
+            rgb(&built_in, 3, 3),
+            colour("hermes", Role::WindowBackground)
+        );
+        assert!(
+            count(&b2, colour("mercury-b2", Role::Text)) > 50,
+            "the About window has B2's text colour in {scheme:?}"
+        );
+        assert_eq!(
+            count(&b2, colour("hermes", Role::Text)),
+            0,
+            "and none of Hermes's in {scheme:?}"
+        );
+    }
+}
+
+/// With `MERCURY_UI_RENDER_DIR` set this writes the pictures of every scene in B2, the ones
+/// the owner looks at; without it, it checks that B2 changes every scene (the settings window takes only its accents from
+/// the palette: selection, focus ring, danger and notice; its body is drawn by Slint's standard widgets).
+#[test]
+fn b2_is_drawn_in_every_scene() {
+    init_platform();
+    for scene in SCENES {
         for (theme, scheme) in THEMES {
-            let hermes = render(scene, theme, Lit::BuiltIn);
+            let built_in = render(scene, theme, Lit::BuiltIn);
             let b2 = render(scene, theme, Lit::Pushed("mercury-b2"));
-            assert_ne!(b2.as_bytes(), hermes.as_bytes(), "{scene:?} in {scheme:?}");
+            assert_ne!(
+                built_in.as_bytes(),
+                b2.as_bytes(),
+                "{scene:?} in {scheme:?}"
+            );
         }
     }
 }

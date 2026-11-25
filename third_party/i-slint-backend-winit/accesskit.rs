@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 use std::pin::Pin;
 use std::ptr::NonNull;
-use std::rc::Weak;
+use std::rc::{Rc, Weak}; // Mercury: a11y-1: `Rc` for the page state shared with the window adapter
 
 use accesskit::{
     Action, ActionRequest, Live, Node, NodeId, Orientation, Role, Toggled, Tree, TreeId, TreeUpdate,
@@ -24,6 +24,10 @@ use i_slint_core::{properties::PropertyTracker, window::WindowAdapter};
 use super::WinitWindowAdapter;
 use crate::SlintEvent;
 use winit::event_loop::{ActiveEventLoop, EventLoopProxy};
+
+// Mercury: a11y-1: hangs a web page's AccessKit tree from one node of this tree (see MERCURY.md).
+#[path = "mercury_graft.rs"]
+pub(crate) mod mercury_graft;
 
 /// The AccessKit adapter tries to keep the given window adapter's item tree in sync with accesskit's node tree.
 ///
@@ -49,6 +53,7 @@ pub struct AccessKitAdapter {
     global_property_tracker: Pin<Box<AccessibilityPropertyTracker>>,
     pending_update: bool,
     initial_tree_sent: bool,
+    page: Rc<mercury_graft::PageShared>, // Mercury: a11y-1
 }
 
 impl AccessKitAdapter {
@@ -57,7 +62,9 @@ impl AccessKitAdapter {
         active_event_loop: &ActiveEventLoop,
         winit_window: &winit::window::Window,
         proxy: EventLoopProxy<SlintEvent>,
+        page: Rc<mercury_graft::PageShared>, // Mercury: a11y-1
     ) -> Self {
+        page.adapter_created(window_adapter_weak.clone()); // Mercury: a11y-1
         Self {
             inner: accesskit_winit::Adapter::with_event_loop_proxy(
                 active_event_loop,
@@ -77,6 +84,7 @@ impl AccessKitAdapter {
                         window_adapter_weak: window_adapter_weak.clone(),
                     },
                 )),
+                page: page.clone(), // Mercury: a11y-1
             },
             global_property_tracker: Box::pin(PropertyTracker::new_with_dirty_handler(
                 AccessibilityPropertyDirtyHandler {
@@ -85,6 +93,7 @@ impl AccessKitAdapter {
             )),
             pending_update: false,
             initial_tree_sent: false,
+            page, // Mercury: a11y-1
         }
     }
 
@@ -94,6 +103,12 @@ impl AccessKitAdapter {
         event: &winit::event::WindowEvent,
     ) {
         if matches!(event, winit::event::WindowEvent::Focused(_)) {
+            // Mercury: a11y-1: the consumer cannot take a host focus change while the focus is in a page.
+            mercury_graft::before_host_focus_change(
+                &mut self.inner,
+                &self.page,
+                self.nodes.root_node_id,
+            );
             self.global_property_tracker.set_dirty();
             self.invoke_later(|self_cell, _| self_cell.borrow_mut().rebuild_tree_of_dirty_nodes());
         }
@@ -106,19 +121,20 @@ impl AccessKitAdapter {
     ) -> Option<DeferredAccessKitAction> {
         match window_event {
             accesskit_winit::WindowEvent::InitialTreeRequested => {
-                self.inner.update_if_active(|| {
+                let activation = mercury_graft::attached(&self.page); // Mercury: a11y-1
+                mercury_graft::update_if_active(&mut self.inner, &self.page, || {
                     self.nodes.build_new_tree(
                         &self.window_adapter_weak,
                         self.global_property_tracker.as_ref(),
                     )
                 });
                 self.initial_tree_sent = true;
-                None
+                activation // Mercury: a11y-1: was `None`; tells the embedder that assistive technology attached
             }
             accesskit_winit::WindowEvent::ActionRequested(r) => self.handle_request(r),
             accesskit_winit::WindowEvent::AccessibilityDeactivated => {
                 self.initial_tree_sent = false;
-                None
+                mercury_graft::detached(&self.page) // Mercury: a11y-1: was `None`
             }
         }
     }
@@ -134,7 +150,7 @@ impl AccessKitAdapter {
         if self.pending_update {
             return;
         }
-        self.inner.update_if_active(|| TreeUpdate {
+        mercury_graft::update_if_active(&mut self.inner, &self.page, || TreeUpdate {
             nodes: Vec::new(),
             tree: None,
             tree_id: TreeId::ROOT,
@@ -143,6 +159,10 @@ impl AccessKitAdapter {
     }
 
     fn handle_request(&self, request: ActionRequest) -> Option<DeferredAccessKitAction> {
+        // Mercury: a11y-1: a request for a node of the page's trees goes to the embedder.
+        if request.target_tree != TreeId::ROOT {
+            return mercury_graft::foreign_action(&self.nodes, request);
+        }
         let a = match request.action {
             Action::Click => AccessibilityAction::Default,
             Action::Focus => {
@@ -184,7 +204,7 @@ impl AccessKitAdapter {
             let mut self_ = self_cell.borrow_mut();
             let self_ = &mut *self_;
             self_.pending_update = false;
-            self_.inner.update_if_active(|| {
+            mercury_graft::update_if_active(&mut self_.inner, &self_.page, || {
                 self_.nodes.build_new_tree(&win, self_.global_property_tracker.as_ref())
             })
         });
@@ -220,7 +240,7 @@ impl AccessKitAdapter {
         let Some(window_adapter) = self.window_adapter_weak.upgrade() else { return };
         let window = window_adapter.window();
 
-        self.inner.update_if_active(|| {
+        mercury_graft::update_if_active(&mut self.inner, &self.page, || {
             self.global_property_tracker.as_ref().evaluate_as_dependency_root(|| {
                 let nodes = self.nodes.all_nodes.iter().filter_map(|cached_node| {
                     cached_node.tracker.as_ref().evaluate_if_dirty(|| {
@@ -233,6 +253,7 @@ impl AccessKitAdapter {
                             Default::default(),
                         );
 
+                        self.nodes.page.mark_page_node(cached_node.id, &mut node); // Mercury: a11y-1
                         node.set_children(cached_node.children.clone());
 
                         Some((cached_node.id, node))
@@ -287,6 +308,7 @@ struct NodeCollection {
     all_nodes: Vec<CachedNode>,
     root_node_id: NodeId,
     focused_node_tracker: Pin<Box<PropertyTracker<false, DelegateFocusPropertyTracker>>>,
+    page: Rc<mercury_graft::PageShared>, // Mercury: a11y-1
 }
 
 impl NodeCollection {
@@ -377,6 +399,14 @@ impl NodeCollection {
 
         let id = self.encode_item_node_id(&item);
 
+        // Mercury: a11y-1: the page node has no children of its own; the page's tree is grafted
+        // there (a graft node's only child comes from its subtree).
+        if self.page.mark_page_node(id, &mut node) {
+            self.all_nodes.push(CachedNode { id, children: Vec::new(), tracker });
+            nodes.push((id, node));
+            return id;
+        }
+
         let popup_children = popups
             .iter()
             .filter_map(|popup| {
@@ -463,6 +493,7 @@ impl NodeCollection {
             .collect::<Vec<_>>();
 
         self.all_nodes.clear();
+        self.page.begin_build(); // Mercury: a11y-1: the page node is found again
         let mut nodes = Vec::new();
 
         let root_id = property_tracker.evaluate_as_dependency_root(|| {
@@ -800,11 +831,13 @@ impl From<accesskit_winit::Event> for SlintEvent {
 pub enum DeferredAccessKitAction {
     SetFocus(ItemRc),
     InvokeAccessibleAction(ItemRc, AccessibilityAction),
+    Mercury(mercury_graft::Deferred), // Mercury: a11y-1: work for the embedder, done after the adapter is released
 }
 
 impl DeferredAccessKitAction {
     pub fn invoke(&self, window: &Window) {
         match self {
+            DeferredAccessKitAction::Mercury(deferred) => deferred.invoke(window), // Mercury: a11y-1
             DeferredAccessKitAction::SetFocus(item) => {
                 // pretend this event was caused by a mouse for compatibility purposes
                 WindowInner::from_pub(window).set_focus_item(item, true, FocusReason::PointerClick);

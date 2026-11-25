@@ -173,8 +173,12 @@ pub struct PrivacySettings {
     pub https_only: bool,
     /// Block pop-up windows.
     pub block_popups: bool,
-    /// Send the Global Privacy Control signal.
+    /// Send the Global Privacy Control signal (read when the engine starts).
     pub global_privacy_control: bool,
+    /// Block the cookies of third-party requests: a site embedded in the page you are on neither
+    /// receives nor sets cookies. A file written before this setting existed has no value for it
+    /// and gets the default, on. A change reaches the engine at once.
+    pub block_third_party_cookies: bool,
     /// What is cleared when the browser quits.
     pub clear_on_exit: ClearOnExit,
 }
@@ -187,6 +191,7 @@ impl Default for PrivacySettings {
             https_only: false,
             block_popups: true,
             global_privacy_control: true,
+            block_third_party_cookies: true,
             clear_on_exit: ClearOnExit::default(),
         }
     }

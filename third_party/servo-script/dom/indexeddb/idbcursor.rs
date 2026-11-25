@@ -2,9 +2,15 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: `execute_iteration` is hand-ported onto Servo 0.8 from LunarWerxs/servo, branch
+// pr/indexeddb, commit 4b07849e2 (author L0garithmic, MPL-2.0; the branch is AI-written): an index
+// cursor keeps asking through its index on every step. Mercury's other changes to this file are
+// marked `Mercury:` where they are.
+
 #![cfg_attr(crown, allow(crown::jscontext_first_arg))]
 
 use std::cell::Cell;
+use std::sync::Arc;
 
 use dom_struct::dom_struct;
 use js::context::JSContext;
@@ -28,13 +34,48 @@ use crate::dom::bindings::refcounted::Trusted;
 use crate::dom::bindings::root::{Dom, DomRoot, MutNullableDom};
 use crate::dom::bindings::structuredclone;
 use crate::dom::globalscope::GlobalScope;
-use crate::dom::indexeddb::idbindex::IDBIndex;
+use crate::dom::indexeddb::idbindex::{IDBIndex, IndexQueryKind, IndexQueryParam};
 use crate::dom::indexeddb::idbobjectstore::IDBObjectStore;
-use crate::dom::indexeddb::idbrequest::IDBRequest;
+use crate::dom::indexeddb::idbrequest::{IDBRequest, RequestSource};
 use crate::dom::indexeddb::idbtransaction::IDBTransaction;
 use crate::dom::indexeddb::key::{
     ExtractionResult, convert_value_to_key, extract_key, key_type_to_jsval,
 };
+
+// Mercury: the records of an index that a cursor derived from the object store, and the write generation of the
+// store at that time (net-1 review, finding 3).
+#[derive(Clone)]
+struct IndexSnapshot {
+    generation: u64,
+    records: Arc<Vec<IndexedDBRecord>>,
+}
+
+// Mercury: the kept records of one cursor. Only records made at the current write generation are handed out.
+#[derive(Default)]
+struct IndexSnapshotCache(Option<IndexSnapshot>);
+
+impl IndexSnapshotCache {
+    fn get(&self, generation: u64) -> Option<Arc<Vec<IndexedDBRecord>>> {
+        self.0
+            .as_ref()
+            .filter(|snapshot| snapshot.generation == generation)
+            .map(|snapshot| snapshot.records.clone())
+    }
+
+    fn keep(&mut self, generation: u64, records: Arc<Vec<IndexedDBRecord>>) {
+        self.0 = Some(IndexSnapshot {
+            generation,
+            records,
+        });
+    }
+}
+
+// Mercury: a key range that holds no key (both bounds the same key, both open): what a cursor step that has its
+// records asks the backend for.
+fn range_of_nothing() -> IndexedDBKeyRange {
+    let nothing = IndexedDBKeyType::Number(0.0);
+    IndexedDBKeyRange::new(Some(nothing.clone()), Some(nothing), true, true)
+}
 
 #[derive(JSTraceable, MallocSizeOf)]
 #[cfg_attr(crown, crown::unrooted_must_root_lint::must_root)]
@@ -79,6 +120,13 @@ pub(crate) struct IDBCursor {
 
     /// <https://w3c.github.io/IndexedDB/#cursor-request>
     request: MutNullableDom<IDBRequest>,
+
+    // Mercury: for a cursor over an index, the records of the index, derived once from the whole object store
+    // and kept until a write to the store makes them stale (net-1 review, finding 3). Before, every step asked
+    // the backend for the whole store and read every value again, so a full walk was quadratic.
+    #[no_trace]
+    #[ignore_malloc_size_of = "the records of the index"]
+    index_snapshot: DomRefCell<IndexSnapshotCache>,
 }
 
 impl IDBCursor {
@@ -106,6 +154,7 @@ impl IDBCursor {
             object_store_position: DomRefCell::new(None),
             key_only,
             request: Default::default(),
+            index_snapshot: DomRefCell::new(IndexSnapshotCache::default()),
         }
     }
 
@@ -162,6 +211,16 @@ impl IDBCursor {
         }
     }
 
+    // Mercury: the records of the index that this cursor derived, if they are still those of `generation`.
+    fn snapshot_at(&self, generation: u64) -> Option<Arc<Vec<IndexedDBRecord>>> {
+        self.index_snapshot.borrow().get(generation)
+    }
+
+    // Mercury: keeps the records that a step derived, for the steps after it.
+    pub(crate) fn keep_snapshot(&self, generation: u64, records: Arc<Vec<IndexedDBRecord>>) {
+        self.index_snapshot.borrow_mut().keep(generation, records);
+    }
+
     pub(crate) fn set_request(&self, request: &IDBRequest) {
         self.request.set(Some(request));
     }
@@ -209,6 +268,70 @@ impl IDBCursor {
                 "Transaction is a read-only transaction".to_owned(),
             )));
         }
+        Ok(())
+    }
+
+    /// Asynchronously executes the steps to iterate this cursor, for `request`, the request created
+    /// with the cursor (the common last step of `advance`, `continue` and `continuePrimaryKey`).
+    ///
+    /// NOTE: According to the spec, execute_async should take the cursor's source (which may be an
+    /// index). Using effective_object_store here is a temporary workaround until execute_async
+    /// supports ObjectStoreOrIndex as source.
+    ///
+    /// Mercury: LunarWerxs pr/indexeddb 4b07849e2, "an index cursor losing its position". The
+    /// backend has no records for an index (see `IDBIndex::records_for`), so a cursor over an index
+    /// asks for the whole object store on every step and the reply handler derives the index's
+    /// records again; the cursor's range then applies to the index's keys. Without this a step
+    /// of an index cursor walked the records of the object store instead, or stopped after the
+    /// first one.
+    fn execute_iteration(
+        &self,
+        cx: &mut JSContext,
+        request: DomRoot<IDBRequest>,
+        iteration_param: IterationParam,
+    ) -> ErrorResult {
+        let (key_range, index_param) = match &self.source {
+            ObjectStoreOrIndex::Index(index) => {
+                // Mercury: with the records of the index at hand (and no write to the store since) the backend
+                // is asked for nothing, a range that holds no key: the request still goes through the
+                // transaction's queue, but the step reads the records the cursor kept.
+                let generation = self.effective_object_store().write_generation();
+                let snapshot = self.snapshot_at(generation);
+                let key_range = if snapshot.is_some() {
+                    range_of_nothing()
+                } else {
+                    IndexedDBKeyRange::default()
+                };
+                (
+                    key_range,
+                    Some(IndexQueryParam {
+                        index: Trusted::new(&**index),
+                        range: self.range.clone(),
+                        count: None,
+                        kind: IndexQueryKind::Cursor,
+                        needs_values: !self.key_only,
+                        generation,
+                        snapshot,
+                    }),
+                )
+            },
+            ObjectStoreOrIndex::ObjectStore(_) => (self.range.clone(), None),
+        };
+
+        IDBRequest::execute_async_indexed(
+            cx,
+            &self.effective_object_store(),
+            |callback| {
+                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
+                    callback,
+                    key_range,
+                })
+            },
+            Some(request),
+            Some(iteration_param),
+            index_param,
+        )?;
+
         Ok(())
     }
 }
@@ -328,24 +451,8 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             count: Some(count),
         };
 
-        let range = self.range.clone();
-        // NOTE: According to the spec, execute_async should take the cursor's source
-        // (which may be an index). Using effective_object_store here is a temporary
-        // workaround until execute_async supports ObjectStoreOrIndex as source.
-        IDBRequest::execute_async(
-            cx,
-            &self.effective_object_store(),
-            |callback| {
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
-                    callback,
-                    key_range: range,
-                })
-            },
-            Some(request),
-            Some(iteration_param),
-        )?;
-
-        Ok(())
+        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
+        self.execute_iteration(cx, request, iteration_param)
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-continue>
@@ -422,24 +529,8 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             count: None,
         };
 
-        let range = self.range.clone();
-        // NOTE: According to the spec, execute_async should take the cursor's source
-        // (which may be an index). Using effective_object_store here is a temporary
-        // workaround until execute_async supports ObjectStoreOrIndex as source.
-        IDBRequest::execute_async(
-            cx,
-            &self.effective_object_store(),
-            |callback| {
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
-                    callback,
-                    key_range: range,
-                })
-            },
-            Some(request),
-            Some(iteration_param),
-        )?;
-
-        Ok(())
+        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
+        self.execute_iteration(cx, request, iteration_param)
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-continueprimarykey>
@@ -568,24 +659,8 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             count: None,
         };
 
-        let range = self.range.clone();
-        // NOTE: According to the spec, execute_async should take the cursor's source
-        // (which may be an index). Using effective_object_store here is a temporary
-        // workaround until execute_async supports ObjectStoreOrIndex as source.
-        IDBRequest::execute_async(
-            cx,
-            &self.effective_object_store(),
-            |callback| {
-                AsyncOperation::ReadOnly(AsyncReadOnlyOperation::Iterate {
-                    callback,
-                    key_range: range,
-                })
-            },
-            Some(request),
-            Some(iteration_param),
-        )?;
-
-        Ok(())
+        // Mercury: see `execute_iteration`, which keeps an index cursor asking through its index.
+        self.execute_iteration(cx, request, iteration_param)
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-update>
@@ -666,6 +741,10 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             )));
         };
 
+        // Mercury: the keys of the new value in each unique index of the store.
+        let unique_index_keys =
+            effective_object_store.unique_index_keys_of(cx, cloned_js_value.handle());
+
         // Step 10. Let operation be an algorithm to run store a record into an object store with
         // this's effective object store, clone, this's effective key, and false.
         // Step 11. Return the result (an IDBRequest) of running asynchronously execute a request
@@ -680,11 +759,16 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
                     value: serialized_value,
                     should_overwrite: true,
                     key_generator_current_number: None,
+                    unique_index_keys,
                 })
             },
             None,
             None,
         )
+        .inspect(|request| {
+            // Mercury: the source of the request is this cursor.
+            request.set_source(Some(RequestSource::Cursor(Dom::from_ref(self))));
+        })
     }
 
     /// <https://www.w3.org/TR/IndexedDB-3/#dom-idbcursor-delete>
@@ -738,6 +822,10 @@ impl IDBCursorMethods<crate::DomTypeHolder> for IDBCursor {
             None,
             None,
         )
+        .inspect(|request| {
+            // Mercury: the source of the request is this cursor.
+            request.set_source(Some(RequestSource::Cursor(Dom::from_ref(self))));
+        })
     }
 }
 
@@ -762,7 +850,7 @@ pub(crate) fn iterate_cursor(
     global: &GlobalScope,
     cx: &mut JSContext,
     param: &IterationParam,
-    records: Vec<IndexedDBRecord>,
+    records: &[IndexedDBRecord],
 ) -> Result<Option<DomRoot<IDBCursor>>, Error> {
     // Unpack IterationParam
     let cursor = param.cursor.root();
@@ -1044,4 +1132,59 @@ pub(crate) fn iterate_cursor(
 
     // Step 15. Return cursor.
     Ok(Some(cursor))
+}
+
+#[cfg(test)]
+mod tests {
+    use storage_traits::indexeddb::{IndexedDBKeyType, IndexedDBRecord};
+
+    use super::*;
+
+    fn records(count: u32) -> Arc<Vec<IndexedDBRecord>> {
+        Arc::new(
+            (0..count)
+                .map(|n| IndexedDBRecord {
+                    key: IndexedDBKeyType::Number(f64::from(n)),
+                    primary_key: IndexedDBKeyType::Number(f64::from(n)),
+                    value: vec![],
+                })
+                .collect(),
+        )
+    }
+
+    #[test]
+    fn a_cursor_keeps_the_records_it_derived_until_the_store_is_written_to() {
+        let mut cache = IndexSnapshotCache::default();
+        assert!(cache.get(0).is_none(), "nothing derived yet");
+
+        let derived = records(3);
+        cache.keep(0, derived.clone());
+        // The same records, not a copy of them: a step reads what the first step derived.
+        let kept = cache.get(0).expect("kept at generation 0");
+        assert!(Arc::ptr_eq(&kept, &derived));
+
+        // A write moved the store to generation 1: the records are stale and are not handed out.
+        assert!(cache.get(1).is_none());
+
+        // The next step derives them again and keeps the new ones, for the generation it saw.
+        let again = records(4);
+        cache.keep(1, again.clone());
+        assert!(Arc::ptr_eq(&cache.get(1).unwrap(), &again));
+        assert!(cache.get(0).is_none(), "the old generation is gone");
+    }
+
+    #[test]
+    fn the_range_of_nothing_holds_no_key_and_is_not_a_singleton() {
+        let range = range_of_nothing();
+        assert!(!range.is_singleton());
+        for key in [
+            IndexedDBKeyType::Number(0.0),
+            IndexedDBKeyType::Number(-1.0),
+            IndexedDBKeyType::Number(1.0),
+            IndexedDBKeyType::String(String::new()),
+            IndexedDBKeyType::String("a".to_owned()),
+        ] {
+            assert!(!range.contains(&key), "{key:?}");
+        }
+    }
 }

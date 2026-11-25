@@ -18,6 +18,7 @@ use talaria_core::{BrowserEvent, LoadState, PageIcon, PointerCursor, TabEvent, T
 use talaria_core::{PageRequest, PageRequestKind};
 use url::Url;
 
+use crate::accessibility::AccessibilitySink; // a11y-1
 use crate::adblocker::ContentBlocker;
 use crate::clipboard::{ClipboardRead, TabClipboard, UserActivationCheck};
 use crate::document_starts::DocumentStarts;
@@ -41,18 +42,22 @@ use crate::page_tabs::{
     AdoptedWebView, DocumentRequestListener, DocumentStartedListener, NewTabAllocator, PageTabs,
     SharedDocumentRequestListener,
 };
-use crate::proxy::SystemProxySettings;
 use crate::screen::ScreenMetrics;
 use crate::session_data::{
     AfterEngineCleanup, HandleThenCleanup, clean_up_before_engine_start, end_session_cookies,
 };
 use crate::web_view::TabParts;
 use crate::{ServoWebView, ServoWebViewError};
+use mercury_proxy::{ProxyPreferences, SystemProxySettings};
 // site security
 use crate::certificate_exceptions::{AcceptedHosts, mercury_protocols};
 use crate::site_information::{self, SiteDataSummary};
 use crate::site_security::{TabHttpsUpgrades, probe_error_page};
 use talaria_core::HttpsPolicy;
+// sh-pages: view source and images per site
+use crate::site_images::SiteImagesHandle;
+use crate::view_source::ViewSourceConfig;
+use mercury_view_source::ProxyConfig;
 
 type WakeCallback = dyn Fn() + Send + Sync + 'static;
 
@@ -119,6 +124,15 @@ pub struct RuntimeOptions {
     pub http_disk_cache_dir: Option<PathBuf>,
     /// Whether pages get `navigator.geolocation`, and where positions come from.
     pub geolocation: GeolocationSetup,
+    // sh-pages
+    /// Run pages in the browser's own process instead of content processes. For tests that start
+    /// the engine inside a test binary, which cannot be a content process (the engine tests of
+    /// `tests/view_source_engine.rs`); the application never sets it.
+    pub single_process: bool,
+    // net: third-party cookies and Global Privacy Control (`net_policy.rs`).
+    /// The network policy at start: Global Privacy Control is read now (a change applies at the next
+    /// start), third-party cookie blocking also live through `ServoRuntime::switches`.
+    pub net_policy: crate::net_policy::NetPolicySetup,
 }
 
 impl Default for RuntimeOptions {
@@ -132,6 +146,9 @@ impl Default for RuntimeOptions {
             system_proxy: None,
             http_disk_cache_dir: None,
             geolocation: GeolocationSetup::Off,
+            single_process: false, // sh-pages
+            // net: the owner's defaults, third-party cookies blocked and GPC on.
+            net_policy: crate::net_policy::NetPolicySetup::default(),
         }
     }
 }
@@ -157,6 +174,11 @@ pub struct ServoRuntime {
     // site security
     /// Hosts whose invalid certificate the user accepted, until the browser takes them.
     accepted_certificates: AcceptedHosts,
+    // sh-pages
+    /// The sites whose images are refused, shared with every tab's delegate.
+    site_images: SiteImagesHandle,
+    /// HTTPS-only mode as the `view-source:` fetch reads it (a copy of the tabs' policy).
+    view_source_https: crate::view_source::SharedHttpsPolicy,
 }
 
 impl ServoRuntime {
@@ -183,18 +205,35 @@ impl ServoRuntime {
             .http_disk_cache_dir
             .as_deref()
             .map(repair_http_disk_cache);
-        let options = mercury_options(runtime_options.config_dir.clone());
+        let mut options = mercury_options(runtime_options.config_dir.clone());
+        options.multiprocess &= !runtime_options.single_process; // sh-pages
         let multiprocess_enabled = options.multiprocess;
         let sandbox_enabled = options.sandbox;
-        let preferences = mercury_preferences(&runtime_options);
+        let mut preferences = mercury_preferences(&runtime_options);
+        // net: the process's network policy and `privacy_gpc_enabled`, from the one setting (net_policy.rs).
+        crate::net_policy::install(&runtime_options.net_policy, &mut preferences);
         let user_agent = preferences.user_agent.clone(); // downloads
         // site security: certificate exceptions from Mercury's certificate page
         let accepted_certificates = AcceptedHosts::default();
+        // sh-pages: `view-source:`; its fetch goes through the proxy the engine uses
+        let view_source_https = crate::view_source::SharedHttpsPolicy::default();
+        let mut registry = mercury_protocols(&accepted_certificates);
+        crate::view_source::register(
+            &mut registry,
+            ViewSourceConfig {
+                proxy: ProxyConfig {
+                    http: preferences.network_http_proxy_uri.clone(),
+                    https: preferences.network_https_proxy_uri.clone(),
+                    no_proxy: preferences.network_http_no_proxy.clone(),
+                },
+                https_policy: Arc::clone(&view_source_https),
+            },
+        );
         let inner = ServoBuilder::default()
             .opts(options)
             .preferences(preferences)
             .event_loop_waker(Box::new(event_loop_waker))
-            .protocol_registry(mercury_protocols(&accepted_certificates))
+            .protocol_registry(registry)
             .build();
         inner.setup_logging();
         log_proxy_settings(runtime_options.system_proxy.as_ref());
@@ -256,6 +295,8 @@ impl ServoRuntime {
             after_engine_cleanup,
             switches,
             accepted_certificates,
+            site_images: SiteImagesHandle::default(), // sh-pages
+            view_source_https,                        // sh-pages
         }
     }
 
@@ -267,6 +308,11 @@ impl ServoRuntime {
         if *self.page_tabs.https_policy.borrow() != *policy {
             self.page_tabs.https_policy.replace(policy.clone());
         }
+        // sh-pages: the `view-source:` fetch applies the same mode to the addresses it requests.
+        *self
+            .view_source_https
+            .write()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = policy.clone();
     }
 
     /// The hosts whose invalid certificate the user accepted since the last call (ASCII).
@@ -292,6 +338,25 @@ impl ServoRuntime {
         self.switches.clone()
     }
 
+    // sh-pages
+    /// The sites whose images are refused; the handle shares its state with every tab's
+    /// delegate, so keep the clone and replace the set through it.
+    pub fn site_images(&self) -> SiteImagesHandle {
+        self.site_images.clone()
+    }
+
+    // net
+    /// The network policy as the browser controls it: the state the network thread reads.
+    pub fn net_policy_control(&self) -> crate::net_policy::NetPolicyControl {
+        crate::net_policy::NetPolicyControl::process()
+    }
+
+    /// How many requests of the page `tab` shows were blocked as mixed content; 0 after the tab's
+    /// next main-frame load starts (EC17). No interface shows it yet.
+    pub fn mixed_content_blocked(&self, tab: TabId) -> u32 {
+        crate::net_messages::mixed_content_blocked(tab)
+    }
+
     // blocklists
     /// Where compiled filter-list engines are handed to the content blocker.
     pub fn filter_engine_slot(&self) -> crate::FilterEngineSlot {
@@ -312,7 +377,12 @@ impl ServoRuntime {
         browser_event_sender: Sender<TabEvent>,
     ) -> Result<ServoWebView, ServoWebViewError> {
         let initial_url = Url::parse(initial_url)?;
-        let (delegate, parts) = new_tab_delegate(&self.page_tabs, tab_id, &browser_event_sender);
+        let (delegate, parts) = new_tab_delegate(
+            &self.page_tabs,
+            tab_id,
+            &browser_event_sender,
+            &self.site_images, // sh-pages
+        );
 
         let inner = WebViewBuilder::new(&self.inner, rendering_context)
             .url(initial_url)
@@ -358,6 +428,23 @@ impl ServoRuntime {
         self.page_tabs
             .document_started_listener
             .replace(Some(listener));
+    }
+
+    // a11y-1
+    /// Where every tab's accessibility tree updates go: called synchronously, inside
+    /// `spin_event_loop`, in the order the engine sent them, with the tab and the update (which
+    /// is the page's text: never print it). A tab sends none until it is told to build its tree
+    /// (`ServoWebView::set_page_accessible`).
+    pub fn set_accessibility_sink(&self, sink: AccessibilitySink) {
+        crate::accessibility::set_sink(sink);
+    }
+
+    // a11y-1
+    /// Sends an action request of assistive technology to the page it names (`target_tree` is
+    /// the tree id the engine gave: the web view's, the document's or an iframe's). A request
+    /// for a tree that is gone is ignored by the engine.
+    pub fn forward_accessibility_action(&self, request: servo::accesskit::ActionRequest) {
+        self.inner.forward_accessibility_action(request);
     }
 
     // media session
@@ -444,6 +531,10 @@ struct BrowserServoDelegate {
 
 impl servo::ServoDelegate for BrowserServoDelegate {
     fn load_web_resource(&self, load: servo::WebResourceLoad) {
+        // sh-pages: a load without a web view never loads a `view-source:` address.
+        let Some(load) = crate::view_source::refuse_view_source_without_web_view(load) else {
+            return;
+        };
         // openurl: a load without a web view (a worker's, say) never reads local files either.
         let Some(load) = crate::openurl::refuse_local_file_load(None, None, load) else {
             return;
@@ -521,18 +612,16 @@ fn mercury_preferences(runtime_options: &RuntimeOptions) -> Preferences {
 
 /// Servo's `Preferences::default` has already read the `http_proxy`, `https_proxy` and
 /// `no_proxy` environment variables (and their upper-case forms); if any was set, those win
-/// and the system settings are not used, as in command-line tools.
+/// and the system settings are not used, as in command-line tools. The choice is
+/// `mercury_proxy::choose`, the same one the desktop app records with `mercury_proxy::install`
+/// for the clients that are not Servo (downloads, the PDF viewer's fetch).
 fn apply_system_proxy(preferences: &mut Preferences, system: Option<&SystemProxySettings>) {
-    let from_environment = !preferences.network_http_proxy_uri.is_empty()
-        || !preferences.network_https_proxy_uri.is_empty()
-        || !preferences.network_http_no_proxy.is_empty();
-    let Some(system) = system else {
-        return;
+    let environment = ProxyPreferences {
+        http_uri: std::mem::take(&mut preferences.network_http_proxy_uri),
+        https_uri: std::mem::take(&mut preferences.network_https_proxy_uri),
+        no_proxy: std::mem::take(&mut preferences.network_http_no_proxy),
     };
-    if from_environment {
-        return;
-    }
-    let proxy = system.preferences();
+    let proxy = mercury_proxy::choose(environment, system);
     preferences.network_http_proxy_uri = proxy.http_uri;
     preferences.network_https_proxy_uri = proxy.https_uri;
     preferences.network_http_no_proxy = proxy.no_proxy;
@@ -654,6 +743,10 @@ struct BrowserDelegate {
     document_request_listener: SharedDocumentRequestListener,
     // site security
     https_upgrades: TabHttpsUpgrades,
+    // sh-pages: shared by every tab's delegate
+    site_images: SiteImagesHandle,
+    // sh-pages: the page this tab's image loads belong to while it navigates
+    navigating_page: crate::site_images::NavigatingPage,
 }
 
 /// A fresh delegate for a tab, used for web views the browser creates and for those pages open.
@@ -661,6 +754,7 @@ fn new_tab_delegate(
     shared: &Rc<PageTabs>,
     tab_id: TabId,
     browser_event_sender: &Sender<TabEvent>,
+    site_images: &SiteImagesHandle, // sh-pages
 ) -> (Rc<BrowserDelegate>, TabParts) {
     let page_feedback = PageFeedback::new(tab_id, browser_event_sender.clone());
     // geolocation: one per tab, shared by Servo, the delegate, `DocumentStarts` and the web view
@@ -708,6 +802,8 @@ fn new_tab_delegate(
         last_document_request: RefCell::new(None), // downloads
         document_request_listener: Rc::clone(&shared.document_request_listener), // downloads
         https_upgrades: TabHttpsUpgrades::new(Rc::clone(&shared.https_policy)),
+        site_images: site_images.clone(), // sh-pages
+        navigating_page: crate::site_images::NavigatingPage::default(), // sh-pages
     });
     (delegate, parts)
 }
@@ -827,6 +923,11 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn load_web_resource(&self, web_view: servo::WebView, load: servo::WebResourceLoad) {
+        // sh-pages: a `view-source:` address loads only as the tab's own page, never as a frame
+        // or a resource.
+        let Some(load) = crate::view_source::refuse_embedded_view_source(load) else {
+            return;
+        };
         // openurl: a web page's frames and resources never come from local files.
         let Some(load) =
             crate::openurl::refuse_local_file_load(Some(self.tab_id), web_view.url(), load)
@@ -839,12 +940,26 @@ impl servo::WebViewDelegate for BrowserDelegate {
         }) else {
             return;
         };
+        // sh-pages: images per site, after the HTTPS-only step and before content blocking. The
+        // page is the main-frame document this tab loads last (`web_view.url()` lags behind a
+        // cross-site navigation until the new document is active).
+        self.navigating_page.note_load(
+            load.request().is_for_main_frame,
+            load.request().url.as_url(),
+        );
+        let page = self.navigating_page.page(web_view.url());
+        let Some(load) = crate::site_images::refuse_blocked_image(&self.site_images, page, load)
+        else {
+            return;
+        };
         self.note_document_request(&web_view, &load.request); // downloads
         self.content_blocker
             .handle_web_resource_load(Some(&web_view), load);
     }
 
     fn notify_url_changed(&self, web_view: servo::WebView, url: Url) {
+        // sh-pages: the new document is active; `web_view.url()` is the page again.
+        self.navigating_page.settle();
         // dialogs: user info is left out; after a sign-in it holds the password.
         log::debug!(
             "tab {}: address changed to {}",
@@ -863,6 +978,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
     }
 
     fn notify_page_title_changed(&self, web_view: servo::WebView, title: Option<String>) {
+        // A title read in flight is older than this notification.
+        self.page_feedback.title_notified();
         self.send_browser_event(BrowserEvent::PageTitleChanged {
             title: title.clone(),
         });
@@ -901,6 +1018,8 @@ impl servo::WebViewDelegate for BrowserDelegate {
         }
         match status {
             LoadStatus::Started => {
+                // net: the mixed content counted for the page being left ends with it.
+                crate::net_messages::main_frame_load_started(self.tab_id);
                 // controls: requests of the page being left are dropped.
                 self.drop_controls();
                 self.load_metrics.borrow_mut().start(Instant::now());
@@ -1009,7 +1128,12 @@ impl servo::WebViewDelegate for BrowserDelegate {
         };
 
         let (browser_event_sender, event_receiver) = mpsc::channel::<TabEvent>();
-        let (delegate, parts) = new_tab_delegate(&page_tabs, tab_id, &browser_event_sender);
+        let (delegate, parts) = new_tab_delegate(
+            &page_tabs,
+            tab_id,
+            &browser_event_sender,
+            &self.site_images, // sh-pages: the opener's handle is the runtime's
+        );
         let scale_factor = parent.hidpi_scale_factor();
         let inner = request
             .builder(parent.rendering_context())
@@ -1147,6 +1271,17 @@ impl servo::WebViewDelegate for BrowserDelegate {
         crate::mercury_messages::handle(Some(self.tab_id), message, &|event| {
             self.send_browser_event(event);
         });
+    }
+
+    // a11y-1: a tree update of this tab's page (the web view's tree, the document's or an iframe's).
+    // It carries the page's text: handed on as it is, to the sink the window installed, and never
+    // printed.
+    fn notify_accessibility_tree_update(
+        &self,
+        _web_view: servo::WebView,
+        tree_update: servo::accesskit::TreeUpdate,
+    ) {
+        crate::accessibility::deliver(self.tab_id, tree_update);
     }
 
     // notifications: the notification UI is a later lane's; until then the title is logged, at
@@ -1607,7 +1742,7 @@ mod tests {
                 "dom_serviceworker_enabled",
                 "dom_webgpu_enabled",
                 "layout_css_container_queries_enabled",
-                "accessibility_enabled",
+                // a11y-1: `accessibility_enabled` is on now (`engine_prefs.rs`); its checks stay off.
                 "expensive_accessibility_test_assertions_enabled",
                 // The media-capture pin stays: the new switch above replaces it later.
                 "dom_webrtc_transceiver_enabled",
@@ -1622,6 +1757,19 @@ mod tests {
                     "{name} (experimental features: {enabled})"
                 );
             }
+        }
+    }
+
+    // a11y-1
+    #[test]
+    fn page_accessibility_is_on_whatever_the_experimental_switch_says() {
+        for enabled in [true, false] {
+            let preferences = preferences_with_experimental_web_features(enabled);
+            assert!(preferences.accessibility_enabled, "{enabled}");
+            assert!(
+                !preferences.expensive_accessibility_test_assertions_enabled,
+                "{enabled}"
+            );
         }
     }
 
@@ -1666,7 +1814,7 @@ mod tests {
         }
     }
 
-    use crate::proxy::ProxyServer;
+    use mercury_proxy::ProxyServer;
 
     fn proxy_preferences(preferences: &Preferences) -> [&str; 3] {
         [

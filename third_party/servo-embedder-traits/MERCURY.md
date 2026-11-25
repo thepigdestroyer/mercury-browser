@@ -31,6 +31,14 @@ scaffold is in `servo-constellation-traits`, `servo-constellation` and `servo`.
   only itself, size) and `talaria-servo` `mercury_messages::tests` (serde round trip, wire format, size of `EmbedderMsg`).
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
+Changes made by lane a11y-1 (21 Nov 2026).
+
+### The epoch of a child document's accessibility tree — `mercury/a11y.rs`
+
+- **What:** `epoch_for_child_document` and `top_level_epoch_of_child_document`: a child (iframe) document's updates carry
+  its top-level document's epoch with the top bit set, so `WebView` can tell them from a new top-level document without a
+  new message.
+- **Drop when:** the constellation change in `servo-constellation` is dropped.
 Changes made by lane txt-1 (text, 21 Nov 2026): input methods (EB11).
 
 ### IME events: commit, marked text, insert text — `input_events.rs`
@@ -64,6 +72,31 @@ Changes made by lane txt-1 (text, 21 Nov 2026): input methods (EB11).
   candidate window needs the caret rectangle; the browser process has neither without this message.
 - **Tested by:** 14 unit tests in `mercury/text.rs` (windowing, surrogate pairs, password, `Debug`, `same_content_as`).
 - **Drop when:** never needed upstream.
+
+Changes made by lane net-1 (frame identity, the rewrite hook and the mixed-content report).
+
+### Frame identity and a rewrite message on `WebResourceRequest` (EC38, EC37) — `lib.rs`
+
+- **What:** `WebResourceRequest` (0.8.0 line about 693) gains `top_level_site: Option<String>`, `initiator_origin:
+  Option<String>` and `is_third_party: Option<bool>`; `WebResourceResponseMsg` gains the terminal variant
+  `Rewrite(WebResourceRewrite)` (after `DoNotIntercept`, line about 733). `WebResourceRewrite { url, set_headers,
+  remove_headers }` is defined in `mercury/net.rs` (Mercury's file; its `Debug` prints no URL and no header value). Two
+  existing fields change meaning, with a comment each: `url` is the URL of the **current hop** (0.8.0 reported the first URL
+  of the redirect chain, so a rewrite of a redirect hop was meaningless), and `is_for_main_frame` is true only for a
+  navigation of the top-level frame (a frame navigated by a script or a link is also fetched with destination `Document`).
+- **Why:** the content blocker needs to know whether a request is third party and which frame it belongs to without
+  guessing from the web view's URL, and EC37 needs a point where a URL can be rewritten (`$removeparam`).
+- **Tested by:** `servo-net/tests/mercury_request_path.rs` (the fields for first-party, third-party, main-frame, nested and
+  worker requests; the rewrite round trip), `cargo test -p servo webview_delegate`, and `talaria-servo`'s `adblocker` tests.
+- **Drop when:** Servo has frame identity and a rewrite point in `WebResourceRequest`.
+
+### `NetMsg::MixedContentBlocked` — `mercury/net.rs`
+
+- **What:** the net lane's file of the K0 scaffold now has `NetMsg::MixedContentBlocked { url, destination }` (its `Debug`
+  prints the variant path only) and `WebResourceRewrite`.
+- **Why:** EC17 reports a blocked mixed-content request to Mercury, which counts them per tab.
+- **Tested by:** the unit tests in `mercury/net.rs`, `servo-net/tests/mercury_request_path.rs` and `talaria-servo`'s `net_messages`.
+- **Drop when:** never needed upstream; keep with the scaffold.
 
 ## Removing this directory
 

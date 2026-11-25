@@ -127,6 +127,10 @@ pub(crate) fn sync(controller: &BrowserController) {
         // session
         can_reopen_closed_tab: crate::session::can_reopen_closed_tab(),
         can_restore_previous_session: crate::session::can_restore_previous_session(),
+        // sh-pages: View Source, and images on or off for the page's site
+        can_view_source: crate::view_source::can_view_source(controller),
+        can_set_site_images: crate::site_images::can_set_site_images(controller),
+        active_site_blocks_images: crate::site_images::active_site_blocks_images(controller),
     };
     STATE.with(|menu_state| {
         if *menu_state.snapshot.borrow() != snapshot {
@@ -215,6 +219,16 @@ fn run_command(
         // tabs-plus
         MenuCommand::TabStrip(command) => {
             crate::tab_strip::run_strip_command(window, controller, command);
+        }
+        // sh-pages: images on or off for the active tab's site, and a reload
+        MenuCommand::SiteImages { block } => {
+            // The page may have changed since the menu was last filled in.
+            if crate::site_images::can_set_site_images(&controller.borrow()) {
+                crate::site_images::set_active_site_images(window, controller, block);
+                // The two rows swap: "Block" gives way to "Show" and back.
+                sync_ui(window, &controller.borrow());
+                window.window().request_redraw();
+            }
         }
     }
 }
