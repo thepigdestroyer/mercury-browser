@@ -289,7 +289,7 @@ use servo::protocol_handler::{
     DoneChannel, FetchContext, HttpStatus, ProtocolHandler, ProtocolRegistry, Request,
     ResourceFetchTiming, Response, ResponseBody,
 };
-use servo::{CookieSource, ServoUrl, WebResourceLoad};
+use servo::{ServoUrl, WebResourceLoad};
 use talaria_core::{HttpsPolicy, MainFrameLoad, main_frame_load};
 
 /// HTTPS-only mode as the handler's thread can read it: the tabs hold the policy in an `Rc` on
@@ -482,6 +482,7 @@ mod tests {
     use std::task::{Context, Poll, Wake, Waker};
 
     use mercury_view_source::SourceKind;
+    use servo::CookieSource;
     use url::Url;
 
     use super::*;
@@ -685,7 +686,7 @@ mod tests {
         assert_eq!(options.total_timeout, Duration::from_secs(30));
         let lookup = options.cookies.expect("cookies are asked for");
         let hop = Url::parse("https://example.com/next").expect("a URL");
-        assert_eq!(lookup(&hop).as_deref(), Some("a=b"));
+        assert_eq!(lookup(&hop, &[]).as_deref(), Some("a=b"));
         assert_eq!(*asked.lock().expect("a lock"), ["https://example.com/next"]);
     }
 
