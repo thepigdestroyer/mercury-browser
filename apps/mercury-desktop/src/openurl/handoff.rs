@@ -31,6 +31,11 @@ pub(crate) const MAX_ADDRESS_BYTES: usize = 8 * 1024;
 const MAX_REPLY_BYTES: u64 = 1024;
 /// How long the running browser waits for a second launch's message.
 const IO_TIMEOUT: Duration = Duration::from_secs(3);
+/// After answering, the running browser reads and drops at most this much more from the sender,
+/// for at most `DRAIN_TIMEOUT`, so that closing the socket does not reset the connection under
+/// the reply.
+const MAX_DRAIN_BYTES: usize = 1024 * 1024;
+const DRAIN_TIMEOUT: Duration = Duration::from_secs(1);
 /// How long the second launch waits for the answer, which comes once the tabs are open: longer
 /// than the running browser ever waits for its window (`HAND_OVER_TIMEOUT` and
 /// `HAND_OVER_FINISH_TIMEOUT` in `openurl`, 10 s each), so it always hears the answer.
@@ -311,6 +316,34 @@ fn serve(mut stream: UnixStream, open: OpenAddresses) {
         log::warn!("openurl: a second launch's addresses were not opened: {error}");
     }
     let _ = stream.write_all(reply.as_bytes());
+    let _ = stream.shutdown(std::net::Shutdown::Write);
+    // A sender of someone else's is not waited for.
+    if !matches!(result, Err(HandoffError::UnsafeSocket(_))) {
+        drain(&mut stream, DRAIN_TIMEOUT, MAX_DRAIN_BYTES);
+    }
+}
+
+/// Reads and drops what the sender still has in flight, within bounds. On Linux, closing a
+/// socket with unread bytes resets the connection, and the sender then loses the reply that was
+/// already written (a message over the size limit stops being read at the limit). Each read waits
+/// only for the time that is left, so the whole drain ends within `timeout`.
+fn drain(stream: &mut UnixStream, timeout: Duration, max_bytes: usize) -> usize {
+    let deadline = std::time::Instant::now() + timeout;
+    let mut remaining = max_bytes;
+    let mut buffer = [0_u8; 8192];
+    while remaining > 0 {
+        let left = deadline.saturating_duration_since(std::time::Instant::now());
+        // A zero timeout is an error for the socket, and means the time is up.
+        if left.is_zero() || stream.set_read_timeout(Some(left)).is_err() {
+            break;
+        }
+        let wanted = buffer.len().min(remaining);
+        match stream.read(&mut buffer[..wanted]) {
+            Ok(0) | Err(_) => break,
+            Ok(read) => remaining -= read,
+        }
+    }
+    max_bytes - remaining
 }
 
 fn receive(stream: &mut UnixStream) -> Result<Vec<String>, HandoffError> {
@@ -360,13 +393,19 @@ fn send(path: &Path, message: &[u8]) -> Result<usize, HandoffError> {
         .set_read_timeout(Some(REPLY_TIMEOUT))
         .map_err(failed)?;
     stream.set_write_timeout(Some(IO_TIMEOUT)).map_err(failed)?;
-    stream.write_all(message).map_err(failed)?;
-    stream.shutdown(std::net::Shutdown::Write).map_err(failed)?;
-    let mut reply = String::new();
-    (&mut stream)
-        .take(MAX_REPLY_BYTES)
-        .read_to_string(&mut reply)
-        .map_err(failed)?;
+    // The browser may answer and close before the whole message is written (it refuses what it
+    // cannot accept without reading on), so a failed write or a reset is only held against it
+    // when no complete answer arrived.
+    let written = stream
+        .write_all(message)
+        .and_then(|()| stream.shutdown(std::net::Shutdown::Write));
+    let mut reply = Vec::new();
+    let read = (&mut stream).take(MAX_REPLY_BYTES).read_to_end(&mut reply);
+    if !reply.ends_with(b"\n") {
+        written.map_err(failed)?;
+        read.map_err(failed)?;
+    }
+    let reply = String::from_utf8_lossy(&reply);
     let reply = reply.trim_end();
     reply
         .strip_prefix("ok ")
@@ -567,6 +606,86 @@ mod tests {
         );
         assert!(received_with("bad").is_empty());
         let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn an_oversized_message_is_still_answered_every_time() {
+        let directory = scratch("big");
+        let _listener = listen(&directory, open_all).expect("the listener starts");
+        let mut oversized = b"mercury-open-addresses 1\n".to_vec();
+        oversized.extend(vec![b'a'; MAX_MESSAGE_BYTES * 3]);
+
+        for round in 0..20 {
+            let result = send(&socket_path(&directory), &oversized);
+            assert!(
+                matches!(&result, Err(HandoffError::Refused(reason)) if reason.contains("bytes")),
+                "round {round}: {result:?}"
+            );
+        }
+        assert!(received_with("aaaa").is_empty());
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn an_answer_that_was_sent_before_the_connection_was_reset_is_heard() {
+        let directory = scratch("reset");
+        let path = socket_path(&directory);
+        let server = UnixListener::bind(&path).expect("a socket is bound");
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))
+            .expect("the socket is made private");
+        // Answers after the first byte and closes with the rest of the message unread: on Linux
+        // that resets the connection.
+        let answering = std::thread::spawn(move || {
+            let (mut stream, _) = server.accept().expect("a sender connects");
+            let mut first = [0_u8; 1];
+            stream.read_exact(&mut first).expect("a byte arrives");
+            stream
+                .write_all(b"error too big\n")
+                .expect("the answer is written");
+        });
+        let mut message = b"mercury-open-addresses 1\n".to_vec();
+        message.extend(vec![b'a'; MAX_MESSAGE_BYTES * 3]);
+
+        let result = send(&path, &message);
+
+        answering.join().expect("the server thread ends");
+        assert_eq!(result, Err(HandoffError::Refused("too big".to_owned())));
+        let _ = std::fs::remove_dir_all(&directory);
+    }
+
+    #[test]
+    fn the_drain_ends_with_its_time_even_when_the_sender_says_nothing() {
+        let (_sender, mut receiver) = UnixStream::pair().expect("a socket pair");
+        // The read timeout of a served connection is longer than the drain's time.
+        receiver
+            .set_read_timeout(Some(IO_TIMEOUT))
+            .expect("a read timeout is set");
+        let started = std::time::Instant::now();
+
+        let read = drain(&mut receiver, Duration::from_millis(200), MAX_DRAIN_BYTES);
+
+        assert_eq!(read, 0);
+        assert!(
+            started.elapsed() < IO_TIMEOUT / 2,
+            "the drain took {:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn the_drain_stops_at_its_byte_limit() {
+        let (mut sender, mut receiver) = UnixStream::pair().expect("a socket pair");
+        let writing = std::thread::spawn(move || {
+            // More than the limit; the write fails when the receiver is dropped.
+            let _ = sender.write_all(&vec![b'a'; 512 * 1024]);
+        });
+        let limit = 100 * 1024;
+
+        let read = drain(&mut receiver, Duration::from_secs(10), limit);
+
+        assert_eq!(read, limit);
+        drop(receiver);
+        writing.join().expect("the sender thread ends");
     }
 
     #[test]

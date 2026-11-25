@@ -6,6 +6,7 @@ import { ChromePalette } from "theme/chrome-palette.slint";
 export { ChromeColors, ChromePalette, ChromeTheme } from "theme/chrome-palette.slint";
 // theme-plumbing: the chrome's sizes (Rust pushes them: src/theme)
 import { ChromeMetrics } from "theme/chrome-metrics.slint";
+import { MercuryMark } from "theme/mercury-mark.slint"; // themes
 export { ChromeMetrics } from "theme/chrome-metrics.slint";
 // ring-geometry: the tab-group rows and arc shapes (Rust fills them: src/ring_geometry)
 export { ArcGlyph, ArcSeg, GroupRow, TabRow } from "groups/models.slint";
@@ -13,10 +14,21 @@ export { ArcGlyph, ArcSeg, GroupRow, TabRow } from "groups/models.slint";
 export { RingBandsPreview, RingDropTarget, RingHit, RingHitKind } from "groups/ring-bands.slint";
 export { FlagKind, FlagPin } from "groups/flags.slint";
 export { RingTextMeasure } from "groups/ring-measure.slint";
+// corner-dial
+export { CornerDialPreview, DialCaption, DialCornerKind, DialPlacement } from "groups/corner-dial.slint";
+// group-dock
+export { DockChip, DockGeometry, DockHit, DockHitKind, DockPill, DockSliver, DockStateKind } from "groups/dock-models.slint";
+export { DockStateDotPreview, GroupDockPreview } from "groups/dock-preview.slint";
+export { KeyChip, KeyMetrics, KeyRingSeg, KeySwitcherPreview, KeyTile } from "groups/key-switcher.slint"; // key-switcher (the KeySwitcher component is imported where it is embedded: only Window components get generated code)
+// hub-ring
+export { BeadRow, CentreMode, DonutArc, HubRingBridge, SearchRow } from "groups/hub-ring-bridge.slint";
+export { RingPopoverPreview } from "groups/hub-ring.slint";
 export { OrbitCard, OrbitChip, OrbitDragView, OrbitLevel, OrbitNeighbour, OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreview, OrbitPreviewCard, OrbitSun } from "orbit/orbit.slint"; // orbit-view
 // settings-ui
 import { SettingsNotice } from "settings/settings-notice.slint";
 export { SearchEngineRow, SettingsWindow } from "settings/settings-window.slint";
+export { AppearanceUi } from "settings/appearance.slint"; // settings-ui: tab groups
+export { KeyRowUi, TabGroupsUi } from "settings/tab-groups.slint"; // settings-ui: tab groups
 // passwords-ui
 export { LoginListRow, PasswordManagerUi } from "passwords/passwords-section.slint";
 import { PasswordSaveNotice } from "passwords/password-save-notice.slint";
@@ -588,6 +600,14 @@ export component MainWindow inherits Window {
         site-info-popover.show();
     }
     // --- end site-security ---
+    // --- sh-pages ---
+    // Images per site, for the "Images" row of the site-information popover (the row exists only
+    // while the active tab shows a web page). Filled by `site_images::sync_popover`.
+    in property <bool> site-images-available: false;
+    in property <bool> site-images-blocked: false;
+    // The row's button: turn images off, or on again, for the active tab's site.
+    callback site-images-toggle();
+    // --- end sh-pages ---
 
     // --- tabs-plus ---
     // What the application last wrote into the address field (or the text the user accepted
@@ -778,6 +798,12 @@ export component MainWindow inherits Window {
                             }
                             remove-https-exception => {
                                 root.site-https-exception-remove();
+                            }
+                            // sh-pages: images per site
+                            images-available: root.site-images-available;
+                            images-blocked: root.site-images-blocked;
+                            toggle-images => {
+                                root.site-images-toggle();
                             }
                         }
                     }
@@ -1057,12 +1083,9 @@ export component MainWindow inherits Window {
                             alignment: center;
                             height: 84px;
 
-                            Image {
+                            MercuryMark { // themes
                                 width: 80px;
                                 height: 80px;
-                                source: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
-                                image-fit: contain;
-                                accessible-role: none; // a11y-base
                             }
                         }
 
@@ -1161,7 +1184,7 @@ export component MainWindow inherits Window {
                 }
             }
 
-            if !root.web-view-visible && !root.is-new-tab: VerticalLayout {
+            if !root.web-view-visible && !root.is-new-tab && !root.pdf-viewer-shown: VerticalLayout {
                 alignment: center;
                 spacing: 10px;
                 padding-left: 32px;
@@ -1181,8 +1204,10 @@ export component MainWindow inherits Window {
                 focus-on-click: false;
                 focus-on-tab-navigation: false;
                 accessible-role: main; // a11y-base
+                // a11y-1: the desktop app finds the page node by this exact role and label
+                // (`apps/mercury-desktop/src/accessibility.rs`, `PAGE_LABEL`). Rename or translate it
+                // there too, or the web page stops being read; `a11y_page_node.rs` pins both.
                 accessible-label: "Page content"; // a11y-base
-                accessible-description: "Mercury doesn't pass web page content to assistive technology yet."; // a11y-base: the page-accessibility lane deletes this line when it grafts the page's tree here
 
                 focus-gained => {
                     root.web-view-focus-changed(true);

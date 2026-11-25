@@ -539,6 +539,10 @@ pub struct Constellation<STF, SWF> {
 
     /// Whether Servo is online or not. This is controlled by the embedder.
     online: bool,
+
+    // Mercury: a11y-1 EE7 (iframes). The pipelines of child (iframe) documents that were sent
+    // `SetAccessibilityActive(true)`, with the epoch they were sent; see `mercury/a11y.rs`.
+    a11y_active_children: FxHashMap<PipelineId, servo_base::Epoch>,
 }
 
 /// State needed to construct a constellation.
@@ -770,6 +774,8 @@ where
                     user_contents_for_manager_id: Default::default(),
                     // Servo is online by default.
                     online: true,
+                    // Mercury: a11y-1 EE7 (iframes).
+                    a11y_active_children: Default::default(),
                 };
 
                 constellation.run();
@@ -3282,6 +3288,8 @@ where
             ScriptThreadMessage::SetAccessibilityActive(pipeline_id, active, epoch),
             "Set accessibility active after closure",
         );
+        // Mercury: a11y-1 EE7. The documents of its iframes follow the `WebView` (mercury/a11y.rs).
+        self.sync_accessibility_of_child_documents(webview_id);
     }
 
     fn forward_accessibility_action(&mut self, action_request: ActionRequest) {
@@ -3291,8 +3299,11 @@ where
             .copied()
             .find(|&pipeline_id| TreeId::from(pipeline_id) == action_request.target_tree)
         else {
+            // Mercury: a11y-1 D9: the request can carry what a person typed (`SetValue`), so only the
+            // action and the tree are logged.
             warn!(
-                "Could not complete accessibility action {action_request:?}: no matching pipeline."
+                "Could not complete accessibility action {:?} for tree {:?}: no matching pipeline.",
+                action_request.action, action_request.target_tree
             );
             return;
         };
@@ -6118,6 +6129,10 @@ where
             return warn!("Tried closing unknown pipeline: {pipeline_id:?}");
         };
 
+        // Mercury: a11y-1 EE7. A closed iframe document is no longer one that was activated
+        // (mercury/a11y.rs).
+        self.forget_accessibility_of_child_document(pipeline_id);
+
         if let Some(browsing_context) = self.browsing_contexts.get_mut(&browsing_context_id) {
             browsing_context.pipelines.remove(&pipeline_id);
         }
@@ -6261,6 +6276,9 @@ where
             return;
         };
         if webview.active_top_level_pipeline_id == Some(new_pipeline_id) {
+            // Mercury: a11y-1 EE7. The top-level document is the same, but an iframe's document
+            // may have entered or left the frame tree (mercury/a11y.rs).
+            self.sync_accessibility_of_child_documents(webview_id);
             return;
         }
 
@@ -6296,6 +6314,9 @@ where
             ),
             "Set accessibility active after closure",
         );
+        // Mercury: a11y-1 EE7. The iframes of the new top-level document, with its new epoch;
+        // the ones of the old document leave the tree (mercury/a11y.rs).
+        self.sync_accessibility_of_child_documents(webview_id);
     }
 
     #[servo_tracing::instrument(skip_all)]

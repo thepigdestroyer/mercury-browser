@@ -11,6 +11,8 @@ use layout_api::{
     GenericLayoutDataTrait, LayoutDataTrait, LayoutElement, LayoutElementType, LayoutNode,
     LayoutNodeType as ScriptLayoutNodeType, NodeRenderingType, SVGElementData,
 };
+// Mercury: lane txt-1 (EB7).
+use layout_api::TextHighlights;
 use malloc_size_of_derive::MallocSizeOf;
 use script::layout_dom::ServoLayoutNode;
 use servo_arc::Arc as ServoArc;
@@ -420,6 +422,27 @@ impl GenericLayoutDataTrait for DOMLayoutData {
                 .run_data
                 .paints_caret
                 .store(new_paints_caret, Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    // Mercury: lane txt-1 (EB7). Beside `set_text_run_selection`, which is unchanged.
+    fn set_text_run_highlights(&self, highlights: TextHighlights) -> bool {
+        let inner = self.0.borrow();
+        // As for the selection: when `::first-letter` is used, one DOM text node can generate
+        // multiple text runs so there isn’t a single place to set the highlights. Script then
+        // dirties the node and layout reads them again when it rebuilds its text runs.
+        if inner
+            .pseudo_boxes
+            .iter()
+            .any(|pseudo_box| matches!(pseudo_box.pseudo, PseudoElement::FirstLetter))
+        {
+            return false;
+        }
+        if let Some(LayoutBox::Text(text_run)) = &*inner.self_box.borrow() {
+            *text_run.borrow().run_data.highlights.borrow_mut() = highlights;
             true
         } else {
             false

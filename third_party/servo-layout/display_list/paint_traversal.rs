@@ -13,9 +13,10 @@ use crate::display_list::{
     ClipId, ContainerTimingRootChain, ContainerTimingRoots, FragmentTextDecoration,
     StackingContext, StackingContextFragments,
 };
+// Mercury: lane txt-1 (ED7). `ElidedTextFragment` is new here.
 use crate::fragment_tree::{
-    BoxFragment, BoxFragmentWithStyle, Fragment, FragmentFlags, IFrameFragment, ImageFragment,
-    PositioningFragment, Tag, TextFragment,
+    BoxFragment, BoxFragmentWithStyle, ElidedTextFragment, Fragment, FragmentFlags, IFrameFragment,
+    ImageFragment, PositioningFragment, Tag, TextFragment,
 };
 use crate::geom::{PhysicalPoint, PhysicalRect};
 use crate::style_ext::ComputedValuesExt;
@@ -298,6 +299,7 @@ impl<'a, Handler: PaintTraversalHandler> PaintTraversal<'a, Handler> {
             },
             Fragment::AbsoluteOrFixedPositionedPlaceholder(..) |
             Fragment::Text(..) |
+            Fragment::ElidedText(..) | // Mercury: lane txt-1 (ED7), text-overflow
             Fragment::Image(..) |
             Fragment::IFrame(..) => {},
         }
@@ -394,6 +396,7 @@ impl<'a, Handler: PaintTraversalHandler> PaintTraversal<'a, Handler> {
             Fragment::Float(..) |
             Fragment::IFrame(_) |
             Fragment::Image(_) |
+            Fragment::ElidedText(..) | // Mercury: lane txt-1 (ED7), text-overflow
             Fragment::Text(..) => {},
         }
     }
@@ -418,6 +421,11 @@ impl<'a, Handler: PaintTraversalHandler> PaintTraversal<'a, Handler> {
             ),
             Fragment::Text(text_fragment) => {
                 self.handler.visit_text(state, line_box_rect, text_fragment);
+            },
+            // Mercury: lane txt-1 (ED7), text-overflow (hand-port of servo/servo#42394).
+            Fragment::ElidedText(elided_text_fragment) => {
+                self.handler
+                    .visit_elided_text(state, line_box_rect, elided_text_fragment);
             },
             Fragment::AbsoluteOrFixedPositionedPlaceholder(..) | Fragment::Float(..) => {},
             Fragment::Positioning(..) => {
@@ -557,6 +565,17 @@ pub(crate) trait PaintTraversalHandler {
         line_box_rect: PhysicalRect<Au>,
         fragment: &Arc<TextFragment>,
     );
+    // Mercury: lane txt-1 (ED7), text-overflow. Text that the end of the line cuts short. The
+    // display list builder and the hit test override it; the default paints and hits all of the
+    // text, as if it were not elided.
+    fn visit_elided_text(
+        &mut self,
+        state: &TraversalState,
+        line_box_rect: PhysicalRect<Au>,
+        fragment: &Arc<ElidedTextFragment>,
+    ) {
+        self.visit_text(state, line_box_rect, &fragment.text_fragment);
+    }
     fn visit_positioning(&mut self, _state: &TraversalState, _fragment: &Arc<PositioningFragment>) {
     }
 

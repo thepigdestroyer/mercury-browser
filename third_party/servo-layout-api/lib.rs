@@ -10,6 +10,8 @@
 
 mod accessibility;
 mod container_timing_record;
+// Mercury: new module (lane txt-1, EB7), typed highlight ranges for text runs.
+mod highlights;
 mod largest_contentful_paint_candidate;
 mod layout_damage;
 mod layout_dom;
@@ -36,6 +38,11 @@ pub use container_timing_record::ContainerTimingRecord;
 use embedder_traits::{Cursor, ScriptToEmbedderChan, Theme, UntrustedNodeAddress, ViewportDetails};
 use euclid::{Point2D, Rect};
 use fonts::{FontContext, WebFontDocumentContext, WebFontSetDifference};
+// Mercury: new module (lane txt-1, EB7), typed highlight ranges for text runs.
+pub use highlights::{
+    Decoration, DecorationSet, HighlightKind, Segment, TextHighlight, TextHighlights,
+    resolve_segments,
+};
 pub use largest_contentful_paint_candidate::LCPCandidate;
 pub use layout_damage::LayoutDamage;
 pub use layout_dom::{
@@ -97,6 +104,12 @@ pub trait GenericLayoutDataTrait: Any + MallocSizeOfTrait + Send + Sync + 'stati
         // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
         new_paints_caret: bool,
     ) -> bool;
+
+    // Mercury: new method (lane txt-1, EB7), next to `set_text_run_selection` and independent of it.
+    /// Returns whether `highlights` was successfully set on an existing text run. The highlights
+    /// replace the previous ones of the text run (an empty set clears them); they are painted
+    /// beside the selection and a new display list (not a new layout) is enough to show them.
+    fn set_text_run_highlights(&self, highlights: TextHighlights) -> bool;
 
     /// Set whether or not this node is selected when it is an element. Returns `true`
     /// if anything changed that requires a new display list.
@@ -660,6 +673,8 @@ bitflags! {
 }
 
 malloc_size_of_is_0!(RestyleReason);
+// Mercury: lane txt-1 (EB7). Plain data without heap memory of its own.
+malloc_size_of_is_0!(HighlightKind, TextHighlight);
 
 impl RestyleReason {
     pub fn needs_restyle(&self) -> bool {

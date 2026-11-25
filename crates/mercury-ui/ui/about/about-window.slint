@@ -2,6 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 import { AboutSlint, Palette } from "std-widgets.slint";
 import { ChromePalette, ChromeTheme } from "../theme/chrome-palette.slint";
+import { MercuryMark } from "../theme/mercury-mark.slint"; // themes
 
 export enum AboutLink {
     licence,
@@ -49,6 +50,7 @@ export component AboutWindow inherits Window {
     property <ChromeTheme> chrome-theme: ChromePalette.theme;
     callback open-link(AboutLink);
     callback close-requested();
+    out property <length> wanted-height: max(420px, content.preferred-height);
 
     // `AboutSlint` picks its badge by Slint's `Palette`: give it the scheme the appearance setting
     // forces. Under "Follow the system" the palette is left to follow the system.
@@ -70,7 +72,10 @@ export component AboutWindow inherits Window {
     title: "About Mercury Browser";
     icon: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
     width: 380px;
-    height: 420px;
+    // 420 px where the lines fit; taller when the system's font makes the wrapped lines longer,
+    // so that the Slint badge at the bottom is never cut off. An explicit height keeps the window
+    // fixed in size (Slint sets its minimum and maximum height to it).
+    height: root.wanted-height;
     background: ChromePalette.window-background;
     forward-focus: key-scope;
 
@@ -91,7 +96,7 @@ export component AboutWindow inherits Window {
             reject
         }
 
-        VerticalLayout {
+        content := VerticalLayout {
             padding: 24px;
             padding-bottom: 16px;
             spacing: 6px;
@@ -101,12 +106,9 @@ export component AboutWindow inherits Window {
                 alignment: center;
                 height: 76px;
 
-                Image {
+                MercuryMark { // themes
                     width: 72px;
                     height: 72px;
-                    source: @image-url("../../../../apps/mercury-desktop/resources/mercury-browser.svg");
-                    image-fit: contain;
-                    accessible-role: none;
                 }
             }
 

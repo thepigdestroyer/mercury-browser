@@ -25,6 +25,10 @@ bitflags! {
 }
 malloc_size_of::malloc_size_of_is_0!(AccessibilityDamage);
 
+// Mercury: a11y-1 item 4: layout no longer consults `SUPPORTED_ARIA_ROLES` (or
+// `ARIA_ROLE_TO_ACCESSKIT_ROLE`) to decide a node's role: `mercury_a11y::roles` maps the whole ARIA role
+// set and the HTML element roles, so the safe-list restriction below is gone. The statics stay for
+// script's `computedRole` (`ACCESSKIT_ROLE_TO_ARIA_ROLE`).
 /// A safe-list of ARIA role attribute values which we map to AccessKit roles.
 ///
 /// This is currently just the roles that don't have any [supported] or [required] properties

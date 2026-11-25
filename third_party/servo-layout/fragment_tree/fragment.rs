@@ -51,6 +51,9 @@ pub(crate) enum Fragment {
     Text(#[conditional_malloc_size_of] Arc<TextFragment>),
     Image(#[conditional_malloc_size_of] Arc<ImageFragment>),
     IFrame(#[conditional_malloc_size_of] Arc<IFrameFragment>),
+    // Mercury: `text-overflow` (hand-port of servo/servo#42394, RichardTjokroutomo). Text that the
+    // end of the line cuts short; see [`ElidedTextFragment`].
+    ElidedText(#[conditional_malloc_size_of] Arc<ElidedTextFragment>),
 }
 
 #[derive(Clone, MallocSizeOf)]
@@ -109,6 +112,33 @@ pub(crate) struct TextFragment {
     pub is_empty_for_text_cursor: bool,
 }
 
+/// Mercury: `text-overflow` (hand-port of servo/servo#42394 by RichardTjokroutomo, where this is
+/// also called `ElidedTextFragment`).
+///
+/// A [`TextFragment`] on a line that overflows its block, where the block elides the end of the line.
+/// The text fragment is kept whole, so that the DOM positions of clicks, selection and queries still
+/// see all of the text (copying an elided title copies all of it, and `scrollWidth` still reports
+/// the overflow); only what is painted and what a pointer can hit shrinks to the glyphs that are kept.
+/// The overflow marker (the ellipsis or the string) is not part of this fragment: layout adds it as a
+/// [`TextFragment`] of its own at the end of the line.
+///
+/// A fragment on the line after the cut has no glyph kept ([`Self::kept_glyphs`] is zero).
+#[derive(MallocSizeOf)]
+pub(crate) struct ElidedTextFragment {
+    /// The text as it would be without `text-overflow`.
+    #[conditional_malloc_size_of]
+    pub text_fragment: Arc<TextFragment>,
+    /// How many of the glyphs of [`Self::text_fragment`] are kept. They are counted in painting order
+    /// (left to right) from the start of the line, which is the left of the fragment when the block
+    /// is left to right and its right when it is right to left ([`Self::end_is_left`]).
+    pub kept_glyphs: usize,
+    /// The advance of the kept glyphs.
+    pub kept_advance: Au,
+    /// Whether the end of the line is the left side: the block is right to left, so the kept glyphs
+    /// are the last ones in painting order and the elided ones are the first.
+    pub end_is_left: bool,
+}
+
 #[derive(MallocSizeOf)]
 pub(crate) struct ImageFragment {
     pub base: BaseFragment,
@@ -151,6 +181,8 @@ impl Fragment {
             Fragment::Image(fragment) => RefOrAtomicRef::Ref(&fragment.base),
             Fragment::IFrame(fragment) => RefOrAtomicRef::Ref(&fragment.base),
             Fragment::Float(fragment) => RefOrAtomicRef::Ref(&fragment.base),
+            // Mercury: text-overflow. The base of the whole text; layout sets its rectangle.
+            Fragment::ElidedText(fragment) => RefOrAtomicRef::Ref(&fragment.text_fragment.base),
         })
     }
 
@@ -167,6 +199,7 @@ impl Fragment {
             },
             Fragment::AbsoluteOrFixedPositionedPlaceholder(..) |
             Fragment::Text(..) |
+            Fragment::ElidedText(..) | // Mercury: text-overflow
             Fragment::Image(..) |
             Fragment::IFrame(..) => {},
         }
@@ -192,6 +225,7 @@ impl Fragment {
             Fragment::Text(fragment) => fragment.print(tree),
             Fragment::Image(fragment) => fragment.print(tree),
             Fragment::IFrame(fragment) => fragment.print(tree),
+            Fragment::ElidedText(fragment) => fragment.print(tree), // Mercury: text-overflow
         }
     }
 
@@ -233,6 +267,11 @@ impl Fragment {
             },
             Fragment::Positioning(fragment) => fragment.scrollable_overflow_for_parent(),
             Fragment::Text(fragment) => fragment.scrollable_overflow_for_parent(),
+            // Mercury: text-overflow. The overflow of the whole text, so that `scrollWidth` still
+            // tells a page that its text is cut short.
+            Fragment::ElidedText(fragment) => {
+                fragment.text_fragment.scrollable_overflow_for_parent()
+            },
             Fragment::AbsoluteOrFixedPositionedPlaceholder(_) |
             Fragment::Image(..) |
             Fragment::IFrame(..) => self.base().map(|base| base.rect()).unwrap_or_default(),
@@ -269,9 +308,11 @@ impl Fragment {
             // rectangle should include that.
             Fragment::Positioning(fragment) => Some(fragment.base.rect()),
             Fragment::AbsoluteOrFixedPositionedPlaceholder(_) => None,
-            Fragment::Text(..) | Fragment::Image(..) | Fragment::IFrame(..) => {
-                Some(self.base()?.rect())
-            },
+            // Mercury: text-overflow (`ElidedText`)
+            Fragment::Text(..) |
+            Fragment::ElidedText(..) |
+            Fragment::Image(..) |
+            Fragment::IFrame(..) => Some(self.base()?.rect()),
         }
     }
 
@@ -300,6 +341,7 @@ impl Fragment {
                 cumulative_content_rect_calculation,
             )),
             Fragment::Text(_) |
+            Fragment::ElidedText(_) | // Mercury: text-overflow
             Fragment::AbsoluteOrFixedPositionedPlaceholder(_) |
             Fragment::Image(_) |
             Fragment::IFrame(_) => None,
@@ -404,6 +446,8 @@ impl Fragment {
             },
             Fragment::Box(fragment) => &fragment.style,
             Fragment::Text(fragment) => &fragment.run_data.inline_styles.style,
+            // Mercury: text-overflow
+            Fragment::ElidedText(fragment) => &fragment.text_fragment.run_data.inline_styles.style,
             Fragment::AbsoluteOrFixedPositionedPlaceholder(_) => return,
             Fragment::Positioning(fragment) => &fragment.style,
             Fragment::Image(fragment) => &fragment.style,
@@ -576,6 +620,35 @@ impl IFrameFragment {
             self.pipeline_id,
             self.base.rect()
         ));
+    }
+}
+
+// Mercury: text-overflow (hand-port of servo/servo#42394)
+impl ElidedTextFragment {
+    pub fn print(&self, tree: &mut PrintTree) {
+        tree.add_item(format!(
+            "ElidedText kept_glyphs={} kept_advance={:?} box={:?}",
+            self.kept_glyphs,
+            self.kept_advance,
+            self.text_fragment.base.rect()
+        ));
+    }
+
+    /// Whether nothing of the text is kept, which is the case for text after the cut.
+    pub(crate) fn is_fully_elided(&self) -> bool {
+        self.kept_glyphs == 0
+    }
+
+    /// The part of `rect`, the rectangle of the whole text in the coordinates of its parent, that is
+    /// kept: the part at the start of the line.
+    pub(crate) fn kept_rect(&self, rect: PhysicalRect<Au>) -> PhysicalRect<Au> {
+        let kept_width = self.kept_advance.max(Au::zero()).min(rect.size.width);
+        let mut kept_rect = rect;
+        kept_rect.size.width = kept_width;
+        if self.end_is_left {
+            kept_rect.origin.x = rect.origin.x + rect.size.width - kept_width;
+        }
+        kept_rect
     }
 }
 

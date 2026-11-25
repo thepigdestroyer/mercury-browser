@@ -15,9 +15,12 @@
 //!   steps (`github-env`).
 //! - [`pixel_diff`]: compares two folders of PNG pictures pixel by pixel (`pixel-diff`), the gate
 //!   that a change to the interface draws what it drew before.
+//! - [`hsts`]: the HSTS preload list tool (`hsts-preload`, run through `make hsts-preload-refresh`
+//!   and `make hsts-preload-check`): Chromium's list to the data file Servo reads.
 
 pub mod colors;
 pub mod github_env;
+pub mod hsts;
 pub mod metadata;
 pub mod pixel_diff;
 pub mod png;

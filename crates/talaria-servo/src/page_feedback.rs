@@ -37,6 +37,10 @@ pub(crate) struct PageFeedback {
     title_in_flight: Cell<Option<u64>>,
     /// A title read was asked for while one was in flight; `refresh_title` starts it.
     title_wanted: Cell<bool>,
+    /// How many title changes Servo has notified. A read is asked at one moment and answered at
+    /// a later one, by a different route than the notifications; an answer is current only if no
+    /// notification came in between (see `title_answer`).
+    title_notices: Cell<u64>,
     /// history lane: the address shown (as `AddressChanged` sent it), so that a title read
     /// also goes out as `PageTitleAt` for history recording. A read answers only while the
     /// address it was asked for is still shown (`generation`).
@@ -52,8 +56,16 @@ impl PageFeedback {
             icon: RefCell::new(None),
             title_in_flight: Cell::new(None),
             title_wanted: Cell::new(false),
+            title_notices: Cell::new(0),
             address: RefCell::new(None),
         })
+    }
+
+    /// Servo notified a title change. A read that is in flight now answers with the title as it
+    /// was when the page ran it, which this notification supersedes or repeats.
+    pub(crate) fn title_notified(&self) {
+        self.title_notices
+            .set(self.title_notices.get().wrapping_add(1));
     }
 
     /// A new document is loading: it has no icon yet, and the tab must not keep the last one.
@@ -99,10 +111,11 @@ impl PageFeedback {
             return;
         }
         let generation = self.generation.get();
+        let notices = self.title_notices.get();
         self.title_in_flight.set(Some(generation));
         let feedback = Rc::clone(self);
         evaluate(Box::new(move |result| {
-            feedback.title_answer(generation, result);
+            feedback.title_answer(generation, notices, result);
         }));
     }
 
@@ -115,11 +128,21 @@ impl PageFeedback {
         }
     }
 
-    fn title_answer(&self, generation: u64, result: Result<JSValue, JavaScriptEvaluationError>) {
+    /// `notices` is the notification count when the read was asked for. A page can change its
+    /// title right after it loads, and the notification of that change can reach the browser
+    /// before the answer of a read that the page ran just before it: the answer would then put
+    /// the older title back and the tab would keep it. Every later change is notified too, so
+    /// the tab already has the page's latest title once one notification came in.
+    fn title_answer(
+        &self,
+        generation: u64,
+        notices: u64,
+        result: Result<JSValue, JavaScriptEvaluationError>,
+    ) {
         if self.title_in_flight.get() == Some(generation) {
             self.title_in_flight.set(None);
         }
-        if generation != self.generation.get() {
+        if generation != self.generation.get() || notices != self.title_notices.get() {
             return;
         }
         if let Ok(JSValue::String(title)) = result {
@@ -240,6 +263,36 @@ mod tests {
                 },
             ]
         );
+    }
+
+    #[test]
+    fn a_title_answer_does_not_replace_a_title_notified_after_the_read_was_asked() {
+        let (feedback, receiver) = feedback();
+        let evaluations = Evaluations::default();
+
+        // The read runs in the page while it still has its first title; the page then changes
+        // it, and that notification overtakes the answer.
+        feedback.request_title(evaluations.evaluate());
+        feedback.title_notified();
+        evaluations.answer(Ok(JSValue::String("First title".to_owned())));
+
+        assert_eq!(events(&receiver), Vec::new());
+        // The read is over, so the next one is asked for and answered as usual.
+        feedback.request_title(evaluations.evaluate());
+        evaluations.answer(Ok(JSValue::String("Second title".to_owned())));
+        assert_eq!(events(&receiver), vec![title("Second title")]);
+    }
+
+    #[test]
+    fn a_title_notified_before_the_read_was_asked_does_not_drop_its_answer() {
+        let (feedback, receiver) = feedback();
+        let evaluations = Evaluations::default();
+
+        feedback.title_notified();
+        feedback.request_title(evaluations.evaluate());
+        evaluations.answer(Ok(JSValue::String("Same title".to_owned())));
+
+        assert_eq!(events(&receiver), vec![title("Same title")]);
     }
 
     #[test]

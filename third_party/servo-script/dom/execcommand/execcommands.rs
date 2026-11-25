@@ -15,13 +15,20 @@ use crate::dom::bindings::str::DOMString;
 use crate::dom::comment::Comment;
 use crate::dom::document::Document;
 use crate::dom::event::Event;
-use crate::dom::event::inputevent::{InputEvent, InputEventFlags};
+// Mercury: `InputEventFlags` is used through `composition::*_flags()` now (EB11).
+use crate::dom::event::inputevent::InputEvent;
 use crate::dom::execcommand::basecommand::CommandName;
 use crate::dom::execcommand::commands::fontsize::maybe_normalize_pixels;
 use crate::dom::html::htmlelement::HTMLElement;
 use crate::dom::node::Node;
 use crate::dom::processinginstruction::ProcessingInstruction;
 use crate::dom::selection::Selection;
+
+// Mercury: IME input events for editing hosts (EB11, the text lane). Declared here, with a path,
+// so that `execcommand/mod.rs` needs no line; move it there when convenient.
+#[path = "composition.rs"]
+pub(crate) mod composition;
+use self::composition::ImeInputEvents;
 
 /// <https://w3c.github.io/editing/docs/execCommand/#miscellaneous-commands>
 fn is_command_listed_in_miscellaneous_section(command_name: CommandName) -> bool {
@@ -199,6 +206,14 @@ pub(crate) trait DocumentExecCommandSupport {
         command_id: DOMString,
         value: DOMString,
     ) -> bool;
+    // Mercury: the same, with the `beforeinput` and `input` events of an input method (EB11).
+    fn exec_command_with_input_events(
+        &self,
+        cx: &mut JSContext,
+        command_id: DOMString,
+        value: DOMString,
+        input: Option<&ImeInputEvents>,
+    ) -> bool;
 }
 
 impl DocumentExecCommandSupport for Document {
@@ -272,6 +287,19 @@ impl DocumentExecCommandSupport for Document {
         command_id: DOMString,
         value: DOMString,
     ) -> bool {
+        // Mercury: the body is `exec_command_with_input_events()` (EB11).
+        self.exec_command_with_input_events(cx, command_id, value, None)
+    }
+
+    // Mercury: the body of `exec_command_for_command_id()`; `input` overrides the type, data and
+    // flags of its `beforeinput` and `input` events (EB11).
+    fn exec_command_with_input_events(
+        &self,
+        cx: &mut JSContext,
+        command_id: DOMString,
+        value: DOMString,
+        input: Option<&ImeInputEvents>,
+    ) -> bool {
         let window = self.window();
         // Step 3. If command is not supported or not enabled, return false.
         let Some((command, mut selection)) = self.check_support_and_enabled(cx, &command_id) else {
@@ -298,11 +326,11 @@ impl DocumentExecCommandSupport for Document {
                 window,
                 None,
                 atom!("beforeinput"),
-                InputEventFlags::BUBBLES | InputEventFlags::CANCELABLE,
+                composition::before_input_flags(input),
                 Some(window),
                 0,
-                None,
-                mapped_value_of_command(command),
+                composition::event_data(input),
+                composition::event_input_type(input, mapped_value_of_command(command)),
             );
             let event = event.upcast::<Event>();
             // Step 4.3. If the value returned by the previous step is false, return false.
@@ -349,11 +377,11 @@ impl DocumentExecCommandSupport for Document {
                 window,
                 None,
                 atom!("input"),
-                InputEventFlags::BUBBLES,
+                composition::input_flags(input),
                 Some(window),
                 0,
-                None,
-                mapped_value_of_command(command),
+                composition::event_data(input),
+                composition::event_input_type(input, mapped_value_of_command(command)),
             );
             let event = event.upcast::<Event>();
             event.set_trusted(true);

@@ -22,8 +22,10 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 9. [Origins and credits](origins.md): what came from Hermes Browser and what Mercury added.
 10. [Saved logins](passwords.md): the Keychain store, the password manager and the worker that keeps Keychain calls off the interface thread.
 11. [Camera and microphone](media-capture.md): how pages get them, and testing with fake devices only.
-12. [Releases](releases.md): the macOS disk image, the Linux archive, the update manifest and the documentation site.
-13. [Contributing](contributing.md): how to prepare a focused, reviewable change.
+12. [PDF viewer](pdf.md): how a PDF reaches the viewer, where PDFium comes from and how it is pinned, the helper process and its protocol, and the limits.
+13. [Media Source Extensions](media-source.md): how `MediaSource` and `SourceBuffer` run on Mercury's own backend, the development switch, and the test pages.
+14. [Releases](releases.md): the macOS disk image, the Linux archive, the update manifest and the documentation site.
+15. [Contributing](contributing.md): how to prepare a focused, reviewable change.
 
 ## Repository map
 
@@ -35,6 +37,8 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `crates/talaria-servo` | The bridge to Servo: web views, content blocking, permission and dialog requests, media and the media session, downloads, find in page, error pages, the HTTP cache, proxies, clearing data at exit |
 | `crates/mercury-settings` | Settings, search engines and their keywords, stored as `settings.json` in the profile, and the saved session (`session.json`) |
 | `crates/mercury-appearance` | How Mercury looks, as data: the palettes and the contrast rules each one must pass, the tab-group colours, the one-letter group-key map, and the resolving of the stored layout, palette and tab-group settings into values for the interface. No engine and no Slint |
+| `crates/mercury-pdf` | The PDF viewer without PDFium, the engine or the interface toolkit: the protocol with the helper process, the client, the helper's serve loop and the model of what to draw ([details](pdf.md)) |
+| `crates/mercury-pdfium` | The PDFium backend of the viewer and the helper process's entry point (`mercury-browser --pdf-worker`); PDFium is loaded at run time from a prebuilt library ([details](pdf.md)) |
 | `crates/mercury-ui` theme layer | `ui/theme/chrome-palette.slint` (two colour tables, one `out` property per role) and `ui/theme/chrome-metrics.slint` (the chrome's sizes) are filled from `mercury-appearance` by `mercury_ui::apply_look` (`src/theme`), which the desktop calls once per window and on every settings change (`settings::apply_chrome_theme`). New roles and sizes: `.superpowers/sdd/ui-lanes.md`, "Colours and sizes". `pixel-diff` (`crates/mercury-devtools`) and `scripts/dev/render-scenes.sh` prove a change draws what it drew before |
 | `crates/mercury-store` | History, bookmarks and the downloads list in SQLite, with search and address-bar suggestions |
 | `crates/mercury-passwords` | Saved logins in the macOS Keychain, a password generator, CSV import and export ([details](passwords.md)) |
@@ -43,7 +47,9 @@ Work happens on the `mercury` branch. Each feature is developed on its own branc
 | `crates/mercury-import` | Reading history and bookmarks from Chromium-based browsers, Firefox and bookmark files |
 | `crates/mercury-filter-lists` | The ad and tracker filter lists as data files with a manifest, the engine built from them at start-up, and the background updates |
 | `crates/mercury-site-security` | Internationalised names shown safely, Mercury's network, certificate and crash pages, and the certificate-exception request |
+| `crates/mercury-proxy` | Which proxy Mercury uses, with no engine inside: the system's proxy settings as data, the choice between them and the `http_proxy`, `https_proxy` and `no_proxy` variables, and `mercury_proxy::apply_process_proxy`, which every reqwest client that talks to the web calls so that it goes where Servo's requests go |
 | `crates/mercury-tab-snapshots` | Small pictures of the open tabs, for the Orbit view, kept in memory only: the shrink to at most 480 by 300 pixels, the store under a 128 MB cap and the rules for when a picture is taken ([details](servo-integration.md#tab-snapshots)) |
+| `crates/mercury-option-keys` | The ⌥ group-key state machine, a pure module with injected time: quick ⌥ + letter passes to the page, a 0.4 s hold opens the "Switch group" card, letter then digit then ⌥ up commits. Nothing wires it into the keyboard yet |
 | `crates/mercury-release` | Writes, signs and checks the update manifest (`update.json`) that each release carries |
 | `crates/mercury-credits` | The credits tool: writes the page of licence texts, copyright lines, notices and MPL source pointers for every crate built into the app, and checks that every crate can be credited ([details](licence-compliance.md#the-credits-page-and-its-tool)) |
 | `crates/mercury-servo-patches` | The tool that vendors, patches, checks and upgrades the crates in `third_party/` |

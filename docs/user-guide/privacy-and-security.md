@@ -35,6 +35,17 @@ Turn blocking off and on in **Settings → Privacy and security → Block ads an
 
 Not available yet: per-site exceptions, hiding page elements (cosmetic filtering) and a count of blocked requests.
 
+## Cookies and tracking signals
+
+Mercury blocks **third-party cookies** by default. A cookie is third party when it belongs to a different site than the page you are on (the site is the registrable domain, such as `example.co.uk`, ignoring the scheme and any subdomain). For such a request Mercury sends no cookies, ignores the cookies in the answer, and hides them from the page's scripts (`document.cookie` reads empty and writes are dropped); the same goes for WebSocket connections. If Mercury cannot tell which page a request belongs to, it treats the request as third party. Cookies that Mercury itself reads (the site information, downloads, the PDF viewer) are not affected.
+
+- **SameSite.** A cookie that says `SameSite=Strict` is sent only when the request comes from the same site, and `SameSite=Lax` also when you follow a link or type an address (a top-level navigation that reads a page). `SameSite=None` is accepted only together with `Secure`. A cookie with no `SameSite` attribute is treated as `None`, as Firefox and Safari do.
+- **Global Privacy Control.** Mercury sends `Sec-GPC: 1` with every request and sets `navigator.globalPrivacyControl` to `true` in pages and workers, which tells sites that you do not want your data sold or shared. Sites are not obliged to honour it everywhere.
+- **Referrers.** A page cannot make Mercury send more of its address than the origin to another site: the policies `unsafe-url`, `no-referrer-when-downgrade` and `origin-when-cross-origin` are treated as `strict-origin-when-cross-origin`. Stricter policies are kept.
+- **Sign-in prompts.** A page's own `fetch` or `XMLHttpRequest` that gets a 401 from the page's own site now shows the sign-in prompt (at most one at a time, and not again for a minute after you cancel); requests to other sites and proxy sign-ins are answered as before.
+
+Some embedded content stops working while its cookies are blocked: sign-in buttons of other sites, comment systems and some video logins. There is no per-site exception in the interface yet (the engine has one; the Settings switch and the exception list come in a later version), and partitioned cookies (CHIPS) are blocked like others for now. Local storage, IndexedDB and cached files of third-party frames are **not** yet separated by site, so a tracker can still recognise you through them. The settings file has `block_third_party_cookies` (default `true`) and `global_privacy_control` (default `true`) under the privacy section; the Settings page does not show them yet.
+
 ## Pop-ups
 
 A page may open a new tab or window only in response to a click or key press in that page. Otherwise Mercury blocks it and shows **Pop-up blocked** in the toolbar with a button to allow pop-ups from that site until Mercury quits. Turn blocking off in **Settings → Privacy and security → Block pop-up windows**.
@@ -58,7 +69,7 @@ The icon before the address says how the page was loaded:
 - **A circled "i":** neither a padlock nor a warning. It marks **Page on this computer** (plain HTTP to `localhost` or another loopback address such as `127.0.0.1`), **File on this computer**, and **Mercury Browser page** (one of Mercury's own error pages).
 - **Nothing:** a new tab.
 
-Click the icon for **site information**: the permissions the site has been given (each with **Reset**), the cookies and site data it holds (with **Clear**), and any exception you made for the site.
+Click the icon for **site information**: the permissions the site has been given (each with **Reset**), the cookies and site data it holds (with **Clear**), any exception you made for the site, and, for a web page, whether its images are shown or blocked (see [Images on one site](#images-on-one-site)).
 
 ### HTTPS-only mode
 
@@ -69,6 +80,8 @@ With **Settings → Privacy and security → Load pages over HTTPS only** on, Me
 - A page whose HTTPS address keeps redirecting to an HTTP address, so that no load ever finishes, is upgraded up to five times and then stopped, and Mercury shows the same **The secure version of this site is not available** page. A page that finishes loading and then sends you back to its HTTP address with a script or a meta refresh is upgraded again each time, for as long as it keeps doing that; you can leave it at any time.
 - If you choose **Continue** after Mercury blocked a form that was being sent, the page is opened again with a plain request: the form's data is not sent a second time.
 - A page that a link opened in a new tab may lose its connection to the page that opened it when it is upgraded.
+
+Apart from that setting, and whether or not it is on, Mercury opens over HTTPS the sites that asked browsers in advance to be opened only that way. The list of them (the HSTS preload list) comes from the Chromium project and is updated before each Mercury release. It applies to an `http://` address you type or follow, to a redirect to one, and to the images, scripts and frames a page loads from such a site. If the certificate of such a site is not valid, Mercury does not let you continue past the error (see [Certificate errors](#certificate-errors)).
 
 ### Certificate errors
 
@@ -84,11 +97,23 @@ What **Continue anyway** accepts is narrow:
 
 Continue only for devices you control. An exception means Mercury trusts whoever holds that certificate's key when you visit that name.
 
+## Images on one site
+
+You can turn images off for one site, for a page that loads slowly, costs data or is full of pictures you don't want. Open **site information** (the icon before the address) and press **Block** in the **Images** row, or choose **View → Block Images on This Site**. The row says **Blocked** or **Shown**, and the other button turns them back on (**View → Show Images on This Site**). Mercury then loads the page again, because pictures already drawn would stay.
+
+- **What is blocked.** Every image the page and the frames inside it ask for, from the load of the page on (while a tab goes to the site from another one, the images of that navigation are judged by the site it goes to; an automated count of this is on the hands-on list, not yet run): pictures in the page, in its style sheets, video posters and SVG images, including those from other sites (a picture from a content network is blocked too). Mercury answers each request itself, so the picture is not downloaded. Text, scripts, style sheets, fonts, video and frames are not touched.
+- **The tab icon goes too.** Pages ask for their icon as an image, and Mercury cannot tell it from the others, so a site with images off shows the default tab icon.
+- **Which site.** The exact host of the page in the tab: blocking `mail.example.com` does not blank `maps.example.com`, and `example.com` is not `www.example.com`. The port and `http` against `https` make no difference. Only web pages have a site: the row and the menu items are not there for a new tab, a file or one of Mercury's own pages.
+- **A page that is open elsewhere.** The choice applies to every tab and window showing the site, from the next load of each. Only the page you changed is reloaded for you.
+- **Where it is kept.** In `site-images.json` in the profile (see below), so it lasts across runs. A damaged file is moved aside and images are on everywhere; a file written by a newer Mercury is read as empty and left alone. At most 1,000 sites can have images off.
+- **Not here yet.** A switch for all sites, a list of the sites in Settings and a choice for private windows.
+
 ## What Mercury stores
 
 | What | Where |
 | --- | --- |
 | Settings | `~/Library/Application Support/Mercury Browser/Default/settings.json` |
+| The sites whose images are turned off | `site-images.json` in the same profile |
 | History, bookmarks and the downloads list | `places.sqlite` in the same profile |
 | Open and recently closed tabs (addresses and titles), for restoring them | `session.json` in the same profile, with `session.previous.json` and `session.recovery.json` |
 | Updated filter lists (only after an update has downloaded a newer version) | the `filter-lists` folder in the same profile |
@@ -151,6 +176,8 @@ Not used:
 - **Proxies that ask for a password.** Mercury cannot prompt for one; the page fails with a connection error. A user name and password in `http_proxy` (`http://user:password@host:port`) do work.
 
 Mercury sends plain `http://` addresses through the proxy with `CONNECT` as well, so a proxy that allows `CONNECT` only to port 443 refuses them. Mercury writes a warning to its log at start when the system asks for something it does not use.
+
+**View source** fetches the page again with the same three proxy settings, and never goes around a proxy that applies to the address: if the proxy cannot fetch it, the source page says so. Unlike the pages, that fetch sends a plain `http://` address to the proxy as an ordinary proxy request, not with `CONNECT`.
 
 ## Reporting a security problem
 

@@ -936,6 +936,17 @@ impl<'dom> LayoutDom<'dom, HTMLInputElement> {
         text_input.selection_for_layout
     }
 
+    // Mercury: the marked text of an IME composition, for layout (EB11).
+    pub(crate) fn composition_for_layout(self) -> Option<RangeAny<Utf32CodeUnits>> {
+        let element = self.unsafe_get();
+        if !element.is_textual_or_password.get() {
+            return None;
+        }
+        #[expect(unsafe_code)]
+        let text_input = unsafe { element.text_input.borrow_for_layout() };
+        text_input.composition_for_layout
+    }
+
     pub(crate) fn width(self) -> LengthOrPercentageOrAuto {
         self.image_button_dimension(&local_name!("width"))
     }
@@ -1059,6 +1070,32 @@ impl TextControlElement for HTMLInputElement {
         matches!(*self.input_type(), InputType::Password(_))
     }
 
+    // Mercury: the text node of the value, for the caret rectangle of the IME (EB11).
+    fn value_text_node(&self) -> Option<DomRoot<crate::dom::characterdata::CharacterData>> {
+        self.input_type
+            .borrow()
+            .as_specific()
+            .text_input_widget()
+            .and_then(|text_input_widget| text_input_widget.borrow().value_text_node())
+    }
+
+    // Mercury: the IME highlights go to the text run of the value (EB11).
+    fn push_composition_highlights(
+        &self,
+        composition: Option<RangeAny<Utf32CodeUnits>>,
+        selected: Option<RangeAny<Utf32CodeUnits>>,
+    ) -> bool {
+        self.input_type
+            .borrow()
+            .as_specific()
+            .text_input_widget()
+            .is_some_and(|text_input_widget| {
+                text_input_widget
+                    .borrow()
+                    .set_text_run_highlights(composition, selected)
+            })
+    }
+
     fn placeholder_text<'a>(&'a self) -> Ref<'a, TracedDOMString> {
         self.placeholder.borrow()
     }
@@ -1072,6 +1109,11 @@ impl TextControlElement for HTMLInputElement {
     }
 
     fn handle_text_content_changed(&self, cx: &mut JSContext) {
+        // Mercury: a11y-1 item 4: the text a user typed is the value of the control.
+        crate::dom::document::accessibility_attributes::damage_for_value_change(
+            self.upcast::<Node>(),
+            cx.no_gc(),
+        );
         self.update_placeholder_shown_state(cx.no_gc());
         self.upcast::<Node>()
             .dirty(cx.no_gc(), NodeDamage::ContentOrHeritage);
@@ -1083,11 +1125,22 @@ impl TextControlElement for HTMLInputElement {
                 self.implicit_submission(cx);
             },
             KeyReaction::DispatchInput(text, input_type) => {
-                self.queue_input_event(text, input_type);
+                // Mercury: a composition update fires `input` now, after the update; the others
+                // are queued as before (EB11).
+                let fire_now = input_type.is_composing();
+                let text_to_fire_now = if fire_now {
+                    text
+                } else {
+                    self.queue_input_event(text, input_type);
+                    None
+                };
                 self.value_dirty.set(true);
                 self.update_placeholder_shown_state(cx.no_gc());
                 self.upcast::<Node>().dirty(cx.no_gc(), NodeDamage::Other);
                 self.maybe_update_shared_selection();
+                if fire_now {
+                    self.fire_input_event_now(cx, text_to_fire_now, input_type);
+                }
             },
             KeyReaction::RedrawSelection => {
                 self.maybe_update_shared_selection();
@@ -2090,6 +2143,11 @@ impl HTMLInputElement {
     }
 
     fn value_changed(&self, cx: &mut JSContext) {
+        // Mercury: a11y-1 item 4: the value (a range's number, a number's text, ...) is an accessibility property.
+        crate::dom::document::accessibility_attributes::damage_for_value_change(
+            self.upcast::<Node>(),
+            cx.no_gc(),
+        );
         self.maybe_update_shared_selection();
         self.update_related_validity_states(cx);
         if self.upcast::<Node>().is_connected() {
@@ -2170,6 +2228,12 @@ impl HTMLInputElement {
             document
                 .embedder_controls()
                 .hide_embedder_control(self.upcast());
+            // Mercury: a composition does not survive the loss of focus; the text stays (EB11).
+            self.text_input_mut().abandon_composition();
+            self.maybe_update_composition_highlights();
+            document
+                .event_handler()
+                .flush_text_input_state_after_input(cx);
         } else if *event_type == *"focus" {
             let input_type = &*self.input_type();
             let Ok(input_method_type) = input_type.try_into() else {
@@ -2199,6 +2263,10 @@ impl HTMLInputElement {
                 }),
                 None,
             );
+            // Mercury: tell the browser what text the focused control has (EB11).
+            document
+                .event_handler()
+                .flush_text_input_state_after_input(cx);
         }
     }
 }

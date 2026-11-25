@@ -14,6 +14,7 @@
 //! Servo release that no longer logs these values.
 
 use http::header::{HeaderMap, HeaderName, HeaderValue};
+use servo_url::ServoUrl;
 
 /// What the value of a secret header is replaced with.
 pub(crate) const REDACTED: &str = "<redacted>";
@@ -55,6 +56,53 @@ pub(crate) fn headers_for_log(headers: &HeaderMap) -> String {
         .map(|(name, value)| format!("{name:?}: {}", value_for_log(name, value)))
         .collect();
     format!("{{{}}}", entries.join(", "))
+}
+
+/// A URL as a log line shows it: scheme, host, port and path, without the user name and password, the query
+/// string and the fragment (they carry session tokens and credentials). A URL that has no host and no path to
+/// speak of (`data:`, `blob:`, `javascript:`) shows only its scheme.
+pub(crate) fn url_for_log(url: &ServoUrl) -> String {
+    let url = url.as_url();
+    if url.cannot_be_a_base() {
+        return format!("{}:", url.scheme());
+    }
+    let mut shown = format!("{}://", url.scheme());
+    if let Some(host) = url.host_str() {
+        shown.push_str(host);
+    }
+    if let Some(port) = url.port() {
+        shown.push_str(&format!(":{port}"));
+    }
+    shown.push_str(url.path());
+    shown
+}
+
+/// What a message, or an action on a connection, is called, without its content: the names of the variants
+/// from the outside in (`Some(Ok(Text("secret")))` is `Some/Ok/Text`). Takes them from the `Debug` text: a name
+/// is an identifier directly followed by `(`; the content of a message is a string or a byte list, which never
+/// start that way.
+pub(crate) fn variant_for_log<T: std::fmt::Debug>(value: &T) -> String {
+    let text = format!("{value:?}");
+    let mut names: Vec<&str> = Vec::new();
+    let mut rest = text.as_str();
+    loop {
+        let end = rest
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(rest.len());
+        let (name, after) = rest.split_at(end);
+        if !name.is_empty() {
+            names.push(name);
+        }
+        match after.strip_prefix('(') {
+            Some(inner) if !name.is_empty() => rest = inner,
+            _ => break,
+        }
+    }
+    if names.is_empty() {
+        "(unknown)".to_owned()
+    } else {
+        names.join("/")
+    }
 }
 
 #[cfg(test)]
@@ -372,6 +420,137 @@ mod tests {
             source.contains("headers_for_log("),
             "the CORS debug line no longer uses headers_for_log"
         );
+    }
+
+    // ---- URLs and message bodies -----------------------------------------------------------------------
+
+    fn shown(url: &str) -> String {
+        url_for_log(&ServoUrl::parse(url).unwrap())
+    }
+
+    #[test]
+    fn a_url_is_shown_without_credentials_query_and_fragment() {
+        assert_eq!(
+            shown("https://user:pass@example.com:8443/a/b.html?token=s3cr3t&x=1#frag"),
+            "https://example.com:8443/a/b.html"
+        );
+        assert_eq!(shown("http://example.com"), "http://example.com/");
+        assert_eq!(
+            shown("wss://example.com/socket?ticket=s3cr3t"),
+            "wss://example.com/socket"
+        );
+        assert_eq!(shown("http://[::1]:3000/x?q=1"), "http://[::1]:3000/x");
+    }
+
+    #[test]
+    fn a_url_that_carries_its_content_shows_only_its_scheme() {
+        assert_eq!(shown("data:text/plain;base64,c2VjcmV0"), "data:");
+        assert_eq!(shown("blob:https://example.com/0d9f"), "blob:");
+        assert_eq!(shown("javascript:alert('s3cr3t')"), "javascript:");
+    }
+
+    #[test]
+    fn a_message_is_shown_by_its_variant_not_its_content() {
+        #[derive(Debug)]
+        #[allow(dead_code)]
+        enum Frame {
+            Text(String),
+            Binary(Vec<u8>),
+            Close { reason: String },
+            Ping,
+        }
+        let frames = [
+            (
+                Some(Ok::<_, ()>(Frame::Text("s3cr3t".into()))),
+                "Some/Ok/Text",
+            ),
+            (Some(Ok(Frame::Binary(vec![115, 51]))), "Some/Ok/Binary"),
+            (
+                Some(Ok(Frame::Close {
+                    reason: "s3cr3t".into(),
+                })),
+                "Some/Ok/Close",
+            ),
+            (Some(Ok(Frame::Ping)), "Some/Ok/Ping"),
+            (None, "None"),
+        ];
+        for (frame, expected) in frames {
+            let line = variant_for_log(&frame);
+            assert!(!line.contains("s3cr3t") && !line.contains("115"), "{line}");
+            assert_eq!(line, expected);
+        }
+        assert_eq!(variant_for_log(&"s3cr3t"), "(unknown)");
+    }
+
+    /// Problems with the logging calls in a network file: a URL may only be logged through `url_for_log`,
+    /// and a WebSocket message or action only through `variant_for_log`.
+    fn url_log_problems(file: &str, source: &str) -> Vec<String> {
+        const URLS: [&str; 6] = ["url", "url1", "url2", "resource_url", "current_url", "uri"];
+        const MESSAGES: [&str; 3] = ["dom_action", "dom_msg", "ws_msg"];
+        let mut problems = Vec::new();
+        for call in log_macro_calls(source) {
+            let args = arguments(call);
+            let Some((literal, rest)) = args.split_first() else {
+                continue;
+            };
+            for name in inline_captures(literal) {
+                if URLS.contains(&name.as_str()) || MESSAGES.contains(&name.as_str()) {
+                    problems.push(format!(
+                        "{file}: `{{{name}}}` in `{literal}` captures a URL or message"
+                    ));
+                }
+            }
+            for arg in rest {
+                let mentions = |names: &[&str]| {
+                    arg.split(|c: char| !(c.is_alphanumeric() || c == '_'))
+                        .any(|word| names.contains(&word))
+                };
+                let wrapped =
+                    arg.starts_with("url_for_log(") || arg.starts_with("variant_for_log(");
+                if (mentions(&URLS) || mentions(&MESSAGES)) && !wrapped {
+                    problems.push(format!("{file}: logs `{arg}` in `{literal}` unredacted"));
+                }
+            }
+        }
+        problems
+    }
+
+    #[test]
+    fn the_http_and_websocket_loaders_log_urls_and_messages_only_through_the_helpers() {
+        for (file, source) in [
+            ("http_loader.rs", include_str!("http_loader.rs")),
+            ("websocket_loader.rs", include_str!("websocket_loader.rs")),
+        ] {
+            let problems = url_log_problems(file, source);
+            assert!(
+                problems.is_empty(),
+                "a query string, credentials or a message body would reach the log (EC13):\n{}",
+                problems.join("\n")
+            );
+            assert!(
+                source.contains("url_for_log("),
+                "{file} no longer uses url_for_log"
+            );
+        }
+        assert!(include_str!("websocket_loader.rs").contains("variant_for_log("));
+    }
+
+    #[test]
+    fn the_url_guard_finds_the_lines_servo_used_to_have() {
+        let old = [
+            r#"info!("{:?} request for {}", request.method, url);"#,
+            r#"debug!("finished response for {:?}", url2);"#,
+            r#"trace!("starting WS connection to {}", client.url());"#,
+            r#"trace!("processing websocket http response for {}", resource_url);"#,
+            r#"trace!("processing WS stream: {:?}", ws_msg);"#,
+            r#"trace!("handling WS DOM action: {:?}", dom_action);"#,
+            r#"info!("request for {url}");"#,
+        ];
+        for line in old {
+            assert_eq!(url_log_problems("old", line).len(), 1, "{line}");
+        }
+        let new = r#"info!("request for {}", url_for_log(&url)); trace!("{}", variant_for_log(&ws_msg));"#;
+        assert!(url_log_problems("new", new).is_empty());
     }
 
     #[test]

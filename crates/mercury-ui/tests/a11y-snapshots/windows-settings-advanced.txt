@@ -3,12 +3,13 @@
 # Reading order of the interface, one element per line: role | label | description | flags.
 # Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support a11y
 tab-list | Settings sections | |
-tab | General | | unselected, item 0 of 6
-tab | Appearance | | unselected, item 1 of 6
-tab | Privacy and security | | unselected, item 2 of 6
-tab | Downloads | | unselected, item 3 of 6
-tab | Passwords | | unselected, item 4 of 6
-tab | Advanced | | selected, item 5 of 6
+tab | General | | unselected, item 0 of 7
+tab | Appearance | | unselected, item 1 of 7
+tab | Tab groups | | unselected, item 2 of 7
+tab | Privacy and security | | unselected, item 3 of 7
+tab | Downloads | | unselected, item 4 of 7
+tab | Passwords | | unselected, item 5 of 7
+tab | Advanced | | selected, item 6 of 7
 text | Advanced | |
 checkbox | Experimental web features | | checked
 text | Experimental web features | |

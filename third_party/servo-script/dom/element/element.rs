@@ -4970,6 +4970,14 @@ impl VirtualMethods for Element {
             },
         };
 
+        // Mercury: a11y-1 item 4: an attribute that gives the node a role, name, state or relation
+        // damages its accessibility properties (the `role` arm above predates this).
+        crate::dom::document::accessibility_attributes::damage_for_attribute_change(
+            node,
+            attr.local_name(),
+            cx,
+        );
+
         // TODO: This should really only take into account the actual attributes that are used
         // for the content attribute property.
         if self
@@ -5335,6 +5343,13 @@ impl Element {
         }
 
         self.state.set(state);
+
+        // Mercury: a11y-1 item 4: the native state flags are accessibility states (checked, disabled, ...).
+        crate::dom::document::accessibility_attributes::damage_for_state_change(
+            self.upcast::<Node>(),
+            which,
+            no_gc,
+        );
     }
 
     /// <https://html.spec.whatwg.org/multipage/#concept-selector-active>

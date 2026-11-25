@@ -633,7 +633,11 @@ impl Fragment {
                     parent_info,
                 );
             },
-            Fragment::Text(_) | Fragment::Image(_) | Fragment::IFrame(_) => {},
+            // Mercury: text-overflow (`ElidedText`, hand-port of servo/servo#42394)
+            Fragment::Text(_) |
+            Fragment::ElidedText(_) |
+            Fragment::Image(_) |
+            Fragment::IFrame(_) => {},
         }
     }
 }

@@ -39,4 +39,8 @@ pub enum NetToEmbedderMsg {
     EmbedderCookieOperationResponseWithCookies(CookieOperationId, Vec<Cookie<'static>>),
     /// Response to an asynchronous request from SiteDataManager.
     EmbedderCookieOperationResponse(CookieOperationId),
+    // Mercury: the one variant through which the net lane's messages (`NetMsg`) reach Mercury; the
+    // `servo` crate hands it to `mercury::deliver` like the other lanes' messages (net-1 brief 5.4).
+    /// A message of Mercury's net lane, for the web view it names (or for the whole `Servo` instance).
+    Mercury(Option<WebViewId>, embedder_traits::MercuryEmbedderMsg),
 }

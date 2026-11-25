@@ -21,7 +21,7 @@ export component PdfPages inherits Rectangle {
 
     background: PdfPalette.backdrop;
     clip: true;
-    accessible-role: AccessibleRole.main;
+    accessible-role: AccessibleRole.region;
     accessible-label: "PDF document, page " + PdfViewerModel.page + " of " + PdfViewerModel.page-count;
 
     init => {

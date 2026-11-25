@@ -79,6 +79,9 @@ pub use media::{
     GlApi as MediaGlApi, GlContext as MediaGlContext, NativeDisplay as MediaNativeDisplay,
 };
 pub use net::image_cache::should_panic_hook_suppress_termination;
+// Mercury: the network policy handle (third-party cookies, GPC, referrer cap, mixed content), which
+// Mercury configures through `NetPolicy::process()` (net-1 brief section 5.4).
+pub use net::net_policy::{NetPolicy, NetPolicyStats, SiteKey};
 pub use net_traits::CookieSource;
 // This API should probably not be exposed in this way. Instead there should be a fully
 // fleshed out public domains API if we want to expose it.

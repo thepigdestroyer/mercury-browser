@@ -5,7 +5,11 @@
 
 #![warn(missing_docs)]
 
+mod tint;
+
 use std::path::{Path, PathBuf};
+
+pub use tint::{APP_ICON_PIXELS, tint_app_icon};
 
 /// One file of a macOS iconset.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -96,6 +100,9 @@ pub enum Error {
     /// The PNG could not be encoded.
     #[error("cannot encode the PNG: {0}")]
     Png(String),
+    /// The icon artwork lacks a colour the tint replaces, so it was edited without the tint.
+    #[error("the icon artwork has no {0}")]
+    Template(String),
 }
 
 /// The largest size drawn from the small artwork. At 16 and 32 px the full icon's detail turns to

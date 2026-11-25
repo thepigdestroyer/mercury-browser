@@ -110,11 +110,7 @@ fn palette(id: &str) -> &'static Palette {
 }
 
 fn look(light: &str, dark: &str) -> Look {
-    Look {
-        palette_light: palette(light),
-        palette_dark: palette(dark),
-        metrics: Metrics::ROOMY,
-    }
+    Look::new(palette(light), palette(dark), Metrics::ROOMY)
 }
 
 fn expected(palette: &Palette, scheme: Scheme) -> Vec<(Role, Colour)> {

@@ -61,6 +61,11 @@ check "the default list has Servo's 38 plugins minus ogg" "37" "$(line_count "$d
 check "the default list names files like libgstcoreelements.dylib" "yes" \
     "$(if grep -x 'libgstcoreelements.dylib' <<<"$default_list" >/dev/null; then echo yes; else echo no; fi)"
 check "ogg is excluded by default" "0|libgstogg.dylib" "$(run bash "$PLUGINS" --excluded)"
+# Mercury (MED-1): Mercury's own plugins (dav1d) are a list in the collector, not on Servo's list.
+check "Servo's list does not name dav1d (Mercury's own plugins are in the collector)" "no" \
+    "$(if grep -x 'libgstdav1d.dylib' <<<"$default_list" >/dev/null; then echo yes; else echo no; fi)"
+check "the collector names dav1d as Mercury's own plugin" "yes" \
+    "$(if grep -F 'MERCURY_PLUGINS=(gstdav1d)' scripts/macos/collect-gstreamer.sh >/dev/null; then echo yes; else echo no; fi)"
 
 # Without jq (macOS before 15) the script reads cargo metadata with the workspace's own
 # reader: a PATH of the system's tools minus jq, and cargo.
@@ -184,11 +189,16 @@ else
     lib="$odd/out dir/lib"
     result="$(collect "$odd/pre fix*" "$lib")"
     check "collects through paths with a space and *" "0" "${result%%|*}"
-    check "87 libraries and one marker" "88" "$(files_in "$lib")"
+    check "89 libraries and one marker" "90" "$(files_in "$lib")"
     check "the excluded plugin is absent" "no" "$([ -e "$lib/libgstogg.dylib" ] && echo yes || echo no)"
     check "the marker records the exclusion" "excluded libgstogg.dylib" \
         "$(grep '^excluded' "$lib/.gstreamer-1.28.9")"
-    check "the marker records the file count" "files 87" "$(grep '^files' "$lib/.gstreamer-1.28.9")"
+    check "the marker records the file count" "files 89" "$(grep '^files' "$lib/.gstreamer-1.28.9")"
+    # Mercury (MED-1): dav1d is one of Mercury's own plugins, collected with its library.
+    check "Mercury's own plugin dav1d is collected with libdav1d" "yes|yes" \
+        "$([ -e "$lib/libgstdav1d.dylib" ] && echo yes || echo no)|$([ -e "$lib/libdav1d.7.dylib" ] && echo yes || echo no)"
+    check "the marker records Mercury's own plugin" "mercury-plugin gstdav1d" \
+        "$(grep '^mercury-plugin' "$lib/.gstreamer-1.28.9")"
 
     result="$(collect "$odd/pre fix*" "$lib")"
     check "a second run finds it up to date" "0|yes" "${result%%|*}|$(stderr_has "is up to date")"
@@ -238,7 +248,10 @@ else
     cp "$EXE" "$app/mercury-browser"
     result="$(collect "$PREFIX" "$app/lib")"
     check "a bundle destination is collected" "0" "${result%%|*}"
-    check "and holds only the 87 libraries, no marker" "87|0" \
+    # Mercury (MED-1): unlike the test sources, Mercury's own plugins ship in a bundle.
+    check "and ships dav1d and libdav1d" "yes|yes" \
+        "$([ -e "$app/lib/libgstdav1d.dylib" ] && echo yes || echo no)|$([ -e "$app/lib/libdav1d.7.dylib" ] && echo yes || echo no)"
+    check "and holds only the 89 libraries, no marker" "89|0" \
         "$(files_in "$app/lib")|$(find "$app/lib" -type f ! -name '*.dylib' | wc -l | tr -d ' ')"
     result="$(collect "$PREFIX" "$app/lib")"
     check "a bundle destination is never collected twice" "1|yes" "${result%%|*}|$(stderr_has "already exists")"
@@ -283,6 +296,11 @@ else
     rm "$TMP/missing/lib/gstreamer-1.0/libgstvolume.dylib"
     result="$(collect "$TMP/missing" "$TMP/fake-out/lib")"
     check "a missing plugin stops the collector" "1|yes" "${result%%|*}|$(stderr_has "plugin gstvolume is missing")"
+    # Mercury (MED-1): the same for one of Mercury's own plugins.
+    fake_prefix "$TMP/missing-dav1d"
+    rm "$TMP/missing-dav1d/lib/gstreamer-1.0/libgstdav1d.dylib"
+    result="$(collect "$TMP/missing-dav1d" "$TMP/fake-out/lib")"
+    check "a missing Mercury plugin stops the collector" "1|yes" "${result%%|*}|$(stderr_has "plugin gstdav1d is missing")"
     check "no partial result is left behind" "no|no" \
         "$([ -e "$TMP/fake-out/lib" ] && echo yes || echo no)|$(if [ -n "$(find "$TMP/fake-out" -maxdepth 1 -name 'lib.partial*')" ]; then echo yes; else echo no; fi)"
 

@@ -1,0 +1,19 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+button | Change keys | |
+list | Switch group | |
+list-item | Option A, Research, 5 tabs | | selected, item 0 of 6
+list-item | Option S, Lisbon trip, 4 tabs | | unselected, item 1 of 6
+list-item | Option D, Reading, 6 tabs | | unselected, item 2 of 6
+list-item | Option F, Shopping, 3 tabs | | unselected, item 3 of 6
+list-item | Option G, Work, 2 tabs | | unselected, item 4 of 6
+list-item | Option H, Recipes, 2 tabs | | unselected, item 5 of 6
+text | Tap a letter for a group, then 1–9 for one of its tabs. Release ⌥ to go there. | |
+list | Tabs of Research | |
+list-item | Tab 1, Servo layout notes | | unselected, item 0 of 5
+list-item | Tab 2, WebRender notes | | unselected, item 1 of 5
+list-item | Tab 3, Slint rendering | | selected, item 2 of 5
+list-item | Tab 4, AccessKit | | unselected, item 3 of 5
+list-item | Tab 5, Forum thread | | unselected, item 4 of 5

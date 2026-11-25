@@ -100,7 +100,13 @@ flowchart TB
 | `crates/mercury-devtools` | Development and CI tools: the loopback server for `tests/`, the smoke test's screenshot checker and the CI scripts' helpers |
 | `crates/mercury-filter-lists` | The ad and tracker filter lists as data files: the manifest and its SHA-256 checks, the compiled engine's cache and the background updates |
 | `crates/mercury-site-security` | Site security with no engine inside: safe display of host names, Mercury's network, certificate and crash error pages, and certificate-exception requests |
+| `crates/mercury-appearance` | How Mercury looks, as data: the palettes and the contrast rules each one must pass, the tab-group colours and the resolving of the stored appearance settings into values for the interface, with no engine and no Slint |
+| `crates/mercury-pdf` | The PDF viewer without PDFium, the engine or the interface toolkit: the protocol with the helper process, the client, the helper's serve loop and the model of what to draw |
+| `crates/mercury-pdfium` | The PDFium backend of the PDF viewer and the helper process's entry point (`mercury-browser --pdf-worker`); PDFium is loaded at run time from a prebuilt library, not linked |
+| `crates/mercury-credits` | A build tool: writes `credits.html`, the licence texts of every crate built into the app, and checks that every crate can be credited (`make credits-check`) |
+| `crates/mercury-proxy` | Which proxy Mercury uses, with no engine inside: the system's proxy settings, the choice between them and the `http_proxy`, `https_proxy` and `no_proxy` variables, and the one function that gives any other HTTP client (downloads, the PDF viewer's fetch) the same proxy as Servo |
 | `crates/mercury-tab-snapshots` | Small pictures of the open tabs, for the Orbit view, with no engine inside: shrinking a frame to at most 480 by 300 pixels, a store kept in memory under a 128 MB cap, and the rules for when a picture is taken |
+| `crates/mercury-option-keys` | The ⌥ group-key state machine with no engine inside: from the keys, the focus and the groups it says whether a key goes to the page, which group or tab to switch to, and when the "Switch group" card shows; time is passed in, so it is tested without a clock |
 | `crates/mercury-iconset` | A build tool: renders the app icon's SVG into the macOS iconset (`scripts/macos/make-icns.sh`) |
 | `crates/mercury-release` | A release tool: writes and signs the update manifest (`update.json`) published with each release |
 | `crates/mercury-servo-patches` | A build tool: vendors a Servo crate exactly as published, exports Mercury's changes to it as a patch and checks them (`make servo-patches-check`) |
@@ -137,6 +143,7 @@ pie showData title Work packages, 19 November 2026
 | Import window for other browsers' data | ✅ Done | Chromium-based browsers and Firefox |
 | Downloads list, saving links and pages | ✅ Done | |
 | Find in page | ✅ Done | |
+| PDF viewer: PDFs open in the tab, drawn from pages that PDFium renders in a helper process | ✅ Done | No forms, no annotations, no screen-reader access to the page text. The first run on Apple Silicon is still to be checked by hand |
 | Links opened from other apps and a second launch | ✅ Done | |
 | Tab audio indicator, mute, and macOS Now Playing | ✅ Done | |
 | Pinned tabs, dragging to reorder, tab search, duplicate tab, close other tabs | ✅ Done | |
@@ -146,8 +153,8 @@ pie showData title Work packages, 19 November 2026
 | Filter lists as separate files, updated in the background | ✅ Done | |
 | Servo patches: safety checks, frame identity, password autofill hooks, leave-page prompts and more | 🗓️ Planned | Approved. The camera work has landed, and most Servo crates are vendored as published, ready for the rest |
 | A completely redesigned, highly customisable interface | 🗓️ Planned | Replaces the look inherited from Hermes |
-| Screen-reader labels for Mercury's own windows (toolbar, tabs, address bar, menus, dialogs, Settings and the other windows) | 🔄 In progress | Written into the code, covered by automated tests and read back through macOS's accessibility interface by a test program, but not yet tried with VoiceOver by a person, and not yet run with the GPU renderer. In a long list (history, bookmarks manager) a screen reader reaches only the rows on screen until keyboard scrolling is added. Web pages are not readable by a screen reader yet: VoiceOver sees a page as one item |
-| Accessibility of web pages (a screen reader reading what a page says) | 🗓️ Planned | Needs Servo patches |
+| Screen-reader labels for Mercury's own windows (toolbar, tabs, address bar, menus, dialogs, Settings and the other windows) | 🔄 In progress | Written into the code, covered by automated tests and read back through macOS's accessibility interface by a test program, but not yet tried with VoiceOver by a person, and not yet run with the GPU renderer. In a long list (history, bookmarks manager) a screen reader reaches only the rows on screen until keyboard scrolling is added. Web pages are described in the next row |
+| Accessibility of web pages (a screen reader reading what a page says) | 🔄 In progress | Implemented (roles, names, states, values, actions and iframes, for the shown tab) and covered by tests without VoiceOver, but not yet tried with VoiceOver by a person; the tests that read a live page run where Servo can render. Reading by character or line, the caret, live regions and tables come later |
 | Phishing protection, search suggestions, password breach checks, translation, update checks | 🗓️ Planned | Waiting for decisions on providers and keys |
 | macOS disk image built and published by CI, signed ad hoc | ✅ Done | No release has been published yet |
 | With each release: SHA-256 checksums, a build-provenance attestation, the source of the bundled LGPL libraries and a signed update manifest | ✅ Done | The release workflow makes them once the owner has set up the update signing key. The browser does not check for updates yet |
@@ -170,6 +177,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 
 **From where Mercury is right now**
 
+- The PDF viewer shows pages, finds and copies text and follows links; it has no forms and no annotations, and a screen reader cannot read the text of a PDF page. PDFium comes as a prebuilt library without V8 and without XFA, so no JavaScript inside a PDF runs.
 - There's no Apple Developer ID yet. Hence the ad hoc signature and the warning on first launch.
 - Updates are manual: the browser has no update check yet. Each release does carry a signed update manifest (`update.json`) for the check that is planned, but nothing reads it today.
 - Releases carry an ad-hoc signed macOS disk image (Apple Silicon only) and a Linux x86-64 archive, with SHA-256 checksums and a build-provenance attestation ([how to check them](docs/user-guide/installation.md#verify-a-download)). Neither is notarised, and neither updates itself. No release has been made yet. An Intel Mac builds the app from source with `make run`; `make app-macos` is Apple Silicon only.
@@ -182,7 +190,7 @@ Some of this is Servo 0.8. Some of it is just where Mercury happens to be today.
 - Eleven features were in progress; ten have merged (session, history, bookmarks and import, downloads, find, links from other apps, media, camera and microphone, and filter lists). Location is the last: it's built but stays off until a Servo patch tells Mercury which frame is asking.
 - The approved Servo patches, each kept in `third_party/` with a note explaining it.
 - A ground-up redesign of the interface, with themes, layouts and a toolbar you arrange yourself.
-- Accessibility of web pages, and trying the labels of Mercury's own windows with VoiceOver on a real Mac.
+- Trying web pages and the labels of Mercury's own windows with VoiceOver on a real Mac.
 - The outside services in the table above, once providers and keys are settled.
 - An update check in the browser, using the signed update manifest each release already carries.
 - Developer ID signing and notarisation of the macOS release, once there's a Developer ID.
