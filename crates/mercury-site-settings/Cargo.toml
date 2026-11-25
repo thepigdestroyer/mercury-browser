@@ -1,0 +1,18 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-site-settings"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# What the user decided per site, as data: origin patterns, the setting axes, allow/block/ask with
+# lifetimes and last-used times, the protocol-handler table and the one-time import of the lists
+# that exist today. No engine, no Slint and no clock: time is an argument. Persistence goes through
+# `mercury-store` rows (the profile-data worker applies the journal). Builds in the light pool.
+[dependencies]
+# The Public Suffix List, for "the site of an address" (already in Cargo.lock through `addr`).
+psl = "2.1"
+url.workspace = true

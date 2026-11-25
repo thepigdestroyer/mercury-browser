@@ -25,6 +25,7 @@ members = [
     "crates/mercury-servo-patches",
     "crates/mercury-settings",
     "crates/mercury-site-security",
+    "crates/mercury-site-settings",
     "crates/mercury-store",
     "crates/mercury-tab-snapshots",
     "crates/mercury-ui",

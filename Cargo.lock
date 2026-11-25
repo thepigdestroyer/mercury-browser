@@ -6253,6 +6253,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-site-settings"
+version = "0.2.0"
+dependencies = [
+ "psl",
+ "url",
+]
+
+[[package]]
 name = "mercury-store"
 version = "0.2.0"
 dependencies = [
