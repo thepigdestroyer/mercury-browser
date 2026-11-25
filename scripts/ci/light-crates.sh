@@ -4,7 +4,8 @@
 # Print the cargo `-p` arguments for every workspace member that can be built
 # without the browser engine or the UI toolkit: members whose full dependency
 # closure (normal, build and dev dependencies, for every target platform)
-# contains neither the `servo` crate nor `slint`.
+# contains none of the `servo`, `slint` or `gstreamer` crates (the fast CI jobs
+# install no GStreamer).
 #
 #   scripts/ci/light-crates.sh            # -p talaria-core -p …   (one line)
 #   scripts/ci/light-crates.sh --explain  # one line per member, light or not, and why

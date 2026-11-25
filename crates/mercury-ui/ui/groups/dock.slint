@@ -1,0 +1,974 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The floating group dock (SPEC design/ui-final/SPEC.md §4.4): one pill per group, the current group
+// expanded into chips, a "+" and the x button; the pill under the pointer grows. `GroupDockBar` is
+// the one component a window instantiates: the dock, or the capsule when it is shrunk.
+//
+// THE PROPERTIES AND CALLBACKS BELOW ARE THE PINNED CONTRACT of lane group-dock
+// (sdd/lane-group-dock-brief.md §3.1). Other lanes build on them; a change goes through the lane
+// lead, and only additions are allowed. The body of `GroupDock` is filled in by the group-dock lane
+// (item 3). `GroupDockBar` is complete in the scaffold.
+//
+// Slint generates Rust code only for Window components: the dock is reached from Rust through
+// `GroupDockPreview` (dock-preview.slint) and, later, through the window that instantiates
+// `GroupDockBar`. Rust fills the models only through src/group_dock/models.rs.
+
+import { DockChip, DockGeometry, DockHit, DockHitKind, DockPill, DockSliver, DockStateKind } from "dock-models.slint";
+import { DockCapsule } from "dock-capsule.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// A state marker as wide as its slot, with a shape of its own per kind (see `DockStateKind`).
+export component StateDot inherits Rectangle {
+    in property <color> colour;
+    in property <DockStateKind> kind: DockStateKind.disc;
+
+    accessible-role: AccessibleRole.none;
+
+    if root.kind == DockStateKind.disc: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: parent.width * 0.78;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.colour;
+        accessible-role: AccessibleRole.none;
+    }
+
+    if root.kind == DockStateKind.triangle: Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: "M 5 0.6 L 9.7 9.2 L 0.3 9.2 Z";
+        fill: root.colour;
+        accessible-role: AccessibleRole.none;
+    }
+
+    if root.kind == DockStateKind.ring-dot || root.kind == DockStateKind.ring-slash || root.kind == DockStateKind.ring: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: parent.width * 0.86;
+        height: self.width;
+        border-radius: self.width / 2;
+        border-width: 1.5px;
+        border-color: root.colour;
+        accessible-role: AccessibleRole.none;
+    }
+
+    if root.kind == DockStateKind.ring-dot: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: parent.width * 0.34;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.colour;
+        accessible-role: AccessibleRole.none;
+    }
+
+    if root.kind == DockStateKind.ring-slash: Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: 10;
+        viewbox-height: 10;
+        commands: "M 1.4 8.6 L 8.6 1.4";
+        stroke: root.colour;
+        stroke-width: 1.3px;
+        accessible-role: AccessibleRole.none;
+    }
+
+    if root.kind == DockStateKind.bars: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        accessible-role: AccessibleRole.none;
+        for bar-height[i] in [0.45, 0.75, 1.0]: Rectangle {
+            x: root.width * (0.12 + i * 0.28);
+            width: root.width * 0.2;
+            height: root.height * 0.9 * bar-height;
+            y: root.height * 0.95 - self.height;
+            border-radius: 1px;
+            background: root.colour;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+}
+
+// One chip of the expanded pill: the tab's favicon dot, title, state dots and, on the active chip and
+// under the pointer, a close x. `k` is how far the pill's animation has come (drawn width over the
+// width the frame asks for), so chips keep their place inside a pill that is still moving; `s` is
+// the pill's drawn height over 30 px, the magnification.
+component DockChipView inherits Rectangle {
+    in property <DockChip> chip;
+    in property <int> index;
+    in property <int> count;
+    in property <string> group-name;
+    in property <bool> hovered;
+    in property <float> s: 1;
+    // Fired when `chip.active` is or becomes true / false, so the expanded pill knows its active tab
+    // (⌘⌫) without a loop over the model.
+    callback active-changed(bool);
+    callback activated();
+
+    property <bool> active-now: root.chip.active;
+    property <length> pad: 8px * root.s;
+    property <bool> show-close: root.chip.active || root.hovered;
+    property <int> dot-count: (root.chip.unread ? 1 : 0) + (root.chip.crashed ? 1 : 0) + (root.chip.capture ? 1 : 0)
+        + (root.chip.audible ? 1 : 0) + (root.chip.muted ? 1 : 0) + (root.chip.loading ? 1 : 0);
+    property <length> dots-width: root.dot-count * 9px * root.s;
+    property <length> close-width: root.show-close ? 16px * root.s : 0px;
+    property <length> title-x: root.pad + 14px * root.s;
+
+    border-radius: self.height / 2;
+    background: root.chip.active ? ChromePalette.popup-background : root.hovered ? ChromePalette.item-hover : transparent;
+
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.chip.title + ", " + root.group-name + ", tab " + (root.index + 1) + " of " + root.count
+        + (root.chip.active ? ", current tab" : "")
+        + (root.chip.unread ? ", unread" : "")
+        + (root.chip.audible ? ", playing sound" : "")
+        + (root.chip.muted ? ", muted" : "")
+        + (root.chip.crashed ? ", crashed" : "")
+        + (root.chip.capture ? ", using camera or microphone" : "")
+        + (root.chip.loading ? ", loading" : "");
+    accessible-item-selectable: true;
+    accessible-item-selected: root.chip.active;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.activated();
+    }
+
+    init => {
+        if root.chip.active {
+            root.active-changed(true);
+        }
+    }
+    changed active-now => {
+        root.active-changed(root.active-now);
+    }
+
+    Rectangle {
+        x: root.pad;
+        y: (parent.height - self.height) / 2;
+        width: 8px * root.s;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.chip.shade;
+        accessible-role: AccessibleRole.none;
+    }
+
+    Text {
+        x: root.title-x;
+        width: max(parent.width - root.title-x - root.pad - root.dots-width - root.close-width, 0px);
+        height: parent.height;
+        text: root.chip.title;
+        font-size: 12.5px * root.s;
+        font-weight: root.chip.active ? 600 : 400;
+        color: root.chip.active ? ChromePalette.text : ChromePalette.text-secondary;
+        vertical-alignment: center;
+        overflow: elide;
+        accessible-role: AccessibleRole.none;
+    }
+
+    // The state markers, right-aligned before the close x, one shape per state: loading an empty
+    // ring, unread a disc (accent), crashed a triangle (danger), camera or microphone a ring with a
+    // dot, playing sound three bars, muted a slashed ring.
+    Rectangle {
+        x: parent.width - root.pad - root.close-width - root.dots-width;
+        y: 0px;
+        width: root.dots-width;
+        height: parent.height;
+        accessible-role: AccessibleRole.none;
+        HorizontalLayout {
+            alignment: start;
+            if root.chip.loading: StateDot {
+                width: 9px * root.s;
+                colour: ChromePalette.accent;
+                kind: DockStateKind.ring;
+            }
+            if root.chip.unread: StateDot {
+                width: 9px * root.s;
+                colour: ChromePalette.accent;
+                kind: DockStateKind.disc;
+            }
+            if root.chip.crashed: StateDot {
+                width: 9px * root.s;
+                colour: ChromePalette.danger;
+                kind: DockStateKind.triangle;
+            }
+            if root.chip.capture: StateDot {
+                width: 9px * root.s;
+                colour: ChromePalette.capture-indicator;
+                kind: DockStateKind.ring-dot;
+            }
+            if root.chip.audible: StateDot {
+                width: 9px * root.s;
+                colour: ChromePalette.text-muted;
+                kind: DockStateKind.bars;
+            }
+            if root.chip.muted: StateDot {
+                width: 9px * root.s;
+                colour: ChromePalette.text-muted;
+                kind: DockStateKind.ring-slash;
+            }
+        }
+    }
+
+    // Drawn only: a click on it is a `chip-close` hit (the dock's one TouchArea decides, Rust's `hit`
+    // knows where it is); ⌘⌫ and a middle click close the tab too.
+    if root.show-close: Text {
+        x: parent.width - root.pad - root.close-width;
+        width: root.close-width;
+        height: parent.height;
+        text: "×";
+        font-size: 14px * root.s;
+        color: ChromePalette.text-muted;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        accessible-role: AccessibleRole.none;
+    }
+}
+
+// The dots of a folded pill's group, at its top right corner, over the border.
+component DockPillDots inherits Rectangle {
+    in property <bool> loading;
+    in property <bool> audible;
+    in property <bool> unread;
+
+    property <int> dot-count: (root.loading ? 1 : 0) + (root.audible ? 1 : 0) + (root.unread ? 1 : 0);
+
+    width: root.dot-count * 9px;
+    height: 9px;
+    accessible-role: AccessibleRole.none;
+
+    HorizontalLayout {
+        alignment: end;
+        if root.loading: StateDot {
+            width: 9px;
+            colour: ChromePalette.accent;
+            kind: DockStateKind.ring;
+        }
+        if root.audible: StateDot {
+            width: 9px;
+            colour: ChromePalette.text-muted;
+            kind: DockStateKind.bars;
+        }
+        if root.unread: StateDot {
+            width: 9px;
+            colour: ChromePalette.accent;
+            kind: DockStateKind.disc;
+        }
+    }
+}
+
+// The group name and, after it, the key badge. Draws nothing when `name` does not fit in `room`
+// (the crowded tiers of the fit): the pill then shows a colour dot and the count instead.
+component DockPillName inherits Rectangle {
+    in property <DockPill> pill;
+    in property <float> s: 1;
+    in property <length> left;
+    in property <length> room;
+    out property <bool> fits: root.left + root.content-width <= root.room + 1px;
+
+    property <length> content-width: name-text.preferred-width + (root.pill.show-key && root.pill.group.key-label != "" ? 6px * root.s + badge.width : 0px);
+
+    accessible-role: AccessibleRole.none;
+
+    name-text := Text {
+        x: root.left;
+        height: parent.height;
+        text: root.pill.group.name;
+        font-size: 13px * root.s;
+        font-weight: 600;
+        color: root.pill.group.deep;
+        vertical-alignment: center;
+        visible: root.fits;
+        accessible-role: AccessibleRole.none;
+    }
+
+    badge := Rectangle {
+        x: root.left + name-text.preferred-width + 6px * root.s;
+        y: (parent.height - self.height) / 2;
+        width: badge-text.preferred-width + 8px * root.s;
+        height: 15px * root.s;
+        border-radius: 4px * root.s;
+        background: ChromePalette.popup-background;
+        visible: root.fits && root.pill.show-key && root.pill.group.key-label != "";
+        accessible-role: AccessibleRole.none;
+
+        badge-text := Text {
+            x: 4px * root.s;
+            height: parent.height;
+            text: root.pill.group.key-label;
+            font-size: 10px * root.s;
+            font-weight: 700;
+            color: ChromePalette.accent;
+            vertical-alignment: center;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+
+    // Too narrow for the name: the group's colour as a dot, and the count when there is room.
+    if !root.fits: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.pill.width >= 34px ? 10px * root.s + 4px + count-text.preferred-width : 10px * root.s;
+        height: 10px * root.s;
+        accessible-role: AccessibleRole.none;
+
+        Rectangle {
+            width: 10px * root.s;
+            height: self.width;
+            border-radius: self.width / 2;
+            background: root.pill.group.colour;
+            accessible-role: AccessibleRole.none;
+        }
+
+        count-text := Text {
+            x: 10px * root.s + 4px;
+            height: parent.height;
+            text: "" + root.pill.group.count;
+            font-size: 10px * root.s;
+            font-weight: 600;
+            color: root.pill.group.deep;
+            vertical-alignment: center;
+            visible: root.pill.width >= 34px;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+}
+
+// A folded pill: the group's tint, its name and one sliver per tab; a `tab` for VoiceOver.
+component FoldedPill inherits Rectangle {
+    in property <DockPill> pill;
+    in property <int> index;
+    in property <int> count;
+    in property <bool> focused;
+    in property <int> hovered-tab: -1;
+    callback activated();
+
+    property <float> k: root.pill.width > 0.5px ? root.width / root.pill.width : 1;
+    property <float> s: max(root.height / DockGeometry.pill-height, 0.1);
+    property <length> pad: 14px * root.s;
+    property <length> first-sliver-x: root.pill.slivers.length > 0 ? root.pill.slivers[0].x * root.k : root.width;
+
+    accessible-role: AccessibleRole.tab;
+    accessible-label: root.pill.group.name + ", tab group, " + root.pill.group.count + (root.pill.group.count == 1 ? " tab" : " tabs")
+        + (root.pill.group.key-label != "" ? ", key Option " + root.pill.group.key-label : "")
+        + (root.pill.group.any-loading ? ", loading" : "")
+        + (root.pill.group.any-audible ? ", playing sound" : "")
+        + (root.pill.group.any-unread ? ", unread" : "");
+    accessible-item-selectable: true;
+    accessible-item-selected: root.pill.group.active;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.activated();
+    }
+
+    body := Rectangle {
+        width: parent.width;
+        height: parent.height;
+        border-radius: self.height / 2;
+        background: root.pill.group.tint;
+        clip: true;
+        accessible-role: AccessibleRole.none;
+
+        DockPillName {
+            width: parent.width;
+            height: parent.height;
+            pill: root.pill;
+            s: root.s;
+            left: root.pad;
+            room: root.first-sliver-x;
+        }
+
+        for sliver in root.pill.slivers: Rectangle {
+            x: sliver.x * root.k;
+            y: 3px;
+            width: max(sliver.width * root.k, 1px);
+            height: max(root.height - 6px, 0px);
+            border-radius: 2px;
+            background: sliver.shade;
+            border-width: sliver.active || sliver.tab == root.hovered-tab ? 2px : 0px;
+            border-color: sliver.active ? root.pill.group.deep : ChromePalette.text;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+
+    DockPillDots {
+        x: root.width - self.width - 6px;
+        y: -3px;
+        loading: root.pill.group.any-loading;
+        audible: root.pill.group.any-audible;
+        unread: root.pill.group.any-unread;
+    }
+
+    if root.focused: Rectangle {
+        x: -3px;
+        y: -3px;
+        width: parent.width + 6px;
+        height: parent.height + 6px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: ChromePalette.focus-ring;
+        accessible-role: AccessibleRole.none;
+    }
+}
+
+// The current group's pill: a 1 px `deep` outline on the tint, its name, and one chip per tab. A
+// `tab-list` for VoiceOver whose chips are `tab`s.
+component ExpandedPill inherits Rectangle {
+    in property <DockPill> pill;
+    in property <int> index;
+    in property <int> count;
+    in property <bool> focused;
+    in property <int> hovered-tab: -1;
+    // Bumped by the dock on ⌘⌫: the focused expanded pill closes its active chip's tab.
+    in property <int> close-request: 0;
+    // The pointer is over the "+" at the pill's right end (the dock's one TouchArea decides).
+    in property <bool> plus-hover: false;
+    callback activated();
+    callback tab-activated(int);
+    callback tab-close(int);
+
+    property <float> k: root.pill.width > 0.5px ? root.width / root.pill.width : 1;
+    property <float> s: max(root.height / DockGeometry.pill-height, 0.1);
+    property <length> pad: 12px * root.s;
+    property <int> active-tab: -1;
+    property <length> first-chip-x: root.pill.chips.length > 0 ? root.pill.chips[0].x * root.k : root.width;
+
+    border-radius: self.height / 2;
+    background: root.pill.group.tint;
+    border-width: 1px;
+    border-color: root.pill.group.deep;
+
+    accessible-role: AccessibleRole.tab-list;
+    accessible-label: root.pill.group.name + ", tab group, " + root.pill.group.count + (root.pill.group.count == 1 ? " tab" : " tabs")
+        + (root.pill.group.key-label != "" ? ", key Option " + root.pill.group.key-label : "")
+        + (root.pill.group.any-loading ? ", loading" : "")
+        + (root.pill.group.any-audible ? ", playing sound" : "")
+        + (root.pill.group.any-unread ? ", unread" : "")
+        + ", current group";
+
+    changed close-request => {
+        if root.focused && root.active-tab >= 0 {
+            root.tab-close(root.active-tab);
+        }
+    }
+
+    DockPillName {
+        width: parent.width;
+        height: parent.height;
+        pill: root.pill;
+        s: root.s;
+        left: root.pad;
+        room: root.first-chip-x;
+    }
+
+    for chip[ci] in root.pill.chips: DockChipView {
+        x: chip.x * root.k;
+        y: 4px * root.s;
+        width: max(chip.width * root.k, 0px);
+        height: max(root.height - 8px * root.s, 0px);
+        chip: chip;
+        index: ci;
+        count: root.pill.chips.length;
+        group-name: root.pill.group.name;
+        hovered: chip.tab == root.hovered-tab;
+        s: root.s;
+        activated => {
+            root.tab-activated(chip.tab);
+        }
+        active-changed(active) => {
+            if active {
+                root.active-tab = chip.tab;
+            } else if root.active-tab == chip.tab {
+                root.active-tab = -1;
+            }
+        }
+    }
+
+    // The pill's own "+" (a new tab in this group), where Rust's `hit` puts it: `PLUS_RIGHT_INSET`
+    // (4 px) from the right end, 26 px wide, both scaled with the pill. Drawn only: the dock's one
+    // TouchArea decides, and the trailing "+" is the accessible button for the same action.
+    plus := Rectangle {
+        x: root.width - (4px + DockGeometry.button) * root.s;
+        y: (root.height - self.height) / 2;
+        width: DockGeometry.button * root.s;
+        height: self.width;
+        border-radius: self.width / 2;
+        background: root.plus-hover ? ChromePalette.item-hover : transparent;
+        accessible-role: AccessibleRole.none;
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 11px * root.s;
+            height: 1.6px * root.s;
+            background: ChromePalette.text-secondary;
+            accessible-role: AccessibleRole.none;
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 1.6px * root.s;
+            height: 11px * root.s;
+            background: ChromePalette.text-secondary;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+
+    if root.focused: Rectangle {
+        x: -4px;
+        y: -4px;
+        width: parent.width + 8px;
+        height: parent.height + 8px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: ChromePalette.focus-ring;
+        accessible-role: AccessibleRole.none;
+    }
+}
+
+// The open dock. Fills its parent's width; its bottom edge is `DockGeometry.bottom-margin` above
+// its parent's bottom, and it grows upward only. The tooltip and the shadow are drawn outside the
+// parent's bounds, so a host must not clip it.
+export component GroupDock inherits Rectangle {
+    // One pill per group that has a tab, in dock order (index == the Rust frame's index).
+    in property <[DockPill]> pills;
+    // The drawn bar, in the container's coordinates (centred; grows upward only).
+    in property <length> dock-x;
+    in property <length> dock-width;
+    in property <length> dock-height;
+    // The trailing "+" (new tab in the current group) and the x (shrink), drawn positions.
+    in property <length> new-tab-x;
+    in property <length> shrink-x;
+    in property <int> hovered-tab: -1;
+    in property <int> focused-group: -1;
+    // "<group> · <title>" of the hovered sliver or chip, and its x; empty = none.
+    in property <string> tooltip: "";
+    in property <length> tooltip-x;
+    // ⌥ held: key badges after every name.
+    in property <bool> held;
+    // true: no animation at all (R12 §7); until the settings lane adds a global.
+    in property <bool> reduce-motion: false;
+    in property <string> accessible-name: "Group dock";
+
+    // The host forwards it to group_dock::DockData::hit (with the last frame). The y it is given is
+    // measured in a box `DockGeometry.box-height` tall whose bottom edge is this component's bottom
+    // edge, whatever this component's height is (the dock is bottom-anchored; a host may give it
+    // the 72 px band, or less while the band settles). Handler-less it returns kind `none` with
+    // group and tab -1, like Rust's `hit`.
+    pure callback hit(length, length) -> DockHit;
+    hit(x, y) => {
+        return { kind: DockHitKind.none, group: -1, tab: -1 };
+    }
+    // Every move over the bar (the container's x and y, y in the same box as for `hit`) and the
+    // pointer leaving it: the host computes `DockData::frame(Some(x))` or `frame(None)` and updates
+    // the models.
+    callback pointer-moved(length, length);
+    callback pointer-left();
+    callback pill-activated(int /* group id */);
+    callback tab-activated(int /* tab id */);
+    callback tab-close(int /* tab id */);
+    callback new-tab-in(int /* group id */);
+    // ↓ or Return on a folded pill (SPEC §5): the peek surface is not part of this lane.
+    callback pill-peek-requested(int /* group id */);
+    callback shrink-requested();
+
+    // The state of the keyboard focus (a pill index; -1 until an arrow key or the host's
+    // `focused-group` picks one) and what the pills tell the dock about the current group.
+    property <int> focus-index: -1;
+    property <int> current-group: -1;
+    property <string> current-name: "";
+    // Bumped by ⌘⌫; the focused expanded pill closes its active chip's tab.
+    property <int> close-request: 0;
+    property <duration> duration-move: root.reduce-motion ? 0ms : 120ms;
+    // Adds what is missing between this component's height and the box `hit` measures in.
+    property <length> y-shift: DockGeometry.box-height - root.height;
+    property <DockHit> hover-hit: touch.has-hover ? root.hit(touch.mouse-x, touch.mouse-y + root.y-shift) : { kind: DockHitKind.none, group: -1, tab: -1 };
+    property <DockHitKind> hover-kind: root.hover-hit.kind;
+    // The tab under the pointer when the host does not feed `hovered-tab`.
+    property <int> shown-hovered-tab: root.hovered-tab >= 0 ? root.hovered-tab : (root.hover-kind == DockHitKind.chip || root.hover-kind == DockHitKind.chip-close || root.hover-kind == DockHitKind.sliver) ? root.hover-hit.tab : -1;
+
+    accessible-role: AccessibleRole.tab-list;
+    accessible-label: root.accessible-name;
+
+    // The bar: a popup-coloured rounded rectangle with a soft shadow. Nothing here (or above it)
+    // clips, so the shadow and the tooltip are drawn whole.
+    dock-bg := Rectangle {
+        x: root.dock-x;
+        width: root.dock-width;
+        height: root.dock-height;
+        y: root.height - DockGeometry.bottom-margin - self.height;
+        border-radius: min(DockGeometry.radius, self.height / 2);
+        background: ChromePalette.popup-background;
+        border-width: 1px;
+        border-color: ChromePalette.popup-border;
+        drop-shadow-blur: 24px;
+        drop-shadow-offset-y: 6px;
+        drop-shadow-color: ChromePalette.shadow;
+        accessible-role: AccessibleRole.none;
+
+        animate x, width, height {
+            duration: root.duration-move;
+            easing: ease-out;
+        }
+    }
+
+    for pill[i] in root.pills: Rectangle {
+        x: pill.x;
+        width: pill.width;
+        height: pill.height;
+        y: dock-bg.y + (dock-bg.height - self.height) / 2;
+
+        property <bool> host-focused: pill.group.id == root.focused-group;
+        property <int> expanded-id: pill.expanded ? pill.group.id : -1;
+        property <string> expanded-name: pill.expanded ? pill.group.name : "";
+        property <bool> ring: (fs.has-focus && root.focus-index == i) || (!fs.has-focus && self.host-focused);
+
+        animate x, width, height {
+            duration: root.duration-move;
+            easing: ease-out;
+        }
+
+        init => {
+            if self.host-focused {
+                root.focus-index = i;
+            }
+            if pill.expanded {
+                root.current-group = pill.group.id;
+                root.current-name = pill.group.name;
+            }
+        }
+        changed host-focused => {
+            if self.host-focused {
+                root.focus-index = i;
+            }
+        }
+        changed expanded-id => {
+            if pill.expanded {
+                root.current-group = pill.group.id;
+            }
+        }
+        changed expanded-name => {
+            if pill.expanded {
+                root.current-name = pill.group.name;
+            }
+        }
+
+        if !pill.expanded: FoldedPill {
+            width: parent.width;
+            height: parent.height;
+            pill: pill;
+            index: i;
+            count: root.pills.length;
+            focused: parent.ring;
+            hovered-tab: root.shown-hovered-tab;
+            activated => {
+                root.pill-activated(pill.group.id);
+            }
+        }
+
+        if pill.expanded: ExpandedPill {
+            width: parent.width;
+            height: parent.height;
+            pill: pill;
+            index: i;
+            count: root.pills.length;
+            focused: parent.ring;
+            hovered-tab: root.shown-hovered-tab;
+            close-request: root.close-request;
+            plus-hover: root.hover-kind == DockHitKind.new-tab
+                && touch.mouse-x >= pill.x + pill.width - (4px + DockGeometry.button) * pill.height / DockGeometry.pill-height
+                && touch.mouse-x <= pill.x + pill.width;
+            activated => {
+                root.pill-activated(pill.group.id);
+            }
+            tab-activated(tab) => {
+                root.tab-activated(tab);
+            }
+            tab-close(tab) => {
+                root.tab-close(tab);
+            }
+        }
+    }
+
+    // The "+" after the pills: a new tab in the current group.
+    new-tab-button := Rectangle {
+        x: root.new-tab-x;
+        width: DockGeometry.button;
+        height: DockGeometry.button;
+        y: dock-bg.y + (dock-bg.height - self.height) / 2;
+        border-radius: self.height / 2;
+        background: root.hover-kind == DockHitKind.new-tab ? ChromePalette.item-hover : transparent;
+
+        accessible-role: AccessibleRole.button;
+        accessible-label: "New tab in " + root.current-name;
+        accessible-action-default => {
+            if root.pills.length > 0 {
+                root.new-tab-in(root.current-group);
+            }
+        }
+
+        animate x {
+            duration: root.duration-move;
+            easing: ease-out;
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 11px;
+            height: 1.6px;
+            background: ChromePalette.text;
+            accessible-role: AccessibleRole.none;
+        }
+
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 1.6px;
+            height: 11px;
+            background: ChromePalette.text;
+            accessible-role: AccessibleRole.none;
+        }
+
+        if fs.has-focus && root.focus-index == root.pills.length: Rectangle {
+            x: -3px;
+            y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: self.height / 2;
+            border-width: 2px;
+            border-color: ChromePalette.focus-ring;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+
+    // The x at the right end: shrinks the dock to the capsule. It never hides by itself.
+    shrink-button := Rectangle {
+        x: root.shrink-x;
+        width: DockGeometry.button;
+        height: DockGeometry.button;
+        y: dock-bg.y + (dock-bg.height - self.height) / 2;
+        border-radius: self.height / 2;
+        background: root.hover-kind == DockHitKind.shrink ? ChromePalette.item-hover : ChromePalette.field-background;
+        border-width: 1px;
+        border-color: ChromePalette.popup-border;
+
+        accessible-role: AccessibleRole.button;
+        accessible-label: "Shrink the group dock, Control Command B";
+        accessible-action-default => {
+            root.shrink-requested();
+        }
+
+        animate x {
+            duration: root.duration-move;
+            easing: ease-out;
+        }
+
+        Text {
+            width: parent.width;
+            height: parent.height;
+            text: "×";
+            font-size: 16px;
+            color: ChromePalette.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: AccessibleRole.none;
+        }
+
+        if fs.has-focus && root.focus-index == root.pills.length + 1: Rectangle {
+            x: -3px;
+            y: -3px;
+            width: parent.width + 6px;
+            height: parent.height + 6px;
+            border-radius: self.height / 2;
+            border-width: 2px;
+            border-color: ChromePalette.focus-ring;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+
+    // "<group> · <title>" above the hovered sliver or chip, 6 px over the dock's top edge.
+    if root.tooltip != "": Rectangle {
+        width: tooltip-text.preferred-width + 20px;
+        height: 26px;
+        x: max(min(root.tooltip-x - self.width / 2, root.width - self.width - 4px), 4px);
+        y: dock-bg.y - 6px - self.height;
+        border-radius: 8px;
+        background: ChromePalette.popup-background;
+        border-width: 1px;
+        border-color: ChromePalette.popup-border;
+        accessible-role: AccessibleRole.none;
+
+        tooltip-text := Text {
+            width: parent.width;
+            height: parent.height;
+            text: root.tooltip;
+            font-size: 12px;
+            font-weight: 500;
+            color: ChromePalette.text;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+            accessible-role: AccessibleRole.none;
+        }
+    }
+
+    fs := FocusScope {
+        width: root.width;
+        height: root.height;
+
+        key-pressed(event) => {
+            if event.text == Key.LeftArrow {
+                root.focus-index = max(root.focus-index - 1, 0);
+                return accept;
+            }
+            if event.text == Key.RightArrow {
+                // The pills, then the trailing "+" (index = pills) and the x (pills + 1).
+                root.focus-index = min(root.focus-index + 1, root.pills.length + 1);
+                return accept;
+            }
+            if root.focus-index == root.pills.length && (event.text == Key.Return || event.text == " ") {
+                root.new-tab-in(root.current-group);
+                return accept;
+            }
+            if root.focus-index == root.pills.length + 1 && (event.text == Key.Return || event.text == " ") {
+                root.shrink-requested();
+                return accept;
+            }
+            if root.focus-index >= 0 && root.focus-index < root.pills.length {
+                if event.text == Key.Return || event.text == " " {
+                    root.pill-activated(root.pills[root.focus-index].group.id);
+                    return accept;
+                }
+                if event.text == Key.DownArrow && !root.pills[root.focus-index].expanded {
+                    root.pill-peek-requested(root.pills[root.focus-index].group.id);
+                    return accept;
+                }
+                if event.text == Key.Backspace && event.modifiers.control {
+                    root.close-request += 1;
+                    return accept;
+                }
+            }
+            reject
+        }
+
+        // The one TouchArea over the whole bar: it only reports; Rust's `hit` says what is under it.
+        touch := TouchArea {
+            width: parent.width;
+            height: parent.height;
+            mouse-cursor: root.hover-kind == DockHitKind.none ? MouseCursor.default : MouseCursor.pointer;
+
+            changed has-hover => {
+                if !self.has-hover {
+                    root.pointer-left();
+                }
+            }
+            clicked => {
+                fs.focus();
+                let h = root.hit(self.mouse-x, self.mouse-y + root.y-shift);
+                if h.kind == DockHitKind.sliver || h.kind == DockHitKind.chip {
+                    root.tab-activated(h.tab);
+                } else if h.kind == DockHitKind.chip-close {
+                    root.tab-close(h.tab);
+                } else if h.kind == DockHitKind.pill {
+                    root.pill-activated(h.group);
+                } else if h.kind == DockHitKind.new-tab {
+                    root.new-tab-in(h.group);
+                } else if h.kind == DockHitKind.shrink {
+                    root.shrink-requested();
+                }
+            }
+            // `TouchArea.moved` only fires while a button is down; every move comes through here.
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.move {
+                    root.pointer-moved(self.mouse-x, self.mouse-y + root.y-shift);
+                }
+                if event.kind == PointerEventKind.up && event.button == PointerEventButton.middle {
+                    let h = root.hit(self.mouse-x, self.mouse-y + root.y-shift);
+                    if h.kind == DockHitKind.sliver || h.kind == DockHitKind.chip || h.kind == DockHitKind.chip-close {
+                        root.tab-close(h.tab);
+                    }
+                }
+            }
+        }
+    }
+}
+
+// The dock, or the capsule when `shrunk`: x on the dock sets `shrunk`, the capsule sets it back.
+export component GroupDockBar inherits Rectangle {
+    // The dock's properties and callbacks, forwarded.
+    in property <[DockPill]> pills <=> dock.pills;
+    in property <length> dock-x <=> dock.dock-x;
+    in property <length> dock-width <=> dock.dock-width;
+    in property <length> dock-height <=> dock.dock-height;
+    in property <length> new-tab-x <=> dock.new-tab-x;
+    in property <length> shrink-x <=> dock.shrink-x;
+    in property <int> hovered-tab <=> dock.hovered-tab;
+    in property <int> focused-group <=> dock.focused-group;
+    in property <string> tooltip <=> dock.tooltip;
+    in property <length> tooltip-x <=> dock.tooltip-x;
+    in property <bool> held <=> dock.held;
+    in property <bool> reduce-motion: false;
+    in property <string> accessible-name <=> dock.accessible-name;
+    pure callback hit <=> dock.hit;
+    callback pointer-moved <=> dock.pointer-moved;
+    callback pointer-left <=> dock.pointer-left;
+    callback pill-activated <=> dock.pill-activated;
+    callback tab-activated <=> dock.tab-activated;
+    callback tab-close <=> dock.tab-close;
+    callback new-tab-in <=> dock.new-tab-in;
+    callback pill-peek-requested <=> dock.pill-peek-requested;
+    // The capsule's, forwarded.
+    in property <[DockSliver]> slivers <=> capsule.slivers;
+    in property <string> count-text <=> capsule.count-text;
+    in property <string> capsule-label <=> capsule.label;
+    // The state. x (or `shrink-requested`) sets it true, the capsule sets it false; the host reads
+    // `shrunk-changed` to store the choice per window and to start group_dock::DockState.
+    in-out property <bool> shrunk: false;
+    // The band for the animation only, instantly: the web view uses group_dock::DockState's
+    // settled value (the brief's D5).
+    out property <length> target-band: root.shrunk ? DockGeometry.band-shrunk : DockGeometry.band-open;
+    callback shrunk-changed(bool);
+    callback shrink-requested();
+    callback expand-requested();
+
+    dock := GroupDock {
+        width: parent.width;
+        height: parent.height;
+        visible: !root.shrunk;
+        // The swap: the one that appears fades in over 180 ms; the other is gone at once, so it
+        // cannot take a click or show in the accessibility tree while it fades.
+        opacity: root.shrunk ? 0 : 1;
+        reduce-motion: root.reduce-motion;
+        animate opacity {
+            duration: root.reduce-motion ? 0ms : 180ms;
+            easing: ease-in-out;
+        }
+        shrink-requested => {
+            root.shrunk = true;
+            root.shrunk-changed(true);
+            root.shrink-requested();
+        }
+    }
+
+    capsule := DockCapsule {
+        x: (parent.width - self.width) / 2;
+        y: parent.height - DockGeometry.bottom-margin - self.height;
+        visible: root.shrunk;
+        opacity: root.shrunk ? 1 : 0;
+        reduce-motion: root.reduce-motion;
+        animate opacity {
+            duration: root.reduce-motion ? 0ms : 180ms;
+            easing: ease-in-out;
+        }
+        expand-requested => {
+            root.shrunk = false;
+            root.shrunk-changed(false);
+            root.expand-requested();
+        }
+    }
+}

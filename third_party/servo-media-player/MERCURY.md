@@ -12,8 +12,16 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+1. **`lib.rs`: `StreamType::MediaSource` and `Player::connect_media_source`** (lane med-1, MSE by Plan B).
+   A third stream type, for a player whose data comes from a MediaSource: it pulls coded frames from the
+   source's feed instead of being pushed bytes (`push_data` is never used for it). `connect_media_source`
+   hands the player its `Arc<dyn MediaSourceBackend>` and must be the first call; its default body refuses,
+   so other backends compile unchanged.
+2. **`lib.rs`: `pub use mercury_mse as mse`**, and **`Cargo.toml`: a path dependency on `crates/mercury-mse`**.
+   The MSE contract (`MediaSourceBackend`, `MseEvent`, `MseError`, `FrameFeed`, ...) is Mercury's own Servo-free
+   crate; the player crate re-exports it so servo-media, servo-media-gstreamer and servo-script name it through
+   a crate they already depend on. A vendored crate depending on a workspace member is the direction the
+   vendoring rules allow (`make servo-patches-check` and `cargo fmt --all` accept it). Not in upstream.
 
 ## Removing this directory
 

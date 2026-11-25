@@ -3,18 +3,25 @@
 resolver = "3"
 members = [
     "apps/mercury-desktop",
+    "crates/mercury-a11y",
     "crates/mercury-appearance",
     "crates/mercury-credits",
     "crates/mercury-devtools",
     "crates/mercury-downloads",
+    "crates/mercury-engine-tests",
     "crates/mercury-filter-lists",
     "crates/mercury-iconset",
     "crates/mercury-import",
+    "crates/mercury-mse",
+    "crates/mercury-mse-gst",
+    "crates/mercury-mse-testkit",
+    "crates/mercury-option-keys",
     "crates/mercury-password-manager",
     "crates/mercury-passwords",
     "crates/mercury-pdf",
     "crates/mercury-pdfium",
     "crates/mercury-protection",
+    "crates/mercury-proxy",
     "crates/mercury-release",
     "crates/mercury-servo-patches",
     "crates/mercury-settings",
@@ -22,12 +29,13 @@ members = [
     "crates/mercury-store",
     "crates/mercury-tab-snapshots",
     "crates/mercury-ui",
+    "crates/mercury-view-source",
     "crates/talaria-core",
     "crates/talaria-servo",
 ]
 # Mercury: servo-net is vendored and its tests need dev-dependencies, so they run on the crate's own
-# manifest (`make test-servo-net`), as gaol's do.
-exclude = ["third_party/gaol", "third_party/servo-net"]
+# manifest (`make test-servo-net`), as gaol's do; servo-storage's too (`make test-servo-storage`).
+exclude = ["third_party/gaol", "third_party/servo-net", "third_party/servo-storage"]
 
 [workspace.package]
 version = "0.2.0"
@@ -37,14 +45,27 @@ license = "MPL-2.0 AND PolyForm-Noncommercial-1.0.0"
 [workspace.dependencies]
 # find: tests only (talaria-servo's dev-dependency), for the find-in-page script.
 boa_engine = { version = "0.20", default-features = false }
+# a11y-1: the page accessibility logic. `accname` and `a11y-dom` (MIT, one author, 0.30.12 of 17 Nov 2026) are
+# pinned exactly: they are one week old and release often; read the lane brief's decision D1 before moving them.
+a11y-dom = "=0.30.12"
+accesskit = "0.24"
+# The tree consumer AccessKit's own adapters use; the oracle of the a11y tests (already in the lock through Slint).
+accesskit_consumer = "0.38"
+accname = "=0.30.12"
 adblock = "=0.13.5"
 ash = "0.38"
 backtrace = "0.3.77"
+# hsts-preload (crates/mercury-devtools): decodes Gitiles' base64 form of Chromium's HSTS list.
+base64 = "0.22"
 content-security-policy = "0.9"
 core-foundation = "0.10"
 dirs = "7.0"
 dpi = "0.1"
+# sh-pages: the page text is decoded with the charset the server or the page names.
+encoding_rs = "0.8"
 euclid = "0.22"
+# hsts-preload: the map format Servo reads for its HSTS preload list (already in the lock through servo-net).
+fst = "0.4"
 futures-util = "0.3.34"
 getrandom = "0.4"
 gleam = "0.15"
@@ -105,6 +126,14 @@ surfman = "0.14"
 tempfile = "3.27"
 thiserror = "2"
 tokio = "1.54.1"
+# sh-pages: view source highlights HTML, JavaScript and CSS with tree-sitter (MIT, C core; the
+# grammars depend only on tree-sitter-language, so they work with core 0.27). `tree-sitter` itself
+# is a dev-dependency of mercury-view-source (it parses the generated pages in tests).
+tree-sitter = "0.27"
+tree-sitter-css = "0.25"
+tree-sitter-highlight = "0.27"
+tree-sitter-html = "0.23"
+tree-sitter-javascript = "0.25"
 url = "2.5"
 zeroize = "1.9"
 

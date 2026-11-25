@@ -14,6 +14,8 @@ use crate::{
 };
 // passwords
 use crate::LoginFill;
+// txt-1
+use crate::TextInputState;
 
 const DEFAULT_PAGE_TITLE: &str = "New Tab";
 const INITIAL_ADDRESS: &str = "";
@@ -297,6 +299,19 @@ pub enum BrowserEvent {
     ControlHidden {
         id: ControlId,
     },
+    // txt-1
+    /// What the focused editable element holds now (its text around the selection, the selection,
+    /// the marked text and the caret's rectangle), or `None` when nothing editable has focus.
+    /// The input method reads it to place its candidate window and to ask for the text around
+    /// the cursor.
+    TextInputState(Option<TextInputState>),
+    // txt-1
+    /// The editable of the document with this id lost the focus (the engine's message for it names
+    /// the document). The state is cleared only if it is that document's: the page's message can
+    /// arrive after the state of an iframe's field that took the focus, and must not hide it.
+    TextInputCleared {
+        document: u64,
+    },
     // openurl
     /// The page asked for a URL the engine cannot load (`mailto:`, `tel:`, an app's scheme) and
     /// the engine was refused. The controller queues it for
@@ -426,6 +441,8 @@ pub struct BrowserState {
     // controls
     pending_control: Option<(ControlId, ControlRequest)>,
     input_method: Option<(ControlId, ControlRect)>,
+    // txt-1: the focused editable's text state, as the engine last sent it
+    text_input: Option<TextInputState>,
     // media session
     media: MediaState,
     /// The user's choice; kept across navigations in the tab.
@@ -451,6 +468,7 @@ impl Default for BrowserState {
             fullscreen: false,
             pending_control: None,
             input_method: None,
+            text_input: None,
             // media session
             media: MediaState::default(),
             audio_muted: false,
@@ -523,9 +541,17 @@ impl BrowserState {
         self.input_method.map(|(_, rect)| rect)
     }
 
+    // txt-1
+    /// The text state of the focused editable element, while the engine reports one. Its
+    /// `caret_rect` places the input method's candidate window.
+    pub fn text_input(&self) -> Option<&TextInputState> {
+        self.text_input.as_ref()
+    }
+
     pub(crate) fn forget_controls(&mut self) {
         self.pending_control = None;
         self.input_method = None;
+        self.text_input = None; // txt-1
     }
 
     pub(crate) fn take_pending_control(&mut self) -> Option<ControlId> {
@@ -609,6 +635,7 @@ impl BrowserState {
                     // The engine dropped every request of the crashed page.
                     self.pending_control = None;
                     self.input_method = None;
+                    self.text_input = None; // txt-1
                     // find
                     self.find.page_changed();
                 }
@@ -659,10 +686,23 @@ impl BrowserState {
                     self.input_method = None;
                 }
             }
+            // txt-1
+            BrowserEvent::TextInputState(state) => self.text_input = state,
+            BrowserEvent::TextInputCleared { document } => {
+                if self
+                    .text_input
+                    .as_ref()
+                    .is_none_or(|state| state.document == document)
+                {
+                    self.text_input = None;
+                }
+            }
             // openurl: not part of what the tab shows; see `BrowserController::handle_event`.
             BrowserEvent::ExternalLinkRequested(_) => {}
             // dialogs: kept by the tab's page requests, not here.
-            BrowserEvent::PageRequested(_) | BrowserEvent::PageLoadStarted => {}
+            BrowserEvent::PageRequested(_) => {}
+            // A new document has no focused editable element yet; txt-1: its text state goes.
+            BrowserEvent::PageLoadStarted => self.text_input = None,
             // media-capture: kept by the tab's page requests.
             BrowserEvent::PageCrashed => {}
             // history: read by the controller's visit tracker, not shown.

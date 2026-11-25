@@ -30,11 +30,12 @@ use slint::winit_030::winit::event::{ElementState, KeyEvent};
 use slint::winit_030::winit::keyboard::{Key, ModifiersState, NamedKey, PhysicalKey};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use talaria_core::{
-    BrowserController, ControlAnswer, ControlId, ControlRect, ControlRequest, PointerButton,
-    PointerButtonAction, Rgb, TabActivation, TabId,
+    BrowserController, BrowserState, ControlAnswer, ControlId, ControlRect, ControlRequest,
+    PointerButton, PointerButtonAction, Rgb, TabActivation, TabId,
 };
 
 use self::color::{ColorKey, ColorModel, SWATCHES, from_hue_lightness, hue_lightness};
+use self::context_menu::with_view_source; // sh-pages
 use self::context_menu::{
     MenuCommand, MenuKey, MenuModel, MenuOutcome, MenuRow, build_menu, with_login_chooser,
 };
@@ -319,8 +320,8 @@ impl Controls {
                         tab_id,
                         id,
                         state.url(),
-                        &origin,
                         state.password_field_menu(), // passwords-ui
+                        crate::view_source::can_view_source(controller), // sh-pages
                     )
                 }
             };
@@ -330,14 +331,18 @@ impl Controls {
             show_popup(window, &current.popup, page, zoom, false);
         }
 
+        // txt-1: a composition belongs to the tab that started it; leaving the tab ends it.
+        crate::ime::active_tab_changed(tab_id);
+        // txt-1: a password field has no input method and holds secure event input.
+        crate::secure_input::password_changed(
+            window,
+            state.text_input().is_some_and(|text| text.is_password),
+        );
         // Slint places the input method itself while one of its text fields has focus.
         if window.get_text_input_focused() {
             current.input_method_area = None;
         } else {
-            let area = state.input_method().map(|rect| {
-                log::debug!("input-method element (from Servo): {rect:?}");
-                element_in_window(rect, page, zoom)
-            });
+            let area = input_method_area(state, page, zoom);
             if current.input_method_area != Some(area) {
                 current.input_method_area = Some(area);
                 log::debug!("input-method area: {area:?}");
@@ -357,6 +362,7 @@ impl Controls {
         state.taken_keys.take(event.physical_key);
         let mut closing = None;
         let mut fill_login = None; // passwords-ui
+        let mut view_source = false; // sh-pages
         match &mut state.popup {
             Popup::Select { model, rows, .. } => {
                 if let Some(key) = select_key(&event.logical_key) {
@@ -383,6 +389,7 @@ impl Controls {
                     match model.key(key) {
                         MenuOutcome::Close(command) => {
                             fill_login = login_to_fill(command.as_ref()); // passwords-ui
+                            view_source = view_source_chosen(command.as_ref()); // sh-pages
                             closing = Some(menu_answer(command));
                         }
                         MenuOutcome::Stay => {
@@ -408,6 +415,10 @@ impl Controls {
                 }
             });
         }
+        // sh-pages: after the engine's menu was dismissed
+        if view_source {
+            self.open_source();
+        }
         true
     }
 
@@ -417,6 +428,7 @@ impl Controls {
         };
         let mut state = self.state.borrow_mut();
         let mut fill_login = None; // passwords-ui
+        let mut view_source = false; // sh-pages
         let closing = match &mut state.popup {
             Popup::Select { model, rows, .. } => match model.click(row) {
                 Outcome::Close(answer) => Some((answer, None)),
@@ -428,6 +440,7 @@ impl Controls {
             Popup::Menu { model, .. } => match model.click(row) {
                 MenuOutcome::Close(command) => {
                     fill_login = login_to_fill(command.as_ref()); // passwords-ui
+                    view_source = view_source_chosen(command.as_ref()); // sh-pages
                     Some(menu_answer(command))
                 }
                 MenuOutcome::Stay => None,
@@ -451,6 +464,19 @@ impl Controls {
                     window.window().request_redraw();
                 }
             });
+        }
+        // sh-pages: after the engine's menu was dismissed
+        if view_source {
+            self.open_source();
+        }
+    }
+
+    // sh-pages
+    /// "View page source": the page's source in a new tab, once the engine's menu is dismissed.
+    fn open_source(&self) {
+        if let Some(window) = self.window.upgrade() {
+            crate::view_source::open_source_of_active_tab(&window, &self.controller);
+            window.window().request_redraw();
         }
     }
 
@@ -627,8 +653,8 @@ fn open_popup(
     tab_id: TabId,
     id: ControlId,
     page_url: &str,
-    _origin: &str,
     password_field: Option<ControlId>,
+    view_source: bool, // sh-pages: the page has a source to view
 ) -> Popup {
     match request {
         ControlRequest::Select {
@@ -673,6 +699,13 @@ fn open_popup(
                 image_url.as_deref(),
                 page_url,
             ));
+            // sh-pages: "View page source" after Reload, in a menu for the page itself
+            model = with_view_source(
+                model,
+                link_url.as_deref(),
+                image_url.as_deref(),
+                view_source,
+            );
             // passwords-ui: "Fill login…" over the focused password field
             if let Some(fill) = password_field
                 .and_then(|field| crate::passwords::fill_menu(tab_id, field, page_url))
@@ -713,6 +746,12 @@ fn login_to_fill(command: Option<&MenuCommand>) -> Option<usize> {
         Some(MenuCommand::FillLogin(index)) => Some(*index),
         _ => None,
     }
+}
+
+// sh-pages
+/// Whether the menu was closed by "View page source".
+fn view_source_chosen(command: Option<&MenuCommand>) -> bool {
+    matches!(command, Some(MenuCommand::ViewSource))
 }
 
 // passwords-ui: the menu became the list of logins; its height changed, so it is placed again
@@ -879,7 +918,20 @@ fn menu_answer(command: Option<MenuCommand>) -> (ControlAnswer, Option<String>) 
         Some(MenuCommand::ShowLogins | MenuCommand::FillLogin(_)) | None => {
             (ControlAnswer::Dismiss, None)
         }
+        // sh-pages: the new tab follows the dismissed menu (`key`, `row_clicked`).
+        Some(MenuCommand::ViewSource) => (ControlAnswer::Dismiss, None),
     }
+}
+
+/// Where the input method's candidate window goes (txt-1): the caret of the focused editable
+/// element, from the engine's text state (page coordinates plus the page's place in the window,
+/// as `element_in_window` does for any element); without one, the element's own rectangle;
+/// without that, nothing.
+fn input_method_area(state: &BrowserState, page: Rect, zoom_percent: u16) -> Option<Rect> {
+    let caret = state.text_input().and_then(|text| text.caret_rect);
+    caret
+        .or_else(|| state.input_method())
+        .map(|rect| element_in_window(rect, page, zoom_percent))
 }
 
 fn set_input_method_area(window: &MainWindow, area: Option<Rect>) {
@@ -1295,5 +1347,130 @@ mod tests {
             )
         );
         assert_eq!(menu_answer(None), (ControlAnswer::Dismiss, None));
+    }
+
+    // txt-1
+    #[test]
+    fn the_candidate_window_goes_to_the_caret_then_the_element_then_nowhere() {
+        use talaria_core::{BrowserEvent, TextInputState, Utf16Range};
+
+        let page = Rect {
+            x: 10.0,
+            y: 100.0,
+            width: 800.0,
+            height: 600.0,
+        };
+        let text_state = |caret_rect| TextInputState {
+            document: 1,
+            sequence: 1,
+            text: "hello".to_owned(),
+            text_start: 0,
+            selection: Utf16Range::collapsed(5),
+            marked: None,
+            caret_rect,
+            multiline: false,
+            is_password: false,
+        };
+        let mut state = BrowserState::default();
+        assert_eq!(input_method_area(&state, page, 100), None);
+
+        // Only the element is known: its rectangle, in the window.
+        state.apply(BrowserEvent::InputMethodShown {
+            id: ControlId::new(1),
+            rect: ControlRect {
+                x: 20,
+                y: 30,
+                width: 200,
+                height: 24,
+            },
+        });
+        assert_eq!(
+            input_method_area(&state, page, 100),
+            Some(Rect {
+                x: 30.0,
+                y: 130.0,
+                width: 200.0,
+                height: 24.0,
+            })
+        );
+
+        // A text state without a caret rectangle changes nothing.
+        state.apply(BrowserEvent::TextInputState(Some(text_state(None))));
+        assert_eq!(
+            input_method_area(&state, page, 100),
+            Some(Rect {
+                x: 30.0,
+                y: 130.0,
+                width: 200.0,
+                height: 24.0,
+            })
+        );
+
+        // With the caret: the caret, not the element's corner.
+        let caret = ControlRect {
+            x: 120,
+            y: 34,
+            width: 2,
+            height: 18,
+        };
+        state.apply(BrowserEvent::TextInputState(Some(text_state(Some(caret)))));
+        assert_eq!(
+            input_method_area(&state, page, 100),
+            Some(Rect {
+                x: 130.0,
+                y: 134.0,
+                width: 2.0,
+                height: 18.0,
+            })
+        );
+        // Page zoom scales the page's own pixels, not the page's place in the window.
+        assert_eq!(
+            input_method_area(&state, page, 200),
+            Some(Rect {
+                x: 250.0,
+                y: 168.0,
+                width: 4.0,
+                height: 36.0,
+            })
+        );
+
+        // The caret alone is enough (its message may come first).
+        let mut caret_first = BrowserState::default();
+        caret_first.apply(BrowserEvent::TextInputState(Some(text_state(Some(caret)))));
+        assert_eq!(
+            input_method_area(&caret_first, page, 100),
+            Some(Rect {
+                x: 130.0,
+                y: 134.0,
+                width: 2.0,
+                height: 18.0,
+            })
+        );
+
+        // Nothing editable has focus any more.
+        state.apply(BrowserEvent::TextInputState(None));
+        state.apply(BrowserEvent::ControlHidden {
+            id: ControlId::new(1),
+        });
+        assert_eq!(input_method_area(&state, page, 100), None);
+    }
+
+    // sh-pages
+    #[test]
+    fn view_page_source_dismisses_the_engines_menu_and_opens_the_source_after_it() {
+        // The engine's menu is dismissed (it has no such action); the new tab is the browser's.
+        assert_eq!(
+            menu_answer(Some(MenuCommand::ViewSource)),
+            (ControlAnswer::Dismiss, None)
+        );
+        assert!(view_source_chosen(Some(&MenuCommand::ViewSource)));
+        assert!(!view_source_chosen(None));
+        assert!(!view_source_chosen(Some(&MenuCommand::ShowLogins)));
+        assert!(!view_source_chosen(Some(&MenuCommand::OpenInNewTab(
+            "https://a.test/".to_owned()
+        ))));
+        assert!(!view_source_chosen(Some(&MenuCommand::Engine(
+            talaria_core::ContextMenuAction::Reload
+        ))));
     }
 }

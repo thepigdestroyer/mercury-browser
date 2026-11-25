@@ -25,6 +25,10 @@ pub(crate) enum MenuCommand {
     ShowLogins,
     /// Fills saved login number `n` of that list; the engine's menu is dismissed.
     FillLogin(usize),
+    // sh-pages
+    /// "View page source": the page's source in a new tab next to it; the engine's menu is
+    /// dismissed (`view_source.rs`).
+    ViewSource,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -100,6 +104,47 @@ pub(crate) fn with_login_chooser(
         highlighted: None,
         chooser: Some(chooser),
     }
+}
+
+// sh-pages
+/// Puts "View page source" right after "Reload" in a page-level menu: one with no link and no
+/// image under the pointer (`link_url` and `image_url` are `None`), for a page that has a source
+/// to view (`viewable`, from `view_source::can_view_source`: an `http(s)` page that is not an
+/// error page). A menu without a Reload row is left as it is.
+///
+/// A separate step after `build_menu`, which stays as it was: its rows are Servo's items under the
+/// browser's wording, and this one is the browser's own.
+pub(crate) fn with_view_source(
+    model: MenuModel,
+    link_url: Option<&str>,
+    image_url: Option<&str>,
+    viewable: bool,
+) -> MenuModel {
+    if !viewable || link_url.is_some() || image_url.is_some() {
+        return model;
+    }
+    let reload = model.rows.iter().position(|row| {
+        matches!(
+            row,
+            MenuRow::Item {
+                command: MenuCommand::Engine(ContextMenuAction::Reload),
+                ..
+            }
+        )
+    });
+    let Some(reload) = reload else {
+        return model;
+    };
+    let mut rows = model.rows;
+    rows.insert(
+        reload + 1,
+        MenuRow::Item {
+            label: "View page source".to_owned(),
+            enabled: true,
+            command: MenuCommand::ViewSource,
+        },
+    );
+    MenuModel { rows, ..model }
 }
 
 /// `page_url` is the address of the page the menu belongs to.
@@ -710,5 +755,133 @@ mod tests {
             menu().content_height(),
             11.0 * ITEM_HEIGHT + 3.0 * SEPARATOR_HEIGHT
         );
+    }
+
+    // sh-pages
+    /// Servo's list for a click on the page itself (no link, no image): editing items, then
+    /// Back, Forward and Reload.
+    fn servo_items_for_the_page() -> Vec<ContextMenuEntry> {
+        servo_items_for_linked_image()[6..].to_vec()
+    }
+
+    fn page_menu() -> MenuModel {
+        MenuModel::new(build_menu(&servo_items_for_the_page(), None, None, PAGE))
+    }
+
+    fn view_source_row() -> MenuRow {
+        MenuRow::Item {
+            label: "View page source".to_owned(),
+            enabled: true,
+            command: MenuCommand::ViewSource,
+        }
+    }
+
+    // sh-pages
+    #[test]
+    fn a_page_level_menu_gets_view_page_source_after_reload() {
+        let plain = page_menu();
+        assert_eq!(
+            labels(plain.rows()),
+            vec![
+                "Cut",
+                "Copy",
+                "Paste",
+                "Select all",
+                "—",
+                "Back",
+                "Forward",
+                "Reload"
+            ],
+            "build_menu itself adds nothing"
+        );
+
+        let model = with_view_source(page_menu(), None, None, true);
+
+        assert_eq!(
+            labels(model.rows()),
+            vec![
+                "Cut",
+                "Copy",
+                "Paste",
+                "Select all",
+                "—",
+                "Back",
+                "Forward",
+                "Reload",
+                "View page source",
+            ]
+        );
+        assert_eq!(model.rows()[8], view_source_row());
+        // Servo's own rows are as they were.
+        assert_eq!(&model.rows()[..8], plain.rows());
+        assert_eq!(model.content_height(), plain.content_height() + ITEM_HEIGHT);
+    }
+
+    // sh-pages
+    #[test]
+    fn view_page_source_is_left_out_of_link_and_image_menus_and_of_pages_without_a_source() {
+        let link = Some("https://a.test/next");
+        let image = Some("https://a.test/i.png");
+        let items = servo_items_for_linked_image();
+        let menu_for =
+            |link_url, image_url| MenuModel::new(build_menu(&items, link_url, image_url, PAGE));
+        for (link_url, image_url) in [(link, None), (None, image), (link, image)] {
+            let before = labels(menu_for(link_url, image_url).rows());
+            let after = with_view_source(menu_for(link_url, image_url), link_url, image_url, true);
+            assert_eq!(labels(after.rows()), before, "{link_url:?} {image_url:?}");
+        }
+
+        // Not viewable: an error page, a source page, a page that is not a web page.
+        let before = labels(page_menu().rows());
+        let after = with_view_source(page_menu(), None, None, false);
+        assert_eq!(labels(after.rows()), before);
+
+        // No Reload row to put it after (a menu of another shape).
+        let entries = vec![
+            item("Cut", ContextMenuAction::Cut, false),
+            item("Paste", ContextMenuAction::Paste, true),
+        ];
+        let model = MenuModel::new(build_menu(&entries, None, None, PAGE));
+        let before = labels(model.rows());
+        let after = with_view_source(model, None, None, true);
+        assert_eq!(labels(after.rows()), before);
+    }
+
+    // sh-pages
+    #[test]
+    fn view_page_source_runs_from_the_mouse_and_the_keyboard() {
+        let mut model = with_view_source(page_menu(), None, None, true);
+        assert_eq!(
+            model.click(8),
+            MenuOutcome::Close(Some(MenuCommand::ViewSource))
+        );
+
+        let mut model = with_view_source(page_menu(), None, None, true);
+        model.key(MenuKey::End);
+        assert_eq!(model.highlighted(), Some(8));
+        assert_eq!(
+            model.key(MenuKey::Return),
+            MenuOutcome::Close(Some(MenuCommand::ViewSource))
+        );
+
+        // Hovering it highlights it like any enabled row.
+        let mut model = with_view_source(page_menu(), None, None, true);
+        model.hover(8);
+        assert_eq!(model.highlighted(), Some(8));
+    }
+
+    // sh-pages
+    #[test]
+    fn view_page_source_goes_with_the_login_chooser() {
+        // A password field's menu on a web page: "Fill login…" first, the rest as before.
+        let model = with_login_chooser(
+            with_view_source(page_menu(), None, None, true),
+            "Fill a login for a.test",
+            &["alice".to_owned()],
+        );
+
+        let shown = labels(model.rows());
+        assert_eq!(shown[0], "Fill login…");
+        assert_eq!(shown.last().map(String::as_str), Some("View page source"));
     }
 }

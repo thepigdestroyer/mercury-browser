@@ -223,7 +223,7 @@ pub type Table = fn(Role) -> Colour;
 /// the two halves of different palettes can be combined.
 #[derive(Clone, Copy, Debug)]
 pub struct Palette {
-    /// The stored id: lower case letters and digits and hyphens, for example `"mercury-b2"`.
+    /// The stored id: lower case letters and digits and hyphens, for example `"signal"`.
     pub id: &'static str,
     /// The name shown to the user.
     pub name: &'static str,

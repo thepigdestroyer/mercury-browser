@@ -105,6 +105,9 @@ pub fn security_indicator(
         // ever labelled as Mercury's own; only recognised error pages are (above).
         "about" => SecurityIndicator::None,
         "data" => SecurityIndicator::NotSecure,
+        // sh-pages: a source page is Mercury's own, made by the browser, and no web page can
+        // reach it (navigation_verdict): neither a padlock nor a warning.
+        crate::VIEW_SOURCE_SCHEME => SecurityIndicator::None,
         "blob" => {
             let inner = parsed.path();
             security_indicator(inner, None, certificate_exception)

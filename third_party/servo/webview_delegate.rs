@@ -278,6 +278,21 @@ impl WebResourceLoad {
             error_sender: self.error_sender,
         }
     }
+
+    // Mercury: change the request and let it go on (EC37); the network thread decides what it accepts.
+    /// Let this load go on to the network after changing it as `rewrite` says: a new URL (same scheme
+    /// and, unless this is a top-level navigation, same origin) and header changes (never cookies,
+    /// credentials or connection headers). The network thread applies the whole rewrite or none of it,
+    /// logs a refusal without the values, and does not ask the embedder about the load again. HSTS is
+    /// applied to the new URL, so a rewrite to an HSTS host is upgraded to `https`.
+    pub fn rewrite(mut self, rewrite: embedder_traits::WebResourceRewrite) {
+        if let Err(error) = self
+            .responder
+            .send(WebResourceResponseMsg::Rewrite(rewrite))
+        {
+            self.error_sender.raise_response_send_error(error);
+        }
+    }
 }
 
 /// An intercepted web resource load. This struct allows the client to send an alternative response
@@ -1231,6 +1246,10 @@ mod test {
             referrer_url: None,
             is_for_main_frame: false,
             is_redirect: false,
+            // Mercury: frame identity fields (EC38).
+            top_level_site: None,
+            initiator_origin: None,
+            is_third_party: None,
         };
         let web_resource_response = || {
             WebResourceResponse::new(
@@ -1306,5 +1325,67 @@ mod test {
         drop(receiver);
         drop(request);
         assert!(errors.try_recv().is_none());
+    }
+
+    // Mercury: `WebResourceLoad::rewrite` (EC37) sends the rewrite as the one terminal answer.
+    #[test]
+    fn test_web_resource_load_rewrite() {
+        use http::{HeaderMap, Method};
+
+        use crate::responders::ServoErrorChannel;
+
+        let web_resource_request = || WebResourceRequest {
+            method: Method::GET,
+            headers: HeaderMap::default(),
+            url: Url::parse("https://example.com/?utm_source=x")
+                .expect("Guaranteed by argument")
+                .into(),
+            destination: content_security_policy::Destination::None,
+            referrer_url: None,
+            is_for_main_frame: false,
+            is_redirect: false,
+            top_level_site: None,
+            initiator_origin: None,
+            is_third_party: None,
+        };
+        let rewrite = || embedder_traits::WebResourceRewrite {
+            url: Some(
+                Url::parse("https://example.com/")
+                    .expect("Guaranteed by argument")
+                    .into(),
+            ),
+            set_headers: vec![("X-Mercury".to_owned(), "1".to_owned())],
+            remove_headers: vec!["X-Remove".to_owned()],
+        };
+
+        // A rewrite yields Rewrite and nothing else: no DoNotIntercept follows when the load is dropped
+        let errors = ServoErrorChannel::default();
+        let (sender, mut receiver) = tokio::sync::mpsc::unbounded_channel();
+        let request = WebResourceLoad::new(web_resource_request(), sender, errors.sender());
+        request.rewrite(rewrite());
+        match receiver.try_recv() {
+            Ok(WebResourceResponseMsg::Rewrite(sent)) => {
+                assert_eq!(
+                    sent.url.as_ref().map(|url| url.as_str()),
+                    Some("https://example.com/")
+                );
+                assert_eq!(
+                    sent.set_headers,
+                    vec![("X-Mercury".to_owned(), "1".to_owned())]
+                );
+                assert_eq!(sent.remove_headers, vec!["X-Remove".to_owned()]);
+            },
+            _ => panic!("expected the Rewrite message"),
+        }
+        assert!(receiver.try_recv().is_err());
+        assert!(errors.try_recv().is_none());
+
+        // A rewrite when the receiver is disconnected yields an error
+        let errors = ServoErrorChannel::default();
+        let (sender, receiver) = tokio::sync::mpsc::unbounded_channel();
+        let request = WebResourceLoad::new(web_resource_request(), sender, errors.sender());
+        drop(receiver);
+        request.rewrite(rewrite());
+        assert!(errors.try_recv().is_some());
     }
 }

@@ -12,6 +12,8 @@ use layout_api::{
     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutDataTrait, LayoutElement, LayoutNode,
     LayoutNodeType, PseudoElementChain, SVGElementData, TrustedNodeAddress,
 };
+// Mercury: lane txt-1 (EB7).
+use layout_api::TextHighlights;
 use net_traits::image_cache::Image;
 use pixels::ImageMetadata;
 use servo_arc::Arc;
@@ -257,6 +259,16 @@ impl<'dom> LayoutNode<'dom> for ServoLayoutNode<'dom> {
         }
 
         self.node.selection_for_text_node()
+    }
+
+    // Mercury: lane txt-1 (EB7).
+    fn text_node_highlights(&self) -> TextHighlights {
+        // Pseudo-elements do not ever have a highlight.
+        if !self.pseudo_element_chain.is_empty() {
+            return TextHighlights::new();
+        }
+
+        self.node.highlights_for_text_node()
     }
 
     fn text_node_paints_caret(&self) -> bool {

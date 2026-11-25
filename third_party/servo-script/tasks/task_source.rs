@@ -56,6 +56,8 @@ pub(crate) enum TaskSourceName {
     Storage,
     /// <https://www.w3.org/TR/webgpu/#-webgpu-task-source>
     WebGPU,
+    /// Mercury: <https://www.w3.org/TR/web-locks/#web-locks-tasks-source> (servo/servo#47981).
+    WebLocks,
 }
 
 impl From<TaskSourceName> for ScriptThreadEventCategory {
@@ -89,6 +91,8 @@ impl From<TaskSourceName> for ScriptThreadEventCategory {
             TaskSourceName::IntersectionObserver => ScriptThreadEventCategory::ScriptEvent,
             TaskSourceName::Storage => ScriptThreadEventCategory::ScriptEvent,
             TaskSourceName::WebGPU => ScriptThreadEventCategory::ScriptEvent,
+            // Mercury: Web Locks (servo/servo#47981).
+            TaskSourceName::WebLocks => ScriptThreadEventCategory::ScriptEvent,
         }
     }
 }

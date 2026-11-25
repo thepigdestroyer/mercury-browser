@@ -230,6 +230,18 @@ impl DownloadManager {
         timeouts: Timeouts,
         on_event: impl Fn(DownloadEvent) + Send + Sync + 'static,
     ) -> std::io::Result<Self> {
+        Self::with_proxy(timeouts, mercury_proxy::process_preferences(), on_event)
+    }
+
+    /// Like `with_timeouts`, with the proxy given instead of the one of this process
+    /// (`mercury_proxy::process_preferences`, the one Servo uses). Fails, as the browser's
+    /// downloads then do, when a proxy address cannot be used: a request that should go through
+    /// the proxy is not sent directly instead.
+    pub fn with_proxy(
+        timeouts: Timeouts,
+        proxy: mercury_proxy::ProxyPreferences,
+        on_event: impl Fn(DownloadEvent) + Send + Sync + 'static,
+    ) -> std::io::Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
             .thread_name("mercury-downloads")
@@ -237,13 +249,14 @@ impl DownloadManager {
             .build()?;
         let client = {
             let _context = runtime.enter();
-            reqwest::Client::builder()
+            // Servo's proxy, so that a download (and the PDF viewer's fetch of the page's own
+            // file) goes where the page's request went, with the same bypass list.
+            mercury_proxy::apply(reqwest::Client::builder(), &proxy)
+                .map_err(std::io::Error::other)?
                 .connect_timeout(timeouts.connect)
                 // Redirects are followed by hand so each hop's scheme and host can be checked.
                 .redirect(reqwest::redirect::Policy::none())
                 .referer(false)
-                // Servo makes its own connections without a proxy; downloads behave the same.
-                .no_proxy()
                 .build()
                 .map_err(std::io::Error::other)?
         };

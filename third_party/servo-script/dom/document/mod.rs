@@ -2,6 +2,10 @@
  * License, v. 2.0. If a copy of the MPL was not distributed with this
  * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 
+// Mercury: a11y-1 items 4 and 5: when the accessibility tree is damaged, and what an assistive technology's
+// actions do.
+pub(crate) mod accessibility_actions;
+pub(crate) mod accessibility_attributes;
 pub(crate) mod accessibility_data;
 mod animation_manager;
 #[expect(clippy::module_inception, reason = "The interface name is Document")]
@@ -17,6 +21,8 @@ pub(crate) mod editing;
 pub(crate) mod focus;
 mod iframe_collection;
 mod interactive_element_command;
+// Mercury: the IME state of a document and its text state message (EB11, the text lane).
+pub(crate) mod text_input_state;
 mod tree_ordered_index_map;
 pub(crate) mod visibilitystateentry;
 pub(crate) mod websocket;

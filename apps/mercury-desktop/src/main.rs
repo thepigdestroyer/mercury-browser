@@ -17,6 +17,7 @@ use talaria_servo::{RuntimeOptions, record_browser_process_id, run_content_proce
 use ui_sync::sync_ui;
 
 mod about;
+mod accessibility; // a11y-1: the shown tab's page, read by assistive technology
 // activation (tabs lane)
 mod activation;
 mod bookmarks;
@@ -27,12 +28,18 @@ mod clipboard;
 // controls
 mod controls;
 mod crash_handler;
+#[cfg(target_os = "macos")]
+mod dock_icon; // themes: the Dock icon follows the theme
 mod downloads; // downloads-ui lane
 mod engine;
 mod filter_lists; // blocklists
 mod find;
 mod geolocation;
 mod history_ui;
+mod ime; // txt-1: the IME composition state machine
+// hub-ring: installed by layout-switch (brief D7)
+#[allow(dead_code)]
+mod hub_ring;
 mod import_ui; // import-ui lane
 mod keyboard;
 mod keyutils;
@@ -41,7 +48,11 @@ mod macos_app_delegate;
 #[cfg(target_os = "macos")]
 mod macos_terminate;
 #[cfg(target_os = "macos")]
+mod macos_text_input; // txt-1: replacement ranges, emoji and dictation through winit's view
+#[cfg(target_os = "macos")]
 mod media_buffers;
+mod option_keys; // key-switcher
+mod secure_input; // txt-1: no input method and secure event input in password fields
 // media-capture
 mod media_capture;
 #[cfg(target_os = "macos")]
@@ -74,6 +85,7 @@ mod shutdown;
 mod tab_close;
 // tabs
 mod signals;
+mod site_images; // sh-pages
 // site-security
 mod site_security;
 #[cfg(target_os = "macos")]
@@ -82,6 +94,7 @@ mod tab_snapshots; // tab-snapshots lane
 mod tab_strip; // tabs-plus
 mod tab_switch_frame;
 mod ui_sync;
+mod view_source; // sh-pages
 
 fn main() -> Result<ExitCode, Box<dyn Error>> {
     // (1) Before the content-process branch, so that content processes report their crashes
@@ -204,6 +217,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     settings::prepare_controller(&settings, &mut controller.borrow_mut(), &options.urls);
     open_start_up_tabs(&mut controller.borrow_mut(), &options.urls);
     profile_data::start(&profile, &mut controller.borrow_mut()); // history lane
+    // sh-pages: the sites whose images are off, read once from the profile, before any page loads
+    if let Some(paths) = &profile.paths {
+        site_images::init(&paths.root);
+    }
     import_ui::configure(
         options.is_automated(),
         options.import_from.as_deref(),
@@ -232,6 +249,11 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             &settings,
         ),
     )?;
+    accessibility::install(&window); // a11y-1: the page's tree hangs from the "Page content" node
+    // sh-pages: the engine learns which sites have their images off, before any page is created
+    if !engine::with_runtime(site_images::attach_engine) {
+        log::warn!("the engine was not reachable: images stay on for every site");
+    }
     // blocklists: builds the content blocker's engine off the UI thread and updates the lists.
     filter_lists::start(&options, &profile, &settings);
     // settings-ui
@@ -343,6 +365,10 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
     // destroys the window and tears rendering down while the engine still runs.
     // `shut_down_engine` hides the window once it has taken the engine's state.
     let shown = window.show();
+    // txt-1: patches winit's view once the event loop has created it; `MERCURY_NATIVE_TEXT_INPUT=0`
+    // turns it off.
+    #[cfg(target_os = "macos")]
+    macos_text_input::install();
     post_run::prepare(post_run::RunEnd {
         window,
         timers,
@@ -386,12 +412,15 @@ fn runtime_options(options: &LaunchOptions, profile: &ActiveProfile) -> RuntimeO
 }
 
 /// Adds the system's proxy settings (macOS). Elsewhere Servo reads the proxy environment
-/// variables itself, which also win on macOS.
+/// variables itself, which also win on macOS. The same choice is recorded for the other HTTP
+/// clients (`mercury_proxy::install`), so a download or a PDF re-fetch never goes out directly
+/// when the page's own request goes through a proxy.
 fn with_system_proxy(runtime_options: RuntimeOptions) -> RuntimeOptions {
     #[cfg(target_os = "macos")]
     let system_proxy = system_proxy::read_system_proxy();
     #[cfg(not(target_os = "macos"))]
     let system_proxy = None;
+    mercury_proxy::install(system_proxy.as_ref());
     RuntimeOptions {
         system_proxy,
         ..runtime_options

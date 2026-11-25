@@ -351,3 +351,52 @@ fn hello_text() -> mercury_pdf::types::PageText {
             .collect(),
     }
 }
+
+#[test]
+fn cache_releasing_the_caches_frees_everything_fetched_and_keeps_the_view() {
+    let mut model = ViewerModel::new(big_pages(40, 600.0, 800.0));
+    model.set_viewport(Viewport {
+        width: 616.0,
+        height: 800.0,
+        scale_factor: 1.0,
+    });
+    model.set_zoom_percent(150);
+    model.go_to_page(20, None);
+    settle(&mut model);
+    model.set_page_text(20, blank_text(1_000));
+    model.set_links(20, Vec::new());
+    let before = model.cache_usage();
+    assert!(before.tiles > 0 && before.tile_bytes > 0, "{before:?}");
+    assert!(before.placeholders > 0, "{before:?}");
+    assert!(before.text_chars > 0 && before.link_pages > 0, "{before:?}");
+    let (scroll_x, scroll_y, zoom, page) = (
+        model.scroll_x(),
+        model.scroll_y(),
+        model.zoom_percent(),
+        model.current_page(),
+    );
+
+    model.release_caches();
+
+    assert_eq!(model.cache_usage(), Default::default());
+    assert_eq!(
+        (
+            model.scroll_x(),
+            model.scroll_y(),
+            model.zoom_percent(),
+            model.current_page()
+        ),
+        (scroll_x, scroll_y, zoom, page),
+        "the view stays"
+    );
+    // When the helper is back the model asks again for what the screen needs, tiles and links,
+    // and fills its caches from the answers.
+    let plan = model.plan();
+    assert!(!plan.requests.is_empty(), "{plan:?}");
+    // Text is asked for only when a selection needs it; links for the pages that show.
+    assert!(plan.links.contains(&20), "{plan:?}");
+    deliver(&mut model, &plan);
+    settle(&mut model);
+    assert!(model.cache_usage().tile_bytes > 0);
+    assert!(!model.visible_tiles().is_empty());
+}

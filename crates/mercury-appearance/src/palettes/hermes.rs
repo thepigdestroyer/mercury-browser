@@ -6,7 +6,7 @@
 //! Every value here is the literal in `crates/mercury-ui/ui/theme/chrome-palette.slint`
 //! (`tests/hermes_matches_chrome_palette.rs` fails if the two drift apart). The owner dropped
 //! the Hermes look (decision O-02), so this palette is `selectable: false`: it is never a default,
-//! never offered in a picker, and `mercury-b2` is what every profile gets. It exists because the
+//! never offered in a picker, and `signal` is what every profile gets. It exists because the
 //! theme-plumbing lane's pixel-diff gate ("Hermes palette with Roomy metrics renders what the
 //! browser renders today", R12 stage 2) needs today's colours as data to prove that moving the
 //! chrome onto palettes changed nothing.

@@ -1,0 +1,26 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+[package]
+name = "mercury-view-source"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+encoding_rs.workspace = true
+log.workspace = true
+# train 23: one place sets the proxy of every Mercury HTTP client (`mercury_proxy::apply`).
+mercury-proxy = { path = "../mercury-proxy" }
+reqwest.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = ["rt", "time"] }
+tree-sitter-css.workspace = true
+tree-sitter-highlight.workspace = true
+tree-sitter-html.workspace = true
+tree-sitter-javascript.workspace = true
+url.workspace = true
+
+[dev-dependencies]
+tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread", "time"] }
+tree-sitter.workspace = true

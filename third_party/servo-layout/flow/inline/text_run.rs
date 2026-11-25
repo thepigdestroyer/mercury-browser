@@ -352,6 +352,11 @@ pub(crate) struct SharedTextRunData {
     /// Whether a caret should be painted when the selection is an empty range (start == end)
     // Mercury: backport of servo/servo#48253 (cd332167d). Drop at the bump that has it.
     pub paints_caret: AtomicBool,
+    // Mercury: lane txt-1 (EB7). Beside `selection`, which stays the fast path for the document
+    // selection and the caret.
+    /// The typed highlights (IME composition, find matches, spelling, ...) of this text run, in
+    /// offsets of the originating DOM node's text like `selection`. Painted without a relayout.
+    pub highlights: AtomicRefCell<layout_api::TextHighlights>,
     /// Whether a caret placeholder should be added for empty text runs or for empty
     /// lines after a forced line break.
     pub needs_caret_placeholder: bool,
@@ -361,6 +366,28 @@ pub(crate) struct SharedTextRunData {
 }
 
 impl SharedTextRunData {
+    // Mercury: lane txt-1 (ED7), `text-overflow` (hand-port of servo/servo#42394). The data of the
+    // text fragment that holds the overflow marker (the ellipsis, or the string of
+    // `text-overflow`). It belongs to no text node: it has no characters of the DOM, no selection,
+    // no caret and no highlight, and it is styled by the block that owns the line. It is built here,
+    // next to the struct, so that a field added to the struct is added to it as well.
+    pub(crate) fn for_overflow_marker(
+        text_content: Arc<OnceLock<String>>,
+        inline_styles: SharedInlineStyles,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            text_content,
+            inline_styles,
+            character_range_in_ifc_text: Utf32CodeUnits(0)..Utf32CodeUnits(0),
+            original_offset: Utf32CodeUnits(0),
+            selection: AtomicRefCell::new(None),
+            paints_caret: AtomicBool::new(false),
+            highlights: AtomicRefCell::new(Default::default()),
+            needs_caret_placeholder: false,
+            offset_map: ArcRefCell::new(OffsetMap::default()),
+        })
+    }
+
     /// Map a range in the originating `TextRun`'s DOM node text into the range in the
     /// `TextRun`'s layout transformed (by white space collapse and `text-transform`)
     /// text.

@@ -219,8 +219,22 @@ impl CookieStorage {
 
     // http://tools.ietf.org/html/rfc6265#section-5.4
     pub fn cookies_for_url(&mut self, url: &ServoUrl, source: CookieSource) -> Option<String> {
+        // Mercury: every cookie that matches the URL, as Servo 0.8 does; `cookies_for_request` takes a filter.
+        self.cookies_for_request(url, source, &accept_every_cookie)
+    }
+
+    // Mercury: `cookies_for_url`, but only the cookies that `may_send` accepts. The network policy uses it for
+    // the SameSite rules (mercury_cookies.rs).
+    // http://tools.ietf.org/html/rfc6265#section-5.4
+    pub fn cookies_for_request(
+        &mut self,
+        url: &ServoUrl,
+        source: CookieSource,
+        may_send: &dyn Fn(&Cookie<'static>) -> bool,
+    ) -> Option<String> {
         // Let cookie-list be the set of cookies from the cookie store
-        let cookie_list = self.cookies_data_for_url(url, source);
+        // Mercury: filtered by the caller's rule.
+        let cookie_list = self.cookies_data_for_request(url, source, may_send);
 
         let reducer = |acc: String, cookie: Cookie<'static>| -> String {
             // Serialize the cookie-list into a cookie-string by processing each cookie in the cookie-list in order:
@@ -280,12 +294,24 @@ impl CookieStorage {
         url: &'a ServoUrl,
         source: CookieSource,
     ) -> impl Iterator<Item = cookie::Cookie<'static>> + 'a {
+        // Mercury: every cookie that matches the URL, as Servo 0.8 does.
+        self.cookies_data_for_request(url, source, &accept_every_cookie)
+    }
+
+    // Mercury: `cookies_data_for_url`, but only the cookies that `may_send` accepts.
+    pub fn cookies_data_for_request<'a>(
+        &'a mut self,
+        url: &'a ServoUrl,
+        source: CookieSource,
+        may_send: &'a dyn Fn(&Cookie<'static>) -> bool,
+    ) -> impl Iterator<Item = cookie::Cookie<'static>> + 'a {
         let domain = reg_host(url.host_str().unwrap_or(""));
         let cookies = self.cookies_map.entry(domain).or_default();
 
         cookies
             .iter_mut()
-            .filter(move |c| c.appropriate_for_url(url, source))
+            // Mercury: the caller's rule is checked before the last-access time of a cookie is touched.
+            .filter(move |c| c.appropriate_for_url(url, source) && may_send(&c.cookie))
             .sorted_by(|a: &&mut ServoCookie, b: &&mut ServoCookie| {
                 // The user agent SHOULD sort the cookie-list
                 CookieStorage::cookie_comparator(a, b)
@@ -304,6 +330,11 @@ impl CookieStorage {
             .map(SiteDescriptor::new)
             .collect()
     }
+}
+
+// Mercury: the filter of `cookies_for_url` and `cookies_data_for_url`, which send every matching cookie.
+fn accept_every_cookie(_: &Cookie<'static>) -> bool {
+    true
 }
 
 fn reg_host(url: &str) -> String {

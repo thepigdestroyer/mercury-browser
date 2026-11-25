@@ -19,6 +19,8 @@ use script_bindings::inheritance::Castable;
 use script_bindings::js::JS_SetPendingException;
 use script_bindings::reflector::reflect_weak_referenceable_dom_object_with_proto;
 use script_bindings::weakref::WeakRef;
+// Mercury: Web Locks (servo/servo#47981).
+use storage_traits::weblocks::LockRequestId;
 
 use crate::dom::bindings::codegen::Bindings::AbortSignalBinding::AbortSignalMethods;
 use crate::dom::bindings::codegen::Bindings::EventListenerBinding::EventListener;
@@ -31,6 +33,8 @@ use crate::dom::bindings::str::DOMString;
 use crate::dom::eventtarget::EventTarget;
 use crate::dom::globalscope::GlobalScope;
 use crate::dom::internalclosewatcher::InternalCloseWatcher;
+// Mercury: Web Locks (servo/servo#47981).
+use crate::dom::lockmanager::LockManager;
 use crate::dom::readablestream::PipeTo;
 use crate::dom::request::Request;
 use crate::fetch::fetch::DeferredFetchRecordId;
@@ -54,6 +58,11 @@ pub(crate) enum AbortAlgorithm {
     FetchLater(#[no_trace] DeferredFetchRecordId),
     /// <https://html.spec.whatwg.org/multipage/#dom-closewatcher>
     CloseWatcher(#[conditional_malloc_size_of] Rc<InternalCloseWatcher>),
+    /// Mercury: <https://www.w3.org/TR/web-locks/#signal-to-abort-the-request> (servo/servo#47981).
+    /// The pull request kept the origin, the name and the promise of the request here; the lock
+    /// manager that made the request keeps them, and knows whether the request still waits (an
+    /// abort after the lock was granted does nothing).
+    AbortLockRequest(Dom<LockManager>, #[no_trace] LockRequestId),
 }
 
 #[derive(Clone, JSTraceable, MallocSizeOf)]
@@ -210,6 +219,12 @@ impl AbortSignal {
             },
             AbortAlgorithm::CloseWatcher(close_watcher) => {
                 close_watcher.destroy(cx.no_gc());
+            },
+            // Mercury: Web Locks (servo/servo#47981).
+            AbortAlgorithm::AbortLockRequest(lock_manager, lock_request_id) => {
+                rooted!(&in(cx) let mut reason = UndefinedValue());
+                reason.set(self.abort_reason.get());
+                lock_manager.abort_request(cx, *lock_request_id, reason.handle());
             },
         }
     }

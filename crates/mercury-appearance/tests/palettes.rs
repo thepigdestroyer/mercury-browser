@@ -1,15 +1,16 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The role registry, the palette registry and the shape of the tables: every palette has every
-//! role in both schemes, ids are unique and well formed, the default is selectable, and the
-//! legacy `hermes` palette can be found but not chosen. Also the values the owner gave for
-//! `mercury-b2`, so that nobody changes them by accident.
+//! role in both schemes, ids are unique and well formed, the default (`signal`) is selectable, only
+//! Signal, Forest, Abyss and Glacier can be chosen, and `hermes`, `mercury-b2`, `graphite` and
+//! `midnight` can be found but not chosen. Also the values the owner gave for `mercury-b2`, so
+//! that nobody changes them by accident.
 
 use std::collections::HashSet;
 
 use mercury_appearance::Colour;
 use mercury_appearance::palette::{Role, SUN_INK, SUN_STOPS, Scheme};
-use mercury_appearance::palettes::{self, hermes, mercury_b2};
+use mercury_appearance::palettes::{self, hermes, mercury_b2, signal};
 use mercury_settings::{DEFAULT_PALETTE, MAX_PALETTE_ID_BYTES};
 
 fn hex(rgb: u32) -> Colour {
@@ -191,10 +192,11 @@ fn ids_are_unique_and_well_formed() {
 }
 
 #[test]
-fn the_default_palette_is_mercury_b2_and_can_be_chosen() {
+fn the_default_palette_is_signal_and_can_be_chosen() {
     let default = palettes::default_palette();
     assert_eq!(default.id, DEFAULT_PALETTE);
-    assert_eq!(default.id, "mercury-b2");
+    assert_eq!(default.id, "signal");
+    assert_eq!(default.id, signal::ID);
     assert!(default.selectable);
     assert_eq!(palettes::all()[0].id, default.id, "the default comes first");
     assert_eq!(
@@ -205,29 +207,45 @@ fn the_default_palette_is_mercury_b2_and_can_be_chosen() {
 }
 
 #[test]
+fn four_palettes_can_be_chosen_and_the_other_four_are_data() {
+    // The owner's choice of 22 Nov 2026, in the order a picker lists them.
+    let chosen: Vec<&str> = palettes::selectable().map(|palette| palette.id).collect();
+    assert_eq!(chosen, ["signal", "forest", "abyss", "glacier"]);
+    let names: Vec<&str> = palettes::selectable().map(|palette| palette.name).collect();
+    assert_eq!(names, ["Signal", "Forest", "Abyss", "Glacier"]);
+    for id in ["graphite", "midnight", "mercury-b2", "hermes"] {
+        let palette = palettes::find(id).unwrap_or_else(|| panic!("{id} is still in the code"));
+        assert!(!palette.selectable, "{id}");
+        assert!(palettes::find_selectable(id).is_none(), "{id}");
+    }
+    assert_eq!(palettes::all().len(), 8);
+}
+
+#[test]
 fn hermes_is_a_baseline_and_not_a_choice() {
     let legacy = palettes::find("hermes").expect("the pixel gate asks for hermes by id");
     assert_eq!(legacy.id, hermes::ID);
     assert!(!legacy.selectable);
     assert!(palettes::find_selectable("hermes").is_none());
-    let chosen: Vec<&str> = palettes::selectable().map(|palette| palette.id).collect();
-    assert_eq!(chosen, ["mercury-b2"]);
     assert_ne!(palettes::default_palette().id, "hermes");
-    // Exactly two palettes ship (decision D3).
-    assert_eq!(palettes::all().len(), 2);
 }
 
 #[test]
 fn find_matches_an_id_exactly() {
     assert!(palettes::find("mercury-b2").is_some());
-    assert!(palettes::find_selectable("mercury-b2").is_some());
+    assert!(palettes::find_selectable("mercury-b2").is_none());
+    for id in ["signal", "forest", "abyss", "glacier"] {
+        assert!(palettes::find_selectable(id).is_some(), "{id}");
+    }
     for id in [
         "",
         "Mercury-B2",
         "mercury-b2 ",
         " mercury-b2",
         "mercury",
-        "graphite",
+        "Signal",
+        "signal ",
+        "paper",
         "hermes2",
     ] {
         assert!(palettes::find(id).is_none(), "{id:?}");
