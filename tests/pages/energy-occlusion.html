@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>energy: frames 0, ticks 0</title>
+<style>
+  html, body { margin: 0; height: 100%; background: #ffffff; font: 24px sans-serif; }
+  #report { position: fixed; left: 16px; top: 16px; line-height: 1.5; }
+  .bar { position: fixed; left: 0; top: 200px; width: 120px; height: 40px; background: #1e6fd9;
+         animation: slide 2s linear infinite alternate; }
+  @keyframes slide { from { transform: translateX(0); } to { transform: translateX(500px); } }
+</style>
+</head>
+<body>
+  <!-- Energy-1 hands-on page: counts animation frames and 100 ms timer ticks. Cover or minimise
+       the window for a few seconds, uncover it, and read the title (tab strip). While the page is
+       hidden the frames stop and the ticks run slowly; once shown again both resume. -->
+  <div id="report"></div>
+  <div class="bar"></div>
+  <script>
+    const report = document.getElementById("report");
+    let frames = 0;
+    let ticks = 0;
+    function show() {
+      const text = "frames " + frames + ", ticks " + ticks;
+      document.title = "energy: " + text;
+      report.textContent = text + " (" + document.visibilityState + ")";
+    }
+    function frame() {
+      frames += 1;
+      requestAnimationFrame(frame);
+    }
+    requestAnimationFrame(frame);
+    setInterval(() => { ticks += 1; show(); }, 100);
+  </script>
+</body>
+</html>

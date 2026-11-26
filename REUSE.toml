@@ -78,6 +78,7 @@ path = [
   "tests/pages/dialog-prompt.html",
   "tests/pages/dialog-spoof.html",
   "tests/pages/dialog-twice.html",
+  "tests/pages/energy-occlusion.html",
   "tests/pages/features.html",
   "tests/pages/find-hidden-matches.html",
   "tests/pages/find-hostile-broken.html",

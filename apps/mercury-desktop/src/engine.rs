@@ -3,21 +3,23 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::mpsc::{self, Receiver};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use mercury_ui::MainWindow;
 use slint::winit_030::WinitWindowAccessor;
 use slint::{ComponentHandle, GraphicsAPI, Image, RenderingState, Timer};
 use talaria_core::{
     BrowserCommand, BrowserController, BrowserEvent, DEFAULT_ZOOM_PERCENT, LoadState, TabEvent,
-    TabId, WebView as TalariaWebView, dispatch_command,
+    TabId, WebView as TalariaWebView, WindowCover, dispatch_command,
 };
 use talaria_servo::{
     EventLoopWaker, NEW_TAB_URL, RuntimeOptions, ScreenMetrics, ServoRuntime, ServoWebView,
     ServoWebViewError, ViewportSize,
 };
 
+use crate::energy::{EnergyGovernor, PageVisibility}; // energy-1
 use crate::keyboard::system_color_scheme;
+use crate::power::PowerSource; // energy-1
 use crate::rendering::{BrowserRenderingContext, RenderingBridgeError, ReportOncePerKind};
 use crate::screen_metrics::screen_metrics;
 use crate::shutdown::{
@@ -36,6 +38,10 @@ const GRAPHICS_BOOTSTRAP_RETRY_INTERVAL: Duration = Duration::from_secs(1);
 thread_local! {
     /// Lets Servo's waker, whose callback must be `Send`, reach the engine on the main thread.
     static ENGINE: RefCell<Weak<Engine>> = const { RefCell::new(Weak::new()) };
+    /// energy-1: whether winit last said the window is covered (`Occluded`). A cell of its own,
+    /// not a field of the engine's state, so the window-event filter never needs the engine
+    /// borrowed; the pump reads it.
+    static WINDOW_OCCLUDED: Cell<bool> = const { Cell::new(false) };
 }
 
 /// Drives Servo independently of drawn frames. Servo is pumped whenever it wakes the event
@@ -71,6 +77,8 @@ struct EngineState {
     /// tabs: bounds how long the previous tab's frame stays up after a switch.
     tab_switch_frame: TabSwitchFrame,
     frame_import_errors: ReportOncePerKind<RenderingBridgeError>,
+    /// energy-1: hides the visible page while the window is covered or minimised.
+    energy: EnergyGovernor,
 }
 
 /// The parts of `EngineState` that are released in order.
@@ -98,6 +106,7 @@ pub(crate) fn connect_servo_runtime(
     controller: Rc<RefCell<BrowserController>>,
     web_view_focused: Rc<Cell<bool>>,
     runtime_options: RuntimeOptions,
+    power: Box<dyn PowerSource>, // energy-1
 ) -> Result<(), slint::SetRenderingNotifierError> {
     let event_loop_waker = EventLoopWaker::new(|| {
         let _queued = slint::invoke_from_event_loop(pump_after_wake);
@@ -127,6 +136,13 @@ pub(crate) fn connect_servo_runtime(
             screen_metrics: None,
             tab_switch_frame: TabSwitchFrame::default(),
             frame_import_errors: ReportOncePerKind::default(),
+            // energy-1: a change of Low Power Mode asks for a pump from whichever thread it is on
+            energy: EnergyGovernor::new(
+                power,
+                Box::new(|| {
+                    let _queued = slint::invoke_from_event_loop(pump_after_wake);
+                }),
+            ),
         })),
         bootstrap_failure_logged: Cell::new(false),
     });
@@ -212,6 +228,42 @@ pub(crate) fn shut_down_engine(exit_code_if_stuck: u8) {
 /// covered and skips its renders.
 pub(crate) fn request_pump() {
     let _queued = slint::invoke_from_event_loop(pump_after_wake);
+}
+
+/// energy-1: winit said the window was covered or uncovered (`WindowEvent::Occluded`; on macOS
+/// the window's occlusion state, which also turns true when the window is minimised). The pump
+/// that follows hides or shows the visible page; see `energy.rs`.
+pub(crate) fn window_occluded(covered: bool) {
+    remember_occlusion(covered);
+    request_pump();
+}
+
+fn remember_occlusion(covered: bool) {
+    WINDOW_OCCLUDED.set(covered);
+}
+
+/// energy-1: `minimised` is read from the window at pump time rather than taken from the event:
+/// a minimise arrives as `Occluded(true)`.
+pub(crate) fn window_cover(occluded: bool, minimised: bool) -> WindowCover {
+    match (occluded, minimised) {
+        (false, _) => WindowCover::Uncovered,
+        (true, false) => WindowCover::Occluded,
+        (true, true) => WindowCover::Minimised,
+    }
+}
+
+impl PageVisibility for ServoWebView {
+    /// The sequence a tab switch uses to show a web view: only a frame announced after `show()`
+    /// contains this page.
+    fn show_page(&mut self) {
+        self.show();
+        self.paint();
+        self.discard_ready_frame();
+    }
+
+    fn hide_page(&mut self) {
+        self.hide();
+    }
 }
 
 /// Whether the engine's state is borrowed right now (a pump or a render is running).
@@ -560,6 +612,8 @@ impl EngineState {
             // tabs: keep the previous frame briefly instead of flashing the background
             self.tab_switch_frame.begin(window);
             self.visible_tab_id = Some(active_tab_id);
+            // energy-1: the switch showed this web view; a covered window hides it again below
+            self.energy.active_view_changed();
         }
 
         if self.current_scale_factor != Some(scale_factor) {
@@ -586,6 +640,31 @@ impl EngineState {
             // context directly would skip Servo's CSS viewport update.
             active_web_view.resize(viewport_size);
             self.current_viewport_size = Some(viewport_size);
+        }
+
+        // energy-1: the visible page is hidden while the window is covered or minimised.
+        let cover = window_cover(
+            WINDOW_OCCLUDED.get(),
+            window
+                .window()
+                .with_winit_window(|winit_window| winit_window.is_minimized())
+                .flatten()
+                .unwrap_or(false),
+        );
+        let hide_due = self.energy.after_pump(
+            &self.controller.borrow(),
+            cover,
+            self.web_views
+                .get_mut(&active_tab_id)
+                .map(|web_view| web_view as &mut dyn PageVisibility),
+            Instant::now(),
+        );
+        if let Some(hide_due) = hide_due {
+            // Looks again when the grace period ends, even if nothing else wakes the engine.
+            Timer::single_shot(
+                hide_due.saturating_duration_since(Instant::now()),
+                pump_after_wake,
+            );
         }
 
         // media-session lane: `runtime` is the `&ServoRuntime` taken from `self.runtime` at the
@@ -1008,6 +1087,27 @@ mod tests {
             .borrow_mut()
             .handle_event(tab_id, BrowserEvent::AddressChanged { url: String::new() });
         assert!(handled);
+    }
+
+    // energy-1
+    #[test]
+    fn a_minimised_window_is_covered_as_minimised() {
+        assert_eq!(window_cover(false, false), WindowCover::Uncovered);
+        assert_eq!(window_cover(false, true), WindowCover::Uncovered);
+        assert_eq!(window_cover(true, false), WindowCover::Occluded);
+        assert_eq!(window_cover(true, true), WindowCover::Minimised);
+    }
+
+    // energy-1
+    #[test]
+    fn an_occlusion_event_is_remembered_for_the_next_pump() {
+        assert!(!WINDOW_OCCLUDED.get());
+
+        remember_occlusion(true);
+        assert!(WINDOW_OCCLUDED.get());
+
+        remember_occlusion(false);
+        assert!(!WINDOW_OCCLUDED.get());
     }
 
     #[test]

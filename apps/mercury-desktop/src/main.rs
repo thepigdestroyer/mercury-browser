@@ -233,6 +233,8 @@ fn main() -> Result<ExitCode, Box<dyn Error>> {
             with_system_proxy(runtime_options(&options, &profile)),
             &settings,
         ),
+        // energy-1: Low Power Mode is read from the system only in interactive launches.
+        power::power_source(media_session::uses_system_services(&options)),
     )?;
     // blocklists: builds the content blocker's engine off the UI thread and updates the lists.
     filter_lists::start(&options, &profile, &settings);

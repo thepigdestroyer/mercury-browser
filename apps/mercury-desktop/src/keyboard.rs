@@ -150,6 +150,8 @@ pub(crate) fn connect_native_keyboard_input(
                     crate::settings::main_window_closing();
                     crate::import_ui::main_window_closing();
                 }
+                // energy-1: covered or minimised pages are hidden (see `energy.rs`).
+                WindowEvent::Occluded(covered) => crate::engine::window_occluded(*covered),
                 WindowEvent::Focused(false) => {
                     // Key-ups that happen while another window has focus never arrive.
                     shortcut_keys.clear();
