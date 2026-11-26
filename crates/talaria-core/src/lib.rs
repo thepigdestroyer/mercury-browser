@@ -10,6 +10,8 @@ mod controller;
 mod controls;
 mod cursor;
 mod find;
+// gestures
+pub mod gestures;
 // groups-core
 mod groups;
 mod input;
@@ -57,6 +59,10 @@ pub use cursor::{ColorScheme, PointerCursor};
 pub use find::{
     CONTINUATION_ROUNDS, EndFindRequest, FindMatches, FindOutcome, FindRequest, FindSelection,
     FindState, FindStatus, FindStep,
+};
+pub use gestures::{
+    Feedback, Reach, Stage, SwipeDirection, SwipeRecogniser, Tuning, Update, WheelPhase,
+    WheelSample,
 };
 // groups-core
 pub use groups::{

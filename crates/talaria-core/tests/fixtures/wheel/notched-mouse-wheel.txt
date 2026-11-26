@@ -1,0 +1,35 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# source: reconstructed from the AppKit/winit 0.30.13 phase contract (platform_impl/macos/view.rs:683), NOT recorded on a trackpad; replace with a real trace (MERCURY_WHEEL_TRACE)
+# finger deltas, logical px: positive x = fingers right; columns: us dx dy phase precise
+0 0.733 0.000 Started 0
+8000 2.190 0.000 Moved 0
+16000 3.623 0.000 Moved 0
+24000 5.017 0.000 Moved 0
+32000 6.356 0.000 Moved 0
+40000 7.625 0.000 Moved 0
+48000 8.810 0.000 Moved 0
+56000 9.899 0.000 Moved 0
+64000 10.880 0.000 Moved 0
+72000 11.741 0.000 Moved 0
+80000 12.474 0.000 Moved 0
+88000 13.070 0.000 Moved 0
+96000 13.523 0.000 Moved 0
+104000 13.828 0.000 Moved 0
+112000 13.981 0.000 Moved 0
+120000 13.981 0.000 Moved 0
+128000 13.828 0.000 Moved 0
+136000 13.523 0.000 Moved 0
+144000 13.070 0.000 Moved 0
+152000 12.474 0.000 Moved 0
+160000 11.741 0.000 Moved 0
+168000 10.880 0.000 Moved 0
+176000 9.899 0.000 Moved 0
+184000 8.810 0.000 Moved 0
+192000 7.625 0.000 Moved 0
+200000 6.356 0.000 Moved 0
+208000 5.017 0.000 Moved 0
+216000 3.623 0.000 Moved 0
+224000 2.190 0.000 Moved 0
+232000 0.733 0.000 Moved 0
+240000 0.000 0.000 Ended 0
