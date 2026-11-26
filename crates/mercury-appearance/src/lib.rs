@@ -11,8 +11,8 @@
 //! - [`colour`]: hex forms, compositing, mixing, WCAG contrast.
 //! - [`oklab`]: perceptual colour distance, for telling tab-group colours apart.
 //! - [`palette`] and [`palettes`]: a palette is a table of the chrome's colour roles for the
-//!   light and the dark scheme. `signal` (the default), `forest`, `abyss` and `glacier` can be
-//!   chosen; `mercury-b2`, `graphite`, `midnight` and `hermes` (today's values, the regression
+//!   light and the dark scheme. `signal` (the default), `forest`, `abyss`, `glacier` and `ember` can
+//!   be chosen; `mercury-b2`, `graphite`, `midnight` and `hermes` (today's values, the regression
 //!   baseline) stay as data that nothing can switch on.
 //! - [`contrast`]: the rules that every palette that can be chosen must pass.
 //! - [`group_colour`]: the 14 tab-group colours, custom colours, and tab shades.

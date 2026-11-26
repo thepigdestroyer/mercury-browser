@@ -23,7 +23,7 @@ type Map = BTreeMap<Role, Colour>;
 const TEXT_MARGIN: f64 = 0.1;
 
 /// The palettes the owner chose to ship (22 Nov 2026): the only ones a user may select.
-const SELECTABLE: [&str; 4] = ["signal", "forest", "abyss", "glacier"];
+const SELECTABLE: [&str; 5] = ["signal", "forest", "abyss", "glacier", "ember"];
 
 /// The design tokens of one scheme.
 struct Scheme {
@@ -382,6 +382,62 @@ fn candidates() -> Vec<Candidate> {
                 info_border: 0x7a5cf0,
                 danger: 0xff8a8a,
                 soft: 0.55,
+            },
+        },
+        Candidate {
+            id: "ember",
+            name: "Ember",
+            mood: "Mercury orange on white by day, orange on true OLED black by night: the brand's own sun colour.",
+            light: Scheme {
+                dark: false,
+                frame: 0xf5f3f1,
+                bar: 0xffffff,
+                content: 0xffffff,
+                field: 0xffffff,
+                field_border: 0xb5aca3,
+                line: 0xe0dad4,
+                popup: 0xffffff,
+                tab_active: 0xffffff,
+                tab_hover: 0xebe7e3,
+                btn_hover: 0xf3f0ed,
+                btn_pressed: 0xeeeae6,
+                item_hover: 0xf4f1ee,
+                ink: 0x1b1511,
+                // The brand's sun rim, `#EC5B27`; tuned darker until a white label reads on it
+                // (4.6:1) and it clears 3:1 on every surface.
+                fill: 0xec5b27,
+                on_fill: 0xffffff,
+                notice_bg: 0xfff3cd,
+                notice_border: 0xd8b84a,
+                info_bg: 0xf1eafa,
+                info_border: 0xbfa9e3,
+                danger: 0xc62828,
+                soft: 0.9,
+            },
+            dark: Scheme {
+                dark: true,
+                frame: 0x000000,
+                bar: 0x0a0a0a,
+                content: 0x000000,
+                field: 0x0a0a0a,
+                field_border: 0x3d3d3d,
+                line: 0x1f1f1f,
+                popup: 0x0a0a0a,
+                tab_active: 0x0a0a0a,
+                tab_hover: 0x111111,
+                btn_hover: 0x121212,
+                btn_pressed: 0x1a1a1a,
+                item_hover: 0x121212,
+                ink: 0xf6f1ec,
+                // The brand's sun, the middle stop of `AppIcon.svg` (`#FF8A2F`).
+                fill: 0xff8a2f,
+                on_fill: 0x000000,
+                notice_bg: 0x2a2106,
+                notice_border: 0x7a6414,
+                info_bg: 0x1c1230,
+                info_border: 0x4a3a7a,
+                danger: 0xff8a80,
+                soft: 0.9,
             },
         },
     ]

@@ -2,7 +2,7 @@
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 //! The role registry, the palette registry and the shape of the tables: every palette has every
 //! role in both schemes, ids are unique and well formed, the default (`signal`) is selectable, only
-//! Signal, Forest, Abyss and Glacier can be chosen, and `hermes`, `mercury-b2`, `graphite` and
+//! Signal, Forest, Abyss, Glacier and Ember can be chosen, and `hermes`, `mercury-b2`, `graphite` and
 //! `midnight` can be found but not chosen. Also the values the owner gave for `mercury-b2`, so
 //! that nobody changes them by accident.
 
@@ -210,15 +210,15 @@ fn the_default_palette_is_signal_and_can_be_chosen() {
 fn four_palettes_can_be_chosen_and_the_other_four_are_data() {
     // The owner's choice of 22 Nov 2026, in the order a picker lists them.
     let chosen: Vec<&str> = palettes::selectable().map(|palette| palette.id).collect();
-    assert_eq!(chosen, ["signal", "forest", "abyss", "glacier"]);
+    assert_eq!(chosen, ["signal", "forest", "abyss", "glacier", "ember"]);
     let names: Vec<&str> = palettes::selectable().map(|palette| palette.name).collect();
-    assert_eq!(names, ["Signal", "Forest", "Abyss", "Glacier"]);
+    assert_eq!(names, ["Signal", "Forest", "Abyss", "Glacier", "Ember"]);
     for id in ["graphite", "midnight", "mercury-b2", "hermes"] {
         let palette = palettes::find(id).unwrap_or_else(|| panic!("{id} is still in the code"));
         assert!(!palette.selectable, "{id}");
         assert!(palettes::find_selectable(id).is_none(), "{id}");
     }
-    assert_eq!(palettes::all().len(), 8);
+    assert_eq!(palettes::all().len(), 9);
 }
 
 #[test]
@@ -234,7 +234,7 @@ fn hermes_is_a_baseline_and_not_a_choice() {
 fn find_matches_an_id_exactly() {
     assert!(palettes::find("mercury-b2").is_some());
     assert!(palettes::find_selectable("mercury-b2").is_none());
-    for id in ["signal", "forest", "abyss", "glacier"] {
+    for id in ["signal", "forest", "abyss", "glacier", "ember"] {
         assert!(palettes::find_selectable(id).is_some(), "{id}");
     }
     for id in [

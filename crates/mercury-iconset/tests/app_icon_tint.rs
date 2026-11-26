@@ -40,7 +40,16 @@ fn every_brand_colour_of_the_artwork_is_replaced_for_every_selectable_palette() 
             let tinted = tint_app_icon(&svg, &colours)
                 .unwrap_or_else(|error| panic!("{} {}: {error}", palette.id, scheme.name()));
             let lower = tinted.to_ascii_lowercase();
+            let drawn: Vec<String> = colours
+                .sun
+                .iter()
+                .chain([&colours.halo, &colours.plate_bottom, &colours.ink])
+                .map(|colour| colour.to_hex())
+                .collect();
             for old in ORIGINAL {
+                if drawn.iter().any(|hex| hex == old) {
+                    continue;
+                }
                 assert!(
                     !lower.contains(old),
                     "{} {}: {old} is left",
@@ -65,6 +74,12 @@ fn the_rasterised_icon_is_1024_square_and_carries_the_palettes_colours() {
             let colours = AppIconColours::new(palette, scheme);
             let tinted = tint_app_icon(&svg, &colours).expect("tints");
             let png = render_png(tinted.as_bytes(), APP_ICON_PIXELS).expect("renders");
+            // `MERCURY_ICON_DIR=<dir>` saves the picture, for looking at.
+            if let Some(directory) = std::env::var_os("MERCURY_ICON_DIR") {
+                let file = format!("dock-icon-{}-{}.png", palette.id, scheme.name());
+                std::fs::write(std::path::Path::new(&directory).join(file), &png)
+                    .expect("the icon can be saved");
+            }
             let pixmap = Pixmap::decode_png(&png).expect("a valid PNG");
             assert_eq!((pixmap.width(), pixmap.height()), (1024, 1024), "{name}");
 

@@ -147,6 +147,9 @@ fn mood(id: &str) -> &'static str {
         "abyss" => {
             "Deep ocean: sea-glass white by day, a trench of blue-green by night, bright cyan-turquoise accent."
         }
+        "ember" => {
+            "Mercury orange on white by day, orange on true OLED black by night: the brand's own sun colour."
+        }
         "glacier" => {
             "Arctic ice: frosted blue-white chrome, vivid cyan accent; steel-blue polar night in the dark."
         }

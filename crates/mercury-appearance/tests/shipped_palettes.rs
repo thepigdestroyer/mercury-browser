@@ -1,20 +1,21 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
-//! The six palettes designed on 22 Nov 2026 (the four the owner chose to ship, Signal, Forest,
-//! Abyss and Glacier, and the two that stay in the code, Graphite and Midnight) held to the
+//! The seven palettes designed on 22 Nov 2026 (the five the owner chose to ship, Signal, Forest,
+//! Abyss, Glacier and Ember, and the two that stay in the code, Graphite and Midnight) held to the
 //! crate's own contrast rules in both schemes, so the two that cannot be chosen stay as good as
-//! the four that can. Run with `--nocapture` for the report (lowest ratios, the exempt pairs).
+//! the five that can. Run with `--nocapture` for the report (lowest ratios, the exempt pairs).
 
 use mercury_appearance::palette::{Role, Scheme};
 use mercury_appearance::palettes;
 use mercury_appearance::{Colour, EXEMPT, Minimum, Palette, check, measure, oklab};
 
-/// The ids of the six, and which of them a user can choose.
-const SIX: [(&str, bool); 6] = [
+/// The ids of the seven, and which of them a user can choose.
+const SIX: [(&str, bool); 7] = [
     ("signal", true),
     ("forest", true),
     ("abyss", true),
     ("glacier", true),
+    ("ember", true),
     ("graphite", false),
     ("midnight", false),
 ];
@@ -53,13 +54,13 @@ fn hue(colour: Colour) -> f64 {
 }
 
 #[test]
-fn the_six_have_every_role_and_unique_ids_and_four_can_be_chosen() {
+fn the_seven_have_every_role_and_unique_ids_and_five_can_be_chosen() {
     let all = six();
-    assert_eq!(all.len(), 6);
+    assert_eq!(all.len(), 7);
     let mut ids: Vec<&str> = all.iter().map(|palette| palette.id).collect();
     ids.sort_unstable();
     ids.dedup();
-    assert_eq!(ids.len(), 6);
+    assert_eq!(ids.len(), 7);
     for (palette, &(id, selectable)) in all.into_iter().zip(&SIX) {
         assert_eq!(palette.id, id);
         assert_eq!(palette.selectable, selectable, "{}", palette.id);
@@ -265,5 +266,5 @@ fn the_mercury_mark_is_legible_on_every_surface_it_is_drawn_on_in_every_selectab
             );
         }
     }
-    assert_eq!(checked, 4 * 2 * surfaces.len());
+    assert_eq!(checked, 5 * 2 * surfaces.len());
 }
