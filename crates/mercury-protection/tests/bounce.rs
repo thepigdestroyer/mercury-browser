@@ -148,6 +148,26 @@ fn an_activation_older_than_the_lifetime_does_not_protect_and_one_just_inside_it
 }
 
 #[test]
+fn the_activation_lifetime_boundary_is_inclusive() {
+    let mut at_boundary = tracker();
+    at_boundary.user_activated(&site("b.example"), T0);
+    bounce_b(&mut at_boundary, TAB, T0 + DAYS_45);
+    assert!(due(&at_boundary, T0 + DAYS_45 + HOUR).is_empty());
+    assert_eq!(
+        at_boundary.records(),
+        vec![record("b.example", Some(T0), None)]
+    );
+
+    let mut past_boundary = tracker();
+    past_boundary.user_activated(&site("b.example"), T0);
+    bounce_b(&mut past_boundary, TAB, T0 + DAYS_45 + 1);
+    assert_eq!(
+        due(&past_boundary, T0 + DAYS_45 + 1 + HOUR),
+        vec![site("b.example")]
+    );
+}
+
+#[test]
 fn a_chain_that_returns_to_its_first_site_still_bounces_the_middle_one() {
     let mut t = tracker();
     t.navigated(TAB, Some(site("a.example")), NavKind::User, T0);
