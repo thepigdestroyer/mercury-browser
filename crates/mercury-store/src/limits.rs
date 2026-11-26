@@ -25,6 +25,23 @@ pub const MAX_VALIDATOR_BYTES: usize = 1024;
 /// [`StoreError::InvalidArgument`]; a cut path would name another file.
 pub const MAX_PATH_BYTES: usize = 4096;
 
+/// A site setting pattern (`https://a.com`, `site:a.com`, `*.a.com`) longer than this many bytes
+/// is refused with [`StoreError::InvalidArgument`].
+pub const MAX_SITE_PATTERN_BYTES: usize = 512;
+
+/// The short text fields of a site setting or protocol handler (axis, qualifier, encoded value,
+/// scheme, meta key) longer than this many bytes are refused with [`StoreError::InvalidArgument`].
+pub const MAX_SITE_FIELD_BYTES: usize = 64;
+
+/// A protocol handler URL template longer than this many bytes is refused.
+pub const MAX_HANDLER_TEMPLATE_BYTES: usize = 2048;
+
+/// A protocol handler title longer than this many characters is refused.
+pub const MAX_HANDLER_TITLE_CHARS: usize = 128;
+
+/// A meta value (such as a migration marker) longer than this many bytes is refused.
+pub const MAX_SITE_META_VALUE_BYTES: usize = 256;
+
 /// `text` cut to at most `max_chars` characters, at a character boundary.
 pub(crate) fn cut(text: &str, max_chars: usize) -> &str {
     match text.char_indices().nth(max_chars) {

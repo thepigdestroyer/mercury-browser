@@ -108,6 +108,35 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO bookmarks (guid, kind, parent_id, position, title, place_id, added_at, modified_at)
     VALUES ('toolbar_____', 2, NULL, 0, 'Bookmarks Bar', NULL, 0, 0),
            ('menu________', 2, NULL, 1, 'Other Bookmarks', NULL, 0, 0);",
+    // Version 2: per-site settings, protocol handlers and their metadata (spec §6.1).
+    "CREATE TABLE site_settings (
+        pattern       TEXT NOT NULL,
+        axis          TEXT NOT NULL,
+        qualifier     TEXT NOT NULL DEFAULT '',
+        value         TEXT NOT NULL,
+        set_at        INTEGER NOT NULL,
+        expires_at    INTEGER,
+        last_used_at  INTEGER,
+        revoke_exempt INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (pattern, axis, qualifier)
+    ) STRICT, WITHOUT ROWID;
+    CREATE INDEX site_settings_by_expiry ON site_settings(expires_at) WHERE expires_at IS NOT NULL;
+
+    CREATE TABLE protocol_handlers (
+        scheme       TEXT NOT NULL,
+        origin       TEXT NOT NULL,
+        url_template TEXT NOT NULL,
+        title        TEXT NOT NULL DEFAULT '',
+        added_at     INTEGER NOT NULL,
+        last_used_at INTEGER,
+        is_default   INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY (scheme, origin)
+    ) STRICT, WITHOUT ROWID;
+
+    CREATE TABLE site_settings_meta (
+        key   TEXT NOT NULL PRIMARY KEY,
+        value TEXT NOT NULL
+    ) STRICT, WITHOUT ROWID;",
 ];
 
 /// The newest schema version this build understands.
