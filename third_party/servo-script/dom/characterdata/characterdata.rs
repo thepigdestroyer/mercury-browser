@@ -8,6 +8,8 @@ use std::cell::LazyCell;
 use atomic_refcell::{AtomicRef, AtomicRefCell};
 use dom_struct::dom_struct;
 use js::context::JSContext;
+// Mercury: lane txt-1 (EB7).
+use layout_api::TextHighlights;
 use script_bindings::codegen::InheritTypes::{CharacterDataTypeId, NodeTypeId, TextTypeId};
 use servo_base::text::{AssumeUnder4GB, RangeAny, Utf16CodeUnits, Utf32CodeUnits};
 
@@ -119,6 +121,17 @@ impl CharacterData {
             .is_some_and(|layout_data| {
                 layout_data.set_text_run_selection(new_range, new_paints_caret)
             })
+    }
+
+    // Mercury: lane txt-1 (EB7). Typed highlights, beside the selection above and independent of it.
+    /// Returns whether `highlights` was successfully set on an existing text run. They replace the
+    /// highlights the text run had; an empty set clears them.
+    pub(crate) fn set_text_run_highlights(&self, highlights: TextHighlights) -> bool {
+        self.upcast::<Node>()
+            .layout_data()
+            .borrow()
+            .as_ref()
+            .is_some_and(|layout_data| layout_data.set_text_run_highlights(highlights))
     }
 
     /// Returns the rendered text for this [`CharacterData`].

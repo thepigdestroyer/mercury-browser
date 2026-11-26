@@ -22,7 +22,9 @@ the change listed below, marked with a `Mercury:` comment.
 - **Why:** Servo reads its error pages (`Resource::BadCertHTML`, `NetErrorHTML`, `CrashHTML`)
   through the one registered resource reader. Mercury registers its own
   (`crates/talaria-servo/src/resources.rs`) to serve Mercury's error pages, and that reader
-  serves every other resource from `DefaultResourceReader`. With both registered, Servo picks
+  serves every other resource from `DefaultResourceReader`, except the HSTS preload list, which
+  is Mercury's own copy (`crates/talaria-servo/resources/hsts_preload.fstmap`; this crate's file
+  stays as published, because the patch tool refuses binary files). With both registered, Servo picks
   one of them at random (`servo-embedder-traits` 0.8.0 `resources.rs:61-77`). Servo links
   this crate through its default `baked-in-resources` feature and `servo-net`'s dependency, so
   turning the feature off would not remove it, and would change Servo's feature list, which

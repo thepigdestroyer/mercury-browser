@@ -26,6 +26,8 @@ use crate::{
     GenericLayoutData, HTMLCanvasData, HTMLMediaData, LayoutDataTrait, LayoutDomTypeBundle,
     LayoutNodeType, SVGElementData,
 };
+// Mercury: lane txt-1 (EB7).
+use crate::TextHighlights;
 
 /// A trait that exposes a DOM nodes to layout. Implementors of this trait must abide by certain
 /// safety requirements. Layout will only ever access and mutate each node from a single thread
@@ -185,6 +187,13 @@ pub trait LayoutNode<'dom>: Copy + Debug + NodeInfo + Send + Sync {
     ///
     /// Returned offsets are counted in `char`s in the `self.text_content()` string.
     fn text_node_selection(&self) -> Option<RangeAny<Utf32CodeUnits>>;
+
+    // Mercury: new method (lane txt-1, EB7), next to `text_node_selection` and independent of it.
+    /// For a text node, the typed highlights (IME composition, find matches, ...) that cover
+    /// this text: the initial value for a text run that is built after highlights were set.
+    ///
+    /// Returned offsets are counted in `char`s in the `self.text_content()` string.
+    fn text_node_highlights(&self) -> TextHighlights;
 
     /// For a text node, whether a caret should be painted when the selection is an empty range
     /// (start == end)

@@ -9,6 +9,7 @@ edition.workspace = true
 license.workspace = true
 
 [dependencies]
+mercury-appearance = { path = "../mercury-appearance" }
 resvg.workspace = true
 thiserror.workspace = true
 

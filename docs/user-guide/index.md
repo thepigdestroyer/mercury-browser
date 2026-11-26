@@ -30,7 +30,7 @@ On the `mercury` branch today:
 
 - tabs, pages that open tabs, pop-up blocking (pop-ups need a click in the page), and pages closing their own tab;
 - the address bar with seven built-in search engines and keywords such as `@wikipedia`;
-- a settings window for search, appearance (Light, Dark, System), the home page and clearing data when Mercury quits;
+- a settings window for search, appearance (Light, Dark, System), the home page and clearing data when Mercury quits, and sections for the layout and the tab groups' letters, which are saved but change nothing you can see until the tab-group interface arrives;
 - page dialogs, permission prompts and HTTP sign-in;
 - drop-down lists, a colour picker, the macOS file panel and a right-click menu;
 - the macOS menu bar and the About window;
@@ -39,17 +39,19 @@ On the `mercury` branch today:
 - ad and tracker blocking at the network level, with filter lists updated in the background;
 - your system's proxy settings and an HTTP disk cache;
 - session restore and reopening closed tabs, and pinned tabs, tab search and dragging tabs into order;
+- a PDF viewer in the tab ([PDF viewer](pdf-viewer.md)): scroll, zoom, find and copy text, with no forms or annotations, and no screen-reader access to the text of the pages;
 - the history window and address-bar suggestions, bookmarks, importing from other browsers, the downloads list, find in page, and opening links from other apps;
 - the tab audio indicator and Now Playing;
 - saved logins in the Keychain, managed in Settings, with a manual fill from the right-click menu;
 - site information, error pages for network and certificate problems, and an HTTPS-only mode;
 - camera and microphone on macOS;
 - cut, copy and paste in pages;
-- screen-reader labels for Mercury's own windows (the toolbar, tabs, address bar, menus, dialogs, Settings and the other windows), written into the code, covered by automated tests and read back through macOS's accessibility interface by a test program, but not yet tried with VoiceOver by a person. Known limits: web pages are not readable by a screen reader yet (to VoiceOver a page is one item, "Page content"); in a long list, such as your history or the bookmarks manager, a screen reader reaches only the rows that are on screen until scrolling with the arrow keys is added, so scroll with the trackpad or narrow the list with its search field; and a password field never tells a screen reader what you typed.
+- web pages for a screen reader (headings, links, text, form controls with their names and states, and the content of frames, for the tab you are looking at), written into the code. The logic is covered by automated tests; the tests that read a live page have not been run yet, and nobody has tried it with VoiceOver; reading by character or line, the text cursor, live announcements and tables are not there yet;
+- screen-reader labels for Mercury's own windows (the toolbar, tabs, address bar, menus, dialogs, Settings and the other windows), written into the code, covered by automated tests and read back through macOS's accessibility interface by a test program, but not yet tried with VoiceOver by a person. Known limits: in a long list, such as your history or the bookmarks manager, a screen reader reaches only the rows that are on screen until scrolling with the arrow keys is added, so scroll with the trackpad or narrow the list with its search field; and a password field never tells a screen reader what you typed.
 
 Not in the app yet: location, which is built but stays off until a Servo patch tells Mercury which frame is asking; video calls (WebRTC); a page's own clipboard API (`navigator.clipboard`); and the download folder settings, which are stored but not used. Mercury doesn't fill in or save the logins you type into a page's own sign-in form on its own.
 
-Planned: a complete redesign of the interface, accessibility of web pages (a screen reader reading what a page says), phishing protection, search suggestions, translation, update checks, and releases signed with an Apple Developer ID.
+Planned: a complete redesign of the interface, phishing protection, search suggestions, translation, update checks, and releases signed with an Apple Developer ID.
 
 ## What Servo can't do yet
 

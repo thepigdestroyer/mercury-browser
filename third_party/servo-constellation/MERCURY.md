@@ -28,6 +28,20 @@ Changes made by lane K0 (engine base, 19 Nov 2026), part of the Mercury message 
 - **Tested by:** the `talaria-servo` router tests and the integration build; no unit test lives in this crate.
 - **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
 
+Changes made by lane a11y-1 (21 Nov 2026).
+
+### Accessibility of iframes (EE7) — `constellation.rs`, `mercury/a11y.rs`
+
+- **What:** upstream activates accessibility for the top-level document of a `WebView` only. `mercury/a11y.rs`
+  (the lane's K0 scaffold file) activates every document of the active frame tree below it, with the top-level epoch plus
+  a flag (`embedder_traits::epoch_for_child_document`), and deactivates the ones that leave it. `constellation.rs` has four
+  hook lines (a field, and calls in `set_accessibility_active`, `set_frame_tree_for_webview` and `close_pipeline`); one
+  warning no longer prints the whole action request, which can carry typed text.
+- **Why:** an iframe's content must be in the tree that VoiceOver reads.
+- **Tested by:** unit tests of the pure planner in `mercury/a11y.rs`; `crates/talaria-servo/tests/a11y_frames.rs`
+  (ignored, needs a GL context).
+- **Drop when:** upstream Servo activates child documents itself.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

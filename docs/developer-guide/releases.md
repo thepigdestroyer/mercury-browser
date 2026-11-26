@@ -75,7 +75,7 @@ dist/Mercury Browser.app/Contents/
   Info.plist            from apps/mercury-desktop/resources/macos/Info.plist.in
   PkgInfo
   MacOS/mercury-browser the release executable (arm64 only)
-  MacOS/lib/            the GStreamer libraries and plugins (see below); nothing else
+  MacOS/lib/            the GStreamer libraries and plugins (see below) and libpdfium.dylib (PDFium, the PDF viewer's library); nothing else
   Resources/AppIcon.icns
   Resources/LICENSE
   Resources/NOTICE
@@ -84,6 +84,7 @@ dist/Mercury Browser.app/Contents/
   Resources/credits/credits.html  the licence text and copyright of every crate in the executable (About, Third-party notices)
   Resources/filter-lists/  the ad and tracker filter lists and their manifest (data, read at start-up)
   Resources/gstreamer-licenses/  each bundled library project's licence files, from the GStreamer packages
+  Resources/pdfium-licenses/  PDFium's licence file and the licence file of every component built into it, from the PDFium tarball
   _CodeSignature/
 dist/Mercury-Browser-0.2.0-macos-arm64.dmg         with --dmg: the app, an Applications link, LICENSE and NOTICE
 dist/Mercury-Browser-0.2.0-macos-arm64.dmg.sha256
@@ -212,12 +213,13 @@ git push origin v0.2.0
 Before pushing a tag:
 
 1. Check that the one-time set-up in [Before the first public release](#before-the-first-public-release) is done. Without the committed public key the release fails in its first minute; without the two secrets it fails after both builds have finished.
-2. Run `make qa`.
-3. Run `make docs`.
-4. Run `make package-macos` and `make test-bundle-macos` on an Apple Silicon Mac, and check the disk image mounts and holds the app (`hdiutil attach -readonly -nobrowse -mountpoint <dir> dist/Mercury-Browser-<version>-macos-arm64.dmg`, then `hdiutil detach <dir>`).
-5. Test the optimized browser on Linux.
-6. Test direct media playback when the release changes GStreamer or graphics code.
-7. Confirm the version and expected artifact names.
+2. Refresh the HSTS preload list ([HSTS preload list](#hsts-preload-list)): run `make hsts-preload-refresh` (it downloads Chromium's list, so it needs the network; the default guards apply, and `HSTS_BUILD_ARGS` passes options such as `--allow-shrink` when a refresh is meant to drop many hosts, as the first one did, see [The first refresh](#the-first-refresh)), read `git diff --stat` and the summary of added, removed and changed hosts it prints, run `make hsts-preload-check HSTS_MAX_AGE_DAYS=<days>`, and commit the two data files alone as `data(hsts): refresh the preload list from Chromium <date>`. It comes before `make qa` so that the next step tests the refreshed list (`crates/mercury-devtools/tests/hsts_data.rs` is part of it).
+3. Run `make qa`.
+4. Run `make docs`.
+5. Run `make package-macos` and `make test-bundle-macos` on an Apple Silicon Mac, and check the disk image mounts and holds the app (`hdiutil attach -readonly -nobrowse -mountpoint <dir> dist/Mercury-Browser-<version>-macos-arm64.dmg`, then `hdiutil detach <dir>`).
+6. Test the optimized browser on Linux.
+7. Test direct media playback when the release changes GStreamer or graphics code.
+8. Confirm the version and expected artifact names.
 
 The release gets these files:
 
@@ -403,6 +405,18 @@ The macOS app bundles GStreamer, FFmpeg, GLib, proxy-libintl and libnice as sepa
 `NOTICE`, which the macOS and Linux downloads carry, the release notes and `THIRD-PARTY-NOTICES.md` include the credit libjpeg-turbo's IJG licence requires: "This software is based in part on the work of the Independent JPEG Group."
 
 The licence text and copyright line of every Rust crate built into the application, with the `NOTICE` files of the Apache-2.0 crates and the source pointers that the MPL-2.0 asks for, are in one generated page, `credits.html`: `Contents/Resources/credits/credits.html` in the macOS app and `credits/credits.html` in the Linux archive. `mercury-credits` writes it at package time from `Cargo.lock` (it is never committed), `bundle.sh` refuses to build without it, and **About, Third-party notices** opens it. [Licence compliance](licence-compliance.md#the-credits-page-and-its-tool) explains the tool, how to read a failure and which duties the page meets; the release checklist's item about the About window checks that the link works.
+
+### HSTS preload list
+
+The list of sites that asked browsers in advance to be opened only over HTTPS is data that Mercury refreshes before each release. It lives in `crates/talaria-servo/resources/hsts_preload.fstmap` (an `fst` map from host name to `2 * rank + include_subdomains`, the format Servo reads) with `hsts_preload.manifest.json` beside it (where the data came from, the date, the SHA-256 of the input and of the file, the counts). `crates/talaria-servo/src/resources.rs` compiles the file in and serves it to Servo as `Resource::HstsPreloadList`, in front of the copy in the vendored `servo-default-resources`. That copy stays as Servo published it, because `mercury-servo-patches` refuses binary files and so cannot carry a changed list ([Vendored patches](vendored-patches.md)); both copies end up in the executable, which makes it about 1.9 MB larger. Since the first refresh (22 Nov 2026) Mercury's file is Chromium's list at commit `f87e0ffc32f5358a0cb05b1e10b8c1235c935a5e` (95,544 hosts; the manifest has the date, the commit, the URL and the SHA-256 of the input); the age of the list is the manifest's `retrieved` date. The credit and licence (Chromium's BSD-3-Clause data) are in `THIRD-PARTY-NOTICES.md`.
+
+`make hsts-preload-refresh` runs `scripts/dev/update-hsts-preload.sh`, which downloads `net/http/transport_security_state_static.json` from Chromium's source host with `curl`, then runs the `hsts-preload` tool of `crates/mercury-devtools` (`build`, `check` and `diff`; see [Continuous integration](continuous-integration.md)). The tool never touches the network and CI never runs the refresh. The files are left uncommitted, so read the diff before you commit them. The script first asks Gitiles which commit the ref (a branch, tag or commit; the default is `main`) points to, downloads the list from that commit, and the manifest records the commit and the URL, so the input can be fetched again later; `HSTS_CHROMIUM_REF=<ref> make hsts-preload-refresh` picks another ref. The download has a size cap of 100 MB (the list is about 14 MB). `HSTS_BUILD_ARGS="..."` passes options to `hsts-preload build` (for example `--allow-shrink --allow-flag-loss --min-entries N`; the tool's own options are in [Continuous integration](continuous-integration.md)).
+
+The tool refuses a bad refresh and writes nothing. `build` stops when the input is over 100 MB, when the new list has fewer than 50,000 entries (Chromium's list of 22 Nov 2026 has 95,544), when fewer than 90 % of its entries include subdomains, when one of a few long-standing hosts (`accounts.google.com`, `github.com`, `dropbox.com` and the `dev` top-level domain) is missing or lacks the include-subdomains flag, when a host name is not a plain ASCII name (the message names the entry), when the list is more than 10 % smaller than the file it replaces (`--allow-shrink` waives only that rule), or when more than 1 % of the hosts it shares with the file it replaces lose the include-subdomains flag (`--allow-flag-loss` waives only that rule; `--max-flag-loss-percent N` moves it). These guards exist because Servo reads a damaged file as an empty list without complaint: a Chromium format change would otherwise ship a browser with no preloaded hosts. `make hsts-preload-check` reads the committed file: it must open, its checksum must hold, its values must follow the scheme above, and the manifest must match it. With `HSTS_MAX_AGE_DAYS=<days>` a list retrieved longer ago fails the check, and so does one with no date. `crates/mercury-devtools/tests/hsts_data.rs` runs the same checks on the shipped file, so `make test` and the fast CI jobs catch a damaged or mismatched file, and a change of the path on either side of the browser's reader.
+
+#### The first refresh
+
+The list Mercury shipped before the first refresh was the file that Servo 0.8.0 published: an earlier snapshot of Chromium's list, of a date nobody recorded (166,958 hosts). Chromium had pruned its list since, so the first refresh **dropped about 98,000 hosts**. It was done on 22 Nov 2026 with `make hsts-preload-refresh HSTS_BUILD_ARGS=--allow-shrink` (Chromium commit `f87e0ffc32f5358a0cb05b1e10b8c1235c935a5e`, 14,152,496 bytes of base64 input, SHA-256 `19fcfe45...81e7`) and gave: 95,544 entries, 95,294 of them include subdomains; `added 26931 / removed 98345 / changed 0` against the old file, so the 68,613 hosts that were in both lists kept their flags. With the default guards the build is refused for one reason only, the 42.8 % shrink, which is why `--allow-shrink` was needed. The lead decided to ship it: Mercury now preloads what Chrome preloads, and the 98,345 hosts that only the old snapshot had are no longer upgraded in advance (those sites still load; they are upgraded only when the site sends its own HSTS header or when HTTPS-only mode is on), which is what their owners asked for when they left Chromium's list. Later refreshes differ little from the list before them, so the default guards apply again.
 
 ## Documentation site
 

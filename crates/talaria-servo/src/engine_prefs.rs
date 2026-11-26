@@ -72,6 +72,12 @@ fn dev_mse_requested() -> Option<bool> {
 pub(crate) const STYLO_PREFS: &[(&str, bool)] = &[
     // `:nth-child(An+B of S)`: Servo's selector parser knows it and Stylo matches it.
     ("layout.css.nth-child-of.enabled", true),
+    // CSS counters (ED5, lane txt-1): `counter-reset` and `counter-increment`. The counter pass
+    // is in `third_party/servo-layout/counters.rs`; without this line Stylo drops both properties.
+    ("layout.css.counters.enabled", true),
+    // `text-overflow: clip | ellipsis | <string>` (ED7, lane txt-1), laid out by
+    // `third_party/servo-layout/ellipsis.rs` and `flow/inline/line.rs`.
+    ("layout.css.text-overflow.enabled", true),
 ];
 
 /// `STYLO_PREFS` as the comma-separated list `Preferences::stylo_prefs` holds.
@@ -109,8 +115,9 @@ const PINNED_OFF: &[&str] = &[
     // report what is not there, until their items land.
     "dom_serviceworker_enabled",
     "dom_web_animations_enabled",
-    // The accessibility tree is built for the active tab only, by its own lane.
-    "accessibility_enabled",
+    // The tree integrity checks walk the whole tree on every update: for Servo's own tests only.
+    // (`accessibility_enabled` itself is on, in [`apply`]: the tree is still built only for the tab
+    // whose page assistive technology reads, see `accessibility.rs`.)
     "expensive_accessibility_test_assertions_enabled",
 ];
 
@@ -151,6 +158,11 @@ fn apply_with(preferences: &mut Preferences, dev_mse: Option<bool>) {
     preferences.dom_composition_event_enabled = true;
     preferences.dom_adoptedstylesheet_enabled = true;
     preferences.dom_visual_viewport_enabled = true;
+    // Page accessibility (lane a11y-1): lets a web view build an accessibility tree when asked
+    // (`WebView::set_accessibility_active`). Nothing is built until assistive technology attaches
+    // to the window and the tab is the shown one: activation is lazy per document, and a document
+    // that was never activated records no accessibility damage.
+    preferences.accessibility_enabled = true;
 }
 
 #[cfg(test)]
@@ -220,10 +232,31 @@ mod tests {
     }
 
     #[test]
+    fn page_accessibility_is_on_and_the_expensive_checks_stay_off() {
+        let preferences = applied();
+        assert!(preferences.accessibility_enabled);
+        assert!(!preferences.expensive_accessibility_test_assertions_enabled);
+        // A value set before does not matter: the product's value wins.
+        let mut before = Preferences::default();
+        before.set_value("accessibility_enabled", PrefValue::Bool(false));
+        before.set_value(
+            "expensive_accessibility_test_assertions_enabled",
+            PrefValue::Bool(true),
+        );
+        apply(&mut before);
+        assert!(before.accessibility_enabled);
+        assert!(!before.expensive_accessibility_test_assertions_enabled);
+        // It is not a pinned-off name any more, but the other one is.
+        assert!(!PINNED_OFF.contains(&"accessibility_enabled"));
+        assert!(PINNED_OFF.contains(&"expensive_accessibility_test_assertions_enabled"));
+    }
+
+    #[test]
     fn the_stylo_list_is_joined_into_the_preferences() {
         assert_eq!(
             applied().stylo_prefs,
-            "layout.css.nth-child-of.enabled=true"
+            "layout.css.nth-child-of.enabled=true,layout.css.counters.enabled=true,\
+             layout.css.text-overflow.enabled=true"
         );
     }
 
@@ -241,6 +274,13 @@ mod tests {
             servo::prefs::stylo_bool_pref("layout.css.nth-child-of.enabled"),
             Some(true)
         );
+        // ED5 counters and ED7 text-overflow (lane txt-1) are on, because they work.
+        for name in [
+            "layout.css.counters.enabled",
+            "layout.css.text-overflow.enabled",
+        ] {
+            assert_eq!(servo::prefs::stylo_bool_pref(name), Some(true), "{name}");
+        }
     }
 
     #[test]

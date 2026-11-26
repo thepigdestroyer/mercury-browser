@@ -810,6 +810,25 @@ pub enum CoreResourceMsg {
     ),
     /// Retrieve the stored cookies as a header string for a given URL.
     GetCookieStringForUrl(ServoUrl, GenericSender<Option<String>>, CookieSource),
+    // Mercury: `document.cookie` (EC5, EC6). The same as `GetCookieStringForUrl` and `SetCookiesForUrl`, but
+    // with the document's network partition key (its top-level site) and web view, so that the network policy
+    // can tell a first-party document from a third-party one. The messages above stay for WebDriver and tests.
+    /// Retrieve the cookies a document may see, as a header string. `None` when the policy hides them.
+    GetCookieStringForDocument(
+        ServoUrl,
+        crate::request::NetworkPartitionKey,
+        Option<servo_base::id::WebViewId>,
+        GenericSender<Option<String>>,
+        CookieSource,
+    ),
+    /// Store the cookies a document may set. Dropped when the policy forbids them.
+    SetCookiesForDocument(
+        ServoUrl,
+        crate::request::NetworkPartitionKey,
+        Option<servo_base::id::WebViewId>,
+        Vec<Serde<Cookie<'static>>>,
+        CookieSource,
+    ),
     /// Retrieve the stored cookies as a vector for the given URL.
     /// The response is sent via the provided sender.
     GetCookiesForUrl(

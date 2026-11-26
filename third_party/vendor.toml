@@ -160,6 +160,7 @@ repository = "https://github.com/servo/servo"
 commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
 path = "components/net"
 license = "MPL-2.0"
+unmarked = ["Cargo.lock"]
 
 [[crate]]
 name = "servo-net-traits"
@@ -205,6 +206,7 @@ repository = "https://github.com/servo/servo"
 commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
 path = "components/storage"
 license = "MPL-2.0"
+unmarked = ["Cargo.lock"]
 
 [[crate]]
 name = "servo-storage-traits"

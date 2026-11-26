@@ -4,7 +4,6 @@ use std::rc::Rc;
 
 use mercury_ui::MainWindow;
 use slint::ComponentHandle;
-use slint::winit_030::WinitWindowAccessor;
 use talaria_core::{
     BrowserCommand, BrowserController, BrowserEvent, LoadState, PointerButtonAction,
 };
@@ -208,13 +207,16 @@ pub(crate) fn connect_ui_callbacks(
     window.on_web_view_focus_changed(move |focused| {
         let _slint = crate::callback_scope::InSlintCallback::enter();
         web_view_focused.set(focused);
+        if !focused {
+            // txt-1: the page no longer has the keyboard; its composition ends before it is told.
+            crate::ime::dismiss_composition(&focus_controller);
+        }
         focus_controller
             .borrow_mut()
             .queue_command(BrowserCommand::FocusChanged { focused });
         if let Some(window) = focus_window.upgrade() {
-            let _native_window = window
-                .window()
-                .with_winit_window(|native_window| native_window.set_ime_allowed(focused));
+            // txt-1: the input method follows the focus, but never in a password field.
+            crate::secure_input::page_focus_changed(&window, focused);
             window.window().request_redraw();
         }
     });

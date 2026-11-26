@@ -1,0 +1,524 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The shared drawing of the tab-group ring (SPEC design/ui-final/SPEC.md §4.2): the hub ring, the
+// corner dial's fan and the Orbit planets all compose `RingBands`. Rust (src/ring_geometry and
+// src/ring_bands) computes every shape; Slint draws what it is given.
+//
+// THE PROPERTIES, CALLBACKS, STRUCTS AND ENUMS BELOW ARE THE PINNED CONTRACT of lane ring-bands
+// (sdd/lane-ring-bands-brief.md §3.1). Other lanes build on them; a change goes through the lane
+// lead, and only additions are allowed. The body of `RingBands` is filled in by the ring-bands lane.
+
+import { ArcGlyph, ArcSeg, GroupRow, TabRow } from "models.slint";
+import { FlagKind, FlagPin, RingFlags } from "flags.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// What a point of the ring is over (ring_geometry::Hit).
+export enum RingHitKind {
+    outside,
+    tab,
+    group,
+    centre,
+    reserve,
+}
+
+// `id` is a `TabRow.id` for a tab, a `GroupRow.id` for a group, and -1 for the other kinds.
+export struct RingHit {
+    kind: RingHitKind,
+    id: int,
+}
+
+// Where a dragged tab would land: `group` is a `GroupRow.id`, `index` the index-in-group to insert at,
+// `indicator` the accent bar to draw at the insertion point.
+export struct RingDropTarget {
+    valid: bool,
+    group: int,
+    index: int,
+    indicator: ArcSeg,
+}
+
+// Tells whether the pointer is over a speaker or muted flag. RingBands' single TouchArea sits above
+// the flags (so hover never stalls), so it cannot get a flag's own click: each flag has one of
+// these instead, which names its tab in `under-tab` while the pointer is within its 20 px target.
+component FlagProbe inherits Rectangle {
+    in property <FlagPin> pin;
+    in property <length> pointer-x;
+    in property <length> pointer-y;
+    in-out property <int> under-tab: -1;
+    // Half the flag, plus 2 px, at most 10 px (the 20 px target of the brief): on a crowded ring the
+    // target stays inside the flag's own arc so that it cannot take a neighbour's click.
+    property <length> reach: min(root.pin.size / 2 + 2px, 10px);
+    property <bool> under: (root.pin.kind == FlagKind.audible || root.pin.kind == FlagKind.muted)
+        && abs(root.pointer-x - root.pin.x) <= root.reach && abs(root.pointer-y - root.pin.y) <= root.reach;
+
+    width: 0px;
+    height: 0px;
+    accessible-role: none;
+
+    changed under => {
+        if (root.under) {
+            root.under-tab = root.pin.tab;
+        } else if (root.under-tab == root.pin.tab) {
+            root.under-tab = -1;
+        }
+    }
+}
+
+// A square box; every coordinate is ring-local (origin at the box's top-left corner). The arrays
+// are PARALLEL and in ring order: fill them only through ring_bands::RingBandsModels.
+export component RingBands inherits Rectangle {
+    // Data.
+    // Only groups that have a shown tab; groups[g] belongs to label-bands[g].
+    in property <[GroupRow]> groups;
+    // Shown tabs, group by group; tabs[i] belongs to segments[i].
+    in property <[TabRow]> tabs;
+    // ArcSeg.tab = TabRow.id.
+    in property <[ArcSeg]> segments;
+    // The hovered shape of segments[i].
+    in property <[ArcSeg]> lifted-segments;
+    // The accessible label of segments[i].
+    in property <[string]> segment-labels;
+    // ArcSeg.tab = GroupRow.id; drawn in `tint` (`colour` while held).
+    in property <[ArcSeg]> label-bands;
+    // Colours already resolved by Rust.
+    in property <[ArcGlyph]> label-glyphs;
+    in property <[FlagPin]> flags;
+    // The box edge, for the Path viewbox (hub 516).
+    in property <length> ring-size;
+    // State.
+    // TabRow.id of the hovered tab; RingBands sets it from the pointer, a host may set it too.
+    in-out property <int> hovered-tab: -1;
+    // TabRow.id; draws the 2 px focus ring.
+    in property <int> focused-tab: -1;
+    // ⌥ held: solid label bands.
+    in property <bool> held;
+    // GroupRow.id.
+    in property <int> selected-group: -1;
+    // With `selected-group`: the other groups at 45 %.
+    in property <bool> dim-others;
+    // Segments without `matches-query` at 18 %.
+    in property <bool> query-active;
+    // A host-driven drag slot: the tab with this TabRow.id is drawn as an empty outline (no ghost, no
+    // insertion bar). RingBands never writes it; a host that wants to follow the component's own
+    // drag reads `drag-source` instead.
+    in property <int> dragging-tab: -1;
+    // TabRow.id of the tab RingBands itself is dragging now (-1 when no drag is live): its slot is an
+    // outline and a ghost follows the pointer.
+    out property <int> drag-source: root.drag-active ? root.drag-tab : -1;
+    // false: draws only; no hover, press or drag.
+    in property <bool> interactive: true;
+    // The container's `list` label; hosts override it ("Tab dial", a planet's name).
+    in property <string> accessible-name: "Tab ring";
+    // true: every animation is 0 ms.
+    in property <bool> reduce-motion: false;
+    // false: spinners stand still (renders and tests).
+    in property <bool> animate-spinners: true;
+
+    // The host forwards these two to ring_bands::RingBandsData::{hit, drop_target}.
+    pure callback hit-test(length, length, int /* hovered tab id */) -> RingHit;
+    pure callback drop-target(length, length, int /* dragging tab id */) -> RingDropTarget;
+    // Row ids throughout.
+    callback tab-activated(int);
+    // -1 = none.
+    callback tab-hovered(int);
+    callback group-activated(int);
+    // Middle click on a segment.
+    callback tab-close(int);
+    // Click on a speaker or muted flag.
+    callback tab-mute(int);
+    // After 6 px of movement with the primary button down on a segment.
+    callback drag-started(int);
+    // Ring-local, also while the pointer is outside the box.
+    callback drag-moved(length, length);
+    // group id, index-in-group: released over a valid drop target. The index counts the dragged tab
+    // itself, so inside its own group a drop on its slot gives its own index or the next one, and a
+    // host moving it later in the group subtracts 1.
+    callback drop(int, int);
+    // Released with no valid target.
+    callback drag-cancelled();
+    // A primary-button press whose hit-test kind is `outside` (lead request R1, corner-dial).
+    callback background-pressed();
+
+    // Ends a drag exactly as a release outside every slot does, without a drop: the ghost, the slot
+    // outline and the insertion bar go and `drag-cancelled` fires if a drag was live. Hosts call it on
+    // Esc and when the popup or fan holding the ring closes. Does nothing else.
+    public function cancel-drag() {
+        if (root.drag-active) {
+            root.end-press();
+            root.drag-cancelled();
+        } else {
+            root.end-press();
+        }
+    }
+
+    changed interactive => {
+        if (!root.interactive) {
+            root.cancel-drag();
+        }
+    }
+
+    accessible-role: list;
+    accessible-label: root.accessible-name;
+
+    // Lengths and timings of the drawing (D9: not chrome metrics).
+    private property <length> outline-width: 3px;
+    private property <length> focus-width: 2px;
+    private property <length> drag-threshold: 6px;
+    private property <length> a11y-box: 24px;
+    private property <duration> hover-ms: root.reduce-motion ? 0ms : 90ms;
+    private property <duration> dim-ms: root.reduce-motion ? 0ms : 100ms;
+    private property <duration> fade-ms: root.reduce-motion ? 0ms : 120ms;
+
+    // Pointer state. `drag-tab` is the component's own drag; `dragging-tab` is the host's.
+    private property <int> drag-tab: -1;
+    private property <bool> drag-active: false;
+    private property <length> drag-x;
+    private property <length> drag-y;
+    private property <bool> press-live: false;
+    private property <bool> press-down: false;
+    private property <length> pointer-x;
+    private property <length> pointer-y;
+    private property <int> flag-under: -1;
+    private property <RingHitKind> press-kind: RingHitKind.outside;
+    private property <int> press-id: -1;
+    private property <length> press-x;
+    private property <length> press-y;
+    private property <int> shown-drag: root.dragging-tab >= 0 ? root.dragging-tab : root.drag-tab;
+    private property <RingDropTarget> current-drop: root.drop-target(root.drag-x, root.drag-y, root.drag-tab);
+
+    pure function band-opacity(g: int) -> float {
+        return g < root.groups.length && root.dim-others && root.selected-group != root.groups[g].id ? 0.45 : 1.0;
+    }
+
+    pure function segment-opacity(i: int) -> float {
+        if (i >= root.tabs.length) {
+            return 1.0;
+        }
+        return min(root.query-active && !root.tabs[i].matches-query ? 0.18 : 1.0, root.dim-others && root.tabs[i].group != root.selected-group ? 0.45 : 1.0);
+    }
+
+    pure function group-label(g: int) -> string {
+        if (g >= root.groups.length) {
+            return "";
+        }
+        return "\{root.groups[g].name}, tab group, \{root.groups[g].count} \{root.groups[g].count == 1 ? "tab" : "tabs"}\{root.groups[g].key-label != "" ? ", key Option \{root.groups[g].key-label}" : ""}";
+    }
+
+    function set-hover(id: int) {
+        if (id != root.hovered-tab) {
+            root.hovered-tab = id;
+            root.tab-hovered(id);
+        }
+    }
+
+    function end-press() {
+        root.press-live = false;
+        root.press-down = false;
+        root.drag-active = false;
+        root.drag-tab = -1;
+    }
+
+    // Label bands. The tab-list elements come before the tabs (D10) and are small boxes at the band.
+    for band[g] in root.label-bands: Path {
+        x: 0;
+        y: 0;
+        width: root.ring-size;
+        height: root.ring-size;
+        viewbox-width: root.ring-size / 1px;
+        viewbox-height: root.ring-size / 1px;
+        commands: band.commands;
+        fill: g < root.groups.length ? (root.held ? root.groups[g].colour : root.groups[g].tint) : transparent;
+        opacity: root.band-opacity(g);
+        animate opacity { duration: root.dim-ms; }
+        accessible-role: none;
+    }
+
+    for band[g] in root.label-bands: Rectangle {
+        x: band.mid-x - root.a11y-box / 2;
+        y: band.mid-y - root.a11y-box / 2;
+        width: root.a11y-box;
+        height: root.a11y-box;
+        accessible-role: tab-list;
+        accessible-label: root.group-label(g);
+    }
+
+    // Segments. A hovered segment is drawn again from `lifted-segments` (below); a dragged one
+    // leaves a stroke-only slot (Slint has no dash style, so the slot is a solid muted outline).
+    for seg[i] in root.segments: Path {
+        x: 0;
+        y: 0;
+        width: root.ring-size;
+        height: root.ring-size;
+        viewbox-width: root.ring-size / 1px;
+        viewbox-height: root.ring-size / 1px;
+        commands: seg.commands;
+        fill: seg.tab == root.shown-drag ? transparent : (i < root.tabs.length ? root.tabs[i].shade : transparent);
+        stroke: seg.tab == root.shown-drag ? ChromePalette.text-muted : transparent;
+        stroke-width: seg.tab == root.shown-drag ? 1.5px : 0px;
+        opacity: seg.tab == root.shown-drag ? 0.6 : root.segment-opacity(i);
+        animate opacity { duration: root.fade-ms; }
+        accessible-role: none;
+    }
+
+    for seg[i] in root.segments: Rectangle {
+        x: seg.mid-x - root.a11y-box / 2;
+        y: seg.mid-y - root.a11y-box / 2;
+        width: root.a11y-box;
+        height: root.a11y-box;
+        accessible-role: tab;
+        accessible-label: i < root.segment-labels.length ? root.segment-labels[i] : "";
+        accessible-item-selectable: true;
+        accessible-item-selected: i < root.tabs.length && root.tabs[i].active;
+        accessible-action-default => {
+            if (i < root.tabs.length) {
+                root.tab-activated(root.tabs[i].id);
+            }
+        }
+    }
+
+    // The hovered segment, lifted, with its outline.
+    for seg[i] in root.segments: Path {
+        x: 0;
+        y: 0;
+        width: root.ring-size;
+        height: root.ring-size;
+        viewbox-width: root.ring-size / 1px;
+        viewbox-height: root.ring-size / 1px;
+        commands: i < root.lifted-segments.length ? root.lifted-segments[i].commands : "";
+        fill: i < root.tabs.length ? root.tabs[i].shade : transparent;
+        stroke: ChromePalette.popup-background;
+        stroke-width: root.outline-width;
+        // Cross-fades with the resting shape (same inner edge and fill, so nothing flashes): `commands`
+        // cannot animate, the opacity can (SPEC §7: 90 ms).
+        opacity: seg.tab == root.hovered-tab && seg.tab != root.shown-drag && i < root.lifted-segments.length ? root.segment-opacity(i) : 0.0;
+        animate opacity { duration: root.hover-ms; }
+        accessible-role: none;
+    }
+
+    // The focus ring: the unlifted shape again, outline only, on top.
+    for seg in root.segments: Path {
+        x: 0;
+        y: 0;
+        width: root.ring-size;
+        height: root.ring-size;
+        viewbox-width: root.ring-size / 1px;
+        viewbox-height: root.ring-size / 1px;
+        visible: seg.tab == root.focused-tab;
+        commands: seg.commands;
+        stroke: ChromePalette.focus-ring;
+        stroke-width: root.focus-width;
+        accessible-role: none;
+    }
+
+    // The insertion bar while a drag is over a valid slot.
+    if root.drag-active && root.current-drop.valid: Path {
+        x: 0;
+        y: 0;
+        width: root.ring-size;
+        height: root.ring-size;
+        viewbox-width: root.ring-size / 1px;
+        viewbox-height: root.ring-size / 1px;
+        commands: root.current-drop.indicator.commands;
+        fill: ChromePalette.accent;
+        accessible-role: none;
+    }
+
+    // The ghost of the dragged tab, following the pointer.
+    for seg[i] in root.segments: Path {
+        x: root.drag-x - seg.mid-x;
+        y: root.drag-y - seg.mid-y;
+        width: root.ring-size;
+        height: root.ring-size;
+        viewbox-width: root.ring-size / 1px;
+        viewbox-height: root.ring-size / 1px;
+        visible: root.drag-active && seg.tab == root.drag-tab;
+        commands: seg.commands;
+        fill: i < root.tabs.length ? root.tabs[i].shade : transparent;
+        opacity: 0.7;
+        accessible-role: none;
+    }
+
+    // The curved labels, one glyph each.
+    for glyph in root.label-glyphs: Text {
+        width: glyph.size * 2;
+        height: glyph.size * 2;
+        x: glyph.x - self.width / 2;
+        y: glyph.y - self.height / 2;
+        text: glyph.text;
+        font-size: glyph.size;
+        font-weight: glyph.weight;
+        color: glyph.colour;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        transform-rotation: glyph.angle;
+        // Rotate about the glyph box's centre (the default, kept explicit). The software renderer draws no
+        // transforms (SUPPORTS_TRANSFORMATIONS is false), so its PNGs show these glyphs upright; the app's
+        // femtovg renderer rotates them.
+        transform-origin: { x: glyph.size, y: glyph.size };
+        accessible-role: none;
+    }
+
+    // The markers; above the glyphs, below the TouchArea.
+    RingFlags {
+        width: parent.width;
+        height: parent.height;
+        flags: root.flags;
+        animate-spinners: root.animate-spinners;
+        reduce-motion: root.reduce-motion;
+        mute-clicked(id) => {
+            root.tab-mute(id);
+        }
+    }
+
+    for pin in root.flags: FlagProbe {
+        pin: pin;
+        pointer-x: root.pointer-x;
+        pointer-y: root.pointer-y;
+        under-tab <=> root.flag-under;
+    }
+
+    TouchArea {
+        width: parent.width;
+        height: parent.height;
+        enabled: root.interactive;
+
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down && event.button == PointerEventButton.left) {
+                root.end-press();
+                root.pointer-x = self.mouse-x;
+                root.pointer-y = self.mouse-y;
+                root.press-down = true;
+                root.press-x = self.mouse-x;
+                root.press-y = self.mouse-y;
+                let hit = root.hit-test(self.mouse-x, self.mouse-y, root.hovered-tab);
+                if (hit.kind == RingHitKind.outside) {
+                    root.background-pressed();
+                } else {
+                    root.press-live = true;
+                    root.press-kind = hit.kind;
+                    root.press-id = hit.id;
+                }
+            } else if (event.kind == PointerEventKind.up && event.button == PointerEventButton.left) {
+                if (root.drag-active) {
+                    root.drag-x = self.mouse-x;
+                    root.drag-y = self.mouse-y;
+                    let target = root.current-drop;
+                    root.end-press();
+                    if (target.valid) {
+                        root.drop(target.group, target.index);
+                    } else {
+                        root.drag-cancelled();
+                    }
+                } else if (root.press-down && root.flag-under >= 0
+                    && sqrt(pow((self.mouse-x - root.press-x) / 1px, 2) + pow((self.mouse-y - root.press-y) / 1px, 2)) * 1px <= root.drag-threshold) {
+                    // A click on a speaker or muted flag (the probes have seen the press point by now):
+                    // a mute click, never a tab press. The probes are updated by change handlers that
+                    // run after the press event, so the decision is taken on release.
+                    let tab = root.flag-under;
+                    root.end-press();
+                    root.tab-mute(tab);
+                } else if (root.press-live) {
+                    let kind = root.press-kind;
+                    let id = root.press-id;
+                    root.end-press();
+                    if (kind == RingHitKind.tab) {
+                        root.tab-activated(id);
+                    } else if (kind == RingHitKind.group
+                        && sqrt(pow((self.mouse-x - root.press-x) / 1px, 2) + pow((self.mouse-y - root.press-y) / 1px, 2)) * 1px <= root.drag-threshold) {
+                        root.group-activated(id);
+                    }
+                }
+            } else if (event.kind == PointerEventKind.up && event.button == PointerEventButton.middle) {
+                let hit = root.hit-test(self.mouse-x, self.mouse-y, root.hovered-tab);
+                if (hit.kind == RingHitKind.tab) {
+                    root.tab-close(hit.id);
+                }
+            } else if (event.kind == PointerEventKind.cancel) {
+                if (root.drag-active) {
+                    root.end-press();
+                    root.drag-cancelled();
+                } else {
+                    root.end-press();
+                }
+            } else if (event.kind == PointerEventKind.move) {
+                root.pointer-x = self.mouse-x;
+                root.pointer-y = self.mouse-y;
+                // `moved` fires only while a button is down; a move event always does.
+                if (root.drag-active) {
+                    root.drag-x = self.mouse-x;
+                    root.drag-y = self.mouse-y;
+                    root.drag-moved(self.mouse-x, self.mouse-y);
+                } else if (root.press-live && root.press-kind == RingHitKind.tab
+                    && sqrt(pow((self.mouse-x - root.press-x) / 1px, 2) + pow((self.mouse-y - root.press-y) / 1px, 2)) * 1px > root.drag-threshold) {
+                    root.set-hover(-1);
+                    root.drag-tab = root.press-id;
+                    root.drag-active = true;
+                    root.drag-x = self.mouse-x;
+                    root.drag-y = self.mouse-y;
+                    root.drag-started(root.press-id);
+                    root.drag-moved(self.mouse-x, self.mouse-y);
+                } else if (!root.press-live) {
+                    let hit = root.hit-test(self.mouse-x, self.mouse-y, root.hovered-tab);
+                    root.set-hover(hit.kind == RingHitKind.tab ? hit.id : -1);
+                }
+            }
+        }
+
+        changed has-hover => {
+            if (!self.has-hover && !root.drag-active) {
+                root.set-hover(-1);
+            }
+        }
+    }
+}
+
+// A window around one RingBands, with every property and callback forwarded, for the lane's
+// examples and tests and for the other lanes' renders. Not used by the browser's own windows.
+export component RingBandsPreview inherits Window {
+    preferred-width: 516px;
+    preferred-height: 516px;
+    background: ChromePalette.window-background;
+
+    in property <[GroupRow]> groups <=> ring.groups;
+    in property <[TabRow]> tabs <=> ring.tabs;
+    in property <[ArcSeg]> segments <=> ring.segments;
+    in property <[ArcSeg]> lifted-segments <=> ring.lifted-segments;
+    in property <[string]> segment-labels <=> ring.segment-labels;
+    in property <[ArcSeg]> label-bands <=> ring.label-bands;
+    in property <[ArcGlyph]> label-glyphs <=> ring.label-glyphs;
+    in property <[FlagPin]> flags <=> ring.flags;
+    in property <length> ring-size <=> ring.ring-size;
+    in-out property <int> hovered-tab <=> ring.hovered-tab;
+    in property <int> focused-tab <=> ring.focused-tab;
+    in property <bool> held <=> ring.held;
+    in property <int> selected-group <=> ring.selected-group;
+    in property <bool> dim-others <=> ring.dim-others;
+    in property <bool> query-active <=> ring.query-active;
+    in property <int> dragging-tab <=> ring.dragging-tab;
+    out property <int> drag-source <=> ring.drag-source;
+    in property <bool> interactive <=> ring.interactive;
+    in property <string> accessible-name <=> ring.accessible-name;
+    in property <bool> reduce-motion <=> ring.reduce-motion;
+    in property <bool> animate-spinners <=> ring.animate-spinners;
+
+    pure callback hit-test <=> ring.hit-test;
+    pure callback drop-target <=> ring.drop-target;
+    callback tab-activated <=> ring.tab-activated;
+    callback tab-hovered <=> ring.tab-hovered;
+    callback group-activated <=> ring.group-activated;
+    callback tab-close <=> ring.tab-close;
+    callback tab-mute <=> ring.tab-mute;
+    callback drag-started <=> ring.drag-started;
+    callback drag-moved <=> ring.drag-moved;
+    callback drop <=> ring.drop;
+    callback drag-cancelled <=> ring.drag-cancelled;
+    callback background-pressed <=> ring.background-pressed;
+
+    public function cancel-drag() {
+        ring.cancel-drag();
+    }
+
+    ring := RingBands {
+        width: parent.width;
+        height: parent.height;
+    }
+}

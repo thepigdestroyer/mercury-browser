@@ -1,0 +1,44 @@
+<!-- SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0 -->
+<!-- SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors -->
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Sign in</title>
+</head>
+<body>
+<h1>Sign in</h1>
+<p>A screen reader reads the form "Sign in form", the required text field "Name" with the value "Ada
+Lovelace", the text field "Email address", two password fields with no value at all, the checkbox
+"Remember me" (not checked), the group "Plan" with three radio buttons (the first selected), the
+pop-up button "Country" showing "Brazil", the read-only "Notes", the disabled "Locked field" and the
+button "Sign in".</p>
+<form aria-label="Sign in form">
+  <label for="name">Name</label>
+  <input id="name" type="text" required value="Ada Lovelace">
+  <label for="email">Email address</label>
+  <input id="email" type="email" placeholder="you@example.com">
+  <label for="pw">Password</label>
+  <input id="pw" type="password" placeholder="Password">
+  <input id="pw2" type="password" aria-label="Password confirmation" value="attr-secret-4321">
+  <label><input id="remember" type="checkbox"> Remember me</label>
+  <fieldset>
+    <legend>Plan</legend>
+    <label><input type="radio" name="plan" value="free" checked> Free</label>
+    <label><input type="radio" name="plan" value="pro"> Pro</label>
+    <label><input type="radio" name="plan" value="team"> Team</label>
+  </fieldset>
+  <label for="country">Country</label>
+  <select id="country"><option>Austria</option><option selected>Brazil</option><option>Chile</option></select>
+  <label for="notes">Notes</label>
+  <textarea id="notes" readonly>Typed notes</textarea>
+  <input id="locked" aria-label="Locked field" disabled value="cannot edit">
+  <button id="submit" type="submit">Sign in</button>
+</form>
+<script>
+  // What a person types: the secret reaches the field by script, not through the markup.
+  document.getElementById("pw").value = "correct horse battery staple";
+  document.querySelector("form").addEventListener("submit", (event) => event.preventDefault());
+</script>
+</body>
+</html>

@@ -12,8 +12,31 @@ a `Mercury:` comment at every change; `make servo-patches-check` fails without o
 
 ## Changes
 
-None yet. For each change, say what it does, why Mercury needs it, the upstream
-file and line it changes, how it is tested and when it can be dropped.
+Changes made by lane net-1 (21 Nov 2026; third-party cookies and the request path).
+
+### `document.cookie` carries the document's site — `lib.rs`
+
+- **What:** two new `CoreResourceMsg` variants after `GetCookieStringForUrl` (0.8.0 line about 812):
+  `GetCookieStringForDocument(ServoUrl, NetworkPartitionKey, Option<WebViewId>, GenericSender<Option<String>>, CookieSource)`
+  and `SetCookiesForDocument(ServoUrl, NetworkPartitionKey, Option<WebViewId>, Vec<Serde<Cookie<'static>>>, CookieSource)`.
+  The old variants stay, unfiltered, for WebDriver and the tests.
+- **Why:** the resource thread has to know which top-level site a document belongs to before it can block a third-party
+  `document.cookie` (EC5, EC6). The old messages carry the URL only.
+- **Tested by:** `servo-net/tests/cookie_policy.rs` (blocked and allowed document reads and writes, over the real
+  resource thread); `servo-script` sends them from `Document::GetCookie` and `SetCookie`.
+- **Drop when:** Servo filters `document.cookie` by site itself (PR #44469 is the only upstream work on it and does not
+  cover it).
+
+### Who started a navigation — `request.rs`
+
+- **What:** `RequestClient` gets `browser_initiated_navigation: bool` (0.8.0 line about 234), set by
+  `servo-script/navigation.rs` for a load that did not come from a script (a typed address, a reload, a history traversal,
+  WebDriver) and false in every other client.
+- **Why:** the client's origin is opaque both for a typed address and for a script that navigates from a sandboxed frame or a
+  `data:` document, so the network policy could not tell them apart and sent `SameSite=Strict` cookies on both (net-1 review,
+  finding 2).
+- **Tested by:** `servo-net/tests/cookie_policy.rs` (`a_script_navigation_from_an_opaque_origin_is_not_a_typed_address`).
+- **Drop when:** Servo distinguishes user-initiated navigations from script ones in the request.
 
 ## Removing this directory
 

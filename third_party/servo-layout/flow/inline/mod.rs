@@ -1317,6 +1317,10 @@ impl InlineFormattingContextLayout<'_> {
             block_end_position
         };
 
+        // Mercury: text-overflow (hand-port of servo/servo#42394). This is decided while
+        // `self.current_line` is still the line that is being finished.
+        let elision = self.line_elision(hanging_white_space, is_phantom_line);
+
         // Set up the new line now that we no longer need the old one.
         let line_to_layout = std::mem::replace(
             &mut self.current_line,
@@ -1360,6 +1364,7 @@ impl InlineFormattingContextLayout<'_> {
             justification_adjustment,
             is_phantom_line,
             line_to_layout.for_block_level,
+            elision, // Mercury: text-overflow
         );
 
         if !is_phantom_line {
@@ -1419,6 +1424,88 @@ impl InlineFormattingContextLayout<'_> {
             Some(placement_among_floats) => placement_among_floats.size.inline,
             None => self.containing_block().size.inline,
         }
+    }
+
+    /// Mercury: `text-overflow` (hand-port of servo/servo#42394 by RichardTjokroutomo onto Servo
+    /// 0.8, with Gecko's `TextOverflow.cpp` as the reference for the cases the pull request left
+    /// open). Whether the end of the line that is being finished is elided, and with what.
+    ///
+    /// This is `Some` only when all of these hold, which is what keeps every other line exactly as
+    /// it was:
+    ///  - the block has `overflow-x` of `hidden` or `clip`. Without clipping there is nothing to
+    ///    stand in for, and for `scroll` and `auto` the hidden text can be scrolled to, which
+    ///    layout cannot follow, so the text is left alone and the box scrolls;
+    ///  - the writing mode is horizontal (vertical text is only clipped, as before);
+    ///  - the value for the end side of the line is `ellipsis` or a non-empty string; `clip` and
+    ///    the empty string elide nothing, and the value for the start side is not used;
+    ///  - the line overflows: its content, without the white space that hangs, is wider than the
+    ///    room it has (the room that floats leave it, if there are any).
+    ///
+    /// The block is the one that owns the lines: `text-overflow` is not inherited, so a block inside
+    /// a block that has it does not elide, as in every other engine.
+    ///
+    /// Single-line text controls are left alone, so that a caret is never elided, and so are lines
+    /// that exist only to hold a block-level box and phantom lines.
+    fn line_elision(
+        &self,
+        hanging_white_space: Au,
+        is_phantom_line: bool,
+    ) -> Option<line::LineElision> {
+        use style::computed_values::overflow_x::T as OverflowX;
+        use style::values::specified::text::TextOverflowSide;
+
+        use crate::ellipsis::{Side, end_side};
+
+        if is_phantom_line ||
+            self.current_line.for_block_level ||
+            self.ifc.is_single_line_text_input
+        {
+            return None;
+        }
+
+        let style = self.containing_block().style;
+        if style.writing_mode.is_vertical() ||
+            !matches!(style.get_box().overflow_x, OverflowX::Hidden | OverflowX::Clip)
+        {
+            return None;
+        }
+
+        let text_overflow = &style.get_text().text_overflow;
+        let block_is_rtl = !style.writing_mode.is_bidi_ltr();
+        let end_side_value = match end_side(text_overflow.sides_are_logical, block_is_rtl) {
+            Side::First => &text_overflow.first,
+            Side::Second => &text_overflow.second,
+        };
+        let marker = match end_side_value {
+            TextOverflowSide::Clip => return None,
+            TextOverflowSide::Ellipsis => line::LineElisionMarker::Ellipsis,
+            TextOverflowSide::String(string) => {
+                let string: &str = string.as_ref();
+                if string.is_empty() {
+                    return None;
+                }
+                line::LineElisionMarker::String(string.to_owned())
+            },
+        };
+
+        // `inline_position` counts from the start of the room the line has (and includes the
+        // text indent and the padding, border and margin of cloned inline boxes), which is the
+        // same measure `calculate_current_line_inline_start_and_justification_adjustment` uses for
+        // the length of the line.
+        let available_space = self.available_line_space();
+        if self.current_line.inline_position - hanging_white_space <= available_space {
+            return None;
+        }
+
+        let line_start = match self.current_line.placement_among_floats.get() {
+            Some(placement_among_floats) => placement_among_floats.start_corner.inline,
+            None => Au::zero(),
+        };
+        Some(line::LineElision {
+            limit: line_start + available_space,
+            marker,
+            block_is_rtl,
+        })
     }
 
     /// Given the amount of whitespace trimmed from the line and taking into consideration

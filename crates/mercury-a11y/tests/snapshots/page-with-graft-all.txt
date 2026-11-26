@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-a11y --test snapshot
+window
+  navigation "Toolbar"
+  graft "Page content"
+    scroll-view
+      graft
+        root-web-area
+          heading "Welcome" [level 1]
+          paragraph
+            text-run value="Hello, world."
+          link "Docs" url="https://example.com/docs" actions=click,focus
+          text-input "Name" [required] value="Ada" desc="As on your passport" placeholder="Your name"
+          check-box "Remember me" [unchecked]
+          button "Menu" [collapsed, has-popup=menu]
+          generic-container "Never read" [hidden]
+            text-run value="under a hidden parent"
+          graft "Embedded"
+            root-web-area
+              heading "In the frame" [level 2]

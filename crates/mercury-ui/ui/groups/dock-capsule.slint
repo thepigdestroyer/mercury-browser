@@ -1,0 +1,125 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The shrunk group dock (SPEC design/ui-final/SPEC.md §4.4): a 236 x 28 capsule with one sliver per
+// tab in tab shades and group order, the tab count and a chevron. Clicking it (or Space / Return,
+// or ⌃⌘B, which is the host's) expands the dock. Rust (src/group_dock/capsule.rs) fits the slivers
+// and builds the texts; this file only draws what it is given.
+//
+// THE PROPERTIES AND THE CALLBACK BELOW ARE THE PINNED CONTRACT of lane group-dock
+// (sdd/lane-group-dock-brief.md §3.1).
+
+import { DockGeometry, DockSliver } from "dock-models.slint";
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+export component DockCapsule inherits Rectangle {
+    // Positions are in the capsule, from its left edge.
+    in property <[DockSliver]> slivers;
+    // The count shown beside the slivers ("22"), and the accessible label
+    // ("Show the group dock, 22 tabs in 6 groups"); Rust builds both (src/group_dock/capsule.rs).
+    in property <string> count-text;
+    in property <string> label;
+    // true: no animation at all (R12 §7); until the settings lane adds a global.
+    in property <bool> reduce-motion: false;
+    callback expand-requested();
+
+    width: DockGeometry.capsule-width;
+    height: DockGeometry.capsule-height;
+
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => {
+        root.expand-requested();
+    }
+
+    // The body is a sibling of the contents, not their parent: the software renderer does not draw
+    // text that is a child of an item with a drop shadow (the count vanished there; the slivers and
+    // the chevron, which are not text, did not). Not clipped: the shadow and the focus ring are
+    // drawn outside the capsule's bounds.
+    body := Rectangle {
+        width: root.width;
+        height: root.height;
+        border-radius: self.height / 2;
+        background: touch.has-hover ? ChromePalette.item-hover : ChromePalette.popup-background;
+        border-width: 1.5px;
+        border-color: ChromePalette.accent;
+        drop-shadow-blur: 8px;
+        drop-shadow-offset-y: 1px;
+        drop-shadow-color: ChromePalette.shadow;
+        accessible-role: none;
+
+        animate background {
+            duration: root.reduce-motion ? 0ms : 90ms;
+        }
+    }
+
+    // One sliver per tab (Rust fits them into the area left of the count: capsule.rs).
+    for sliver in root.slivers: Rectangle {
+        x: sliver.x;
+        y: sliver.active ? 6px : 7px;
+        width: sliver.width;
+        height: sliver.active ? 16px : 14px;
+        border-radius: 2px;
+        background: sliver.shade;
+        accessible-role: none;
+    }
+
+    Text {
+        x: DockGeometry.capsule-count-x;
+        y: 0px;
+        width: DockGeometry.capsule-count-width;
+        height: root.height;
+        text: root.count-text;
+        color: ChromePalette.text-muted;
+        font-size: 12px;
+        font-weight: 600;
+        horizontal-alignment: left;
+        vertical-alignment: center;
+        accessible-role: none;
+    }
+
+    Path {
+        x: DockGeometry.capsule-chevron-x;
+        y: (root.height - self.height) / 2;
+        width: 8px;
+        height: 5px;
+        viewbox-width: 8;
+        viewbox-height: 5;
+        commands: "M 0.75 4.25 L 4 1 L 7.25 4.25";
+        stroke: ChromePalette.text-muted;
+        stroke-width: 1.5px;
+        stroke-line-cap: round;
+        stroke-line-join: round;
+        accessible-role: none;
+    }
+
+    focus-ring := Rectangle {
+        x: -3.5px;
+        y: -3.5px;
+        width: root.width + 7px;
+        height: root.height + 7px;
+        border-radius: self.height / 2;
+        border-width: 2px;
+        border-color: ChromePalette.focus-ring;
+        visible: focus.has-focus;
+        accessible-role: none;
+    }
+
+    // Reached with Tab (never focused by a click: the capsule goes away when clicked); Space or
+    // Return expands the dock. One TouchArea over the whole capsule: no per-sliver click (D15).
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.expand-requested();
+                return accept;
+            }
+            return reject;
+        }
+
+        touch := TouchArea {
+            clicked => {
+                root.expand-requested();
+            }
+        }
+    }
+}

@@ -1343,8 +1343,8 @@ mod accessibility {
         );
         assert_eq!(
             element(&rig.window, "PDF document, page 1 of 3").accessible_role(),
-            Some(AccessibleRole::Main),
-            "the page area says where it is"
+            Some(AccessibleRole::Region),
+            "the page area says where it is (a region: the window's one `main` is the web page)"
         );
     }
 
@@ -1421,4 +1421,27 @@ mod accessibility {
             Some(AccessibleRole::Groupbox)
         );
     }
+}
+
+#[test]
+fn a_suspended_document_holds_no_page_pictures_text_or_links() {
+    let folder = tempfile::tempdir().expect("a folder");
+    let factory = FakeFactory::new(FakeConfig::with_pages(3));
+    let mut session = opened(&folder, &factory, "a.pdf");
+    wait_for(&mut session, "the tiles of the first page", |s| {
+        has_exact_tile_of(s, 0)
+    });
+    let held = session.model().expect("a model").cache_usage();
+    assert!(held.tile_bytes > 0, "{held:?}");
+    session.scroll(ScrollMove::Bottom);
+    let (scroll_y, zoom) = {
+        let model = session.model().expect("a model");
+        (model.scroll_y(), model.zoom_percent())
+    };
+
+    session.suspend();
+
+    let model = session.model().expect("the view model is kept");
+    assert_eq!(model.cache_usage(), Default::default());
+    assert_eq!((model.scroll_y(), model.zoom_percent()), (scroll_y, zoom));
 }

@@ -28,6 +28,7 @@ use js::rust::{HandleValue, MutableHandleValue, ParentRuntime};
 use mime::Mime;
 use net_traits::blob_url_store::UrlWithBlobClaim;
 use net_traits::policy_container::PolicyContainer;
+use net_traits::pub_domains::Site;
 use net_traits::request::{
     CredentialsMode, Destination, InsecureRequestsPolicy, ParserMetadata, RequestBuilder, RequestId,
 };
@@ -161,6 +162,8 @@ pub(crate) fn prepare_workerscope_init(
         #[cfg(feature = "webgl")]
         webgl_chan,
         online: global.online(),
+        // Mercury: the creator's key (net-1 review, finding 1).
+        network_partition_key: global.network_partition_key(),
     }
 }
 
@@ -358,6 +361,10 @@ pub(crate) struct WorkerGlobalScope {
     #[no_trace]
     insecure_requests_policy: InsecureRequestsPolicy,
 
+    // Mercury: the top-level site of the document that created this worker (net-1 review, finding 1).
+    #[no_trace]
+    network_partition_key: Option<Site>,
+
     /// <https://w3c.github.io/reporting/#windoworworkerglobalscope-registered-reporting-observer-list>
     reporting_observer_list: DomRefCell<Vec<Dom<ReportingObserver>>>,
 
@@ -476,7 +483,13 @@ impl WorkerGlobalScope {
             font_context,
             module_map: Default::default(),
             online: init.online.into(),
+            network_partition_key: init.network_partition_key,
         }
+    }
+
+    // Mercury: the network partition key that this worker's requests carry.
+    pub(crate) fn network_partition_key(&self) -> Option<Site> {
+        self.network_partition_key.clone()
     }
 
     pub(crate) fn online(&self) -> bool {

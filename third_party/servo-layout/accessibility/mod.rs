@@ -12,6 +12,12 @@ use crate::layout_impl::LayoutThread;
 
 mod accessibility_node;
 mod accessibility_tree;
+// Mercury: a11y-1 item 4 (`dom_adapter`, `semantics`) and item 5 (`frames`): roles, names, states and
+// relations come from `mercury-a11y` through an adapter over the layout DOM, and an `<iframe>`'s node
+// grafts the tree of its document.
+mod dom_adapter;
+mod frames;
+mod semantics;
 
 pub use accessibility_tree::AccessibilityTree;
 

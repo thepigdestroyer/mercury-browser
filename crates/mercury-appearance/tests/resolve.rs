@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use mercury_appearance::keymap::{LetterKey, parse_sequence};
 use mercury_appearance::palette::{Role, Scheme};
-use mercury_appearance::palettes::{self, hermes, mercury_b2};
+use mercury_appearance::palettes::{self, hermes, mercury_b2, signal};
 use mercury_appearance::resolve::{AppearanceSettings, Layout, Repair, Resolved, resolve};
 use mercury_settings::{
     DEFAULT_KEY_SEQUENCE, DEFAULT_PALETTE, DialCorner, DockStart, KeyCapture, LAYOUT_IDS, Settings,
@@ -72,11 +72,11 @@ fn only_the_exact_ids_are_layouts() {
 // --- The defaults ---
 
 #[test]
-fn the_defaults_resolve_to_mercury_b2_with_the_dock_and_the_dial() {
+fn the_defaults_resolve_to_signal_with_the_dock_and_the_dial() {
     let resolved = clean(&AppearanceSettings::default());
     assert_eq!(resolved.layout, Layout::Mercury);
-    assert_eq!(resolved.palette_light.id, mercury_b2::ID);
-    assert_eq!(resolved.palette_dark.id, mercury_b2::ID);
+    assert_eq!(resolved.palette_light.id, signal::ID);
+    assert_eq!(resolved.palette_dark.id, signal::ID);
     assert_eq!(resolved.palette_light.id, DEFAULT_PALETTE);
     assert!(resolved.dock_visible());
     let groups = &resolved.tab_groups;
@@ -99,7 +99,7 @@ fn the_defaults_resolve_to_mercury_b2_with_the_dock_and_the_dial() {
 }
 
 #[test]
-fn the_default_settings_file_resolves_without_notes_and_its_colours_are_the_b2_ones() {
+fn the_default_settings_file_resolves_without_notes_and_its_colours_are_the_signal_ones() {
     let (settings, repairs) = Settings::default().validated();
     assert!(repairs.is_empty());
     let resolved = clean(&settings.appearance);
@@ -255,21 +255,21 @@ fn the_sequence_is_parsed_the_same_way_as_the_key_map_parses_it() {
 
 #[test]
 fn an_unknown_palette_falls_back_with_a_note_and_the_stored_value_is_kept() {
-    let appearance = settings(|a| a.palette_light = "graphite".to_owned());
+    let appearance = settings(|a| a.palette_light = "tangerine".to_owned());
     let before = appearance.clone();
     let (resolved, repairs) = resolve(&appearance);
     assert_eq!(appearance, before, "resolve must not change what is stored");
-    assert_eq!(appearance.palette_light, "graphite");
+    assert_eq!(appearance.palette_light, "tangerine");
     assert_eq!(resolved.palette_light.id, DEFAULT_PALETTE);
     assert_eq!(resolved.palette_dark.id, DEFAULT_PALETTE);
     assert_eq!(fields(&repairs), ["appearance.palette_light"]);
     let reason = &repairs[0].reason;
-    assert!(reason.contains("\"graphite\""), "{reason}");
+    assert!(reason.contains("\"tangerine\""), "{reason}");
     assert!(
         reason.contains("not a palette this version has"),
         "{reason}"
     );
-    assert!(reason.contains("mercury-b2"), "{reason}");
+    assert!(reason.contains("\"signal\""), "{reason}");
     assert!(reason.contains("kept"), "{reason}");
 }
 
@@ -314,6 +314,69 @@ fn a_palette_that_cannot_be_chosen_is_not_used_even_when_the_file_names_it() {
         appearance.palette_light, "hermes",
         "the stored value is kept"
     );
+}
+
+#[test]
+fn the_palettes_that_were_not_chosen_fall_back_to_signal_with_one_note_each() {
+    for id in ["graphite", "midnight", "hermes"] {
+        let appearance = settings(|a| a.palette_dark = id.to_owned());
+        let (resolved, repairs) = resolve(&appearance);
+        assert_eq!(resolved.palette_light.id, "signal", "{id}");
+        assert_eq!(resolved.palette_dark.id, "signal", "{id}");
+        assert_eq!(fields(&repairs), ["appearance.palette_dark"], "{id}");
+        assert!(
+            repairs[0].reason.contains("cannot be chosen"),
+            "{id}: {}",
+            repairs[0].reason
+        );
+    }
+}
+
+#[test]
+fn a_stored_mercury_b2_quietly_shows_signal_and_is_kept() {
+    // The former default: what every profile that has saved its settings holds. No note per
+    // field, and nothing is rewritten (a downgrade and an upgrade lose nothing).
+    let both = settings(|a| {
+        a.palette_light = "mercury-b2".to_owned();
+        a.palette_dark = "mercury-b2".to_owned();
+    });
+    let before = both.clone();
+    let (resolved, repairs) = resolve(&both);
+    assert_eq!(resolved.palette_light.id, "signal");
+    assert_eq!(resolved.palette_dark.id, "signal");
+    assert!(repairs.is_empty(), "{repairs:?}");
+    assert_eq!(both, before, "the stored value is kept");
+    assert_eq!(palettes::RETIRED_DEFAULT_ID, "mercury-b2");
+    assert!(palettes::find_selectable("mercury-b2").is_none());
+
+    // One scheme holding it and the other a real choice: Signal and the choice, still no note.
+    let mixed = settings(|a| {
+        a.palette_light = "mercury-b2".to_owned();
+        a.palette_dark = "abyss".to_owned();
+    });
+    let (resolved, repairs) = resolve(&mixed);
+    assert_eq!(resolved.palette_light.id, "signal");
+    assert_eq!(resolved.palette_dark.id, "abyss");
+    assert!(repairs.is_empty(), "{repairs:?}");
+
+    // Genuinely unknown ids keep their note, one per field that holds one.
+    let unknown = settings(|a| {
+        a.palette_light = "mercury-b2".to_owned();
+        a.palette_dark = "tangerine".to_owned();
+    });
+    let (_, repairs) = resolve(&unknown);
+    assert_eq!(fields(&repairs), ["appearance.palette_dark"]);
+}
+
+#[test]
+fn two_chosen_palettes_are_used_one_per_scheme() {
+    let appearance = settings(|a| {
+        a.palette_light = "forest".to_owned();
+        a.palette_dark = "glacier".to_owned();
+    });
+    let resolved = clean(&appearance);
+    assert_eq!(resolved.palette(Scheme::Light).id, "forest");
+    assert_eq!(resolved.palette(Scheme::Dark).id, "glacier");
 }
 
 #[test]

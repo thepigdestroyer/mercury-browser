@@ -57,10 +57,13 @@ const QUOTE_SET: &AsciiSet = &NON_ALPHANUMERIC
 
 /// The `--log FILE` of the server: one JSON line per request, appended to the file.
 ///
-/// A line has the keys `method`, `path`, `cookie`, `referer`, `user_agent`, `range`, `sent`
-/// (the bytes of the body sent, or null when the route does not count them) and `complete`
-/// (whether the client read the body to the end, or null). The file is opened for each line,
-/// so it can be read or removed while the server runs.
+/// A line has the keys `method`, `path`, `cookie`, `referer`, `user_agent`, `sec_gpc` (the
+/// `Sec-GPC` header, or null), `origin`, `host`, `range`, `sent` (the bytes of the body sent, or
+/// null when the route does not count them) and `complete` (whether the client read the body to
+/// the end, or null). The three after `user_agent` are the network-policy pages' (net-1 lane): they
+/// show whether Global Privacy Control reached the server, and which site a request said it came
+/// from and went to. The file is opened for each line, so it can be read or removed while the
+/// server runs.
 pub(super) struct RequestLog {
     path: PathBuf,
     write: Mutex<()>,
@@ -77,12 +80,16 @@ impl RequestLog {
     pub(super) fn record(&self, request: &Request, sent: Option<u64>, complete: Option<bool>) {
         let text = |name: &str| serde_json::Value::from(request.header(name)).to_string();
         let line = format!(
-            "{{\"method\": {}, \"path\": {}, \"cookie\": {}, \"referer\": {}, \"user_agent\": {}, \"range\": {}, \"sent\": {}, \"complete\": {}}}\n",
+            "{{\"method\": {}, \"path\": {}, \"cookie\": {}, \"referer\": {}, \"user_agent\": {}, \"sec_gpc\": {}, \"origin\": {}, \"host\": {}, \"range\": {}, \"sent\": {}, \"complete\": {}}}\n",
             serde_json::Value::from(request.command.as_str()),
             serde_json::Value::from(request.path.as_str()),
             text("Cookie"),
             text("Referer"),
             text("User-Agent"),
+            // net: the headers of the network-policy pages.
+            text("Sec-GPC"),
+            text("Origin"),
+            text("Host"),
             text("Range"),
             serde_json::Value::from(sent),
             serde_json::Value::from(complete),
@@ -125,7 +132,7 @@ pub(super) fn url_path(target: &str) -> &str {
 
 /// `urllib.parse.parse_qs(query)` with the last value of each name: blank values are dropped
 /// and `+` and `%XX` decoded.
-fn parse_query(query: &str) -> HashMap<String, String> {
+pub(super) fn parse_query(query: &str) -> HashMap<String, String> {
     let decode = |text: &str| {
         percent_decode_str(&text.replace('+', " "))
             .decode_utf8_lossy()

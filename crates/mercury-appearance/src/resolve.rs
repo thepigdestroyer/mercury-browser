@@ -11,13 +11,15 @@
 //!
 //! `resolve` only reads. It never changes the settings it is given, so what the user stored stays
 //! stored (D9): a palette id that is well formed but that this version does not have, for
-//! example one a later Mercury wrote, is **kept in `settings.json`** and shown as `mercury-b2`
+//! example one a later Mercury wrote, is **kept in `settings.json`** and shown as `signal`
 //! for now, and a downgrade followed by an upgrade does not lose the user's choice. Each such
 //! fallback is reported as a [`Repair`] whose `field` is the setting, but it is a *note*: nothing
 //! was written anywhere. The settings window can show it ("this palette is not in this version").
 //!
-//! The palettes a user cannot choose (`hermes`) are treated like unknown ones, so a hand-edited
-//! file cannot switch the legacy palette on (D2).
+//! The palettes a user cannot choose (`hermes`, `graphite`, `midnight`) are treated like unknown
+//! ones, so a hand-edited file cannot switch them on (D2). The exception is `mercury-b2`, the
+//! former default that every saved `settings.json` holds: it is a quiet alias of the default (no
+//! note, and still never rewritten), see [`palettes::RETIRED_DEFAULT_ID`].
 //!
 //! # Values that are out of range
 //!
@@ -251,6 +253,11 @@ fn choose_palette(field: &'static str, id: &str, notes: &mut Vec<Repair>) -> &'s
         return palette;
     }
     let fallback = palettes::default_palette();
+    if id == palettes::RETIRED_DEFAULT_ID {
+        // What every profile that has saved its settings holds (it was the default until Signal):
+        // not a choice anyone made and nothing a later version could mean, so no note.
+        return fallback;
+    }
     let why = if palettes::find(id).is_some() {
         "is a palette that cannot be chosen"
     } else {

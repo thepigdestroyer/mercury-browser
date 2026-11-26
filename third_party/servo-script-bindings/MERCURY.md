@@ -35,6 +35,17 @@ It is part of the media-capture patch described in
 Drop when: Servo implements `stop()`/`readyState` and Mercury enables WebRTC
 or Servo gives capture its own preference.
 
+### net-1 (21 Nov 2026)
+
+- **`webidls/Navigator.webidl`, `webidls/WorkerNavigator.webidl`:** the `NavigatorGPC` mixin (`readonly attribute boolean
+  globalPrivacyControl`, no `Pref`), included by both interfaces (EC25).
+- **`webidls/WebLock.webidl` (new):** `LockManager`, `Lock`, `LockOptions`, `LockInfo`, `LockManagerSnapshot` and the callback, all
+  behind `Pref="dom_web_locks_enabled"` (ED4, servo/servo#47981; the draft has no `Pref`).
+- **`webidls/IDBIndex.webidl`:** `get`, `getKey`, `getAll`, `getAllKeys` and `count` uncommented (`[NewObject, Throws]`).
+  **`webidls/IDBRequest.webidl`:** `source` is `(IDBObjectStore or IDBIndex or IDBCursor)?` (ED3).
+- **`codegen/Bindings.conf`:** the `IDBIndex` `cx` list gains the five methods, `LockManager` gets a `realm` list (`Request`, `Request_`, `Query`) and the two navigators' `cx` lists gain `Locks`.
+- Tested by compiling `servo-script`; drop with the corresponding `servo-script` changes (12 to 15).
+
 ### K0 (19 Nov 2026)
 
 4. **servo/servo#49649** (`10c279fae`, "Rename `DomSlice` `r()` to `as_ref_slice()`"): `root.rs` (the `DomSlice` trait and its

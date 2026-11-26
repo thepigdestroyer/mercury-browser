@@ -6,9 +6,12 @@ use style::counter_style::{CounterStyle, Symbol, SymbolsType};
 use style::properties::longhands::list_style_type::computed_value::T as ListStyleType;
 use style::values::computed::Image;
 use style::values::generics::counters::Content;
-use stylo_atoms::atom;
 
 use crate::context::LayoutContext;
+// Mercury: ED5 (lane txt-1). Counter values and the text of counter styles come from the new
+// files `counters.rs`, `counter_walk.rs` and `counter_styles.rs`.
+use crate::counter_styles::{CounterSystem, SymbolsKind, anonymous, generate, predefined};
+use crate::counter_walk::list_item_number;
 use crate::dom_traversal::{
     NodeAndStyleInfo, PseudoElementContentItem, generate_pseudo_element_content,
 };
@@ -50,6 +53,8 @@ pub(crate) fn make_marker<'dom>(
         Content::Normal => marker_image().or_else(|| {
             Some(vec![PseudoElementContentItem::Text(marker_string(
                 &list_style.list_style_type,
+                // Mercury: ED5. The number of the list item (was: a value of 0 for every item).
+                list_item_number(context, info),
             )?)])
         })?,
     };
@@ -64,106 +69,61 @@ fn symbol_to_string(symbol: &Symbol) -> &str {
     }
 }
 
+/// Mercury: ED5. Runs `f` on the counter style that `counter_style` names. A name that is not a
+/// predefined style (`@counter-style` is not supported) is written in `decimal`, as the
+/// specification asks for a style that does not exist.
 /// <https://drafts.csswg.org/css-counter-styles-3/#generate-a-counter>
-pub(crate) fn generate_counter_representation(counter_style: &CounterStyle) -> &str {
-    // TODO: Most counter styles produce different results depending on the counter value.
-    // Since we don't support counter properties yet, assume a value of 0 for now.
+pub(crate) fn with_counter_system<R>(
+    counter_style: &CounterStyle,
+    f: impl FnOnce(&CounterSystem<'_>) -> R,
+) -> R {
+    let decimal = || predefined("decimal").expect("decimal is predefined");
     match counter_style {
-        CounterStyle::None | CounterStyle::String(_) => unreachable!("Invalid counter style"),
-        CounterStyle::Name(name) => match name.0 {
-            atom!("disc") => "\u{2022}",            /* "•" */
-            atom!("circle") => "\u{25E6}",          /* "◦" */
-            atom!("square") => "\u{25AA}",          /* "▪" */
-            atom!("disclosure-open") => "\u{25BE}", /* "▾" */
-            // TODO: Use U+25C2 "◂" depending on the direction.
-            atom!("disclosure-closed") => "\u{25B8}", /* "▸" */
-            atom!("decimal-leading-zero") => "00",
-            atom!("arabic-indic") => "\u{660}", /* "٠" */
-            atom!("bengali") => "\u{9E6}",      /* "০" */
-            atom!("cambodian") | atom!("khmer") => "\u{17E0}", /* "០" */
-            atom!("devanagari") => "\u{966}",   /* "०" */
-            atom!("gujarati") => "\u{AE6}",     /* "૦" */
-            atom!("gurmukhi") => "\u{A66}",     /* "੦" */
-            atom!("kannada") => "\u{CE6}",      /* "೦" */
-            atom!("lao") => "\u{ED0}",          /* "໐" */
-            atom!("malayalam") => "\u{D66}",    /* "൦" */
-            atom!("mongolian") => "\u{1810}",   /* "᠐" */
-            atom!("myanmar") => "\u{1040}",     /* "၀" */
-            atom!("oriya") => "\u{B66}",        /* "୦" */
-            atom!("persian") => "\u{6F0}",      /* "۰" */
-            atom!("tamil") => "\u{BE6}",        /* "௦" */
-            atom!("telugu") => "\u{C66}",       /* "౦" */
-            atom!("thai") => "\u{E50}",         /* "๐" */
-            atom!("tibetan") => "\u{F20}",      /* "༠" */
-            atom!("cjk-decimal") |
-            atom!("cjk-earthly-branch") |
-            atom!("cjk-heavenly-stem") |
-            atom!("japanese-informal") => "\u{3007}", /* "〇" */
-            atom!("korean-hangul-formal") => "\u{C601}", /* "영" */
-            atom!("korean-hanja-informal") |
-            atom!("korean-hanja-formal") |
-            atom!("japanese-formal") |
-            atom!("simp-chinese-informal") |
-            atom!("simp-chinese-formal") |
-            atom!("trad-chinese-informal") |
-            atom!("trad-chinese-formal") |
-            atom!("cjk-ideographic") => "\u{96F6}", /* "零" */
-            // Fall back to decimal.
-            _ => "0",
+        CounterStyle::Name(name) => f(&predefined(&name.0).unwrap_or_else(decimal)),
+        CounterStyle::Symbols { ty, symbols } => {
+            let symbols: Vec<&str> = symbols.0.iter().map(symbol_to_string).collect();
+            let kind = match ty {
+                SymbolsType::Cyclic => SymbolsKind::Cyclic,
+                SymbolsType::Numeric => SymbolsKind::Numeric,
+                SymbolsType::Alphabetic => SymbolsKind::Alphabetic,
+                SymbolsType::Symbolic => SymbolsKind::Symbolic,
+                SymbolsType::Fixed => SymbolsKind::Fixed,
+            };
+            f(&anonymous(kind, &symbols))
         },
-        CounterStyle::Symbols { ty, symbols } => match ty {
-            // For numeric, use the first symbol, which represents the value 0.
-            SymbolsType::Numeric => {
-                symbol_to_string(symbols.0.first().expect("symbols() should have symbols"))
-            },
-            // For cyclic, the first symbol represents the value 1. However, it loops back,
-            // so the last symbol represents the value 0.
-            SymbolsType::Cyclic => {
-                symbol_to_string(symbols.0.last().expect("symbols() should have symbols"))
-            },
-            // For the others, the first symbol represents the value 1, and 0 is out of range.
-            // Therefore, fall back to `decimal`.
-            SymbolsType::Alphabetic | SymbolsType::Symbolic | SymbolsType::Fixed => "0",
-        },
+        CounterStyle::None | CounterStyle::String(_) => f(&decimal()),
+    }
+}
+
+/// <https://drafts.csswg.org/css-counter-styles-3/#generate-a-counter>
+///
+/// Mercury: ED5. Takes the counter value and writes it with every predefined style and with
+/// `symbols()` (`counter_styles.rs`); it used to assume a value of 0.
+pub(crate) fn generate_counter_representation(counter_style: &CounterStyle, value: i32) -> String {
+    match counter_style {
+        // `counter()` and `counters()` do not accept `none` or a string, so this is not reached.
+        CounterStyle::None | CounterStyle::String(_) => String::new(),
+        style => with_counter_system(style, |system| generate(system, value)),
     }
 }
 
 /// <https://drafts.csswg.org/css-lists/#marker-string>
-pub(crate) fn marker_string(list_style_type: &ListStyleType) -> Option<String> {
-    let suffix = match &list_style_type.0 {
-        CounterStyle::None => return None,
-        CounterStyle::String(string) => return Some(string.to_string()),
-        CounterStyle::Name(name) => match name.0 {
-            atom!("disc") |
-            atom!("circle") |
-            atom!("square") |
-            atom!("disclosure-open") |
-            atom!("disclosure-closed") => " ",
-            atom!("hiragana") |
-            atom!("hiragana-iroha") |
-            atom!("katakana") |
-            atom!("katakana-iroha") |
-            atom!("cjk-decimal") |
-            atom!("cjk-earthly-branch") |
-            atom!("cjk-heavenly-stem") |
-            atom!("japanese-informal") |
-            atom!("japanese-formal") |
-            atom!("simp-chinese-informal") |
-            atom!("simp-chinese-formal") |
-            atom!("trad-chinese-informal") |
-            atom!("trad-chinese-formal") |
-            atom!("cjk-ideographic") => "\u{3001}", /* "、" */
-            atom!("korean-hangul-formal") |
-            atom!("korean-hanja-informal") |
-            atom!("korean-hanja-formal") => ", ",
-            atom!("ethiopic-numeric") => "/ ",
-            _ => ". ",
-        },
-        CounterStyle::Symbols { .. } => " ",
-    };
-    Some(format!(
-        "{}{}",
-        generate_counter_representation(&list_style_type.0),
-        suffix
-    ))
+///
+/// Mercury: ED5. Takes the value of the list item, and the prefix and the suffix come from the
+/// counter style (`counter_styles.rs`) instead of a table in this function. The suffix of a
+/// style is the one of the style that was named, not of the fallback that wrote the number.
+pub(crate) fn marker_string(list_style_type: &ListStyleType, value: i32) -> Option<String> {
+    match &list_style_type.0 {
+        CounterStyle::None => None,
+        CounterStyle::String(string) => Some(string.to_string()),
+        style => Some(with_counter_system(style, |system| {
+            format!(
+                "{}{}{}",
+                system.prefix,
+                generate(system, value),
+                system.suffix
+            )
+        })),
+    }
 }
+

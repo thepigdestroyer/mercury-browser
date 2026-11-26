@@ -328,6 +328,20 @@ impl AsyncReadOnlyOperation {
     }
 }
 
+// Mercury: the keys that one record has in one unique index of its object store (net-1 review, finding 3).
+// The backend stores values as opaque structured-clone blobs and cannot evaluate a key path, so the script
+// computes the keys and sends them with the put; the backend keeps them in `unique_index_data`, whose primary
+// key makes a second record with the same key in the same index a constraint violation.
+/// The keys of a record in one unique index.
+#[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+pub struct UniqueIndexKeys {
+    /// The name of the index.
+    pub index_name: String,
+    /// One key, or one per member of a multiEntry key. Empty when the value has no valid key for the index
+    /// (it is then not in the index).
+    pub keys: Vec<IndexedDBKeyType>,
+}
+
 #[derive(Debug, Deserialize, MallocSizeOf, Serialize)]
 pub enum AsyncReadWriteOperation {
     /// Sets the value of the given key in the associated idb data
@@ -338,6 +352,9 @@ pub enum AsyncReadWriteOperation {
         should_overwrite: bool,
         /// New object store key generator current number to persist if the put succeeds.
         key_generator_current_number: Option<i64>,
+        // Mercury: the record's keys in each unique index of the store, see `UniqueIndexKeys`. Empty for
+        // a store with no unique index.
+        unique_index_keys: Vec<UniqueIndexKeys>,
     },
 
     /// Removes the key/value pair for the given key in the associated idb data

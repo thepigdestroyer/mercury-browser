@@ -276,6 +276,8 @@ pub(crate) mod geometry;
 pub(crate) use self::geometry::*;
 pub(crate) mod globalscope;
 pub(crate) use self::globalscope::*;
+// Mercury: new module (lane txt-1, EB7), the typed highlights of a document.
+pub(crate) mod highlights;
 pub(crate) mod html;
 pub(crate) use self::html::*;
 pub(crate) mod indexeddb;
@@ -361,6 +363,9 @@ pub(crate) use self::webgpu::*;
 pub(crate) mod gpucanvascontext;
 pub(crate) mod webcrypto;
 pub(crate) use self::webcrypto::*;
+// Mercury: Web Locks (servo/servo#47981).
+pub(crate) mod weblock;
+pub(crate) use self::weblock::*;
 pub(crate) mod webrtc;
 pub(crate) use self::webrtc::*;
 pub(crate) mod webvtt;

@@ -221,14 +221,19 @@ struct LinkRow {
 /// the search is where the separator is. Antialiased edges are left out by asking for a colour
 /// close to the accent. Ink less than `LINK_GAP` apart is one link (the gap in a link is a
 /// space, between links it is the layout's 18px).
-fn link_row(pixels: &SharedPixelBuffer<slint::Rgba8Pixel>, accent: [u8; 3]) -> LinkRow {
+fn link_row(
+    pixels: &SharedPixelBuffer<slint::Rgba8Pixel>,
+    accent: [u8; 3],
+    window_height: u32,
+) -> LinkRow {
     const BELOW_THE_ICON: u32 = 110;
-    const ABOVE_THE_SEPARATOR: u32 = 285;
+    // The separator, the badge and the bottom padding take 135 px under the links.
+    let above_the_separator = window_height - 135;
     const LINK_GAP: u32 = 12;
     let is_accent = |[r, g, b]: [u8; 3]| {
         r.abs_diff(accent[0]) <= 48 && g.abs_diff(accent[1]) <= 48 && b.abs_diff(accent[2]) <= 48
     };
-    let mut rows = (BELOW_THE_ICON..ABOVE_THE_SEPARATOR)
+    let mut rows = (BELOW_THE_ICON..above_the_separator)
         .filter(|&y| (0..pixels.width()).any(|x| is_accent(pixel(pixels, x, y))));
     let top = rows
         .next()
@@ -272,20 +277,29 @@ fn render_about(theme: ChromeTheme, name: &str) -> ([u8; 3], [u8; 3]) {
         let clicked = Rc::clone(&clicked);
         move |link| clicked.borrow_mut().push(link)
     });
-    // A software window has no size until it is given one; this is the size the window declares.
+    // A software window has no size until it is given one: 380 px wide, and as tall as the window
+    // wants (420 px where the system's font fits the lines in that, more where it does not).
     about.window().set_size(LogicalSize::new(380.0, 420.0));
     about.show().expect("the About window can be shown");
+    let height = about.get_wanted_height();
+    // Content that grows a lot is a layout change to look at, not something to follow.
+    assert!(
+        (420.0..=480.0).contains(&height),
+        "{name}: the About window wants {height} px"
+    );
+    about.window().set_size(LogicalSize::new(380.0, height));
     let pixels = about
         .window()
         .take_snapshot()
         .expect("the About window renders");
     save(&pixels, &format!("about-{name}.png"));
-    assert_eq!(about.window().size(), PhysicalSize::new(380, 420));
+    let height = height.round() as u32;
+    assert_eq!(about.window().size(), PhysicalSize::new(380, height));
 
     // Licence, Third-party notices and Source code: three links in the accent colour on one
     // line, inside the window's padding, and each one opens its own page.
     let accent = rgb(about.global::<ChromePalette>().get_accent());
-    let links = link_row(&pixels, accent);
+    let links = link_row(&pixels, accent, height);
     assert_eq!(links.runs.len(), 3, "{name}: {links:?}");
     assert!(links.bottom - links.top < 20, "{name}: one line: {links:?}");
     let (first, last) = (links.runs[0], links.runs[2]);

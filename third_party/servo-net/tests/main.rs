@@ -22,8 +22,19 @@ mod hsts;
 mod http_cache;
 mod http_loader;
 mod image_cache;
+// Mercury: the unit tests of mercury_log.rs and mercury_svg.rs (the library itself has `test = false`).
+mod mercury_unit;
 mod resource_thread;
 mod subresource_integrity;
+
+// Mercury: the tests of the network policy (net-1 lane): the policy handle, the cookie rules, the request path,
+// WebSockets through the proxy and the limits on sign-in prompts.
+mod cookie_policy;
+mod mercury_auth;
+mod mercury_request_path;
+mod mercury_ws;
+mod net_policy;
+
 use std::sync::Arc;
 
 use content_security_policy as csp;
@@ -126,6 +137,8 @@ fn create_http_state(fc: Option<GenericEmbedderProxy<NetToEmbedderMsg>>) -> Http
         )),
         override_manager,
         embedder_proxy: fc.unwrap_or_else(|| create_generic_embedder_proxy()),
+        // Mercury: a policy that behaves as Servo 0.8 does; the tests of the policy switch it on.
+        net_policy: net::net_policy::NetPolicy::new(),
     }
 }
 

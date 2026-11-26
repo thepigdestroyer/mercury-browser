@@ -43,6 +43,7 @@ mod macos {
     use std::rc::Rc;
     use std::time::Duration;
 
+    use mercury_ui::settings_sections::section;
     use mercury_ui::{
         LoginListRow, MainWindow, PageRequestStyle, PageRequestView, PasswordManagerUi,
         SettingsWindow,
@@ -298,7 +299,7 @@ mod macos {
 
         // The settings window on the Passwords section, editing the first login.
         let settings = SettingsWindow::new().expect("the settings window");
-        settings.set_section(4);
+        settings.set_section(section::PASSWORDS);
         let ui = settings.global::<PasswordManagerUi>();
         ui.set_storage_note("Saved in your login keychain.".into());
         ui.set_rows(ModelRc::new(VecModel::from(vec![
