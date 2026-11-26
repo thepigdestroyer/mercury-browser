@@ -60,6 +60,7 @@ mod passwords;
 #[cfg(target_os = "macos")]
 mod platform_macos;
 mod post_run;
+mod power; // energy-1
 mod profile;
 mod profile_data;
 mod quit;
