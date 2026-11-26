@@ -1,0 +1,351 @@
+; SPDX-License-Identifier: BSD-3-Clause
+; SPDX-FileCopyrightText: 2017 The Chromium Authors
+;
+; Mercury Browser: the Seatbelt profile of the macOS content process.
+;
+; Translated from Chromium's sandbox/policy/mac/common.sb and renderer.sb
+; (https://chromium.googlesource.com/chromium/src/+/refs/heads/main/sandbox/policy/mac/,
+; fetched 2026-11-22). Copyright 2017 The Chromium Authors. Use of the Chromium
+; source is governed by a BSD-style licence, kept in LICENSES/BSD-3-Clause-chromium.txt
+; and listed in THIRD-PARTY-NOTICES.md. A line adapted from Chromium carries the place
+; it comes from (common.sb:48 is line 48 of common.sb); every change of Mercury's is a
+; comment that starts "Mercury:". Rules are evaluated in order and the last match wins,
+; so the broad denials come first and the narrow allowances after them.
+;
+; The profile is applied with sandbox_init_with_parameters, so no path is ever pasted
+; into this text: every path and switch is a parameter, (param "NAME"). An undefined
+; parameter makes the profile fail to load, which ends the content process (fail closed).
+;   BUNDLE_PATH        the .app bundle, or the directory of a development executable
+;   EXECUTABLE_PATH    the running executable, resolved
+;   BUNDLE_ID          io.github.thepigdestroyer.mercury-browser
+;   HOMEDIR            the user's home directory, resolved
+;   RUN_ROOT           optional: the private per-run directory GLib and GStreamer write to
+;   ALLOW_AUDIO_OUT    TRUE or FALSE: Core Audio services (rule group AUDIO_OUT)
+;   ALLOW_MEDIA_DECODE TRUE or FALSE: VideoToolbox and AudioToolbox (rule group MEDIA_DECODE)
+;   ALLOW_CAPTURE      TRUE or FALSE: camera and microphone (rule group CAPTURE)
+;   ENABLE_LOGGING     TRUE or FALSE: (debug deny)
+;
+; What is NOT here, on purpose (the content process does not need it):
+;   - no network rule at all: every fetch, WebSocket, HSTS check and filter-list lookup
+;     happens in the browser process, and WebRTC is off;
+;   - no GPU, Metal or IOSurface rule: WebRender, WebGL and the canvas run in the browser;
+;   - no file-map-executable for GStreamer: its plugins are loaded BEFORE this profile is
+;     applied (the content process starts the media backend first and waits for it);
+;   - no read access to the profile, the keychains, ~/.ssh or any filter or HSTS data.
+
+; ---- 0. Prologue (common.sb:4-45) ----
+
+(version 1)
+
+; Helper function to check if a param is set to true (common.sb:7).
+(define (param-true? str) (string=? (param str) "TRUE"))
+
+; Helper function to determine if a parameter is defined or not (common.sb:10).
+(define (param-defined? str) (string? (param str)))
+
+(deny default)
+
+; common.sb:45
+(if (param-true? "ENABLE_LOGGING") (debug deny))
+
+; ---- 1. Denials first (renderer.sb:7-17) ----
+; crbug.com/40556801: these operations are allowed even under (deny default).
+(deny iokit-get-properties process-info* nvram*)
+(deny distributed-notification-post)
+
+; ---- 2. The process itself ----
+
+; Allow sending signals to self (common.sb:48, crbug.com/20370).
+(allow signal (target self))
+
+; Mercury: Chromium's renderer.sb leaves pidinfo off (a killswitch); the system memory
+; reporter of the content process asks about its own process, so only that is allowed.
+(allow process-info-pidinfo (target self))
+(allow process-info-setcontrol (target self))   ; renderer.sb:29
+
+; Allow cf prefs to work (renderer.sb:20).
+(allow user-preference-read)
+
+; ---- 3. The application ----
+
+; Mercury: the executable is already running, so Chromium's (allow process-exec ...)
+; (common.sb:165) is dropped; reading it is kept (crash reports read their own image).
+(allow file-read* (path (param "EXECUTABLE_PATH")))   ; common.sb:166
+
+; All processes can read the bundle contents (common.sb:183).
+(allow file-read* (subpath (param "BUNDLE_PATH")))
+
+; Mercury: libraries of the signed bundle that are bound lazily are mapped from here.
+; The bundle is read-only to this process (no file-write rule names it).
+(allow file-map-executable (subpath (param "BUNDLE_PATH")))
+
+; Allow realpath() to work (common.sb:180). Known leak, accepted: a path's existence
+; can be learned, its contents cannot.
+(allow file-read-metadata (subpath "/"))
+
+; Mercury: dropped from common.sb: component builds (:162), the browser's
+; MachPortRendezvousServer (:175; Mercury's IPC connects before this profile is applied),
+; the logging file (:156) and the macOS 11/12 data-volume workaround (:185-217; the
+; minimum macOS is 13).
+
+; ---- 4. System files ----
+
+; Allow reads of system libraries and frameworks (common.sb:220).
+(allow file-read*
+  (subpath "/System/Library/CoreServices/CoreTypes.bundle")
+  (subpath "/System/Library/CoreServices/SystemVersion.bundle")
+  (subpath "/System/Library/Frameworks")
+  (subpath "/System/Library/Preferences/Logging")
+  (subpath "/System/Library/PrivateFrameworks")
+  (subpath "/usr/lib")
+)
+
+; common.sb:233
+(allow file-read*
+  (subpath "/Library/Apple/System/Library/Frameworks")
+  (subpath "/Library/Apple/System/Library/PrivateFrameworks")
+)
+
+; Read by CFPrefs calling getpwuid; no password hashes are in it (common.sb:243).
+(allow file-read-data (path "/private/etc/passwd"))
+
+; common.sb:246-255
+(allow file-ioctl file-read-data file-write-data
+  (require-all
+    (path "/dev/dtracehelper")
+    (vnode-type CHARACTER-DEVICE)))
+(allow file-read-data
+  (path "/dev/null")
+  (path "/dev/random")
+  (path "/dev/urandom")
+)
+
+; renderer.sb:39-49
+(allow file-read-data
+  (path "/dev/autofs_nowait")
+  (path "/dev/fd")
+)
+(allow file-write-data
+  (require-all
+    (path "/dev/null")
+    (vnode-type CHARACTER-DEVICE)))
+
+; Time zone and locale data (common.sb:257-258, 285-288).
+(allow file-read* (subpath "/private/var/db/timezone"))
+(allow file-read-data (subpath "/usr/share/zoneinfo.default"))
+(allow file-read-data
+  (subpath "/usr/share/icu")
+  (subpath "/usr/share/locale")
+)
+
+; Global preferences (common.sb:261-268).
+(allow file-read-data
+  (path "/Library/Managed Preferences/.GlobalPreferences.plist")
+  (path "/Library/Preferences/.GlobalPreferences.plist")
+  (path (string-append "/Library/Managed Preferences/" (param "BUNDLE_ID") ".plist"))
+  (path (string-append "/Library/Preferences/" (param "BUNDLE_ID") ".plist"))
+  (regex #"/Library/Managed Preferences/.*/\.GlobalPreferences\.plist")
+  (regex (string-append #"/Library/Managed Preferences/.*/" (regex-quote (param "BUNDLE_ID")) #"\.plist"))
+)
+
+; common.sb:271-274
+(allow file-read-data
+  (path "/System/Library/CoreServices/SystemVersion.plist")
+  (path "/System/Library/CoreServices/checkfixlist")
+)
+
+; From /System/Library/Sandbox/Profiles/dyld-support.sb (common.sb:277).
+(allow file-read* file-map-executable
+  (subpath "/System/Cryptexes/App")
+  (subpath "/System/Cryptexes/OS")
+  (subpath "/System/Volumes/Preboot/Cryptexes/App/System")
+  (subpath "/System/Volumes/Preboot/Cryptexes/OS")
+)
+
+; renderer.sb:55-69
+(allow file-read-data
+  (path "/System/Library/CoreServices/CoreTypes.bundle/Contents/Library/AppExceptions.bundle/Exceptions.plist")
+  (path "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/Exceptions.plist")
+  (path "/System/Library/Preferences/Logging/Subsystems/com.apple.SkyLight.plist")
+  (subpath "/System/Library/ColorSync/Profiles")
+  (subpath "/System/Library/CoreServices/SystemAppearance.bundle")
+  (subpath "/System/Library/CoreServices/SystemVersion.bundle")
+  (subpath "/System/Library/Extensions")  ; https://crbug.com/847518
+  (subpath "/System/Library/LinguisticData")
+)
+
+; Preferences in the home directory (common.sb:291, renderer.sb:33-36). The home directory
+; is a parameter, resolved by the browser's own code before any page ran.
+(define (user-homedir-path subpath)
+  (string-append (param "HOMEDIR") subpath))
+(allow file-read-data
+  (path (string-append (user-homedir-path "/Library/Preferences/") (param "BUNDLE_ID") ".plist"))
+  (path (user-homedir-path "/Library/Preferences/.GlobalPreferences.plist"))
+  (path (user-homedir-path "/Library/Preferences/.GlobalPreferences_m.plist"))
+  (prefix (user-homedir-path "/Library/Preferences/ByHost/.GlobalPreferences"))
+  (path (user-homedir-path "/Library/Preferences/com.apple.LaunchServices/com.apple.launchservices.secure.plist"))
+  (path (user-homedir-path "/.CFUserTextEncoding"))
+  (path (user-homedir-path "/Library/Preferences/com.apple.universalaccess.plist"))
+)
+
+; Signed Mach-O blobs of the CVMS server (renderer.sb:44, common.sb:146).
+(allow file-read* file-write-unlink
+  (prefix "/private/tmp/cvmsCodeSignObj"))
+(allow file-read*
+  (extension "com.apple.cvms.kernel")
+  (prefix "/private/var/db/CVMS/cvmsCodeSignObj"))
+
+; ---- 5. Mach services and IPC ----
+
+; Mach IPC needed by every helper (common.sb:300, renderer.sb:86).
+(allow mach-lookup
+  (global-name "com.apple.logd")  ; https://crbug.com/792229
+  (global-name "com.apple.system.logger")
+  (global-name "com.apple.system.opendirectoryd.libinfo")  ; https://crbug.com/792228
+  (global-name "com.apple.cvmsServ")  ; https://crbug.com/850021
+  (global-name "com.apple.lsd.mapdb")
+  (global-name "com.apple.system.notification_center")  ; https://crbug.com/792217
+)
+
+; POSIX IPC (renderer.sb:79).
+(allow ipc-posix-shm-read-data
+  (ipc-posix-name "apple.cfprefs.317580v1")
+  (ipc-posix-name "apple.cfprefs.daemonv1")
+  (ipc-posix-name "apple.shm.notification_center")  ; https://crbug.com/792217
+)
+
+; The system log (common.sb:346). The only network rule of the profile: two local
+; sockets, not the network.
+(allow network-outbound
+  (literal "/private/var/run/asl_input")
+  (literal "/private/var/run/syslog")
+)
+
+; IOKit properties (renderer.sb:93).
+(allow iokit-get-properties
+  (iokit-property "CaseSensitive")
+  (iokit-property "CoreStorage Encrypted")
+  (iokit-property "Ejectable")
+  (iokit-property "Encrypted")
+  (iokit-property "IOClassNameOverride")
+  (iokit-property "IOMediaIcon")
+  (iokit-property "Product Identification")
+  (iokit-property "Protocol Characteristics")
+  (iokit-property "Removable")
+  (iokit-property "image-encrypted")
+)
+
+; Mercury: dropped from renderer.sb: the IOSurface and RootDomain user clients (:72; no GPU
+; and no power assertions in the content process), GPUBundles (:68), the V8-only
+; kern.tcsm_* sysctls (:107-109), ALLOW_RENDERER_PIDINFO (:27), and the Metal shader
+; cache of common.sb (:79-143). Each comes back only if the deny log shows a need.
+
+; ---- 6. sysctl (common.sb:307-344) ----
+; Mercury: by name, not the blanket (allow sysctl-read) of Servo's old profile.
+; machdep.cpu. is added: SpiderMonkey and Rust read CPU features.
+(allow sysctl-read
+  (sysctl-name "hw.activecpu")
+  (sysctl-name "hw.busfrequency_compat")
+  (sysctl-name "hw.byteorder")
+  (sysctl-name "hw.cacheconfig")
+  (sysctl-name "hw.cachelinesize_compat")
+  (sysctl-name "hw.cpufamily")
+  (sysctl-name "hw.cpufrequency_compat")
+  (sysctl-name "hw.cputype")
+  (sysctl-name "hw.l1dcachesize_compat")
+  (sysctl-name "hw.l1icachesize_compat")
+  (sysctl-name "hw.l2cachesize_compat")
+  (sysctl-name "hw.l3cachesize_compat")
+  (sysctl-name "hw.logicalcpu_max")
+  (sysctl-name "hw.machine")
+  (sysctl-name "hw.memsize")
+  (sysctl-name "hw.ncpu")
+  (sysctl-name "hw.nperflevels")
+  (sysctl-name "hw.packages")
+  (sysctl-name "hw.pagesize_compat")
+  (sysctl-name "hw.physicalcpu_max")
+  (sysctl-name "hw.tbfrequency_compat")
+  (sysctl-name "hw.vectorunit")
+  (sysctl-name "kern.hostname")
+  (sysctl-name "kern.hv_vmm_present")
+  (sysctl-name "kern.maxfilesperproc")
+  (sysctl-name "kern.osproductversion")
+  (sysctl-name "kern.osrelease")
+  (sysctl-name "kern.ostype")
+  (sysctl-name "kern.osvariant_status")
+  (sysctl-name "kern.osversion")
+  (sysctl-name "kern.secure_kernel")
+  (sysctl-name "kern.usrstack64")
+  (sysctl-name "kern.version")
+  (sysctl-name "sysctl.proc_cputype")
+  (sysctl-name-prefix "hw.optional.")
+  (sysctl-name-prefix "hw.perflevel")
+  (sysctl-name-prefix "machdep.cpu.")
+)
+
+; ---- 7. Fonts (common.sb:60-75, renderer.sb:52) ----
+; Old fonts are stored in the resource fork, so xattr reads are allowed too
+; (https://crbug.com/429221317).
+(allow file-read-data file-read-xattr
+  (subpath "/Library/Fonts")
+  (subpath "/System/Library/Fonts")
+  (subpath (user-homedir-path "/Library/Fonts"))
+)
+(allow mach-lookup
+  ; https://crbug.com/41339707, https://crbug.com/41356325
+  (global-name "com.apple.FontObjectsServer")
+  (global-name "com.apple.fonts")
+)
+; Downloaded and other hidden fonts, /System/Library/AssetsV2 (https://crbug.com/41284825).
+(allow file-read* (extension "com.apple.app-sandbox.read"))
+
+; ---- 8. Mercury: the private per-run directory ----
+; GLib's user directories point here (media_buffers.rs); GStreamer writes its download
+; buffers (copies of the media being played) into it. Created 0700 by the browser, removed
+; when the run ends. Nothing else is writable.
+(if (param-defined? "RUN_ROOT")
+  (allow file-read* file-write* (subpath (param "RUN_ROOT"))))
+
+; ---- 9. Mercury: rule groups the first real-Mac run finishes ----
+; Every Mach name below marked UNVERIFIED is a candidate that nobody has seen denied yet.
+; The deny log of an enforcing run (or the report-mode log) decides which stay.
+
+; AUDIO_OUT: playing sound through Core Audio.
+(when (param-true? "ALLOW_AUDIO_OUT")
+  (allow mach-lookup
+    (global-name "com.apple.audio.audiohald")  ; UNVERIFIED
+    (global-name "com.apple.audio.coreaudiod")  ; UNVERIFIED
+    (global-name "com.apple.audio.AudioComponentRegistrar")  ; UNVERIFIED
+  )
+)
+
+; MEDIA_DECODE: VideoToolbox and AudioToolbox decoders (H.264 has no software fallback
+; in the bundle, so this group matters most).
+(when (param-true? "ALLOW_MEDIA_DECODE")
+  (allow mach-lookup
+    (global-name "com.apple.coremedia.videodecoder")  ; UNVERIFIED
+    (global-name "com.apple.coremedia.audiodecoder")  ; UNVERIFIED
+  )
+)
+
+; CAPTURE: camera and microphone (getUserMedia opens devices in the content process until
+; MED-2 moves capture to the browser; then this group is removed). The system's
+; per-app permission (TCC) still decides whether any device opens.
+(when (param-true? "ALLOW_CAPTURE")
+  (allow mach-lookup
+    (global-name "com.apple.tccd")  ; UNVERIFIED
+    (global-name "com.apple.tccd.system")  ; UNVERIFIED
+    (global-name "com.apple.cmio.registerassistantservice")  ; UNVERIFIED
+    (global-name "com.apple.avfoundation.avcapturedeviced")  ; UNVERIFIED
+  )
+)
+
+; ---- 10. Mercury: network ----
+; Nothing. WebRTC (MED-2) adds its own block here, under its own parameter.
+
+; ---- 11. Explicit denials last (common.sb:353) ----
+; CFPreferences falls back to in-process access to preference plists when cfprefsd is
+; inaccessible, which keeps this profile in charge of which domains can be read.
+(deny mach-lookup
+  (global-name "com.apple.cfprefsd.daemon")
+)

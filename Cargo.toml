@@ -22,6 +22,7 @@ members = [
     "crates/mercury-pdfium",
     "crates/mercury-proxy",
     "crates/mercury-release",
+    "crates/mercury-sandbox",
     "crates/mercury-servo-patches",
     "crates/mercury-settings",
     "crates/mercury-site-security",

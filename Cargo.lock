@@ -6214,6 +6214,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-sandbox"
+version = "0.2.0"
+
+[[package]]
 name = "mercury-servo-patches"
 version = "0.2.0"
 dependencies = [

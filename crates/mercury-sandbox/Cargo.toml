@@ -1,0 +1,16 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-sandbox"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The macOS content-process sandbox (R14 EC1): the Seatbelt profile (`profiles/content.sb`, translated
+# from Chromium's BSD-3 renderer profile), the builders for its parameters and for the environment of
+# a sandboxed child, the `sandbox_init_with_parameters` call and the checks after it. No engine, no
+# window: a light crate. The vendored Servo crates call it only through the trait of
+# `servo-embedder-traits/mercury/sandbox.rs`, implemented in `talaria-servo`.
+[dependencies]
