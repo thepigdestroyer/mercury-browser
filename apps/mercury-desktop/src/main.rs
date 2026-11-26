@@ -29,16 +29,17 @@ mod clipboard;
 // controls
 mod controls;
 mod crash_handler;
+mod ctrl_tab; // input-hooks
 #[cfg(target_os = "macos")]
 mod dock_icon; // themes: the Dock icon follows the theme
 mod downloads; // downloads-ui lane
 mod engine;
 mod filter_lists; // blocklists
 mod find;
+mod focus_regions; // input-hooks
 mod geolocation;
 mod history_ui;
-mod ctrl_tab; // input-hooks
-mod focus_regions; // input-hooks
+mod hook_chain; // input-hooks
 mod ime; // txt-1: the IME composition state machine
 // hub-ring: installed by layout-switch (brief D7)
 #[allow(dead_code)]

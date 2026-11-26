@@ -22,14 +22,17 @@ pub(crate) fn connect_native_keyboard_input(
     window: &MainWindow,
     controller: Rc<RefCell<BrowserController>>,
     web_view_focused: Rc<Cell<bool>>,
-    _settings: &Rc<crate::settings::SettingsHandle>, // input-hooks
+    settings: &Rc<crate::settings::SettingsHandle>, // input-hooks
 ) {
     let weak_window = window.as_weak();
     let mut modifiers = ModifiersState::empty();
     let mut shortcut_keys = ShortcutKeys::default();
+    let mut pinch = PinchTracker::default();
     // txt-1: `ime.rs` holds the composition state and queues commands itself (text from the
     // system's emoji picker and dictation arrives outside this handler).
     attach_ime(window, &controller, &web_view_focused);
+    // input-hooks: the ⌥ group keys and the Orbit pinch follow these settings.
+    crate::input_hooks::follow_settings(settings);
 
     window
         .window()
@@ -46,12 +49,33 @@ pub(crate) fn connect_native_keyboard_input(
                     modifiers = changed.state();
                     // controls: Control-click opens the context menu on macOS.
                     crate::controls::set_control_key(modifiers.control_key());
+                    // input-hooks: the ⌥ group keys and the ⌃⇥ hold follow the modifier state.
+                    crate::hook_chain::modifiers(
+                        &window,
+                        &controller,
+                        web_view_focused.get(),
+                        modifiers,
+                    );
                 }
                 WindowEvent::KeyboardInput {
                     event,
                     is_synthetic,
                     ..
                 } => {
+                    // input-hooks: the ring's ⌥ keys, the ⌥ group keys, Orbit's keys and the ⌃⇥
+                    // hold see every key before anything else, so a captured key's key-up is
+                    // never taken by a popup first.
+                    if crate::hook_chain::early(
+                        &window,
+                        &controller,
+                        web_view_focused.get(),
+                        event,
+                        modifiers,
+                        *is_synthetic,
+                    ) {
+                        window.window().request_redraw();
+                        return EventResult::PreventDefault;
+                    }
                     if crate::downloads::handle_key(event) {
                         return EventResult::PreventDefault; // downloads-ui lane
                     }
@@ -62,6 +86,11 @@ pub(crate) fn connect_native_keyboard_input(
                     }
                     // history lane: the suggestion list's keys come before everything else.
                     if crate::history_ui::handle_key(&window, event) {
+                        return EventResult::PreventDefault;
+                    }
+                    // input-hooks: F6 and ⇧F6 move through the window's regions, after the
+                    // popups and the suggestions had their keys.
+                    if crate::hook_chain::f6(&controller, event, modifiers, *is_synthetic) {
                         return EventResult::PreventDefault;
                     }
                     let handled_as_shortcut = handle_browser_shortcut(
@@ -109,15 +138,37 @@ pub(crate) fn connect_native_keyboard_input(
                     queue_ime_input(&controller, ime);
                     window.window().request_redraw();
                 }
-                WindowEvent::PinchGesture { delta, .. }
-                    if window.get_web_view_visible() && window.get_web_view_hovered() =>
+                // input-hooks: a gesture Orbit owns is consumed without the hover guard.
+                WindowEvent::PinchGesture { delta, phase, .. }
+                    if pinch.orbit_owned()
+                        || (window.get_web_view_visible() && window.get_web_view_hovered()) =>
                 {
-                    controller.borrow_mut().queue_command(pinch_zoom_command(
-                        *delta,
-                        window.get_web_view_pointer_x(),
-                        window.get_web_view_pointer_y(),
-                    ));
-                    window.window().request_redraw();
+                    let tab = controller.borrow().active_tab_id();
+                    let step = pinch.step(tab, pinch_phase(*phase), *delta, orbit_pinch_enabled());
+                    let orbit = crate::input_hooks::orbit_host();
+                    if step.abandoned_orbit
+                        && let Some(orbit) = &orbit
+                    {
+                        orbit.pinch_open_end(false);
+                    }
+                    match step.route {
+                        PinchRoute::Forward => {
+                            controller.borrow_mut().queue_command(pinch_zoom_command(
+                                *delta,
+                                window.get_web_view_pointer_x(),
+                                window.get_web_view_pointer_y(),
+                            ));
+                            window.window().request_redraw();
+                        }
+                        PinchRoute::DriveOrbit { progress } => {
+                            if let Some(orbit) = &orbit {
+                                orbit.pinch_open_progress(progress);
+                            }
+                        }
+                    }
+                    if let (Some(commit), Some(orbit)) = (step.finished, &orbit) {
+                        orbit.pinch_open_end(commit);
+                    }
                     return EventResult::PreventDefault;
                 }
                 // The user left window fullscreen through the system (for example Ctrl+Cmd+F)
@@ -154,11 +205,17 @@ pub(crate) fn connect_native_keyboard_input(
                 WindowEvent::CloseRequested => {
                     crate::settings::main_window_closing();
                     crate::import_ui::main_window_closing();
+                    crate::hook_chain::reset(&window, &controller); // input-hooks
                 }
                 WindowEvent::Focused(false) => {
                     // Key-ups that happen while another window has focus never arrive.
                     shortcut_keys.clear();
                     dismiss_composition(&controller);
+                    crate::hook_chain::reset(&window, &controller); // input-hooks
+                }
+                // input-hooks: a hidden window never delivers the key-up of a held ⌥ or ⌃.
+                WindowEvent::Occluded(true) => {
+                    crate::hook_chain::reset(&window, &controller);
                 }
                 _ => {}
             }
@@ -229,6 +286,233 @@ pub(crate) fn pinch_zoom_command(delta: f64, x: f32, y: f32) -> BrowserCommand {
         x,
         y,
     }
+}
+
+/// A closing pinch shows Orbit from this product of `1 + delta` since the gesture started
+/// (SPEC section 6.1) and commits at `PINCH_ORBIT_COMMIT`.
+const PINCH_ORBIT_SHOW: f64 = 0.85;
+const PINCH_ORBIT_COMMIT: f64 = 0.70;
+const PINCH_ORBIT_SPAN: f64 = 0.15;
+/// Float slack on the thresholds, so that a product that is 0.85 or 0.70 in decimal counts.
+const PINCH_EPSILON: f64 = 1e-9;
+/// Servo's pinch zoom range, and how far above 1.0 a page still counts as unzoomed.
+const PAGE_PINCH_ZOOM_MAX: f32 = 10.0;
+const PAGE_PINCH_ZOOM_TOLERANCE: f64 = 1e-3;
+
+/// Where one pinch event goes (SPEC section 6.1).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) enum PinchRoute {
+    /// To the page, as before.
+    Forward,
+    /// To Orbit: the page lifts toward the ring. `progress` is 0.0 at rest and 1.0 at the
+    /// committed distance.
+    DriveOrbit { progress: f32 },
+}
+
+fn pinch_orbit_progress(cumulative: f64) -> f32 {
+    ((PINCH_ORBIT_SHOW - cumulative) / PINCH_ORBIT_SPAN).clamp(0.0, 1.0) as f32
+}
+
+/// The route of one event of a pinch that is not owned yet. `page_pinch_zoom` is the page's zoom
+/// at the start of the gesture, `delta` this event's change in magnification and `cumulative`
+/// the product of `1 + delta` since the gesture started.
+pub(crate) fn route_pinch(
+    page_pinch_zoom: f32,
+    delta: f64,
+    cumulative: f64,
+    orbit_enabled: bool,
+) -> PinchRoute {
+    if !orbit_enabled
+        || !page_pinch_zoom.is_finite()
+        || !delta.is_finite()
+        || !cumulative.is_finite()
+        || f64::from(page_pinch_zoom) > 1.0 + PAGE_PINCH_ZOOM_TOLERANCE
+        || (delta >= 0.0 && cumulative >= 1.0)
+        || cumulative > PINCH_ORBIT_SHOW + PINCH_EPSILON
+    {
+        return PinchRoute::Forward;
+    }
+    PinchRoute::DriveOrbit {
+        progress: pinch_orbit_progress(cumulative),
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum PinchPhase {
+    Started,
+    Moved,
+    Ended,
+    Cancelled,
+}
+
+pub(crate) fn pinch_phase(phase: winit::event::TouchPhase) -> PinchPhase {
+    match phase {
+        winit::event::TouchPhase::Started => PinchPhase::Started,
+        winit::event::TouchPhase::Moved => PinchPhase::Moved,
+        winit::event::TouchPhase::Ended => PinchPhase::Ended,
+        winit::event::TouchPhase::Cancelled => PinchPhase::Cancelled,
+    }
+}
+
+/// Who a gesture belongs to. It is decided once and then kept for the whole gesture, so that a
+/// gesture is never split between a half-zoomed page and a half-open Orbit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PinchOwner {
+    /// Closing from rest and still above the threshold: the page gets the events (they cannot
+    /// zoom an unzoomed page out), and the gesture can still become Orbit's.
+    Pending,
+    Page,
+    Orbit,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PinchGesture {
+    start_zoom: f32,
+    cumulative: f64,
+    owner: PinchOwner,
+}
+
+/// What `PinchTracker::step` decided for one event.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct PinchStep {
+    pub(crate) route: PinchRoute,
+    /// A gesture that was Orbit's was still open when this one started: tell Orbit it ended
+    /// without a commit (`pinch_open_end(false)`).
+    pub(crate) abandoned_orbit: bool,
+    /// The gesture ended on this event and was Orbit's: `Some(commit)`.
+    pub(crate) finished: Option<bool>,
+}
+
+/// The state behind `route_pinch`: a shadow estimate of each tab's pinch zoom (the desktop cannot
+/// read Servo's) and the gesture in progress.
+#[derive(Default)]
+pub(crate) struct PinchTracker {
+    page_zoom: std::collections::HashMap<talaria_core::TabId, f32>,
+    gesture: Option<PinchGesture>,
+}
+
+impl PinchTracker {
+    /// The page's estimated pinch zoom; 1.0 for a tab with no entry.
+    fn estimate(&self, tab: talaria_core::TabId) -> f32 {
+        self.page_zoom.get(&tab).copied().unwrap_or(1.0)
+    }
+
+    /// A delta that was forwarded to the page. Servo clamps the zoom to 1.0..=10.0.
+    fn forwarded(&mut self, tab: talaria_core::TabId, delta: f64) {
+        if !delta.is_finite() {
+            return;
+        }
+        let zoom = (f64::from(self.estimate(tab)) * (1.0 + delta))
+            .clamp(1.0, f64::from(PAGE_PINCH_ZOOM_MAX)) as f32;
+        if zoom > 1.0 {
+            self.page_zoom.insert(tab, zoom);
+        } else {
+            self.page_zoom.remove(&tab);
+        }
+    }
+
+    /// The tab closed.
+    #[allow(dead_code)] // input-hooks: item 3 calls it where a tab closes
+    pub(crate) fn forget(&mut self, tab: talaria_core::TabId) {
+        self.page_zoom.remove(&tab);
+    }
+
+    pub(crate) fn orbit_owned(&self) -> bool {
+        self.gesture
+            .is_some_and(|gesture| gesture.owner == PinchOwner::Orbit)
+    }
+
+    /// Starts a gesture at the tab's current estimate. Returns whether it ended an open gesture
+    /// that was Orbit's, without a commit.
+    fn begin(&mut self, tab: talaria_core::TabId) -> bool {
+        let abandoned = self.orbit_owned();
+        self.gesture = Some(PinchGesture {
+            start_zoom: self.estimate(tab),
+            cumulative: 1.0,
+            owner: PinchOwner::Pending,
+        });
+        abandoned
+    }
+
+    fn update(&mut self, delta: f64, orbit_enabled: bool) -> PinchRoute {
+        let Some(gesture) = self.gesture.as_mut() else {
+            return PinchRoute::Forward;
+        };
+        if delta.is_finite() {
+            let next = gesture.cumulative * (1.0 + delta).max(0.0);
+            if next.is_finite() {
+                gesture.cumulative = next;
+            }
+        }
+        match gesture.owner {
+            PinchOwner::Page => PinchRoute::Forward,
+            PinchOwner::Orbit => PinchRoute::DriveOrbit {
+                progress: pinch_orbit_progress(gesture.cumulative),
+            },
+            PinchOwner::Pending => {
+                let route =
+                    route_pinch(gesture.start_zoom, delta, gesture.cumulative, orbit_enabled);
+                if matches!(route, PinchRoute::DriveOrbit { .. }) {
+                    gesture.owner = PinchOwner::Orbit;
+                } else if !orbit_enabled
+                    || f64::from(gesture.start_zoom) > 1.0 + PAGE_PINCH_ZOOM_TOLERANCE
+                    || gesture.cumulative > 1.0 + PAGE_PINCH_ZOOM_TOLERANCE
+                {
+                    gesture.owner = PinchOwner::Page;
+                }
+                route
+            }
+        }
+    }
+
+    /// The gesture ended: `Some(commit)` if it was Orbit's.
+    fn finish(&mut self, cancelled: bool) -> Option<bool> {
+        let gesture = self.gesture.take()?;
+        let commit = !cancelled && gesture.cumulative <= PINCH_ORBIT_COMMIT + PINCH_EPSILON;
+        (gesture.owner == PinchOwner::Orbit).then_some(commit)
+    }
+
+    /// Ends the gesture without a commit (focus lost, window closing). `Some(false)` if it was
+    /// Orbit's, which must then be told.
+    #[allow(dead_code)] // input-hooks: item 3 calls it on `Focused(false)` and `CloseRequested`
+    pub(crate) fn cancel(&mut self) -> Option<bool> {
+        self.finish(true)
+    }
+
+    /// One pinch event: the route, and what to tell Orbit about the gesture's end.
+    pub(crate) fn step(
+        &mut self,
+        tab: talaria_core::TabId,
+        phase: PinchPhase,
+        delta: f64,
+        orbit_enabled: bool,
+    ) -> PinchStep {
+        let abandoned_orbit = if phase == PinchPhase::Started || self.gesture.is_none() {
+            self.begin(tab)
+        } else {
+            false
+        };
+        let route = self.update(delta, orbit_enabled);
+        if route == PinchRoute::Forward {
+            self.forwarded(tab, delta);
+        }
+        let finished = match phase {
+            PinchPhase::Ended => self.finish(false),
+            PinchPhase::Cancelled => self.finish(true),
+            PinchPhase::Started | PinchPhase::Moved => None,
+        };
+        PinchStep {
+            route,
+            abandoned_orbit,
+            finished,
+        }
+    }
+}
+
+/// Orbit takes a pinch only when it exists in this layout and is not already open.
+fn orbit_pinch_enabled() -> bool {
+    // input-hooks: item 3 adds the orbit_pinch setting
+    crate::input_hooks::orbit_host().is_some_and(|host| host.available() && !host.is_open())
 }
 
 pub(crate) fn physical_key_string(key: PhysicalKey) -> String {
@@ -386,6 +670,390 @@ mod tests {
                 y: 0.0,
             }
         );
+    }
+
+    // input-hooks (SPEC section 6.1): the pinch route.
+    const TAB_A: TabId = TabId::new(1);
+    const TAB_B: TabId = TabId::new(2);
+
+    fn assert_drives_orbit(route: PinchRoute, expected_progress: f32) {
+        match route {
+            PinchRoute::DriveOrbit { progress } => assert!(
+                (progress - expected_progress).abs() < 1e-5,
+                "progress {progress}, expected {expected_progress}"
+            ),
+            PinchRoute::Forward => panic!("expected DriveOrbit, got Forward"),
+        }
+    }
+
+    #[test]
+    fn a_closing_pinch_on_an_unzoomed_page_opens_orbit_between_0_85_and_0_70() {
+        let closing = |cumulative| route_pinch(1.0, -0.01, cumulative, true);
+
+        assert_eq!(closing(1.0), PinchRoute::Forward);
+        assert_eq!(closing(0.9), PinchRoute::Forward);
+        // The boundary: 0.85 exactly is the first DriveOrbit, 0.8501 is not.
+        assert_eq!(closing(0.85), PinchRoute::DriveOrbit { progress: 0.0 });
+        assert_eq!(closing(0.8501), PinchRoute::Forward);
+        assert_drives_orbit(closing(0.775), 0.5);
+        assert_drives_orbit(closing(0.7), 1.0);
+        assert_drives_orbit(closing(0.5), 1.0);
+    }
+
+    #[test]
+    fn a_zoomed_page_always_gets_the_pinch() {
+        for page_zoom in [1.3_f32, 10.0] {
+            for cumulative in [1.0, 0.9, 0.85, 0.775, 0.7, 0.5, 0.1] {
+                assert_eq!(
+                    route_pinch(page_zoom, -0.05, cumulative, true),
+                    PinchRoute::Forward,
+                    "page {page_zoom}, cumulative {cumulative}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_page_zoom_within_the_tolerance_counts_as_unzoomed() {
+        assert_drives_orbit(route_pinch(1.0005, -0.05, 0.7, true), 1.0);
+        assert_eq!(route_pinch(1.002, -0.05, 0.7, true), PinchRoute::Forward);
+    }
+
+    #[test]
+    fn an_opening_pinch_goes_to_the_page() {
+        assert_eq!(route_pinch(1.0, 0.05, 1.2, true), PinchRoute::Forward);
+        assert_eq!(route_pinch(1.0, 0.0, 1.0, true), PinchRoute::Forward);
+    }
+
+    #[test]
+    fn fingers_reopening_below_the_threshold_still_drive_orbit() {
+        assert_drives_orbit(route_pinch(1.0, 0.02, 0.8, true), 1.0 / 3.0);
+    }
+
+    #[test]
+    fn with_orbit_disabled_every_pinch_goes_to_the_page() {
+        for cumulative in [1.2, 1.0, 0.9, 0.85, 0.775, 0.7, 0.5, 0.0] {
+            assert_eq!(
+                route_pinch(1.0, -0.05, cumulative, false),
+                PinchRoute::Forward,
+                "cumulative {cumulative}"
+            );
+        }
+    }
+
+    #[test]
+    fn non_finite_pinch_input_goes_to_the_page() {
+        for bad in [f64::NAN, f64::INFINITY, f64::NEG_INFINITY] {
+            assert_eq!(route_pinch(1.0, bad, 0.7, true), PinchRoute::Forward);
+            assert_eq!(route_pinch(1.0, -0.05, bad, true), PinchRoute::Forward);
+        }
+        for bad in [f32::NAN, f32::INFINITY] {
+            assert_eq!(route_pinch(bad, -0.05, 0.7, true), PinchRoute::Forward);
+        }
+    }
+
+    #[test]
+    fn the_orbit_progress_never_leaves_zero_to_one() {
+        let mut cumulative = -0.5;
+        while cumulative < 3.0 {
+            for delta in [-0.9, -0.01, 0.0, 0.01, 0.9] {
+                if let PinchRoute::DriveOrbit { progress } =
+                    route_pinch(1.0, delta, cumulative, true)
+                {
+                    assert!(
+                        (0.0..=1.0).contains(&progress),
+                        "progress {progress} at {cumulative}"
+                    );
+                }
+            }
+            cumulative += 0.005;
+        }
+    }
+
+    #[test]
+    fn a_closing_gesture_enters_orbit_at_0_85_and_stays_there_when_the_fingers_reopen() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        let mut first_orbit_step = None;
+        for step in 1..=10 {
+            let result = tracker.step(TAB_A, PinchPhase::Moved, -0.03, true);
+            if matches!(result.route, PinchRoute::DriveOrbit { .. }) {
+                first_orbit_step.get_or_insert(step);
+            } else {
+                assert!(first_orbit_step.is_none(), "left Orbit at step {step}");
+            }
+        }
+        // 0.97^5 = 0.8587, 0.97^6 = 0.8330.
+        assert_eq!(first_orbit_step, Some(6));
+
+        // The product rises from 0.737 to above 0.95: still Orbit's.
+        let mut cumulative: f64 = 0.97_f64.powi(10);
+        while cumulative < 0.95 {
+            cumulative *= 1.03;
+            let result = tracker.step(TAB_A, PinchPhase::Moved, 0.03, true);
+            let PinchRoute::DriveOrbit { progress } = result.route else {
+                panic!("the gesture left Orbit at {cumulative}");
+            };
+            assert!((0.0..=1.0).contains(&progress));
+        }
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Ended, 0.0, true).finished,
+            Some(false)
+        );
+    }
+
+    #[test]
+    fn a_gesture_on_a_zoomed_page_stays_the_pages_through_a_product_of_0_6() {
+        let mut tracker = PinchTracker::default();
+        tracker.forwarded(TAB_A, 1.0); // the page is at 2.0
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        let mut cumulative = 1.0;
+        while cumulative > 0.5 {
+            cumulative *= 0.97;
+            let result = tracker.step(TAB_A, PinchPhase::Moved, -0.03, true);
+            assert_eq!(result.route, PinchRoute::Forward, "at {cumulative}");
+        }
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Ended, 0.0, true).finished,
+            None
+        );
+    }
+
+    #[test]
+    fn a_gesture_that_opens_first_stays_the_pages_when_it_then_closes() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Moved, 0.2, true).route,
+            PinchRoute::Forward
+        );
+        // 1.2 * 0.5 = 0.6
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Moved, -0.5, true).route,
+            PinchRoute::Forward
+        );
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Ended, 0.0, true).finished,
+            None
+        );
+    }
+
+    #[test]
+    fn a_gesture_that_began_with_orbit_unavailable_stays_the_pages() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, false);
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Moved, -0.4, true).route,
+            PinchRoute::Forward
+        );
+    }
+
+    #[test]
+    fn ending_an_orbit_gesture_commits_at_or_below_0_70() {
+        for (delta, commit) in [(-0.3, true), (-0.31, true), (-0.29, false), (-0.5, true)] {
+            let mut tracker = PinchTracker::default();
+            tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+            let moved = tracker.step(TAB_A, PinchPhase::Moved, delta, true);
+            assert!(matches!(moved.route, PinchRoute::DriveOrbit { .. }));
+            let ended = tracker.step(TAB_A, PinchPhase::Ended, 0.0, true);
+            assert_eq!(ended.finished, Some(commit), "delta {delta}");
+        }
+    }
+
+    #[test]
+    fn the_final_delta_of_the_ended_event_counts_towards_the_commit() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.step(TAB_A, PinchPhase::Moved, -0.25, true); // 0.75
+        let ended = tracker.step(TAB_A, PinchPhase::Ended, -0.1, true); // 0.675
+        assert_drives_orbit(ended.route, 1.0);
+        assert_eq!(ended.finished, Some(true));
+    }
+
+    #[test]
+    fn a_cancelled_orbit_gesture_never_commits() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.step(TAB_A, PinchPhase::Moved, -0.5, true);
+        let cancelled = tracker.step(TAB_A, PinchPhase::Cancelled, 0.0, true);
+        assert_eq!(cancelled.finished, Some(false));
+        assert!(!tracker.orbit_owned());
+    }
+
+    #[test]
+    fn a_new_started_ends_a_stale_orbit_gesture_without_a_commit() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.step(TAB_A, PinchPhase::Moved, -0.5, true);
+        assert!(tracker.orbit_owned());
+
+        let restarted = tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+
+        assert!(restarted.abandoned_orbit);
+        assert_eq!(restarted.finished, None);
+        // The new gesture starts again at 1.0.
+        assert_eq!(restarted.route, PinchRoute::Forward);
+        assert!(!tracker.orbit_owned());
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Ended, 0.0, true).finished,
+            None
+        );
+    }
+
+    #[test]
+    fn a_new_started_after_a_stale_page_gesture_abandons_nothing() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.step(TAB_A, PinchPhase::Moved, 0.2, true);
+        let restarted = tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        assert!(!restarted.abandoned_orbit);
+    }
+
+    #[test]
+    fn a_moved_event_without_started_is_forwarded_as_before() {
+        let mut tracker = PinchTracker::default();
+        let step = tracker.step(TAB_A, PinchPhase::Moved, 0.1, true);
+        assert_eq!(step.route, PinchRoute::Forward);
+        assert!(!step.abandoned_orbit);
+        assert!((tracker.estimate(TAB_A) - 1.1).abs() < 1e-6);
+    }
+
+    #[test]
+    fn the_page_zoom_estimate_multiplies_forwarded_deltas() {
+        let mut tracker = PinchTracker::default();
+        tracker.forwarded(TAB_A, 0.25);
+        tracker.forwarded(TAB_A, 0.25);
+        assert_eq!(tracker.estimate(TAB_A), 1.5625);
+    }
+
+    #[test]
+    fn the_page_zoom_estimate_drops_its_entry_when_it_returns_to_one() {
+        let mut tracker = PinchTracker::default();
+        tracker.forwarded(TAB_A, 0.25);
+        assert_eq!(tracker.page_zoom.len(), 1);
+        tracker.forwarded(TAB_A, -0.9);
+        assert_eq!(tracker.estimate(TAB_A), 1.0);
+        assert!(tracker.page_zoom.is_empty());
+        // Zooming out of a page that is not zoomed makes no entry.
+        tracker.forwarded(TAB_A, -0.5);
+        assert!(tracker.page_zoom.is_empty());
+    }
+
+    #[test]
+    fn the_page_zoom_estimate_clamps_at_ten() {
+        let mut tracker = PinchTracker::default();
+        for _ in 0..40 {
+            tracker.forwarded(TAB_A, 0.25);
+        }
+        assert_eq!(tracker.estimate(TAB_A), 10.0);
+    }
+
+    #[test]
+    fn the_page_zoom_estimate_ignores_non_finite_deltas() {
+        let mut tracker = PinchTracker::default();
+        tracker.forwarded(TAB_A, 0.5);
+        tracker.forwarded(TAB_A, f64::NAN);
+        tracker.forwarded(TAB_A, f64::INFINITY);
+        assert_eq!(tracker.estimate(TAB_A), 1.5);
+    }
+
+    #[test]
+    fn the_page_zoom_estimate_is_per_tab() {
+        let mut tracker = PinchTracker::default();
+        tracker.forwarded(TAB_A, 1.0); // tab A at 2.0
+        tracker.step(TAB_B, PinchPhase::Started, 0.0, true);
+        assert_drives_orbit(
+            tracker.step(TAB_B, PinchPhase::Moved, -0.3, true).route,
+            1.0,
+        );
+        tracker.step(TAB_B, PinchPhase::Ended, 0.0, true);
+
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Moved, -0.3, true).route,
+            PinchRoute::Forward
+        );
+    }
+
+    #[test]
+    fn a_gestures_route_uses_the_page_zoom_at_its_start() {
+        // Unzoomed at the start: a forwarded delta that raises the estimate mid-gesture does
+        // not take Orbit away.
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.forwarded(TAB_A, 0.5);
+        assert_drives_orbit(
+            tracker.step(TAB_A, PinchPhase::Moved, -0.3, true).route,
+            1.0,
+        );
+
+        // Zoomed at the start: the estimate falling to 1.0 mid-gesture does not give Orbit the
+        // rest of it.
+        let mut tracker = PinchTracker::default();
+        tracker.forwarded(TAB_A, 0.5);
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.forwarded(TAB_A, -0.9);
+        assert_eq!(tracker.estimate(TAB_A), 1.0);
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Moved, -0.3, true).route,
+            PinchRoute::Forward
+        );
+    }
+
+    #[test]
+    fn forwarded_deltas_move_the_estimate_and_orbit_driven_ones_do_not() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.step(TAB_A, PinchPhase::Moved, -0.1, true); // Forward at 0.9
+        tracker.step(TAB_A, PinchPhase::Moved, -0.2, true); // Orbit at 0.72
+        tracker.step(TAB_A, PinchPhase::Moved, -0.2, true); // Orbit at 0.576
+        assert_eq!(tracker.estimate(TAB_A), 1.0);
+
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        tracker.step(TAB_A, PinchPhase::Moved, 0.5, true);
+        assert_eq!(tracker.estimate(TAB_A), 1.5);
+    }
+
+    #[test]
+    fn forgetting_a_tab_drops_its_estimate() {
+        let mut tracker = PinchTracker::default();
+        tracker.forwarded(TAB_A, 0.5);
+        tracker.forwarded(TAB_B, 0.5);
+        tracker.forget(TAB_A);
+        assert_eq!(tracker.estimate(TAB_A), 1.0);
+        assert_eq!(tracker.estimate(TAB_B), 1.5);
+    }
+
+    #[test]
+    fn non_finite_gesture_deltas_do_not_poison_the_product() {
+        let mut tracker = PinchTracker::default();
+        tracker.step(TAB_A, PinchPhase::Started, 0.0, true);
+        assert_eq!(
+            tracker.step(TAB_A, PinchPhase::Moved, f64::NAN, true).route,
+            PinchRoute::Forward
+        );
+        assert_drives_orbit(
+            tracker.step(TAB_A, PinchPhase::Moved, -0.3, true).route,
+            1.0,
+        );
+        // Orbit keeps the gesture through a bad delta.
+        assert!(matches!(
+            tracker
+                .step(TAB_A, PinchPhase::Moved, f64::INFINITY, true)
+                .route,
+            PinchRoute::DriveOrbit { .. }
+        ));
+    }
+
+    #[test]
+    fn winit_touch_phases_map_to_pinch_phases() {
+        use winit::event::TouchPhase;
+
+        assert_eq!(pinch_phase(TouchPhase::Started), PinchPhase::Started);
+        assert_eq!(pinch_phase(TouchPhase::Moved), PinchPhase::Moved);
+        assert_eq!(pinch_phase(TouchPhase::Ended), PinchPhase::Ended);
+        assert_eq!(pinch_phase(TouchPhase::Cancelled), PinchPhase::Cancelled);
     }
 
     #[test]
