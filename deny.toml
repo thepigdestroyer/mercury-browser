@@ -37,6 +37,11 @@ ignore = [
     # `subtlecrypto` feature), so the fixed 0.10.0 cannot be selected. Reached
     # only by pages that do RSA decryption or signing through crypto.subtle;
     # Mercury does no RSA itself and its TLS is rustls with aws-lc-rs.
+    # Private-cookie nonces can repeat after fork(): cookie 0.16.2 <- webdriver 0.53 <- servo's
+    # WebDriver server (dev and test only). 0.16 has no fixed release (0.18.3 fixed the 0.18 line,
+    # which the lockfile now uses). Only `PrivateJar` / `add_private` are affected, and nothing in
+    # Mercury or WebDriver seals private cookies; the browser's cookie store is servo-net's own.
+    { id = "RUSTSEC-2026-0594", reason = "cookie 0.16.2 via webdriver 0.53 has no fixed 0.16 release; only private (encrypted) cookies are affected and nothing here uses PrivateJar" },
     { id = "RUSTSEC-2023-0071", reason = "rsa =0.10.0-rc.19 pinned by servo-script-webcrypto 0.8.0 (Servo's WebCrypto); no fixed version is selectable" },
     # SQLite before 3.54.0 can return uninitialised page-cache memory to
     # queries on a database opened together with a crafted -wal file whose
