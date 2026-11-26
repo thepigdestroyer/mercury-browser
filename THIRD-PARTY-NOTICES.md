@@ -255,10 +255,47 @@ Three crates are linked as libraries into `mercury-passkeys` (no code of theirs 
 pinned to exact versions in the workspace `Cargo.toml`, and the credits page carries their licence texts and notices.
 
 - `passkey` 0.6.0 and the crates it re-exports, `passkey-authenticator`, `passkey-client`, `passkey-types`, `passkey-crypto`
-  and `passkey-transports`, with `public-suffix` — https://github.com/1Password/passkey-rs — MIT OR Apache-2.0 (used under
-  MIT; Copyright (c) 2022 1Password; `LICENSES/MIT.txt`) — the software authenticator, the WebAuthn and CTAP2 types and the
-  crypto traits behind Mercury's built-in passkey manager. The packages carry no licence file; the holder was read in the
-  repository's `LICENSE-MIT` on 22 Nov 2026.
+  and `passkey-transports` — https://github.com/1Password/passkey-rs — MIT OR Apache-2.0 (used under MIT; Copyright (c) 2022
+  1Password; `LICENSES/MIT.txt`) — the software authenticator, the WebAuthn and CTAP2 types and the crypto traits behind
+  Mercury's built-in passkey manager. The packages carry no licence file; the holder was read in the repository's
+  `LICENSE-MIT` on 22 Nov 2026.
+- `public-suffix` 0.1.3 (a dependency of `passkey-client`, used to refuse relying party ids that are public suffixes) —
+  https://github.com/1Password/passkey-rs — MIT OR Apache-2.0 (used under MIT; Copyright (c) 2022 1Password;
+  `LICENSES/MIT.txt`), **with two parts under other terms**. Its `src/lib.rs` is "mostly a transliteration" of the Go
+  library's `list.go` (Copyright 2012 The Go Authors, BSD-style licence): the Go Authors' BSD-3-Clause licence
+  (`LICENSES/BSD-3-Clause-go.txt`) is reproduced below. Its `src/tld_list.rs` is a snapshot of the Public Suffix List
+  (https://publicsuffix.org, Mozilla and contributors), which is under the MPL-2.0 (`LICENSES/MPL-2.0.txt`); the list's source
+  is https://github.com/publicsuffix/list.
+
+  ```text
+  Copyright 2009 The Go Authors.
+
+  Redistribution and use in source and binary forms, with or without
+  modification, are permitted provided that the following conditions are
+  met:
+
+     * Redistributions of source code must retain the above copyright
+  notice, this list of conditions and the following disclaimer.
+     * Redistributions in binary form must reproduce the above
+  copyright notice, this list of conditions and the following disclaimer
+  in the documentation and/or other materials provided with the
+  distribution.
+     * Neither the name of Google LLC nor the names of its
+  contributors may be used to endorse or promote products derived from
+  this software without specific prior written permission.
+
+  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+  "AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+  OWNER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+  SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+  LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+  DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+  THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+  (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+  OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+  ```
 - `credential-exchange-format` 0.4.0 — https://github.com/bitwarden/credential-exchange — MIT (Copyright (c) 2024
   Bitwarden; `LICENSES/MIT.txt`) — the FIDO Credential Exchange Format types used to import and export passkeys.
 - `authenticator` 0.5.0 — https://github.com/mozilla/authenticator-rs — MPL-2.0 (Mozilla; `LICENSES/MPL-2.0.txt`) — USB

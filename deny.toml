@@ -69,7 +69,7 @@ ignore = [
     # Mercury's own manager use passkey-crypto's p256 0.14, which links crypto-bigint 0.7.11). The other
     # backends are worse (`crypto_nss`: NSS is not shipped; `crypto_openssl`: a system OpenSSL; `crypto_dummy`:
     # no PIN protocol). Remove when authenticator releases on p256 0.14, or if EC43 is dropped.
-    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 is pinned by p256 0.13 in authenticator 0.5.0 (USB security keys, macOS only); it is used for one ephemeral ECDH per PIN exchange, never for a long-term key; no fixed version is selectable" },
+    { id = "RUSTSEC-2026-0387", reason = "crypto-bigint 0.5.5 is pinned by p256 0.13 in authenticator 0.5.0 (USB security keys, macOS only); the affected code is reachable only through authenticator's PIN-protocol ECDH; the signing and key generation of its RustCrypto backend are unimplemented!(); remove when authenticator moves to p256 0.14" },
 ]
 
 [bans]

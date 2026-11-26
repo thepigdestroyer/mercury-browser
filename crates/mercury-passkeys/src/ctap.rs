@@ -116,8 +116,16 @@ impl std::fmt::Debug for UserEntity {
     }
 }
 
+/// The lengths of credential ids (or other byte strings), for `Debug`: the bytes stay out of logs.
+fn byte_lengths(items: &[Vec<u8>]) -> Vec<String> {
+    items
+        .iter()
+        .map(|bytes| format!("<{} bytes>", bytes.len()))
+        .collect()
+}
+
 /// `navigator.credentials.create({ publicKey })`, after the engine's checks.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CreateRequest {
     /// The page's origin, serialised (`https://example.com`), for the prompt only. The
     /// authenticator trusts `rp.id` and `client_data_hash` as given.
@@ -142,8 +150,28 @@ pub struct CreateRequest {
     pub timeout_ms: Option<u32>,
 }
 
+impl std::fmt::Debug for CreateRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CreateRequest")
+            .field("origin", &self.origin)
+            .field("rp", &self.rp)
+            .field("user", &self.user)
+            .field(
+                "client_data_hash",
+                &format_args!("<{} bytes>", self.client_data_hash.len()),
+            )
+            .field("algorithms", &self.algorithms)
+            .field("exclude", &byte_lengths(&self.exclude))
+            .field("resident_key", &self.resident_key)
+            .field("user_verification", &self.user_verification)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
 /// The authenticator's answer to a [`CreateRequest`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct CreateResponse {
     /// Which authenticator answered.
     pub kind: AuthenticatorKind,
@@ -164,8 +192,39 @@ pub struct CreateResponse {
     pub attachment: Attachment,
 }
 
+impl std::fmt::Debug for CreateResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("CreateResponse")
+            .field("kind", &self.kind)
+            .field(
+                "credential_id",
+                &format_args!("<{} bytes>", self.credential_id.len()),
+            )
+            .field(
+                "attestation_object",
+                &format_args!("<{} bytes>", self.attestation_object.len()),
+            )
+            .field(
+                "authenticator_data",
+                &format_args!("<{} bytes>", self.authenticator_data.len()),
+            )
+            .field("public_key_algorithm", &self.public_key_algorithm)
+            .field(
+                "public_key_spki",
+                &self
+                    .public_key_spki
+                    .as_ref()
+                    .map(|key| format!("<{} bytes>", key.len())),
+            )
+            .field("transports", &self.transports)
+            .field("attachment", &self.attachment)
+            .finish()
+    }
+}
+
 /// `navigator.credentials.get({ publicKey })`, after the engine's checks.
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AssertRequest {
     /// The page's origin, serialised, for the prompt only.
     pub origin: String,
@@ -182,8 +241,25 @@ pub struct AssertRequest {
     pub timeout_ms: Option<u32>,
 }
 
+impl std::fmt::Debug for AssertRequest {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AssertRequest")
+            .field("origin", &self.origin)
+            .field("rp_id", &self.rp_id)
+            .field(
+                "client_data_hash",
+                &format_args!("<{} bytes>", self.client_data_hash.len()),
+            )
+            .field("allow", &byte_lengths(&self.allow))
+            .field("user_verification", &self.user_verification)
+            .field("timeout_ms", &self.timeout_ms)
+            .finish()
+    }
+}
+
 /// The authenticator's answer to an [`AssertRequest`].
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Eq)]
 pub struct AssertResponse {
     /// Which authenticator answered.
     pub kind: AuthenticatorKind,
@@ -197,6 +273,35 @@ pub struct AssertResponse {
     pub user_handle: Option<Vec<u8>>,
     /// `authenticatorAttachment`.
     pub attachment: Attachment,
+}
+
+impl std::fmt::Debug for AssertResponse {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("AssertResponse")
+            .field("kind", &self.kind)
+            .field(
+                "credential_id",
+                &format_args!("<{} bytes>", self.credential_id.len()),
+            )
+            .field(
+                "authenticator_data",
+                &format_args!("<{} bytes>", self.authenticator_data.len()),
+            )
+            .field(
+                "signature",
+                &format_args!("<{} bytes>", self.signature.len()),
+            )
+            .field(
+                "user_handle",
+                &self
+                    .user_handle
+                    .as_ref()
+                    .map(|handle| format!("<{} bytes>", handle.len())),
+            )
+            .field("attachment", &self.attachment)
+            .finish()
+    }
 }
 
 /// A source of passkeys: the built-in manager, a security key, later a phone.
