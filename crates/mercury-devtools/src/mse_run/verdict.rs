@@ -22,13 +22,14 @@
 //!
 //! This file is pure logic ([`evaluate`], [`render`]) plus the small glue [`run`] the binary calls.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::BTreeSet;
 use std::fmt::Write as _;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::io;
+use std::path::PathBuf;
 
 use super::cli::{Environment, UsageError, value};
-use super::expect::{self, Entry, Expectations};
+use super::expect::{self, Expectations};
 use super::journal::Journal;
 use super::model::{Outcome, Phase, TestResult};
 use super::phases::{self, PAGE_ORDER, PLAYER_ORDER};
@@ -127,7 +128,7 @@ pub struct Plan {
 }
 
 /// Everything the verdict is made from.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct Inputs {
     /// The latest result of every test in the journal.
     pub results: Vec<TestResult>,
@@ -185,6 +186,8 @@ pub struct Evaluation {
     pub share: Share,
     /// The peak RSS of every test that has one, largest first.
     pub rss: Vec<RssRow>,
+    /// The tests with no peak RSS recorded (listed in the report, never a failure).
+    pub unrecorded: Vec<(Phase, String)>,
     pub tests_without_rss: usize,
     pub results: usize,
     pub unreadable_journal_lines: usize,
@@ -207,14 +210,480 @@ pub fn name_key(name: &str) -> String {
     stem.chars().filter(char::is_ascii_alphanumeric).collect()
 }
 
-pub fn evaluate(inputs: &Inputs) -> Evaluation {
-    let _ = inputs;
-    todo!("evaluate")
+/// The command that finishes a run that was interrupted or left a stuck browser.
+const RESUME_ALL: &str = "scripts/dev/mse-window-run.sh all --resume";
+
+fn resume_hint(phase: Phase) -> String {
+    format!("scripts/dev/mse-window-run.sh {} --resume", phase.name())
 }
 
+fn note(incomplete: &mut Vec<String>, reason: String) {
+    if !incomplete.contains(&reason) {
+        incomplete.push(reason);
+    }
+}
+
+fn note_missing(incomplete: &mut Vec<String>, phase: Phase, missing: &[String]) {
+    if !missing.is_empty() {
+        note(
+            incomplete,
+            format!(
+                "{}: no result for {}; run `{}`",
+                phase.name(),
+                missing.join(", "),
+                resume_hint(phase)
+            ),
+        );
+    }
+}
+
+fn unfinished_reason(result: &TestResult) -> String {
+    match result.outcome {
+        Outcome::Stuck => format!(
+            "{} left a stuck browser that could not be killed: restart the browser (or the Mac), then run `{RESUME_ALL}`",
+            result.id
+        ),
+        _ => format!(
+            "{} was interrupted by a screen lock: run `{RESUME_ALL}`",
+            result.id
+        ),
+    }
+}
+
+fn find<'a>(results: &'a [TestResult], phase: Phase, id: &str) -> Option<&'a TestResult> {
+    results.iter().find(|r| r.phase == phase && r.id == id)
+}
+
+/// A page or player passes when it says PASS and no line says FAIL.
+fn passed(result: &TestResult) -> bool {
+    result.outcome == Outcome::Pass && !result.lines.iter().any(|line| line.starts_with("FAIL"))
+}
+
+fn describe(result: &TestResult) -> String {
+    let state = if result.outcome == Outcome::Pass {
+        "FAIL"
+    } else {
+        result.outcome.name()
+    };
+    match result.lines.iter().find(|line| line.starts_with("FAIL")) {
+        Some(line) => format!("{}: {state} ({line})", result.id),
+        None => format!("{}: {state}", result.id),
+    }
+}
+
+impl Condition {
+    fn new(id: &'static str, title: &str) -> Condition {
+        Condition {
+            id,
+            title: title.to_owned(),
+            status: Status::Pass,
+            details: Vec::new(),
+        }
+    }
+
+    fn raise(&mut self, status: Status, detail: String) {
+        self.status = self.status.max(status);
+        self.details.push(detail);
+    }
+}
+
+/// Checks one required test and raises the condition for anything but a pass. Returns whether it
+/// passed; a test with no result is added to `missing`.
+fn require(
+    condition: &mut Condition,
+    result: Option<&TestResult>,
+    id: &str,
+    missing: &mut Vec<String>,
+) -> bool {
+    match result {
+        None => {
+            missing.push(id.to_owned());
+            condition.raise(Status::Incomplete, format!("{id}: not run"));
+            false
+        }
+        Some(result) if !result.outcome.is_final() => {
+            condition.raise(
+                Status::Incomplete,
+                format!("{}: {} (not finished)", result.id, result.outcome.name()),
+            );
+            false
+        }
+        Some(result) if passed(result) => true,
+        Some(result) => {
+            condition.raise(Status::Fail, describe(result));
+            false
+        }
+    }
+}
+
+/// The required tests of one phase: the defaults of the brief, the plan, and what the journal holds.
+fn required_ids(
+    defaults: &[&str],
+    planned: &[String],
+    results: &[TestResult],
+    phase: Phase,
+) -> Vec<String> {
+    let journal = results
+        .iter()
+        .filter(|r| r.phase == phase)
+        .map(|r| r.id.clone());
+    let mut ids: Vec<String> = Vec::new();
+    for id in defaults
+        .iter()
+        .map(|id| (*id).to_owned())
+        .chain(planned.iter().cloned())
+        .chain(journal)
+    {
+        if !ids.contains(&id) {
+            ids.push(id);
+        }
+    }
+    ids
+}
+
+fn flag(id: &'static str, title: &str, given: bool, hint: &str) -> Condition {
+    let mut condition = Condition::new(id, title);
+    if given {
+        condition
+            .details
+            .push("given on the command line".to_owned());
+    } else {
+        condition.raise(Status::NotProven, format!("not given: {hint}"));
+    }
+    condition
+}
+
+fn gib(kb: u64) -> String {
+    format!("{:.2} GiB", kb as f64 / 1_048_576.0)
+}
+
+fn mib(kb: u64) -> String {
+    format!("{:.1} MiB", kb as f64 / 1024.0)
+}
+
+/// Decides F1 to F7 from the journal, the expectations and the plan. Pure.
+pub fn evaluate(inputs: &Inputs) -> Evaluation {
+    let results = inputs.results.as_slice();
+    let plan = &inputs.plan;
+    let expectations = &inputs.expectations;
+    let mut incomplete = Vec::new();
+    let mut warnings = Vec::new();
+
+    let mut f1 = Condition::new(
+        "F1",
+        "both blocker pages pass: mse-abort.html and mse-underrun.html",
+    );
+    for id in BLOCKER_PAGES {
+        require(
+            &mut f1,
+            find(results, Phase::Pages, id),
+            id,
+            &mut Vec::new(),
+        );
+    }
+
+    let mut f2 = Condition::new(
+        "F2",
+        "every page of the run passes, none skipped, interrupted or stuck",
+    );
+    let pages = required_ids(&PAGE_ORDER, &plan.pages, results, Phase::Pages);
+    let mut missing_pages = Vec::new();
+    let mut passed_pages = 0;
+    for id in &pages {
+        if require(
+            &mut f2,
+            find(results, Phase::Pages, id),
+            id,
+            &mut missing_pages,
+        ) {
+            passed_pages += 1;
+        }
+    }
+    note_missing(&mut incomplete, Phase::Pages, &missing_pages);
+    f2.details
+        .insert(0, format!("{passed_pages} of {} pages pass", pages.len()));
+
+    let mut f3 = Condition::new(
+        "F3",
+        "WPT media-source: no unexpected result, core areas have issues, at least 85% of subtests pass",
+    );
+    let mut share = Share::default();
+    let mut loaded_files = 0;
+    let mut finished_wpt = false;
+    for result in results.iter().filter(|r| r.phase == Phase::Wpt) {
+        if !result.outcome.is_final() {
+            f3.raise(
+                Status::Incomplete,
+                format!("{}: {} (not finished)", result.id, result.outcome.name()),
+            );
+            continue;
+        }
+        finished_wpt = true;
+        for finding in expect::judge(expectations.entries.get(&result.id), result) {
+            f3.raise(Status::Fail, finding.describe());
+        }
+        let harness = expect::actual_harness(result);
+        if harness == "NOLOAD" || harness == "CRASH" {
+            f3.details.push(format!(
+                "{} did not load ({harness}): left out of the subtest share",
+                result.id
+            ));
+            continue;
+        }
+        loaded_files += 1;
+        share.subtests += result.subtests.len() as u64;
+        share.passing += result
+            .subtests
+            .iter()
+            .filter(|subtest| subtest.status == "PASS")
+            .count() as u64;
+    }
+    let planned = plan.wpt.iter().flatten().filter(|id| {
+        !expectations
+            .entries
+            .get(id.as_str())
+            .is_some_and(|entry| entry.skip)
+    });
+    let mut missing_wpt = Vec::new();
+    for id in planned {
+        if find(results, Phase::Wpt, id).is_none() {
+            missing_wpt.push(id.clone());
+        }
+    }
+    if plan.wpt.is_none() && !results.iter().any(|r| r.phase == Phase::Wpt) {
+        f3.raise(
+            Status::Incomplete,
+            "no WPT result at all: the run did not reach the media-source tests".to_owned(),
+        );
+        note(
+            &mut incomplete,
+            format!(
+                "wpt: no WPT result at all; run `{}`",
+                resume_hint(Phase::Wpt)
+            ),
+        );
+    }
+    for id in &missing_wpt {
+        f3.raise(Status::Incomplete, format!("{id}: not run"));
+    }
+    note_missing(&mut incomplete, Phase::Wpt, &missing_wpt);
+    f3.details.push(format!(
+        "{}% of {} subtests in the {loaded_files} files that loaded pass (the floor is {SUBTEST_FLOOR_PERCENT}%)",
+        share.percent_text(),
+        share.subtests
+    ));
+    if share.subtests == 0 && finished_wpt {
+        f3.raise(
+            Status::Fail,
+            "no subtest ran: every WPT file failed to load or reported none".to_owned(),
+        );
+    } else if share.subtests > 0 && !share.meets_floor() {
+        f3.raise(
+            Status::Fail,
+            format!(
+                "{}% is below the {SUBTEST_FLOOR_PERCENT}% floor",
+                share.percent_text()
+            ),
+        );
+    }
+    for entry in expectations.entries.values() {
+        let file = entry
+            .path
+            .rsplit('/')
+            .next()
+            .unwrap_or_default()
+            .to_ascii_lowercase();
+        let core = matches!(entry.class.as_str(), "mse-core" | "dom")
+            && CORE_AREAS.iter().any(|word| file.contains(*word));
+        if core && entry.issue.is_none() {
+            f3.raise(
+                Status::Fail,
+                format!(
+                    "{} ({}) is in a core area and has no issue: add its issue field",
+                    entry.path, entry.class
+                ),
+            );
+        }
+    }
+
+    let players = required_ids(&PLAYER_ORDER, &plan.players, results, Phase::Players);
+    let mut f4 = Condition::new("F4", "the dash.js, Shaka Player and hls.js pages each pass");
+    let mut missing_players = Vec::new();
+    for id in &players {
+        let key = name_key(id);
+        let result = find(results, Phase::Players, id);
+        match result {
+            Some(r)
+                if inputs.engine_gap_players.contains(&key)
+                    && !passed(r)
+                    && matches!(r.outcome, Outcome::Fail | Outcome::NoLoad) =>
+            {
+                if inputs.allow_engine_gap.contains(&key) {
+                    f4.details.push(format!(
+                        "{}; engine-gap, reported separately (allowed by --allow-engine-gap {key})",
+                        describe(r)
+                    ));
+                } else {
+                    f4.raise(
+                        Status::Fail,
+                        format!(
+                            "{}; classed engine-gap: rerun with --allow-engine-gap {key} to report it separately",
+                            describe(r)
+                        ),
+                    );
+                }
+            }
+            _ => {
+                require(&mut f4, result, id, &mut missing_players);
+            }
+        }
+    }
+    note_missing(&mut incomplete, Phase::Players, &missing_players);
+
+    let mut f5 = Condition::new(
+        "F5",
+        "no crash, hang, stuck browser or interrupted test in the whole journal",
+    );
+    for result in results {
+        match result.outcome {
+            Outcome::Crash | Outcome::Timeout | Outcome::Stuck => f5.raise(
+                Status::Fail,
+                format!(
+                    "{} {}: {}",
+                    result.phase.name(),
+                    result.id,
+                    result.outcome.name()
+                ),
+            ),
+            Outcome::Interrupted => {
+                f5.raise(Status::Incomplete, format!("{}: interrupted", result.id))
+            }
+            Outcome::Pass | Outcome::Fail | Outcome::NoLoad => {}
+        }
+        if !result.outcome.is_final() {
+            note(&mut incomplete, unfinished_reason(result));
+        }
+    }
+    let mut rss = Vec::new();
+    let mut unrecorded = Vec::new();
+    for result in results {
+        match result.peak_rss_kb {
+            Some(kb) => rss.push(RssRow {
+                phase: result.phase,
+                id: result.id.clone(),
+                kb,
+            }),
+            None => unrecorded.push((result.phase, result.id.clone())),
+        }
+    }
+    rss.sort_by(|a, b| b.kb.cmp(&a.kb).then_with(|| a.id.cmp(&b.id)));
+    if let Some(largest) = rss.first() {
+        f5.details.push(format!(
+            "largest peak RSS: {} at {}",
+            largest.id,
+            gib(largest.kb)
+        ));
+        if largest.kb > RSS_SOFT_LIMIT_KB {
+            warnings.push(format!(
+                "{} peaks at {}, above the 1.5 GiB soft limit (a warning, not a failure)",
+                largest.id,
+                gib(largest.kb)
+            ));
+        }
+    }
+    if inputs.unreadable_journal_lines > 0 {
+        warnings.push(format!(
+            "{} unreadable journal line(s) were skipped",
+            inputs.unreadable_journal_lines
+        ));
+    }
+
+    let f6 = flag(
+        "F6",
+        "the gates are green on the head",
+        inputs.gates_green,
+        "run the gates on the head, then pass --gates-green",
+    );
+    let f7 = flag(
+        "F7",
+        "the skeptic review is ok",
+        inputs.review_ok,
+        "pass --review-ok once the skeptic review says ok",
+    );
+
+    let conditions = vec![f1, f2, f3, f4, f5, f6, f7];
+    let verdict = if conditions.iter().any(|c| c.status == Status::Incomplete) {
+        Verdict::Incomplete
+    } else if conditions
+        .iter()
+        .any(|c| matches!(c.status, Status::NotProven | Status::Fail))
+    {
+        Verdict::NoGo
+    } else {
+        Verdict::Go
+    };
+    let tests_without_rss = unrecorded.len();
+    Evaluation {
+        verdict,
+        conditions,
+        incomplete,
+        warnings,
+        share,
+        rss,
+        unrecorded,
+        tests_without_rss,
+        results: results.len(),
+        unreadable_journal_lines: inputs.unreadable_journal_lines,
+    }
+}
+
+/// The report: the conditions with the failing ones first, then what is open, then the peak RSS,
+/// and the headline last.
 pub fn render(evaluation: &Evaluation, now: &str, journal: &str) -> String {
-    let _ = (evaluation, now, journal);
-    todo!("render")
+    let mut out = String::new();
+    let _ = writeln!(out, "# MSE flip verdict\n");
+    let _ = writeln!(out, "**{}**\n", evaluation.verdict.headline());
+    let _ = writeln!(
+        out,
+        "Decided at {now} from `{journal}`: {} results, {} unreadable journal lines.\n",
+        evaluation.results, evaluation.unreadable_journal_lines
+    );
+    let mut ordered: Vec<&Condition> = evaluation.conditions.iter().collect();
+    ordered.sort_by(|a, b| b.status.cmp(&a.status).then_with(|| a.id.cmp(b.id)));
+    let _ = writeln!(out, "## Conditions\n");
+    for condition in ordered {
+        let _ = writeln!(
+            out,
+            "- **{}** {}: {}",
+            condition.id,
+            condition.status.name(),
+            condition.title
+        );
+        for detail in &condition.details {
+            let _ = writeln!(out, "  - {detail}");
+        }
+    }
+    if !evaluation.incomplete.is_empty() {
+        let _ = writeln!(out, "\n## Still open\n");
+        for reason in &evaluation.incomplete {
+            let _ = writeln!(out, "- {reason}");
+        }
+    }
+    if !evaluation.warnings.is_empty() {
+        let _ = writeln!(out, "\n## Warnings\n");
+        for warning in &evaluation.warnings {
+            let _ = writeln!(out, "- {warning}");
+        }
+    }
+    let _ = writeln!(out, "\n## Peak RSS, largest first\n");
+    for row in &evaluation.rss {
+        let _ = writeln!(out, "- {} {}: {}", row.phase.name(), row.id, mib(row.kb));
+    }
+    for (phase, id) in &evaluation.unrecorded {
+        let _ = writeln!(out, "- {} {}: no peak RSS recorded", phase.name(), id);
+    }
+    let _ = writeln!(out, "\n{}", evaluation.verdict.headline());
+    out
 }
 
 /// A row of the "Entries" table of `engine-gaps.md`.
@@ -224,19 +693,81 @@ pub struct EngineGapRow {
     pub blocks_mse: bool,
 }
 
+/// The "Entries" table of `engine-gaps.md`: the rows that name a player, and whether the row says
+/// the gap blocks MSE. Other sections (the suspected gaps) are not entries.
 pub fn parse_engine_gaps(text: &str) -> Vec<EngineGapRow> {
-    let _ = text;
-    todo!("parse_engine_gaps")
+    let mut rows = Vec::new();
+    let mut in_entries = false;
+    let mut columns: Option<(usize, usize)> = None;
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("## ") {
+            in_entries = trimmed == "## Entries";
+            columns = None;
+            continue;
+        }
+        if !in_entries || !trimmed.starts_with('|') {
+            continue;
+        }
+        let cells: Vec<&str> = trimmed
+            .trim_matches('|')
+            .split('|')
+            .map(str::trim)
+            .collect();
+        if columns.is_none() {
+            let lower: Vec<String> = cells.iter().map(|c| c.to_ascii_lowercase()).collect();
+            let found = lower.iter().position(|c| c.starts_with("found by"));
+            let blocks = lower.iter().position(|c| c.starts_with("blocks"));
+            if let (Some(found), Some(blocks)) = (found, blocks) {
+                columns = Some((found, blocks));
+            }
+            continue;
+        }
+        if cells
+            .iter()
+            .all(|c| c.chars().all(|ch| ch == '-' || ch == ':'))
+        {
+            continue;
+        }
+        let Some((found, blocks)) = columns else {
+            continue;
+        };
+        let found_by = cells.get(found).copied().unwrap_or_default();
+        if found_by.is_empty() {
+            continue;
+        }
+        let blocks_mse = cells
+            .get(blocks)
+            .is_some_and(|cell| cell.to_ascii_lowercase().starts_with("yes"));
+        rows.push(EngineGapRow {
+            found_by: found_by.to_owned(),
+            blocks_mse,
+        });
+    }
+    rows
 }
 
-/// The players that count as an `engine-gap` failure.
+/// The players that count as an `engine-gap` failure: a `players/` entry of class `engine-gap`
+/// in the expectations, or an engine-gaps row that does not block MSE. Only known players count.
 pub fn engine_gap_players(
     expectations: &Expectations,
     rows: &[EngineGapRow],
     players: &[String],
 ) -> BTreeSet<String> {
-    let _ = (expectations, rows, players);
-    todo!("engine_gap_players")
+    let known: BTreeSet<String> = players.iter().map(|p| name_key(p)).collect();
+    let from_expectations = expectations
+        .entries
+        .values()
+        .filter(|entry| entry.class == "engine-gap" && entry.path.starts_with("players/"))
+        .map(|entry| name_key(entry.path.rsplit('/').next().unwrap_or_default()));
+    let from_table = rows
+        .iter()
+        .filter(|row| !row.blocks_mse)
+        .map(|row| name_key(&row.found_by));
+    from_expectations
+        .chain(from_table)
+        .filter(|key| known.contains(key))
+        .collect()
 }
 
 /// What `mse-run verdict` was asked.
@@ -258,8 +789,68 @@ pub fn parse_arguments(
     arguments: &[String],
     environment: &Environment,
 ) -> Result<VerdictConfig, UsageError> {
-    let _ = (arguments, environment);
-    todo!("parse_arguments")
+    let repo = &environment.repo;
+    let mut out_dir = environment.out_dir.clone();
+    let mut journal: Option<PathBuf> = None;
+    let mut report: Option<PathBuf> = None;
+    let mut expect = repo.join("tests/wpt/media-source.expect.toml");
+    let mut engine_gaps: Option<PathBuf> = None;
+    let mut tools_dir = environment.tools_dir.clone();
+    let mut gates_green = false;
+    let mut review_ok = false;
+    let mut allow_engine_gap = Vec::new();
+
+    let mut index = 0;
+    while index < arguments.len() {
+        let argument = arguments[index].as_str();
+        let (name, inline) = match argument.split_once('=') {
+            Some((name, inline)) if name.starts_with("--") => (name, Some(inline)),
+            _ => (argument, None),
+        };
+        match name {
+            "--gates-green" if inline.is_none() => gates_green = true,
+            "--review-ok" if inline.is_none() => review_ok = true,
+            "--allow-engine-gap" => {
+                allow_engine_gap.push(value(arguments, &mut index, name, inline)?)
+            }
+            "--out-dir" => out_dir = PathBuf::from(value(arguments, &mut index, name, inline)?),
+            "--journal" => {
+                journal = Some(PathBuf::from(value(arguments, &mut index, name, inline)?))
+            }
+            "--report" => report = Some(PathBuf::from(value(arguments, &mut index, name, inline)?)),
+            "--expect" => expect = PathBuf::from(value(arguments, &mut index, name, inline)?),
+            "--engine-gaps" => {
+                engine_gaps = Some(PathBuf::from(value(arguments, &mut index, name, inline)?))
+            }
+            "--tools-dir" => tools_dir = PathBuf::from(value(arguments, &mut index, name, inline)?),
+            other => return Err(UsageError(format!("unknown argument {other:?}"))),
+        }
+        index += 1;
+    }
+    let journal = journal.unwrap_or_else(|| out_dir.join("journal.jsonl"));
+    let report = report
+        .unwrap_or_else(|| out_dir.join(format!("flip-verdict-{}.md", environment.now_stamp)));
+    Ok(VerdictConfig {
+        journal,
+        report,
+        expect,
+        tests_root: repo.join("tests"),
+        tools_dir,
+        engine_gaps: engine_gaps.unwrap_or_else(|| out_dir.join("engine-gaps.md")),
+        out_dir,
+        gates_green,
+        review_ok,
+        allow_engine_gap,
+    })
+}
+
+/// Reads a file that may be absent: a missing file is `None`, any other failure is an error.
+fn read_optional(path: &std::path::Path) -> Result<Option<String>, String> {
+    match fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("cannot read {}: {error}", path.display())),
+    }
 }
 
 /// What the binary needs: the text to print, the exit status, where the report went.
@@ -273,23 +864,66 @@ pub struct Finished {
 
 /// Reads the journal and the expectations, decides, writes the report.
 pub fn run(config: &VerdictConfig, now: &str) -> Result<Finished, String> {
-    let _ = (config, now);
-    todo!("run")
-}
+    let loaded = Journal::new(&config.journal)
+        .load()
+        .map_err(|error| format!("cannot read {}: {error}", config.journal.display()))?;
+    let expect_text = fs::read_to_string(&config.expect)
+        .map_err(|error| format!("cannot read {}: {error}", config.expect.display()))?;
+    let expectations = expect::parse(&expect_text)
+        .map_err(|errors| format!("{}: {}", config.expect.display(), errors.join("; ")))?;
+    let gaps_text = read_optional(&config.engine_gaps)?.unwrap_or_default();
+    let rows = parse_engine_gaps(&gaps_text);
 
-#[allow(dead_code)]
-fn unused(_: &Path, _: &HashMap<u8, u8>, _: &Entry, _: &mut String) -> fmt_dummy::Unit {
-    let _ = fs::read_dir;
-    let _ = Journal::new;
-    let _ = expect::parse;
-    let _ = phases::plan_pages;
-    let _ = (PAGE_ORDER, PLAYER_ORDER, value);
-    let _ = write!(String::new(), "");
-    fmt_dummy::Unit
-}
+    let pages = phases::plan_pages(&config.tests_root)
+        .map_err(|error| format!("cannot list the pages: {error}"))?
+        .into_iter()
+        .map(|planned| planned.id)
+        .collect();
+    let players: Vec<String> = phases::plan_players(&config.tests_root)
+        .map_err(|error| format!("cannot list the players: {error}"))?
+        .into_iter()
+        .map(|planned| planned.id)
+        .collect();
+    let wpt_root = config.tools_dir.join("wpt");
+    let wpt = if wpt_root.join("media-source").is_dir() {
+        let (tests, _) = phases::plan_wpt(&wpt_root)
+            .map_err(|error| format!("cannot list the WPT files: {error}"))?;
+        Some(tests.into_iter().map(|planned| planned.id).collect())
+    } else {
+        None
+    };
 
-mod fmt_dummy {
-    pub struct Unit;
+    let engine_gap_players = engine_gap_players(&expectations, &rows, &players);
+    let inputs = Inputs {
+        results: loaded.results,
+        unreadable_journal_lines: loaded.unreadable_lines,
+        expectations,
+        plan: Plan {
+            pages,
+            players,
+            wpt,
+        },
+        engine_gap_players,
+        allow_engine_gap: config
+            .allow_engine_gap
+            .iter()
+            .map(|name| name_key(name))
+            .collect(),
+        gates_green: config.gates_green,
+        review_ok: config.review_ok,
+    };
+    let evaluation = evaluate(&inputs);
+    let text = render(&evaluation, now, &config.journal.display().to_string());
+    let write_error = fs::create_dir_all(&config.out_dir)
+        .and_then(|()| fs::write(&config.report, &text))
+        .err()
+        .map(|error| error.to_string());
+    Ok(Finished {
+        text,
+        exit_code: evaluation.verdict.exit_code(),
+        report: config.report.clone(),
+        write_error,
+    })
 }
 
 #[cfg(test)]
@@ -298,6 +932,7 @@ mod tests {
     use crate::mse_run::expect::Entry;
     use crate::mse_run::model::Subtest;
     use std::collections::BTreeMap;
+    use std::path::Path;
 
     fn page(phase: Phase, id: &str, outcome: Outcome) -> TestResult {
         let mut result = TestResult::new(phase, id, outcome);
@@ -644,7 +1279,11 @@ mod tests {
     #[test]
     fn f3_an_unexpected_pass_is_an_unexpected_result() {
         let mut inputs = green();
-        inputs.expectations = expectations(vec![entry("media-source/a.html", "test-bug", None, 1)]);
+        let mut expected_failure = entry("media-source/a.html", "test-bug", None, 0);
+        expected_failure
+            .subtests
+            .insert("pass 0".to_owned(), "FAIL".to_owned());
+        inputs.expectations = expectations(vec![expected_failure]);
         let evaluation = evaluate(&inputs);
         only(&evaluation, &[("F3", Status::Fail)]);
         assert!(
