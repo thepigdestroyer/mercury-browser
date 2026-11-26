@@ -6,6 +6,8 @@
 
 use std::ops::Range;
 
+use unicode_segmentation::UnicodeSegmentation;
+
 /// AccessKit slices are `u8`, so a run holds at most this many characters.
 pub const MAX_RUN_CHARACTERS: usize = 255;
 /// Runs per text node, at most.
@@ -72,19 +74,125 @@ pub struct SelectionSpec {
     pub focus: TextPositionSpec,
 }
 
-// stub
-pub fn graphemes(_text: &str) -> Vec<Range<usize>> {
-    Vec::new()
+/// Byte range of each extended grapheme cluster in `text`. A cluster longer than 255 bytes is cut at
+/// character boundaries, because a character length is a `u8`.
+pub fn graphemes(text: &str) -> Vec<Range<usize>> {
+    let mut spans = Vec::new();
+    for (start, cluster) in text.grapheme_indices(true) {
+        let mut piece_start = start;
+        for (offset, character) in cluster.char_indices() {
+            let end = start + offset + character.len_utf8();
+            if end - piece_start > MAX_CHARACTER_BYTES {
+                spans.push(piece_start..start + offset);
+                piece_start = start + offset;
+            }
+        }
+        spans.push(piece_start..start + cluster.len());
+    }
+    spans
 }
 
-// stub
-pub fn word_starts_in(_text: &str, _graphemes: &[Range<usize>]) -> Vec<usize> {
-    Vec::new()
+const MAX_CHARACTER_BYTES: usize = 255;
+
+/// Grapheme indices where a UAX #29 word starts. A word's trailing space belongs to that word, so
+/// it does not start a new one.
+pub fn word_starts_in(text: &str, graphemes: &[Range<usize>]) -> Vec<usize> {
+    let mut starts = Vec::new();
+    for (byte_start, word) in text.split_word_bound_indices() {
+        if word.chars().all(char::is_whitespace) {
+            continue;
+        }
+        if let Some(index) = graphemes.iter().position(|span| span.start == byte_start) {
+            starts.push(index);
+        }
+    }
+    starts
 }
 
-// stub
-pub fn build_runs(_line: &LineInput<'_>) -> RunBuild {
-    RunBuild::default()
+/// Split a line into runs of at most 255 characters, cutting at a word boundary where one exists.
+pub fn build_runs(line: &LineInput<'_>) -> RunBuild {
+    let mut build = RunBuild::default();
+    if line.text.is_empty() {
+        return build;
+    }
+    let spans = graphemes(line.text);
+    let advances_mismatched =
+        !line.advances.is_empty() && line.advances.len() != line.text.chars().count();
+    build.advances_mismatched = advances_mismatched;
+    let positions_for_scalars = !advances_mismatched && !line.advances.is_empty();
+    let word_starts = word_starts_in(line.text, &spans);
+
+    let mut run_start = 0;
+    while run_start < spans.len() {
+        let mut run_end = (run_start + MAX_RUN_CHARACTERS).min(spans.len());
+        if run_end < spans.len()
+            && let Some(&boundary) = word_starts
+                .iter()
+                .rev()
+                .find(|&&start| start > run_start && start < run_end)
+        {
+            run_end = boundary;
+        }
+        let byte_start = spans[run_start].start;
+        let byte_end = spans[run_end - 1].end;
+        let text = line.text[byte_start..byte_end].to_string();
+        let character_lengths = spans[run_start..run_end]
+            .iter()
+            .map(|span| (span.end - span.start) as u8)
+            .collect();
+        let local_word_starts = word_starts
+            .iter()
+            .filter(|&&start| start >= run_start && start < run_end)
+            .map(|&start| (start - run_start) as u8)
+            .collect();
+        let (positions, widths) = if positions_for_scalars {
+            advances_for(line, &spans[run_start..run_end])
+        } else {
+            (None, None)
+        };
+        let dom_start = line.dom_offsets.get(run_start).copied().unwrap_or(0);
+        let dom_end = line
+            .dom_offsets
+            .get(run_end)
+            .copied()
+            .unwrap_or(dom_start + run_end - run_start);
+        build.runs.push(RunSpec {
+            text,
+            character_lengths,
+            word_starts: local_word_starts,
+            positions,
+            widths,
+            direction: line.direction,
+            dom_start,
+            dom_end,
+        });
+        run_start = run_end;
+    }
+    build
+}
+
+/// Positions and widths for the graphemes of one run, from the per-scalar advances.
+fn advances_for(
+    line: &LineInput<'_>,
+    spans: &[Range<usize>],
+) -> (Option<Vec<f32>>, Option<Vec<f32>>) {
+    let mut widths = Vec::with_capacity(spans.len());
+    let mut scalar_index = line.text[..spans[0].start].chars().count();
+    for span in spans {
+        let scalars = line.text[span.clone()].chars().count();
+        let width: f32 = line.advances[scalar_index..scalar_index + scalars]
+            .iter()
+            .sum();
+        widths.push(width);
+        scalar_index += scalars;
+    }
+    let mut positions = Vec::with_capacity(widths.len());
+    let mut x = 0.0_f32;
+    for width in &widths {
+        positions.push(x);
+        x += width;
+    }
+    (Some(positions), Some(widths))
 }
 
 // stub
