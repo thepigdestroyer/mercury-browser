@@ -5937,6 +5937,7 @@ dependencies = [
  "accesskit",
  "accesskit_consumer",
  "accname",
+ "unicode-segmentation",
 ]
 
 [[package]]
