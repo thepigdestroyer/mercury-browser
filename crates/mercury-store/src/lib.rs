@@ -20,6 +20,7 @@ mod frecency;
 mod history;
 mod import;
 mod limits;
+mod protection;
 mod schema;
 mod search;
 mod suggest;
@@ -37,6 +38,7 @@ pub use limits::{
     MAX_ERROR_CHARS, MAX_MIME_TYPE_CHARS, MAX_PATH_BYTES, MAX_TITLE_CHARS, MAX_URL_BYTES,
     MAX_VALIDATOR_BYTES,
 };
+pub use protection::{ProtectionBounceRow, ProtectionExceptionRow, ProtectionTallyRow};
 pub use search::{MAX_SEARCH_INPUT_BYTES, MAX_SEARCH_WORDS};
 pub use suggest::{
     BEST_PAGES_EXAMINED, CANDIDATES_PER_RESULT, FRECENCY_REFRESH_AGE_MS, INDEX_ROWS_EXAMINED,
@@ -153,6 +155,7 @@ mod tests {
             include_str!("frecency.rs"),
             include_str!("history.rs"),
             include_str!("import.rs"),
+            include_str!("protection.rs"),
             include_str!("schema.rs"),
             include_str!("search.rs"),
             include_str!("suggest.rs"),
