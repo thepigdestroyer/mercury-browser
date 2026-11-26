@@ -62,6 +62,7 @@ export { SiteInfo, SitePermissionRow, SiteSecurityIcon } from "site-security/sit
 // pdf-viewer
 import { PdfViewer } from "pdf/pdf-viewer.slint";
 import { PdfViewerModel } from "pdf/pdf-model.slint";
+import { SwipeIndicator } from "gestures/swipe-indicator.slint";
 export { PdfFitMode, PdfPageRow, PdfPointer, PdfRectRow, PdfScrollKey, PdfTileRow, PdfViewState, PdfViewerModel } from "pdf/pdf-model.slint";
 
 export enum WebViewPointerButton {
@@ -649,6 +650,15 @@ export component MainWindow inherits Window {
     // else it shows and asks for is in the global `PdfViewerModel`.
     in property <bool> pdf-viewer-shown: false;
     // --- end pdf-viewer ---
+
+    // --- gestures ---
+    // The back/forward chip that follows a trackpad swipe (ui/gestures).
+    in property <bool> swipe-shown: false;
+    in property <bool> swipe-forward: false;
+    in property <float> swipe-progress: 0;
+    in property <bool> swipe-armed: false;
+    in property <bool> swipe-reduce-motion: false;
+    // --- end gestures ---
 
     title: page-title + " — Mercury Browser";
     icon: @image-url("../../../apps/mercury-desktop/resources/mercury-browser.svg");
@@ -1301,6 +1311,17 @@ export component MainWindow inherits Window {
             if root.pdf-viewer-shown: PdfViewer {
                 width: parent.width;
                 height: parent.height;
+            }
+
+            // gestures: the swipe chip, over the page; it takes no pointer input of its own.
+            SwipeIndicator {
+                width: parent.width;
+                height: parent.height;
+                shown: root.swipe-shown;
+                forward: root.swipe-forward;
+                progress: root.swipe-progress;
+                armed: root.swipe-armed;
+                reduce-motion: root.swipe-reduce-motion;
             }
 
             // Drawn above the page; plain Rectangle and Text items do not take pointer input.

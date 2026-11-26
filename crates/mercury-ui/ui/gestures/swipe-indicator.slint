@@ -1,0 +1,63 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+import { ChromePalette } from "../theme/chrome-palette.slint";
+
+// The back or forward chip that follows a trackpad swipe. It sits over the page, so it draws
+// nothing and takes no pointer events of its own: a click passes through to the page.
+export component SwipeIndicator inherits Rectangle {
+    in property <bool> shown: false;
+    in property <bool> forward: false;
+    // 0..1 along the swipe; the chip slides in with it.
+    in property <float> progress: 0;
+    in property <bool> armed: false;
+    in property <bool> reduce-motion: false;
+
+    property <length> chip: 44px;
+    property <length> inset: 12px;
+    property <length> edge: root.forward
+        ? root.width - (root.chip + root.inset) * root.progress
+        : -root.chip + (root.chip + root.inset) * root.progress;
+
+    background: transparent;
+    accessible-role: none;
+
+    // The soft ring behind the chip: a second rectangle 2px larger, at the shadow colour.
+    Rectangle {
+        x: root.edge - 2px;
+        y: (root.height - root.chip) / 2 - 2px;
+        width: root.chip + 4px;
+        height: root.chip + 4px;
+        border-radius: (root.chip + 4px) / 2;
+        background: ChromePalette.shadow;
+        opacity: root.shown ? 0.25 : 0;
+        animate opacity { duration: root.reduce-motion ? 0ms : 90ms; }
+    }
+
+    Rectangle {
+        x: root.edge;
+        y: (root.height - root.chip) / 2;
+        width: root.chip;
+        height: root.chip;
+        border-radius: root.chip / 2;
+        background: root.armed ? ChromePalette.primary-button-background : ChromePalette.popup-background;
+        border-width: 1px;
+        border-color: ChromePalette.popup-border;
+        opacity: root.shown ? 1 : 0;
+        animate opacity { duration: root.reduce-motion ? 0ms : 90ms; }
+
+        Path {
+            width: 24px;
+            height: 24px;
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            commands: root.forward
+                ? "M 12 4 L 20 12 L 12 20 M 20 12 L 4 12"
+                : "M 12 4 L 4 12 L 12 20 M 4 12 L 20 12";
+            stroke: root.armed ? ChromePalette.primary-button-text : ChromePalette.text-secondary;
+            stroke-width: 2.5px;
+            stroke-line-cap: round;
+            stroke-line-join: round;
+            fill: transparent;
+        }
+    }
+}
