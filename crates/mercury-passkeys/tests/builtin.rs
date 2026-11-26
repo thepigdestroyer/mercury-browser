@@ -1122,6 +1122,36 @@ fn nothing_the_crate_prints_shows_the_private_key() {
 }
 
 #[test]
+fn the_contract_types_print_lengths_not_ids_or_handles() {
+    let h = harness();
+    let created = create(&h, RP, b"user-1", "alice");
+    let signed = h
+        .authenticator
+        .get_assertion(&assert_request(RP, vec![created.credential_id.clone()]))
+        .expect("assertion");
+    let mut create_req = create_request(RP, b"user-1", "alice");
+    create_req.exclude = vec![created.credential_id.clone()];
+    let assert_req = assert_request(RP, vec![created.credential_id.clone()]);
+
+    let outputs = [
+        format!("{create_req:?}"),
+        format!("{created:?}"),
+        format!("{assert_req:?}"),
+        format!("{signed:?}"),
+    ];
+    let hex_of = |bytes: &[u8]| data_encoding::HEXLOWER.encode(bytes);
+    for output in &outputs {
+        assert!(!output.contains(&hex_of(&created.credential_id)));
+        assert!(!output.contains(&hex_of(b"user-1")));
+        assert!(!output.contains(&hex_of(&created.authenticator_data)));
+        assert!(!output.contains(&hex_of(&signed.signature)));
+    }
+    let id_len = format!("<{} bytes>", created.credential_id.len());
+    assert!(outputs[0].contains(&format!("exclude: [\"{id_len}\"]")));
+    assert!(outputs[1].contains(&format!("credential_id: {id_len}")));
+}
+
+#[test]
 fn the_error_a_failed_call_returns_never_shows_a_name_or_an_id() {
     let h = harness();
     let created = create(&h, RP, b"user-1", "alice-the-user");

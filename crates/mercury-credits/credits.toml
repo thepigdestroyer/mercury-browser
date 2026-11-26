@@ -369,11 +369,15 @@ licence = "MIT"
 copyright = "Copyright (c) 2022 1Password"
 source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
 
+# public-suffix: MIT OR Apache-2.0 (1Password's crate), used under MIT. Its `src/lib.rs` also says "Copyright 2012 The
+# Go Authors ... BSD-style licence ... mostly a transliteration of list.go" (the Go Authors' licence is
+# BSD-3-Clause: LICENSES/BSD-3-Clause-go.txt, reproduced in THIRD-PARTY-NOTICES.md), and `src/tld_list.rs` is a
+# snapshot of the Public Suffix List (https://publicsuffix.org, MPL-2.0: LICENSES/MPL-2.0.txt).
 [[clarify]]
 crate = "public-suffix"
-licence = "MIT"
-copyright = "Copyright (c) 2022 1Password"
-source = "https://github.com/1Password/passkey-rs, LICENSE-MIT at the repository root"
+licence = "MIT AND BSD-3-Clause AND MPL-2.0"
+copyright = "Copyright (c) 2022 1Password. Portions Copyright 2012 The Go Authors (BSD-3-Clause). Contains a snapshot of the Public Suffix List, https://publicsuffix.org (MPL-2.0)."
+source = "https://github.com/1Password/passkey-rs LICENSE-MIT; public-suffix-0.1.3/src/lib.rs lines 2-4 (Go Authors); src/tld_list.rs (generated from the list)"
 
 [[clarify]]
 crate = "credential-exchange-format"
