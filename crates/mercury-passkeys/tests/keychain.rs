@@ -71,6 +71,12 @@ macro_rules! contract_suite {
             }
 
             #[test]
+            fn add_never_replaces() {
+                let (_guard, backend) = $make;
+                contract::add_never_replaces(&backend);
+            }
+
+            #[test]
             fn bulk_removal_through_the_store() {
                 let (_guard, backend) = $make;
                 drop(contract::bulk_removal_through_the_store(backend));

@@ -48,11 +48,14 @@ pub use ctap::{
     Transport, UserEntity, UserVerification,
 };
 pub use error::PasskeyError;
+pub use model::AddOutcome;
 pub use model::{
     MAX_CREDENTIAL_ID_BYTES, MAX_NAME_BYTES, MAX_RP_ID_BYTES, MAX_USER_HANDLE_BYTES,
     MIN_CREDENTIAL_ID_BYTES, PasskeyKey, PasskeyRecord, PasskeySummary, PrivateKey, SaveOutcome,
 };
-pub use store::{MAX_PRIVATE_KEY_BYTES, PasskeyStore, validate_record, validate_rp_id};
+pub use store::{
+    ImportOutcome, MAX_PRIVATE_KEY_BYTES, PasskeyStore, validate_record, validate_rp_id,
+};
 pub use verifier::{
     UserVerifier, Verification, VerificationPurpose, VerificationRequest, VerifierCapabilities,
 };

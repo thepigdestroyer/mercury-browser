@@ -4,7 +4,7 @@ use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{PasskeyError, PasskeyKey, PasskeyRecord, PasskeySummary, SaveOutcome};
+use crate::{AddOutcome, PasskeyError, PasskeyKey, PasskeyRecord, PasskeySummary, SaveOutcome};
 
 /// Where passkeys live. Implementations never return a private key from `list`, and never write
 /// one anywhere in the clear.
@@ -12,6 +12,9 @@ pub trait PasskeyBackend: Send + Sync {
     /// Saves `record`, creating the passkey or replacing the one with the same key. A backend that
     /// keeps creation dates sets `created_at_ms` itself and keeps it on replacement.
     fn put(&self, record: &PasskeyRecord) -> Result<SaveOutcome, PasskeyError>;
+    /// Adds `record` only if no passkey has its key. An existing passkey is never changed, and
+    /// the check and the write are one step.
+    fn add(&self, record: &PasskeyRecord) -> Result<AddOutcome, PasskeyError>;
     /// The passkey with this key, with its private key, or `None`. On macOS this is the call that
     /// can make the system ask the user.
     fn get(&self, key: &PasskeyKey) -> Result<Option<PasskeyRecord>, PasskeyError>;
@@ -70,6 +73,19 @@ impl PasskeyBackend for MemoryBackend {
                 Ok(SaveOutcome::Created)
             }
         }
+    }
+
+    fn add(&self, record: &PasskeyRecord) -> Result<AddOutcome, PasskeyError> {
+        let mut entries = self.entries();
+        if entries.contains_key(&record.summary.key) {
+            return Ok(AddOutcome::Exists);
+        }
+        let now = now_ms();
+        let mut stored = record.clone();
+        stored.summary.modified_at_ms = Some(now);
+        stored.summary.created_at_ms = record.summary.created_at_ms.or(Some(now));
+        entries.insert(record.summary.key.clone(), stored);
+        Ok(AddOutcome::Added)
     }
 
     fn get(&self, key: &PasskeyKey) -> Result<Option<PasskeyRecord>, PasskeyError> {

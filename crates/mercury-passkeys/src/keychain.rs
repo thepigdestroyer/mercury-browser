@@ -57,7 +57,7 @@ use serde_json::{Value, json};
 use zeroize::Zeroize;
 
 use crate::{
-    MAX_CREDENTIAL_ID_BYTES, PasskeyBackend, PasskeyError, PasskeyKey, PasskeyRecord,
+    AddOutcome, MAX_CREDENTIAL_ID_BYTES, PasskeyBackend, PasskeyError, PasskeyKey, PasskeyRecord,
     PasskeySummary, PrivateKey, SaveOutcome, validate_rp_id,
 };
 
@@ -263,6 +263,29 @@ impl PasskeyBackend for KeychainPasskeyBackend {
                 add(&keychain, &access, &account, &label, &comment, &secret).map_err(map_error)?;
                 Ok(SaveOutcome::Created)
             }
+            Err(error) => Err(map_error(error)),
+        }
+    }
+
+    /// `SecItemAdd` alone: a duplicate is `Exists` and the existing item is not touched.
+    fn add(&self, record: &PasskeyRecord) -> Result<AddOutcome, PasskeyError> {
+        let summary = &record.summary;
+        let account = encode_account(&summary.key).ok_or(PasskeyError::InvalidInput(
+            "the relying party id or the credential id cannot be stored",
+        ))?;
+        let comment = encode_metadata(summary).ok_or(PasskeyError::InvalidInput(
+            "the passkey's names are too long to store",
+        ))?;
+        let label = label(summary);
+        let secret = SecretData::new(record.private_key.expose()).ok_or(PasskeyError::Internal(
+            "a Core Foundation buffer could not be allocated",
+        ))?;
+        let keychain = self.keychain()?;
+        let access = make_access(self.access_policy).map_err(map_error)?;
+
+        match add(&keychain, &access, &account, &label, &comment, &secret) {
+            Ok(()) => Ok(AddOutcome::Added),
+            Err(error) if error.code() == ERR_SEC_DUPLICATE_ITEM => Ok(AddOutcome::Exists),
             Err(error) => Err(map_error(error)),
         }
     }

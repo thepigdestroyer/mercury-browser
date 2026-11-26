@@ -154,6 +154,15 @@ impl fmt::Debug for PasskeyRecord {
     }
 }
 
+/// What a backend did with a record it was asked to add, when it must not replace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AddOutcome {
+    /// There was no passkey with this key; the record was added.
+    Added,
+    /// A passkey with this key already exists; it was left unchanged.
+    Exists,
+}
+
 /// What a backend did with a record it was given.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum SaveOutcome {

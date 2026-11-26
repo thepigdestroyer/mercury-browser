@@ -17,10 +17,10 @@ use mercury_passkeys::builtin::{
 use mercury_passkeys::crypto::MercuryCrypto;
 use mercury_passkeys::testing::{FakeAnswer, FakePick, FakeVerifier};
 use mercury_passkeys::{
-    AssertRequest, AssertResponse, Attachment, AuthenticatorKind, COSE_EDDSA, COSE_ES256,
-    COSE_RS256, CreateRequest, CreateResponse, MemoryBackend, PasskeyAuthenticator, PasskeyBackend,
-    PasskeyError, PasskeyKey, PasskeyRecord, PasskeyStore, PasskeySummary, PrivateKey,
-    RelyingParty, ResidentKey, SaveOutcome, Transport, UserEntity, UserVerification,
+    AddOutcome, AssertRequest, AssertResponse, Attachment, AuthenticatorKind, COSE_EDDSA,
+    COSE_ES256, COSE_RS256, CreateRequest, CreateResponse, MemoryBackend, PasskeyAuthenticator,
+    PasskeyBackend, PasskeyError, PasskeyKey, PasskeyRecord, PasskeyStore, PasskeySummary,
+    PrivateKey, RelyingParty, ResidentKey, SaveOutcome, Transport, UserEntity, UserVerification,
     VerificationPurpose, VerifierCapabilities,
 };
 use passkey::authenticator::{CredentialStore, PasskeyAccessor};
@@ -985,6 +985,13 @@ impl PasskeyBackend for FlakyBackend {
             return Err(PasskeyError::AccessDenied);
         }
         self.inner.put(record)
+    }
+
+    fn add(&self, record: &PasskeyRecord) -> Result<AddOutcome, PasskeyError> {
+        if self.fail_put.load(Ordering::SeqCst) {
+            return Err(PasskeyError::AccessDenied);
+        }
+        self.inner.add(record)
     }
 
     fn get(&self, key: &PasskeyKey) -> Result<Option<PasskeyRecord>, PasskeyError> {

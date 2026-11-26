@@ -8,8 +8,8 @@ use std::time::Duration;
 
 use data_encoding::BASE64URL_NOPAD;
 use mercury_passkeys::{
-    MAX_CREDENTIAL_ID_BYTES, MAX_NAME_BYTES, MAX_PRIVATE_KEY_BYTES, PasskeyBackend, PasskeyKey,
-    PasskeyRecord, PasskeyStore, PasskeySummary, PrivateKey, SaveOutcome,
+    AddOutcome, MAX_CREDENTIAL_ID_BYTES, MAX_NAME_BYTES, MAX_PRIVATE_KEY_BYTES, PasskeyBackend,
+    PasskeyKey, PasskeyRecord, PasskeyStore, PasskeySummary, PrivateKey, SaveOutcome,
 };
 
 pub fn key(rp_id: &str, credential_id: &[u8]) -> PasskeyKey {
@@ -357,6 +357,26 @@ pub fn extreme_sizes_round_trip(backend: &impl PasskeyBackend) {
         assert!(back.private_key.same_as(&record.private_key));
     }
     assert_eq!(sorted_keys(backend).len(), 4);
+}
+
+pub fn add_never_replaces(backend: &impl PasskeyBackend) {
+    let first = passkey("example.com", 1, "alice");
+    let key = first.summary.key.clone();
+    assert_eq!(backend.add(&first).expect("add"), AddOutcome::Added);
+
+    let other_key = PasskeyRecord {
+        summary: summary("example.com", &id(1), "mallory"),
+        private_key: private_key(2),
+    };
+    assert_eq!(
+        backend.add(&other_key).expect("add the same key again"),
+        AddOutcome::Exists
+    );
+    let back = read(backend, &key).expect("the stored passkey is still there");
+    assert!(same_fields(&back.summary, &first.summary));
+    assert!(back.private_key.same_as(&first.private_key));
+    assert!(!back.private_key.same_as(&other_key.private_key));
+    assert_eq!(sorted_keys(backend), vec![key]);
 }
 
 pub fn bulk_removal_through_the_store<B: PasskeyBackend>(backend: B) -> B {

@@ -43,6 +43,10 @@ pub enum PasskeyError {
     /// An item that had to exist does not.
     #[error("the stored passkey was not found")]
     NotFound,
+    /// A passkey with the same relying party and credential id is already stored, and it was
+    /// left unchanged.
+    #[error("a passkey with this relying party and credential id is already stored")]
+    AlreadyExists,
     /// This platform has no such backend.
     #[error("this platform does not support this operation")]
     Unsupported,
@@ -104,6 +108,7 @@ impl PasskeyError {
             }
             Self::InvalidInput(_) => "TypeError",
             Self::NotFound
+            | Self::AlreadyExists
             | Self::CorruptItem
             | Self::RandomUnavailable
             | Self::RemoveIncomplete { .. }

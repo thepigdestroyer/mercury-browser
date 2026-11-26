@@ -10,7 +10,8 @@ use mercury_passkeys::cxf::{
     export_cxf, import_cxf, read_import_file, write_export_file,
 };
 use mercury_passkeys::{
-    COSE_ES256, PasskeyError, PasskeyKey, PasskeyRecord, PasskeySummary, PrivateKey,
+    COSE_ES256, MemoryBackend, PasskeyBackend, PasskeyError, PasskeyKey, PasskeyRecord,
+    PasskeyStore, PasskeySummary, PrivateKey,
 };
 use passkey::crypto::coset::cbor::Value as Cbor;
 use passkey::crypto::coset::{CborSerializable, CoseKey, Label, iana};
@@ -534,6 +535,29 @@ fn one_passkey_listed_twice_with_different_keys_is_refused() {
         ),
     ]);
     refusal(import_value(&value));
+}
+
+#[test]
+fn an_imported_passkey_never_replaces_a_stored_one_with_the_same_ids() {
+    let store = PasskeyStore::new(MemoryBackend::new());
+    let (stored, _) = record_with("example.com", &[7; 16], "alice", Some(b"handle"));
+    store.save(&stored).expect("save");
+
+    let imported = import_value(&one_item_doc(vec![good_passkey("mallory")])).expect("import");
+    assert_eq!(imported.records.len(), 1);
+    assert!(!imported.records[0].private_key.same_as(&stored.private_key));
+    let outcome = store.import(&imported.records).expect("store the import");
+
+    assert_eq!((outcome.saved, outcome.conflicts.len()), (0, 1));
+    assert_eq!(outcome.conflicts[0], stored.summary.key);
+    let back = store
+        .backend()
+        .get(&stored.summary.key)
+        .expect("get")
+        .expect("the stored passkey is still there");
+    assert!(back.private_key.same_as(&stored.private_key));
+    assert_eq!(back.summary.username, "alice");
+    assert_eq!(store.all().expect("all").len(), 1);
 }
 
 // ---- the spec's example, written by hand ------------------------------------------------------
