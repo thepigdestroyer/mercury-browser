@@ -205,10 +205,9 @@ impl PrintFlow {
         if let Source::Page {
             initiated_by_script: true,
         } = source
+            && self.throttle_until.is_some_and(|until| now < until)
         {
-            if self.throttle_until.is_some_and(|until| now < until) {
-                return Vec::new();
-            }
+            return Vec::new();
         }
         self.tab = Some(tab);
         self.source = Some(source);
@@ -713,8 +712,19 @@ mod tests {
         flow.handle(FlowCommand::SelectionChanged("3-1".into()));
         let effects = flow.handle(FlowCommand::Print);
 
-        assert!(effects.is_empty());
+        assert_eq!(
+            effects,
+            vec![FlowEffect::Notify(
+                "the range 3-1 ends before it starts".to_owned()
+            )]
+        );
         assert_eq!(flow.state(), &FlowState::Ready);
+
+        flow.handle(FlowCommand::DestinationChanged(Destination::Printer(None)));
+        flow.handle(FlowCommand::SelectionChanged("1-2".into()));
+        let effects = flow.handle(FlowCommand::Print);
+
+        assert!(matches!(effects.as_slice(), [FlowEffect::ShowPanel(_)]));
     }
 
     #[test]
