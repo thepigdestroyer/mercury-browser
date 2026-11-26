@@ -55,6 +55,7 @@ fn page_window() -> MainWindow {
         pinned: false,
         url: "https://example.com/".into(),
         audio: TabAudioState::Silent,
+        chip_before: 0.0,
     }])));
     window.set_is_new_tab(false);
     window.set_web_view_visible(true);

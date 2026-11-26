@@ -69,6 +69,7 @@ fn window(theme: ChromeTheme, address: &str) -> MainWindow {
         pinned: false,
         url: "https://example.com/".into(),
         audio: TabAudioState::Silent,
+        chip_before: 0.0,
     }])));
     window.set_is_new_tab(false);
     window.set_address(address.into());

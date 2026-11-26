@@ -24,6 +24,8 @@ export struct BrowserTab {
     url: string,
     // media-session lane: whether the tab plays sound or is muted (the speaker button).
     audio: TabAudioState,
+    // layout-switch: the total width of the group label chips before this tab (`chip_offsets`).
+    chip-before: length,
 }
 
 export enum TabMenuCommand {
@@ -589,11 +591,12 @@ export component TabStrip inherits Rectangle {
     property <bool> menu-pinned;
     property <bool> menu-can-close-others;
 
+    // layout-switch: the group chips before the tab push it right (`BrowserTab.chip-before`).
     pure function slot-x(index: int) -> length {
         if index < root.pinned-count {
             return index * root.pinned-stride;
         }
-        root.pinned-region + (index - root.pinned-count) * root.stride
+        root.pinned-region + (index - root.pinned-count) * root.stride + root.tabs[index].chip-before
     }
 
     pure function slot-width(index: int) -> length {
@@ -606,11 +609,14 @@ export component TabStrip inherits Rectangle {
         root.pinned-count > 0 && x < root.pinned-region
     }
 
+    // layout-switch: the slot under `x`, from the slot starts that `drop-index-of` (Rust,
+    // `tab_rows::drop_index`) reads; clamped to the pinned tabs when the drag started there.
+    pure callback drop-index-of(length) -> int;
     pure function drop-index(from: int, x: length) -> int {
         if root.drops-pinned(x) {
             return clamp(floor(x / root.pinned-stride), 0, from < root.pinned-count ? root.pinned-count - 1 : root.pinned-count);
         }
-        clamp(root.pinned-count + floor((x - root.pinned-region) / root.stride), from < root.pinned-count ? root.pinned-count - 1 : root.pinned-count, root.tabs.length - 1)
+        clamp(root.drop-index-of(x), from < root.pinned-count ? root.pinned-count - 1 : root.pinned-count, root.tabs.length - 1)
     }
 
     // Where the insertion mark goes for a drop at `index`.
