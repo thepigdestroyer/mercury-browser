@@ -1,0 +1,17 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-net-policy"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# Network policy data and pure logic that the shell needs without the engine: the built-in sign-in
+# exception pairs (NET-2 N2-D4) and the summary of a main-frame connection's TLS facts (EC26).
+#
+# No dependencies, and no servo-* crate: the engine crates keep their own copies of the rules they
+# apply, and this crate is what `talaria-servo` and the padlock UI read.
+
+[dependencies]

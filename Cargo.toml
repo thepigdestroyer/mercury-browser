@@ -15,6 +15,7 @@ members = [
     "crates/mercury-mse",
     "crates/mercury-mse-gst",
     "crates/mercury-mse-testkit",
+    "crates/mercury-net-policy",
     "crates/mercury-option-keys",
     "crates/mercury-password-manager",
     "crates/mercury-passwords",
