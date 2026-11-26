@@ -110,8 +110,16 @@ fn a_table_is_written_as_a_map_of_ids_and_read_back() {
 fn a_table_from_a_newer_build_still_loads() {
     let text = r#"{"ads_and_trackers":"hyper","telemetry":"strict","cookie_banners":"off","bounce_tracking":7}"#;
     let table: Categories = serde_json::from_str(text).unwrap();
-    assert_eq!(table.get(AdsAndTrackers), Standard, "unknown setting: Standard");
+    assert_eq!(
+        table.get(AdsAndTrackers),
+        Standard,
+        "unknown setting: Standard"
+    );
     assert_eq!(table.get(CookieBanners), Off);
-    assert_eq!(table.get(BounceTracking), Standard, "not a string: Standard");
+    assert_eq!(
+        table.get(BounceTracking),
+        Standard,
+        "not a string: Standard"
+    );
     assert_eq!(table.get(Cryptominers), Standard, "missing: Standard");
 }

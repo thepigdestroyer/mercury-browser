@@ -35,14 +35,22 @@ fn an_address_or_a_single_label_host_is_its_own_site() {
 
 #[test]
 fn a_url_with_no_host_has_no_site() {
-    for url in ["data:text/plain,x", "about:blank", "file:///etc/hosts", "mailto:a@b.example"] {
+    for url in [
+        "data:text/plain,x",
+        "about:blank",
+        "file:///etc/hosts",
+        "mailto:a@b.example",
+    ] {
         assert_eq!(of(url), None, "{url}");
     }
 }
 
 #[test]
 fn the_engines_key_is_trimmed_and_lower_cased() {
-    assert_eq!(Site::from_key("  Example.COM ").unwrap().as_str(), "example.com");
+    assert_eq!(
+        Site::from_key("  Example.COM ").unwrap().as_str(),
+        "example.com"
+    );
     assert_eq!(Site::from_key(""), None);
     assert_eq!(Site::from_key("   "), None);
     assert_eq!(Site::from_key(&"a".repeat(254)), None);
@@ -53,7 +61,10 @@ fn the_engines_key_is_trimmed_and_lower_cased() {
 fn a_host_written_as_text_gives_the_same_site_as_the_url() {
     assert_eq!(Site::of_host("::1").unwrap().as_str(), "[::1]");
     assert_eq!(Site::of_host("[::1]").unwrap().as_str(), "[::1]");
-    assert_eq!(Site::of_host("WWW.Example.com").unwrap().as_str(), "example.com");
+    assert_eq!(
+        Site::of_host("WWW.Example.com").unwrap().as_str(),
+        "example.com"
+    );
     assert_eq!(Site::of_host("10.0.0.1").unwrap().as_str(), "10.0.0.1");
     assert_eq!(Site::of_host("not a host"), None);
     assert_eq!(Site::of_host(""), None);

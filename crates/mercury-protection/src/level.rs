@@ -184,7 +184,9 @@ impl Categories {
 
     /// The categories and settings, in [`Category::ALL`] order.
     pub fn iter(&self) -> impl Iterator<Item = (Category, Setting)> + '_ {
-        Category::ALL.into_iter().map(|category| (category, self.get(category)))
+        Category::ALL
+            .into_iter()
+            .map(|category| (category, self.get(category)))
     }
 }
 
@@ -196,7 +198,10 @@ impl Default for Categories {
 
 impl Serialize for Categories {
     fn serialize<S: Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
-        serializer.collect_map(self.iter().map(|(category, setting)| (category.id(), setting.id())))
+        serializer.collect_map(
+            self.iter()
+                .map(|(category, setting)| (category.id(), setting.id())),
+        )
     }
 }
 

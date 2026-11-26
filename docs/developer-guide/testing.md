@@ -190,6 +190,19 @@ The third-party cookie rules, SameSite, `Sec-GPC`, the referrer cap, the mixed-c
 
 **End to end,** `scripts/macos/test-certificate-exceptions.sh` (or `make test-certificate-exceptions-macos`) runs the release browser against the loopback TLS test server (`crates/mercury-site-security/examples/tls_test_server.rs`). It needs the release build, so run `make build-release` first; it builds the test server itself (a small build without the engine). It uses only `127.0.0.1`, and each run is an automated `--screenshot` run with its own temporary profile, so it touches no trust store, keychain or profile of yours and synthesises no input. The server's one certificate has two names, `127.0.0.1` and `localhost`, and both reach the server. With `MERCURY_TEST_PROCEED_ON_CERTIFICATE_ERROR=1`, which makes the certificate page continue by itself in an automated run, the script opens `https://127.0.0.1:<port>/host-binding`. That page loads an image from its own name and one from the other name, and puts `CERTEXC same=<loaded|failed>; other=<loaded|failed>` in its title. The check passes only when the title reads `same=loaded; other=failed`, which means the exception holds for the name it was made for and not for the same certificate under the other name; an engine that accepts the certificate for every host loads both. A second run opens the page as `localhost` and must read the same, with the log showing an exception for `localhost` and none for `127.0.0.1`. A control run without the variable must show the certificate page ("Certificate not valid") and accept nothing. The script prints one line per check, ends with `all checks passed` and exits non-zero if any check fails. A run that misses the browser's 30-second page-load limit (exit status 3), which can happen on a heavily loaded machine, is repeated once. `MERCURY_TEST_CERTEXC_KEEP=<directory>` copies the screenshots and logs there before the temporary directory is removed, and `MERCURY_TEST_CERTEXC_DELAY=<milliseconds>` changes how long each run waits before its screenshot (10000 by default). Run it again after any Servo upgrade and after any change to `third_party/servo-net`.
 
+### Protections model
+
+`mercury-protection` holds the logic behind the protections panel and needs no engine or interface. Run it with **`cargo test --release -p mercury-protection -p mercury-store`** (with `RUST_TEST_THREADS=2`). It covers:
+
+- the settings and their resolution per site (`ProtectionSettings::resolve`), the level presets, and the exception list;
+- the local-network access rule (`lna_decision`), which classifies addresses and hosts and decides allow, block or ask;
+- the screen-geometry rounding (`round_geometry`, spec §5.7), tested with seeded property cases;
+- the bounce tracker, the compatibility list, the per-tab counters, the weekly tally and the panel's view model.
+
+Persistence lives in `mercury-store`: the protection tables are schema version 2 on this lane (see the migration ladder in its `schema.rs`). At the train-24 merge they move to version 4, after site settings (2) and recent searches (3). The store's tests use an in-memory database.
+
+The gates for the lane are the mutation checks listed in the lane report: removing a classifier arm, unwrapping an embedded IPv4 address, changing the bounce grace comparison, inverting `blocks_ads_for`, or moving the tally day boundary by one. Each must make a test fail.
+
 ### View source and images per site
 
 All of these tests are Rust. None opens a window, Metal, your profile or the public network; the servers are loopback sockets (`127.0.0.1:0`) started by the test.

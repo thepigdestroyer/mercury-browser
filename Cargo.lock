@@ -6199,6 +6199,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-protection"
+version = "0.2.0"
+dependencies = [
+ "log",
+ "mercury-store",
+ "psl",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.21",
+ "url",
+]
+
+[[package]]
 name = "mercury-proxy"
 version = "0.2.0"
 dependencies = [
