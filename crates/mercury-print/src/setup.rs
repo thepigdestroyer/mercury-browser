@@ -34,7 +34,9 @@ impl PageSetup {
     /// The same setup with the scale clamped into 50 to 200 percent.
     pub fn sanitized(self) -> PageSetup {
         PageSetup {
-            scale_percent: self.scale_percent.clamp(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT),
+            scale_percent: self
+                .scale_percent
+                .clamp(MIN_SCALE_PERCENT, MAX_SCALE_PERCENT),
             ..self
         }
     }
@@ -56,7 +58,10 @@ impl PageSetup {
     pub fn content_points(&self) -> (f32, f32) {
         let (width, height) = self.page_points();
         let margin = self.margin_points();
-        ((width - 2.0 * margin).max(0.0), (height - 2.0 * margin).max(0.0))
+        (
+            (width - 2.0 * margin).max(0.0),
+            (height - 2.0 * margin).max(0.0),
+        )
     }
 
     /// The layout width in CSS pixels, so that the printed content is `content_points` wide at the
@@ -91,12 +96,27 @@ mod tests {
     use super::*;
     use crate::paper::{MarginPreset, Orientation, PaperSize};
 
-    fn setup(paper: PaperSize, orientation: Orientation, margins: MarginPreset, scale: u16) -> PageSetup {
-        PageSetup { paper, orientation, margins, scale_percent: scale }
+    fn setup(
+        paper: PaperSize,
+        orientation: Orientation,
+        margins: MarginPreset,
+        scale: u16,
+    ) -> PageSetup {
+        PageSetup {
+            paper,
+            orientation,
+            margins,
+            scale_percent: scale,
+        }
     }
 
     fn a4_default(scale: u16) -> PageSetup {
-        setup(PaperSize::A4, Orientation::Portrait, MarginPreset::Default, scale)
+        setup(
+            PaperSize::A4,
+            Orientation::Portrait,
+            MarginPreset::Default,
+            scale,
+        )
     }
 
     #[test]
@@ -128,17 +148,45 @@ mod tests {
 
     #[test]
     fn tiny_paper_with_huge_margin_is_at_least_200_css_px() {
-        let page = setup(PaperSize::A5, Orientation::Landscape, MarginPreset::Default, 200);
-        assert!(page.content_width_css_px() >= 200, "{}", page.content_width_css_px());
-        assert!(page.content_height_css_px() >= 200, "{}", page.content_height_css_px());
+        let page = setup(
+            PaperSize::A5,
+            Orientation::Landscape,
+            MarginPreset::Default,
+            200,
+        );
+        assert!(
+            page.content_width_css_px() >= 200,
+            "{}",
+            page.content_width_css_px()
+        );
+        assert!(
+            page.content_height_css_px() >= 200,
+            "{}",
+            page.content_height_css_px()
+        );
     }
 
     #[test]
     fn needs_recapture_true_when_paper_orientation_margins_or_scale_differ() {
         let base = a4_default(100);
-        assert!(base.needs_recapture(&setup(PaperSize::Letter, Orientation::Portrait, MarginPreset::Default, 100)));
-        assert!(base.needs_recapture(&setup(PaperSize::A4, Orientation::Landscape, MarginPreset::Default, 100)));
-        assert!(base.needs_recapture(&setup(PaperSize::A4, Orientation::Portrait, MarginPreset::None, 100)));
+        assert!(base.needs_recapture(&setup(
+            PaperSize::Letter,
+            Orientation::Portrait,
+            MarginPreset::Default,
+            100
+        )));
+        assert!(base.needs_recapture(&setup(
+            PaperSize::A4,
+            Orientation::Landscape,
+            MarginPreset::Default,
+            100
+        )));
+        assert!(base.needs_recapture(&setup(
+            PaperSize::A4,
+            Orientation::Portrait,
+            MarginPreset::None,
+            100
+        )));
         assert!(base.needs_recapture(&a4_default(90)));
     }
 

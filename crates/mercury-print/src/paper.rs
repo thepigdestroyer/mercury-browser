@@ -52,7 +52,9 @@ impl PaperSize {
     /// letter size is used, A4 everywhere else.
     pub fn for_region(region: &str) -> PaperSize {
         match region.to_ascii_uppercase().as_str() {
-            "US" | "CA" | "MX" | "CL" | "CO" | "VE" | "PH" | "CR" | "GT" | "PR" => PaperSize::Letter,
+            "US" | "CA" | "MX" | "CL" | "CO" | "VE" | "PH" | "CR" | "GT" | "PR" => {
+                PaperSize::Letter
+            }
             _ => PaperSize::A4,
         }
     }
@@ -128,8 +130,17 @@ mod tests {
     #[test]
     fn serde_names_are_snake_case() {
         assert_eq!(serde_json::to_string(&PaperSize::A4).unwrap(), "\"a4\"");
-        assert_eq!(serde_json::to_string(&PaperSize::Letter).unwrap(), "\"letter\"");
-        assert_eq!(serde_json::to_string(&Orientation::Landscape).unwrap(), "\"landscape\"");
-        assert_eq!(serde_json::to_string(&MarginPreset::Minimum).unwrap(), "\"minimum\"");
+        assert_eq!(
+            serde_json::to_string(&PaperSize::Letter).unwrap(),
+            "\"letter\""
+        );
+        assert_eq!(
+            serde_json::to_string(&Orientation::Landscape).unwrap(),
+            "\"landscape\""
+        );
+        assert_eq!(
+            serde_json::to_string(&MarginPreset::Minimum).unwrap(),
+            "\"minimum\""
+        );
     }
 }
