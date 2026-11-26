@@ -9,6 +9,7 @@ use crate::error::Result;
 use crate::frecency;
 use crate::limits::{MAX_TITLE_CHARS, check_url, cut};
 use crate::search::{fts_query, url_key};
+use crate::searches::clear_searches;
 
 /// How the user reached a page. Uses Firefox's numbering (`nsINavHistoryService.idl`).
 #[repr(u8)]
@@ -304,6 +305,7 @@ impl Store {
             forget_titles_seen(&tx, place_id, from, i64::MAX)?;
             refresh_place(&tx, place_id, now_ms)?;
         }
+        clear_searches(&tx, range)?;
         tx.commit()?;
         Ok(removed as u64)
     }
@@ -331,6 +333,7 @@ impl Store {
             forget_titles_seen(&tx, place_id, i64::MIN, i64::MAX)?;
             refresh_place(&tx, place_id, now_ms)?;
         }
+        clear_searches(&tx, ClearRange::All)?;
         tx.commit()?;
         Ok(removed as u64)
     }

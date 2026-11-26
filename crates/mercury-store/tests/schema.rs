@@ -16,9 +16,9 @@ fn names(conn: &rusqlite::Connection, kind: &str) -> Vec<String> {
 }
 
 #[test]
-fn in_memory_store_is_at_schema_version_1() {
+fn in_memory_store_is_at_schema_version_2() {
     let store = Store::open_in_memory().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 2);
 }
 
 #[test]
@@ -35,6 +35,7 @@ fn opening_creates_tables_indexes_triggers_and_roots() {
         "downloads",
         "places_fts",
         "bookmarks_fts",
+        "searches",
     ] {
         assert!(tables.iter().any(|t| t == table), "missing table {table}");
     }
@@ -48,6 +49,7 @@ fn opening_creates_tables_indexes_triggers_and_roots() {
         "places_by_frecency",
         "places_frecency_by_id",
         "places_by_frecency_at",
+        "searches_by_last",
     ] {
         assert!(indexes.iter().any(|i| i == index), "missing index {index}");
     }
@@ -85,7 +87,36 @@ fn opening_creates_tables_indexes_triggers_and_roots() {
     let version: u32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
+}
+
+#[test]
+fn a_version_1_database_is_migrated_and_keeps_its_history() {
+    let dir = TempDir::new("migrate-1");
+    {
+        let mut store = Store::open(&dir.db()).unwrap();
+        store
+            .record_visit(
+                "https://example.com/",
+                Some("Example"),
+                VisitTransition::Link,
+                NOW,
+            )
+            .unwrap();
+    }
+    {
+        let conn = rusqlite::Connection::open(dir.db()).unwrap();
+        conn.execute_batch("PRAGMA user_version = 1; DROP TABLE searches;")
+            .unwrap();
+    }
+
+    let store = Store::open(&dir.db()).unwrap();
+    assert_eq!(store.schema_version().unwrap(), 2);
+    assert_eq!(store.history(None, None, 10).unwrap().len(), 1);
+    drop(store);
+
+    let conn = rusqlite::Connection::open(dir.db()).unwrap();
+    assert!(names(&conn, "table").iter().any(|t| t == "searches"));
 }
 
 #[test]
@@ -114,7 +145,7 @@ fn reopening_keeps_data_and_does_not_duplicate_roots() {
             .unwrap();
     }
     let store = Store::open(&dir.db()).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 2);
     assert_eq!(store.history(None, None, 10).unwrap().len(), 1);
     let toolbar = store.bookmark_root(BookmarkRoot::Toolbar).unwrap();
     assert_eq!(store.bookmark_children(toolbar).unwrap().len(), 1);
@@ -143,11 +174,28 @@ fn a_newer_schema_is_refused_and_left_unmodified() {
 
     match Store::open(&dir.db()) {
         Err(StoreError::UnsupportedSchemaVersion { found, supported }) => {
-            assert_eq!((found, supported), (7, 1));
+            assert_eq!((found, supported), (7, 2));
         }
         Err(other) => panic!("unexpected error {other}"),
         Ok(_) => panic!("a newer schema must be refused"),
     }
     assert_eq!(std::fs::read(dir.db()).unwrap(), before);
     assert!(!dir.path().join("places.sqlite-wal").exists());
+}
+
+#[test]
+fn schema_version_3_is_refused() {
+    let dir = TempDir::new("version-3");
+    {
+        let conn = rusqlite::Connection::open(dir.db()).unwrap();
+        conn.execute_batch("PRAGMA user_version = 3;").unwrap();
+    }
+
+    match Store::open(&dir.db()) {
+        Err(StoreError::UnsupportedSchemaVersion { found, supported }) => {
+            assert_eq!((found, supported), (3, 2));
+        }
+        Err(other) => panic!("unexpected error {other}"),
+        Ok(_) => panic!("schema version 3 must be refused"),
+    }
 }

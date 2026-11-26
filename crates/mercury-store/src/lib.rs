@@ -22,6 +22,7 @@ mod import;
 mod limits;
 mod schema;
 mod search;
+mod searches;
 mod suggest;
 
 use std::path::Path;
@@ -38,6 +39,7 @@ pub use limits::{
     MAX_VALIDATOR_BYTES,
 };
 pub use search::{MAX_SEARCH_INPUT_BYTES, MAX_SEARCH_WORDS};
+pub use searches::{MAX_RECENT_SEARCHES, MAX_SEARCH_TERM_CHARS, RecentSearch};
 pub use suggest::{
     BEST_PAGES_EXAMINED, CANDIDATES_PER_RESULT, FRECENCY_REFRESH_AGE_MS, INDEX_ROWS_EXAMINED,
     MAX_SUGGESTIONS, Suggestion,
@@ -155,6 +157,7 @@ mod tests {
             include_str!("import.rs"),
             include_str!("schema.rs"),
             include_str!("search.rs"),
+            include_str!("searches.rs"),
             include_str!("suggest.rs"),
         ];
         let call = concat!(".prepare_", "cached(");

@@ -108,6 +108,17 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO bookmarks (guid, kind, parent_id, position, title, place_id, added_at, modified_at)
     VALUES ('toolbar_____', 2, NULL, 0, 'Bookmarks Bar', NULL, 0, 0),
            ('menu________', 2, NULL, 1, 'Other Bookmarks', NULL, 0, 0);",
+    // Version 2: recent searches, keyed by the normalised term (spec D15).
+    "CREATE TABLE searches (
+        id       INTEGER PRIMARY KEY,
+        term_key TEXT NOT NULL UNIQUE,
+        term     TEXT NOT NULL,
+        engine_id TEXT,
+        count    INTEGER NOT NULL DEFAULT 1,
+        first_at INTEGER NOT NULL,
+        last_at  INTEGER NOT NULL
+    ) STRICT;
+    CREATE INDEX searches_by_last ON searches(last_at);",
 ];
 
 /// The newest schema version this build understands.
