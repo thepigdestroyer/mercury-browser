@@ -13,7 +13,41 @@
 import { ComboBox, Palette } from "std-widgets.slint";
 import { ChromePalette } from "../theme/chrome-palette.slint";
 
+// The colours of the small drawing of one palette in one scheme (`mercury_appearance::panels::palette_panel::
+// PaletteSwatch`). They are palette DATA, not roles of the window's own palette: the drawing shows a palette other
+// than the one the window wears.
+export struct PaletteLookUi {
+    window: color,
+    toolbar: color,
+    field: color,
+    content: color,
+    text: color,
+    accent: color,
+    on-accent: color,
+    tab: color,
+    border: color,
+}
+
+// One card of the palette picker.
+export struct PaletteCardUi {
+    // The id the palette is stored under (not shown).
+    id: string,
+    name: string,
+    // What assistive technology reads after the name.
+    description: string,
+    // The default palette says so on its card.
+    is-default: bool,
+    light: PaletteLookUi,
+    dark: PaletteLookUi,
+}
+
 export global AppearanceUi {
+    // The palette picker: one card per selectable palette (from `palettes::selectable()`, never listed here), the
+    // chosen one (-1 when the stored light and dark palettes differ) and the line under the title.
+    in property <[PaletteCardUi]> palettes;
+    in-out property <int> palette-index: -1;
+    in property <string> palette-note;
+
     // Layout: 0 Mercury, 1 Classic.
     in-out property <int> layout-index;
 
@@ -43,7 +77,7 @@ export global AppearanceUi {
 
     // A switch: "dock", "ring", "orbit", "orbit-pinch", "keys", "dial", and its new state.
     callback toggled(string, bool);
-    // A list: "layout", "dock-starts", "dial-corner", "snapshot-cap", and the chosen index.
+    // A list: "layout", "dock-starts", "dial-corner", "snapshot-cap", "palette", and the chosen index.
     callback chosen(string, int);
 }
 
@@ -407,6 +441,285 @@ component LayoutCards inherits Rectangle {
     }
 }
 
+// A small drawing of the browser in one palette and scheme: tab strip with the selected tab, toolbar with the address
+// field, and a page with a heading, two lines and a button in the fill accent. Drawn from palette data only, no image
+// file. Decorative: hidden from assistive technology (the card says what it is in words).
+component PaletteDrawing inherits Rectangle {
+    in property <PaletteLookUi> look;
+
+    property <length> strip: 13px;
+    property <length> toolbar: 14px;
+
+    background: root.look.window;
+    border-radius: 5px;
+    border-width: 1px;
+    border-color: root.look.border;
+    clip: true;
+    accessible-role: none;
+
+    // The selected tab, then a tab at rest.
+    Rectangle {
+        x: 6px;
+        y: 4px;
+        width: parent.width * 0.28;
+        height: root.strip - 4px;
+        border-top-left-radius: 3px;
+        border-top-right-radius: 3px;
+        background: root.look.tab;
+    }
+
+    Rectangle {
+        x: 6px + parent.width * 0.28 + 4px;
+        y: 8px;
+        width: parent.width * 0.2;
+        height: 2px;
+        border-radius: 1px;
+        background: root.look.text;
+        opacity: 0.4;
+    }
+
+    // The toolbar: three buttons and the address field.
+    Rectangle {
+        y: root.strip;
+        width: parent.width;
+        height: root.toolbar;
+        background: root.look.toolbar;
+
+        for dot in 3: Rectangle {
+            x: 6px + dot * 7px;
+            y: (parent.height - 4px) / 2;
+            width: 4px;
+            height: 4px;
+            border-radius: 2px;
+            background: root.look.text;
+            opacity: 0.55;
+        }
+
+        Rectangle {
+            x: 30px;
+            y: (parent.height - 8px) / 2;
+            width: parent.width - self.x - 8px;
+            height: 8px;
+            border-radius: 4px;
+            border-width: 1px;
+            border-color: root.look.border;
+            background: root.look.field;
+        }
+    }
+
+    // The page.
+    Rectangle {
+        y: root.strip + root.toolbar;
+        width: parent.width;
+        height: parent.height - root.strip - root.toolbar;
+        background: root.look.content;
+
+        Rectangle {
+            x: parent.width * 0.08;
+            y: 6px;
+            width: parent.width * 0.4;
+            height: 4px;
+            border-radius: 2px;
+            background: root.look.text;
+        }
+
+        for line in 2: Rectangle {
+            x: parent.width * 0.08;
+            y: 14px + line * 5px;
+            width: parent.width * (line == 1 ? 0.32 : 0.5);
+            height: 2px;
+            border-radius: 1px;
+            background: root.look.text;
+            opacity: 0.45;
+        }
+
+        Rectangle {
+            x: parent.width * 0.08;
+            y: parent.height - 14px;
+            width: parent.width * 0.3;
+            height: 9px;
+            border-radius: 4.5px;
+            background: root.look.accent;
+
+            Rectangle {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - 2px) / 2;
+                width: parent.width * 0.5;
+                height: 2px;
+                border-radius: 1px;
+                background: root.look.on-accent;
+            }
+        }
+    }
+}
+
+// A palette the user can choose: its name, and its light and dark drawings side by side. The selected card has a 2 px
+// accent border; the focused one a 2 px focus ring outside it. Return and Space choose it, as on a layout card.
+component PaletteCard inherits Rectangle {
+    in property <PaletteCardUi> card;
+    in property <bool> selected;
+    // Its place among the palettes, for "n of m".
+    in property <int> index;
+    in property <int> count;
+    callback chosen;
+
+    background: ChromePalette.field-background;
+    border-radius: 10px;
+    border-width: root.selected ? 2px : 1px;
+    border-color: root.selected ? ChromePalette.accent : ChromePalette.field-border;
+    accessible-role: radio-button;
+    accessible-label: root.card.name;
+    accessible-description: root.card.description;
+    accessible-checkable: true;
+    accessible-checked: root.selected;
+    accessible-item-index: root.index;
+    accessible-item-count: root.count;
+    accessible-action-default => {
+        root.pick();
+    }
+
+    // Choosing the chosen palette again is not a change.
+    function pick() {
+        if !root.selected {
+            root.chosen();
+        }
+    }
+
+    property <length> drawing-width: (root.width - 28px - 10px) / 2;
+
+    HorizontalLayout {
+        x: 14px;
+        y: 12px;
+        width: parent.width - 28px;
+        height: 20px;
+        spacing: 8px;
+
+        Rectangle {
+            width: 16px;
+            height: 16px;
+            border-radius: 8px;
+            border-width: 2px;
+            border-color: root.selected ? ChromePalette.accent : ChromePalette.text-secondary;
+            accessible-role: none;
+
+            if root.selected: Rectangle {
+                x: 4px;
+                y: 4px;
+                width: 8px;
+                height: 8px;
+                border-radius: 4px;
+                background: ChromePalette.accent;
+            }
+        }
+
+        Text {
+            text: root.card.name;
+            color: ChromePalette.text;
+            font-size: 13px;
+            font-weight: 650;
+            vertical-alignment: center;
+            overflow: elide;
+            accessible-role: none;
+        }
+
+        if root.card.is-default: Text {
+            text: "Default";
+            color: ChromePalette.text-secondary;
+            font-size: 12px;
+            vertical-alignment: center;
+            accessible-role: none;
+        }
+    }
+
+    PaletteDrawing {
+        x: 14px;
+        y: 40px;
+        width: root.drawing-width;
+        height: 64px;
+        look: root.card.light;
+    }
+
+    PaletteDrawing {
+        x: 14px + root.drawing-width + 10px;
+        y: 40px;
+        width: root.drawing-width;
+        height: 64px;
+        look: root.card.dark;
+    }
+
+    Text {
+        x: 14px;
+        y: 107px;
+        width: root.drawing-width;
+        text: "Light";
+        color: ChromePalette.text-secondary;
+        font-size: 11px;
+        accessible-role: none;
+    }
+
+    Text {
+        x: 14px + root.drawing-width + 10px;
+        y: 107px;
+        width: root.drawing-width;
+        text: "Dark";
+        color: ChromePalette.text-secondary;
+        font-size: 11px;
+        accessible-role: none;
+    }
+
+    touch := TouchArea {
+        clicked => {
+            root.pick();
+        }
+    }
+
+    focus := FocusScope {
+        focus-on-click: false;
+        key-pressed(event) => {
+            if event.text == Key.Return || event.text == " " {
+                root.pick();
+                return accept;
+            }
+            reject
+        }
+    }
+
+    if focus.has-focus: FocusRing {
+        target-width: parent.width;
+        target-height: parent.height;
+        corner: 13px;
+    }
+}
+
+// The palette cards in one column, or two when the section is wide enough (the window can be as narrow as 560 px).
+component PaletteCards inherits Rectangle {
+    in property <[PaletteCardUi]> palettes;
+    in-out property <int> palette-index;
+    callback chosen(int);
+
+    property <length> gap: 12px;
+    property <length> card-height: 132px;
+    property <int> columns: root.width >= 460px ? 2 : 1;
+    property <length> card-width: (root.width - (root.columns - 1) * root.gap) / root.columns;
+    property <int> rows: floor((root.palettes.length + root.columns - 1) / root.columns);
+
+    height: root.rows * root.card-height + max(root.rows - 1, 0) * root.gap;
+
+    for item[position] in root.palettes: PaletteCard {
+        x: mod(position, root.columns) * (root.card-width + root.gap);
+        y: floor(position / root.columns) * (root.card-height + root.gap);
+        width: root.card-width;
+        height: root.card-height;
+        card: item;
+        index: position;
+        count: root.palettes.length;
+        selected: root.palette-index == position;
+        chosen => {
+            root.chosen(position);
+        }
+    }
+}
+
 // A switch with its label and a note under it. The switch is an outline when off and accent-filled when on; its knob
 // is the primary button's text colour on the accent. Pressing it from assistive technology does what a click does,
 // and nothing while it is disabled. A dependent control is `indented`, under the text of its parent.
@@ -569,6 +882,26 @@ export component AppearanceSection inherits VerticalLayout {
             font-size: 12px;
             wrap: word-wrap;
             vertical-alignment: center;
+        }
+    }
+
+    // The palette picker: the cards come from the palette data; nothing here names a palette.
+    if AppearanceUi.palettes.length > 0: GroupTitle {
+        text: "Palette";
+    }
+
+    if AppearanceUi.palettes.length > 0: Note {
+        text: AppearanceUi.palette-note != ""
+            ? AppearanceUi.palette-note
+            : "The browser's colours, each with a light and a dark look. Theme above chooses which one shows.";
+    }
+
+    if AppearanceUi.palettes.length > 0: PaletteCards {
+        palettes: AppearanceUi.palettes;
+        palette-index <=> AppearanceUi.palette-index;
+        chosen(index) => {
+            AppearanceUi.palette-index = index;
+            AppearanceUi.chosen("palette", index);
         }
     }
 

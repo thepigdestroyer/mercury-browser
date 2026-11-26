@@ -387,7 +387,7 @@ fn the_lists_report_their_name_and_index_and_a_name_this_version_does_not_know_i
     ui.invoke_chosen("layout".into(), 1);
     ui.invoke_toggled("orbit-pinch".into(), false);
     // Unknown names and a negative index reach nobody.
-    ui.invoke_chosen("palette".into(), 0);
+    ui.invoke_chosen("no-such-list".into(), 0);
     ui.invoke_chosen("snapshot-cap".into(), -1);
     ui.invoke_toggled("show-home-button".into(), true);
     ui.invoke_toggled(SharedString::new(), true);

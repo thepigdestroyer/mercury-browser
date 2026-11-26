@@ -14,11 +14,13 @@ use std::error::Error;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 
+use mercury_appearance::palettes::selectable;
 use mercury_appearance::panels::layout_panel::{
     Choice, Control, layout_panel, set_choice, set_switch,
 };
+use mercury_appearance::panels::palette_panel::palette_panel;
 use mercury_settings::AppearanceSettings;
-use mercury_ui::SettingsWindow;
+use mercury_ui::{Look, SettingsWindow, apply_look};
 use mercury_ui::settings_sections::appearance;
 use mercury_ui::settings_sections::section;
 use slint::language::ColorScheme;
@@ -28,8 +30,8 @@ use slint::{ComponentHandle, PhysicalSize, Rgb8Pixel, SharedString};
 
 const SCALE: f32 = 2.0;
 
-/// The Tab stops before the first card: the sidebar's seven tabs, the Theme list and the two
-/// check boxes above the section, and one more to land on the first card.
+/// The Tab stops before the first card (the first palette card): the sidebar's seven tabs, the Theme list
+/// and the two check boxes above the section, and one more to land on the first card.
 const TABS_TO_FIRST_CARD: usize = 7 + 1 + 2 + 1;
 
 struct HeadlessPlatform {
@@ -118,21 +120,38 @@ fn states() -> Vec<State> {
         tabs,
     };
     let defaults = AppearanceSettings::default();
+    let palettes = selectable().count();
+
+    // A palette other than the default (the last one the data lists), and a hand-edited pair.
+    let mut other = AppearanceSettings::default();
+    set_choice(&mut other, Choice::Palette, palettes - 1);
+    let mut mixed = AppearanceSettings::default();
+    set_choice(&mut mixed, Choice::Palette, palettes - 1);
+    mixed.palette_dark = AppearanceSettings::default().palette_dark;
+
     vec![
+        state("palette-last", &other, true, 0),
+        state("palette-mixed", &mixed, true, 0),
         state("mercury-defaults", &defaults, true, 0),
         state("classic", &classic, true, 0),
         state("orbit-and-dial-off", &off, true, 0),
         state("note-shown", &defaults, false, 0),
         state("classic-dock-on-odd-memory", &odd, true, 0),
         // The keyboard focus: on the chosen card, on the other card, on the dock switch.
-        state("focus-card", &defaults, true, TABS_TO_FIRST_CARD),
+        state("focus-palette-card", &defaults, true, TABS_TO_FIRST_CARD),
+        state("focus-card", &defaults, true, TABS_TO_FIRST_CARD + palettes),
         state(
             "focus-classic-card",
             &defaults,
             true,
-            TABS_TO_FIRST_CARD + 1,
+            TABS_TO_FIRST_CARD + palettes + 1,
         ),
-        state("focus-switch", &defaults, true, TABS_TO_FIRST_CARD + 2),
+        state(
+            "focus-switch",
+            &defaults,
+            true,
+            TABS_TO_FIRST_CARD + palettes + 2,
+        ),
     ]
 }
 
@@ -165,7 +184,10 @@ fn main() -> Result<(), Box<dyn Error>> {
                 window.set_forced_color_scheme(scheme);
                 window.set_section(section::APPEARANCE);
                 window.set_show_bookmarks_bar(true);
+                // The window wears the palette the settings name, as the browser does.
+                apply_look(&window, &Look::from_appearance(&settings).0);
                 appearance::fill(&window, &layout_panel(&settings, interface_live));
+                appearance::fill_palettes(&window, &palette_panel(&settings));
                 window.show()?;
                 // Lay the window out at its size first, so that Tab walks the real controls.
                 window

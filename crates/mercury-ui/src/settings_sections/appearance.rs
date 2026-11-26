@@ -11,9 +11,10 @@
 use std::rc::Rc;
 
 use mercury_appearance::panels::layout_panel::{AppearanceAction, Choice, Control, LayoutPanel};
+use mercury_appearance::panels::palette_panel::{PaletteSwatch, PalettePanel};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
-use crate::{AppearanceUi, SettingsWindow};
+use crate::{AppearanceUi, PaletteCardUi, PaletteLookUi, SettingsWindow};
 
 /// A list index as the window's `int`. The lists are a handful of items long; a value that
 /// does not fit (which cannot happen) selects the first item.
@@ -51,6 +52,52 @@ pub fn fill(window: &SettingsWindow, panel: &LayoutPanel) {
     }
     ui.set_snapshot_cap_index(to_int(panel.snapshot_cap_index));
     ui.set_note(SharedString::from(panel.note.as_str()));
+}
+
+/// A palette's drawing colours as the window's struct.
+fn look_of(swatch: &PaletteSwatch) -> PaletteLookUi {
+    let colour = |colour: mercury_appearance::Colour| {
+        slint::Color::from_argb_u8(colour.a, colour.r, colour.g, colour.b)
+    };
+    PaletteLookUi {
+        window: colour(swatch.window),
+        toolbar: colour(swatch.toolbar),
+        field: colour(swatch.field),
+        content: colour(swatch.content),
+        text: colour(swatch.text),
+        accent: colour(swatch.accent),
+        on_accent: colour(swatch.on_accent),
+        tab: colour(swatch.tab),
+        border: colour(swatch.border),
+    }
+}
+
+/// Puts the palette picker of `panel` into the window's `AppearanceUi` global: one card per
+/// palette, the chosen one (-1 for none) and the line under the title. The cards are replaced
+/// only when they changed, so a card with the keyboard focus keeps it.
+pub fn fill_palettes(window: &SettingsWindow, panel: &PalettePanel) {
+    let ui = window.global::<AppearanceUi>();
+    let cards: Vec<PaletteCardUi> = panel
+        .cards
+        .iter()
+        .map(|card| PaletteCardUi {
+            id: SharedString::from(card.id),
+            name: SharedString::from(card.name),
+            description: SharedString::from(if card.is_default {
+                "Default. Shown in light and dark."
+            } else {
+                "Shown in light and dark."
+            }),
+            is_default: card.is_default,
+            light: look_of(&card.light),
+            dark: look_of(&card.dark),
+        })
+        .collect();
+    if ui.get_palettes().iter().ne(cards.iter().cloned()) {
+        ui.set_palettes(ModelRc::new(VecModel::from(cards)));
+    }
+    ui.set_palette_index(panel.selected.map_or(-1, to_int));
+    ui.set_palette_note(SharedString::from(panel.note.as_str()));
 }
 
 /// Calls `on_action` for every switch and choice the user changes in the Appearance section. Call

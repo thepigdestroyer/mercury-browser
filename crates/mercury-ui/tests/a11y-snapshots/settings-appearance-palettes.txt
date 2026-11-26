@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Reading order of the interface, one element per line: role | label | description | flags.
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-ui --features test-support --test 'a11y_*'
+text | Palette | |
+text | The browser's colours, each with a light and a dark look. Theme above chooses which one shows. | |
+radio-button | Signal | Default. Shown in light and dark. | checked, item 0 of 4
+radio-button | Forest | Shown in light and dark. | unchecked, item 1 of 4
+radio-button | Abyss | Shown in light and dark. | unchecked, item 2 of 4
+radio-button | Glacier | Shown in light and dark. | unchecked, item 3 of 4
+text | Layout | |
+radio-button | Mercury (default) | Toolbar on top, group dock at the bottom | checked, item 0 of 2
+radio-button | Classic | Tabs in the title strip, group labels | unchecked, item 1 of 2
+text | Tab group controls | |
+switch | Group dock | Bottom of the window. × shrinks it to a capsule; it never hides by itself. | checked
+combobox | Dock starts | | collapsed, value "Open"
+switch | Ring from the toolbar hub | Click the hub or hold Control-Tab. Search, status flags and ⌥ keys. | checked
+switch | Orbit overview | ⌘E, or “See everything” in the ring. | checked
+switch | Pinch to open Orbit | Pinch in on a page at 100% zoom. | checked
+switch | Group keys (⌥ + letter) | Assign letters in Tab groups. | checked
+switch | Corner dial | Group colour and page loading in a corner; fans out into the ring. | checked
+combobox | Dial corner | | collapsed, value "Bottom right"
+combobox | Memory for Orbit previews | The most memory Orbit's tab previews may use. | collapsed, value "128 MB"
+text | Classic keeps every control above: the hub, the ring, Orbit and group keys all work there too. The dock has its own switch in each layout. | |
