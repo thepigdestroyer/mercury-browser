@@ -1,0 +1,91 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The bridge globals of the layout switch: Rust fills the dock and the dial through these, and the
+// hosts in `hosts.slint` bind the group dock and the corner dial to them. Every member is the
+// member of `GroupDockBar` / `CornerDial` of the same name; nothing here is a colour.
+
+import { DockPill, DockSliver, DockHit } from "../groups/dock-models.slint";
+import { DialCornerKind, DialPlacement, DialCaption } from "../groups/corner-dial.slint";
+import { RingHit, RingDropTarget } from "../groups/ring-bands.slint";
+import { GroupRow, TabRow, ArcSeg, ArcGlyph } from "../groups/models.slint";
+import { FlagPin } from "../groups/flags.slint";
+
+export global DockBridge {
+    in property <[DockPill]> pills;
+    in property <length> dock-x;
+    in property <length> dock-width;
+    in property <length> dock-height;
+    in property <length> new-tab-x;
+    in property <length> shrink-x;
+    in property <int> hovered-tab: -1;
+    in property <int> focused-group: -1;
+    in property <string> tooltip: "";
+    in property <length> tooltip-x;
+    in property <bool> held;
+    in property <bool> reduce-motion: false;
+    in property <string> accessible-name: "Group dock";
+    in property <[DockSliver]> slivers;
+    in property <string> count-text;
+    in property <string> capsule-label;
+    in-out property <bool> shrunk: false;
+
+    pure callback hit(length, length) -> DockHit;
+    callback pointer-moved(length, length);
+    callback pointer-left();
+    callback pill-activated(int);
+    callback tab-activated(int);
+    callback tab-close(int);
+    callback new-tab-in(int);
+    callback pill-peek-requested(int);
+    callback shrunk-changed(bool);
+    callback shrink-requested();
+    callback expand-requested();
+}
+
+export global DialBridge {
+    in property <[GroupRow]> groups;
+    in property <[TabRow]> tabs;
+    in property <[ArcSeg]> segments;
+    in property <[ArcSeg]> lifted-segments;
+    in property <[string]> segment-labels;
+    in property <[ArcSeg]> label-bands;
+    in property <[ArcGlyph]> label-glyphs;
+    in property <[FlagPin]> flags;
+    in property <length> ring-size: 768px;
+    in property <color> active-colour;
+    in property <image> favicon;
+    in property <bool> has-favicon;
+    in property <string> fallback-letter;
+    in property <bool> loading;
+    in property <float> progress;
+    in property <string> dial-label;
+    in property <DialCaption> caption;
+    in-out property <DialCornerKind> corner: DialCornerKind.bottom-right;
+    in-out property <bool> expanded;
+    in-out property <int> hovered-tab: -1;
+    in property <int> focused-tab: -1;
+    in property <bool> suppressed;
+    in property <bool> reduce-motion: false;
+    in property <bool> animate-spinners: true;
+
+    pure callback place(DialCornerKind, length, length) -> DialPlacement;
+    pure callback clamp-drag(length, length, length, length) -> DialPlacement;
+    pure callback snap-corner(length, length, length, length, DialCornerKind) -> DialCornerKind;
+    pure callback step-focus(int, int) -> int;
+    pure callback hit-test(length, length, int) -> RingHit;
+    pure callback drop-target(length, length, int) -> RingDropTarget;
+
+    callback toggled(bool);
+    callback corner-changed(DialCornerKind);
+    callback close-requested();
+    callback tab-activated(int);
+    callback tab-hovered(int);
+    callback group-activated(int);
+    callback tab-close(int);
+    callback tab-mute(int);
+    callback drag-started(int);
+    callback drag-moved(length, length);
+    callback drop(int, int);
+    callback drag-cancelled();
+    callback focus-moved(int);
+}
