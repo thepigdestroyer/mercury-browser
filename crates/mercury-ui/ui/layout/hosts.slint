@@ -1,0 +1,109 @@
+// SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+// SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+// The hosts: the group dock and the corner dial, each bound to its bridge global. The host is the
+// only place the bridge meets the component; Rust never touches the hosts, only the bridges.
+
+import { GroupDockBar } from "../groups/dock.slint";
+import { CornerDial } from "../groups/corner-dial.slint";
+import { DockBridge, DialBridge } from "bridges.slint";
+
+component DockHost inherits GroupDockBar {
+    pills: DockBridge.pills;
+    dock-x: DockBridge.dock-x;
+    dock-width: DockBridge.dock-width;
+    dock-height: DockBridge.dock-height;
+    new-tab-x: DockBridge.new-tab-x;
+    shrink-x: DockBridge.shrink-x;
+    hovered-tab: DockBridge.hovered-tab;
+    focused-group: DockBridge.focused-group;
+    tooltip: DockBridge.tooltip;
+    tooltip-x: DockBridge.tooltip-x;
+    held: DockBridge.held;
+    reduce-motion: DockBridge.reduce-motion;
+    accessible-name: DockBridge.accessible-name;
+    slivers: DockBridge.slivers;
+    count-text: DockBridge.count-text;
+    capsule-label: DockBridge.capsule-label;
+    shrunk <=> DockBridge.shrunk;
+
+    hit(x, y) => { return DockBridge.hit(x, y); }
+    pointer-moved(x, y) => { DockBridge.pointer-moved(x, y); }
+    pointer-left() => { DockBridge.pointer-left(); }
+    pill-activated(group) => { DockBridge.pill-activated(group); }
+    tab-activated(tab) => { DockBridge.tab-activated(tab); }
+    tab-close(tab) => { DockBridge.tab-close(tab); }
+    new-tab-in(group) => { DockBridge.new-tab-in(group); }
+    pill-peek-requested(group) => { DockBridge.pill-peek-requested(group); }
+    shrunk-changed(value) => { DockBridge.shrunk-changed(value); }
+    shrink-requested() => { DockBridge.shrink-requested(); }
+    expand-requested() => { DockBridge.expand-requested(); }
+}
+
+component DialHost inherits CornerDial {
+    groups: DialBridge.groups;
+    tabs: DialBridge.tabs;
+    segments: DialBridge.segments;
+    lifted-segments: DialBridge.lifted-segments;
+    segment-labels: DialBridge.segment-labels;
+    label-bands: DialBridge.label-bands;
+    label-glyphs: DialBridge.label-glyphs;
+    flags: DialBridge.flags;
+    ring-size: DialBridge.ring-size;
+    active-colour: DialBridge.active-colour;
+    favicon: DialBridge.favicon;
+    has-favicon: DialBridge.has-favicon;
+    fallback-letter: DialBridge.fallback-letter;
+    loading: DialBridge.loading;
+    progress: DialBridge.progress;
+    dial-label: DialBridge.dial-label;
+    caption: DialBridge.caption;
+    corner <=> DialBridge.corner;
+    expanded <=> DialBridge.expanded;
+    hovered-tab <=> DialBridge.hovered-tab;
+    focused-tab: DialBridge.focused-tab;
+    suppressed: DialBridge.suppressed;
+    reduce-motion: DialBridge.reduce-motion;
+    animate-spinners: DialBridge.animate-spinners;
+
+    place(corner, width, height) => { return DialBridge.place(corner, width, height); }
+    clamp-drag(x, y, width, height) => { return DialBridge.clamp-drag(x, y, width, height); }
+    snap-corner(x, y, width, height, corner) => { return DialBridge.snap-corner(x, y, width, height, corner); }
+    step-focus(focused, step) => { return DialBridge.step-focus(focused, step); }
+    hit-test(x, y, hovered) => { return DialBridge.hit-test(x, y, hovered); }
+    drop-target(x, y, dragged) => { return DialBridge.drop-target(x, y, dragged); }
+    toggled(open) => { DialBridge.toggled(open); }
+    corner-changed(corner) => { DialBridge.corner-changed(corner); }
+    close-requested() => { DialBridge.close-requested(); }
+    tab-activated(tab) => { DialBridge.tab-activated(tab); }
+    tab-hovered(tab) => { DialBridge.tab-hovered(tab); }
+    group-activated(group) => { DialBridge.group-activated(group); }
+    tab-close(tab) => { DialBridge.tab-close(tab); }
+    tab-mute(tab) => { DialBridge.tab-mute(tab); }
+    drag-started(tab) => { DialBridge.drag-started(tab); }
+    drag-moved(x, y) => { DialBridge.drag-moved(x, y); }
+    drop(group, index) => { DialBridge.drop(group, index); }
+    drag-cancelled() => { DialBridge.drag-cancelled(); }
+    focus-moved(tab) => { DialBridge.focus-moved(tab); }
+}
+
+// A window holding the dial over the page area and the dock in its 72 px band, for the lane's
+// tests. Not used by the browser's own windows.
+export component LayoutHostsPreview inherits Window {
+    preferred-width: 1440px;
+    preferred-height: 900px;
+
+    dial := DialHost {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+    }
+
+    dock := DockHost {
+        x: 0px;
+        width: parent.width;
+        // The 72 px band the dock sits in (`DockGeometry.band-open`).
+        height: 72px;
+        y: parent.height - self.height;
+    }
+}
