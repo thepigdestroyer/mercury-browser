@@ -454,7 +454,9 @@ fn the_scrim_dims_the_page_by_the_palette_scrim_at_60_percent() {
                 "{}: dimmed at ({x}, {y}): {got:?}, expected {want:?}",
                 theme(dark)
             );
-            assert_ne!(got, under, "{}: it is dimmed", theme(dark));
+            if want != under {
+                assert_ne!(got, under, "{}: it is dimmed", theme(dark));
+            }
         }
     }
 }
