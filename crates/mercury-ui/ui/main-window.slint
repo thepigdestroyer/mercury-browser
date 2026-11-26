@@ -640,6 +640,8 @@ export component MainWindow inherits Window {
     in-out property <string> tab-search-query;
     // The tab with this id goes to this index in the strip, pinned or not (a drag ended).
     callback move-tab(int, int, bool);
+    // The strip slot under this x while dragging (`tab_rows::drop_index`, set by the application).
+    pure callback drop-index-of(length) -> int;
     // A command from a tab's menu, for the tab with this id.
     callback tab-menu-activated(int, TabMenuCommand);
     // The tab search query changed (also called with "" when it opens).
@@ -727,6 +729,9 @@ export component MainWindow inherits Window {
                     }
                     move-tab(id, index, pinned) => {
                         root.move-tab(id, index, pinned);
+                    }
+                    drop-index-of(x) => {
+                        root.drop-index-of(x)
                     }
                     tab-menu-activated(id, command) => {
                         root.tab-menu-activated(id, command);

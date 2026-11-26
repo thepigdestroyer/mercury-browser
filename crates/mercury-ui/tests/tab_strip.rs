@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use mercury_ui::{
     BrowserTab, ChromePalette, ChromeTheme, MainWindow, TabAudioState, TabMenuCommand,
-    TabSearchRow, update_tab_rows,
+    TabSearchRow, chip_offsets, drop_index, run_starts, update_tab_rows,
 };
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Key, Platform, PointerEventButton, WindowAdapter, WindowEvent};
@@ -40,6 +40,10 @@ const STRIP_X: f32 = 10.0;
 const TAB_Y: f32 = 26.0;
 const PINNED_STRIDE: f32 = 46.0;
 const STRIDE: f32 = 190.0;
+/// The width of a group label chip; the strip reserves it before each group's first tab.
+const CHIP_WIDTH: f32 = 96.0;
+/// The y of a run's 3 px line, under the tab row, in the strip's rendered pixels.
+const RUN_LINE_Y: f32 = 43.0;
 
 fn output_path(name: &str) -> PathBuf {
     let directory = std::env::var_os("MERCURY_UI_RENDER_DIR")
@@ -96,6 +100,16 @@ fn window_with(theme: ChromeTheme, tabs: Vec<BrowserTab>, pinned: i32) -> MainWi
     window.global::<ChromePalette>().set_theme(theme);
     window.window().set_size(LogicalSize::new(WIDTH, HEIGHT));
     let active = tabs.iter().position(|tab| tab.active).unwrap_or(0);
+    // The unpinned slots only: the pinned tabs are clamped in Slint before this is asked.
+    let unpinned = tabs.iter().skip(pinned as usize);
+    let starts: Vec<f32> = unpinned
+        .enumerate()
+        .map(|(index, tab)| {
+            let base = STRIP_X + 2.0 * PINNED_STRIDE;
+            base + index as f32 * STRIDE + tab.chip_before
+        })
+        .collect();
+    window.on_drop_index_of(move |x| drop_index(&starts, x) as i32 + pinned);
     window.set_tabs(ModelRc::new(VecModel::from(tabs)));
     window.set_pinned_tab_count(pinned);
     window.set_active_tab_index(active as i32);
@@ -195,6 +209,54 @@ fn render_pinned_tabs(theme: ChromeTheme, name: &str) {
     window.hide().expect("the window can be hidden");
 }
 
+/// A strip of eight tabs with `runs` group runs of two tabs each, rendered for `theme`, saved as
+/// `tab-strip-groups-{runs}-{name}.png`. The chip is drawn at the group's colour in front of the
+/// run's first tab, and the run's 3 px line under its last tab.
+fn render_group_runs(theme: ChromeTheme, name: &str, runs: usize) {
+    let groups = run_groups(runs);
+    let window = window_with(theme, grouped_strip(&groups), 0);
+    window.window().set_size(LogicalSize::new(1800.0, HEIGHT));
+    let pixels = window.window().take_snapshot().expect("the window renders");
+    save(&pixels, &format!("tab-strip-groups-{runs}-{name}.png"));
+
+    // Each run's 3 px line sits under its last tab, in the group colour.
+    let starts = unpinned_slot_starts(&groups);
+    for (index, group) in groups.iter().enumerate() {
+        let last = group.is_some() && groups.get(index + 1) != Some(group);
+        if last {
+            let (colour, _, _) = group_colours(group.unwrap_or(0));
+            assert_eq!(
+                pixel(&pixels, starts[index] + 92.0, RUN_LINE_Y),
+                rgb(colour),
+                "{name}: the run line under tab {}",
+                index + 1
+            );
+        }
+    }
+    window.hide().expect("the window can be hidden");
+}
+
+/// Eight tabs: `runs` runs of two tabs, each run followed by a loose tab, so three runs fit
+/// (positions 0-1, 3-4, 6-7). Zero runs leaves the strip ungrouped.
+fn run_groups(runs: usize) -> Vec<Option<i32>> {
+    let mut groups = vec![None; 8];
+    for run in 0..runs {
+        let start = run * 3;
+        groups[start] = Some(run as i32 + 1);
+        groups[start + 1] = Some(run as i32 + 1);
+    }
+    groups
+}
+
+#[test]
+fn group_runs_render_in_light_and_dark_with_0_1_and_3_runs() {
+    init_platform();
+    for runs in [0usize, 1, 3] {
+        render_group_runs(ChromeTheme::Light, "light", runs);
+        render_group_runs(ChromeTheme::Dark, "dark", runs);
+    }
+}
+
 fn dragging_reorders_and_pins() {
     let window = window_with(ChromeTheme::Dark, sample_tabs(), 2);
     let moves = Rc::new(RefCell::new(Vec::new()));
@@ -246,6 +308,110 @@ fn dragging_reorders_and_pins() {
             button: PointerEventButton::Left,
         },
     );
+    window.hide().expect("the window can be hidden");
+}
+
+/// The slot starts of the unpinned tabs in `tabs`, as the strip lays them out: each slot is a
+/// stride wide and starts after the group label chips before it.
+fn unpinned_slot_starts(groups: &[Option<i32>]) -> Vec<f32> {
+    let base = STRIP_X;
+    chip_offsets(groups, CHIP_WIDTH)
+        .into_iter()
+        .enumerate()
+        .map(|(index, chips)| base + index as f32 * STRIDE + chips)
+        .collect()
+}
+
+/// The strip's `drop-index-of` answer for a group layout: the slot under `x` from the slot starts.
+fn answer_drop_index(window: &MainWindow, groups: Vec<Option<i32>>) {
+    let starts = unpinned_slot_starts(&groups);
+    window.on_drop_index_of(move |x| drop_index(&starts, x) as i32);
+}
+
+/// Eight unpinned tabs in two group runs: tabs 1-2 in group 1, tabs 5-6 in group 2, with a label
+/// chip before each run.
+fn grouped_tabs() -> (Vec<BrowserTab>, Vec<Option<i32>>) {
+    let groups = vec![None, Some(1), Some(1), None, Some(2), Some(2), None, None];
+    (grouped_strip(&groups), groups)
+}
+
+/// The group colours the label tests use: a fill, a tint and a deep text colour per group.
+fn group_colours(group: i32) -> (slint::Color, slint::Color, slint::Color) {
+    match group {
+        1 => (
+            slint::Color::from_rgb_u8(0x3b, 0x82, 0xf6),
+            slint::Color::from_rgb_u8(0xdb, 0xea, 0xfe),
+            slint::Color::from_rgb_u8(0x1e, 0x3a, 0x8a),
+        ),
+        _ => (
+            slint::Color::from_rgb_u8(0x22, 0xc5, 0x5e),
+            slint::Color::from_rgb_u8(0xdc, 0xfc, 0xe7),
+            slint::Color::from_rgb_u8(0x14, 0x53, 0x2d),
+        ),
+    }
+}
+
+/// The eight tabs of a strip with `groups` for their groups: every group field the strip reads is
+/// set from the group ids (the chip before each run, the run start and its end flags, the group
+/// name and colours), so the layout matches what the desktop would build.
+fn grouped_strip(groups: &[Option<i32>]) -> Vec<BrowserTab> {
+    let chips = chip_offsets(groups, CHIP_WIDTH);
+    let starts = run_starts(groups);
+    (0..groups.len())
+        .map(|index| {
+            let group = groups[index];
+            let (colour, tint, deep) = group.map(group_colours).unwrap_or_default();
+            let first = group.is_some() && (index == 0 || groups[index - 1] != group);
+            let last = group.is_some() && groups.get(index + 1) != Some(&group);
+            BrowserTab {
+                chip_before: chips[index],
+                group: group.unwrap_or(0),
+                group_name: group
+                    .map(|group| format!("Group {group}"))
+                    .unwrap_or_default()
+                    .into(),
+                group_colour: colour,
+                group_tint: tint,
+                group_deep: deep,
+                group_first: first,
+                group_last: last,
+                group_key: group
+                    .map(|group| format!("g{group}"))
+                    .unwrap_or_default()
+                    .into(),
+                group_run_start: starts[index].unwrap_or(0) as i32,
+                ..tab(
+                    index as i32 + 1,
+                    &format!("Tab {}", index + 1),
+                    index == 2,
+                    false,
+                )
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn dragging_across_group_labels_lands_on_the_right_index() {
+    init_platform();
+    let (tabs, groups) = grouped_tabs();
+    let window = window_with(ChromeTheme::Dark, tabs, 0);
+    window.window().set_size(LogicalSize::new(1800.0, HEIGHT));
+    answer_drop_index(&window, groups.clone());
+    let moves = Rc::new(RefCell::new(Vec::new()));
+    let recorded = Rc::clone(&moves);
+    window.on_move_tab(move |id, index, pinned| recorded.borrow_mut().push((id, index, pinned)));
+
+    // Each tab's centre, measured from the slot starts the strip uses for its labels.
+    let starts = unpinned_slot_starts(&groups);
+    let centre = |index: usize| starts[index] + 92.0;
+
+    // Tab 1 (index 0) onto the slot of tab 6 (index 5), which sits after both group labels.
+    drag(window.window(), centre(0), centre(5));
+    // Tab 8 (index 7) onto the slot of tab 2 (index 1), across the first group label.
+    drag(window.window(), centre(7), centre(1));
+
+    assert_eq!(*moves.borrow(), [(1, 5, false), (8, 1, false)]);
     window.hide().expect("the window can be hidden");
 }
 

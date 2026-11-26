@@ -133,6 +133,16 @@ fn window_for(case: &Case) -> Result<MainWindow, Box<dyn Error>> {
         pinned: false,
         url: "https://example.com/".into(),
         audio: TabAudioState::Silent,
+        chip_before: 0.0,
+        group: 0,
+        group_name: "".into(),
+        group_colour: Default::default(),
+        group_tint: Default::default(),
+        group_deep: Default::default(),
+        group_first: false,
+        group_last: false,
+        group_key: "".into(),
+        group_run_start: 0,
     }])));
     window.set_is_new_tab(false);
     window.set_address("https://example.com/article".into());

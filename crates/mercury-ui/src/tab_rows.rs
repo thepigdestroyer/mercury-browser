@@ -80,6 +80,52 @@ fn sync_rows(model: &impl RowStore, rows: Vec<BrowserTab>) {
     }
 }
 
+/// The offset of each tab's slot from the strip's first slot: a group label chip of `chip_width`
+/// sits before the first tab of every run of one group. `groups[i]` is the group of tab `i`
+/// (`None` for a loose tab), so the offset of tab `i` is the number of chips before it.
+pub fn chip_offsets(groups: &[Option<i32>], chip_width: f32) -> Vec<f32> {
+    let mut chips = 0;
+    let mut previous = None;
+    groups
+        .iter()
+        .map(|&group| {
+            if group.is_some() && group != previous {
+                chips += 1;
+            }
+            previous = group;
+            chips as f32 * chip_width
+        })
+        .collect()
+}
+
+/// The slot index where each tab's run of one group starts (`None` for a loose tab, which starts
+/// no run). A run is a stretch of consecutive tabs with the same group.
+pub fn run_starts(groups: &[Option<i32>]) -> Vec<Option<usize>> {
+    let mut start = None;
+    groups
+        .iter()
+        .enumerate()
+        .map(|(index, &group)| {
+            if group.is_none() {
+                start = None;
+                return None;
+            }
+            if index == 0 || groups[index - 1] != group {
+                start = Some(index);
+            }
+            start
+        })
+        .collect()
+}
+
+/// The index of the slot that contains `x`, given the slot starts `offsets` (ascending): the last
+/// slot starting at or before `x`. A pointer left of the first slot is slot 0.
+pub fn drop_index(offsets: &[f32], x: f32) -> usize {
+    offsets
+        .partition_point(|&start| start <= x)
+        .saturating_sub(1)
+}
+
 /// Whether two rows of the same tab show the same thing. Slint never counts one empty `Image` as
 /// equal to another, so `==` would call every row without a page icon changed on every sync (and
 /// have the strip re-read it); such a row's `icon` is not shown, so it is left out. Every field
@@ -95,6 +141,16 @@ fn same_row(a: &BrowserTab, b: &BrowserTab) -> bool {
         pinned,
         url,
         audio,
+        chip_before,
+        group,
+        group_name,
+        group_colour,
+        group_tint,
+        group_deep,
+        group_first,
+        group_last,
+        group_key,
+        group_run_start,
     } = a;
     let icons_match = (!*has_icon && !b.has_icon) || *icon == b.icon;
     icons_match
@@ -106,6 +162,16 @@ fn same_row(a: &BrowserTab, b: &BrowserTab) -> bool {
         && *pinned == b.pinned
         && *url == b.url
         && *audio == b.audio
+        && *chip_before == b.chip_before
+        && *group == b.group
+        && *group_name == b.group_name
+        && *group_colour == b.group_colour
+        && *group_tint == b.group_tint
+        && *group_deep == b.group_deep
+        && *group_first == b.group_first
+        && *group_last == b.group_last
+        && *group_key == b.group_key
+        && *group_run_start == b.group_run_start
 }
 
 #[cfg(test)]
@@ -249,6 +315,161 @@ mod tests {
         assert_eq!(store.edits.borrow().len(), 3);
         sync_rows(&store, vec![row(1, "a")]);
         assert_eq!(store.edits.borrow().len(), 3, "nothing changed");
+    }
+
+    /// `tabs` tabs with exactly `runs` runs of one group each, every run three tabs long, and
+    /// loose tabs between them (none when `runs` is 0). The runs are spread over the strip.
+    fn groups_with_runs(tabs: usize, runs: usize) -> Vec<Option<i32>> {
+        let mut groups = vec![None; tabs];
+        for run in 0..runs {
+            // Run `run` starts at its share of the strip, then holds three tabs of group `run`.
+            let start = (run + 1) * tabs / (runs + 1);
+            for group in groups.iter_mut().skip(start).take(3) {
+                *group = Some(run as i32);
+            }
+        }
+        groups
+    }
+
+    fn slot_starts(tabs: usize, runs: usize, tab_width: f32, chip_width: f32) -> Vec<f32> {
+        let groups = groups_with_runs(tabs, runs);
+        chip_offsets(&groups, chip_width)
+            .into_iter()
+            .enumerate()
+            .map(|(index, chips)| index as f32 * tab_width + chips)
+            .collect()
+    }
+
+    #[test]
+    fn chips_count_the_runs_before_each_tab() {
+        // Three runs: [a a] loose [b] loose loose [c c c]. Each run's chip sits before its first
+        // tab, so that tab's offset already counts its own chip.
+        let groups = [
+            Some(1),
+            Some(1),
+            None,
+            Some(2),
+            None,
+            None,
+            Some(3),
+            Some(3),
+            Some(3),
+        ];
+        assert_eq!(
+            chip_offsets(&groups, 96.0),
+            [96.0, 96.0, 96.0, 192.0, 192.0, 192.0, 288.0, 288.0, 288.0]
+        );
+        assert_eq!(chip_offsets(&[None, None], 96.0), [0.0, 0.0]);
+        assert_eq!(chip_offsets(&[], 96.0), Vec::<f32>::new());
+        // Two adjacent groups: each starts with its own chip.
+        assert_eq!(chip_offsets(&[Some(1), Some(2)], 96.0), [96.0, 192.0]);
+    }
+
+    #[test]
+    fn each_tab_knows_the_slot_where_its_run_starts() {
+        let groups = [
+            None,
+            Some(1),
+            Some(1),
+            None,
+            Some(2),
+            Some(2),
+            Some(2),
+            None,
+        ];
+        assert_eq!(
+            run_starts(&groups),
+            [
+                None,
+                Some(1),
+                Some(1),
+                None,
+                Some(4),
+                Some(4),
+                Some(4),
+                None
+            ]
+        );
+        // Two adjacent runs of different groups each start where they begin.
+        assert_eq!(run_starts(&[Some(1), Some(2)]), [Some(0), Some(1)]);
+        assert_eq!(run_starts(&[]), Vec::<Option<usize>>::new());
+    }
+
+    #[test]
+    fn chips_are_counted_for_200_tabs_with_0_1_and_3_runs() {
+        for runs in [0usize, 1, 3] {
+            let groups = groups_with_runs(200, runs);
+            let offsets = chip_offsets(&groups, 96.0);
+            assert_eq!(offsets.len(), 200);
+            // Exactly one chip per run, so the last tab sits after all of them.
+            assert_eq!(offsets.last(), Some(&(runs as f32 * 96.0)), "runs {runs}");
+            assert!(offsets.windows(2).all(|pair| pair[0] <= pair[1]));
+        }
+    }
+
+    #[test]
+    fn drop_index_inverts_slot_x_at_every_slot_centre_and_boundary() {
+        const TAB: f32 = 190.0;
+        const CHIP: f32 = 96.0;
+        for runs in [0usize, 1, 3] {
+            let starts = slot_starts(200, runs, TAB, CHIP);
+            for (index, &start) in starts.iter().enumerate() {
+                assert_eq!(
+                    drop_index(&starts, start),
+                    index,
+                    "runs {runs}, left edge of {index}"
+                );
+                assert_eq!(
+                    drop_index(&starts, start + TAB / 2.0),
+                    index,
+                    "runs {runs}, centre of {index}"
+                );
+                assert_eq!(
+                    drop_index(&starts, start + TAB - 0.01),
+                    index,
+                    "runs {runs}, right edge of {index}"
+                );
+            }
+            // Left of the first slot is slot 0.
+            assert_eq!(drop_index(&starts, -50.0), 0);
+            // Past the last slot is the last slot.
+            assert_eq!(drop_index(&starts, f32::MAX), starts.len() - 1);
+        }
+    }
+
+    #[test]
+    fn drop_index_of_an_empty_strip_is_zero() {
+        assert_eq!(drop_index(&[], 10.0), 0);
+    }
+
+    fn grouped(row: BrowserTab, group: i32, name: &str, first: bool) -> BrowserTab {
+        BrowserTab {
+            group,
+            group_name: name.into(),
+            group_first: first,
+            group_key: format!("g{group}").into(),
+            ..row
+        }
+    }
+
+    #[test]
+    fn a_group_field_is_patched_in_place_without_recreating_the_tab() {
+        let model = VecModel::from(vec![row(1, "a"), row(2, "b"), row(3, "c")]);
+        update_tab_rows(
+            &model,
+            vec![
+                row(1, "a"),
+                grouped(row(2, "b"), 7, "Work", true),
+                row(3, "c"),
+            ],
+        );
+        // The same three tabs in the same order: the group changed one row, not the list.
+        assert_eq!(ids(&model), [1, 2, 3]);
+        let patched = model.row_data(1).expect("tab 2 is still there");
+        assert_eq!(patched.group, 7);
+        assert_eq!(patched.group_name, "Work");
+        assert!(patched.group_first);
+        assert_eq!(model.row_data(0).map(|row| row.group), Some(0));
     }
 
     #[test]
