@@ -92,6 +92,7 @@ fn read_back(palette: &ChromePalette<'_>, role: Role) -> Colour {
         Role::PagePopupCaption => palette.get_page_popup_caption(),
         Role::CaptureIndicator => palette.get_capture_indicator(),
         Role::CaptureIndicatorGlyph => palette.get_capture_indicator_glyph(),
+        Role::PinnedBeadLetter => palette.get_pinned_bead_letter(),
     };
     Colour::rgba(colour.red(), colour.green(), colour.blue(), colour.alpha())
 }

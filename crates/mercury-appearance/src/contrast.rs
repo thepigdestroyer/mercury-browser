@@ -360,6 +360,10 @@ pub const EXEMPT: &[(Role, &str)] = &[
         R::Shadow,
         "a translucent shadow, decoration with no information in it",
     ),
+    (
+        R::PinnedBeadLetter,
+        "drawn on a derived group-colour mark (`Swatch::mark`), not on a role: tests/bead_letter.rs holds it to 4.5:1 on every mark",
+    ),
 ];
 
 /// Measures every pair of [`RULES`] in `palette`'s `scheme`, in rule order.

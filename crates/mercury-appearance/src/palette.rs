@@ -49,7 +49,7 @@ macro_rules! roles {
     ($( $(#[$meta:meta])* $variant:ident => $name:literal, )+) => {
         /// One colour of the browser's own interface; see the [module documentation](self).
         ///
-        /// There is one variant per property of `ChromePalette` (54 today), in the order of that
+        /// There is one variant per property of `ChromePalette` (55 today), in the order of that
         /// file. [`Role::slint_name`] is the property's exact name.
         #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
         pub enum Role {
@@ -204,6 +204,11 @@ roles! {
     CaptureIndicator => "capture-indicator",
     /// A glyph drawn on [`Role::CaptureIndicator`].
     CaptureIndicatorGlyph => "capture-indicator-glyph",
+
+    // Tab groups.
+    /// The letter drawn on the bead of a pinned tab in the hub ring, on a `Swatch::mark` (a group
+    /// colour darkened until white reads on it at 4.5:1): white in every palette.
+    PinnedBeadLetter => "pinned-bead-letter",
 }
 
 impl Role {

@@ -492,6 +492,7 @@ fn build(s: &Scheme) -> Map {
         m.insert(R::PagePopupCaption, c(0x6e6e73));
     }
     m.insert(R::CaptureIndicatorGlyph, Colour::WHITE);
+    m.insert(R::PinnedBeadLetter, Colour::WHITE);
 
     // The primary fill: a mark (3:1) that its label reads on (4.5:1).
     let label_ok = |fill: Colour| fill.contrast_ratio(on_fill) >= 4.6;

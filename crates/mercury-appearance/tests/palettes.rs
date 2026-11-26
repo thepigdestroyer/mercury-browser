@@ -19,10 +19,10 @@ fn hex(rgb: u32) -> Colour {
 
 #[test]
 fn there_is_a_role_for_every_property_of_the_chrome_palette() {
-    // 54 colour properties in chrome-palette.slint; hermes_matches_chrome_palette.rs checks the
+    // 55 colour properties in chrome-palette.slint; hermes_matches_chrome_palette.rs checks the
     // names against the file itself.
-    assert_eq!(Role::COUNT, 54);
-    assert_eq!(Role::ALL.len(), 54);
+    assert_eq!(Role::COUNT, 55);
+    assert_eq!(Role::ALL.len(), 55);
     for (index, role) in Role::ALL.into_iter().enumerate() {
         assert_eq!(
             role as usize, index,
@@ -51,6 +51,7 @@ fn role_names_round_trip() {
         Role::CaptureIndicatorGlyph.slint_name(),
         "capture-indicator-glyph"
     );
+    assert_eq!(Role::PinnedBeadLetter.slint_name(), "pinned-bead-letter");
     for name in [
         "",
         "Window-Background",

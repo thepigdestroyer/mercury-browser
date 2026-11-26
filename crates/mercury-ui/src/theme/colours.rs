@@ -71,6 +71,7 @@ fn table(palette: &Palette, scheme: Scheme) -> ChromeColors {
         page_popup_caption: of(Role::PagePopupCaption),
         capture_indicator: of(Role::CaptureIndicator),
         capture_indicator_glyph: of(Role::CaptureIndicatorGlyph),
+        pinned_bead_letter: of(Role::PinnedBeadLetter),
     }
 }
 

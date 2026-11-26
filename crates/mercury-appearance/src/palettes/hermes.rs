@@ -97,6 +97,7 @@ const fn light(role: Role) -> Colour {
         // Media capture.
         Role::CaptureIndicator => Colour::hex(0xd93025),
         Role::CaptureIndicatorGlyph => Colour::hex(0xffffff),
+        Role::PinnedBeadLetter => Colour::hex(0xffffff),
     }
 }
 
@@ -167,5 +168,6 @@ const fn dark(role: Role) -> Colour {
         // Media capture.
         Role::CaptureIndicator => Colour::hex(0xff5f57),
         Role::CaptureIndicatorGlyph => Colour::hex(0xffffff),
+        Role::PinnedBeadLetter => Colour::hex(0xffffff),
     }
 }

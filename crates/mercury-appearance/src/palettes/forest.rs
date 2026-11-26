@@ -77,6 +77,7 @@ const fn light(role: Role) -> Colour {
         Role::PagePopupCaption => Colour::hex(0x6e6e73),
         Role::CaptureIndicator => Colour::hex(0xd93025),
         Role::CaptureIndicatorGlyph => Colour::hex(0xffffff),
+        Role::PinnedBeadLetter => Colour::hex(0xffffff),
     }
 }
 
@@ -137,5 +138,6 @@ const fn dark(role: Role) -> Colour {
         Role::PagePopupCaption => Colour::hex(0xa2a2a8),
         Role::CaptureIndicator => Colour::hex(0xf2544c),
         Role::CaptureIndicatorGlyph => Colour::hex(0xffffff),
+        Role::PinnedBeadLetter => Colour::hex(0xffffff),
     }
 }

@@ -68,6 +68,7 @@ export struct ChromeColors {
     page-popup-caption: color,
     capture-indicator: color,
     capture-indicator-glyph: color,
+    pinned-bead-letter: color,
 }
 
 // The browser chrome's colours, by role. Every part of the browser's own UI takes its colours
@@ -142,6 +143,7 @@ export global ChromePalette {
         // --- media-capture ---
         capture-indicator: #d93025,
         capture-indicator-glyph: #ffffff,
+        pinned-bead-letter: #ffffff,
         // --- end media-capture ---
     };
     in property <ChromeColors> dark-colours: {
@@ -202,6 +204,7 @@ export global ChromePalette {
         // --- media-capture ---
         capture-indicator: #ff5f57,
         capture-indicator-glyph: #ffffff,
+        pinned-bead-letter: #ffffff,
         // --- end media-capture ---
     };
 
@@ -285,5 +288,6 @@ export global ChromePalette {
     out property <color> capture-indicator: root.dark ? root.dark-colours.capture-indicator : root.light-colours.capture-indicator;
     // A glyph drawn on `capture-indicator`.
     out property <color> capture-indicator-glyph: root.dark ? root.dark-colours.capture-indicator-glyph : root.light-colours.capture-indicator-glyph;
+    out property <color> pinned-bead-letter: root.dark ? root.dark-colours.pinned-bead-letter : root.light-colours.pinned-bead-letter;
     // --- end media-capture ---
 }

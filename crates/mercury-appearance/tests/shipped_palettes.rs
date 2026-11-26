@@ -131,7 +131,7 @@ fn report_the_exempt_pairs() {
         (Role::DisabledText, Role::PopupBackground),
     ];
     for (role, _) in EXEMPT {
-        if !matches!(role, Role::Scrim | Role::Shadow) {
+        if !matches!(role, Role::Scrim | Role::Shadow | Role::PinnedBeadLetter) {
             assert!(
                 pairs.iter().any(|(r, _)| r == role),
                 "{role:?} is not reported"
