@@ -12,7 +12,7 @@ license.workspace = true
 # selection, the capture state machine, the PDF writer and the print backends. No engine, no UI
 # toolkit: the desktop's print controller and the engine's capture driver call into this crate.
 [dependencies]
-image.workspace = true
+image = { workspace = true, features = ["jpeg"] }
 krilla.workspace = true
 log.workspace = true
 png.workspace = true
