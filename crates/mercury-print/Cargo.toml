@@ -1,0 +1,24 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+
+[package]
+name = "mercury-print"
+publish = false
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+# The printing stop-gap (EB1) and the full-page screenshot (EB18): page setup, page ranges, break
+# selection, the capture state machine, the PDF writer and the print backends. No engine, no UI
+# toolkit: the desktop's print controller and the engine's capture driver call into this crate.
+[dependencies]
+image.workspace = true
+krilla.workspace = true
+log.workspace = true
+png.workspace = true
+serde = { workspace = true, features = ["derive"] }
+thiserror.workspace = true
+
+[dev-dependencies]
+serde_json.workspace = true
+tempfile.workspace = true

@@ -20,6 +20,7 @@ members = [
     "crates/mercury-passwords",
     "crates/mercury-pdf",
     "crates/mercury-pdfium",
+    "crates/mercury-print",
     "crates/mercury-proxy",
     "crates/mercury-release",
     "crates/mercury-servo-patches",
@@ -73,6 +74,9 @@ glow = "0.17"
 http = "1.5"
 httpdate = "1.0"
 image = { version = "0.25", default-features = false, features = ["png"] }
+# mercury-print: the PDF writer for printing (image pages now, vector text in EB3). Default features
+# off; `raster-images` embeds the PNG and JPEG pages.
+krilla = { version = "=0.8.2", default-features = false, features = ["raster-images"] }
 libc = "0.2.191"
 log = "0.4"
 mime_guess = "2.0.5"
@@ -84,6 +88,8 @@ objc2-foundation = { version = "0.3.2", default-features = false }
 # `pdfium_enable_v8` or `pdfium_enable_xfa`: the pinned build has neither (decision OD-11).
 pdfium-render = { version = "=0.9.5", default-features = false, features = ["pdfium_8125", "thread_safe"] }
 percent-encoding = "2.3"
+# mercury-print: the streaming PNG writer for the full-page screenshot (`image` already locks 0.18.1).
+png = "0.18"
 reqwest = { version = "0.13", default-features = false, features = ["rustls", "http2", "stream"] }
 resvg = { version = "0.48", default-features = false }
 rusqlite = { version = "0.38", features = ["bundled"] }
