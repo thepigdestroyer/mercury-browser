@@ -12,6 +12,11 @@ use std::cell::RefCell;
 use mercury_ui::MainWindow;
 use talaria_core::BrowserController;
 
+mod menu_state; // task 9
+pub(crate) use menu_state::{LayoutMenuState, menu_state};
+#[allow(unused_imports)] // written by tasks 7 and 8; until they are merged only the tests set it
+pub(crate) use menu_state::set_menu_state;
+
 /// View > Show Tab Ring.
 pub(crate) fn show_tab_ring(_window: &MainWindow, _controller: &RefCell<BrowserController>) {}
 
