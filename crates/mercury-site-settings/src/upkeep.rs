@@ -8,7 +8,7 @@ use mercury_store::SiteSettingChange;
 use crate::axis::Axis;
 use crate::lifetime::Lifetime;
 use crate::origin::Origin;
-use crate::pattern::{OriginPattern, Specificity};
+use crate::pattern::OriginPattern;
 use crate::settings::{RuleKey, RuleView, SiteSettings, Slot, row_for, view_of};
 use crate::value::{Setting, Value};
 use crate::{LAST_USED_GRANULARITY_MS, UnixMillis};

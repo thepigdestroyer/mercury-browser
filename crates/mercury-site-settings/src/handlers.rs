@@ -62,11 +62,6 @@ impl HandlerTable {
         (table, ignored)
     }
 
-    /// The rows for every handler, in key order.
-    pub(crate) fn to_rows(&self) -> Vec<ProtocolHandlerRow> {
-        self.handlers.values().map(row_from_handler).collect()
-    }
-
     pub(crate) fn len(&self) -> usize {
         self.handlers.len()
     }

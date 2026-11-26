@@ -6259,6 +6259,7 @@ dependencies = [
  "mercury-settings",
  "mercury-store",
  "psl",
+ "serde_json",
  "url",
 ]
 
