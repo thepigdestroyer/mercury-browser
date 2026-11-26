@@ -22,13 +22,17 @@
 
 mod axis;
 mod handlers;
+mod legacy;
 mod lifetime;
 mod origin;
 mod pattern;
 mod settings;
+mod upkeep;
 mod value;
 
 pub use axis::Axis;
+pub use handlers::{ProtocolHandler, is_registrable_scheme};
+pub use legacy::{LegacyReport, LegacySources};
 pub use lifetime::Lifetime;
 pub use origin::Origin;
 pub use pattern::{OriginPattern, PatternError, Specificity};

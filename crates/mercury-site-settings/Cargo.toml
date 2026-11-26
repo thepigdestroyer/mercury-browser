@@ -18,3 +18,6 @@ psl = "2.1"
 url.workspace = true
 mercury-settings = { path = "../mercury-settings" }
 mercury-store = { path = "../mercury-store" }
+
+[dev-dependencies]
+serde_json.workspace = true
