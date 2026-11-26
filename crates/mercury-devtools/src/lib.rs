@@ -24,4 +24,5 @@ pub mod hsts;
 pub mod metadata;
 pub mod pixel_diff;
 pub mod png;
+pub mod sandbox_denials;
 pub mod serve;
