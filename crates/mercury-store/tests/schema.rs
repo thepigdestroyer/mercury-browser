@@ -16,9 +16,9 @@ fn names(conn: &rusqlite::Connection, kind: &str) -> Vec<String> {
 }
 
 #[test]
-fn in_memory_store_is_at_schema_version_1() {
+fn in_memory_store_is_at_schema_version_2() {
     let store = Store::open_in_memory().unwrap();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 2);
 }
 
 #[test]
@@ -35,6 +35,9 @@ fn opening_creates_tables_indexes_triggers_and_roots() {
         "downloads",
         "places_fts",
         "bookmarks_fts",
+        "protection_exceptions",
+        "protection_tally",
+        "protection_bounce",
     ] {
         assert!(tables.iter().any(|t| t == table), "missing table {table}");
     }
@@ -85,7 +88,7 @@ fn opening_creates_tables_indexes_triggers_and_roots() {
     let version: u32 = conn
         .query_row("PRAGMA user_version", [], |r| r.get(0))
         .unwrap();
-    assert_eq!(version, 1);
+    assert_eq!(version, 2);
 }
 
 #[test]
@@ -114,7 +117,7 @@ fn reopening_keeps_data_and_does_not_duplicate_roots() {
             .unwrap();
     }
     let store = Store::open(&dir.db()).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 1);
+    assert_eq!(store.schema_version().unwrap(), 2);
     assert_eq!(store.history(None, None, 10).unwrap().len(), 1);
     let toolbar = store.bookmark_root(BookmarkRoot::Toolbar).unwrap();
     assert_eq!(store.bookmark_children(toolbar).unwrap().len(), 1);
@@ -143,7 +146,7 @@ fn a_newer_schema_is_refused_and_left_unmodified() {
 
     match Store::open(&dir.db()) {
         Err(StoreError::UnsupportedSchemaVersion { found, supported }) => {
-            assert_eq!((found, supported), (7, 1));
+            assert_eq!((found, supported), (7, 2));
         }
         Err(other) => panic!("unexpected error {other}"),
         Ok(_) => panic!("a newer schema must be refused"),

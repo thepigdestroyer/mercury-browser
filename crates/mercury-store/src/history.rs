@@ -304,6 +304,7 @@ impl Store {
             forget_titles_seen(&tx, place_id, from, i64::MAX)?;
             refresh_place(&tx, place_id, now_ms)?;
         }
+        crate::protection::forget_bounce(&tx, Some(from))?;
         tx.commit()?;
         Ok(removed as u64)
     }
@@ -331,6 +332,7 @@ impl Store {
             forget_titles_seen(&tx, place_id, i64::MIN, i64::MAX)?;
             refresh_place(&tx, place_id, now_ms)?;
         }
+        crate::protection::forget_bounce(&tx, None)?;
         tx.commit()?;
         Ok(removed as u64)
     }

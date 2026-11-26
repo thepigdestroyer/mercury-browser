@@ -108,6 +108,8 @@ const MIGRATIONS: &[&str] = &[
     INSERT INTO bookmarks (guid, kind, parent_id, position, title, place_id, added_at, modified_at)
     VALUES ('toolbar_____', 2, NULL, 0, 'Bookmarks Bar', NULL, 0, 0),
            ('menu________', 2, NULL, 1, 'Other Bookmarks', NULL, 0, 0);",
+    // Version 2: the protection tables (spec §6).
+    crate::protection::MIGRATION_PROTECTION,
 ];
 
 /// The newest schema version this build understands.
