@@ -59,6 +59,11 @@ enum FakeCall {
     EndFind(EndFindRequest),
     // passwords
     FillLogin(LoginFill),
+    // nav-basics
+    TraverseHistory(i32),
+    Stop,
+    ReloadBypassingCache,
+    ReadSelection(u64),
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -217,6 +222,23 @@ impl WebView for FakeWebView {
     // passwords
     fn fill_login(&mut self, fill: LoginFill) -> Result<(), Self::Error> {
         self.record(FakeCall::FillLogin(fill))
+    }
+
+    // nav-basics
+    fn traverse_history(&mut self, steps: i32) -> Result<(), Self::Error> {
+        self.record(FakeCall::TraverseHistory(steps))
+    }
+
+    fn stop(&mut self) -> Result<(), Self::Error> {
+        self.record(FakeCall::Stop)
+    }
+
+    fn reload_bypassing_cache(&mut self) -> Result<(), Self::Error> {
+        self.record(FakeCall::ReloadBypassingCache)
+    }
+
+    fn read_selection(&mut self, request_id: u64) -> Result<(), Self::Error> {
+        self.record(FakeCall::ReadSelection(request_id))
     }
 }
 

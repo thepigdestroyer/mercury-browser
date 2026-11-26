@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: MPL-2.0
 mod address;
+// nav-basics
+mod back_list;
 mod browser;
 // certificate exceptions
 mod certificate_exception;
@@ -34,6 +36,11 @@ mod zoom;
 
 pub use address::{
     AddressResolutionError, NavigationTarget, SearchUrlBuilder, classify_address, resolve_address,
+};
+// nav-basics
+pub use back_list::{
+    BackList, Direction, HistoryEntry, HistoryPopup, LONG_PRESS_MS, POPUP_ROWS, PopupAction,
+    PopupRow, row_label,
 };
 pub use browser::{
     BrowserCommand, BrowserEvent, BrowserState, DownloadOffer, DownloadSignal, LoadState,

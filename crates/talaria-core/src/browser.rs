@@ -14,6 +14,8 @@ use crate::{
 };
 // passwords
 use crate::LoginFill;
+// nav-basics
+use crate::BackList;
 // txt-1
 use crate::TextInputState;
 
@@ -188,6 +190,17 @@ pub enum BrowserCommand {
     /// Fills a login the user chose into the focused password field of the top-level document,
     /// if that document has the login's origin.
     FillLogin(LoginFill),
+    // nav-basics
+    /// Moves through the tab's history; negative steps go back.
+    TraverseHistory {
+        steps: i32,
+    },
+    Stop,
+    ReloadBypassingCache,
+    /// Reads the page's selection; answered by `BrowserEvent::SelectionRead`.
+    ReadSelection {
+        request_id: u64,
+    },
 }
 
 impl BrowserCommand {
@@ -209,7 +222,13 @@ impl BrowserCommand {
     pub(crate) const fn targets_the_current_page(&self) -> bool {
         matches!(
             self,
-            Self::Navigate { .. } | Self::Reload | Self::GoBack | Self::GoForward
+            Self::Navigate { .. }
+                | Self::Reload
+                | Self::GoBack
+                | Self::GoForward
+                // nav-basics
+                | Self::TraverseHistory { .. }
+                | Self::ReloadBypassingCache
         )
     }
 
@@ -217,8 +236,10 @@ impl BrowserCommand {
     /// `Navigate` does not: `queue_navigation` and its callers name the origin.
     pub(crate) const fn navigation_origin(&self) -> Option<crate::NavigationOrigin> {
         match self {
-            Self::Reload => Some(crate::NavigationOrigin::Reload),
-            Self::GoBack | Self::GoForward => Some(crate::NavigationOrigin::History),
+            Self::Reload | Self::ReloadBypassingCache => Some(crate::NavigationOrigin::Reload),
+            Self::GoBack | Self::GoForward | Self::TraverseHistory { .. } => {
+                Some(crate::NavigationOrigin::History)
+            }
             _ => None,
         }
     }
@@ -390,6 +411,17 @@ pub enum BrowserEvent {
         menu: ControlId,
         field: ControlId,
     },
+    // nav-basics
+    /// The tab's session history: every entry's address, and which one is shown.
+    HistoryEntries {
+        urls: Vec<String>,
+        current: usize,
+    },
+    /// The page's selection text, answering `BrowserCommand::ReadSelection`.
+    SelectionRead {
+        request_id: u64,
+        text: Option<String>,
+    },
 }
 
 /// A page the engine could not show, offered to the browser as a download.
@@ -451,6 +483,9 @@ pub struct BrowserState {
     find: FindState,
     // passwords: the context menu and the password field it was opened over.
     password_field_menu: Option<(ControlId, ControlId)>,
+    // nav-basics
+    back_list: BackList,
+    selection_read: Option<(u64, String)>,
 }
 
 impl Default for BrowserState {
@@ -475,6 +510,9 @@ impl Default for BrowserState {
             // find
             find: FindState::default(),
             password_field_menu: None,
+            // nav-basics
+            back_list: BackList::default(),
+            selection_read: None,
         }
     }
 }
@@ -500,6 +538,18 @@ impl BrowserState {
     }
     pub fn zoom_percent(&self) -> u16 {
         self.zoom_percent
+    }
+
+    // nav-basics
+    pub fn back_list(&self) -> &BackList {
+        &self.back_list
+    }
+
+    /// The latest selection the page answered with, until the next answer replaces it.
+    pub fn selection_read(&self) -> Option<(u64, &str)> {
+        self.selection_read
+            .as_ref()
+            .map(|(id, text)| (*id, text.as_str()))
     }
 
     pub fn cursor(&self) -> PointerCursor {
@@ -618,6 +668,7 @@ impl BrowserState {
                 }
             }
             BrowserEvent::PageTitleChanged { title } => {
+                self.back_list.set_current_title(title.clone());
                 self.page_title = title
                     .filter(|title| !title.trim().is_empty())
                     .unwrap_or_else(|| placeholder_title(&self.url));
@@ -728,6 +779,15 @@ impl BrowserState {
             // passwords
             BrowserEvent::PasswordFieldMenu { menu, field } => {
                 self.password_field_menu = Some((menu, field));
+            }
+            // nav-basics
+            BrowserEvent::HistoryEntries { urls, current } => {
+                self.back_list.set_entries(urls, current);
+                self.can_go_back = self.back_list.can_go_back();
+                self.can_go_forward = self.back_list.can_go_forward();
+            }
+            BrowserEvent::SelectionRead { request_id, text } => {
+                self.selection_read = text.map(|text| (request_id, text));
             }
         }
     }

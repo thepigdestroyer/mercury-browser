@@ -57,6 +57,11 @@ pub trait WebView {
     fn end_find(&mut self, request: EndFindRequest) -> Result<(), Self::Error>;
     // passwords
     fn fill_login(&mut self, fill: LoginFill) -> Result<(), Self::Error>;
+    // nav-basics
+    fn traverse_history(&mut self, steps: i32) -> Result<(), Self::Error>;
+    fn stop(&mut self) -> Result<(), Self::Error>;
+    fn reload_bypassing_cache(&mut self) -> Result<(), Self::Error>;
+    fn read_selection(&mut self, request_id: u64) -> Result<(), Self::Error>;
 }
 
 pub fn dispatch_command<W>(web_view: &mut W, command: BrowserCommand) -> Result<(), W::Error>
@@ -107,5 +112,10 @@ where
         BrowserCommand::EndFind(request) => web_view.end_find(request),
         // passwords
         BrowserCommand::FillLogin(fill) => web_view.fill_login(fill),
+        // nav-basics
+        BrowserCommand::TraverseHistory { steps } => web_view.traverse_history(steps),
+        BrowserCommand::Stop => web_view.stop(),
+        BrowserCommand::ReloadBypassingCache => web_view.reload_bypassing_cache(),
+        BrowserCommand::ReadSelection { request_id } => web_view.read_selection(request_id),
     }
 }

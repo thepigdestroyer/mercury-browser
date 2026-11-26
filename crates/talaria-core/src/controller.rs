@@ -1039,7 +1039,10 @@ impl BrowserController {
             // The user is leaving the page: its questions no longer matter. Answering them first
             // also unblocks the page's script, which the navigation may need.
             command if command.targets_the_current_page() => {
-                let reload = matches!(command, BrowserCommand::Reload);
+                let reload = matches!(
+                    command,
+                    BrowserCommand::Reload | BrowserCommand::ReloadBypassingCache
+                );
                 let discarded = tab.page_requests_mut().note_user_navigation(reload);
                 self.queue_page_request_answers(tab_id, &discarded, PageRequestAnswer::Discard);
             }
