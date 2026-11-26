@@ -240,12 +240,25 @@ fn serve(mut stream: TcpStream, state: &State, handler: &(dyn Fn(&Seen) -> Reply
             let _ = stream.shutdown(Shutdown::Both);
         }
         Reply::Stall => wait_for_stop(&mut stream, state, false),
-        Reply::ThenHold(bytes) => {
-            if stream.write_all(&bytes).is_ok() {
+        Reply::ThenHold(bytes) => match stream.write_all(&bytes) {
+            Ok(()) => {
                 let _ = stream.flush();
                 wait_for_stop(&mut stream, state, true);
             }
-        }
+            // The client may close while the body is still being written (it stops at its cap);
+            // that is the hang-up itself, whichever moment the server notices it.
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::BrokenPipe
+                        | std::io::ErrorKind::ConnectionReset
+                        | std::io::ErrorKind::ConnectionAborted
+                ) =>
+            {
+                state.hangups.fetch_add(1, Ordering::SeqCst);
+            }
+            Err(_) => {}
+        },
     }
 }
 
