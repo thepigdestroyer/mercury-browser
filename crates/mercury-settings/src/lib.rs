@@ -53,6 +53,7 @@ mod appearance;
 mod atomic;
 mod bounded;
 mod error;
+mod navigation; // nav-basics
 mod read;
 mod search;
 mod session;
@@ -69,6 +70,7 @@ pub use appearance::{
 };
 pub use atomic::write_private_atomic;
 pub use error::SettingsError;
+pub use navigation::NavigationSettings; // nav-basics
 pub use search::{
     DEFAULT_ENGINE_ID, MAX_CUSTOM_ENGINES, MAX_ENGINE_ID_BYTES, MAX_ENGINE_NAME_BYTES,
     MAX_KEYWORD_BYTES, MAX_TEMPLATE_BYTES, SEARCH_TERMS_PLACEHOLDER, SearchEngine, builtin_engines,

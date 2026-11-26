@@ -68,6 +68,11 @@ const DEFAULT_FILE: &str = r#"{
     "gpu_canvas": true,
     "pdf": "open_in_mercury"
   },
+  "navigation": {
+    "command_click_opens_tab": true,
+    "new_tab_becomes_active": false,
+    "warn_before_quitting": true
+  },
   "language": null
 }
 "#;

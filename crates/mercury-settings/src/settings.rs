@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::appearance::{DEFAULT_LAYOUT, DEFAULT_PALETTE, TabGroupSettings};
 use crate::bounded::{self, Unread};
+use crate::navigation::NavigationSettings;
 use crate::search::{DEFAULT_ENGINE_ID, SearchEngine};
 
 /// The smallest default page zoom, in percent.
@@ -51,6 +52,8 @@ pub struct Settings {
     pub passwords: PasswordSettings,
     /// Web-platform features.
     pub web: WebSettings,
+    /// Navigation: ⌘-click, new-tab focus and the quit warning.
+    pub navigation: NavigationSettings,
     /// The user-interface language as a BCP 47 tag; `None` follows the system.
     pub language: Option<String>,
 }
