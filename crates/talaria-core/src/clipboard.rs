@@ -25,6 +25,7 @@
 //! the user's Paste lets them read, in the short window each grants.
 
 use std::cell::RefCell;
+use std::fmt;
 use std::time::Duration;
 
 use crate::{ClipboardCommand, ContextMenuAction, KeyState, KeyboardInput};
@@ -89,6 +90,41 @@ pub const ASYNC_CLIPBOARD_OFFERED: bool = false;
 /// script's read is refused here (and, with `ASYNC_CLIPBOARD_OFFERED` off, no page has one).
 pub const CLIPBOARD_READ_FRAME_GATE: bool = false;
 
+/// One typed value on the clipboard (`text/plain`, `text/html`, `image/png`, ...). Its `Debug`
+/// shows the type and the length only: the bytes are the user's or the page's data.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PasteboardItem {
+    pub mime: String,
+    pub bytes: Vec<u8>,
+}
+
+impl fmt::Debug for PasteboardItem {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PasteboardItem")
+            .field("mime", &self.mime)
+            .field("bytes", &self.bytes.len())
+            .finish()
+    }
+}
+
+/// A decoded image for the clipboard: `rgba` is `width * height * 4` bytes. Its `Debug` shows
+/// the size only.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PasteboardImage {
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
+impl fmt::Debug for PasteboardImage {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PasteboardImage")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .finish()
+    }
+}
+
 /// The text clipboard pages read and write. The browser uses the system clipboard in a normal
 /// run and a `MemoryPasteboard` in automated runs and tests, which must never read or change
 /// the user's clipboard.
@@ -99,6 +135,29 @@ pub trait Pasteboard {
     fn write_text(&self, text: &str);
     /// Empties the clipboard.
     fn clear(&self);
+
+    /// Replaces the clipboard's contents with `items` and `image`. A pasteboard without rich
+    /// types keeps the `text/plain` item only, so text copies keep working.
+    fn write_items(&self, items: &[PasteboardItem], image: Option<&PasteboardImage>) {
+        let _ = image;
+        match items.iter().find(|item| item.mime == "text/plain") {
+            Some(item) => self.write_text(&String::from_utf8_lossy(&item.bytes)),
+            None => self.clear(),
+        }
+    }
+
+    /// The clipboard's items of the wanted types, in the order asked for; an empty `mimes`
+    /// asks for every type. A pasteboard without rich types offers `text/plain` only.
+    fn read_items(&self, mimes: &[String]) -> Vec<PasteboardItem> {
+        let wanted = mimes.is_empty() || mimes.iter().any(|mime| mime == "text/plain");
+        match self.read_text() {
+            Some(text) if wanted => vec![PasteboardItem {
+                mime: "text/plain".to_owned(),
+                bytes: text.into_bytes(),
+            }],
+            _ => Vec::new(),
+        }
+    }
 }
 
 /// A clipboard that lives in memory only.
@@ -131,6 +190,78 @@ impl Pasteboard for MemoryPasteboard {
 
     fn clear(&self) {
         *self.text.borrow_mut() = None;
+    }
+}
+
+/// Who asked for a clipboard write or read, as the engine reports it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardSourceKind {
+    /// The user's own Cut, Copy or Paste (menu, shortcut, context menu).
+    User,
+    /// A page's script (`navigator.clipboard`, `execCommand`).
+    Script,
+}
+
+/// Where a page's clipboard request came from, as the engine reports it. `same_origin_with_top`
+/// and `had_transient_activation` are the engine's own view: the browser checks its own
+/// activation tracker as well (`async_write_access`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ClipboardRequestOrigin {
+    pub same_origin_with_top: bool,
+    pub is_top_level: bool,
+    pub had_transient_activation: bool,
+}
+
+/// Why a page's clipboard access is refused.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RefusalReason {
+    /// The request is from a frame that is not same-origin with the top-level document.
+    CrossOrigin,
+    /// The browser saw no user activation in the page.
+    NoActivation,
+    /// Script reads are off (`CLIPBOARD_READ_FRAME_GATE`).
+    ReadsOff,
+}
+
+/// The browser's decision for a script's clipboard access.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AsyncAccess {
+    Allow,
+    /// Ask the user first (`PagePermission::ClipboardRead`).
+    AskPermission,
+    Refuse(RefusalReason),
+}
+
+/// Whether a script's write may reach the clipboard. A cross-origin frame is refused whatever
+/// the engine says; otherwise the browser's own activation tracker must agree with the engine.
+pub fn async_write_access(
+    origin: &ClipboardRequestOrigin,
+    browser_has_activation: bool,
+) -> AsyncAccess {
+    if !origin.same_origin_with_top {
+        AsyncAccess::Refuse(RefusalReason::CrossOrigin)
+    } else if !browser_has_activation {
+        AsyncAccess::Refuse(RefusalReason::NoActivation)
+    } else {
+        AsyncAccess::Allow
+    }
+}
+
+/// Whether a script's read may reach the clipboard: refused while script reads are off, then
+/// the same origin and activation checks as a write, and otherwise asked of the user.
+pub fn async_read_access(
+    origin: &ClipboardRequestOrigin,
+    browser_has_activation: bool,
+    frame_gate_on: bool,
+) -> AsyncAccess {
+    if !frame_gate_on {
+        AsyncAccess::Refuse(RefusalReason::ReadsOff)
+    } else if !origin.same_origin_with_top {
+        AsyncAccess::Refuse(RefusalReason::CrossOrigin)
+    } else if !browser_has_activation {
+        AsyncAccess::Refuse(RefusalReason::NoActivation)
+    } else {
+        AsyncAccess::AskPermission
     }
 }
 
@@ -263,7 +394,9 @@ pub const fn context_menu_clipboard_command(action: ContextMenuAction) -> Option
         | ContextMenuAction::Reload
         | ContextMenuAction::OpenLinkInNewView
         | ContextMenuAction::OpenImageInNewView
-        | ContextMenuAction::SelectAll => None,
+        | ContextMenuAction::SelectAll
+        | ContextMenuAction::CopyImage
+        | ContextMenuAction::Media(_) => None,
     }
 }
 

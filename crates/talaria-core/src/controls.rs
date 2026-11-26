@@ -68,6 +68,82 @@ pub enum ContextMenuAction {
     Copy,
     Paste,
     SelectAll,
+    /// Copies the image's pixels to the clipboard (rich pasteboard).
+    CopyImage,
+    /// A media control on the video or audio under the menu.
+    Media(MediaAction),
+}
+
+/// A media control on the element under a context menu.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum MediaAction {
+    PlayPause,
+    Mute,
+    Loop,
+    Controls,
+}
+
+/// The kind of a date or time input, for its picker.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateTimeKind {
+    Date,
+    Time,
+    Month,
+    Week,
+    DatetimeLocal,
+}
+
+/// What the page's selection, link and element are, for a context menu. Text fields are empty
+/// for a password field (`is_password`), and their `Debug` prints no text.
+#[derive(Clone, PartialEq, Eq, Default)]
+pub struct ContextMenuInfo {
+    pub selection_text: Option<String>,
+    pub link_text: Option<String>,
+    pub page_url: Option<String>,
+    pub frame_url: Option<String>,
+    pub is_top_level_frame: bool,
+    pub media: Option<MediaAction>,
+    pub editable: bool,
+    pub is_password: bool,
+}
+
+impl std::fmt::Debug for ContextMenuInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ContextMenuInfo")
+            .field(
+                "selection_text",
+                &self.selection_text.as_ref().map(String::len),
+            )
+            .field("link_text", &self.link_text.as_ref().map(String::len))
+            .field("is_top_level_frame", &self.is_top_level_frame)
+            .field("media", &self.media)
+            .field("editable", &self.editable)
+            .field("is_password", &self.is_password)
+            .finish_non_exhaustive()
+    }
+}
+
+/// Longest text Look Up and Search send from a context menu, in characters.
+const MAX_SEARCH_TEXT_CHARS: usize = 200;
+
+/// The text a context menu's Look Up and Search use: the selection when it is not empty and the
+/// element is not a password field, else the link's text, trimmed; at most 200 characters.
+pub fn context_menu_search_text(info: &ContextMenuInfo) -> Option<String> {
+    if info.is_password {
+        return None;
+    }
+    let selection = info
+        .selection_text
+        .as_deref()
+        .filter(|text| !text.is_empty());
+    let text = match selection {
+        Some(text) => text,
+        None => info.link_text.as_deref()?.trim(),
+    };
+    if text.is_empty() {
+        return None;
+    }
+    Some(text.chars().take(MAX_SEARCH_TEXT_CHARS).collect())
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -103,7 +179,20 @@ pub enum ControlRequest {
         entries: Vec<ContextMenuEntry>,
         link_url: Option<String>,
         image_url: Option<String>,
+        details: Option<ContextMenuInfo>,
     },
+    /// A date, time, month, week or local date-and-time picker for the input at `rect`. `value`
+    /// is in the input's format ("" when empty).
+    DateTime {
+        rect: ControlRect,
+        kind: DateTimeKind,
+        value: String,
+        min: Option<String>,
+        max: Option<String>,
+        step: Option<String>,
+    },
+    /// A validation message for the control at `rect`, at most 300 characters.
+    ValidationMessage { rect: ControlRect, message: String },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +203,8 @@ pub enum ControlAnswer {
     /// Only files the user chose. An empty list leaves the input unchanged.
     Files(Vec<PathBuf>),
     ContextMenu(ContextMenuAction),
+    /// The picked value in the input's format, or `None` to leave the input unchanged.
+    DateTime(Option<String>),
     /// Closes the control with the engine's default answer: the unchanged selection or colour,
     /// no files, no menu action.
     Dismiss,

@@ -36,22 +36,25 @@ pub use address::{
     AddressResolutionError, NavigationTarget, SearchUrlBuilder, classify_address, resolve_address,
 };
 pub use browser::{
-    BrowserCommand, BrowserEvent, BrowserState, DownloadOffer, DownloadSignal, LoadState,
-    PointerButton, PointerButtonAction, display_origin, placeholder_title,
+    BrowserCommand, BrowserEvent, BrowserState, DownloadOffer, DownloadSignal, FieldFocusInfo,
+    FieldInputType, LoadState, PasswordSubmittedInfo, PointerButton, PointerButtonAction,
+    display_origin, placeholder_title,
 };
 // media-capture
 pub use capture::CaptureAccess;
 pub use clipboard::{
-    ASYNC_CLIPBOARD_OFFERED, CLIPBOARD_READ_FRAME_GATE, ClipboardGate, ClipboardReadDecision,
-    MemoryPasteboard, Pasteboard, USER_CLIPBOARD_ACTION_WINDOW, clipboard_shortcut,
-    context_menu_clipboard_command,
+    ASYNC_CLIPBOARD_OFFERED, AsyncAccess, CLIPBOARD_READ_FRAME_GATE, ClipboardGate,
+    ClipboardReadDecision, ClipboardRequestOrigin, ClipboardSourceKind, MemoryPasteboard,
+    Pasteboard, PasteboardImage, PasteboardItem, RefusalReason, USER_CLIPBOARD_ACTION_WINDOW,
+    async_read_access, async_write_access, clipboard_shortcut, context_menu_clipboard_command,
 };
 pub use controller::{BrowserController, CloseTabOutcome};
 // tabs-plus
 pub use controller::{PinnedCloseOutcome, tab_matches_query};
 pub use controls::{
-    ContextMenuAction, ContextMenuEntry, ControlAnswer, ControlId, ControlRect, ControlRequest,
-    Rgb, SelectEntry, SelectOption,
+    ContextMenuAction, ContextMenuEntry, ContextMenuInfo, ControlAnswer, ControlId, ControlRect,
+    ControlRequest, DateTimeKind, MediaAction, Rgb, SelectEntry, SelectOption,
+    context_menu_search_text,
 };
 pub use cursor::{ColorScheme, PointerCursor};
 pub use find::{

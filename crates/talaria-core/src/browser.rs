@@ -390,6 +390,85 @@ pub enum BrowserEvent {
         menu: ControlId,
         field: ControlId,
     },
+    // txt-2
+    /// An editable input took focus; the page's own origin and frame facts come with it. The
+    /// `Debug` of the info prints no values.
+    FieldFocused(FieldFocusInfo),
+    // txt-2
+    /// A form with a password field was submitted; the `Debug` of the info prints no values.
+    PasswordSubmitted(PasswordSubmittedInfo),
+}
+
+/// The type of an editable input, as the engine reports it for the input method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldInputType {
+    Color,
+    Date,
+    DatetimeLocal,
+    Email,
+    Month,
+    Number,
+    Password,
+    Search,
+    Tel,
+    Text,
+    Time,
+    Url,
+    Week,
+}
+
+/// A focused editable input. It carries no value: a password field's text never leaves the
+/// page's content process. Its `Debug` prints no names, origins or sites.
+#[derive(Clone, PartialEq, Eq)]
+pub struct FieldFocusInfo {
+    pub document: u64,
+    pub control: ControlId,
+    pub input_type: FieldInputType,
+    pub name: Option<String>,
+    pub id: Option<String>,
+    pub autocomplete: Option<String>,
+    pub origin: String,
+    pub top_level_site: Option<String>,
+    pub is_cross_site_frame: bool,
+    pub user_initiated: bool,
+    pub form_has_password: bool,
+}
+
+impl std::fmt::Debug for FieldFocusInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("FieldFocusInfo")
+            .field("input_type", &self.input_type)
+            .field("is_cross_site_frame", &self.is_cross_site_frame)
+            .field("user_initiated", &self.user_initiated)
+            .field("form_has_password", &self.form_has_password)
+            .finish_non_exhaustive()
+    }
+}
+
+/// A form's submission that carries a password. The `Debug` prints lengths and flags only.
+#[derive(Clone, PartialEq, Eq)]
+pub struct PasswordSubmittedInfo {
+    pub document: u64,
+    pub origin: String,
+    pub top_level_site: Option<String>,
+    pub is_cross_site_frame: bool,
+    pub action_url: Option<String>,
+    pub username: Option<String>,
+    pub password: String,
+    pub new_password: Option<String>,
+    pub had_user_activation: bool,
+}
+
+impl std::fmt::Debug for PasswordSubmittedInfo {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("PasswordSubmittedInfo")
+            .field("is_cross_site_frame", &self.is_cross_site_frame)
+            .field("has_username", &self.username.is_some())
+            .field("password_len", &self.password.len())
+            .field("has_new_password", &self.new_password.is_some())
+            .field("had_user_activation", &self.had_user_activation)
+            .finish_non_exhaustive()
+    }
 }
 
 /// A page the engine could not show, offered to the browser as a download.
@@ -729,6 +808,8 @@ impl BrowserState {
             BrowserEvent::PasswordFieldMenu { menu, field } => {
                 self.password_field_menu = Some((menu, field));
             }
+            // txt-2: read by the controller and the desktop app, not kept by the tab's state.
+            BrowserEvent::FieldFocused(_) | BrowserEvent::PasswordSubmitted(_) => {}
         }
     }
 
