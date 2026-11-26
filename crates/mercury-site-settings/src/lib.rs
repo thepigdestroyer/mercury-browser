@@ -21,6 +21,7 @@
 )]
 
 mod axis;
+mod legacy;
 mod lifetime;
 mod origin;
 mod pattern;
@@ -28,6 +29,7 @@ mod upkeep;
 mod value;
 
 pub use axis::Axis;
+pub use legacy::{LegacyReport, LegacySources};
 pub use lifetime::Lifetime;
 pub use origin::Origin;
 pub use pattern::{OriginPattern, PatternError, Specificity};
