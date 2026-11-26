@@ -487,6 +487,16 @@ The other three vendored crates compile without warnings.
 - **Tested by:** `cargo check`; the lane's tests.
 - **Drop when:** the scaffold is dropped and Servo has equivalents.
 
+### Open hints, wake lock release — `mercury_page/open.rs`, `dom/wakelock/wakelocksentinel.rs`
+
+- **What:** `mercury_page/open.rs` records the hints of the next opening (link modifier, middle click, `window.open`
+  features) and takes them once. `dom/wakelock/wakelocksentinel.rs` adds `release()` and `onrelease`: the first release
+  sends `ReleaseWakeLock` to the constellation and fires `release`; later calls only resolve. The webidl change is in
+  `third_party/servo-script-bindings/MERCURY.md`.
+- **Why:** the page lane's open hints (EB35, EB37), and the wake-lock release the page can call (EB33).
+- **Tested by:** `cargo test --release -p servo-script --lib mercury_page`.
+- **Drop when:** the scaffold is dropped and Servo has equivalents.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry and this directory once a Servo release

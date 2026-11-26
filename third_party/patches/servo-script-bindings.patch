@@ -71,7 +71,18 @@ diff --git a/codegen/Bindings.conf b/codegen/Bindings.conf
  },
 
  'WakeLock': {
-@@ -1520,8 +1539,9 @@
+@@ -984,6 +1003,10 @@
+     'realm': ['Request'],
+ },
+
++'WakeLockSentinel': {
++    'realm': ['Release'],
++},
++
+ 'Node': {
+     'cx': ['AppendChild', 'ChildNodes', 'CloneNode', 'InsertBefore', 'Normalize', 'RemoveChild', 'ReplaceChild', 'SetNodeValue', 'SetTextContent'],
+     'no_gc': ['CompareDocumentPosition'],
+@@ -1520,8 +1543,9 @@
      'realm': ['CreateImageBitmap', 'CreateImageBitmap_', 'Fetch'],
  },
 
@@ -482,6 +493,19 @@ diff --git a/webidls/URL.webidl b/webidls/URL.webidl
    static undefined revokeObjectURL(DOMString url);
 
    USVString toJSON();
+diff --git a/webidls/WakeLock.webidl b/webidls/WakeLock.webidl
+--- a/webidls/WakeLock.webidl
++++ b/webidls/WakeLock.webidl
+@@ -21,6 +21,7 @@
+   readonly attribute boolean released;
+   readonly attribute WakeLockType type;
+
+-  // Promise<void> release();
+-  // attribute EventHandler onrelease;
++  // Mercury: release() and onrelease are enabled with the sentinel's implementation (H22).
++  Promise<undefined> release();
++  attribute EventHandler onrelease;
+ };
 diff --git a/webidls/WebLock.webidl b/webidls/WebLock.webidl
 new file mode 100644
 --- /dev/null

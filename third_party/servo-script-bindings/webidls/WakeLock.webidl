@@ -21,6 +21,7 @@ interface WakeLockSentinel : EventTarget {
   readonly attribute boolean released;
   readonly attribute WakeLockType type;
 
-  // Promise<void> release();
-  // attribute EventHandler onrelease;
+  // Mercury: release() and onrelease are enabled with the sentinel's implementation (H22).
+  Promise<undefined> release();
+  attribute EventHandler onrelease;
 };

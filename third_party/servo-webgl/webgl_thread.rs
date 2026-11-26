@@ -328,9 +328,14 @@ impl WebGLThread {
         self.mercury_drop_contexts_after_failed_receive();
     }
 
-    /// Drops the WebGL contexts left after the receive loop ends on a failed receive. Stub: does
-    /// nothing yet.
-    fn mercury_drop_contexts_after_failed_receive(&mut self) {}
+    /// Drops the WebGL contexts left after the receive loop ends on a failed receive. Each one is
+    /// removed as `WebGLMsg::Exit` removes them, so its WebRender image keys are deleted.
+    fn mercury_drop_contexts_after_failed_receive(&mut self) {
+        let context_ids: Vec<WebGLContextId> = self.contexts.keys().copied().collect();
+        for id in context_ids {
+            self.remove_webgl_context(id);
+        }
+    }
 
     /// Enable GL_POINT_SPRITE and GL_PROGRAM_POINT_SIZE on desktop OpenGL.
     ///
