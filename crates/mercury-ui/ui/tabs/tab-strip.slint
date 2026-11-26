@@ -26,6 +26,18 @@ export struct BrowserTab {
     audio: TabAudioState,
     // layout-switch: the total width of the group label chips before this tab (`chip_offsets`).
     chip-before: length,
+    // layout-switch (spec item 3): the tab's group, 0 when loose. The name and the first/last
+    // flags are set on the tab that starts or ends a run; the colours come from the group.
+    group: int,
+    group-name: string,
+    group-colour: color,
+    group-tint: color,
+    group-deep: color,
+    group-first: bool,
+    group-last: bool,
+    group-key: string,
+    // The slot index of the run's first tab; the run line on `group-last` starts there.
+    group-run-start: int,
 }
 
 export enum TabMenuCommand {
@@ -45,6 +57,10 @@ export global TabStripMetrics {
     out property <length> list-button-width: ChromeMetrics.tab-list-button-width;
     // How far the pointer moves with the button down before a press becomes a drag.
     out property <length> drag-threshold: 6px;
+    // The width of a group's name chip, in front of its first tab; 0 draws the run's line only.
+    out property <length> group-label-width: 0px;
+    // The thickness of the line under a group's run of tabs.
+    out property <length> group-line-height: 3px;
 }
 
 component TabIcon inherits Rectangle {
@@ -780,6 +796,37 @@ export component TabStrip inherits Rectangle {
                     }
                     drag-cancelled => {
                         root.cancel-drag();
+                    }
+                }
+
+                // layout-switch: a group's name chip in front of its first tab, and its line under
+                // the run. Drawn after the tabs so the line sits on top; placed at the slots
+                // `slot-x` already leaves for the chips.
+                for tab[index] in root.tabs: Rectangle {
+                    visible: tab.group-first || tab.group-last;
+                    x: root.slot-x(index) - (tab.group-first ? TabStripMetrics.group-label-width : 0px);
+                    y: 0px;
+                    height: parent.height;
+                    width: tab.group-first ? TabStripMetrics.group-label-width : 0px;
+                    background: tab.group-colour;
+                    Text {
+                        visible: parent.width > 0px;
+                        text: tab.group-name;
+                        color: tab.group-deep;
+                        font-size: ChromeMetrics.tab-title-font-size;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        accessible-role: text;
+                        accessible-label: tab.group-name;
+                    }
+                    // The run's line, on its last tab: from the run's first slot to this slot's end.
+                    Rectangle {
+                        visible: tab.group-last;
+                        x: root.slot-x(tab.group-run-start) - root.slot-x(index);
+                        y: parent.height - TabStripMetrics.group-line-height;
+                        height: TabStripMetrics.group-line-height;
+                        width: root.slot-x(index) + root.tab-width - root.slot-x(tab.group-run-start);
+                        background: tab.group-colour;
                     }
                 }
 

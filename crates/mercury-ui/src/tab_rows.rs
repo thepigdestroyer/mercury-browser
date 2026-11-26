@@ -98,6 +98,26 @@ pub fn chip_offsets(groups: &[Option<i32>], chip_width: f32) -> Vec<f32> {
         .collect()
 }
 
+/// The slot index where each tab's run of one group starts (`None` for a loose tab, which starts
+/// no run). A run is a stretch of consecutive tabs with the same group.
+pub fn run_starts(groups: &[Option<i32>]) -> Vec<Option<usize>> {
+    let mut start = None;
+    groups
+        .iter()
+        .enumerate()
+        .map(|(index, &group)| {
+            if group.is_none() {
+                start = None;
+                return None;
+            }
+            if index == 0 || groups[index - 1] != group {
+                start = Some(index);
+            }
+            start
+        })
+        .collect()
+}
+
 /// The index of the slot that contains `x`, given the slot starts `offsets` (ascending): the last
 /// slot starting at or before `x`. A pointer left of the first slot is slot 0.
 pub fn drop_index(offsets: &[f32], x: f32) -> usize {
@@ -122,6 +142,15 @@ fn same_row(a: &BrowserTab, b: &BrowserTab) -> bool {
         url,
         audio,
         chip_before,
+        group,
+        group_name,
+        group_colour,
+        group_tint,
+        group_deep,
+        group_first,
+        group_last,
+        group_key,
+        group_run_start,
     } = a;
     let icons_match = (!*has_icon && !b.has_icon) || *icon == b.icon;
     icons_match
@@ -134,6 +163,15 @@ fn same_row(a: &BrowserTab, b: &BrowserTab) -> bool {
         && *url == b.url
         && *audio == b.audio
         && *chip_before == b.chip_before
+        && *group == b.group
+        && *group_name == b.group_name
+        && *group_colour == b.group_colour
+        && *group_tint == b.group_tint
+        && *group_deep == b.group_deep
+        && *group_first == b.group_first
+        && *group_last == b.group_last
+        && *group_key == b.group_key
+        && *group_run_start == b.group_run_start
 }
 
 #[cfg(test)]
@@ -328,6 +366,36 @@ mod tests {
     }
 
     #[test]
+    fn each_tab_knows_the_slot_where_its_run_starts() {
+        let groups = [
+            None,
+            Some(1),
+            Some(1),
+            None,
+            Some(2),
+            Some(2),
+            Some(2),
+            None,
+        ];
+        assert_eq!(
+            run_starts(&groups),
+            [
+                None,
+                Some(1),
+                Some(1),
+                None,
+                Some(4),
+                Some(4),
+                Some(4),
+                None
+            ]
+        );
+        // Two adjacent runs of different groups each start where they begin.
+        assert_eq!(run_starts(&[Some(1), Some(2)]), [Some(0), Some(1)]);
+        assert_eq!(run_starts(&[]), Vec::<Option<usize>>::new());
+    }
+
+    #[test]
     fn chips_are_counted_for_200_tabs_with_0_1_and_3_runs() {
         for runs in [0usize, 1, 3] {
             let groups = groups_with_runs(200, runs);
@@ -372,6 +440,36 @@ mod tests {
     #[test]
     fn drop_index_of_an_empty_strip_is_zero() {
         assert_eq!(drop_index(&[], 10.0), 0);
+    }
+
+    fn grouped(row: BrowserTab, group: i32, name: &str, first: bool) -> BrowserTab {
+        BrowserTab {
+            group,
+            group_name: name.into(),
+            group_first: first,
+            group_key: format!("g{group}").into(),
+            ..row
+        }
+    }
+
+    #[test]
+    fn a_group_field_is_patched_in_place_without_recreating_the_tab() {
+        let model = VecModel::from(vec![row(1, "a"), row(2, "b"), row(3, "c")]);
+        update_tab_rows(
+            &model,
+            vec![
+                row(1, "a"),
+                grouped(row(2, "b"), 7, "Work", true),
+                row(3, "c"),
+            ],
+        );
+        // The same three tabs in the same order: the group changed one row, not the list.
+        assert_eq!(ids(&model), [1, 2, 3]);
+        let patched = model.row_data(1).expect("tab 2 is still there");
+        assert_eq!(patched.group, 7);
+        assert_eq!(patched.group_name, "Work");
+        assert!(patched.group_first);
+        assert_eq!(model.row_data(0).map(|row| row.group), Some(0));
     }
 
     #[test]
