@@ -42,8 +42,8 @@ mod ime; // txt-1: the IME composition state machine
 mod hub_ring;
 mod import_ui; // import-ui lane
 mod keyboard;
-mod layout_switch; // layout-switch
 mod keyutils;
+mod layout_switch; // layout-switch
 #[cfg(target_os = "macos")]
 mod macos_app_delegate;
 #[cfg(target_os = "macos")]
