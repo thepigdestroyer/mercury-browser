@@ -6,14 +6,23 @@
 
 use accesskit::{Affine, Rect};
 
-// stub
-pub fn union_rects(_rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
-    None
+fn is_finite_rect(rect: &Rect) -> bool {
+    rect.x0.is_finite() && rect.y0.is_finite() && rect.x1.is_finite() && rect.y1.is_finite()
 }
 
-// stub
-pub fn aabb_of_transformed(_rect: Rect, _transform: Affine) -> Option<Rect> {
-    None
+/// The smallest rectangle that holds every finite rectangle of `rects`, or `None` when there is
+/// none.
+pub fn union_rects(rects: impl IntoIterator<Item = Rect>) -> Option<Rect> {
+    rects
+        .into_iter()
+        .filter(is_finite_rect)
+        .reduce(|acc, rect| acc.union(rect))
+}
+
+/// The bounding box of `rect` after `transform`, or `None` when the result is not finite.
+pub fn aabb_of_transformed(rect: Rect, transform: Affine) -> Option<Rect> {
+    let bounds = transform.transform_rect_bbox(rect);
+    is_finite_rect(&bounds).then_some(bounds)
 }
 
 /// One spatial node on the way from a node to the root of the scroll tree.
@@ -25,7 +34,10 @@ pub enum SpatialKind {
     Other,
 }
 
-// stub
-pub fn scroll_applies(_chain_from_node_to_root: &[SpatialKind], _scrolled: u64) -> bool {
-    false
+/// Whether a scroll of `scrolled` moves a node whose spatial chain (node first, root last) is
+/// `chain_from_node_to_root`: the node scrolls with the scroller it sits inside.
+pub fn scroll_applies(chain_from_node_to_root: &[SpatialKind], scrolled: u64) -> bool {
+    chain_from_node_to_root
+        .iter()
+        .any(|kind| *kind == SpatialKind::Scroll(scrolled))
 }
