@@ -598,3 +598,69 @@ pub struct Panicked;
 pub fn guarded<T>(work: impl FnOnce() -> T) -> Result<T, Panicked> {
     catch_unwind(AssertUnwindSafe(work)).map_err(|_| Panicked)
 }
+
+/// Tree updates waiting for the main thread, merged per tree so that one push is one node-set
+/// merge rather than a replay of every update.
+///
+/// A push folds into the tree's newest queued update while that update keeps at most `max_nodes`
+/// distinct nodes; past the cap a new update is started. Merging keeps the later write of each
+/// node, the last focus, and the first `tree` field of its tree. `take` returns the oldest queued
+/// update across all trees. `merged` counts pushes folded into an earlier update.
+pub struct PendingUpdates {
+    max_nodes: usize,
+    queue: Vec<accesskit::TreeUpdate>,
+    merged: usize,
+}
+
+impl PendingUpdates {
+    pub fn new(max_nodes: usize) -> Self {
+        Self {
+            max_nodes,
+            queue: Vec::new(),
+            merged: 0,
+        }
+    }
+
+    pub fn push(&mut self, update: accesskit::TreeUpdate) {
+        let max_nodes = self.max_nodes;
+        let newest = self
+            .queue
+            .iter_mut()
+            .rev()
+            .find(|queued| queued.tree_id == update.tree_id);
+        let Some(newest) = newest else {
+            self.queue.push(update);
+            return;
+        };
+        let mut ids: std::collections::HashSet<accesskit::NodeId> =
+            newest.nodes.iter().map(|(id, _)| *id).collect();
+        ids.extend(update.nodes.iter().map(|(id, _)| *id));
+        if ids.len() > max_nodes {
+            self.queue.push(update);
+            return;
+        }
+        self.merged += 1;
+        for (id, node) in update.nodes {
+            match newest.nodes.iter_mut().find(|(queued, _)| *queued == id) {
+                Some(slot) => slot.1 = node,
+                None => newest.nodes.push((id, node)),
+            }
+        }
+        newest.focus = update.focus;
+        if newest.tree.is_none() {
+            newest.tree = update.tree;
+        }
+    }
+
+    pub fn take(&mut self) -> Option<accesskit::TreeUpdate> {
+        if self.queue.is_empty() {
+            None
+        } else {
+            Some(self.queue.remove(0))
+        }
+    }
+
+    pub fn merged(&self) -> usize {
+        self.merged
+    }
+}

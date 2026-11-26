@@ -37,7 +37,5 @@ pub enum SpatialKind {
 /// Whether a scroll of `scrolled` moves a node whose spatial chain (node first, root last) is
 /// `chain_from_node_to_root`: the node scrolls with the scroller it sits inside.
 pub fn scroll_applies(chain_from_node_to_root: &[SpatialKind], scrolled: u64) -> bool {
-    chain_from_node_to_root
-        .iter()
-        .any(|kind| *kind == SpatialKind::Scroll(scrolled))
+    chain_from_node_to_root.contains(&SpatialKind::Scroll(scrolled))
 }
