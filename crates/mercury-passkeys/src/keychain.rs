@@ -99,7 +99,9 @@ pub enum AccessPolicy {
 ///
 /// See the module documentation for the item layout. Every operation is restricted to the one
 /// keychain this backend was made for. Listing reads attributes only and never secret data. Items
-/// under the service whose account or comment does not decode are skipped, never removed.
+/// under the service whose account does not decode as a version-1 passkey account are skipped and
+/// never removed. An item with a valid account but a missing or damaged comment is listed as
+/// skipped, and `stored_keys` still returns its key so that `remove_all` removes it.
 ///
 /// `Debug` shows only whether the backend uses the default keychain or a file, and the access
 /// policy.
@@ -370,6 +372,32 @@ impl PasskeyBackend for KeychainPasskeyBackend {
             }
         }
         Ok(summaries)
+    }
+
+    /// Like `list`, but a valid version-1 account is enough: an item whose comment is missing or
+    /// damaged is still this application's passkey, so its key is returned.
+    fn stored_keys(&self) -> Result<Vec<PasskeyKey>, PasskeyError> {
+        let keychain = self.keychain()?;
+        let results = match search(&keychain)
+            .load_attributes(true)
+            .limit(Limit::All)
+            .search()
+        {
+            Ok(results) => results,
+            Err(error) if error.code() == ERR_SEC_ITEM_NOT_FOUND => return Ok(Vec::new()),
+            Err(error) => return Err(map_error(error)),
+        };
+        let mut keys = Vec::with_capacity(results.len());
+        for result in &results {
+            let key = result.simplify_dict().and_then(|attributes| {
+                attributes.get("acct").and_then(|text| decode_account(text))
+            });
+            match key {
+                Some(key) => keys.push(key),
+                None => log::debug!("skipping a Keychain item whose account is not a passkey"),
+            }
+        }
+        Ok(keys)
     }
 }
 

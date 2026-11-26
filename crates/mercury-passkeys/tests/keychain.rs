@@ -500,7 +500,8 @@ mod keychain_only {
         ] {
             add_foreign_item(&handle, KEYCHAIN_SERVICE, &account, Some(good_comment));
         }
-        // A readable account with no comment, and with a comment of another shape.
+        // Valid v1 accounts of this service whose metadata is damaged: no comment, and a comment of
+        // another shape. These are this application's passkeys, so `remove_all` removes them.
         add_foreign_item(
             &handle,
             KEYCHAIN_SERVICE,
@@ -514,8 +515,9 @@ mod keychain_only {
             Some("not json"),
         );
         let foreign = attributes(&handle).len();
-        // One other application's item, eight undecodable accounts and two undecodable comments.
-        assert_eq!(foreign, 11);
+        // One other application's item and eight invalid accounts, which `remove_all` never touches.
+        let never_touched = 9;
+        assert_eq!(foreign, never_touched + 2);
 
         let store = PasskeyStore::new(backend);
         store
@@ -524,19 +526,37 @@ mod keychain_only {
         store.save(&passkey("example.org", 2, "bob")).expect("save");
         assert_eq!(store.all().expect("all").len(), 2);
 
-        assert_eq!(store.remove_all().expect("remove all"), 2);
+        assert_eq!(store.remove_all().expect("remove all"), 4);
         assert!(store.all().expect("all").is_empty());
         let remaining = attributes(&handle);
         assert_eq!(
             remaining.len(),
-            foreign,
-            "every foreign item is still there"
+            never_touched,
+            "every item of another application, and every invalid account, is still there"
         );
         assert!(
             remaining
                 .iter()
                 .all(|item| item["labl"] == "foreign test item")
         );
+    }
+
+    #[test]
+    fn remove_all_deletes_a_passkey_with_damaged_metadata() {
+        let (guard, backend) = temp_keychain();
+        let handle = guard.handle();
+        let damaged = key("damaged.example", &id(7));
+        add_foreign_item(
+            &handle,
+            KEYCHAIN_SERVICE,
+            &account_of(&damaged),
+            Some("not json"),
+        );
+        let store = PasskeyStore::new(backend);
+        assert!(store.all().expect("all").is_empty());
+
+        assert_eq!(store.remove_all().expect("remove all"), 1);
+        assert!(attributes(&handle).is_empty());
     }
 
     #[test]

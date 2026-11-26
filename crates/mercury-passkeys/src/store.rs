@@ -123,14 +123,18 @@ impl<B: PasskeyBackend> PasskeyStore<B> {
     /// Removes every passkey this application stored and returns how many were removed; same rule
     /// as [`PasskeyStore::remove_for_rp`].
     pub fn remove_all(&self) -> Result<u64, PasskeyError> {
-        self.remove_listed(self.backend.list()?)
+        self.remove_keys(self.backend.stored_keys()?)
     }
 
     fn remove_listed(&self, listed: Vec<PasskeySummary>) -> Result<u64, PasskeyError> {
+        self.remove_keys(listed.into_iter().map(|summary| summary.key).collect())
+    }
+
+    fn remove_keys(&self, keys: Vec<PasskeyKey>) -> Result<u64, PasskeyError> {
         let mut removed = 0;
         let mut first_error = None;
-        for summary in listed {
-            match self.backend.delete(&summary.key) {
+        for key in keys {
+            match self.backend.delete(&key) {
                 Ok(true) => removed += 1,
                 Ok(false) => {}
                 Err(error) => {

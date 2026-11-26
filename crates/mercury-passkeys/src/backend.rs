@@ -25,6 +25,15 @@ pub trait PasskeyBackend: Send + Sync {
     fn delete(&self, key: &PasskeyKey) -> Result<bool, PasskeyError>;
     /// Every passkey this application stored, without private keys, in no particular order.
     fn list(&self) -> Result<Vec<PasskeySummary>, PasskeyError>;
+    /// The keys of every passkey this application stored, including any whose metadata cannot be
+    /// read. Items of other applications are never included.
+    fn stored_keys(&self) -> Result<Vec<PasskeyKey>, PasskeyError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .map(|summary| summary.key)
+            .collect())
+    }
 }
 
 /// Passkeys kept in this process's memory only. For tests, and for platforms without a backend.
