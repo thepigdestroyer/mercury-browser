@@ -47,6 +47,7 @@ fn show_mercury(window: &MainWindow) {
     window.set_dock_band(DOCK_OPEN);
     window.set_dial_shown(false);
     window.set_window_controls_inset(0.0);
+    window.set_bookmarks_bar_shown(false);
 }
 
 /// The Classic tree: the tab row above the toolbar, no dock, no hub button.
@@ -58,6 +59,7 @@ fn show_classic(window: &MainWindow) {
     window.set_dock_band(0.0);
     window.set_dial_shown(false);
     window.set_window_controls_inset(0.0);
+    window.set_bookmarks_bar_shown(false);
 }
 
 /// Rows for the dock and the dial, and the feed that puts them on the bridges.
@@ -139,6 +141,7 @@ fn the_page_area_height_is_window_minus_rows_and_band() {
 fn an_unpushed_window_is_roomy_classic() {
     a11y::init();
     let window = MainWindow::new().unwrap();
+    window.set_bookmarks_bar_shown(false);
     a11y::open_window(&window, WIDTH, HEIGHT);
     let page_y = window.get_controls_page_y();
     assert!(
