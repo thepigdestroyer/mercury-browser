@@ -354,10 +354,9 @@ fn the_web_page_node_only_speaks_when_no_pdf_is_shown() {
     window.set_web_view_visible(true);
     let nodes = reading_order(&window);
     let page = node_in(&nodes, Role::Main, "Page content");
-    assert_eq!(
-        page.description,
-        "Mercury doesn't pass web page content to assistive technology yet."
-    );
+    // a11y-1 (EE1) grafts the shown tab's page tree under this node, so it no longer carries the
+    // old "doesn't pass web page content" description; it is the plain "Page content" landmark.
+    assert_eq!(page.description, "");
     assert!(
         nodes
             .iter()
