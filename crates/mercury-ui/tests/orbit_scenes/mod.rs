@@ -22,9 +22,9 @@ use mercury_ui::orbit_view::fixtures::{
     generated_input, orbit_groups, orbit_input, orbit_tabs, skeleton_picture, tab_id,
 };
 use mercury_ui::orbit_view::machine::OrbitMachine;
-use mercury_ui::orbit_view::{DragView, Level, OrbitInput, Stage, Target, View, search};
+use mercury_ui::orbit_view::{DragView, OrbitInput, Stage, Target, View, search};
 use mercury_ui::ring_bands::RingColours;
-use mercury_ui::{ChromePalette, ChromeTheme, Look, OrbitLevel, OrbitPreview, apply_look};
+use mercury_ui::{ChromePalette, ChromeTheme, Look, OrbitPreview, apply_look};
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, PlatformError, WindowAdapter, WindowEvent};
 use slint::{ComponentHandle, PhysicalSize, Rgba8Pixel, SharedPixelBuffer};
@@ -159,49 +159,29 @@ impl Scene {
         };
         self.data = OrbitData::build(STAGE, &self.input, &view, &snapshots, &options);
         self.models.update(&self.data);
+        // The single values come from the same `Frame` the desktop glue pushes.
+        let frame = self.models.frame(&view, &self.input, true, "");
         let window = &self.window;
-        window.set_level(match view.level {
-            Level::Groups => OrbitLevel::Groups,
-            Level::Group => OrbitLevel::Group,
-            Level::Tab => OrbitLevel::Tab,
-        });
+        window.set_level(frame.level);
         window.set_planets(self.models.planets());
-        window.set_centre(self.models.centre());
-        window.set_has_centre(self.models.has_centre());
+        window.set_centre(frame.centre);
+        window.set_has_centre(frame.has_centre);
         window.set_previews(self.models.previews());
-        window.set_more_previews(self.models.more_previews());
+        window.set_more_previews(frame.more_previews);
         window.set_chips(self.models.chips());
         window.set_neighbours(self.models.neighbours());
-        window.set_card(self.models.card());
-        window.set_sun(self.models.sun());
-        window.set_new_group(self.models.new_group());
-        window.set_drag(self.models.drag());
-        window.set_popover(self.models.popover());
+        window.set_card(frame.card);
+        window.set_sun(frame.sun);
+        window.set_new_group(frame.new_group);
+        window.set_drag(frame.drag);
+        window.set_popover(frame.popover);
         window.set_crumbs(self.models.crumbs());
-        window.set_container_label(self.container_label(&view).into());
-        window.set_query_active(!view.query.is_empty());
+        window.set_container_label(frame.container_label);
+        window.set_search_placeholder(frame.search_placeholder);
+        window.set_query_active(frame.query_active);
         window.set_search_text(view.query.as_str().into());
-        window.set_focus_tab(match view.focus {
-            Some(Target::Preview(tab)) => tab,
-            _ => -1,
-        });
-    }
-
-    /// "Orbit, every group", "Orbit, Research, 10 tabs", "Orbit, AccessKit guide, tab 4 of 10".
-    fn container_label(&self, view: &View) -> String {
-        let group = view.group.and_then(|g| self.input.group(g));
-        let tab = view.tab.and_then(|t| self.input.tab(t));
-        match (view.level, group, tab) {
-            (Level::Group, Some(group), _) => {
-                format!("Orbit, {}, {} tabs", group.name, group.count)
-            }
-            (Level::Tab, Some(group), Some(tab)) => {
-                let own = self.input.tabs_of(group.id);
-                let place = own.iter().position(|t| t.id == tab.id).map_or(0, |i| i + 1);
-                format!("Orbit, {}, tab {place} of {}", tab.title, own.len())
-            }
-            _ => "Orbit, every group".to_string(),
-        }
+        window.set_focus_tab(frame.focus_tab);
+        window.set_notice(frame.notice);
     }
 
     /// The slint row of the planet of this group.
@@ -215,10 +195,27 @@ impl Scene {
             .row
     }
 
-    /// Draws the window at 1440 x 900 logical px and scale 2 (software renderer).
+    /// Draws the window at 1440 x 900 logical px and scale 2 (software renderer), with the keyboard
+    /// focus where the host puts it when Orbit opens (`focus-view`), unless the popover's name field
+    /// has it.
     pub fn render(&self) -> Pixels {
+        self.draw(true)
+    }
+
+    /// Like [`Scene::render`] with a window that is not the active one: no keyboard focus ring.
+    pub fn render_unfocused(&self) -> Pixels {
+        self.draw(false)
+    }
+
+    fn draw(&self, focused: bool) -> Pixels {
         let window = self.window.window();
         self.window.show().expect("the preview can be shown");
+        if focused {
+            window.dispatch_event(WindowEvent::WindowActiveChanged(true));
+            if !self.models.popover().visible {
+                self.window.invoke_focus_view();
+            }
+        }
         window.dispatch_event(WindowEvent::ScaleFactorChanged {
             scale_factor: SCALE,
         });
@@ -277,8 +274,8 @@ pub fn scene(frame: Frame, dark: bool) -> Scene {
             scene.machine.drag_started(source);
             scene.machine.drag_over(Some(DropTarget::NewGroup));
             let over = Some(DropTarget::NewGroup);
+            // The product opens the popover empty: the field shows its placeholder and no name.
             scene.machine.drag_released();
-            scene.machine.popover_edited("Untitled group", "blue");
             scene.ghost = Some(DragView { source, over });
         }
         Frame::ManyGroups => scene.machine.hover(Target::Planet(1)),

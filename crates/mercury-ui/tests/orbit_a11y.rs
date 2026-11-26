@@ -20,7 +20,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use common::a11y::{self, Node, assert_labelled, node_in, reading_order};
-use i_slint_backend_testing::AccessibleRole as Role;
+use i_slint_backend_testing::{AccessibleLiveness, AccessibleRole as Role};
 use mercury_ui::{
     OrbitChip, OrbitNeighbour, OrbitPlanet, OrbitPopover, OrbitPreview, OrbitPreviewCard,
 };
@@ -194,14 +194,82 @@ fn level_one_has_a_button_per_planet_the_sun_the_new_group_ring_and_nothing_else
         texts,
         vec![
             "Orbit".to_string(),
-            "Personal, Window 1 · 40 tabs".to_string()
+            "Personal, window 1, 40 tabs".to_string()
         ],
-        "the hints, the hole texts and the glyphs are decoration"
+        "the hints, the hole texts and the glyphs are decoration; the sun is read in words"
     );
     let fields = of_role(&nodes, Role::TextInput);
     assert_eq!(fields.len(), 1);
     assert_eq!(fields[0].label, "Search tabs");
-    assert_eq!(fields[0].placeholder(), "Search tabs");
+    assert_eq!(fields[0].placeholder(), "Search 40 tabs");
+}
+
+#[test]
+fn the_search_field_is_500_by_40_and_centred() {
+    // SPEC mockup: the field is 500 x 40 at the middle of the title bar; its text box starts 36 px
+    // in and ends 16 px before the right edge.
+    let (window, _log, _rows) = window(Frame::Overview, false);
+    let nodes = reading_order(&window);
+    let field = node_in(&nodes, Role::TextInput, "Search tabs").rect();
+    assert!((field.x - (470.0 + 36.0)).abs() < 0.5, "{field:?}");
+    assert!(
+        (field.width - (500.0 - 36.0 - 16.0)).abs() < 0.5,
+        "{field:?}"
+    );
+    assert!((field.height - 40.0).abs() < 0.5, "{field:?}");
+    assert!((field.y - 4.0).abs() < 0.5, "{field:?}");
+}
+
+#[test]
+fn the_search_placeholder_is_what_the_host_sets() {
+    let (window, _log, _rows) = window(Frame::Overview, false);
+    window.set_search_placeholder("Search 12 tabs".into());
+    let nodes = reading_order(&window);
+    assert_eq!(
+        node_in(&nodes, Role::TextInput, "Search tabs").placeholder(),
+        "Search 12 tabs"
+    );
+}
+
+#[test]
+fn the_sun_is_read_with_its_own_accessible_label_not_the_drawn_texts() {
+    let (window, _log, _rows) = window(Frame::Overview, false);
+    let mut sun = window.get_sun();
+    sun.accessible_label = "Work, window 2, 9 tabs".into();
+    window.set_sun(sun);
+    let nodes = reading_order(&window);
+    let texts = labels(&of_role(&nodes, Role::Text));
+    assert!(
+        texts.contains(&"Work, window 2, 9 tabs".to_string()),
+        "{texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t.contains('·')),
+        "the middle dot is never read: {texts:?}"
+    );
+}
+
+#[test]
+fn a_refused_drop_notice_is_a_live_region_that_names_its_text() {
+    let (window, _log, _rows) = window(Frame::Overview, false);
+    assert!(
+        !of_role(&reading_order(&window), Role::Text)
+            .iter()
+            .any(|n| n.label.contains("pinned")),
+        "no notice, nothing to read"
+    );
+    window.set_notice("That tab is pinned, so it stays where it is".into());
+    let nodes = reading_order(&window);
+    let notice = node_in(
+        &nodes,
+        Role::Text,
+        "That tab is pinned, so it stays where it is",
+    );
+    assert_eq!(
+        notice.handle.accessible_live_region(),
+        Some(AccessibleLiveness::Polite),
+        "VoiceOver announces it when it appears"
+    );
 }
 
 #[test]
@@ -336,10 +404,45 @@ fn the_popover_is_a_labelled_group_with_a_field_and_six_colour_choices() {
         1,
         "exactly one colour is chosen"
     );
-    assert_eq!(dots[0].checked, Some(true));
+    let selected = usize::try_from(rows.popover.selected).expect("a colour is chosen");
+    assert_eq!(dots[selected].checked, Some(true));
     node_in(&nodes, Role::RadioButton, "rose").press();
     assert_eq!(take(&log), vec!["colour 3"]);
     assert_eq!(rows.popover.colour_names.row_count(), 6);
+}
+
+#[test]
+fn the_popover_field_is_empty_and_announces_its_placeholder() {
+    let (window, _log, rows) = window(Frame::NewGroup, false);
+    assert_eq!(
+        rows.popover.name, "",
+        "the scene no longer pre-fills a name"
+    );
+    let mut popover = window.get_popover();
+    popover.placeholder = "Untitled group".into();
+    popover.selected = 2;
+    window.set_popover(popover);
+    let nodes = reading_order(&window);
+    let field = node_in(&nodes, Role::TextInput, "Group name");
+    assert_eq!(field.value, "");
+    assert_eq!(field.placeholder(), "Untitled group");
+    let dots = of_role(&nodes, Role::RadioButton);
+    assert_eq!(
+        dots[2].checked,
+        Some(true),
+        "the dot at `selected` is chosen"
+    );
+    assert_eq!(dots.iter().filter(|d| d.checked == Some(true)).count(), 1);
+}
+
+#[test]
+fn the_scene_popover_carries_the_placeholder_and_a_chosen_dot() {
+    let (_window, _log, rows) = window(Frame::NewGroup, false);
+    assert_eq!(rows.popover.placeholder, "Untitled group");
+    assert!(
+        rows.popover.selected >= 0,
+        "an empty colour shows the one the controller will use"
+    );
 }
 
 #[test]

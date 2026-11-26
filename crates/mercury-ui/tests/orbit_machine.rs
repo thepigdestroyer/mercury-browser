@@ -631,7 +631,7 @@ fn level_two_arrows_walk_the_previews_active_first_and_clamp() {
 }
 
 #[test]
-fn level_two_arrows_cross_from_the_first_ring_to_the_second_and_stop_at_the_last_shown() {
+fn level_two_arrows_cross_from_the_first_ring_to_the_second_and_on_to_the_undrawn_tabs() {
     let mut machine = opened_with(&big_group(30));
     machine.click(Target::Planet(1));
     for _ in 0..11 {
@@ -655,9 +655,10 @@ fn level_two_arrows_cross_from_the_first_ring_to_the_second_and_stop_at_the_last
     }
     assert_eq!(
         machine.view().tab,
-        Some(523),
-        "24 previews are shown, the rest is '+N more'"
+        Some(529),
+        "the focus walks every tab, the last of the 30 included (F14)"
     );
+    assert_eq!(machine.view().focus, Some(Target::Preview(529)));
 }
 
 #[test]
@@ -767,6 +768,7 @@ fn keys_that_belong_to_a_text_field_are_not_commands_while_it_has_the_focus() {
         Key::Right,
         Key::Up,
         Key::Down,
+        Key::Tab,
     ] {
         let mut machine = opened();
         let before = machine.view();
@@ -863,6 +865,7 @@ fn n_while_the_popover_is_open_does_nothing_more() {
         "the popover is modal"
     );
     assert!(press(&mut machine, Key::Right).is_empty());
+    assert!(press(&mut machine, Key::Tab).is_empty());
     assert!(command(&mut machine, Key::Up).is_empty());
     assert_eq!(machine.view().level, Level::Group);
     assert_eq!(machine.view().tab, Some(101));
@@ -905,7 +908,7 @@ fn confirming_the_popover_applies_create_group_with_the_name_and_colour() {
 }
 
 #[test]
-fn confirming_with_no_name_or_colour_leaves_them_to_the_controller() {
+fn confirming_with_no_name_leaves_it_to_the_controller_and_sends_the_shown_default_colour() {
     let mut machine = at_group(1);
     press(&mut machine, Key::N);
     let effects = machine.popover_confirmed("   ", "");
@@ -914,7 +917,7 @@ fn confirming_with_no_name_or_colour_leaves_them_to_the_controller() {
         vec![Effect::Apply(GroupOp::CreateGroup {
             tabs: vec![101],
             name: None,
-            colour: None,
+            colour: Some(mercury_ui::orbit_view::data::DEFAULT_POPOVER_COLOUR.to_string()),
         })]
     );
 }
@@ -1615,6 +1618,9 @@ fn level_two_order_follows_a_changed_active_tab_without_moving_the_focus() {
 enum Event {
     Click(Target),
     Press(Key),
+    ShiftTab,
+    /// ⌥ + an arrow: moves a tab.
+    AltPress(Key),
     CommandUp,
 }
 
@@ -1628,7 +1634,22 @@ enum Outcome {
     Close(Option<i32>),
     Popover,
     FocusSearch,
+    /// `Effect::Resolve`: a tab is moved.
+    MoveTab,
 }
+
+const ALT: Mods = Mods {
+    command: false,
+    shift: false,
+    alt: true,
+    control: false,
+};
+const SHIFT: Mods = Mods {
+    command: false,
+    shift: true,
+    alt: false,
+    control: false,
+};
 
 /// Every kind of target, with ids that exist in the fixture (Planet 2, Preview 103, Chip 2,
 /// Neighbour 105). The match makes a new `Target` or `Key` variant fail to compile here.
@@ -1653,6 +1674,7 @@ fn every_event() -> Vec<Event> {
             | Key::Down
             | Key::Left
             | Key::Right
+            | Key::Tab
             | Key::N
             | Key::Slash
             | Key::Char(_) => {}
@@ -1679,12 +1701,19 @@ fn every_event() -> Vec<Event> {
             Key::Down,
             Key::Left,
             Key::Right,
+            Key::Tab,
             Key::N,
             Key::Slash,
             Key::Char('x'),
         ]
         .into_iter()
         .map(Event::Press),
+    );
+    events.push(Event::ShiftTab);
+    events.extend(
+        [Key::Left, Key::Right, Key::Up, Key::Down]
+            .into_iter()
+            .map(Event::AltPress),
     );
     events.push(Event::CommandUp);
     events
@@ -1696,6 +1725,7 @@ fn classify(before: &View, after: &View, effects: &[Effect]) -> Outcome {
             Effect::Close { activate } => return Outcome::Close(*activate),
             Effect::OpenNewGroupPopover { .. } => return Outcome::Popover,
             Effect::FocusSearch => return Outcome::FocusSearch,
+            Effect::Resolve(_) => return Outcome::MoveTab,
             _ => {}
         }
     }
@@ -1719,6 +1749,8 @@ fn run(level: u8, event: Event) -> Outcome {
     let effects = match event {
         Event::Click(target) => machine.click(target),
         Event::Press(key) => press(&mut machine, key),
+        Event::ShiftTab => machine.key(Key::Tab, SHIFT, KeyContext::default()),
+        Event::AltPress(key) => machine.key(key, ALT, KeyContext::default()),
         Event::CommandUp => command(&mut machine, Key::Up),
     };
     classify(&before, &machine.view(), &effects)
@@ -1774,6 +1806,15 @@ fn every_level_and_event_pair_has_the_documented_result() {
         (Event::Press(Key::Down), Moved, Nothing, Nothing),
         (Event::Press(Key::Left), Nothing, Nothing, Moved),
         (Event::Press(Key::Right), Moved, Moved, Moved),
+        // Tab goes forward from the first item at every level; ⇧⇥ is back, so clamped there.
+        (Event::Press(Key::Tab), Moved, Moved, Moved),
+        (Event::ShiftTab, Nothing, Nothing, Moved),
+        // ⌥ + arrows move a tab at levels 2 and 3 (the fixture's tab is the first of the first
+        // group at level 2 and the fourth at level 3) and are ignored at level 1.
+        (Event::AltPress(Key::Left), Nothing, Nothing, MoveTab),
+        (Event::AltPress(Key::Right), Nothing, MoveTab, MoveTab),
+        (Event::AltPress(Key::Up), Nothing, Nothing, Nothing),
+        (Event::AltPress(Key::Down), Nothing, MoveTab, MoveTab),
         (Event::Press(Key::N), Popover, Popover, Popover),
         (
             Event::Press(Key::Slash),
@@ -1870,7 +1911,8 @@ fn random_target(rng: &mut Rng) -> Target {
 }
 
 fn random_key(rng: &mut Rng) -> Key {
-    match rng.below(9) {
+    match rng.below(10) {
+        8 => Key::Tab,
         0 => Key::Escape,
         1 => Key::Enter,
         2 => Key::Up,
@@ -1896,6 +1938,54 @@ fn random_drop(rng: &mut Rng) -> Option<DropTarget> {
                 None
             },
         }),
+    }
+}
+
+/// What the host animates: the level, the group at levels 2 and 3, the tab at level 3.
+fn shown(view: &View) -> (Level, Option<i32>, Option<i32>) {
+    (
+        view.level,
+        (view.level != Level::Groups)
+            .then_some(view.group)
+            .flatten(),
+        (view.level == Level::Tab).then_some(view.tab).flatten(),
+    )
+}
+
+/// What the effects of one click, key, pinch end or row change must say about the view before and
+/// after it.
+fn check_effects(before: &View, after: &View, effects: &[Effect], context: &str) {
+    let zoomed = effects.iter().any(|e| matches!(e, Effect::ZoomedTo(_)));
+    assert_eq!(
+        zoomed,
+        shown(before) != shown(after),
+        "ZoomedTo exactly when the level, group or tab changed {context}"
+    );
+    if zoomed {
+        assert_eq!(
+            after.hover, None,
+            "a level change clears the hover {context}"
+        );
+        assert!(
+            effects.contains(&Effect::ZoomedTo(after.clone())),
+            "ZoomedTo carries the new view {context}"
+        );
+    }
+    if effects.iter().any(|e| matches!(e, Effect::Close { .. })) {
+        assert_eq!(effects.len(), 1, "Close is the only effect {context}");
+    }
+    for effect in effects {
+        if let Effect::Resolve(decision) = effect {
+            // Only a key move (⌥ + arrow) resolves outside a drag: a real move of the tab that is
+            // shown (level 3) or focused (level 2).
+            assert!(
+                matches!(
+                    decision,
+                    Decision::MoveTab { tab, .. } if Some(*tab) == before.tab
+                ),
+                "{decision:?} {context}"
+            );
+        }
     }
 }
 
@@ -2003,10 +2093,12 @@ fn a_thousand_random_event_sequences_never_leave_an_impossible_state() {
         );
         let mut log: Vec<String> = Vec::new();
         for step in 0..60 {
+            let before = machine.view();
+            let mut effects: Option<Vec<Effect>> = None;
             let what = match rng.below(15) {
                 0..=2 => {
                     let target = random_target(&mut rng);
-                    machine.click(target);
+                    effects = Some(machine.click(target));
                     format!("click {target:?}")
                 }
                 3 => {
@@ -2018,13 +2110,14 @@ fn a_thousand_random_event_sequences_never_leave_an_impossible_state() {
                     let key = random_key(&mut rng);
                     let mods = Mods {
                         command: rng.chance(20),
-                        alt: rng.chance(5),
+                        alt: rng.chance(25),
+                        shift: rng.chance(20),
                         ..Mods::NONE
                     };
                     let context = KeyContext {
                         text_input_focused: rng.chance(15),
                     };
-                    machine.key(key, mods, context);
+                    effects = Some(machine.key(key, mods, context));
                     format!("key {key:?} {mods:?} {context:?}")
                 }
                 6 => {
@@ -2039,7 +2132,7 @@ fn a_thousand_random_event_sequences_never_leave_an_impossible_state() {
                 }
                 8 => {
                     if rng.chance(70) {
-                        machine.pinch_ended();
+                        effects = Some(machine.pinch_ended());
                         "pinch_ended".to_string()
                     } else {
                         machine.pinch_cancelled();
@@ -2072,7 +2165,7 @@ fn a_thousand_random_event_sequences_never_leave_an_impossible_state() {
                 12 => {
                     if rng.chance(50) {
                         input = random_input(&mut rng);
-                        machine.rows_changed(&input);
+                        effects = Some(machine.rows_changed(&input));
                         "rows_changed".to_string()
                     } else {
                         let query = ["", "servo", "zzz", "a"][rng.below(4) as usize];
@@ -2090,11 +2183,791 @@ fn a_thousand_random_event_sequences_never_leave_an_impossible_state() {
                 }
             };
             log.push(what.clone());
-            check_invariants(
-                &machine,
-                &input,
-                &format!("sequence {sequence} step {step} after `{what}`; history {log:?}"),
-            );
+            let context =
+                format!("sequence {sequence} step {step} after `{what}`; history {log:?}");
+            if let Some(effects) = effects {
+                check_effects(&before, &machine.view(), &effects, &context);
+            }
+            check_invariants(&machine, &input, &context);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// ⇥ steps the focus through the items of the level (F3a)
+
+fn shift_tab(machine: &mut OrbitMachine) -> Vec<Effect> {
+    machine.key(Key::Tab, SHIFT, KeyContext::default())
+}
+
+fn alt(machine: &mut OrbitMachine, key: Key) -> Vec<Effect> {
+    machine.key(key, ALT, KeyContext::default())
+}
+
+#[test]
+fn tab_steps_through_the_planets_in_group_order_and_shift_tab_goes_back_clamped() {
+    let mut machine = opened();
+    assert!(
+        shift_tab(&mut machine).is_empty(),
+        "clamped at the first planet"
+    );
+    assert_eq!(machine.view().focus, Some(Target::Planet(1)));
+    for group in 2..=5 {
+        assert!(press(&mut machine, Key::Tab).is_empty());
+        assert_eq!(machine.view().focus, Some(Target::Planet(group)));
+        assert_eq!(machine.view().group, Some(group));
+    }
+    press(&mut machine, Key::Tab);
+    assert_eq!(
+        machine.view().focus,
+        Some(Target::Planet(5)),
+        "clamped, not wrapped"
+    );
+    for group in (1..=4).rev() {
+        assert!(shift_tab(&mut machine).is_empty());
+        assert_eq!(machine.view().focus, Some(Target::Planet(group)));
+    }
+    shift_tab(&mut machine);
+    assert_eq!(machine.view().focus, Some(Target::Planet(1)));
+    assert_eq!(machine.view().level, Level::Groups);
+}
+
+#[test]
+fn tab_steps_through_the_previews_in_level_two_order_and_shift_tab_goes_back() {
+    let mut machine = OrbitMachine::new(1);
+    machine.open(&OrbitInput {
+        active_tab: 104,
+        ..orbit_input(false)
+    });
+    machine.click(Target::Planet(1));
+    assert!(shift_tab(&mut machine).is_empty(), "clamped at the first");
+    let mut seen = vec![machine.view().tab.expect("a focused tab")];
+    for _ in 0..12 {
+        press(&mut machine, Key::Tab);
+        let tab = machine.view().tab.expect("a focused tab");
+        if seen.last() != Some(&tab) {
+            seen.push(tab);
+        }
+        assert_eq!(machine.view().focus, Some(Target::Preview(tab)));
+    }
+    assert_eq!(
+        seen,
+        vec![104, 101, 102, 103, 105, 106, 107, 108, 109, 110],
+        "the active tab first, then the strip; clamped at the last"
+    );
+    shift_tab(&mut machine);
+    assert_eq!(machine.view().tab, Some(109));
+    assert_eq!(machine.view().level, Level::Group);
+}
+
+#[test]
+fn tab_at_level_three_shows_the_next_tab_of_the_strip_and_shift_tab_the_previous() {
+    let mut machine = at_tab(104);
+    let effects = press(&mut machine, Key::Tab);
+    assert_eq!(machine.view().tab, Some(105));
+    assert_eq!(effects, zoomed(&machine));
+    let effects = shift_tab(&mut machine);
+    assert_eq!(machine.view().tab, Some(104));
+    assert_eq!(effects, zoomed(&machine));
+    assert_eq!(machine.view().focus, Some(Target::Card));
+
+    let mut last = at_tab(110);
+    assert!(press(&mut last, Key::Tab).is_empty(), "clamped at the last");
+    assert_eq!(last.view().tab, Some(110));
+    let mut first = at_tab(101);
+    assert!(shift_tab(&mut first).is_empty(), "clamped at the first");
+    assert_eq!(first.view().tab, Some(101));
+}
+
+#[test]
+fn tab_with_command_alt_or_control_is_not_ours() {
+    for mods in [
+        Mods::COMMAND,
+        ALT,
+        Mods {
+            control: true,
+            ..Mods::NONE
+        },
+    ] {
+        let mut machine = opened();
+        let before = machine.view();
+        assert!(
+            machine
+                .key(Key::Tab, mods, KeyContext::default())
+                .is_empty()
+        );
+        assert_eq!(machine.view(), before, "{mods:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// ⌥ + arrows move a tab (F3b)
+
+fn tab_move(input: &OrbitInput, tab: i32, group: i32, slot: Option<usize>) -> Vec<Effect> {
+    vec![Effect::Resolve(drag::resolve(
+        Source::Tab(tab),
+        DropTarget::Group { group, slot },
+        input,
+    ))]
+}
+
+fn level_two_on(input: &OrbitInput, group: i32, tab: i32) -> OrbitMachine {
+    let mut machine = opened_with(input);
+    machine.click(Target::Planet(group));
+    // Walk to the tab with ⇥ (the level-2 order starts with the active tab).
+    for _ in 0..60 {
+        if machine.view().tab == Some(tab) {
+            break;
+        }
+        press(&mut machine, Key::Tab);
+    }
+    assert_eq!(machine.view().tab, Some(tab));
+    machine
+}
+
+fn apply_move(order: &mut Vec<i32>, decision: &Decision) {
+    if let Decision::MoveTab { tab, index, .. } = decision {
+        order.retain(|other| other != tab);
+        order.insert(*index, *tab);
+    }
+}
+
+#[test]
+fn alt_left_and_right_move_the_focused_tab_one_place_in_its_group_at_level_two() {
+    let input = OrbitInput {
+        active_tab: 104,
+        ..orbit_input(false)
+    };
+    let mut machine = level_two_on(&input, 1, 104);
+    let before = machine.view();
+    // Tab 104 is the fourth tab of Research (strip index 3).
+    let later = alt(&mut machine, Key::Right);
+    assert_eq!(later, tab_move(&input, 104, 1, Some(5)));
+    assert_eq!(
+        later,
+        vec![Effect::Resolve(Decision::MoveTab {
+            tab: 104,
+            group: Some(1),
+            index: 4
+        })]
+    );
+    let earlier = alt(&mut machine, Key::Left);
+    assert_eq!(earlier, tab_move(&input, 104, 1, Some(2)));
+    assert_eq!(
+        earlier,
+        vec![Effect::Resolve(Decision::MoveTab {
+            tab: 104,
+            group: Some(1),
+            index: 2
+        })]
+    );
+    assert_eq!(machine.view(), before, "the host applies it and sends rows");
+}
+
+#[test]
+fn alt_left_and_right_do_nothing_at_the_ends_of_the_strip() {
+    let input = OrbitInput {
+        active_tab: 104,
+        ..orbit_input(false)
+    };
+    let mut first = level_two_on(&input, 1, 101);
+    assert!(alt(&mut first, Key::Left).is_empty());
+    assert!(!alt(&mut first, Key::Right).is_empty());
+    let mut last = level_two_on(&input, 1, 110);
+    assert!(alt(&mut last, Key::Right).is_empty());
+    assert!(!alt(&mut last, Key::Left).is_empty());
+    assert_eq!(last.view().tab, Some(110));
+}
+
+#[test]
+fn alt_left_and_right_move_the_shown_tab_at_level_three() {
+    let input = orbit_input(false);
+    let mut machine = at_tab(104);
+    assert_eq!(
+        alt(&mut machine, Key::Right),
+        tab_move(&input, 104, 1, Some(5))
+    );
+    assert_eq!(
+        alt(&mut machine, Key::Left),
+        tab_move(&input, 104, 1, Some(2))
+    );
+    assert_eq!(machine.view().level, Level::Tab);
+    assert_eq!(machine.view().tab, Some(104));
+    assert!(alt(&mut at_tab(101), Key::Left).is_empty());
+    assert!(alt(&mut at_tab(110), Key::Right).is_empty());
+}
+
+#[test]
+fn every_alt_left_and_right_move_swaps_the_tab_with_its_neighbour() {
+    let input = big_group(5);
+    for level in [2, 3] {
+        for index in 0..5 {
+            let tab = 500 + index;
+            for (key, other) in [(Key::Left, index - 1), (Key::Right, index + 1)] {
+                let mut machine = if level == 2 {
+                    level_two_on(&input, 1, tab)
+                } else {
+                    let mut machine = opened_with(&input);
+                    machine.click(Target::Planet(1));
+                    machine.click(Target::Preview(tab));
+                    machine
+                };
+                let effects = alt(&mut machine, key);
+                if !(0..5).contains(&other) {
+                    assert!(effects.is_empty(), "level {level}, tab {tab}, {key:?}");
+                    continue;
+                }
+                let [Effect::Resolve(decision)] = effects.as_slice() else {
+                    panic!("level {level}, tab {tab}, {key:?}: {effects:?}");
+                };
+                let mut order: Vec<i32> = (500..505).collect();
+                apply_move(&mut order, decision);
+                let mut swapped: Vec<i32> = (500..505).collect();
+                swapped.swap(index as usize, other as usize);
+                assert_eq!(order, swapped, "level {level}, tab {tab}, {key:?}");
+            }
+        }
+    }
+}
+
+#[test]
+fn alt_up_and_down_move_the_tab_to_the_end_of_the_previous_or_next_group() {
+    let input = orbit_input(false);
+    for level in [2, 3] {
+        let mut machine = if level == 2 {
+            at_group(2)
+        } else {
+            let mut machine = at_group(2);
+            machine.click(Target::Preview(111));
+            machine
+        };
+        assert_eq!(machine.view().tab, Some(111));
+        assert_eq!(
+            alt(&mut machine, Key::Up),
+            tab_move(&input, 111, 1, None),
+            "level {level}"
+        );
+        assert_eq!(
+            alt(&mut machine, Key::Down),
+            tab_move(&input, 111, 3, None),
+            "level {level}"
+        );
+        assert_eq!(
+            alt(&mut machine, Key::Up),
+            vec![Effect::Resolve(Decision::MoveTab {
+                tab: 111,
+                group: Some(1),
+                index: 10
+            })],
+            "the end of Research, which has ten tabs"
+        );
+    }
+}
+
+#[test]
+fn alt_up_and_down_do_nothing_past_the_first_and_the_last_group() {
+    let mut first = at_group(1);
+    assert!(alt(&mut first, Key::Up).is_empty());
+    assert!(!alt(&mut first, Key::Down).is_empty());
+    let mut last = at_group(5);
+    assert!(alt(&mut last, Key::Down).is_empty());
+    assert!(!alt(&mut last, Key::Up).is_empty());
+}
+
+#[test]
+fn alt_arrows_do_nothing_for_a_pinned_tab() {
+    let mut tabs = orbit_tabs();
+    tabs[0].pinned = true;
+    let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false);
+    let mut machine = opened_with(&input);
+    machine.click(Target::Planet(LOOSE_GROUP_ID));
+    assert_eq!(machine.view().tab, Some(101), "the pinned tab is focused");
+    for key in [Key::Left, Key::Right, Key::Up, Key::Down] {
+        assert!(alt(&mut machine, key).is_empty(), "{key:?}");
+    }
+}
+
+#[test]
+fn alt_arrows_in_the_loose_planet_keep_its_order_and_alt_up_down_move_out_of_it() {
+    let mut tabs = orbit_tabs();
+    tabs[0].group = 999;
+    tabs[1].group = 999;
+    let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false);
+    let mut machine = opened_with(&input);
+    machine.click(Target::Planet(LOOSE_GROUP_ID));
+    assert_eq!(machine.view().tab, Some(101));
+    assert!(alt(&mut machine, Key::Left).is_empty());
+    assert!(
+        alt(&mut machine, Key::Right).is_empty(),
+        "the order of the loose tabs is not Orbit's to keep"
+    );
+    assert!(alt(&mut machine, Key::Down).is_empty(), "it is the last");
+    assert_eq!(
+        alt(&mut machine, Key::Up),
+        tab_move(&input, 101, 5, None),
+        "into the last real group"
+    );
+
+    // From the last real group, down is out of every group.
+    let mut machine = opened_with(&input);
+    machine.click(Target::Planet(5));
+    let tab = machine.view().tab.expect("a tab");
+    assert_eq!(
+        alt(&mut machine, Key::Down),
+        vec![Effect::Resolve(Decision::MoveTab {
+            tab,
+            group: None,
+            index: 2
+        })]
+    );
+}
+
+#[test]
+fn alt_arrows_are_not_ours_at_level_one_in_a_text_field_or_during_a_drag_or_the_popover() {
+    for key in [Key::Left, Key::Right, Key::Up, Key::Down] {
+        let mut machine = opened();
+        let before = machine.view();
+        assert!(alt(&mut machine, key).is_empty(), "level 1 {key:?}");
+        assert_eq!(machine.view(), before);
+
+        let mut machine = at_tab(104);
+        assert!(
+            machine
+                .key(
+                    key,
+                    ALT,
+                    KeyContext {
+                        text_input_focused: true
+                    }
+                )
+                .is_empty(),
+            "text field {key:?}"
+        );
+
+        let mut machine = at_tab(104);
+        machine.drag_started(Source::Tab(102));
+        assert!(alt(&mut machine, key).is_empty(), "drag {key:?}");
+        machine.drag_cancelled();
+        press(&mut machine, Key::N);
+        assert!(alt(&mut machine, key).is_empty(), "popover {key:?}");
+    }
+}
+
+#[test]
+fn alt_with_command_or_control_is_not_a_move() {
+    let mut machine = at_tab(104);
+    for mods in [
+        Mods {
+            command: true,
+            ..ALT
+        },
+        Mods {
+            control: true,
+            ..ALT
+        },
+    ] {
+        for key in [Key::Left, Key::Right, Key::Down] {
+            assert!(machine.key(key, mods, KeyContext::default()).is_empty());
+        }
+    }
+    assert_eq!(machine.view().level, Level::Tab);
+}
+
+#[test]
+fn can_drag_is_the_rule_for_what_a_key_or_a_pointer_may_move() {
+    let mut tabs = orbit_tabs();
+    tabs[0].pinned = true;
+    let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 102, false);
+    let machine = opened_with(&input);
+    for (source, expected) in [
+        (Source::Tab(101), false),
+        (Source::Tab(102), true),
+        (Source::Tab(9999), false),
+        (Source::Group(1), true),
+        (Source::Group(LOOSE_GROUP_ID), false),
+        (Source::Group(9999), false),
+    ] {
+        assert_eq!(machine.can_drag(source), expected, "{source:?}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// A level change puts the focus on the new level's first item and clears the hover (F3c, F16)
+
+fn assert_focus_on_the_first_item(machine: &OrbitMachine, what: &str) {
+    let view = machine.view();
+    match view.level {
+        Level::Groups => {
+            assert!(view.group.is_some(), "{what}");
+            assert_eq!(view.focus, view.group.map(Target::Planet), "{what}");
+        }
+        Level::Group => {
+            assert!(view.tab.is_some(), "{what}");
+            assert_eq!(view.focus, view.tab.map(Target::Preview), "{what}");
+        }
+        Level::Tab => assert_eq!(view.focus, Some(Target::Card), "{what}"),
+    }
+}
+
+type Start = fn() -> OrbitMachine;
+type Action = Box<dyn Fn(&mut OrbitMachine)>;
+
+fn level_changes() -> Vec<(&'static str, Start, Action)> {
+    fn level_one() -> OrbitMachine {
+        opened()
+    }
+    fn level_two() -> OrbitMachine {
+        at_group(1)
+    }
+    fn level_three() -> OrbitMachine {
+        at_tab(104)
+    }
+    let mut cases: Vec<(&'static str, Start, Action)> = Vec::new();
+    let mut case = |name: &'static str, start: Start, action: Action| {
+        cases.push((name, start, action));
+    };
+    case(
+        "click on a planet",
+        level_one,
+        Box::new(|m| {
+            m.click(Target::Planet(2));
+        }),
+    );
+    case(
+        "⏎ on a planet",
+        level_one,
+        Box::new(|m| {
+            press(m, Key::Right);
+            press(m, Key::Enter);
+        }),
+    );
+    case(
+        "pinch in on a planet",
+        level_one,
+        Box::new(|m| {
+            pinch(m, Target::Planet(3), 1.5);
+        }),
+    );
+    case(
+        "⏎ on a search result",
+        level_one,
+        Box::new(|m| {
+            m.search_changed("interview");
+            press(m, Key::Enter);
+        }),
+    );
+    case(
+        "click on a preview",
+        level_two,
+        Box::new(|m| {
+            m.click(Target::Preview(104));
+        }),
+    );
+    case(
+        "⏎ on a preview",
+        level_two,
+        Box::new(|m| {
+            press(m, Key::Tab);
+            press(m, Key::Enter);
+        }),
+    );
+    case(
+        "pinch in on a preview",
+        level_two,
+        Box::new(|m| {
+            pinch(m, Target::Preview(103), 1.5);
+        }),
+    );
+    case(
+        "click on an other-groups chip",
+        level_two,
+        Box::new(|m| {
+            m.click(Target::Chip(3));
+        }),
+    );
+    case(
+        "click on a neighbour card",
+        level_three,
+        Box::new(|m| {
+            m.click(Target::Neighbour(105));
+        }),
+    );
+    case(
+        "⇥ at level three",
+        level_three,
+        Box::new(|m| {
+            press(m, Key::Tab);
+        }),
+    );
+    case(
+        "click on the backdrop at level three",
+        level_three,
+        Box::new(|m| {
+            m.click(Target::Backdrop);
+        }),
+    );
+    case(
+        "⌘↑ at level three",
+        level_three,
+        Box::new(|m| {
+            command(m, Key::Up);
+        }),
+    );
+    case(
+        "⌘↑ at level two",
+        level_two,
+        Box::new(|m| {
+            command(m, Key::Up);
+        }),
+    );
+    case(
+        "pinch out at level two",
+        level_two,
+        Box::new(|m| {
+            pinch(m, Target::Backdrop, 0.5);
+        }),
+    );
+    case(
+        "pinch out at level three",
+        level_three,
+        Box::new(|m| {
+            pinch(m, Target::Card, 0.5);
+        }),
+    );
+    case(
+        "rows: the shown group is gone at level two",
+        level_two,
+        Box::new(|m| {
+            m.rows_changed(&without_group(&orbit_input(false), 1));
+        }),
+    );
+    case(
+        "rows: the shown group is gone at level three",
+        level_three,
+        Box::new(|m| {
+            m.rows_changed(&without_group(&orbit_input(false), 1));
+        }),
+    );
+    case(
+        "rows: the shown tab is gone at level three",
+        level_three,
+        Box::new(|m| {
+            m.rows_changed(&without_tab(&orbit_input(false), 104));
+        }),
+    );
+    case(
+        "rows: the shown tab moved to another group",
+        level_three,
+        Box::new(|m| {
+            let mut input = orbit_input(false);
+            for tab in &mut input.tabs {
+                if tab.id == 104 {
+                    tab.group = 2;
+                    tab.index_in_group = 8;
+                }
+            }
+            m.rows_changed(&input);
+        }),
+    );
+    case(
+        "rows: every tab is gone at level three",
+        level_three,
+        Box::new(|m| {
+            let mut input = orbit_input(false);
+            input.tabs.clear();
+            m.rows_changed(&input);
+        }),
+    );
+    cases
+}
+
+#[test]
+fn every_level_change_puts_the_focus_on_the_new_levels_first_item_and_clears_the_hover() {
+    for (name, start, action) in level_changes() {
+        let mut machine = start();
+        machine.hover(Target::Sun);
+        let before = shown(&machine.view());
+        action(&mut machine);
+        assert_ne!(shown(&machine.view()), before, "{name}: something changed");
+        assert_focus_on_the_first_item(&machine, name);
+        assert_eq!(machine.view().hover, None, "{name}: the hover is cleared");
+    }
+}
+
+#[test]
+fn a_move_inside_a_level_keeps_the_hover() {
+    let mut machine = at_group(1);
+    machine.hover(Target::Sun);
+    press(&mut machine, Key::Right);
+    press(&mut machine, Key::Tab);
+    assert_eq!(machine.view().hover, Some(Target::Sun));
+    let mut machine = opened();
+    machine.hover(Target::Sun);
+    press(&mut machine, Key::Tab);
+    assert_eq!(machine.view().hover, Some(Target::Sun));
+}
+
+#[test]
+fn a_stale_planet_hover_does_not_survive_command_up() {
+    let mut machine = at_group(1);
+    machine.hover(Target::Preview(103));
+    command(&mut machine, Key::Up);
+    assert_eq!(machine.view().level, Level::Groups);
+    assert_eq!(machine.view().hover, None);
+    machine.hover(Target::Planet(2));
+    assert_eq!(machine.view().hover, Some(Target::Planet(2)));
+}
+
+#[test]
+fn rows_that_only_change_the_content_keep_the_hover() {
+    let mut machine = opened();
+    machine.hover(Target::Planet(2));
+    machine.rows_changed(&orbit_input(false));
+    assert_eq!(machine.view().hover, Some(Target::Planet(2)));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Clicks while the popover is open (F13)
+
+#[test]
+fn clicks_are_ignored_while_the_new_group_popover_is_open() {
+    let targets = [
+        Target::Planet(2),
+        Target::Sun,
+        Target::Preview(103),
+        Target::Chip(2),
+        Target::NewGroup,
+        Target::Card,
+        Target::Neighbour(105),
+        Target::Backdrop,
+    ];
+    for level in 1..=3 {
+        for target in targets {
+            let mut machine = match level {
+                1 => opened(),
+                2 => at_group(1),
+                _ => at_tab(104),
+            };
+            press(&mut machine, Key::N);
+            let before = machine.view();
+            assert!(before.popover.is_some());
+            assert!(machine.click(target).is_empty(), "level {level} {target:?}");
+            assert_eq!(machine.view(), before, "level {level} {target:?}");
+        }
+    }
+}
+
+#[test]
+fn a_click_works_again_once_the_popover_is_closed() {
+    let mut machine = opened();
+    press(&mut machine, Key::N);
+    assert!(machine.click(Target::Planet(2)).is_empty());
+    press(&mut machine, Key::Escape);
+    assert!(!machine.click(Target::Planet(2)).is_empty());
+    assert_eq!(machine.view().level, Level::Group);
+
+    let mut machine = opened();
+    press(&mut machine, Key::N);
+    machine.popover_confirmed("x", "blue");
+    assert!(!machine.click(Target::Planet(2)).is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// The keyboard focus walks every tab of a big group (F14)
+
+#[test]
+fn level_two_arrows_and_tab_walk_all_forty_tabs_of_a_group_past_the_24_that_are_drawn() {
+    // 24 previews are drawn (`MAX_PREVIEWS`); the others are "+N more" and have no card.
+    const DRAWN: usize = mercury_ui::ring_geometry::orbit::MAX_PREVIEWS;
+    assert_eq!(DRAWN, 24);
+    for key in [Key::Right, Key::Tab] {
+        let mut machine = opened_with(&big_group(40));
+        machine.click(Target::Planet(1));
+        assert_eq!(machine.view().tab, Some(500));
+        for index in 1..40 {
+            let effects = press(&mut machine, key);
+            let tab = 500 + index;
+            assert_eq!(machine.view().tab, Some(tab), "{key:?} step {index}");
+            assert_eq!(machine.view().focus, Some(Target::Preview(tab)));
+            assert!(effects.is_empty(), "the level did not change");
+            if index as usize >= DRAWN {
+                assert_eq!(machine.view().level, Level::Group);
+            }
+        }
+        assert!(press(&mut machine, key).is_empty(), "clamped at the 40th");
+        assert_eq!(machine.view().tab, Some(539));
+        // ⏎ on a tab that has no card goes to its level 3.
+        let effects = press(&mut machine, Key::Enter);
+        assert_eq!(
+            (machine.view().level, machine.view().tab),
+            (Level::Tab, Some(539))
+        );
+        assert_eq!(effects, zoomed(&machine));
+    }
+}
+
+#[test]
+fn level_two_left_and_shift_tab_walk_back_from_the_last_of_forty_tabs() {
+    for back in [Key::Left, Key::Tab] {
+        let mut machine = opened_with(&big_group(40));
+        machine.click(Target::Planet(1));
+        for _ in 0..60 {
+            press(&mut machine, Key::Right);
+        }
+        assert_eq!(machine.view().tab, Some(539));
+        for index in (0..39).rev() {
+            if back == Key::Left {
+                press(&mut machine, Key::Left);
+            } else {
+                shift_tab(&mut machine);
+            }
+            assert_eq!(machine.view().tab, Some(500 + index));
+        }
+        assert!(press(&mut machine, Key::Left).is_empty());
+    }
+}
+
+#[test]
+fn level_three_walks_all_forty_tabs_too() {
+    let mut machine = opened_with(&big_group(40));
+    machine.click(Target::Planet(1));
+    machine.click(Target::Preview(530));
+    for _ in 0..30 {
+        press(&mut machine, Key::Right);
+    }
+    assert_eq!(machine.view().tab, Some(539));
+    assert_eq!(machine.view().level, Level::Tab);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reconciling at level 3 keeps level 3 when the shown tab is still there (review §1 item 3)
+
+#[test]
+fn an_unrelated_row_change_at_level_three_keeps_level_three() {
+    let base = orbit_input(false);
+    let mut retitled = base.clone();
+    for tab in &mut retitled.tabs {
+        tab.title = format!("{} (new)", tab.title).into();
+    }
+    let other_active = OrbitInput {
+        active_tab: 105,
+        ..base.clone()
+    };
+    for (name, input) in [
+        ("a tab of another group is gone", without_tab(&base, 120)),
+        ("another tab of the group is gone", without_tab(&base, 105)),
+        ("another group is gone", without_group(&base, 4)),
+        ("the titles changed", retitled),
+        ("the active tab changed", other_active),
+    ] {
+        let mut machine = at_tab(104);
+        let effects = machine.rows_changed(&input);
+        let view = machine.view();
+        assert_eq!(
+            (view.level, view.group, view.tab, view.focus),
+            (Level::Tab, Some(1), Some(104), Some(Target::Card)),
+            "{name}"
+        );
+        assert!(effects.is_empty(), "{name}: {effects:?}");
     }
 }

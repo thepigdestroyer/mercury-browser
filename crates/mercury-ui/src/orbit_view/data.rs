@@ -17,27 +17,141 @@
 
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::SystemTime;
 
 use mercury_appearance::group_colour::preset;
 use slint::{Color, Image, Model, ModelRc, SharedString, VecModel};
 
 use super::drag::{DropTarget, Source};
 use super::layout::{CardCell, OrbitLayout, PlanetCell, PreviewCell, Rect, RingCell, tooltip_text};
-use super::{Level, OrbitInput, Stage, Target, View};
+use super::{Level, OrbitInput, Stage, Target, View, search};
 use crate::ring_bands::{RingBandsData, RingBandsModels, RingColours, RingOptions};
 use crate::ring_geometry::{GlyphMetrics, Point, RingLayout, RingSpec, point_on_circle};
 use crate::{
-    ArcSeg, FlagKind, FlagPin, GroupRow, OrbitCard, OrbitChip, OrbitDragView, OrbitNeighbour,
-    OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreviewCard, OrbitSun, TabRow,
+    ArcSeg, FlagKind, FlagPin, GroupRow, OrbitCard, OrbitChip, OrbitDragView, OrbitLevel,
+    OrbitNeighbour, OrbitNewGroup, OrbitPlanet, OrbitPopover, OrbitPreviewCard, OrbitSun, TabRow,
 };
 
-/// The preset names of the six colour dots of the new-group popover, in the mockup's order.
+/// The preset names of the six colour dots of the new-group popover, in the mockup's order. The one
+/// list: the glue reads a dot's name with [`popover_colour_name`].
 pub const POPOVER_COLOURS: [&str; 6] = ["blue", "amber", "violet", "rose", "green", "teal"];
+
+/// The colour a new group gets when the user confirms without choosing one: the first dot, which
+/// the popover shows as selected.
+pub const DEFAULT_POPOVER_COLOUR: &str = "blue";
+
+/// What the empty name field of the popover says.
+const POPOVER_PLACEHOLDER: &str = "Untitled group";
+
+/// The preset name of a colour dot (`None` for an index that is not one of the six).
+pub fn popover_colour_name(index: i32) -> Option<String> {
+    let index = usize::try_from(index).ok()?;
+    POPOVER_COLOURS.get(index).map(|name| (*name).to_owned())
+}
+
+/// How long ago, in the words of the group labels: "now", "2 min ago", "1 h ago", "yesterday",
+/// "3 days ago", "2 weeks ago". A time in the future is "now".
+pub fn relative_age(now: SystemTime, then: SystemTime) -> String {
+    let seconds = now
+        .duration_since(then)
+        .map_or(0, |elapsed| elapsed.as_secs());
+    let minutes = seconds / 60;
+    let hours = minutes / 60;
+    let days = hours / 24;
+    match (minutes, hours, days) {
+        (0, ..) => "now".to_owned(),
+        (_, 0, _) => format!("{minutes} min ago"),
+        (_, _, 0) => format!("{hours} h ago"),
+        (.., 1) => "yesterday".to_owned(),
+        (.., 2..=13) => format!("{days} days ago"),
+        _ => format!("{} weeks ago", days / 7),
+    }
+}
+
+/// The container's accessible label for a level (brief D14): "Orbit, every group",
+/// "Orbit, Research, 10 tabs", "Orbit, AccessKit guide, tab 4 of 10"; while a query is active it
+/// ends with the number of matching tabs: ", 3 matches", ", 1 match", ", no matches".
+pub fn container_label(view: &View, input: &OrbitInput) -> String {
+    let mut label = match view.level {
+        Level::Groups => "Orbit, every group".to_owned(),
+        Level::Group => match view.group.and_then(|group| input.group(group)) {
+            Some(group) => format!(
+                "Orbit, {}, {}",
+                group.name,
+                count_text(input.tabs_of(group.id).len())
+            ),
+            None => "Orbit".to_owned(),
+        },
+        Level::Tab => match view.tab.and_then(|tab| input.tab(tab)) {
+            Some(tab) => {
+                let strip = input.tabs_of(tab.group);
+                let place = strip
+                    .iter()
+                    .position(|other| other.id == tab.id)
+                    .map_or(1, |at| at + 1);
+                let title = if tab.title.is_empty() {
+                    &tab.host
+                } else {
+                    &tab.title
+                };
+                format!("Orbit, {title}, tab {place} of {}", strip.len())
+            }
+            None => "Orbit".to_owned(),
+        },
+    };
+    let query = view.query.trim();
+    if !query.is_empty() {
+        let matching = input
+            .tabs
+            .iter()
+            .filter(|tab| search::matches(query, &tab.title, &tab.host))
+            .count();
+        match matching {
+            0 => label.push_str(", no matches"),
+            1 => label.push_str(", 1 match"),
+            n => label.push_str(&format!(", {n} matches")),
+        }
+    }
+    label
+}
+
+/// The placeholder of the search field: "Search 40 tabs", "Search 1 tab", "Search tabs" for none.
+pub fn search_placeholder(input: &OrbitInput) -> String {
+    match input.tabs.len() {
+        0 => "Search tabs".to_owned(),
+        n => format!("Search {}", count_text(n)),
+    }
+}
+
+/// Everything that is a single value on the view (the lists are the persistent [`OrbitModels`]).
+#[derive(Clone, Default)]
+pub struct Frame {
+    pub level: OrbitLevel,
+    pub centre: OrbitPlanet,
+    pub has_centre: bool,
+    pub more_previews: i32,
+    pub card: OrbitCard,
+    pub sun: OrbitSun,
+    pub new_group: OrbitNewGroup,
+    pub drag: OrbitDragView,
+    pub popover: OrbitPopover,
+    pub query_active: bool,
+    /// The tab the keyboard focus is on at level 2, else -1.
+    pub focus_tab: i32,
+    /// The container's accessible label ("Orbit, every group", ...; brief D14).
+    pub container_label: SharedString,
+    /// The search field's placeholder ("Search 40 tabs").
+    pub search_placeholder: SharedString,
+    /// A one-line notice (a refused drop), empty for none.
+    pub notice: SharedString,
+    pub reduce_motion: bool,
+    pub animate_spinners: bool,
+}
 
 /// The popover's size (mockup: 230 x 100).
 const POPOVER_WIDTH: f32 = 230.0;
 const POPOVER_HEIGHT: f32 = 100.0;
-/// Size of a group badge at scale 1 (the unread dot is half of it).
+/// Size of a group badge at scale 1 (the unread badge is as large as the others).
 const BADGE_SIZE: f32 = 18.0;
 /// Angle of the first badge (clockwise from the top); the next ones are 20 degrees further round.
 const BADGE_FIRST_DEG: f32 = 200.0;
@@ -234,6 +348,13 @@ impl OrbitData {
             radius: layout.sun.radius,
             title: input.profile_name.clone(),
             subtitle: format!("{} · {}", input.window_label, count_text(total)).into(),
+            accessible_label: format!(
+                "{}, {}, {}",
+                input.profile_name,
+                input.window_label.to_lowercase(),
+                count_text(total)
+            )
+            .into(),
             opacity: layout.sun.opacity,
         };
         let new_group = OrbitNewGroup {
@@ -267,6 +388,45 @@ impl OrbitData {
             crumbs,
         }
     }
+
+    /// The ring data of the planet (level 1) or the centre ring (levels 2 and 3) of `group`. At
+    /// levels 2 and 3 the planets are still in the data (they slide away), but the ring that is
+    /// shown, and that the pointer is over, is the centre ring.
+    pub fn ring_of(&self, group: i32) -> Option<&RingBandsData> {
+        let planet = self.planets.iter().find(|p| p.row.group == group);
+        let centre = self.centre.as_ref().filter(|c| c.row.group == group);
+        let found = if self.layout.level == Level::Groups {
+            planet.or(centre)
+        } else {
+            centre.or(planet)
+        };
+        found.map(|data| &data.ring)
+    }
+
+    /// What the stage point is over for a drop: a ring (with the insertion slot for the tab being
+    /// dragged, `dragging_tab`, -1 for none), another planet or chip, the "New group" ring, empty
+    /// stage, or nothing a drop may land on (the sun, a card).
+    pub fn drop_target_at(&self, x: f32, y: f32, dragging_tab: i32) -> Option<DropTarget> {
+        if let Some(point) = self.layout.ring_at(x, y) {
+            let slot = self
+                .ring_of(point.group)
+                .map(|ring| ring.drop_target(point.x, point.y, dragging_tab))
+                .filter(|landing| landing.valid && landing.group == point.group)
+                .and_then(|landing| usize::try_from(landing.index).ok());
+            return Some(DropTarget::Group {
+                group: point.group,
+                slot,
+            });
+        }
+        match self.layout.hit(x, y) {
+            Target::Planet(group) | Target::Chip(group) => {
+                Some(DropTarget::Group { group, slot: None })
+            }
+            Target::NewGroup => Some(DropTarget::NewGroup),
+            Target::Backdrop => Some(DropTarget::Empty),
+            Target::Sun | Target::Preview(_) | Target::Card | Target::Neighbour(_) => None,
+        }
+    }
 }
 
 fn key_text(group: &GroupRow) -> SharedString {
@@ -291,7 +451,17 @@ impl Ctx<'_> {
         self.input.tabs.iter().filter(|t| t.group == group).count()
     }
 
-    fn ring(&self, group: &GroupRow, spec: RingSpec, flag_size: f32) -> RingBandsData {
+    /// The ring of one group. With `tab_states` false (a planet: F6) its flags are only the current
+    /// dot and the ones that are never hidden (crashed, capture): the spinner, speaker, muted and
+    /// unread flags of the tabs would be specks that repeat the group badges. The segment labels and
+    /// the tab rows still carry every state.
+    fn ring(
+        &self,
+        group: &GroupRow,
+        spec: RingSpec,
+        flag_size: f32,
+        tab_states: bool,
+    ) -> RingBandsData {
         let tabs: Vec<TabRow> = self.input.tabs_of(group.id).into_iter().cloned().collect();
         let options = RingOptions {
             held: false,
@@ -300,7 +470,21 @@ impl Ctx<'_> {
             colours: self.options.colours,
         };
         let groups = std::slice::from_ref(group);
-        let mut ring = RingBandsData::new(spec, groups, &tabs, &options, self.metrics);
+        let mut ring = if tab_states {
+            RingBandsData::new(spec, groups, &tabs, &options, self.metrics)
+        } else {
+            let quiet: Vec<TabRow> = tabs
+                .iter()
+                .map(|tab| TabRow {
+                    loading: false,
+                    audible: false,
+                    muted: false,
+                    unread: false,
+                    ..tab.clone()
+                })
+                .collect();
+            RingBandsData::new(spec, groups, &quiet, &options, self.metrics)
+        };
         // A group that fills the whole ring has its label at the middle of its arc, which is the
         // bottom (180 degrees) when the segments start at 12 o'clock. The mockup has it centred
         // at the top, so the label glyphs come from a second build whose arc starts 180 degrees
@@ -310,8 +494,12 @@ impl Ctx<'_> {
             start_deg: spec.start_deg + 180.0,
             ..spec
         };
-        ring.label_glyphs =
-            RingBandsData::new(turned, groups, &tabs, &options, self.metrics).label_glyphs;
+        let turned = RingBandsData::new(turned, groups, &tabs, &options, self.metrics);
+        ring.label_glyphs = turned.label_glyphs;
+        if !tab_states {
+            ring.segment_labels = turned.segment_labels;
+            ring.tabs = turned.tabs;
+        }
         ring
     }
 
@@ -376,7 +564,7 @@ impl Ctx<'_> {
             ..OrbitPlanet::default()
         };
         PlanetData {
-            ring: self.ring(group, cell.spec, self.options.flag_size * cell.scale),
+            ring: self.ring(group, cell.spec, self.options.flag_size * cell.scale, false),
             badges: badges(group, &cell.spec, cell.scale),
             row,
         }
@@ -417,7 +605,12 @@ impl Ctx<'_> {
             ..OrbitPlanet::default()
         };
         PlanetData {
-            ring: self.ring(group, ring.spec, self.options.flag_size * 1.5 * ring.scale),
+            ring: self.ring(
+                group,
+                ring.spec,
+                self.options.flag_size * 1.5 * ring.scale,
+                true,
+            ),
             badges: Vec::new(),
             row,
         }
@@ -690,14 +883,21 @@ impl Ctx<'_> {
             POPOVER_WIDTH,
             POPOVER_HEIGHT,
         );
+        let chosen = if popover.colour.is_empty() {
+            DEFAULT_POPOVER_COLOUR
+        } else {
+            popover.colour.as_str()
+        };
         OrbitPopover {
             visible: true,
             x: rect.x,
             y: rect.y,
             name: popover.name.as_str().into(),
+            placeholder: POPOVER_PLACEHOLDER.into(),
+            // No colour chosen yet: the first dot shows the default the group will get.
             selected: POPOVER_COLOURS
                 .iter()
-                .position(|name| *name == popover.colour)
+                .position(|name| *name == chosen)
                 .map_or(-1, |i| i as i32),
             ..OrbitPopover::default()
         }
@@ -710,7 +910,7 @@ fn badges(group: &GroupRow, spec: &RingSpec, scale: f32) -> Vec<FlagPin> {
     [
         (group.any_loading, FlagKind::Spinner, BADGE_SIZE),
         (group.any_audible, FlagKind::Audible, BADGE_SIZE),
-        (group.any_unread, FlagKind::Unread, BADGE_SIZE / 2.0),
+        (group.any_unread, FlagKind::Unread, BADGE_SIZE),
     ]
     .into_iter()
     .filter(|(on, _, _)| *on)
@@ -1013,5 +1213,45 @@ impl OrbitModels {
 
     pub fn more_previews(&self) -> i32 {
         self.more_previews.get()
+    }
+
+    /// The single values of the view for the last `update`: the rows above, and what comes from the
+    /// machine's `view`, the `input`, the motion setting and the current `notice`. The glue puts
+    /// the drag ghost under the pointer afterwards.
+    pub fn frame(
+        &self,
+        view: &View,
+        input: &OrbitInput,
+        reduce_motion: bool,
+        notice: &str,
+    ) -> Frame {
+        let mut drag = self.drag();
+        // The machine is the authority on whether a drag is in flight.
+        drag.active = view.drag.is_some();
+        Frame {
+            level: match view.level {
+                Level::Groups => OrbitLevel::Groups,
+                Level::Group => OrbitLevel::Group,
+                Level::Tab => OrbitLevel::Tab,
+            },
+            centre: self.centre(),
+            has_centre: self.has_centre(),
+            more_previews: self.more_previews(),
+            card: self.card(),
+            sun: self.sun(),
+            new_group: self.new_group(),
+            drag,
+            popover: self.popover(),
+            query_active: !view.query.trim().is_empty(),
+            focus_tab: match view.focus {
+                Some(Target::Preview(tab)) => tab,
+                _ => -1,
+            },
+            container_label: container_label(view, input).into(),
+            search_placeholder: search_placeholder(input).into(),
+            notice: notice.into(),
+            reduce_motion,
+            animate_spinners: !reduce_motion,
+        }
     }
 }

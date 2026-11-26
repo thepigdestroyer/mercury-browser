@@ -31,6 +31,7 @@ pub mod data;
 pub mod drag;
 #[cfg(any(test, feature = "test-support"))]
 pub mod fixtures;
+pub mod keys;
 pub mod layout;
 pub mod machine;
 pub mod search;
@@ -90,6 +91,8 @@ pub enum Key {
     Down,
     Left,
     Right,
+    /// ⇥: the next item of the level; ⇧⇥ (`Mods::shift`) the previous one.
+    Tab,
     /// `N`: a new group.
     N,
     /// `/`: focus the search field.

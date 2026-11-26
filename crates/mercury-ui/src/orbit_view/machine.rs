@@ -12,15 +12,31 @@
 //! # Rules the tests pin
 //!
 //! - While a drag is in flight only Esc is a key and clicks are ignored; while the new-group popover
-//!   is open only Esc is a key (it is modal); a pinch, a drag and the popover never overlap.
-//! - Arrows are ignored while a text field has the focus (they move its cursor) and with ⌘, ⌥ or ⌃
-//!   (other than ⌘↑); `N`, `/` and typed characters are commands only outside a text field. A typed
-//!   character answers [`Effect::FocusSearch`]; the host puts the character into the field and then
-//!   calls [`OrbitMachine::search_changed`].
+//!   is open only Esc is a key (it is modal) and clicks are ignored too (a click on a planet must not
+//!   zoom with the popover left on screen; Esc or the popover's own buttons close it); a pinch, a
+//!   drag and the popover never overlap.
+//! - Arrows and Tab are ignored while a text field has the focus (they move its cursor) and with ⌘,
+//!   ⌥ or ⌃ (other than ⌘↑ and the ⌥ moves below); `N`, `/` and typed characters are commands only
+//!   outside a text field. A typed character answers [`Effect::FocusSearch`]; the host puts the
+//!   character into the field and then calls [`OrbitMachine::search_changed`].
+//! - Keyboard focus walks the items of the level: ← → (and ⇥ forward, ⇧⇥ back) go to the next or
+//!   previous item and clamp at the ends (no wrap). Level 1 walks the planets in group order (the
+//!   order of the ring, not "by direction" as SPEC §5 words it: ← → never jump across the stage, a
+//!   decision of the brief (D9) kept on purpose; ↑ ↓ take the nearest planet above or below). Level 2 walks every preview in the
+//!   order of [`preview_order`], past the 24 that are drawn too: the focus is then a
+//!   `Target::Preview(tab)` whose card is not drawn and the centre ring's segment shows it. Level 3
+//!   shows the previous or next tab of the strip.
+//! - ⌥ + ← → at levels 2 and 3 move the focused (level 2) or shown (level 3) tab one place earlier
+//!   or later in its group; ⌥ + ↑ ↓ move it to the end of the previous or next group. The machine
+//!   only emits [`Effect::Resolve`] (the host applies it and sends the new rows); nothing happens at
+//!   the ends, for a pinned tab or when the move changes nothing. Level 1 ignores ⌥ + arrows.
+//! - Every level change puts the keyboard focus on the new level's first item (level 1: the group's
+//!   planet; level 2: the focused tab's preview, the active tab's or the first; level 3: the card)
+//!   and clears the hover (a stale lit planet must not stay lit after ⌘↑ until the pointer moves).
 //! - A tab that is pinned is read-only: no drag starts from it and it is never taken for a new group.
 
 use crate::ring_geometry::Ellipse;
-use crate::ring_geometry::orbit::{MAX_PREVIEWS, planet_layout};
+use crate::ring_geometry::orbit::planet_layout;
 
 use super::drag::{self, Decision, DropTarget, GroupOp, Source};
 use super::{
@@ -144,8 +160,18 @@ impl OrbitMachine {
         let text = context.text_input_focused;
         match key {
             Key::Up if mods.command => self.zoom_out(),
+            Key::Left | Key::Right | Key::Up | Key::Down
+                if mods.alt && !mods.command && !mods.control =>
+            {
+                if text {
+                    Vec::new()
+                } else {
+                    self.move_tab(key)
+                }
+            }
             _ if mods.command || mods.alt || mods.control => Vec::new(),
             Key::Enter => self.enter(),
+            Key::Tab if !text => self.step_focus(if mods.shift { -1 } else { 1 }),
             Key::Left | Key::Right | Key::Up | Key::Down if !text => self.arrow(key),
             Key::N if !text => self.new_group_from_focus(),
             Key::Slash if !text => vec![Effect::FocusSearch],
@@ -156,9 +182,10 @@ impl OrbitMachine {
         }
     }
 
-    /// A click (primary button, released) on `target`.
+    /// A click (primary button, released) on `target`. Ignored during a drag, a pinch and while the
+    /// new-group popover is open (it is modal).
     pub fn click(&mut self, target: Target) -> Vec<Effect> {
-        if self.view.drag.is_some() || self.pinch.is_some() {
+        if self.view.drag.is_some() || self.pinch.is_some() || self.view.popover.is_some() {
             return Vec::new();
         }
         self.activate(target)
@@ -226,7 +253,7 @@ impl OrbitMachine {
         if self.view.drag.is_some() || self.view.popover.is_some() || self.pinch.is_some() {
             return;
         }
-        if !self.source_valid(source) {
+        if !self.can_drag(source) {
             return;
         }
         self.view.drag = Some(DragView { source, over: None });
@@ -277,7 +304,7 @@ impl OrbitMachine {
             .view
             .drag
             .as_ref()
-            .is_some_and(|drag| !self.source_valid(drag.source))
+            .is_some_and(|drag| !self.can_drag(drag.source))
         {
             self.view.drag = None;
         }
@@ -323,7 +350,9 @@ impl OrbitMachine {
         vec![Effect::Apply(GroupOp::CreateGroup {
             tabs: vec![popover.tab],
             name: non_empty(name),
-            colour: non_empty(colour),
+            // The popover shows the first dot selected, so an untouched confirm sends that colour.
+            colour: non_empty(colour)
+                .or_else(|| Some(super::data::DEFAULT_POPOVER_COLOUR.to_string())),
         })]
     }
 
@@ -349,10 +378,13 @@ impl OrbitMachine {
         )
     }
 
-    fn changed(&self, before: Shown) -> Vec<Effect> {
+    /// `ZoomedTo` when what is shown changed since `before`; the hover is cleared then (the pointer
+    /// has not moved over the new stage yet).
+    fn changed(&mut self, before: Shown) -> Vec<Effect> {
         if self.shown() == before {
             Vec::new()
         } else {
+            self.view.hover = None;
             vec![Effect::ZoomedTo(self.view.clone())]
         }
     }
@@ -387,7 +419,9 @@ impl OrbitMachine {
         self.view.group.is_some() && self.input.tab(tab).map(|row| row.group) == self.view.group
     }
 
-    fn source_valid(&self, source: Source) -> bool {
+    /// Whether `source` may be dragged (or moved by a key): a tab that exists and is not pinned, or
+    /// a real group (not the loose planet).
+    pub fn can_drag(&self, source: Source) -> bool {
         match source {
             Source::Tab(tab) => free_tab(&self.input, tab),
             Source::Group(group) => group != LOOSE_GROUP_ID && self.input.group(group).is_some(),
@@ -523,45 +557,97 @@ impl OrbitMachine {
     }
 
     fn arrow(&mut self, key: Key) -> Vec<Effect> {
-        let delta: isize = match key {
-            Key::Left | Key::Up => -1,
-            _ => 1,
-        };
-        let horizontal = matches!(key, Key::Left | Key::Right);
-        match self.view.level {
-            Level::Groups if horizontal => {
+        match key {
+            Key::Left => self.step_focus(-1),
+            Key::Right => self.step_focus(1),
+            _ if self.view.level == Level::Groups => {
+                if let Some(group) = self.vertical_neighbour(key == Key::Up) {
+                    self.show_groups(Some(group));
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        }
+    }
+
+    /// ← → and ⇥ ⇧⇥: the focus (level 3: the shown tab) goes `delta` items on, clamped at the ends.
+    /// Level 2 walks every preview, the undrawn ones past the first 24 included (F14).
+    fn step_focus(&mut self, delta: isize) -> Vec<Effect> {
+        let before = self.shown();
+        match (self.view.level, self.view.group) {
+            (Level::Groups, _) => {
                 let ids: Vec<i32> = self.input.groups.iter().map(|group| group.id).collect();
-                if let Some(group) = step(&ids, self.view.group, delta, ids.len()) {
+                if let Some(group) = step(&ids, self.view.group, delta) {
                     self.show_groups(Some(group));
                 }
-                Vec::new()
             }
-            Level::Groups => {
-                if let Some(group) = self.vertical_neighbour(delta < 0) {
-                    self.show_groups(Some(group));
+            (Level::Group, Some(group)) => {
+                let order = preview_order(&self.input, group);
+                if let Some(tab) = step(&order, self.view.tab, delta) {
+                    self.show_group(group, Some(tab));
                 }
-                Vec::new()
             }
-            Level::Group if horizontal => {
-                if let Some(group) = self.view.group {
-                    let order = preview_order(&self.input, group);
-                    let shown = order.len().min(MAX_PREVIEWS);
-                    if let Some(tab) = step(&order, self.view.tab, delta, shown) {
-                        self.show_group(group, Some(tab));
-                    }
+            (Level::Tab, Some(group)) => {
+                let strip = strip_order(&self.input, group);
+                if let Some(tab) = step(&strip, self.view.tab, delta) {
+                    self.show_tab(group, tab);
                 }
-                Vec::new()
             }
-            Level::Tab if horizontal => {
-                let before = self.shown();
-                if let Some(group) = self.view.group {
-                    let strip = strip_order(&self.input, group);
-                    if let Some(tab) = step(&strip, self.view.tab, delta, strip.len()) {
-                        self.show_tab(group, tab);
-                    }
+            _ => {}
+        }
+        self.changed(before)
+    }
+
+    /// ⌥ + an arrow at levels 2 and 3: ← → one place earlier or later in the strip of the tab's
+    /// group, ↑ ↓ the end of the previous or next group (group order). The machine's own view does
+    /// not change; the host applies the decision and sends the new rows.
+    fn move_tab(&mut self, key: Key) -> Vec<Effect> {
+        if self.view.level == Level::Groups {
+            return Vec::new();
+        }
+        let Some(tab) = self.view.tab else {
+            return Vec::new();
+        };
+        if !self.can_drag(Source::Tab(tab)) {
+            return Vec::new();
+        }
+        let Some(group) = self.input.tab(tab).map(|row| row.group) else {
+            return Vec::new();
+        };
+        let target = match key {
+            Key::Left | Key::Right => {
+                let strip = strip_order(&self.input, group);
+                let Some(at) = strip.iter().position(|&id| id == tab) else {
+                    return Vec::new();
+                };
+                // The slot counts the moved tab itself: one place later is slot `at + 2`.
+                let slot = if key == Key::Left {
+                    at.checked_sub(1)
+                } else {
+                    (at + 1 < strip.len()).then_some(at + 2)
+                };
+                slot.map(|slot| DropTarget::Group {
+                    group,
+                    slot: Some(slot),
+                })
+            }
+            _ => {
+                let ids: Vec<i32> = self.input.groups.iter().map(|row| row.id).collect();
+                let at = ids.iter().position(|&id| id == group);
+                let other = match (key, at) {
+                    (Key::Up, Some(at)) => at.checked_sub(1),
+                    (_, Some(at)) => Some(at + 1),
+                    _ => None,
                 }
-                self.changed(before)
+                .and_then(|index| ids.get(index).copied());
+                other.map(|group| DropTarget::Group { group, slot: None })
             }
+        };
+        let Some(target) = target else {
+            return Vec::new();
+        };
+        match drag::resolve(Source::Tab(tab), target, &self.input) {
+            decision @ Decision::MoveTab { .. } => vec![Effect::Resolve(decision)],
             _ => Vec::new(),
         }
     }
@@ -634,17 +720,16 @@ impl OrbitMachine {
     }
 }
 
-/// The element `delta` places from `current` in `list`, clamped to the first `limit` elements; the
-/// current element is where the list starts when it is not found; `None` when it does not change.
-fn step(list: &[i32], current: Option<i32>, delta: isize, limit: usize) -> Option<i32> {
-    let limit = limit.min(list.len());
-    if limit == 0 {
+/// The element `delta` places from `current` in `list`, clamped to the list; the current element is
+/// where the list starts when it is not found; `None` when it does not change.
+fn step(list: &[i32], current: Option<i32>, delta: isize) -> Option<i32> {
+    if list.is_empty() {
         return None;
     }
     let index = current
         .and_then(|id| list.iter().position(|&other| other == id))
         .unwrap_or(0);
-    let next = (index as isize + delta).clamp(0, limit as isize - 1) as usize;
+    let next = (index as isize + delta).clamp(0, list.len() as isize - 1) as usize;
     let id = list.get(next).copied()?;
     (Some(id) != current).then_some(id)
 }

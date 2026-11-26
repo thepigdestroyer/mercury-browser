@@ -8,9 +8,12 @@
 
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::time::Instant;
+use std::time::{Duration, Instant, SystemTime};
 
-use mercury_ui::orbit_view::data::{Options, OrbitData, OrbitModels, PlanetData};
+use mercury_ui::orbit_view::data::{
+    DEFAULT_POPOVER_COLOUR, Options, OrbitData, OrbitModels, POPOVER_COLOURS, PlanetData,
+    container_label, popover_colour_name, relative_age, search_placeholder,
+};
 use mercury_ui::orbit_view::fixtures::{
     generated_input, orbit_groups, orbit_input, orbit_tabs, skeleton_picture,
 };
@@ -21,7 +24,7 @@ use mercury_ui::orbit_view::{
 };
 use mercury_ui::ring_bands::{RingBandsData, RingOptions};
 use mercury_ui::ring_geometry::{ApproxMetrics, point_on_circle};
-use mercury_ui::{FlagKind, FlagPin};
+use mercury_ui::{FlagKind, FlagPin, OrbitLevel};
 use slint::{Color, Image, Model};
 
 thread_local! {
@@ -180,6 +183,12 @@ fn the_sun_says_the_profile_and_the_window_with_all_tabs() {
     // Loose and pinned tabs count too; one tab is "1 tab".
     let one = generated_input(1, 1, false);
     assert_eq!(build_with(&one, &level1()).sun.subtitle, "Window 1 · 1 tab");
+    // F8: the spoken label has no middle dot and the window in lower case.
+    assert_eq!(data.sun.accessible_label, "Personal, window 1, 40 tabs");
+    assert_eq!(
+        build_with(&one, &level1()).sun.accessible_label,
+        "Personal, window 1, 1 tab"
+    );
     assert_eq!(build_with(&orbit_input(false), &level2(1)).sun.opacity, 0.0);
 }
 
@@ -228,8 +237,8 @@ fn the_group_badges_sit_on_the_label_band_at_the_bottom() {
     let spinner = &data.planets[0].badges[0];
     assert_eq!(spinner.size, 18.0);
     assert_eq!(
-        data.planets[1].badges[0].size, 9.0,
-        "the unread dot is small"
+        data.planets[1].badges[0].size, 18.0,
+        "the unread badge is as large as the others"
     );
 }
 
@@ -822,12 +831,97 @@ fn the_popover_shows_the_name_and_the_chosen_dot() {
     assert!(data.popover.x >= 0.0 && data.popover.x + 230.0 <= 1440.0);
     assert!(data.popover.y >= 48.0 && data.popover.y + 100.0 <= 800.0 - 50.0);
     assert!(!build_with(&orbit_input(false), &level1()).popover.visible);
+}
+
+#[test]
+fn a_new_popover_is_empty_with_a_placeholder_and_the_first_dot_selected() {
+    let mut v = level1();
     v.popover = Some(NewGroupPopover::default());
+    let data = build_with(&orbit_input(false), &v);
+    assert_eq!(data.popover.name, "", "the field starts empty");
+    assert_eq!(data.popover.placeholder, "Untitled group");
+    assert_eq!(
+        data.popover.selected, 0,
+        "no colour chosen yet: the first dot shows the default"
+    );
+    // The placeholder is there whatever the field holds (Slint shows it only while it is empty).
+    v.popover = Some(NewGroupPopover {
+        tab: 104,
+        name: "Trip".into(),
+        colour: "teal".into(),
+    });
+    let data = build_with(&orbit_input(false), &v);
+    assert_eq!(data.popover.name, "Trip");
+    assert_eq!(data.popover.placeholder, "Untitled group");
+    assert_eq!(data.popover.selected, 5);
+    v.popover = Some(NewGroupPopover {
+        tab: 104,
+        name: String::new(),
+        colour: "not-a-preset".into(),
+    });
     assert_eq!(
         build_with(&orbit_input(false), &v).popover.selected,
         -1,
-        "no colour chosen yet"
+        "a colour that is not one of the six dots"
     );
+}
+
+// ---- F6: no per-tab states inside the planets ----
+
+#[test]
+fn planets_carry_only_the_current_dot_and_the_flags_that_are_never_hidden() {
+    let mut tabs = orbit_tabs();
+    tabs[2].crashed = true;
+    tabs[3].capture = true;
+    tabs[10].muted = true;
+    tabs[11].audible = true;
+    tabs[12].loading = true;
+    let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false);
+    let data = build_with(&input, &level1());
+    for planet in &data.planets {
+        for pin in &planet.ring.flags {
+            assert!(
+                matches!(
+                    pin.kind,
+                    FlagKind::Current | FlagKind::Crashed | FlagKind::Capture
+                ),
+                "group {}: {:?} inside a planet",
+                planet.row.group,
+                pin.kind
+            );
+        }
+    }
+    let research = pins_kinds(&data.planets[0].ring.flags);
+    assert!(research.contains(&FlagKind::Current), "the mockup's dot");
+    assert!(research.contains(&FlagKind::Crashed));
+    assert!(research.contains(&FlagKind::Capture));
+    // The group badges at the bottom keep the group's states.
+    assert_eq!(pins_kinds(&data.planets[0].badges), vec![FlagKind::Spinner]);
+    // The accessible label of a segment still names every state.
+    assert!(
+        data.planets[0].ring.segment_labels[1].contains("loading 64 percent"),
+        "{}",
+        data.planets[0].ring.segment_labels[1]
+    );
+    assert!(
+        data.planets[0].ring.tabs[1].loading,
+        "the rows are untouched"
+    );
+}
+
+#[test]
+fn levels_two_and_three_keep_every_flag_of_the_centre_ring() {
+    let mut tabs = orbit_tabs();
+    tabs[2].crashed = true;
+    let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false);
+    for view in [level2(1), level3(1, 104)] {
+        let data = build_with(&input, &view);
+        let centre = data.centre.as_ref().expect("centre ring");
+        let kinds = pins_kinds(&centre.ring.flags);
+        assert!(kinds.contains(&FlagKind::Spinner), "{:?}", view.level);
+        assert!(kinds.contains(&FlagKind::Crashed), "{:?}", view.level);
+        assert!(kinds.contains(&FlagKind::Current), "{:?}", view.level);
+    }
 }
 
 // ---- the models ----
@@ -1086,11 +1180,29 @@ fn only_the_label_glyphs_come_from_the_turned_build() {
             &ApproxMetrics,
         );
         let ctx = &group.name;
+        // Inside a planet only the flags that are never hidden and the current dot are drawn.
+        let quiet: Vec<_> = tabs
+            .iter()
+            .map(|tab| mercury_ui::TabRow {
+                loading: false,
+                audible: false,
+                muted: false,
+                unread: false,
+                ..tab.clone()
+            })
+            .collect();
+        let quiet = RingBandsData::new(
+            cell.spec,
+            std::slice::from_ref(group),
+            &quiet,
+            &ring_options,
+            &ApproxMetrics,
+        );
+        assert_eq!(planet.ring.flags, quiet.flags, "{ctx}");
         assert_eq!(planet.ring.segments, plain.segments, "{ctx}");
         assert_eq!(planet.ring.lifted_segments, plain.lifted_segments, "{ctx}");
         assert_eq!(planet.ring.segment_labels, plain.segment_labels, "{ctx}");
         assert_eq!(planet.ring.label_bands, plain.label_bands, "{ctx}");
-        assert_eq!(planet.ring.flags, plain.flags, "{ctx}");
         let ids = |tabs: &[mercury_ui::TabRow]| tabs.iter().map(|t| t.id).collect::<Vec<_>>();
         assert_eq!(ids(&planet.ring.tabs), ids(&plain.tabs), "{ctx}");
         assert_eq!(planet.ring.groups, plain.groups, "{ctx}");
@@ -1139,4 +1251,444 @@ fn sixty_four_groups_and_two_hundred_tabs_build_in_under_100_ms() {
     println!("level 2: build {:?}", started.elapsed());
     assert!(started.elapsed().as_millis() < 100);
     assert_eq!(data.planets.len(), 64);
+}
+
+// ---- the pure helpers that used to live in the desktop glue (F4) ----
+
+const RESEARCH: i32 = 1;
+const ACTIVE: i32 = 101;
+
+fn at(level: Level, group: Option<i32>, tab: Option<i32>) -> View {
+    view(level, group, tab)
+}
+
+#[test]
+fn container_labels_follow_the_levels() {
+    let input = orbit_input(false);
+    let label = |view: &View| container_label(view, &input);
+    assert_eq!(label(&at(Level::Groups, None, None)), "Orbit, every group");
+    assert_eq!(
+        label(&at(Level::Groups, Some(2), None)),
+        "Orbit, every group"
+    );
+    assert_eq!(
+        label(&at(Level::Group, Some(RESEARCH), None)),
+        "Orbit, Research, 10 tabs"
+    );
+    assert_eq!(
+        label(&at(Level::Tab, Some(RESEARCH), Some(ACTIVE))),
+        "Orbit, Servo layout notes, tab 1 of 10"
+    );
+    assert_eq!(
+        label(&at(Level::Group, Some(99), None)),
+        "Orbit",
+        "a group that is gone"
+    );
+    assert_eq!(label(&at(Level::Tab, Some(RESEARCH), Some(99))), "Orbit");
+}
+
+#[test]
+fn a_group_of_one_tab_says_1_tab() {
+    let mut input = orbit_input(false);
+    input
+        .tabs
+        .retain(|tab| tab.group != RESEARCH || tab.id == ACTIVE);
+    let view = at(Level::Group, Some(RESEARCH), None);
+    assert_eq!(container_label(&view, &input), "Orbit, Research, 1 tab");
+}
+
+#[test]
+fn a_tab_without_a_title_is_named_by_its_host_in_the_label() {
+    let mut tabs = orbit_tabs();
+    tabs[0].title = "".into();
+    let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false);
+    assert_eq!(
+        container_label(&at(Level::Tab, Some(RESEARCH), Some(ACTIVE)), &input),
+        "Orbit, docs.example.org, tab 1 of 10"
+    );
+}
+
+#[test]
+fn an_active_query_adds_the_number_of_matches_to_the_label_at_every_level() {
+    let input = orbit_input(false);
+    let with = |mut view: View, query: &str| {
+        view.query = query.into();
+        container_label(&view, &input)
+    };
+    // "servo" is in two titles and one host.
+    assert_eq!(
+        with(at(Level::Groups, None, None), "servo"),
+        "Orbit, every group, 3 matches"
+    );
+    assert_eq!(
+        with(at(Level::Group, Some(RESEARCH), None), "SERVO"),
+        "Orbit, Research, 10 tabs, 3 matches",
+        "the count is over every tab, not the group's"
+    );
+    assert_eq!(
+        with(at(Level::Tab, Some(RESEARCH), Some(ACTIVE)), "interview"),
+        "Orbit, Servo layout notes, tab 1 of 10, 1 match"
+    );
+    assert_eq!(
+        with(at(Level::Groups, None, None), "zzzz"),
+        "Orbit, every group, no matches"
+    );
+    // Two words must both occur; a blank query is no query.
+    assert_eq!(
+        with(at(Level::Groups, None, None), "servo notes"),
+        "Orbit, every group, 1 match"
+    );
+    assert_eq!(
+        with(at(Level::Groups, None, None), "   "),
+        "Orbit, every group"
+    );
+    assert_eq!(
+        with(at(Level::Groups, None, None), ""),
+        "Orbit, every group"
+    );
+}
+
+#[test]
+fn the_match_count_counts_loose_and_pinned_tabs_too() {
+    let mut tabs = orbit_tabs();
+    tabs[1].pinned = true;
+    let input = OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false);
+    let mut view = at(Level::Groups, None, None);
+    view.query = "servo".into();
+    assert_eq!(
+        container_label(&view, &input),
+        "Orbit, every group, 3 matches"
+    );
+}
+
+#[test]
+fn the_search_placeholder_counts_the_tabs() {
+    assert_eq!(search_placeholder(&orbit_input(false)), "Search 40 tabs");
+    assert_eq!(
+        search_placeholder(&generated_input(1, 1, false)),
+        "Search 1 tab"
+    );
+    assert_eq!(search_placeholder(&OrbitInput::default()), "Search tabs");
+}
+
+#[test]
+fn ages_are_written_the_way_the_group_labels_are() {
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+    let ago = |seconds: u64| relative_age(now, now - Duration::from_secs(seconds));
+    for (seconds, expected) in [
+        (0, "now"),
+        (59, "now"),
+        (60, "1 min ago"),
+        (120, "2 min ago"),
+        (59 * 60 + 59, "59 min ago"),
+        (3600, "1 h ago"),
+        (2 * 3600 - 1, "1 h ago"),
+        (3 * 3600, "3 h ago"),
+        (23 * 3600 + 59 * 60, "23 h ago"),
+        (24 * 3600, "yesterday"),
+        (47 * 3600, "yesterday"),
+        (48 * 3600, "2 days ago"),
+        (3 * 86_400, "3 days ago"),
+        (13 * 86_400, "13 days ago"),
+        (14 * 86_400, "2 weeks ago"),
+        (60 * 86_400, "8 weeks ago"),
+    ] {
+        assert_eq!(ago(seconds), expected, "{seconds} s");
+    }
+    assert_eq!(
+        relative_age(now, now + Duration::from_secs(500)),
+        "now",
+        "a time in the future"
+    );
+}
+
+#[test]
+fn the_ages_use_the_words_of_the_fixtures() {
+    // The mockup rows (and `ring_bands::fixtures`) write "1 h ago", not "1 hour ago".
+    let fixtures: Vec<String> = orbit_groups(false)
+        .iter()
+        .map(|g| g.last_used.to_string())
+        .collect();
+    assert!(fixtures.iter().any(|age| age == "1 h ago"));
+    let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
+    for age in fixtures {
+        let seconds = match age.as_str() {
+            "2 min ago" => 120,
+            "1 h ago" => 3600,
+            "now" => 0,
+            "yesterday" => 86_400,
+            "3 days ago" => 3 * 86_400,
+            other => panic!("a new fixture age {other}"),
+        };
+        assert_eq!(
+            relative_age(now, now - Duration::from_secs(seconds)),
+            age,
+            "{age}"
+        );
+    }
+}
+
+#[test]
+fn the_six_dots_have_one_list_of_names() {
+    assert_eq!(
+        POPOVER_COLOURS,
+        ["blue", "amber", "violet", "rose", "green", "teal"]
+    );
+    for (index, name) in POPOVER_COLOURS.iter().enumerate() {
+        assert_eq!(
+            popover_colour_name(index as i32).as_deref(),
+            Some(*name),
+            "{index}"
+        );
+    }
+    assert_eq!(popover_colour_name(6), None);
+    assert_eq!(popover_colour_name(-1), None);
+    assert_eq!(popover_colour_name(i32::MAX), None);
+    assert_eq!(
+        DEFAULT_POPOVER_COLOUR, POPOVER_COLOURS[0],
+        "the first dot is the one shown as selected"
+    );
+    // The models carry the same names and one colour per name.
+    let models = OrbitModels::new();
+    let popover = models.popover();
+    let names: Vec<String> = popover.colour_names.iter().map(|n| n.to_string()).collect();
+    assert_eq!(names, POPOVER_COLOURS);
+    assert_eq!(popover.colours.row_count(), 6);
+}
+
+#[test]
+fn the_frame_carries_the_level_the_labels_and_the_motion_setting() {
+    let input = orbit_input(false);
+    let models = OrbitModels::new();
+    let build = |v: &View| {
+        let data = build_with(&input, v);
+        models.update(&data);
+        models.frame(v, &input, false, "")
+    };
+
+    let frame = build(&level1());
+    assert_eq!(frame.level, OrbitLevel::Groups);
+    assert!(!frame.has_centre);
+    assert_eq!(frame.container_label, "Orbit, every group");
+    assert_eq!(frame.search_placeholder, "Search 40 tabs");
+    assert_eq!(frame.sun.title, "Personal");
+    assert!(frame.sun.opacity > 0.0);
+    assert!(frame.new_group.visible);
+    assert!(!frame.query_active);
+    assert_eq!(frame.focus_tab, -1);
+    assert!(!frame.drag.active);
+    assert!(!frame.popover.visible);
+    assert!(frame.animate_spinners && !frame.reduce_motion);
+
+    let mut v = level2(RESEARCH);
+    v.focus = Some(Target::Preview(104));
+    v.query = "servo".into();
+    let frame = build(&v);
+    assert_eq!(frame.level, OrbitLevel::Group);
+    assert!(frame.has_centre);
+    assert_eq!(frame.centre.group, RESEARCH);
+    assert_eq!(frame.focus_tab, 104);
+    assert!(frame.query_active);
+    assert_eq!(frame.container_label, "Orbit, Research, 10 tabs, 3 matches");
+    assert_eq!(frame.more_previews, 0);
+
+    let mut v = level3(RESEARCH, 104);
+    v.focus = Some(Target::Card);
+    let frame = build(&v);
+    assert_eq!(frame.level, OrbitLevel::Tab);
+    assert_eq!(frame.focus_tab, -1, "only a preview's focus is a tab");
+    assert_eq!(frame.card.tab, 104);
+
+    v.query = "   ".into();
+    assert!(!models.frame(&v, &input, false, "").query_active);
+}
+
+#[test]
+fn the_frame_takes_the_notice_and_turns_the_spinners_off_with_reduced_motion() {
+    let input = orbit_input(false);
+    let models = OrbitModels::new();
+    models.update(&build_with(&input, &level1()));
+    let frame = models.frame(
+        &level1(),
+        &input,
+        true,
+        "Pinned tabs can't be put in a group.",
+    );
+    assert_eq!(frame.notice, "Pinned tabs can't be put in a group.");
+    assert!(frame.reduce_motion);
+    assert!(!frame.animate_spinners);
+}
+
+#[test]
+fn the_frames_drag_is_active_exactly_when_the_machine_has_a_drag() {
+    let input = orbit_input(false);
+    let models = OrbitModels::new();
+    let mut v = level1();
+    models.update(&build_with(&input, &v));
+    assert!(!models.frame(&v, &input, false, "").drag.active);
+    v.drag = Some(DragView {
+        source: Source::Tab(104),
+        over: None,
+    });
+    // The models were built without the drag: the machine is the authority.
+    assert!(models.frame(&v, &input, false, "").drag.active);
+    models.update(&build_with(&input, &v));
+    let frame = models.frame(&v, &input, false, "");
+    assert!(frame.drag.active);
+    assert_eq!(frame.drag.ghost_text, "AccessKit guide");
+}
+
+#[test]
+fn the_frame_shows_the_popover_with_its_placeholder() {
+    let input = orbit_input(false);
+    let models = OrbitModels::new();
+    let mut v = level1();
+    v.popover = Some(NewGroupPopover {
+        tab: 104,
+        ..NewGroupPopover::default()
+    });
+    models.update(&build_with(&input, &v));
+    let frame = models.frame(&v, &input, false, "");
+    assert!(frame.popover.visible);
+    assert_eq!(frame.popover.placeholder, "Untitled group");
+    assert_eq!(frame.popover.selected, 0);
+    assert_eq!(frame.popover.colour_names.row_count(), 6);
+}
+
+// ---- OrbitData::drop_target_at ----
+
+fn on_circle(centre: mercury_ui::ring_geometry::Point, radius: f32, deg: f32) -> (f32, f32) {
+    let p = point_on_circle(centre, radius, deg);
+    (p.x, p.y)
+}
+
+#[test]
+fn a_planets_tab_band_gives_the_insertion_slot() {
+    let data = build_with(&orbit_input(false), &level1());
+    let cell = &data.layout.planets[0];
+    assert_eq!(cell.tabs, 10);
+    let slot_at = |deg: f32, dragging: i32| {
+        let (x, y) = on_circle(cell.centre, cell.radius, deg);
+        data.drop_target_at(x, y, dragging)
+    };
+    // Ten slots of 36 degrees from 12 o'clock: the first half of a slot lands before its tab.
+    assert_eq!(
+        slot_at(5.25 * 36.0, -1),
+        Some(DropTarget::Group {
+            group: 1,
+            slot: Some(5)
+        })
+    );
+    assert_eq!(
+        slot_at(5.75 * 36.0, -1),
+        Some(DropTarget::Group {
+            group: 1,
+            slot: Some(6)
+        })
+    );
+    // The dragged tab is part of the count (the ring shows it before the move).
+    assert_eq!(
+        slot_at(5.75 * 36.0, 106),
+        Some(DropTarget::Group {
+            group: 1,
+            slot: Some(6)
+        })
+    );
+}
+
+#[test]
+fn a_planets_label_band_means_the_end_of_the_group() {
+    let data = build_with(&orbit_input(false), &level1());
+    let cell = &data.layout.planets[0];
+    // `spec` is ring-local; the radius is the same on the stage.
+    let (x, y) = on_circle(cell.centre, cell.spec.label_radius(), 90.0);
+    assert_eq!(
+        data.drop_target_at(x, y, -1),
+        Some(DropTarget::Group {
+            group: 1,
+            slot: Some(10)
+        })
+    );
+}
+
+#[test]
+fn a_halo_a_chip_the_new_group_ring_and_empty_stage_are_targets_without_a_slot() {
+    let data = build_with(&orbit_input(false), &level1());
+    let cell = &data.layout.planets[0];
+    let (x, y) = on_circle(cell.centre, cell.halo_radius - 1.0, 90.0);
+    assert_eq!(
+        data.drop_target_at(x, y, -1),
+        Some(DropTarget::Group {
+            group: 1,
+            slot: None
+        }),
+        "the halo, outside the ring"
+    );
+    let ring = data.layout.new_group.centre;
+    assert_eq!(
+        data.drop_target_at(ring.x, ring.y, 104),
+        Some(DropTarget::NewGroup)
+    );
+    assert_eq!(
+        data.drop_target_at(30.0, 120.0, 104),
+        Some(DropTarget::Empty)
+    );
+    let sun = data.layout.sun.centre;
+    assert_eq!(data.drop_target_at(sun.x, sun.y, 104), None, "the sun");
+
+    let two = build_with(&orbit_input(false), &level2(RESEARCH));
+    let chip = two.layout.chips[0].rect.centre();
+    assert_eq!(
+        two.drop_target_at(chip.x, chip.y, 104),
+        Some(DropTarget::Group {
+            group: two.layout.chips[0].group,
+            slot: None
+        })
+    );
+}
+
+#[test]
+fn at_level_two_the_centre_ring_gives_slots_and_a_card_gives_none() {
+    let data = build_with(&orbit_input(false), &level2(RESEARCH));
+    let ring = data.layout.centre.as_ref().expect("centre ring");
+    let (x, y) = on_circle(ring.centre, ring.spec.radius, 5.25 * 36.0);
+    assert_eq!(
+        data.drop_target_at(x, y, 111),
+        Some(DropTarget::Group {
+            group: 1,
+            slot: Some(5)
+        })
+    );
+    let card = data.layout.previews[0].rect.centre();
+    assert_eq!(data.drop_target_at(card.x, card.y, 111), None);
+    assert_eq!(
+        data.drop_target_at(8.0, 400.0, 111),
+        Some(DropTarget::Empty)
+    );
+}
+
+#[test]
+fn at_level_three_the_card_and_the_neighbours_are_no_target() {
+    let data = build_with(&orbit_input(false), &level3(RESEARCH, 104));
+    let card = data.layout.card.as_ref().expect("card").rect.centre();
+    assert_eq!(data.drop_target_at(card.x, card.y, -1), None);
+    let neighbour = data.layout.neighbours[0].rect.centre();
+    assert_eq!(data.drop_target_at(neighbour.x, neighbour.y, -1), None);
+}
+
+#[test]
+fn ring_of_finds_the_planet_then_the_centre_ring() {
+    let one = build_with(&orbit_input(false), &level1());
+    assert!(one.ring_of(3).is_some());
+    assert!(one.ring_of(99).is_none());
+    let two = build_with(&orbit_input(false), &level2(RESEARCH));
+    let centre = &two.centre.as_ref().expect("centre ring").ring;
+    assert!(
+        std::ptr::eq(two.ring_of(RESEARCH).expect("a ring"), centre),
+        "at level 2 the ring that is shown is the centre ring, not the planet that slid away"
+    );
+    assert!(
+        two.ring_of(3).is_some(),
+        "another group has only its planet"
+    );
 }

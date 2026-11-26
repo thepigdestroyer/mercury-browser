@@ -93,6 +93,8 @@ export component TabPicture inherits Rectangle {
 // (x, y).
 export component PreviewCard inherits Rectangle {
     in property <OrbitPreviewCard> card;
+    // The keyboard focus is on this card: a 2 px `focus-ring` outline, a little outside the card.
+    in property <bool> focused: false;
     in property <bool> animate-spinners: true;
     in property <bool> reduce-motion: false;
 
@@ -171,6 +173,16 @@ export component PreviewCard inherits Rectangle {
             border-width: root.card.current || root.card.lit ? 2px : 1px;
             border-color: root.card.current || root.card.lit ? ChromePalette.accent : ChromePalette.popup-border;
         }
+    }
+
+    if root.focused: Rectangle {
+        x: -4px;
+        y: -4px;
+        width: parent.width + 8px;
+        height: parent.height + 8px;
+        border-radius: 14px;
+        border-width: 2px;
+        border-color: ChromePalette.focus-ring;
     }
 
     // The flags (spinner, speaker, unread dot) sit at the card's top right, in card coordinates.

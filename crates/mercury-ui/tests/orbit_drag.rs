@@ -9,10 +9,10 @@ use std::rc::Rc;
 use mercury_ui::TabRow;
 use mercury_ui::orbit_view::drag::{
     Decision, DropTarget, GroupOp, OrbitPayload, PayloadError, Source, can_accept, drag_text,
-    resolve, slot_to_final_index,
+    drop_target_of, lit_target, resolve, slot_to_final_index, source_of, target_from_id,
 };
 use mercury_ui::orbit_view::fixtures::{orbit_groups, orbit_input, orbit_tabs};
-use mercury_ui::orbit_view::{LOOSE_GROUP_ID, OrbitInput};
+use mercury_ui::orbit_view::{LOOSE_GROUP_ID, OrbitInput, Target};
 use slint::{DataTransfer, SharedString};
 
 const SESSION: u64 = 7;
@@ -239,6 +239,103 @@ fn the_plain_text_is_never_a_url() {
         let data = payload(Source::Tab(id)).to_data_transfer(&text);
         let carried = data.plain_text().map(|t| t.to_string()).unwrap_or_default();
         assert!(!carried.contains("://"), "{carried}");
+    }
+}
+
+fn input_with_title(title: &str, host: &str) -> OrbitInput {
+    let mut tabs = orbit_tabs();
+    tabs[3].title = title.into();
+    tabs[3].host = host.into();
+    OrbitInput::new(&orbit_groups(false), &tabs, "P", "W", 101, false)
+}
+
+#[test]
+fn a_scheme_less_address_as_title_falls_back_to_the_host() {
+    for (title, host) in [
+        ("example.com/a?b=1", "example.com"),
+        ("localhost:8080/x", "localhost"),
+        ("example.com?token=1", "example.com"),
+        ("sub.example.org#top", "sub.example.org"),
+        ("example.com/", "example.com"),
+        ("192.168.0.1:3000/admin", "192.168.0.1"),
+        ("example.com:8080/a b", "example.com"),
+    ] {
+        let input = input_with_title(title, host);
+        let id = input.tabs[3].id;
+        let text = drag_text(Source::Tab(id), &input);
+        if title.contains(' ') {
+            assert_eq!(text, title, "words with a space are kept: {title}");
+            continue;
+        }
+        assert_eq!(text, host, "{title}");
+        assert!(!text.contains(['/', '?', '#']), "{text}");
+        let data = payload(Source::Tab(id)).to_data_transfer(&text);
+        assert_eq!(data.plain_text().ok().as_deref(), Some(host), "{title}");
+        // Given as the text itself, the address is withheld.
+        let data = payload(Source::Tab(id)).to_data_transfer(title);
+        assert!(!data.has_plain_text(), "{title}");
+    }
+}
+
+#[test]
+fn a_scheme_less_address_with_no_usable_host_gives_no_text() {
+    for host in ["example.com/a?b=1", "", "localhost:8080/x", "http://h/"] {
+        let input = input_with_title("example.com/a?b=1", host);
+        assert_eq!(
+            drag_text(Source::Tab(input.tabs[3].id), &input),
+            "",
+            "{host:?}"
+        );
+    }
+}
+
+#[test]
+fn titles_that_are_words_or_a_bare_host_are_not_addresses() {
+    for title in [
+        "TCP/IP",
+        "and/or",
+        "v1.2",
+        "node.js",
+        "example.com",
+        "Q3 plan: example.com/a?b=1",
+        "3.5 / 5",
+        "C# in depth",
+        "What is localhost:8080?",
+    ] {
+        let input = input_with_title(title, "example.com");
+        let text = drag_text(Source::Tab(input.tabs[3].id), &input);
+        assert_eq!(text, title, "{title}");
+    }
+}
+
+#[test]
+fn a_www_host_is_a_fine_drag_text() {
+    let input = input_with_title("https://www.example.com/x", "www.example.com");
+    assert_eq!(
+        drag_text(Source::Tab(input.tabs[3].id), &input),
+        "www.example.com"
+    );
+    let input = input_with_title("www.example.com/x", "www.example.com");
+    assert_eq!(
+        drag_text(Source::Tab(input.tabs[3].id), &input),
+        "www.example.com"
+    );
+}
+
+#[test]
+fn a_host_that_is_an_address_is_not_a_drag_text() {
+    for host in [
+        "https://example.com",
+        "mailto:a@b.c",
+        "javascript:alert(1)",
+        "a b",
+    ] {
+        let input = input_with_title("https://example.com/x", host);
+        assert_eq!(
+            drag_text(Source::Tab(input.tabs[3].id), &input),
+            "",
+            "{host}"
+        );
     }
 }
 
@@ -1040,4 +1137,121 @@ fn resolving_a_group_drop_ends_in_reorder() {
         decision.op(),
         Some(GroupOp::ReorderGroup { group: 4, index: 1 })
     );
+}
+
+// --- ids and kinds of the Slint side (moved from the desktop glue) -----------------------------
+
+#[test]
+fn a_drag_area_kind_and_id_give_the_source() {
+    assert_eq!(source_of("tab", 104), Some(Source::Tab(104)));
+    assert_eq!(source_of("group", 3), Some(Source::Group(3)));
+    assert_eq!(
+        source_of("group", LOOSE_GROUP_ID),
+        Some(Source::Group(LOOSE_GROUP_ID))
+    );
+    for kind in ["", "Tab", "tabs", "new-group", "empty", "planet"] {
+        assert_eq!(source_of(kind, 1), None, "{kind:?}");
+    }
+}
+
+#[test]
+fn a_drop_area_kind_id_and_slot_give_the_target() {
+    assert_eq!(drop_target_of("group", 2, -1), Some(group(2, None)));
+    assert_eq!(drop_target_of("group", 2, 0), Some(group(2, Some(0))));
+    assert_eq!(drop_target_of("group", 2, 7), Some(group(2, Some(7))));
+    assert_eq!(drop_target_of("group", 2, i32::MIN), Some(group(2, None)));
+    assert_eq!(
+        drop_target_of("new-group", -1, -1),
+        Some(DropTarget::NewGroup)
+    );
+    assert_eq!(drop_target_of("empty", -1, 4), Some(DropTarget::Empty));
+    for kind in ["", "tab", "Group", "new_group", "planet"] {
+        assert_eq!(drop_target_of(kind, 1, 1), None, "{kind:?}");
+    }
+}
+
+#[test]
+fn a_negative_slint_id_is_the_backdrop() {
+    assert_eq!(target_from_id(-1, Target::Planet), Target::Backdrop);
+    assert_eq!(target_from_id(i32::MIN, Target::Preview), Target::Backdrop);
+    assert_eq!(target_from_id(0, Target::Planet), Target::Planet(0));
+    assert_eq!(target_from_id(7, Target::Preview), Target::Preview(7));
+    assert_eq!(target_from_id(7, Target::Chip), Target::Chip(7));
+    assert_eq!(target_from_id(7, Target::Neighbour), Target::Neighbour(7));
+}
+
+#[test]
+fn only_a_target_that_would_change_something_is_lit() {
+    let input = input();
+    // A tab of Research over Lisbon trip: lit; over its own halo: nothing to change.
+    assert_eq!(
+        lit_target(Source::Tab(104), SESSION, Some(group(2, None)), &input),
+        Some(group(2, None))
+    );
+    assert_eq!(
+        lit_target(Source::Tab(104), SESSION, Some(group(1, None)), &input),
+        None
+    );
+    assert_eq!(
+        lit_target(
+            Source::Tab(104),
+            SESSION,
+            Some(DropTarget::NewGroup),
+            &input
+        ),
+        Some(DropTarget::NewGroup)
+    );
+    assert_eq!(
+        lit_target(Source::Tab(104), SESSION, Some(DropTarget::Empty), &input),
+        Some(DropTarget::Empty)
+    );
+    // A group: reorder is lit, "New group" and itself are not.
+    assert_eq!(
+        lit_target(Source::Group(2), SESSION, Some(group(4, None)), &input),
+        Some(group(4, None))
+    );
+    assert_eq!(
+        lit_target(
+            Source::Group(2),
+            SESSION,
+            Some(DropTarget::NewGroup),
+            &input
+        ),
+        None
+    );
+    assert_eq!(
+        lit_target(Source::Group(2), SESSION, Some(group(2, None)), &input),
+        None
+    );
+    // No target, a stale source, a pinned tab.
+    assert_eq!(lit_target(Source::Tab(104), SESSION, None, &input), None);
+    assert_eq!(
+        lit_target(Source::Tab(9999), SESSION, Some(group(2, None)), &input),
+        None
+    );
+    let loose = input_with_loose();
+    assert_eq!(
+        lit_target(Source::Tab(101), SESSION, Some(group(2, None)), &loose),
+        None,
+        "tab 101 is pinned"
+    );
+}
+
+#[test]
+fn lit_target_agrees_with_can_accept_for_every_pair() {
+    let input = input();
+    let mut sources: Vec<Source> = input.tabs.iter().map(|t| Source::Tab(t.id)).collect();
+    sources.extend(input.groups.iter().map(|g| Source::Group(g.id)));
+    let mut targets = vec![DropTarget::NewGroup, DropTarget::Empty];
+    for g in &input.groups {
+        targets.push(group(g.id, None));
+        targets.extend((0..=11).map(|slot| group(g.id, Some(slot))));
+    }
+    for source in &sources {
+        for target in &targets {
+            let lit = lit_target(*source, SESSION, Some(*target), &input);
+            let accepted = can_accept(&payload(*source), *target, &input);
+            assert_eq!(lit, accepted.then_some(*target), "{source:?} on {target:?}");
+        }
+    }
 }

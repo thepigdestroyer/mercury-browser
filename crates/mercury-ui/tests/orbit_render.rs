@@ -226,6 +226,92 @@ fn the_current_and_the_lit_cards_have_an_accent_outline_the_others_do_not() {
 }
 
 #[test]
+fn the_vertical_and_horizontal_spokes_are_drawn() {
+    // A spoke whose ends share an x or a y has a path box one pixel wide: its 1.5 px stroke sat at
+    // the box's edge and was clipped away.
+    let (pixels, scene) = draw(Frame::Group, false);
+    let cards: Vec<_> = scene.data.previews.iter().map(|p| p.row.clone()).collect();
+    let straight: Vec<_> = cards
+        .iter()
+        .filter(|c| (c.spoke_x1 - c.spoke_x2).abs() < 0.5 || (c.spoke_y1 - c.spoke_y2).abs() < 0.5)
+        .collect();
+    assert!(
+        straight.len() >= 2,
+        "the top and the bottom card have straight spokes: {}",
+        straight.len()
+    );
+    for card in straight {
+        let (mx, my) = (
+            (card.spoke_x1 + card.spoke_x2) / 2.0,
+            (card.spoke_y1 + card.spoke_y2) / 2.0,
+        );
+        let vertical = (card.spoke_x1 - card.spoke_x2).abs() < 0.5;
+        let (across_x, across_y) = if vertical { (1.0, 0.0) } else { (0.0, 1.0) };
+        let beside = at(&pixels, mx + across_x * 8.0, my + across_y * 8.0);
+        let on_it = (-4..=4)
+            .map(|step| step as f32 * 0.5)
+            .map(|d| at(&pixels, mx + across_x * d, my + across_y * d))
+            .any(|pixel| {
+                pixel.r.abs_diff(beside.r) > 6
+                    || pixel.g.abs_diff(beside.g) > 6
+                    || pixel.b.abs_diff(beside.b) > 6
+            });
+        assert!(
+            on_it,
+            "the spoke of {} is not drawn at ({mx}, {my}): beside it {beside:?}",
+            card.title
+        );
+    }
+}
+
+#[test]
+fn the_level_three_card_has_a_focus_ring_only_while_the_view_has_the_keyboard_focus() {
+    let (pixels, scene) = draw(Frame::Tab, false);
+    let focus_ring = scene.window.global::<ChromePalette>().get_focus_ring();
+    let card = &scene.data.card;
+    let probe = (card.x - 3.5, card.y + card.height / 2.0);
+    assert!(
+        near_colour(&pixels, probe, (0.5, 0.0), focus_ring),
+        "the focus ring left of the card: {:?}",
+        at(&pixels, probe.0, probe.1)
+    );
+    // The accent outline of the card itself stays (the card is the shown tab at every level 3).
+    assert!(near_colour(
+        &pixels,
+        (card.x + 0.5, card.y + card.height / 2.0),
+        (0.5, 0.0),
+        accent(&scene)
+    ));
+    // A window nobody gave the focus to (a fresh scene: the first one was focused above).
+    let unfocused = scenes::scene(Frame::Tab, false).render_unfocused();
+    assert!(
+        !near_colour(&unfocused, probe, (0.5, 0.0), focus_ring),
+        "no ring without the keyboard focus"
+    );
+}
+
+#[test]
+fn the_focused_preview_has_a_focus_ring_and_the_others_do_not() {
+    let (pixels, scene) = draw(Frame::Group, false);
+    let focus_ring = scene.window.global::<ChromePalette>().get_focus_ring();
+    let focused_tab = scene.window.get_focus_tab();
+    assert!(focused_tab >= 0, "the machine opens level 2 with a focus");
+    for card in scene.data.previews.iter().map(|p| p.row.clone()) {
+        let probe = (card.x - card.width * card.scale / 2.0 - 3.5, card.y);
+        let ringed = near_colour(&pixels, probe, (0.5, 0.0), focus_ring);
+        assert_eq!(ringed, card.tab == focused_tab, "{}", card.title);
+    }
+}
+
+#[test]
+fn the_popover_opens_empty_with_its_placeholder() {
+    let (_, scene) = draw(Frame::NewGroup, false);
+    let popover = scene.window.get_popover();
+    assert!(popover.visible);
+    assert_eq!(popover.name, "", "no prefilled name");
+}
+
+#[test]
 fn the_level_three_card_shows_the_supplied_picture() {
     for dark in [false, true] {
         let (pixels, scene) = draw(Frame::Tab, dark);

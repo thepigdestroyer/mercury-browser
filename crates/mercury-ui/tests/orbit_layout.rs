@@ -7,7 +7,7 @@
 #![cfg(feature = "test-support")]
 
 use mercury_ui::orbit_view::fixtures::{generated_input, orbit_input, orbit_tabs};
-use mercury_ui::orbit_view::layout::{OrbitLayout, Rect, Side};
+use mercury_ui::orbit_view::layout::{OrbitLayout, Rect, Side, TooltipSide};
 use mercury_ui::orbit_view::{
     LOOSE_GROUP_ID, Level, OrbitInput, Stage, TITLE_BAR_HEIGHT, Target, View,
 };
@@ -214,21 +214,142 @@ fn rebuilding_at_another_size_keeps_the_planet_order() {
 fn the_tooltip_sits_to_the_right_unless_it_would_leave_the_window() {
     let layout = level1(Stage::MOCKUP, &orbit_input(false));
     let top = &layout.planets[0];
-    assert_eq!(top.tooltip_side, Side::Right);
+    assert_eq!(top.tooltip_side, TooltipSide::Right);
     assert!(top.tooltip.x >= top.centre.x + top.halo_radius);
     let right = &layout.planets[1];
-    assert_eq!(
+    assert_ne!(
         right.tooltip_side,
-        Side::Left,
+        TooltipSide::Right,
         "the planet at x 1160 has no room on its right"
     );
-    assert!(right.tooltip.right() <= right.centre.x - right.halo_radius + 0.01);
+    if right.tooltip_side == TooltipSide::Left {
+        assert!(right.tooltip.right() <= right.centre.x - right.halo_radius + 0.01);
+    }
+    assert_eq!(
+        right.tooltip_side,
+        TooltipSide::Above,
+        "its left side is the sun's, so the tooltip goes above"
+    );
+    assert!(right.tooltip.bottom() <= right.centre.y - right.halo_radius + 0.01);
+    for (i, cell) in layout.planets.iter().enumerate() {
+        assert_eq!(
+            crowding(&layout, i),
+            0.0,
+            "the mockup's tooltips are clear: {cell:?}"
+        );
+    }
     for cell in &layout.planets {
         assert!(
             cell.tooltip.x >= 0.0 && cell.tooltip.right() <= 1440.0,
             "{cell:?}"
         );
         assert!(cell.tooltip.y >= TITLE_BAR_HEIGHT && cell.tooltip.bottom() <= 900.0);
+    }
+}
+
+/// How far the rectangle runs into the circle (0 when they do not touch).
+fn into_circle(rect: Rect, centre: Point, radius: f32) -> f32 {
+    let nearest = Point::new(
+        centre.x.clamp(rect.x, rect.right()),
+        centre.y.clamp(rect.y, rect.bottom()),
+    );
+    (radius - dist(nearest, centre)).max(0.0)
+}
+
+/// What a tooltip runs into: the other planets' halos and the sun.
+fn crowding(layout: &OrbitLayout, index: usize) -> f32 {
+    crowding_of(layout, index, layout.planets[index].tooltip)
+}
+
+/// The same for a rectangle that stands for planet `index`'s tooltip.
+fn crowding_of(layout: &OrbitLayout, index: usize, tooltip: Rect) -> f32 {
+    let planets: f32 = layout
+        .planets
+        .iter()
+        .enumerate()
+        .filter(|(i, _)| *i != index)
+        .map(|(_, p)| into_circle(tooltip, p.centre, p.halo_radius))
+        .sum();
+    planets + into_circle(tooltip, layout.sun.centre, layout.sun.radius)
+}
+
+fn inside(rect: Rect, stage: Stage) -> bool {
+    rect.x >= 8.0
+        && rect.right() <= stage.width - 8.0
+        && rect.y >= TITLE_BAR_HEIGHT
+        && rect.bottom() <= stage.height - 8.0
+}
+
+/// (planets whose tooltip touches a neighbour or the sun, planets whose tooltip covers their own
+/// halo) for `n` groups on `stage`; every tooltip must be inside the stage.
+fn tooltip_trouble(stage: Stage, n: usize) -> (usize, usize) {
+    let layout = level1(stage, &generated_input(n, n * 6, false));
+    let (mut crowded, mut covering) = (0, 0);
+    for (i, cell) in layout.planets.iter().enumerate() {
+        assert!(
+            inside(cell.tooltip, stage),
+            "{}x{}, {n} groups: {cell:?}",
+            stage.width,
+            stage.height
+        );
+        crowded += usize::from(crowding(&layout, i) > 0.0);
+        covering += usize::from(into_circle(cell.tooltip, cell.centre, cell.halo_radius) > 0.0);
+    }
+    println!(
+        "{}x{}, {n} groups: {crowded} tooltips touch a neighbour or the sun, {covering} their own halo",
+        stage.width, stage.height
+    );
+    (crowded, covering)
+}
+
+#[test]
+fn a_tooltip_touches_no_other_planet_and_not_the_sun_at_5_and_12_groups() {
+    for (w, h) in [(1440.0, 900.0), (1920.0, 1080.0), (2560.0, 1440.0)] {
+        for n in [5_usize, 12] {
+            assert_eq!(tooltip_trouble(Stage::new(w, h), n), (0, 0), "{w}x{h}, {n}");
+        }
+    }
+    // A small window with 12 planets may have none of the four sides free for a planet or two.
+    assert_eq!(tooltip_trouble(Stage::new(1280.0, 800.0), 5), (0, 0));
+    let (crowded, covering) = tooltip_trouble(Stage::new(1280.0, 800.0), 12);
+    assert!(crowded <= 3 && covering == 0, "{crowded}, {covering}");
+}
+
+/// The tooltip the first version drew: right of the halo, left when that leaves the window.
+fn right_or_left(cell: &mercury_ui::orbit_view::layout::PlanetCell, stage: Stage) -> Rect {
+    let w = cell.tooltip.w;
+    let mut x = cell.centre.x + cell.halo_radius + 8.0;
+    if x + w > stage.width - 8.0 {
+        x = cell.centre.x - cell.halo_radius - 8.0 - w;
+    }
+    x = x.min(stage.width - 8.0 - w).max(8.0);
+    let y = (cell.centre.y - 16.0)
+        .min(stage.height - 8.0 - 32.0)
+        .max(TITLE_BAR_HEIGHT + 8.0);
+    Rect::new(x, y, w, 32.0)
+}
+
+#[test]
+fn at_24_groups_the_four_sides_run_into_neighbours_less_than_right_or_left_did() {
+    for (w, h) in [(1440.0, 900.0), (1920.0, 1080.0), (2560.0, 1440.0)] {
+        let stage = Stage::new(w, h);
+        let layout = level1(stage, &generated_input(24, 24 * 6, false));
+        let (now, before): (f32, f32) = layout
+            .planets
+            .iter()
+            .enumerate()
+            .map(|(i, cell)| {
+                (
+                    crowding_of(&layout, i, cell.tooltip),
+                    crowding_of(&layout, i, right_or_left(cell, stage)),
+                )
+            })
+            .fold((0.0, 0.0), |(a, b), (x, y)| (a + x, b + y));
+        let (crowded, covering) = tooltip_trouble(stage, 24);
+        println!("{w}x{h}, 24 groups: depth {now:.0} px now, {before:.0} px with right or left");
+        assert!(now < before, "{w}x{h}: {now} against {before}");
+        assert_eq!(covering, 0, "{w}x{h}: a tooltip covers its own planet");
+        assert!(crowded < 24, "{w}x{h}: {crowded} of 24 touch a neighbour");
     }
 }
 
