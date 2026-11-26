@@ -98,6 +98,7 @@ mod keychain_only {
     use mercury_passkeys::keychain::{
         AccessPolicy, ITEM_DESCRIPTION, KEYCHAIN_SERVICE, KeychainPasskeyBackend,
     };
+    use mercury_passkeys::testing::FakeVerifier;
     use mercury_passkeys::{
         PasskeyBackend, PasskeyError, PasskeyKey, PasskeyRecord, PasskeyStore, SaveOutcome,
     };
@@ -518,7 +519,10 @@ mod keychain_only {
         store.save(&passkey("example.org", 2, "bob")).expect("save");
         assert_eq!(store.all().expect("all").len(), 2);
 
-        assert_eq!(store.remove_all().expect("remove all"), 2);
+        assert_eq!(
+            store.remove_all(&FakeVerifier::new()).expect("remove all"),
+            2
+        );
         assert!(store.all().expect("all").is_empty());
         let remaining = attributes(&handle);
         assert_eq!(

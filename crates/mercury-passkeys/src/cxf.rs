@@ -50,6 +50,7 @@ use passkey::crypto::rust_crypto::RustCryptoSecretKey;
 use passkey::crypto::{Pkcs8, SecretKeyT};
 use zeroize::{Zeroize, Zeroizing};
 
+use crate::verifier::{UserVerifier, VerificationPurpose, require_verified_user};
 use crate::{
     COSE_ES256, PasskeyError, PasskeyKey, PasskeyRecord, PasskeySummary, PrivateKey,
     validate_record,
@@ -171,15 +172,23 @@ impl fmt::Debug for Imported {
 ///
 /// # Errors
 ///
-/// [`PasskeyError::RandomUnavailable`] if the operating system's random source fails (ids are
-/// random), and [`PasskeyError::InvalidInput`] if there are more passkeys than an import accepts or
-/// the file would be larger than an import accepts.
+/// [`PasskeyError::NotAllowed`] if `verifier` does not verify the user, in which case nothing is
+/// exported. [`PasskeyError::RandomUnavailable`] if the operating system's random source fails (ids
+/// are random), and [`PasskeyError::InvalidInput`] if there are more passkeys than an import accepts
+/// or the file would be larger than an import accepts.
 pub fn export_cxf(
     records: &[PasskeyRecord],
     ack: ExportAcknowledgement,
     now_secs: u64,
+    verifier: &dyn UserVerifier,
 ) -> Result<Exported, PasskeyError> {
     let ExportAcknowledgement::PrivateKeysInClear = ack;
+    require_verified_user(
+        verifier,
+        VerificationPurpose::ExportPasskeys {
+            count: records.len(),
+        },
+    )?;
     if records.len() > MAX_IMPORT_ITEMS {
         return Err(PasskeyError::InvalidInput(
             "there are more passkeys than one exchange file can hold",

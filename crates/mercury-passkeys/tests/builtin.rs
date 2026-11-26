@@ -1320,7 +1320,9 @@ fn the_adapter_reads_the_key_only_when_asked_and_it_is_the_saved_key() {
     assert!(item.key().into_owned() == saved_key);
 
     // Once the passkey is gone, the key cannot be read: the item gives an unusable key.
-    store.remove(&key_of(RP, &[1; 32])).expect("removed");
+    store
+        .remove(&key_of(RP, &[1; 32]), &FakeVerifier::new())
+        .expect("removed");
     assert!(item.key().into_owned() == CoseKey::default());
 }
 

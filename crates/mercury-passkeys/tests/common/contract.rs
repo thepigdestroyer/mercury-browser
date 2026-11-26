@@ -7,6 +7,7 @@ use std::thread::sleep;
 use std::time::Duration;
 
 use data_encoding::BASE64URL_NOPAD;
+use mercury_passkeys::testing::FakeVerifier;
 use mercury_passkeys::{
     MAX_CREDENTIAL_ID_BYTES, MAX_NAME_BYTES, MAX_PRIVATE_KEY_BYTES, PasskeyBackend, PasskeyKey,
     PasskeyRecord, PasskeyStore, PasskeySummary, PrivateKey, SaveOutcome,
@@ -372,17 +373,28 @@ pub fn bulk_removal_through_the_store<B: PasskeyBackend>(backend: B) -> B {
     assert_eq!(store.for_rp("example.com").expect("for_rp").len(), 2);
     assert_eq!(store.for_rp("www.example.com").expect("for_rp").len(), 0);
 
-    assert_eq!(store.remove_for_rp("example.com").expect("remove"), 2);
+    let verifier = FakeVerifier::new();
+    assert_eq!(
+        store
+            .remove_for_rp("example.com", &verifier)
+            .expect("remove"),
+        2
+    );
     let left = store.all().expect("all");
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].key.rp_id, "example.org");
-    assert_eq!(store.remove_for_rp("example.com").expect("again"), 0);
+    assert_eq!(
+        store
+            .remove_for_rp("example.com", &verifier)
+            .expect("again"),
+        0
+    );
 
     store
         .save(&passkey("example.net", 4, "dave"))
         .expect("save");
-    assert_eq!(store.remove_all().expect("remove all"), 2);
+    assert_eq!(store.remove_all(&verifier).expect("remove all"), 2);
     assert!(store.all().expect("all").is_empty());
-    assert_eq!(store.remove_all().expect("remove all again"), 0);
+    assert_eq!(store.remove_all(&verifier).expect("remove all again"), 0);
     store.into_backend()
 }
