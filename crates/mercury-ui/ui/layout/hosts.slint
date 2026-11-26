@@ -7,7 +7,7 @@ import { GroupDockBar } from "../groups/dock.slint";
 import { CornerDial } from "../groups/corner-dial.slint";
 import { DockBridge, DialBridge } from "bridges.slint";
 
-component DockHost inherits GroupDockBar {
+export component DockHost inherits GroupDockBar {
     pills: DockBridge.pills;
     dock-x: DockBridge.dock-x;
     dock-width: DockBridge.dock-width;
@@ -39,7 +39,7 @@ component DockHost inherits GroupDockBar {
     expand-requested() => { DockBridge.expand-requested(); }
 }
 
-component DialHost inherits CornerDial {
+export component DialHost inherits CornerDial {
     groups: DialBridge.groups;
     tabs: DialBridge.tabs;
     segments: DialBridge.segments;

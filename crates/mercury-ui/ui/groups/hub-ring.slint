@@ -323,6 +323,7 @@ export component RingPopover inherits Rectangle {
     property <int> close-request: HubRingBridge.close-request;
     property <bool> closing: false;
     property <bool> popup-open: popup.is-open;
+    property <int> cancel-count: 0;
 
     public function show() {
         root.closing = false;
@@ -341,7 +342,7 @@ export component RingPopover inherits Rectangle {
         if !root.popup-open {
             close-timer.running = false;
             root.closing = false;
-            content.cancel-drag();
+            root.cancel-count += 1;
             HubRingBridge.closed();
         }
     }
@@ -364,6 +365,7 @@ export component RingPopover inherits Rectangle {
 
         frame := Rectangle {
             property <bool> shown: false;
+            property <int> cancel-seen: root.cancel-count;
             width: parent.width;
             height: parent.height;
             opacity: root.closing || !self.shown ? 0 : 1;
@@ -376,6 +378,9 @@ export component RingPopover inherits Rectangle {
             animate opacity, transform-scale-x, transform-scale-y {
                 duration: HubRingBridge.reduce-motion ? 0ms : (root.closing ? 120ms : 160ms);
                 easing: ease-out;
+            }
+            changed cancel-seen => {
+                content.cancel-drag();
             }
             init => {
                 HubRingBridge.opened();

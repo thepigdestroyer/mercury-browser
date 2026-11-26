@@ -66,6 +66,9 @@ export { PdfFitMode, PdfPageRow, PdfPointer, PdfRectRow, PdfScrollKey, PdfTileRo
 // layout-switch: the two layouts of the main window
 export { DockBridge, DialBridge } from "layout/bridges.slint";
 export { LayoutHostsPreview } from "layout/hosts.slint";
+import { DockHost, DialHost } from "layout/hosts.slint"; // layout-switch
+import { HubButton, RingPopover } from "groups/hub-ring.slint"; // layout-switch: hub button and ring popover
+import { HubRingBridge } from "groups/hub-ring-bridge.slint"; // layout-switch
 export enum WindowLayout {
     classic,
     mercury,
@@ -672,6 +675,12 @@ export component MainWindow inherits Window {
     callback window-drag-requested();
     callback window-zoom-requested();
     public function show-tab-ring() {
+        tab-ring.show();
+    }
+    tab-ring := RingPopover {
+        x: Math.max(8px, Math.min(root.width - 8px - HubRingBridge.ring-size, root.width - HubRingBridge.ring-size - 14px));
+        y: ChromeMetrics.toolbar-height;
+        tail-x: root.width - 14px - 15px - self.x;
     }
     // --- end layout-switch ---
 
@@ -689,12 +698,12 @@ export component MainWindow inherits Window {
         spacing: 0px;
 
         Rectangle {
-            height: root.chrome-hidden ? 0px : ChromeMetrics.tab-row-height;
-            visible: !root.chrome-hidden;
+            height: root.tab-row-shown && !root.chrome-hidden ? ChromeMetrics.tab-row-height : 0px;
+            visible: root.tab-row-shown && !root.chrome-hidden;
             background: ChromePalette.window-background;
 
             HorizontalLayout {
-                padding-left: ChromeMetrics.tab-row-padding-left;
+                padding-left: ChromeMetrics.tab-row-padding-left + (root.layout == WindowLayout.classic ? root.window-controls-inset : 0px);
                 padding-right: ChromeMetrics.tab-row-padding-right;
                 padding-top: ChromeMetrics.tab-row-padding-top;
                 padding-bottom: ChromeMetrics.tab-row-padding-bottom;
@@ -747,7 +756,7 @@ export component MainWindow inherits Window {
             accessible-label: "Toolbar"; // a11y-base
 
             HorizontalLayout {
-                padding-left: ChromeMetrics.toolbar-padding-x;
+                padding-left: ChromeMetrics.toolbar-padding-x + (root.layout == WindowLayout.mercury ? root.window-controls-inset : 0px);
                 padding-right: ChromeMetrics.toolbar-padding-x;
                 padding-top: ChromeMetrics.toolbar-padding-y;
                 padding-bottom: ChromeMetrics.toolbar-padding-y;
@@ -789,8 +798,22 @@ export component MainWindow inherits Window {
                     }
                 }
 
+                // layout-switch: Mercury centres the address box between two spacers
+                if root.layout == WindowLayout.mercury: Rectangle {
+                    horizontal-stretch: 1;
+                }
+
+                // layout-switch: the hub button opens the tab ring
+                if root.hub-shown: HubButton {
+                    clicked => {
+                        root.show-tab-ring();
+                    }
+                }
+
                 address-box := Rectangle {
                     horizontal-stretch: 1;
+                    min-width: root.layout == WindowLayout.mercury ? 240px : 0px;
+                    max-width: root.layout == WindowLayout.mercury ? 640px : 100000px;
                     height: ChromeMetrics.address-height;
                     border-radius: ChromeMetrics.address-radius;
                     border-width: 1px;
@@ -924,6 +947,11 @@ export component MainWindow inherits Window {
                             root.capture-bubble-open = !root.capture-bubble-open;
                         }
                     }
+                }
+
+                // layout-switch: the right-hand spacer of the centred address box
+                if root.layout == WindowLayout.mercury: Rectangle {
+                    horizontal-stretch: 1;
                 }
 
                 if root.zoom-percent != root.default-zoom-percent: Text {
@@ -1072,6 +1100,12 @@ export component MainWindow inherits Window {
         web-view-area := Rectangle {
             vertical-stretch: 1;
             background: ChromePalette.content-background;
+
+            // layout-switch: the corner dial, over the page
+            if root.dial-shown: DialHost {
+                width: parent.width;
+                height: parent.height;
+            }
 
             if root.web-view-visible: Image {
                 width: parent.width;
@@ -1434,6 +1468,21 @@ export component MainWindow inherits Window {
                 close => {
                     root.downloads-close-panel();
                 }
+            }
+        }
+
+        // layout-switch: the dock band, under the page; the page is window minus rows minus band
+        dock-band-area := Rectangle {
+            height: root.dock-shown && !root.chrome-hidden ? root.dock-band : 0px;
+            visible: root.dock-shown && !root.chrome-hidden;
+            background: ChromePalette.window-background;
+            clip: true;
+
+            DockHost {
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: parent.height;
             }
         }
     }
