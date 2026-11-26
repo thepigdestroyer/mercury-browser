@@ -28,6 +28,7 @@ mod clipboard;
 mod controls;
 mod crash_handler;
 mod downloads; // downloads-ui lane
+mod energy; // energy-1
 mod engine;
 mod filter_lists; // blocklists
 mod find;
