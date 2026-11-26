@@ -311,6 +311,38 @@ fn authenticator_data_has_the_rp_id_hash_the_flags_and_no_counter() {
 }
 
 #[test]
+fn a_new_passkey_is_backup_eligible_and_not_backed_up_on_create_and_on_get() {
+    let h = harness();
+    let created = create(&h, RP, b"user-1", "alice");
+    assert_eq!(
+        created.authenticator_data[32] & 0x08,
+        0x08,
+        "BE set on create"
+    );
+    assert_eq!(
+        created.authenticator_data[32] & 0x10,
+        0,
+        "BS clear on create"
+    );
+
+    let request = assert_request(RP, vec![created.credential_id.clone()]);
+    let asserted = h.authenticator.get_assertion(&request).expect("assertion");
+    assert_eq!(
+        asserted.authenticator_data[32] & 0x08,
+        0x08,
+        "BE set on get"
+    );
+    assert_eq!(asserted.authenticator_data[32] & 0x10, 0, "BS clear on get");
+
+    let public = secret_key_of(&h, RP, &created.credential_id).public_key();
+    let mut message = asserted.authenticator_data.clone();
+    message.extend_from_slice(&request.client_data_hash);
+    public
+        .verify(&message, &asserted.signature)
+        .expect("the signature covers the flags that were returned");
+}
+
+#[test]
 fn the_attestation_object_is_cbor_with_format_none() {
     let h = harness();
     let created = create(&h, RP, b"user-1", "alice");

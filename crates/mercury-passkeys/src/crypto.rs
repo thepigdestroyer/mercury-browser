@@ -17,11 +17,30 @@
 
 use std::ops::RangeInclusive;
 
+use passkey::crypto::coset::CoseKey;
 use passkey::crypto::rng::RngBackend;
-use passkey::crypto::rust_crypto::{RustCryptoBackend, RustCryptoSecretKey, RustCryptoSha2};
-use passkey::crypto::{CryptoBackend, Error, iana};
+use passkey::crypto::rust_crypto::{
+    RustCryptoBackend, RustCryptoPublicKey, RustCryptoSecretKey, RustCryptoSha2,
+};
+use passkey::crypto::{CoseKeyConversionError, CryptoBackend, Error, SecretKeyT, iana};
+use passkey::types::ctap2::Flags;
 
 use crate::PasskeyError;
+
+/// The flags of a passkey that is not synced: backup eligible (BE) set and backed up (BS) clear.
+/// Every other bit is kept.
+pub(crate) fn unsynced_backup_flags(flags: Flags) -> Flags {
+    flags.union(Flags::BE).difference(Flags::BS)
+}
+
+/// Rewrites the flags byte of serialised authenticator data, which sits after the 32-byte RP ID
+/// hash, to [`unsynced_backup_flags`]. Data too short to have the byte is left alone.
+fn set_unsynced_backup_flags(data: &mut [u8]) {
+    const FLAGS_OFFSET: usize = 32;
+    if let Some(byte) = data.get_mut(FLAGS_OFFSET) {
+        *byte = unsynced_backup_flags(Flags::from_bits_retain(*byte)).bits();
+    }
+}
 
 /// Fills `buffer` from the operating system, or aborts the process.
 ///
@@ -81,6 +100,36 @@ impl RngBackend for OsRng {
     }
 }
 
+/// A passkey's signing key. It delegates to [`RustCryptoSecretKey`], except that [`SecretKeyT::sign`]
+/// first rewrites the flags byte of its target, which starts with the authenticator data and ends
+/// with the client data hash, so the signature covers the flags this crate returns.
+pub struct MercurySecretKey(RustCryptoSecretKey);
+
+impl SecretKeyT for MercurySecretKey {
+    type PublicKey = RustCryptoPublicKey;
+
+    fn from_cose_key(cose_key: &CoseKey) -> Result<Self, CoseKeyConversionError>
+    where
+        Self: Sized,
+    {
+        RustCryptoSecretKey::from_cose_key(cose_key).map(Self)
+    }
+
+    fn sign(&mut self, target: &[u8]) -> Vec<u8> {
+        let mut target = target.to_vec();
+        set_unsynced_backup_flags(&mut target);
+        self.0.sign(&target)
+    }
+
+    fn public_key(&self) -> Self::PublicKey {
+        self.0.public_key()
+    }
+
+    fn to_cose_key(&self) -> CoseKey {
+        self.0.to_cose_key()
+    }
+}
+
 /// The crypto backend of the built-in authenticator: ES256 keys and hashing from passkey-rs'
 /// RustCrypto backend, the operating system RNG for everything random, no other algorithm.
 #[derive(Clone, Copy, Debug, Default)]
@@ -96,7 +145,7 @@ impl MercuryCrypto {
 impl CryptoBackend for MercuryCrypto {
     type Rng = OsRng;
     type Sha256 = RustCryptoSha2;
-    type SecretKey = RustCryptoSecretKey;
+    type SecretKey = MercurySecretKey;
 
     fn enumerate_algorithms(&self) -> Vec<iana::Algorithm> {
         vec![iana::Algorithm::ES256]
@@ -104,7 +153,9 @@ impl CryptoBackend for MercuryCrypto {
 
     fn generate_key(&self, algorithm: iana::Algorithm) -> Result<Self::SecretKey, Error> {
         match algorithm {
-            iana::Algorithm::ES256 => RustCryptoBackend.generate_key(algorithm),
+            iana::Algorithm::ES256 => RustCryptoBackend
+                .generate_key(algorithm)
+                .map(MercurySecretKey),
             _ => Err("Algorithm is unsupported".into()),
         }
     }
