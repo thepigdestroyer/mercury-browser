@@ -11,6 +11,9 @@ export component Sun inherits Rectangle {
     in property <length> radius: 92px;
     in property <string> title;
     in property <string> subtitle;
+    // What a screen reader says ("Personal, window 1, 40 tabs"): `OrbitSun.accessible-label`. The
+    // drawn texts are decoration, so the middle dot of the subtitle is never spoken.
+    in property <string> label;
 
     private property <length> disc: 2 * root.radius;
     private property <float> k: root.radius / 92px;
@@ -30,7 +33,7 @@ export component Sun inherits Rectangle {
     width: 2.9 * root.radius;
     height: root.width;
     accessible-role: text;
-    accessible-label: root.subtitle == "" ? root.title : "\{root.title}, \{root.subtitle}";
+    accessible-label: root.label == "" ? root.title : root.label;
 
     // The halo: opaque orange 35 % from 60 % of its radius, fading to nothing at its edge (the
     // corner of the box is 1.414 x the radius, so the stops are scaled by 0.707).

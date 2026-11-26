@@ -32,6 +32,9 @@ pub fn key_from_text(text: &str) -> Option<Key> {
     if named(slint::platform::Key::RightArrow) {
         return Some(Key::Right);
     }
+    if named(slint::platform::Key::Tab) {
+        return Some(Key::Tab);
+    }
     match c {
         'n' | 'N' => Some(Key::N),
         '/' => Some(Key::Slash),

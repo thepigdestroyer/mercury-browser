@@ -91,6 +91,8 @@ pub enum Key {
     Down,
     Left,
     Right,
+    /// ⇥: the next item of the level; ⇧⇥ (`Mods::shift`) the previous one.
+    Tab,
     /// `N`: a new group.
     N,
     /// `/`: focus the search field.

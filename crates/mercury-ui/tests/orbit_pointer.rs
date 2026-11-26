@@ -17,6 +17,7 @@ mod scenes;
 
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::time::Duration;
 
 use common::a11y;
 use mercury_ui::orbit_view::{OrbitPayload, Source};
@@ -623,6 +624,186 @@ fn ring_the_centre_ring_takes_the_pointer_at_level_two_and_not_at_level_three() 
     three.move_to(100.0, 470.0);
     three.move_to(720.0, 800.0);
     assert_eq!(*asked.borrow(), 0, "the huge ring at level 3 only draws");
+}
+
+// ---- what the host reads and drives: text focus, the open animation, the pinch reset
+
+/// Moves Slint's mocked clock on (animations, timers and change handlers run).
+fn elapse(milliseconds: u64) {
+    i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(milliseconds));
+}
+
+fn close_to(value: f32, expected: f32) -> bool {
+    (value - expected).abs() < 0.002
+}
+
+#[test]
+fn text_field_focused_is_true_only_while_the_search_field_has_the_focus() {
+    let h = Harness::new(Frame::Overview);
+    h.window.invoke_focus_view();
+    elapse(1);
+    assert!(!h.window.get_text_field_focused(), "the key scope has it");
+    h.window.invoke_focus_search();
+    elapse(1);
+    assert!(h.window.get_text_field_focused(), "the search field has it");
+    h.window.invoke_focus_view();
+    elapse(1);
+    assert!(!h.window.get_text_field_focused(), "blurred again");
+}
+
+#[test]
+fn text_field_focused_is_true_while_the_popover_name_field_has_the_focus() {
+    let h = Harness::new(Frame::NewGroup);
+    elapse(1);
+    assert!(
+        h.window.get_popover().visible,
+        "the new-group frame shows the popover"
+    );
+    assert!(
+        h.window.get_text_field_focused(),
+        "the name field takes the focus when the popover opens"
+    );
+    h.window.invoke_focus_view();
+    elapse(1);
+    assert!(
+        !h.window.get_text_field_focused(),
+        "the key scope has it now"
+    );
+}
+
+#[test]
+fn a_popover_that_closes_with_its_field_focused_no_longer_counts() {
+    let h = Harness::new(Frame::NewGroup);
+    elapse(1);
+    assert!(h.window.get_text_field_focused());
+    h.window.set_popover(mercury_ui::OrbitPopover::default());
+    elapse(1);
+    assert!(!h.window.get_text_field_focused(), "the field is gone");
+}
+
+#[test]
+fn play_open_runs_320_ms_from_zero_to_one_in_three_phases() {
+    let h = Harness::new(Frame::Overview);
+    h.window.set_reduce_motion(false);
+    assert_eq!(
+        h.window.get_open_progress(),
+        1.0,
+        "at rest nothing is lifted"
+    );
+    assert_eq!(h.window.get_open_scale(), 1.0);
+    assert_eq!(h.window.get_open_opacity(), 1.0);
+
+    h.window.invoke_play_open();
+    assert_eq!(h.window.get_open_progress(), 0.0, "it starts at zero");
+    assert!(close_to(h.window.get_open_scale(), 0.94));
+    assert!(close_to(h.window.get_open_opacity(), 0.0));
+
+    // Phase 1, 80 ms: the page lifts into a card.
+    elapse(80);
+    assert!(
+        close_to(h.window.get_open_scale(), 0.98),
+        "{}",
+        h.window.get_open_scale()
+    );
+    assert!(
+        close_to(h.window.get_open_opacity(), 0.6),
+        "{}",
+        h.window.get_open_opacity()
+    );
+
+    // Phase 2, 160 ms: it shrinks toward its group (the middle of the run).
+    elapse(80);
+    let middle = h.window.get_open_progress();
+    assert!(middle > 0.0 && middle < 1.0, "{middle}");
+    elapse(80);
+    assert!(
+        close_to(h.window.get_open_scale(), 1.02),
+        "{}",
+        h.window.get_open_scale()
+    );
+    assert!(
+        close_to(h.window.get_open_opacity(), 1.0),
+        "{}",
+        h.window.get_open_opacity()
+    );
+
+    // Phase 3, 80 ms: it settles, and the end is exactly the static frame.
+    elapse(80);
+    assert_eq!(h.window.get_open_progress(), 1.0);
+    assert_eq!(h.window.get_open_scale(), 1.0);
+    assert_eq!(h.window.get_open_opacity(), 1.0);
+    elapse(1000);
+    assert_eq!(h.window.get_open_progress(), 1.0, "it stays there");
+}
+
+#[test]
+fn play_open_is_strictly_between_zero_and_one_at_160_ms() {
+    let h = Harness::new(Frame::Overview);
+    h.window.set_reduce_motion(false);
+    h.window.invoke_play_open();
+    assert_eq!(h.window.get_open_progress(), 0.0);
+    elapse(160);
+    let progress = h.window.get_open_progress();
+    assert!(progress > 0.0 && progress < 1.0, "{progress}");
+    elapse(160);
+    assert_eq!(h.window.get_open_progress(), 1.0, "exactly 1 at 320 ms");
+}
+
+#[test]
+fn play_open_again_restarts_from_zero() {
+    let h = Harness::new(Frame::Overview);
+    h.window.set_reduce_motion(false);
+    h.window.invoke_play_open();
+    elapse(400);
+    assert_eq!(h.window.get_open_progress(), 1.0);
+    h.window.invoke_play_open();
+    assert_eq!(h.window.get_open_progress(), 0.0);
+}
+
+#[test]
+fn play_open_with_reduced_motion_is_at_the_end_at_once() {
+    let h = Harness::new(Frame::Overview);
+    h.window.set_reduce_motion(true);
+    h.window.invoke_play_open();
+    assert_eq!(h.window.get_open_progress(), 1.0);
+    assert_eq!(h.window.get_open_scale(), 1.0);
+    assert_eq!(h.window.get_open_opacity(), 1.0);
+}
+
+#[test]
+fn focus_view_clears_a_pinch_that_never_ended() {
+    let h = Harness::new(Frame::Overview);
+    h.window.set_reduce_motion(false);
+    // A pinch is live and has reached its end; its `ended` is lost (Esc in the middle of it).
+    h.window.set_pinch_live(true);
+    h.window.set_pinch_progress(1.0);
+    assert_eq!(
+        h.window.get_pinch_progress(),
+        1.0,
+        "a live pinch follows the fingers"
+    );
+    h.window.invoke_focus_view();
+    assert!(
+        !h.window.get_pinch_live(),
+        "no pinch is live after the view takes the focus"
+    );
+    assert_eq!(
+        h.window.get_pinch_progress(),
+        0.0,
+        "the next Orbit opens unscaled"
+    );
+    // The next spring-back is the 160 ms one, not a jump.
+    h.window.set_pinch_progress(1.0);
+    assert_eq!(
+        h.window.get_pinch_progress(),
+        0.0,
+        "it starts from where it was"
+    );
+    elapse(80);
+    let half = h.window.get_pinch_progress();
+    assert!(half > 0.0 && half < 1.0, "{half}");
+    elapse(80);
+    assert_eq!(h.window.get_pinch_progress(), 1.0);
 }
 
 // ---- cancelling the ring's own drag (ring)

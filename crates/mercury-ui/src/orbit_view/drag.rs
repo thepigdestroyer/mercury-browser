@@ -18,7 +18,7 @@ use std::rc::Rc;
 
 use slint::DataTransfer;
 
-use super::{LOOSE_GROUP_ID, OrbitInput};
+use super::{LOOSE_GROUP_ID, OrbitInput, Target};
 
 /// What is being dragged.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -60,6 +60,50 @@ pub enum Decision {
     NewGroup { tab: i32 },
     /// Move the group to `index` in the group order.
     ReorderGroup { group: i32, index: usize },
+}
+
+/// What a `DragArea` of this kind carries: `"tab"` (a preview) or `"group"` (a planet).
+pub fn source_of(kind: &str, id: i32) -> Option<Source> {
+    match kind {
+        "tab" => Some(Source::Tab(id)),
+        "group" => Some(Source::Group(id)),
+        _ => None,
+    }
+}
+
+/// Where a `DropArea` of this kind is: `"group"`, `"new-group"` or `"empty"`; `slot` is -1 for
+/// "at the end".
+pub fn drop_target_of(kind: &str, id: i32, slot: i32) -> Option<DropTarget> {
+    match kind {
+        "group" => Some(DropTarget::Group {
+            group: id,
+            slot: usize::try_from(slot).ok(),
+        }),
+        "new-group" => Some(DropTarget::NewGroup),
+        "empty" => Some(DropTarget::Empty),
+        _ => None,
+    }
+}
+
+/// The [`Target`] of a Slint id where a negative id means "none" (the backdrop).
+pub fn target_from_id(id: i32, make: fn(i32) -> Target) -> Target {
+    if id < 0 { Target::Backdrop } else { make(id) }
+}
+
+/// The target the view shows as lit during a drag of `drag_source` in `session`: only one the drop
+/// would change something on (`None` for no target, or one that [`can_accept`] refuses).
+pub fn lit_target(
+    drag_source: Source,
+    session: u64,
+    target: Option<DropTarget>,
+    input: &OrbitInput,
+) -> Option<DropTarget> {
+    let target = target?;
+    let payload = OrbitPayload {
+        session,
+        source: drag_source,
+    };
+    can_accept(&payload, target, input).then_some(target)
 }
 
 /// What the glue asks `talaria-core`'s controller to do (one `match` in `orbit.rs`).
@@ -158,8 +202,8 @@ impl OrbitPayload {
     }
 }
 
-/// Whether a text is an address (a scheme, `www.`) and not words: no whitespace and a scheme
-/// separator, a `www.` start or one of the schemes without `//`.
+/// Whether a text is an address and not words: no whitespace and a scheme separator, a `www.`
+/// start, one of the schemes without `//`, or a scheme-less address (see [`scheme_less_address`]).
 fn looks_like_url(text: &str) -> bool {
     let text = text.trim();
     if text.is_empty() || text.contains(char::is_whitespace) {
@@ -171,10 +215,52 @@ fn looks_like_url(text: &str) -> bool {
         || ["mailto:", "data:", "javascript:", "about:", "blob:"]
             .iter()
             .any(|scheme| lower.starts_with(scheme))
+        || scheme_less_address(&lower)
+}
+
+/// An address without its scheme, as a page with no title is often shown: a host with a dot-label
+/// or a port, then `/`, `?` or `#` ("example.com/a?b=1", "localhost:8080/x"). A bare host
+/// ("example.com") and words with a slash ("TCP/IP") are not.
+fn scheme_less_address(text: &str) -> bool {
+    let Some(end) = text.find(['/', '?', '#']) else {
+        return false;
+    };
+    let authority = &text[..end];
+    let (host, port) = match authority.rsplit_once(':') {
+        Some((host, port)) if !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit()) => {
+            (host, true)
+        }
+        _ => (authority, false),
+    };
+    let host_chars = !host.is_empty()
+        && host
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '-' | '.' | '_'));
+    let dotted = host.contains('.') && host.split('.').all(|label| !label.is_empty());
+    host_chars && (dotted || port)
+}
+
+/// Whether a text is a bare host name (with an optional port): the one kind of address that is
+/// fine as a drag text.
+fn is_bare_host(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty()
+        || text.contains(char::is_whitespace)
+        || text.contains(['/', '?', '#', '@', '\\'])
+    {
+        return false;
+    }
+    match text.rsplit_once(':') {
+        None => true,
+        Some((host, port)) => {
+            !host.is_empty() && !port.is_empty() && port.bytes().all(|b| b.is_ascii_digit())
+        }
+    }
 }
 
 /// The plain text a drag carries: the tab's title or the group's name; for a tab whose title is an
-/// address (a page without a title) its host; empty for an unknown id. Never a URL.
+/// address (a page without a title) its host, tested as a bare host (so a `www.` host is fine);
+/// empty for an unknown id or a host that is itself an address. Never a URL.
 pub fn drag_text(source: Source, input: &OrbitInput) -> String {
     match source {
         Source::Tab(id) => {
@@ -184,10 +270,10 @@ pub fn drag_text(source: Source, input: &OrbitInput) -> String {
             if !looks_like_url(&tab.title) {
                 return tab.title.to_string();
             }
-            if looks_like_url(&tab.host) {
-                String::new()
+            if is_bare_host(&tab.host) {
+                tab.host.trim().to_string()
             } else {
-                tab.host.to_string()
+                String::new()
             }
         }
         Source::Group(id) => input

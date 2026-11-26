@@ -124,6 +124,15 @@ pub enum Side {
     Right,
 }
 
+/// Which side of its halo a planet's tooltip sits on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TooltipSide {
+    Right,
+    Left,
+    Above,
+    Below,
+}
+
 /// One planet (level 1; kept at levels 2 and 3 so that the view can animate it away).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PlanetCell {
@@ -144,7 +153,7 @@ pub struct PlanetCell {
     /// The hover and drop halo (103 at scale 1 for 10 tabs).
     pub halo_radius: f32,
     pub tooltip: Rect,
-    pub tooltip_side: Side,
+    pub tooltip_side: TooltipSide,
     /// Where the planet is drawn at the current level (the centre at level 1).
     pub shown: Point,
     pub opacity: f32,
@@ -386,46 +395,60 @@ impl OrbitLayout {
                 (fit, layout)
             });
 
+        let shapes: Vec<(Point, RingSpec, f32, f32)> = counts
+            .iter()
+            .zip(&plan.centres)
+            .map(|(tabs, p)| {
+                let home = Point::new(cx + p.x, cy + p.y);
+                let (spec, ring_size) = ring_spec(planet_radius(*tabs), PLANET_BAND, plan.scale);
+                let halo_radius = spec.label_outer_radius() + HALO_MARGIN * plan.scale;
+                (home, spec, ring_size, halo_radius)
+            })
+            .collect();
+        let halos: Vec<(Point, f32)> = shapes.iter().map(|s| (s.0, s.3)).collect();
+        let sun_disc = (centre, SUN_RADIUS);
         let planets = input
             .groups
             .iter()
             .zip(&counts)
-            .zip(&plan.centres)
-            .map(|((row, tabs), p)| {
-                let home = Point::new(cx + p.x, cy + p.y);
-                let (spec, ring_size) = ring_spec(planet_radius(*tabs), PLANET_BAND, plan.scale);
-                let halo_radius = spec.label_outer_radius() + HALO_MARGIN * plan.scale;
-                let (tooltip, tooltip_side) =
-                    tooltip_for(&tooltip_text(&row.name), home, halo_radius, stage);
-                let (shown, opacity, dimmed) = match shown_group {
-                    None => (home, 1.0, false),
-                    Some(g) if g == row.id => (centre, 0.0, false),
-                    Some(_) => (
-                        Point::new(
-                            cx + (home.x - cx) * SLIDE_OUT,
-                            cy + (home.y - cy) * SLIDE_OUT,
+            .zip(&shapes)
+            .enumerate()
+            .map(
+                |(index, ((row, tabs), (home, spec, ring_size, halo_radius)))| {
+                    let (home, spec, ring_size, halo_radius) =
+                        (*home, *spec, *ring_size, *halo_radius);
+                    let (tooltip, tooltip_side) =
+                        tooltip_for(&tooltip_text(&row.name), index, &halos, sun_disc, stage);
+                    let (shown, opacity, dimmed) = match shown_group {
+                        None => (home, 1.0, false),
+                        Some(g) if g == row.id => (centre, 0.0, false),
+                        Some(_) => (
+                            Point::new(
+                                cx + (home.x - cx) * SLIDE_OUT,
+                                cy + (home.y - cy) * SLIDE_OUT,
+                            ),
+                            0.0,
+                            true,
                         ),
-                        0.0,
-                        true,
-                    ),
-                };
-                PlanetCell {
-                    group: row.id,
-                    tabs: *tabs,
-                    centre: home,
-                    scale: plan.scale,
-                    radius: spec.radius,
-                    diameter: 2.0 * spec.label_outer_radius(),
-                    spec,
-                    ring_size,
-                    halo_radius,
-                    tooltip,
-                    tooltip_side,
-                    shown,
-                    opacity,
-                    dimmed,
-                }
-            })
+                    };
+                    PlanetCell {
+                        group: row.id,
+                        tabs: *tabs,
+                        centre: home,
+                        scale: plan.scale,
+                        radius: spec.radius,
+                        diameter: 2.0 * spec.label_outer_radius(),
+                        spec,
+                        ring_size,
+                        halo_radius,
+                        tooltip,
+                        tooltip_side,
+                        shown,
+                        opacity,
+                        dimmed,
+                    }
+                },
+            )
             .collect();
 
         let mut layout = Self {
@@ -680,21 +703,89 @@ impl OrbitLayout {
     }
 }
 
-/// A tooltip card right of the halo, or left of it when it would leave the window.
-fn tooltip_for(text: &str, centre: Point, halo: f32, stage: Stage) -> (Rect, Side) {
+/// How far the rectangle runs into the circle (0 when they do not touch).
+fn into_circle(rect: Rect, circle: (Point, f32)) -> f32 {
+    let (centre, radius) = circle;
+    let nearest = Point::new(
+        centre.x.clamp(rect.x, rect.right()),
+        centre.y.clamp(rect.y, rect.bottom()),
+    );
+    (radius - dist(nearest, centre)).max(0.0)
+}
+
+/// The tooltip of planet `index` (halos: every planet's centre and halo radius): the first of right,
+/// left, above and below of its halo that lies inside the stage and touches no other planet's halo
+/// and not the sun. When none does, the side that runs least into a halo, the sun or the window's
+/// edge.
+fn tooltip_for(
+    text: &str,
+    index: usize,
+    halos: &[(Point, f32)],
+    sun: (Point, f32),
+    stage: Stage,
+) -> (Rect, TooltipSide) {
+    let (centre, halo) = halos[index];
     let w = text_width(text, 12.5, 600) + 24.0;
-    let mut side = Side::Right;
-    let mut x = centre.x + halo + TOOLTIP_GAP;
-    if x + w > stage.width - EDGE {
-        side = Side::Left;
-        x = centre.x - halo - TOOLTIP_GAP - w;
-    }
-    x = x.min(stage.width - EDGE - w).max(EDGE);
+    let (h, gap) = (TOOLTIP_HEIGHT, TOOLTIP_GAP);
     let top = TITLE_BAR_HEIGHT + EDGE;
-    let y = (centre.y - TOOLTIP_HEIGHT / 2.0)
-        .min(stage.height - EDGE - TOOLTIP_HEIGHT)
-        .max(top);
-    (Rect::new(x, y, w, TOOLTIP_HEIGHT), side)
+    let (left_edge, right_edge, bottom_edge) = (EDGE, stage.width - EDGE, stage.height - EDGE);
+    // Sliding along the halo is free; the distance to it is not, so the clamp on the other axis
+    // is a penalty (the tooltip would be pushed onto the halo or out of the window).
+    let slide_y = |y: f32| y.min(bottom_edge - h).max(top);
+    let slide_x = |x: f32| x.min(right_edge - w).max(left_edge);
+    let sides = [
+        (
+            TooltipSide::Right,
+            centre.x + halo + gap,
+            slide_y(centre.y - h / 2.0),
+        ),
+        (
+            TooltipSide::Left,
+            centre.x - halo - gap - w,
+            slide_y(centre.y - h / 2.0),
+        ),
+        (
+            TooltipSide::Above,
+            slide_x(centre.x - w / 2.0),
+            centre.y - halo - gap - h,
+        ),
+        (
+            TooltipSide::Below,
+            slide_x(centre.x - w / 2.0),
+            centre.y + halo + gap,
+        ),
+    ];
+    let mut best: Option<(f32, Rect, TooltipSide)> = None;
+    for (side, x, y) in sides {
+        let (rect, pushed) = match side {
+            TooltipSide::Right | TooltipSide::Left => {
+                let fitted = slide_x(x);
+                (Rect::new(fitted, y, w, h), (fitted - x).abs())
+            }
+            TooltipSide::Above | TooltipSide::Below => {
+                let fitted = y.min(bottom_edge - h).max(top);
+                (Rect::new(x, fitted, w, h), (fitted - y).abs())
+            }
+        };
+        // Covering the planet the tooltip belongs to is the worst of them.
+        let mut cost = pushed + into_circle(rect, sun) + 4.0 * into_circle(rect, (centre, halo));
+        cost += halos
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| *i != index)
+            .map(|(_, circle)| into_circle(rect, *circle))
+            .sum::<f32>();
+        if cost <= 0.0 {
+            return (rect, side);
+        }
+        if best.is_none_or(|(least, ..)| cost < least) {
+            best = Some((cost, rect, side));
+        }
+    }
+    best.map_or(
+        (Rect::new(left_edge, top, w, h), TooltipSide::Right),
+        |(_, rect, side)| (rect, side),
+    )
 }
 
 /// The spoke from a ring's outer edge toward a card, ending where it meets the card's edge.

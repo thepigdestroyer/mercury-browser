@@ -6,6 +6,11 @@
 //! 5000) a repeating timer takes a snapshot of the window that often. It counts in automated runs
 //! only (`--screenshot`, `--background`, import); anywhere else it is ignored with a warning, and
 //! without the variable nothing is created.
+//!
+//! "Automated" here is `Options::is_automated()` (`cli.rs`), which also counts `--import-from`.
+//! `mercury_site_security::is_automated_run` counts only `--screenshot` and `--background`. The
+//! difference is harmless for this driver (a snapshot has no side effect), but the two meanings
+//! are not the same: do not use one where the other is meant.
 
 use std::cell::Cell;
 use std::fmt;

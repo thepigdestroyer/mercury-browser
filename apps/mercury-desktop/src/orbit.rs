@@ -19,13 +19,23 @@
 //!   [`OrbitController::rows_changed`] (the sync tick: tabs or groups changed) and
 //!   [`OrbitController::refresh`] (the window was resized).
 //!
+//! # What `input-hooks` must know about text fields
+//!
+//! `handle_key` asks the window ([`OrbitWindow::text_field_focused`]) whether the search field or
+//! the new-group popover's name field has the keyboard focus. While one has, it answers `false`
+//! (the key is not taken, so it reaches the field) for `N`, `/`, typed characters, the arrows and
+//! Tab, and for ⏎ while the popover is open (the popover confirms itself). Escape and the
+//! ⌘-keys still act. A hook that runs before Slint sees the key can therefore call `handle_key`
+//! for every key while Orbit is open without eating what is typed.
+//!
 //! # How a frame is made
 //!
 //! The machine ([`OrbitMachine`]) holds the level, the focus and the drag. After every event the
 //! glue compares its [`View`] with the one last drawn and, if it differs (or a group command or a
 //! notice made the picture stale), builds a frame with [`OrbitData::build`], fills the persistent
-//! models and hands the window a [`Frame`] of single values. A pointer move during a drag only
-//! moves the ghost.
+//! models and hands the window a [`Frame`] of single values (made by [`OrbitModels::frame`]). A
+//! pointer move during a drag only moves the ghost. After the first build of an open the window is
+//! told to play the 320 ms open animation ([`OrbitWindow::play_open`]).
 //!
 //! # Pictures (brief D4)
 //!
@@ -33,10 +43,10 @@
 //! the active tab's picture. A capture lands on the main thread some milliseconds later with no
 //! signal that Orbit can hear (`tab_snapshots.rs` is not edited), so one timer asks for the active
 //! tab's picture a second time after [`REFRESH_DELAY`]; the old picture stays on screen until the
-//! new one is there. Every other tab's picture is asked for once, the first time it is shown.
+//! new one is there. If that ask brought no new picture (none, or the same pixels) one more ask
+//! follows [`LATE_REFRESH_DELAY`] later (about 750 ms after opening); never more than two asks
+//! per open. Every other tab's picture is asked for once, the first time it is shown.
 //! Everything is dropped on close.
-
-#![allow(dead_code)] // used by layout-switch and input-hooks
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -44,18 +54,20 @@ use std::rc::{Rc, Weak};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
-use mercury_ui::orbit_view::data::{Options, OrbitData, OrbitModels};
-use mercury_ui::orbit_view::drag::{self, Decision, DropTarget, GroupOp, OrbitPayload, Source};
+use mercury_ui::orbit_view::data::{
+    Frame, Options, OrbitData, OrbitModels, popover_colour_name, relative_age,
+};
+use mercury_ui::orbit_view::drag::{
+    self, Decision, DropTarget, GroupOp, OrbitPayload, Source, drop_target_of, lit_target,
+    source_of, target_from_id,
+};
+use mercury_ui::orbit_view::keys::key_from_text;
 use mercury_ui::orbit_view::{
-    Effect, Key, KeyContext, LOOSE_GROUP_ID, Level, Mods, OrbitInput, OrbitMachine, Stage, Target,
-    View,
+    Effect, Key, KeyContext, Mods, OrbitInput, OrbitMachine, Stage, Target, View,
 };
 use mercury_ui::ring_bands::{RingBandsData, RingColours};
-use mercury_ui::{
-    GroupRow, OrbitCard, OrbitDragView, OrbitLevel, OrbitNewGroup, OrbitPlanet, OrbitPopover,
-    OrbitSun, RingDropTarget, RingHit, RingHitKind, TabRow,
-};
-use slint::{Color, DataTransfer, Image, Model, SharedString, Timer, TimerMode};
+use mercury_ui::{GroupRow, OrbitDragView, RingDropTarget, RingHit, RingHitKind, TabRow};
+use slint::{Color, DataTransfer, Image, Timer, TimerMode};
 use talaria_core::{
     BrowserController, GroupColour, GroupError, GroupId, GroupPreset, MAX_GROUPS, TabId,
 };
@@ -68,9 +80,10 @@ use crate::tab_strip::{id_for_ui, id_from_ui};
 /// thread.
 pub(crate) const REFRESH_DELAY: Duration = Duration::from_millis(250);
 
-/// The colour presets of the new-group popover's six dots (brief §4), in the order of the dots,
-/// used when the frame does not carry their names.
-const POPOVER_COLOURS: [&str; 6] = ["blue", "amber", "violet", "rose", "green", "teal"];
+/// How long after the second ask the third and last one comes, if the second brought no new
+/// picture (a capture that is late under load or while the window is covered): 750 ms after
+/// opening.
+pub(crate) const LATE_REFRESH_DELAY: Duration = Duration::from_millis(500);
 
 /// The nonce of the next Orbit that opens, unique in the process (so a payload of another window's
 /// Orbit is as foreign as one of an older open).
@@ -81,6 +94,7 @@ static NEXT_SESSION: AtomicU64 = AtomicU64::new(1);
 // ---------------------------------------------------------------------------------------------
 
 /// What the window shows besides the rows.
+#[allow(dead_code)] // used by layout-switch
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Environment {
     /// The dark scheme is in use (the label colours of the rows are already resolved).
@@ -116,29 +130,6 @@ pub(crate) struct OrbitHost {
     pub environment: Box<dyn Fn() -> Environment>,
 }
 
-/// Everything that is a single value on the view (the lists are the persistent [`OrbitModels`]).
-#[derive(Clone, Default)]
-pub(crate) struct Frame {
-    pub level: OrbitLevel,
-    pub centre: OrbitPlanet,
-    pub has_centre: bool,
-    pub more_previews: i32,
-    pub card: OrbitCard,
-    pub sun: OrbitSun,
-    pub new_group: OrbitNewGroup,
-    pub drag: OrbitDragView,
-    pub popover: OrbitPopover,
-    pub query_active: bool,
-    /// The tab the keyboard focus is on at level 2, else -1.
-    pub focus_tab: i32,
-    /// The container's accessible label ("Orbit, every group", ...; brief D14).
-    pub container_label: SharedString,
-    /// A one-line notice (a refused drop), empty for none.
-    pub notice: SharedString,
-    pub reduce_motion: bool,
-    pub animate_spinners: bool,
-}
-
 /// The one `OrbitView` of the application, seen from the glue. `layout-switch` implements it on
 /// `MainWindow` (each method is a setter, a getter or a callback registration of the view); the
 /// tests implement it on `OrbitPreview` and on a fake. All methods take `&self`.
@@ -149,7 +140,7 @@ pub(crate) trait OrbitWindow {
     fn ring_colours(&self) -> RingColours;
     /// Gives the view the persistent models (once, from `OrbitController::new`).
     fn set_models(&self, models: &OrbitModels);
-    /// Sets every single value of the view.
+    /// Sets every single value of the view (including the search field's placeholder).
     fn set_frame(&self, frame: &Frame);
     /// Sets the search field's text.
     fn set_search_text(&self, text: &str);
@@ -158,6 +149,12 @@ pub(crate) trait OrbitWindow {
     fn focus_search(&self);
     /// Gives the overlay's key scope the keyboard focus (when Orbit opens).
     fn focus_view(&self);
+    /// Whether the search field or the new-group popover's name field has the keyboard focus (the
+    /// view's `text-field-focused`): typed keys are text then, not commands.
+    fn text_field_focused(&self) -> bool;
+    /// Plays the 320 ms open animation (the view's `play-open()`); called once per open, after
+    /// the first build.
+    fn play_open(&self);
     /// Cancels the drag `RingBands` has in flight, if any (the view's `cancel-ring-drag()`).
     /// Called after the machine's own drag is gone, on Esc, on a cancelled drag and when Orbit
     /// closes; the ring may answer with `drag-cancelled`, which the glue ignores once the
@@ -178,6 +175,7 @@ pub(crate) struct OrbitController {
     inner: Rc<Inner>,
 }
 
+#[allow(dead_code)] // used by layout-switch and input-hooks
 impl OrbitController {
     /// Connects to the window: gives it the models and routes its callbacks here. Orbit starts
     /// closed.
@@ -215,7 +213,10 @@ impl OrbitController {
 
     /// A key while Orbit is up (`input-hooks`). `false` when Orbit is closed, so the key goes on
     /// to the page; `true` when open and the key is one of Orbit's (the overlay is modal: a key
-    /// that changes nothing is still taken, it must not reach the page).
+    /// that changes nothing is still taken, it must not reach the page). `false` too for a key
+    /// that is text while the search field or the popover's name field has the focus (`N`, `/`,
+    /// characters, arrows, Tab, and ⏎ with the popover open): it must reach the field. Escape and
+    /// the ⌘-keys act whatever has the focus.
     pub(crate) fn handle_key(&self, key: Key, mods: Mods) -> bool {
         self.inner.handle_key(key, mods)
     }
@@ -254,6 +255,7 @@ pub(crate) struct OrbitEvents {
     inner: Weak<Inner>,
 }
 
+#[allow(dead_code)] // used by layout-switch (the view's callbacks)
 impl OrbitEvents {
     fn with<R>(&self, otherwise: R, call: impl FnOnce(&Inner) -> R) -> R {
         let _slint = crate::callback_scope::InSlintCallback::enter();
@@ -265,7 +267,9 @@ impl OrbitEvents {
 
     /// `-1`: the pointer left every planet.
     pub(crate) fn planet_hovered(&self, group: i32) {
-        self.with((), |inner| inner.hover(target(group, Target::Planet)));
+        self.with((), |inner| {
+            inner.hover(target_from_id(group, Target::Planet));
+        });
     }
 
     pub(crate) fn planet_clicked(&self, group: i32) {
@@ -274,7 +278,9 @@ impl OrbitEvents {
 
     /// `-1`: the pointer left every preview.
     pub(crate) fn preview_hovered(&self, tab: i32) {
-        self.with((), |inner| inner.hover(target(tab, Target::Preview)));
+        self.with((), |inner| {
+            inner.hover(target_from_id(tab, Target::Preview));
+        });
     }
 
     pub(crate) fn preview_clicked(&self, tab: i32) {
@@ -299,8 +305,9 @@ impl OrbitEvents {
 
     /// The dashed "New group" ring was clicked: the same as `N`.
     pub(crate) fn new_group_clicked(&self) {
+        // A click is not typing: it works whatever has the keyboard focus.
         self.with((), |inner| {
-            inner.handle_key(Key::N, Mods::NONE);
+            inner.run_key(Key::N, Mods::NONE, false);
         });
     }
 
@@ -468,67 +475,20 @@ impl OrbitEvents {
     }
 }
 
-/// `Target` of a Slint id where -1 means "none".
-fn target(id: i32, make: fn(i32) -> Target) -> Target {
-    if id < 0 { Target::Backdrop } else { make(id) }
-}
-
-/// What a `DragArea` of this kind carries.
-fn source_of(kind: &str, id: i32) -> Option<Source> {
-    match kind {
-        "tab" => Some(Source::Tab(id)),
-        "group" => Some(Source::Group(id)),
-        _ => None,
-    }
-}
-
-/// Where a `DropArea` of this kind is; `slot` is -1 for "at the end".
-fn drop_target_of(kind: &str, id: i32, slot: i32) -> Option<DropTarget> {
-    match kind {
-        "group" => Some(DropTarget::Group {
-            group: id,
-            slot: usize::try_from(slot).ok(),
-        }),
-        "new-group" => Some(DropTarget::NewGroup),
-        "empty" => Some(DropTarget::Empty),
-        _ => None,
-    }
-}
-
-/// A key of the view's `key-pressed` text as the machine's [`Key`]; `None` for anything Orbit has
-/// no use for (Tab, function keys, white space, several characters at once).
-pub(crate) fn key_from_text(text: &str) -> Option<Key> {
-    let mut chars = text.chars();
-    let c = chars.next()?;
-    if chars.next().is_some() {
-        return None;
-    }
-    let named = |key: slint::platform::Key| c == char::from(key);
-    if named(slint::platform::Key::Escape) {
-        return Some(Key::Escape);
-    }
-    if c == '\n' || c == '\r' || named(slint::platform::Key::Return) {
-        return Some(Key::Enter);
-    }
-    if named(slint::platform::Key::UpArrow) {
-        return Some(Key::Up);
-    }
-    if named(slint::platform::Key::DownArrow) {
-        return Some(Key::Down);
-    }
-    if named(slint::platform::Key::LeftArrow) {
-        return Some(Key::Left);
-    }
-    if named(slint::platform::Key::RightArrow) {
-        return Some(Key::Right);
-    }
-    match c {
-        'n' | 'N' => Some(Key::N),
-        '/' => Some(Key::Slash),
-        // The private-use block holds Slint's other special keys (F1, Home, ...).
-        c if c.is_control() || c.is_whitespace() || ('\u{e000}'..='\u{f8ff}').contains(&c) => None,
-        c => Some(Key::Char(c)),
-    }
+/// Whether `key` is text while a text field has the focus (so it must reach the field).
+fn is_text_key(key: Key, mods: Mods) -> bool {
+    !mods.command
+        && matches!(
+            key,
+            Key::N
+                | Key::Slash
+                | Key::Char(_)
+                | Key::Up
+                | Key::Down
+                | Key::Left
+                | Key::Right
+                | Key::Tab
+        )
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -556,9 +516,11 @@ struct Inner {
     open: Cell<bool>,
     /// The frame is out of date for a reason the machine's view does not show.
     stale: Cell<bool>,
-    refreshed: Cell<bool>,
+    /// How many times the active tab's picture was asked for again in this open (0 to 2).
+    refresh_asks: Cell<u8>,
     building: Cell<bool>,
     refresh_timer: Timer,
+    late_refresh_timer: Timer,
 }
 
 impl Inner {
@@ -579,9 +541,10 @@ impl Inner {
             pointer: Cell::new(None),
             open: Cell::new(false),
             stale: Cell::new(false),
-            refreshed: Cell::new(false),
+            refresh_asks: Cell::new(0),
             building: Cell::new(false),
             refresh_timer: Timer::default(),
+            late_refresh_timer: Timer::default(),
         }
     }
 
@@ -592,6 +555,8 @@ impl Inner {
             return;
         }
         self.forget_everything();
+        // A pinch that closed the last Orbit may have left the view's progress at -1 or 1.
+        self.window.set_pinch_progress(0.0);
         let input = Rc::new((self.host.rows)());
         *self.input.borrow_mut() = Rc::clone(&input);
         let session = NEXT_SESSION.fetch_add(1, Ordering::Relaxed);
@@ -603,6 +568,7 @@ impl Inner {
         self.picture(input.active_tab);
         self.rebuild();
         self.window.focus_view();
+        self.window.play_open();
         self.start_refresh_timer();
     }
 
@@ -612,8 +578,12 @@ impl Inner {
             return;
         }
         self.refresh_timer.stop();
+        self.late_refresh_timer.stop();
         *self.machine.borrow_mut() = OrbitMachine::default();
         self.window.cancel_ring_drag();
+        // Whatever ended Orbit (a pinch out of level 1, a pinch in on the card, Esc), the view's
+        // pinch scale goes back to 1.
+        self.window.set_pinch_progress(0.0);
         self.forget_everything();
         // Empty models and a blank frame, so that no picture stays alive in the view.
         let empty = OrbitData::build(
@@ -638,7 +608,7 @@ impl Inner {
         self.notice.borrow_mut().clear();
         self.pointer.set(None);
         self.stale.set(false);
-        self.refreshed.set(false);
+        self.refresh_asks.set(0);
         *self.data.borrow_mut() = None;
         *self.input.borrow_mut() = Rc::new(OrbitInput::default());
         *self.last_view.borrow_mut() = View::default();
@@ -646,27 +616,41 @@ impl Inner {
     }
 
     fn start_refresh_timer(&self) {
-        let me = self.me.clone();
-        self.refresh_timer
-            .start(TimerMode::SingleShot, REFRESH_DELAY, move || {
-                let _slint = crate::callback_scope::InSlintCallback::enter();
-                if let Some(inner) = me.upgrade() {
-                    inner.refresh_active_picture();
-                }
-            });
+        self.start_refresh(&self.refresh_timer, REFRESH_DELAY);
     }
 
-    /// The active tab's picture, asked for the second time (once per open). The old picture stays
-    /// until a new one is there.
+    fn start_refresh(&self, timer: &Timer, delay: Duration) {
+        let me = self.me.clone();
+        timer.start(TimerMode::SingleShot, delay, move || {
+            let _slint = crate::callback_scope::InSlintCallback::enter();
+            if let Some(inner) = me.upgrade() {
+                inner.refresh_active_picture();
+            }
+        });
+    }
+
+    /// The active tab's picture, asked for again: at most twice per open (after
+    /// [`REFRESH_DELAY`], and once more after [`LATE_REFRESH_DELAY`] if the first ask brought no
+    /// new picture). The old picture stays until a new one is there.
     fn refresh_active_picture(&self) {
-        if !self.open.get() || self.refreshed.replace(true) {
+        let asked = self.refresh_asks.get();
+        if !self.open.get() || asked >= 2 {
             return;
         }
+        self.refresh_asks.set(asked + 1);
         let active = self.input.borrow().active_tab;
-        if let Some(image) = (self.host.snapshot)(active) {
+        let before = self.images.borrow().get(&active).cloned().flatten();
+        let after = (self.host.snapshot)(active);
+        let landed = after
+            .as_ref()
+            .is_some_and(|image| !same_picture(before.as_ref(), image));
+        if let Some(image) = after {
             self.images.borrow_mut().insert(active, Some(image));
             self.stale.set(true);
             self.settle();
+        }
+        if asked == 0 && !landed {
+            self.start_refresh(&self.late_refresh_timer, LATE_REFRESH_DELAY);
         }
     }
 
@@ -734,33 +718,10 @@ impl Inner {
     }
 
     fn push_frame(&self, view: &View, input: &OrbitInput, environment: Environment) {
-        let mut drag = self.models.drag();
-        // The machine is the authority on whether a drag is in flight.
-        drag.active = view.drag.is_some();
-        let mut frame = Frame {
-            level: match view.level {
-                Level::Groups => OrbitLevel::Groups,
-                Level::Group => OrbitLevel::Group,
-                Level::Tab => OrbitLevel::Tab,
-            },
-            centre: self.models.centre(),
-            has_centre: self.models.has_centre(),
-            more_previews: self.models.more_previews(),
-            card: self.models.card(),
-            sun: self.models.sun(),
-            new_group: self.models.new_group(),
-            drag,
-            popover: self.models.popover(),
-            query_active: !view.query.trim().is_empty(),
-            focus_tab: match view.focus {
-                Some(Target::Preview(tab)) => tab,
-                _ => -1,
-            },
-            container_label: container_label(view, input).into(),
-            notice: self.notice.borrow().as_str().into(),
-            reduce_motion: environment.reduce_motion,
-            animate_spinners: !environment.reduce_motion,
-        };
+        let notice = self.notice.borrow().clone();
+        let mut frame = self
+            .models
+            .frame(view, input, environment.reduce_motion, &notice);
         self.place_ghost(&mut frame.drag);
         *self.frame.borrow_mut() = frame.clone();
         self.window.set_frame(&frame);
@@ -884,7 +845,26 @@ impl Inner {
         self.settle();
     }
 
+    /// A key from outside the view (`input-hooks`) or from its key scope.
     fn handle_key(&self, key: Key, mods: Mods) -> bool {
+        if !self.open.get() {
+            return false;
+        }
+        let text_field_focused = self.window.text_field_focused();
+        if text_field_focused {
+            // The popover confirms itself on ⏎ (its own callback): the hook must not eat it.
+            let popover = self.machine.borrow().view().popover.is_some();
+            let enter_for_the_popover = key == Key::Enter && !mods.command && popover;
+            if is_text_key(key, mods) || enter_for_the_popover {
+                return false;
+            }
+        }
+        self.run_key(key, mods, text_field_focused)
+    }
+
+    /// Runs a key on the machine; `text_input_focused` is what the machine is told about the
+    /// keyboard.
+    fn run_key(&self, key: Key, mods: Mods, text_input_focused: bool) -> bool {
         if !self.open.get() {
             return false;
         }
@@ -893,7 +873,7 @@ impl Inner {
         let effects = self
             .machine
             .borrow_mut()
-            .key(key, mods, KeyContext::default());
+            .key(key, mods, KeyContext { text_input_focused });
         if dragging && self.machine.borrow().view().drag.is_none() {
             // Esc, layer 1: the machine's drag is gone, so the ring's must go too (its
             // `drag-cancelled` then finds nothing to drop).
@@ -993,14 +973,12 @@ impl Inner {
     }
 
     /// The target the machine shows as lit: only one the drop would change something on.
-    fn lit_target(&self, target: Option<DropTarget>) -> Option<DropTarget> {
-        let target = target?;
-        let source = self.machine.borrow().view().drag?.source;
-        let payload = OrbitPayload {
-            session: self.machine.borrow().session(),
-            source,
+    fn lit(&self, target: Option<DropTarget>) -> Option<DropTarget> {
+        let (source, session) = {
+            let machine = self.machine.borrow();
+            (machine.view().drag?.source, machine.session())
         };
-        drag::can_accept(&payload, target, &self.input.borrow()).then_some(target)
+        lit_target(source, session, target, &self.input.borrow())
     }
 
     fn drag_over(&self, kind: &str, id: i32, x: f32, y: f32) {
@@ -1008,7 +986,7 @@ impl Inner {
             return;
         }
         self.pointer.set(Some((x, y)));
-        let lit = self.lit_target(drop_target_of(kind, id, -1));
+        let lit = self.lit(drop_target_of(kind, id, -1));
         self.machine.borrow_mut().drag_over(lit);
         self.settle();
         self.move_ghost();
@@ -1019,7 +997,7 @@ impl Inner {
             return;
         }
         self.pointer.set(Some((x, y)));
-        let lit = self.lit_target(self.drop_target_at(x, y));
+        let lit = self.lit(self.drop_target_at(x, y));
         self.machine.borrow_mut().drag_over(lit);
         self.settle();
         self.move_ghost();
@@ -1069,32 +1047,15 @@ impl Inner {
         self.settle();
     }
 
-    /// What the stage point is over for a drop: a ring (with the insertion slot), another planet
-    /// or chip, the "New group" ring, empty stage, or nothing a drop may land on.
+    /// What the stage point is over for a drop (`OrbitData::drop_target_at`), for the tab being
+    /// dragged, if the drag is of a tab.
     fn drop_target_at(&self, x: f32, y: f32) -> Option<DropTarget> {
         let data = self.data.borrow().clone()?;
         let dragging = match self.machine.borrow().view().drag.map(|drag| drag.source) {
             Some(Source::Tab(tab)) => tab,
             _ => -1,
         };
-        if let Some(point) = data.layout.ring_at(x, y) {
-            let slot = ring_of(&data, point.group)
-                .map(|ring| ring.drop_target(point.x, point.y, dragging))
-                .filter(|landing| landing.valid && landing.group == point.group)
-                .and_then(|landing| usize::try_from(landing.index).ok());
-            return Some(DropTarget::Group {
-                group: point.group,
-                slot,
-            });
-        }
-        match data.layout.hit(x, y) {
-            Target::Planet(group) | Target::Chip(group) => {
-                Some(DropTarget::Group { group, slot: None })
-            }
-            Target::NewGroup => Some(DropTarget::NewGroup),
-            Target::Backdrop => Some(DropTarget::Empty),
-            Target::Sun | Target::Preview(_) | Target::Card | Target::Neighbour(_) => None,
-        }
+        data.drop_target_at(x, y, dragging)
     }
 
     fn with_ring<R>(&self, group: i32, call: impl FnOnce(&RingBandsData) -> R) -> Option<R> {
@@ -1104,11 +1065,12 @@ impl Inner {
 
     fn payload_for(&self, kind: &str, id: i32) -> DataTransfer {
         let input = Rc::clone(&self.input.borrow());
-        let Some(source) = source_of(kind, id).filter(|source| draggable(*source, &input)) else {
+        let machine = self.machine.borrow();
+        let Some(source) = source_of(kind, id).filter(|source| machine.can_drag(*source)) else {
             return DataTransfer::default();
         };
         let payload = OrbitPayload {
-            session: self.machine.borrow().session(),
+            session: machine.session(),
             source,
         };
         payload.to_data_transfer(&drag::drag_text(source, &input))
@@ -1167,7 +1129,7 @@ impl Inner {
         if !self.open.get() {
             return;
         }
-        let Some(colour) = self.popover_colour_name(index) else {
+        let Some(colour) = popover_colour_name(index) else {
             return;
         };
         let name = self
@@ -1179,16 +1141,6 @@ impl Inner {
             .unwrap_or_default();
         self.machine.borrow_mut().popover_edited(&name, &colour);
         self.settle();
-    }
-
-    /// The preset name of a dot: the frame's list when it has one, else the six of the mockup.
-    fn popover_colour_name(&self, index: i32) -> Option<String> {
-        let index = usize::try_from(index).ok()?;
-        let names = self.frame.borrow().popover.colour_names.clone();
-        match names.row_data(index) {
-            Some(name) if !name.is_empty() => Some(name.to_string()),
-            _ => POPOVER_COLOURS.get(index).map(|name| (*name).to_owned()),
-        }
     }
 
     fn popover_confirmed(&self) {
@@ -1222,68 +1174,19 @@ fn ring_of(data: &OrbitData, group: i32) -> Option<&RingBandsData> {
         .map(|planet| &planet.ring)
 }
 
-/// A tab Orbit may drag (it exists and is not pinned) or a planet it may reorder (not the loose
-/// planet).
-fn draggable(source: Source, input: &OrbitInput) -> bool {
-    match source {
-        Source::Tab(tab) => input.tab(tab).is_some() && !input.is_pinned(tab),
-        Source::Group(group) => group != LOOSE_GROUP_ID && input.group(group).is_some(),
+/// Whether `after` holds the same pixels as `before`. `Image` compares by buffer address and every
+/// `tab_snapshots::image_for` makes a new buffer, so the pixels are compared (the pictures are
+/// small). A picture whose pixels cannot be read counts as different.
+fn same_picture(before: Option<&Image>, after: &Image) -> bool {
+    let Some(before) = before else {
+        return false;
+    };
+    if before.size() != after.size() {
+        return false;
     }
-}
-
-/// The container's accessible label for a level (brief D14): "Orbit, every group",
-/// "Orbit, Research, 10 tabs", "Orbit, AccessKit guide, tab 4 of 10".
-pub(crate) fn container_label(view: &View, input: &OrbitInput) -> String {
-    match view.level {
-        Level::Groups => "Orbit, every group".to_owned(),
-        Level::Group => match view.group.and_then(|group| input.group(group)) {
-            Some(group) => {
-                let count = input.tabs_of(group.id).len();
-                let tabs = if count == 1 {
-                    "1 tab".to_owned()
-                } else {
-                    format!("{count} tabs")
-                };
-                format!("Orbit, {}, {tabs}", group.name)
-            }
-            None => "Orbit".to_owned(),
-        },
-        Level::Tab => match view.tab.and_then(|tab| input.tab(tab)) {
-            Some(tab) => {
-                let strip = input.tabs_of(tab.group);
-                let place = strip
-                    .iter()
-                    .position(|other| other.id == tab.id)
-                    .map_or(1, |at| at + 1);
-                let title = if tab.title.is_empty() {
-                    &tab.host
-                } else {
-                    &tab.title
-                };
-                format!("Orbit, {title}, tab {place} of {}", strip.len())
-            }
-            None => "Orbit".to_owned(),
-        },
-    }
-}
-
-/// How long ago, in the words of the group labels: "now", "2 min ago", "1 hour ago", "yesterday",
-/// "3 days ago", "2 weeks ago". A time in the future is "now".
-pub(crate) fn relative_age(now: SystemTime, then: SystemTime) -> String {
-    let seconds = now
-        .duration_since(then)
-        .map_or(0, |elapsed| elapsed.as_secs());
-    let minutes = seconds / 60;
-    let hours = minutes / 60;
-    let days = hours / 24;
-    match (minutes, hours, days) {
-        (0, ..) => "now".to_owned(),
-        (_, 0, _) => format!("{minutes} min ago"),
-        (_, 1, 0) => "1 hour ago".to_owned(),
-        (_, _, 0) => format!("{hours} hours ago"),
-        (.., 1) => "yesterday".to_owned(),
-        (.., 2..=13) => format!("{days} days ago"),
-        _ => format!("{} weeks ago", days / 7),
+    match (before.to_rgba8(), after.to_rgba8()) {
+        (Some(before), Some(after)) => before.as_bytes() == after.as_bytes(),
+        _ => false,
     }
 }
 
@@ -1319,6 +1222,7 @@ pub(crate) trait RowStyle {
 }
 
 /// The three colours of a `GroupRow`.
+#[allow(dead_code)] // used by layout-switch
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub(crate) struct GroupSwatch {
     pub colour: Color,
@@ -1327,6 +1231,7 @@ pub(crate) struct GroupSwatch {
 }
 
 /// What `layout-switch` gives [`OrbitHost::for_desktop`].
+#[allow(dead_code)] // used by layout-switch
 pub(crate) struct DesktopHost {
     pub controller: Rc<RefCell<BrowserController>>,
     /// The rendering context, once there is one (it is made when the first frame is shown).
@@ -1348,6 +1253,7 @@ pub(crate) struct DesktopHost {
 impl OrbitHost {
     /// The host that reads the rows from the controller, runs group commands on it and takes the
     /// pictures from `tab_snapshots`.
+    #[allow(dead_code)] // used by layout-switch
     pub(crate) fn for_desktop(parts: DesktopHost) -> Self {
         let DesktopHost {
             controller,
@@ -1406,6 +1312,9 @@ pub(crate) fn group_id_for_ui(group: GroupId) -> Option<i32> {
 
 /// The rows Orbit shows, from the controller: groups in their order with their keys, counts and
 /// flags, tabs in strip order, loose and pinned tabs folded into the "Loose tabs" planet.
+///
+/// Private tabs do not exist yet. When they do, they must be left out here (no row, so no
+/// capture, no picture, no card) and from `capture_active` below (review F10).
 pub(crate) fn rows_from_controller(
     controller: &BrowserController,
     style: &dyn RowStyle,
@@ -1544,9 +1453,10 @@ pub(crate) fn apply_group_op(
 
 #[cfg(test)]
 mod tests {
-    use mercury_ui::OrbitPreview;
+    use mercury_ui::orbit_view::LOOSE_GROUP_ID;
     use mercury_ui::orbit_view::fixtures::{orbit_input, skeleton_picture, tab_id};
-    use slint::ComponentHandle;
+    use mercury_ui::{OrbitLevel, OrbitPreview};
+    use slint::{ComponentHandle, Model, SharedString};
     use talaria_core::{BrowserEvent, GroupKey, TabActivation};
 
     use super::*;
@@ -1565,6 +1475,9 @@ mod tests {
         focus_search: Cell<u32>,
         cancel_ring_drag: Cell<u32>,
         pinch_progress: Cell<f32>,
+        /// What `text_field_focused` answers.
+        text_focused: Cell<bool>,
+        play_open: Cell<u32>,
     }
 
     impl FakeWindow {
@@ -1577,6 +1490,8 @@ mod tests {
                 focus_search: Cell::new(0),
                 cancel_ring_drag: Cell::new(0),
                 pinch_progress: Cell::new(0.0),
+                text_focused: Cell::new(false),
+                play_open: Cell::new(0),
             })
         }
 
@@ -1631,6 +1546,15 @@ mod tests {
             self.log.borrow_mut().push("focus-view".to_owned());
         }
 
+        fn text_field_focused(&self) -> bool {
+            self.text_focused.get()
+        }
+
+        fn play_open(&self) {
+            self.play_open.set(self.play_open.get() + 1);
+            self.log.borrow_mut().push("play-open".to_owned());
+        }
+
         fn connect(&self, events: OrbitEvents) {
             *self.events.borrow_mut() = Some(events);
         }
@@ -1640,6 +1564,10 @@ mod tests {
         log: Log,
         input: Rc<RefCell<OrbitInput>>,
         snapshots: Rc<RefCell<HashMap<i32, u32>>>,
+        /// The picture the host gives from now on instead of the first one (a capture landed).
+        later_picture: Rc<RefCell<Option<Image>>>,
+        /// The host has no picture at all (no capture landed).
+        no_pictures: Rc<Cell<bool>>,
         ops: Rc<RefCell<Vec<GroupOp>>>,
         refuse: Rc<Cell<Option<GroupError>>>,
         rows_calls: Rc<Cell<u32>>,
@@ -1668,6 +1596,8 @@ mod tests {
             log: Rc::new(RefCell::new(Vec::new())),
             input: Rc::new(RefCell::new(orbit_input(false))),
             snapshots: Rc::new(RefCell::new(HashMap::new())),
+            later_picture: Rc::new(RefCell::new(None)),
+            no_pictures: Rc::new(Cell::new(false)),
             ops: Rc::new(RefCell::new(Vec::new())),
             refuse: Rc::new(Cell::new(None)),
             rows_calls: Rc::new(Cell::new(0)),
@@ -1680,9 +1610,14 @@ mod tests {
             },
             snapshot: {
                 let snapshots = Rc::clone(&fakes.snapshots);
+                let later = Rc::clone(&fakes.later_picture);
+                let none = Rc::clone(&fakes.no_pictures);
                 Box::new(move |tab| {
                     *snapshots.borrow_mut().entry(tab).or_default() += 1;
-                    Some(picture.clone())
+                    if none.get() {
+                        return None;
+                    }
+                    Some(later.borrow().clone().unwrap_or_else(|| picture.clone()))
                 })
             },
             rows: {
@@ -1763,32 +1698,117 @@ mod tests {
         assert_eq!(window.frame().level, OrbitLevel::Groups);
         assert_eq!(window.frame().container_label, "Orbit, every group");
         assert_eq!(fakes.count("focus-view"), 1);
+        assert_eq!(window.play_open.get(), 1, "the open animation plays once");
+        let play = log.iter().position(|line| line == "play-open");
+        assert!(first_build < play, "after the first build: {log:?}");
+    }
+
+    #[test]
+    fn the_open_animation_plays_once_per_open() {
+        let (orbit, window, _fakes) = setup();
+        assert_eq!(window.play_open.get(), 0, "not while closed");
+
+        orbit.open();
+        orbit.open();
+        assert_eq!(window.play_open.get(), 1, "a second open does nothing");
+        window.events().planet_clicked(RESEARCH);
+        orbit.rows_changed();
+        assert_eq!(
+            window.play_open.get(),
+            1,
+            "levels and rows do not replay it"
+        );
+
+        orbit.close();
+        assert_eq!(window.play_open.get(), 1);
+        orbit.open();
+        assert_eq!(window.play_open.get(), 2);
+    }
+
+    /// How many times the host was asked for a tab's picture.
+    fn asks(fakes: &Fakes, tab: i32) -> u32 {
+        fakes.snapshots.borrow().get(&tab).copied().unwrap_or(0)
     }
 
     #[test]
     fn the_active_tabs_picture_is_asked_for_again_once_and_every_other_tab_once() {
-        let (orbit, window, fakes) = opened();
+        let (_orbit, window, fakes) = opened();
         let events = window.events();
         events.planet_clicked(RESEARCH);
         events.preview_clicked(ACCESSKIT_GUIDE);
         events.neighbour_clicked(ACCESSKIT_GUIDE + 1);
         assert_eq!(
-            fakes.snapshots.borrow().get(&ACTIVE),
-            Some(&1),
+            asks(&fakes, ACTIVE),
+            1,
             "the active tab's picture is fetched when Orbit opens"
         );
 
+        // The capture landed: the second ask brings a new picture, so there is no third.
+        *fakes.later_picture.borrow_mut() = Some(skeleton_picture(true));
         elapse(REFRESH_DELAY + Duration::from_millis(10));
-        elapse(REFRESH_DELAY * 4);
-        orbit.inner.refresh_active_picture();
+        elapse(LATE_REFRESH_DELAY * 4);
         events.planet_hovered(READING);
         events.planet_hovered(-1);
 
-        let snapshots = fakes.snapshots.borrow();
-        assert_eq!(snapshots.get(&ACTIVE), Some(&2), "refreshed exactly once");
-        for (tab, asked) in snapshots.iter().filter(|(tab, _)| **tab != ACTIVE) {
+        assert_eq!(asks(&fakes, ACTIVE), 2, "refreshed exactly once");
+        for (tab, asked) in fakes
+            .snapshots
+            .borrow()
+            .iter()
+            .filter(|(tab, _)| **tab != ACTIVE)
+        {
             assert_eq!(*asked, 1, "tab {tab} was asked for more than once");
         }
+    }
+
+    #[test]
+    fn a_picture_that_did_not_change_is_asked_for_once_more_at_about_750_ms_and_then_never() {
+        let (_orbit, _window, fakes) = opened();
+        assert_eq!(asks(&fakes, ACTIVE), 1);
+
+        elapse(REFRESH_DELAY - Duration::from_millis(10));
+        assert_eq!(asks(&fakes, ACTIVE), 1, "not before 250 ms");
+        elapse(Duration::from_millis(20));
+        assert_eq!(asks(&fakes, ACTIVE), 2, "the first re-ask");
+
+        elapse(LATE_REFRESH_DELAY - Duration::from_millis(20));
+        assert_eq!(asks(&fakes, ACTIVE), 2, "not before about 750 ms");
+        elapse(Duration::from_millis(40));
+        assert_eq!(asks(&fakes, ACTIVE), 3, "the late ask");
+
+        elapse(Duration::from_secs(30));
+        assert_eq!(asks(&fakes, ACTIVE), 3, "bounded: two asks after the open");
+    }
+
+    #[test]
+    fn a_picture_that_never_lands_is_still_asked_for_at_most_twice_after_the_open() {
+        let (orbit, _window, fakes) = setup();
+        fakes.no_pictures.set(true);
+        orbit.open();
+
+        elapse(REFRESH_DELAY + Duration::from_millis(10));
+        elapse(LATE_REFRESH_DELAY + Duration::from_millis(10));
+        elapse(Duration::from_secs(30));
+
+        assert_eq!(asks(&fakes, ACTIVE), 3);
+        assert!(orbit.is_open());
+    }
+
+    #[test]
+    fn closing_before_the_late_ask_cancels_it_and_a_new_open_starts_the_count_again() {
+        let (orbit, _window, fakes) = opened();
+        elapse(REFRESH_DELAY + Duration::from_millis(10));
+        assert_eq!(asks(&fakes, ACTIVE), 2);
+
+        orbit.close();
+        elapse(Duration::from_secs(30));
+        assert_eq!(asks(&fakes, ACTIVE), 2, "no ask after close");
+
+        orbit.open();
+        assert_eq!(asks(&fakes, ACTIVE), 3);
+        elapse(REFRESH_DELAY + Duration::from_millis(10));
+        elapse(LATE_REFRESH_DELAY + Duration::from_millis(10));
+        assert_eq!(asks(&fakes, ACTIVE), 5, "one open ask and two more");
     }
 
     #[test]
@@ -1984,32 +2004,110 @@ mod tests {
     }
 
     #[test]
-    fn key_text_maps_to_the_machines_keys() {
-        use slint::platform::Key as Special;
-        let text = |key: Special| char::from(key).to_string();
-        for (given, expected) in [
-            (text(Special::Escape), Some(Key::Escape)),
-            ("\n".to_owned(), Some(Key::Enter)),
-            ("\r".to_owned(), Some(Key::Enter)),
-            (text(Special::Return), Some(Key::Enter)),
-            (text(Special::UpArrow), Some(Key::Up)),
-            (text(Special::DownArrow), Some(Key::Down)),
-            (text(Special::LeftArrow), Some(Key::Left)),
-            (text(Special::RightArrow), Some(Key::Right)),
-            ("n".to_owned(), Some(Key::N)),
-            ("N".to_owned(), Some(Key::N)),
-            ("/".to_owned(), Some(Key::Slash)),
-            ("x".to_owned(), Some(Key::Char('x'))),
-            ("é".to_owned(), Some(Key::Char('é'))),
-            (" ".to_owned(), None),
-            ("\t".to_owned(), None),
-            (text(Special::F1), None),
-            (text(Special::Home), None),
-            ("ab".to_owned(), None),
-            (String::new(), None),
+    fn while_a_text_field_has_the_focus_the_text_keys_are_not_taken_and_change_nothing() {
+        let (orbit, window, fakes) = opened();
+        window.text_focused.set(true);
+        let frames = window.frames.borrow().len();
+        let arrow = |key: slint::platform::Key| char::from(key).to_string();
+
+        for key in [
+            Key::N,
+            Key::Slash,
+            Key::Char('x'),
+            Key::Up,
+            Key::Down,
+            Key::Left,
+            Key::Right,
+            Key::Tab,
         ] {
-            assert_eq!(key_from_text(&given), expected, "{given:?}");
+            assert!(!orbit.handle_key(key, Mods::NONE), "{key:?}");
         }
+        assert!(!orbit.handle_key(
+            Key::Left,
+            Mods {
+                alt: true,
+                ..Mods::NONE
+            }
+        ));
+        let events = window.events();
+        assert!(!events.key_pressed("n", false, false, false, false));
+        assert!(!events.key_pressed(
+            &arrow(slint::platform::Key::UpArrow),
+            false,
+            false,
+            false,
+            false
+        ));
+
+        assert!(
+            orbit.inner.machine.borrow().view().popover.is_none(),
+            "N typed into a field does not open the popover"
+        );
+        assert_eq!(
+            window.focus_search.get(),
+            0,
+            "'/' and letters do not steal the focus"
+        );
+        assert_eq!(*window.search_text.borrow(), "");
+        assert_eq!(window.frames.borrow().len(), frames, "nothing was rebuilt");
+        assert_eq!(fakes.count("close"), 0);
+        assert!(orbit.is_open());
+    }
+
+    #[test]
+    fn without_a_focused_text_field_n_opens_the_popover_and_the_arrows_are_taken() {
+        let (orbit, window, _fakes) = opened();
+        assert!(!window.text_focused.get());
+
+        assert!(orbit.handle_key(Key::N, Mods::NONE));
+
+        assert!(orbit.inner.machine.borrow().view().popover.is_some());
+        assert!(orbit.handle_key(Key::Right, Mods::NONE), "modal: taken");
+    }
+
+    #[test]
+    fn escape_and_the_command_keys_still_act_while_a_text_field_has_the_focus() {
+        let (orbit, window, fakes) = opened();
+        window.events().planet_clicked(RESEARCH);
+        window.text_focused.set(true);
+        window.events().search_edited("servo");
+
+        assert!(
+            orbit.handle_key(Key::Escape, Mods::NONE),
+            "Esc clears the search"
+        );
+        assert!(!window.frame().query_active);
+        assert!(
+            orbit.handle_key(Key::Up, Mods::COMMAND),
+            "⌘↑ climbs a level"
+        );
+        assert_eq!(window.frame().level, OrbitLevel::Groups);
+        assert!(orbit.handle_key(Key::Escape, Mods::NONE));
+
+        assert!(!orbit.is_open());
+        assert_eq!(fakes.count("close"), 1);
+    }
+
+    #[test]
+    fn enter_in_the_popovers_name_field_is_left_to_the_field() {
+        let (orbit, window, _fakes) = opened();
+        window.events().new_group_clicked();
+        assert!(orbit.inner.machine.borrow().view().popover.is_some());
+
+        window.text_focused.set(true);
+        assert!(!orbit.handle_key(Key::Enter, Mods::NONE));
+        window.text_focused.set(false);
+        assert!(orbit.handle_key(Key::Enter, Mods::NONE), "modal: taken");
+    }
+
+    #[test]
+    fn clicking_new_group_opens_the_popover_even_while_the_search_field_has_the_focus() {
+        let (orbit, window, _fakes) = opened();
+        window.text_focused.set(true);
+
+        window.events().new_group_clicked();
+
+        assert!(orbit.inner.machine.borrow().view().popover.is_some());
     }
 
     #[test]
@@ -2018,8 +2116,14 @@ mod tests {
         let events = window.events();
 
         assert!(
-            !events.key_pressed("\t", false, false, false, false),
-            "Tab is not Orbit's"
+            !events.key_pressed(
+                &char::from(slint::platform::Key::F1).to_string(),
+                false,
+                false,
+                false,
+                false
+            ),
+            "F1 is not Orbit's"
         );
         assert!(events.key_pressed("\n", false, false, false, false));
         assert_eq!(window.frame().level, OrbitLevel::Group);
@@ -2132,12 +2236,57 @@ mod tests {
         );
         assert_eq!(window.frame().level, OrbitLevel::Groups);
 
+        // The view writes the pinch's progress while the fingers move: -1 for this pinch.
+        window.pinch_progress.set(-1.0);
         events.pinch_started(720.0, 470.0);
         events.pinch_updated(0.5);
         events.pinch_ended();
 
         assert!(!orbit.is_open(), "pinching out of level 1 leaves Orbit");
         assert_eq!(fakes.count("close"), 1);
+        assert_eq!(
+            window.pinch_progress.get(),
+            0.0,
+            "a pinch that closes must not leave the scale at 0.92"
+        );
+
+        // Whatever the view was left with, the next Orbit opens at scale 1.
+        window.pinch_progress.set(1.0);
+        orbit.open();
+        assert_eq!(window.pinch_progress.get(), 0.0, "reopened at scale 1");
+    }
+
+    #[test]
+    fn a_pinch_in_on_the_card_that_opens_the_tab_also_resets_the_pinch_progress() {
+        let (orbit, window, fakes) = opened();
+        let events = window.events();
+        events.planet_clicked(RESEARCH);
+        events.preview_clicked(ACCESSKIT_GUIDE);
+        assert_eq!(window.frame().level, OrbitLevel::Tab);
+        let card = window.frame().card;
+        let (x, y) = (card.x + card.width / 2.0, card.y + card.height / 2.0);
+
+        window.pinch_progress.set(1.0);
+        events.pinch_started(x, y);
+        events.pinch_updated(1.4);
+        events.pinch_ended();
+
+        assert!(
+            !orbit.is_open(),
+            "pinching in on the card activates the tab"
+        );
+        assert_eq!(fakes.count("activate:104"), 1);
+        assert_eq!(window.pinch_progress.get(), 0.0);
+    }
+
+    #[test]
+    fn closing_resets_the_pinch_progress_whatever_the_view_was_left_with() {
+        let (orbit, window, _fakes) = opened();
+        window.pinch_progress.set(0.6);
+
+        orbit.close();
+
+        assert_eq!(window.pinch_progress.get(), 0.0);
     }
 
     #[test]
@@ -2668,86 +2817,8 @@ mod tests {
     }
 
     // ------------------------------------------------------------------------------------
-    // The pure helpers
+    // The notices (the pure helpers that moved to `mercury-ui` are tested there)
     // ------------------------------------------------------------------------------------
-
-    #[test]
-    fn container_labels_follow_the_levels() {
-        let input = orbit_input(false);
-        let at = |level, group, tab| View {
-            level,
-            group,
-            tab,
-            ..View::default()
-        };
-
-        let label = |view: &View| container_label(view, &input);
-
-        assert_eq!(label(&at(Level::Groups, None, None)), "Orbit, every group");
-        assert_eq!(
-            label(&at(Level::Groups, Some(2), None)),
-            "Orbit, every group"
-        );
-        assert_eq!(
-            label(&at(Level::Group, Some(RESEARCH), None)),
-            "Orbit, Research, 10 tabs"
-        );
-        assert_eq!(
-            label(&at(Level::Tab, Some(RESEARCH), Some(ACTIVE))),
-            "Orbit, Servo layout notes, tab 1 of 10"
-        );
-        assert_eq!(
-            label(&at(Level::Group, Some(99), None)),
-            "Orbit",
-            "a group that is gone"
-        );
-        assert_eq!(label(&at(Level::Tab, Some(RESEARCH), Some(99))), "Orbit");
-    }
-
-    #[test]
-    fn a_group_of_one_tab_says_1_tab() {
-        let mut input = orbit_input(false);
-        input
-            .tabs
-            .retain(|tab| tab.group != RESEARCH || tab.id == ACTIVE);
-        let view = View {
-            level: Level::Group,
-            group: Some(RESEARCH),
-            ..View::default()
-        };
-
-        assert_eq!(container_label(&view, &input), "Orbit, Research, 1 tab");
-    }
-
-    #[test]
-    fn ages_are_written_the_way_the_group_labels_are() {
-        let now = SystemTime::UNIX_EPOCH + Duration::from_secs(10_000_000);
-        let ago = |seconds: u64| relative_age(now, now - Duration::from_secs(seconds));
-        for (seconds, expected) in [
-            (0, "now"),
-            (59, "now"),
-            (60, "1 min ago"),
-            (120, "2 min ago"),
-            (59 * 60 + 59, "59 min ago"),
-            (3600, "1 hour ago"),
-            (2 * 3600 - 1, "1 hour ago"),
-            (3 * 3600, "3 hours ago"),
-            (24 * 3600, "yesterday"),
-            (47 * 3600, "yesterday"),
-            (48 * 3600, "2 days ago"),
-            (3 * 86_400, "3 days ago"),
-            (13 * 86_400, "13 days ago"),
-            (14 * 86_400, "2 weeks ago"),
-            (60 * 86_400, "8 weeks ago"),
-        ] {
-            assert_eq!(ago(seconds), expected, "{seconds} s");
-        }
-        assert_eq!(
-            relative_age(now, now + Duration::from_secs(500)),
-            "now",
-            "a time in the future"
-        );
-    }
 
     #[test]
     fn every_refusal_has_its_own_plain_sentence() {
@@ -3322,6 +3393,7 @@ mod tests {
             self.set_notice(frame.notice.clone());
             self.set_reduce_motion(frame.reduce_motion);
             self.set_animate_spinners(frame.animate_spinners);
+            self.set_search_placeholder(frame.search_placeholder.clone());
         }
 
         fn set_search_text(&self, text: &str) {
@@ -3338,6 +3410,14 @@ mod tests {
 
         fn focus_view(&self) {
             self.invoke_focus_view();
+        }
+
+        fn text_field_focused(&self) -> bool {
+            self.get_text_field_focused()
+        }
+
+        fn play_open(&self) {
+            self.invoke_play_open();
         }
 
         fn cancel_ring_drag(&self) {
@@ -3463,6 +3543,24 @@ mod tests {
         preview.invoke_back_clicked();
         assert!(!orbit.is_open());
         assert_eq!(fakes.count("close"), 1);
+    }
+
+    #[test]
+    fn opening_plays_the_views_open_animation_and_the_frame_sets_the_search_placeholder() {
+        let (orbit, preview, _fakes) = preview_orbit();
+
+        assert!(!preview.get_search_placeholder().is_empty());
+        assert!(!preview.text_field_focused(), "nothing is focused yet");
+        assert!(
+            preview.get_open_progress() < 1.0,
+            "the 320 ms animation has started"
+        );
+        elapse(Duration::from_millis(400));
+        assert!(preview.get_open_progress() > 0.999);
+        assert!(
+            orbit.handle_key(Key::N, Mods::NONE),
+            "no text field: N is Orbit's"
+        );
     }
 
     #[test]

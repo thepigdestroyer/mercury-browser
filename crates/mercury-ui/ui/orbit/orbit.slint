@@ -24,6 +24,17 @@
 //     level change) and `out property ring-drag-source` (the tab a ring is dragging, -1 for none);
 // The Command key reaches `key-pressed` as its second argument and Control as the fifth (Slint calls
 // the Command key `control` and the Control key `meta` on macOS).
+//
+// ADDED by the fix round (review F1, F2, F3, F5, F8, F12, F20):
+//   - `out property <bool> text-field-focused`: the search field or the popover's name field has the
+//     keyboard focus (the host lets such a key through to the field);
+//   - `public function play-open()` and `out property <float> open-progress` (0..1; with the derived
+//     `open-scale` and `open-opacity`): the 320 ms open animation (SPEC §7: 80 ms the page lifts into
+//     a card, 160 ms it shrinks toward its group, 80 ms it settles); progress is 1 at once with
+//     `reduce-motion`, and 1 is exactly the static frame;
+//   - `focus-view()` also ends a pinch that never ended (`pinch-live`, `pinch-progress`);
+//   - the keyboard focus ring (ChromePalette.focus-ring, 2 px) on the level-3 card, the focused
+//     preview and the two buttons "Back to the page" and "New group".
 
 import { RingDropTarget, RingHit } from "../groups/ring-bands.slint";
 import { ChromePalette } from "../theme/chrome-palette.slint";
@@ -96,6 +107,7 @@ export component OrbitView inherits Rectangle {
     in property <OrbitPopover> popover;
     // "Orbit", then the group, then the tab.
     in property <[string]> crumbs;
+    // What the empty search field says ("Search 40 tabs"): the host sets it.
     in property <string> search-placeholder: "Search tabs";
     in-out property <string> search-text <=> field.text;
     in property <bool> query-active;
@@ -107,8 +119,19 @@ export component OrbitView inherits Rectangle {
     in property <string> notice;
     // The pinch's progress, -1..1, while a pinch runs (the stage scales with it); 0 at rest.
     in-out property <float> pinch-progress: 0;
+    // true from the first to the last update of a pinch (the stage follows the fingers at once, no
+    // spring-back); the view sets it. Hosts leave it alone; `focus-view` clears a stale one.
+    in-out property <bool> pinch-live: false;
     in property <bool> reduce-motion: false;
     in property <bool> animate-spinners: true;
+    // The search field or the popover's name field has the keyboard focus.
+    out property <bool> text-field-focused: field.has-focus || (root.popover.visible && root.popover-field-focus);
+    // The open animation, 0 to 1 (`play-open`); 1 at rest.
+    out property <float> open-progress: 1;
+    // What the stage draws at that progress: 0.94 to 0.98 and opacity 0 to 0.6 in the first quarter,
+    // on to 1.02 and opacity 1 by the third, back to 1 at the end (exactly 1 and 1 at progress 1).
+    out property <float> open-scale: root.open-progress >= 1 ? 1 : 0.94 + 0.04 * clamp(root.open-progress / 0.25, 0, 1) + 0.04 * clamp((root.open-progress - 0.25) / 0.5, 0, 1) - 0.02 * clamp((root.open-progress - 0.75) / 0.25, 0, 1);
+    out property <float> open-opacity: root.open-progress >= 1 ? 1 : 0.6 * clamp(root.open-progress / 0.25, 0, 1) + 0.4 * clamp((root.open-progress - 0.25) / 0.5, 0, 1);
 
     // What happened (Rust: orbit_view::machine::OrbitMachine). Ids are row ids.
     callback planet-hovered(int);       // -1: none
@@ -153,8 +176,24 @@ export component OrbitView inherits Rectangle {
         field.focus();
     }
 
+    // The overlay's key scope takes the keyboard focus (Orbit opens, the search or the popover
+    // closes). It also ends a pinch whose `ended` never came: the stage goes back to its size at
+    // once (the progress is set while the pinch counts as live, so it does not animate) and the next
+    // spring-back runs its 160 ms.
     public function focus-view() {
+        root.pinch-live = true;
+        root.pinch-progress = 0;
+        root.pinch-live = false;
         scope.focus();
+    }
+
+    // Starts the open animation: progress 0, then 1 in 320 ms (linear: 80, 160 and 80 ms are the three
+    // phases of `open-scale` and `open-opacity`). With `reduce-motion` it is 1 at once.
+    public function play-open() {
+        root.open-snap = true;
+        root.open-progress = root.reduce-motion ? 1 : 0;
+        root.open-snap = false;
+        root.open-progress = 1;
     }
 
     // Ends the drag of every ring (the planets and the centre ring), as a release outside every slot
@@ -177,7 +216,8 @@ export component OrbitView inherits Rectangle {
     private property <bool> l1: root.level == OrbitLevel.groups;
     private property <bool> l2: root.level == OrbitLevel.group;
     private property <bool> l3: root.level == OrbitLevel.tab;
-    private property <bool> pinch-live: false;
+    private property <bool> open-snap: false;
+    private property <bool> popover-field-focus: false;
     private property <duration> fade: root.reduce-motion ? 0ms : 90ms;
     // The mockup's window is 1440 x 900; the ellipses shrink with a smaller one, never grow.
     private property <float> ellipse-scale: min(1, min(root.width / 1440px, root.height / 900px));
@@ -190,6 +230,7 @@ export component OrbitView inherits Rectangle {
     private property <length> chips-end: root.chips.length > 0 ? root.chips[root.chips.length - 1].x + root.chips[root.chips.length - 1].width : 0px;
 
     animate pinch-progress { duration: root.pinch-live || root.reduce-motion ? 0ms : 160ms; easing: ease-out; }
+    animate open-progress { duration: root.open-snap || root.reduce-motion ? 0ms : 320ms; easing: linear; }
 
     background: ChromePalette.window-background;
     accessible-role: none;
@@ -224,7 +265,8 @@ export component OrbitView inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
                 clip: true;
-                transform-scale: 1 + root.pinch-progress * 0.08;
+                transform-scale: (1 + root.pinch-progress * 0.08) * root.open-scale;
+                opacity: root.open-opacity;
                 accessible-role: list;
                 accessible-label: root.container-label;
 
@@ -278,19 +320,21 @@ export component OrbitView inherits Rectangle {
                             }
                         }
                     }
+                    // 500 x 40, centred (mockup); a narrow window gives the breadcrumb and the way
+                    // back their room first.
                     Rectangle {
                         x: (parent.width - self.width) / 2;
-                        y: 9px;
-                        width: 360px;
-                        height: 30px;
-                        border-radius: 15px;
+                        y: 4px;
+                        width: max(120px, min(500px, parent.width - 760px));
+                        height: 40px;
+                        border-radius: 20px;
                         border-width: 1px;
                         border-color: field.has-focus ? ChromePalette.accent : ChromePalette.search-field-border;
                         background: ChromePalette.search-field-background;
 
                         Path {
-                            x: 13px;
-                            y: 8px;
+                            x: 14px;
+                            y: 13px;
                             width: 14px;
                             height: 14px;
                             viewbox-width: 16;
@@ -363,6 +407,31 @@ export component OrbitView inherits Rectangle {
                             clicked => {
                                 root.back-clicked();
                             }
+                        }
+                        // The button takes the keyboard focus (Slint's own focus traversal, or an
+                        // assistive technology's focus action) and shows the focus ring then.
+                        back-focus := FocusScope {
+                            width: parent.width;
+                            height: parent.height;
+                            // A click is the TouchArea's; the ring is for the keyboard.
+                            focus-on-click: false;
+                            key-pressed(event) => {
+                                if event.text == "\n" || event.text == " " {
+                                    root.back-clicked();
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
+                        Rectangle {
+                            x: 2px;
+                            y: 4px;
+                            width: parent.width - 4px;
+                            height: parent.height - 8px;
+                            border-radius: 8px;
+                            border-width: 2px;
+                            border-color: ChromePalette.focus-ring;
+                            visible: back-focus.has-focus;
                         }
                     }
                 }
@@ -439,16 +508,20 @@ export component OrbitView inherits Rectangle {
                             radius: root.sun.radius;
                             title: root.sun.title;
                             subtitle: root.sun.subtitle;
+                            label: root.sun.accessible-label;
                             opacity: root.sun.opacity;
                             visible: root.sun.opacity > 0.01;
                         }
 
                         // The spokes from the centre ring to the previews (level 2).
                         for spoke in root.previews: Path {
-                            x: min(spoke.spoke-x1, spoke.spoke-x2);
-                            y: min(spoke.spoke-y1, spoke.spoke-y2);
-                            width: max(1px, abs(spoke.spoke-x2 - spoke.spoke-x1));
-                            height: max(1px, abs(spoke.spoke-y2 - spoke.spoke-y1));
+                            // The box is the spoke's own and a margin on every side: a vertical or
+                            // horizontal spoke has a box one px wide and its 1.5 px stroke would be
+                            // clipped away at the box's edge.
+                            x: min(spoke.spoke-x1, spoke.spoke-x2) - 2px;
+                            y: min(spoke.spoke-y1, spoke.spoke-y2) - 2px;
+                            width: abs(spoke.spoke-x2 - spoke.spoke-x1) + 4px;
+                            height: abs(spoke.spoke-y2 - spoke.spoke-y1) + 4px;
                             viewbox-width: self.width / 1px;
                             viewbox-height: self.height / 1px;
                             commands: "M \{(spoke.spoke-x1 - self.x) / 1px} \{(spoke.spoke-y1 - self.y) / 1px} L \{(spoke.spoke-x2 - self.x) / 1px} \{(spoke.spoke-y2 - self.y) / 1px}";
@@ -464,7 +537,7 @@ export component OrbitView inherits Rectangle {
                             interactive: root.l1;
                             reorderable: root.l1 && row.group != -2;
                             accepts-drops: root.l1;
-                    cancel-tick: root.cancel-tick;
+                            cancel-tick: root.cancel-tick;
                             query-active: root.query-active;
                             reduce-motion: root.reduce-motion;
                             animate-spinners: root.animate-spinners;
@@ -534,8 +607,8 @@ export component OrbitView inherits Rectangle {
                             reorderable: false;
                             accepts-drops: root.l2;
                             focused-tab: root.focus-tab;
-                        dim: root.l3 ? 0.4 : 1;
-                        cancel-tick: root.cancel-tick;
+                            dim: root.l3 ? 0.4 : 1;
+                            cancel-tick: root.cancel-tick;
                             query-active: root.query-active;
                             reduce-motion: root.reduce-motion;
                             animate-spinners: root.animate-spinners;
@@ -639,6 +712,29 @@ export component OrbitView inherits Rectangle {
                                     root.new-group-clicked();
                                 }
                             }
+                            // The ring takes the keyboard focus like a button (see "Back to the page").
+                            new-group-focus := FocusScope {
+                                width: parent.width;
+                                height: parent.height;
+                                focus-on-click: false;
+                                key-pressed(event) => {
+                                    if event.text == "\n" || event.text == " " {
+                                        root.new-group-clicked();
+                                        return accept;
+                                    }
+                                    return reject;
+                                }
+                            }
+                            Rectangle {
+                                x: -4px;
+                                y: -4px;
+                                width: parent.width + 8px;
+                                height: parent.height + 8px;
+                                border-radius: self.width / 2;
+                                border-width: 2px;
+                                border-color: ChromePalette.focus-ring;
+                                visible: new-group-focus.has-focus;
+                            }
                             group-drop := DropArea {
                                 width: parent.width;
                                 height: parent.height;
@@ -661,6 +757,7 @@ export component OrbitView inherits Rectangle {
                         // The previews of the group's tabs (level 2).
                         for row in root.previews: PreviewCard {
                             card: row;
+                            focused: scope.has-focus && root.l2 && root.focus-tab == row.tab;
                             reduce-motion: root.reduce-motion;
                             animate-spinners: root.animate-spinners;
                             accessible-role: button;
@@ -842,6 +939,18 @@ export component OrbitView inherits Rectangle {
                                     root.neighbour-clicked(near.tab);
                                 }
                             }
+                        }
+
+                        // The keyboard focus ring of the card (the machine puts the focus on the shown
+                        // tab's card at level 3): 2 px, a little outside the accent outline.
+                        if root.card.visible && root.l3 && scope.has-focus: Rectangle {
+                            x: root.card.x - 4px;
+                            y: root.card.y - 4px;
+                            width: root.card.width + 8px;
+                            height: root.card.height + 8px;
+                            border-radius: 20px;
+                            border-width: 2px;
+                            border-color: ChromePalette.focus-ring;
                         }
 
                         // The shown tab almost full size (level 3): 2.5 px accent outline, a 40 px header.
@@ -1026,6 +1135,19 @@ export component OrbitView inherits Rectangle {
                                 border-color: ChromePalette.accent;
                                 background: ChromePalette.field-background;
 
+                                // The placeholder shows while the field is empty (the product opens it
+                                // empty; the controller names the group "Group N" then).
+                                Text {
+                                    x: 8px;
+                                    width: parent.width - 16px;
+                                    height: parent.height;
+                                    text: root.popover.placeholder;
+                                    font-size: 13px;
+                                    color: ChromePalette.placeholder;
+                                    vertical-alignment: center;
+                                    visible: name-field.text == "";
+                                    accessible-role: none;
+                                }
                                 name-field := TextInput {
                                     x: 8px;
                                     width: parent.width - 16px;
@@ -1036,9 +1158,14 @@ export component OrbitView inherits Rectangle {
                                     vertical-alignment: center;
                                     single-line: true;
                                     accessible-label: "Group name";
+                                    accessible-placeholder-text: root.popover.placeholder;
                                     init => {
                                         self.focus();
                                         self.select-all();
+                                        root.popover-field-focus = self.has-focus;
+                                    }
+                                    changed has-focus => {
+                                        root.popover-field-focus = self.has-focus;
                                     }
                                     edited => {
                                         root.popover-name-edited(self.text);
@@ -1084,7 +1211,8 @@ export component OrbitView inherits Rectangle {
                             }
                         }
 
-                        // A refused drop: one line at the bottom.
+                        // A refused drop: one line at the bottom. A live region: a screen reader
+                        // announces its text when it appears.
                         if root.notice != "": Rectangle {
                             x: (parent.width - self.width) / 2;
                             y: parent.height - 96px;
@@ -1094,6 +1222,9 @@ export component OrbitView inherits Rectangle {
                             border-width: 1px;
                             border-color: ChromePalette.notice-border;
                             background: ChromePalette.notice-background;
+                            accessible-role: text;
+                            accessible-label: root.notice;
+                            accessible-live-region: AccessibleLiveness.polite;
 
                             notice-text := Text {
                                 x: 16px;
@@ -1102,6 +1233,7 @@ export component OrbitView inherits Rectangle {
                                 font-size: 12.5px;
                                 color: ChromePalette.status-text;
                                 vertical-alignment: center;
+                                accessible-role: none;
                             }
                         }
 
@@ -1196,8 +1328,13 @@ export component OrbitPreview inherits Window {
     in property <string> container-label <=> view.container-label;
     in property <string> notice <=> view.notice;
     in-out property <float> pinch-progress <=> view.pinch-progress;
+    in-out property <bool> pinch-live <=> view.pinch-live;
     in property <bool> reduce-motion <=> view.reduce-motion;
     in property <bool> animate-spinners <=> view.animate-spinners;
+    out property <bool> text-field-focused <=> view.text-field-focused;
+    out property <float> open-progress <=> view.open-progress;
+    out property <float> open-scale <=> view.open-scale;
+    out property <float> open-opacity <=> view.open-opacity;
 
     callback planet-hovered <=> view.planet-hovered;
     callback planet-clicked <=> view.planet-clicked;
@@ -1239,6 +1376,10 @@ export component OrbitPreview inherits Window {
 
     public function focus-view() {
         view.focus-view();
+    }
+
+    public function play-open() {
+        view.play-open();
     }
 
     public function cancel-ring-drag() {
