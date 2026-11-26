@@ -12,6 +12,8 @@ use std::time::{Duration, Instant};
 
 use talaria_core::PagePermission;
 
+use crate::platform::system_settings::{open_pane, pane_for_permission};
+
 /// What macOS allows for one kind of device.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum SystemAccess {
@@ -127,19 +129,9 @@ fn query(_permission: PagePermission) -> SystemAccess {
 
 /// Opens the Privacy & Security pane for `permission` in System Settings.
 pub(crate) fn open_privacy_settings(permission: PagePermission) {
-    #[cfg(target_os = "macos")]
-    {
-        let pane = match permission {
-            PagePermission::Microphone => "Privacy_Microphone",
-            _ => "Privacy_Camera",
-        };
-        let url = format!("x-apple.systempreferences:com.apple.preference.security?{pane}");
-        if let Err(error) = std::process::Command::new("/usr/bin/open").arg(url).spawn() {
-            log::warn!("could not open the privacy settings: {error}");
-        }
+    if let Some(pane) = pane_for_permission(permission) {
+        open_pane(pane);
     }
-    #[cfg(not(target_os = "macos"))]
-    let _ = permission;
 }
 
 #[cfg(test)]
