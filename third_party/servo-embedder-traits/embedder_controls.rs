@@ -16,6 +16,10 @@ use servo_url::ImmutableOrigin;
 use url::Url;
 use uuid::Uuid;
 
+use crate::mercury::{
+    ContextMenuDetails, DateTimePickerRequest, InputMethodResponse, MediaContextAction,
+    ValidationMessage,
+};
 use crate::{InputMethodType, RgbColor};
 
 /// The id of a user interface control that the engine requests that the
@@ -44,6 +48,10 @@ pub enum EmbedderControlRequest {
     InputMethod(InputMethodRequest),
     /// Indicates that the the user has triggered the display of a context menu.
     ContextMenu(ContextMenuRequest),
+    // Mercury: a date, time, month, week or datetime-local input was activated.
+    DateTimePicker(DateTimePickerRequest),
+    // Mercury: a validation message for an invalid form control, to show in a bubble.
+    ValidationMessage(ValidationMessage),
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -104,6 +112,10 @@ pub enum ContextMenuAction {
     Copy,
     Paste,
     SelectAll,
+    // Mercury: copy an image's pixels, not its link.
+    CopyImage,
+    // Mercury: play, pause, mute, loop or show the controls of the media element.
+    Media(MediaContextAction),
 }
 
 bitflags! {
@@ -132,6 +144,8 @@ pub struct ContextMenuElementInformation {
     pub flags: ContextMenuElementInformationFlags,
     pub link_url: Option<Url>,
     pub image_url: Option<Url>,
+    // Mercury: the selection, link text, frame and media state; boxed so the struct stays small.
+    pub details: Option<Box<ContextMenuDetails>>,
 }
 
 /// Request to present an IME to the user when an editable element is focused. If `type` is
@@ -175,6 +189,10 @@ pub enum EmbedderControlResponse {
     ColorPicker(Option<RgbColor>),
     FilePicker(Option<Vec<SelectedFile>>),
     ContextMenu(Option<ContextMenuAction>),
+    // Mercury: the value the user chose in a date or time picker, in the HTML format; `None` cancels.
+    DateTimePicker(Option<String>),
+    // Mercury: a command to fill the field of an `InputMethod` control.
+    InputMethod(InputMethodResponse),
 }
 
 /// Response to file selection request
@@ -227,4 +245,17 @@ pub enum ConfirmResponse {
 pub enum PromptResponse {
     Ok(String),
     Cancel,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn context_menu_information_default_has_no_details() {
+        let information = ContextMenuElementInformation::default();
+        assert!(information.details.is_none());
+        assert!(information.link_url.is_none());
+        assert!(information.image_url.is_none());
+    }
 }

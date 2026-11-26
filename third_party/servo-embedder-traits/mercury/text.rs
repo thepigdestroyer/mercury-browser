@@ -11,6 +11,9 @@ use std::ops::Range;
 use serde::{Deserialize, Serialize};
 use strum::IntoStaticStr;
 
+use super::clipboard::{ClipboardReadMsg, ClipboardWriteMsg};
+use super::forms::{FieldFocus, PasswordSubmission};
+
 /// Messages from the engine to Mercury for the `text` lane (IME, composition, editing).
 ///
 /// `Debug` prints only the variant name, never a payload.
@@ -27,6 +30,14 @@ pub enum TextMsg {
     /// reach the browser in either order when the focus moves between them: the browser clears
     /// its state only if it is the state of that document.
     InputCleared(u64),
+    /// A clipboard write from the page or the user's Copy and Cut. Boxed: see `InputState`.
+    ClipboardWrite(Box<ClipboardWriteMsg>),
+    /// A clipboard read from the page or the user's Paste. Boxed: see `InputState`.
+    ClipboardRead(Box<ClipboardReadMsg>),
+    /// A password-capable field got focus. Boxed: see `InputState`.
+    FieldFocus(Box<FieldFocus>),
+    /// A password form was submitted. Boxed: see `InputState`.
+    PasswordSubmitted(Box<PasswordSubmission>),
 }
 
 impl fmt::Debug for TextMsg {
@@ -310,6 +321,33 @@ mod tests {
     fn debug_prints_only_the_variant_name() {
         let message = TextMsg::InputState(Box::new(state("secret text")));
         assert_eq!(format!("{message:?}"), "InputState");
+    }
+
+    #[test]
+    fn debug_of_the_clipboard_and_form_variants_is_the_variant_name() {
+        servo_base::id::PipelineNamespace::install(servo_base::id::PipelineNamespaceId(2));
+        let focus = FieldFocus {
+            document: 1,
+            control: crate::EmbedderControlId {
+                webview_id: servo_base::id::WebViewId::new(servo_base::id::PainterId::next()),
+                pipeline_id: servo_base::id::PipelineId::new(),
+                index: servo_base::Epoch(1),
+            },
+            input_type: crate::InputMethodType::Password,
+            name: None,
+            id: None,
+            autocomplete: None,
+            origin: "https://a.test".to_owned(),
+            top_level_site: None,
+            is_cross_site_frame: false,
+            user_initiated: true,
+            form_has_password: true,
+        };
+        assert_eq!(
+            format!("{:?}", TextMsg::FieldFocus(Box::new(focus))),
+            "FieldFocus"
+        );
+        assert_eq!(format!("{:?}", TextMsg::InputCleared(1)), "InputCleared");
     }
 
     #[test]

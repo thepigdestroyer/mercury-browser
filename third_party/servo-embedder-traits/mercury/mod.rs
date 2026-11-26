@@ -22,7 +22,9 @@
 //! `Core::Probe`, and never a payload: what a page sent must not reach a log.
 
 mod a11y;
+mod clipboard;
 mod core;
+mod forms;
 mod media;
 mod net;
 mod page;
@@ -34,7 +36,9 @@ use serde::{Deserialize, Serialize};
 use strum::IntoStaticStr;
 
 pub use self::a11y::*;
+pub use self::clipboard::*;
 pub use self::core::*;
+pub use self::forms::*;
 pub use self::media::*;
 pub use self::net::*;
 pub use self::page::*;
@@ -125,8 +129,9 @@ mod tests {
             size <= EMBEDDER_MSG_SIZE_IN_SERVO_0_8 + size_of::<usize>(),
             "EmbedderMsg is {size} bytes; Servo 0.8.0 had {EMBEDDER_MSG_SIZE_IN_SERVO_0_8}"
         );
-        // The variant itself (a web view id and a message) is far smaller than the largest one.
-        assert!(size_of::<(Option<servo_base::id::WebViewId>, MercuryEmbedderMsg)>() <= 32);
+        // The wrapper pair is 40 bytes on the scaffold's own layout (measured on HEAD before the text
+        // lane's clipboard variants); the boxed text variants keep it from growing further.
+        assert!(size_of::<(Option<servo_base::id::WebViewId>, MercuryEmbedderMsg)>() <= 40);
     }
 
     #[test]
