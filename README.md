@@ -92,6 +92,7 @@ flowchart TB
 | `crates/talaria-core` | Browser logic with no engine inside: tabs, navigation, commands and events, testable with fake web views |
 | `crates/talaria-servo` | The bridge to Servo: web views, content blocking, permission and dialog requests, media |
 | `crates/mercury-store` | History and bookmarks in SQLite, with search and address-bar suggestions |
+| `crates/mercury-site-settings` | What the user decided per site, as data: origin patterns, allow, block and ask with lifetimes, protocol handlers |
 | `crates/mercury-settings` | Settings, search engines and their keywords |
 | `crates/mercury-passwords` | Saved logins in the macOS Keychain, a password generator, CSV import and export |
 | `crates/mercury-password-manager` | The password manager's logic between the Keychain crate and the Settings window: the list, editing, CSV import and export, the Touch ID gate, manual fill and saving HTTP sign-ins |
