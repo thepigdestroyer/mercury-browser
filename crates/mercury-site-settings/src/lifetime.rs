@@ -9,7 +9,7 @@ use crate::UnixMillis;
 /// [`Permanent`](Self::Permanent).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Lifetime {
-    /// Until the site's last tab closes (`SiteSettings::end_visit`). Never written to disk.
+    /// Until the site's last tab closes. Never written to disk.
     ThisVisit,
     /// Until the browser quits. Never written to disk.
     Session,

@@ -21,15 +21,18 @@
 )]
 
 mod axis;
+mod handlers;
 mod lifetime;
 mod origin;
 mod pattern;
+mod settings;
 mod value;
 
 pub use axis::Axis;
 pub use lifetime::Lifetime;
 pub use origin::Origin;
 pub use pattern::{OriginPattern, PatternError, Specificity};
+pub use settings::{Error, LoadReport, Resolved, RuleView, SiteSettings, Source};
 pub use value::{AutoplayPolicy, DataRule, Setting, Value, ValueKind};
 
 /// Milliseconds since the Unix epoch, as `mercury-store` keeps times.
@@ -48,7 +51,7 @@ pub const LAST_USED_GRANULARITY_MS: i64 = HOUR_MS;
 pub const MAX_RULES: usize = 50_000;
 /// The most protocol handlers the model holds.
 pub const MAX_HANDLERS: usize = 2_000;
-/// The smallest zoom a site can have, in percent (equal to `mercury-settings`').
-pub const MIN_ZOOM_PERCENT: u16 = 30;
-/// The largest zoom a site can have, in percent (equal to `mercury-settings`').
-pub const MAX_ZOOM_PERCENT: u16 = 500;
+/// The smallest zoom a site can have, in percent.
+pub const MIN_ZOOM_PERCENT: u16 = mercury_settings::MIN_ZOOM_PERCENT;
+/// The largest zoom a site can have, in percent.
+pub const MAX_ZOOM_PERCENT: u16 = mercury_settings::MAX_ZOOM_PERCENT;

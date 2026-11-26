@@ -16,3 +16,5 @@ license.workspace = true
 # The Public Suffix List, for "the site of an address" (already in Cargo.lock through `addr`).
 psl = "2.1"
 url.workspace = true
+mercury-settings = { path = "../mercury-settings" }
+mercury-store = { path = "../mercury-store" }
