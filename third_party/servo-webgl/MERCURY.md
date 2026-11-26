@@ -33,10 +33,10 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
 
 ### Hook to the page lane — `webgl_thread.rs`
 
-- **What:** `process` calls `mercury_drop_contexts_after_failed_receive` after its receive loop. The function is a stub until
-  the lane's tasks fill it.
-- **Why:** the page lane drops the WebGL contexts of a thread whose receive failed.
-- **Tested by:** `cargo check`; the lane's tests.
+- **What:** `process` calls `mercury_drop_contexts_after_failed_receive` after its receive loop. The function removes each
+  remaining context as `WebGLMsg::Exit` does, so its WebRender image keys are deleted.
+- **Why:** the page lane drops the WebGL contexts of a thread whose receive failed (EF3).
+- **Tested by:** `cargo check`.
 - **Drop when:** the scaffold is dropped and Servo has equivalents.
 
 ## Removing this directory

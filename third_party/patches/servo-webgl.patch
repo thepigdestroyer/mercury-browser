@@ -4,7 +4,7 @@
 diff --git a/webgl_thread.rs b/webgl_thread.rs
 --- a/webgl_thread.rs
 +++ b/webgl_thread.rs
-@@ -324,8 +324,14 @@
+@@ -324,8 +324,19 @@
                  break;
              }
          }
@@ -12,14 +12,19 @@ diff --git a/webgl_thread.rs b/webgl_thread.rs
 +        self.mercury_drop_contexts_after_failed_receive();
      }
 
-+    /// Drops the WebGL contexts left after the receive loop ends on a failed receive. Stub: does
-+    /// nothing yet.
-+    fn mercury_drop_contexts_after_failed_receive(&mut self) {}
++    /// Drops the WebGL contexts left after the receive loop ends on a failed receive. Each one is
++    /// removed as `WebGLMsg::Exit` removes them, so its WebRender image keys are deleted.
++    fn mercury_drop_contexts_after_failed_receive(&mut self) {
++        let context_ids: Vec<WebGLContextId> = self.contexts.keys().copied().collect();
++        for id in context_ids {
++            self.remove_webgl_context(id);
++        }
++    }
 +
      /// Enable GL_POINT_SPRITE and GL_PROGRAM_POINT_SIZE on desktop OpenGL.
      ///
      /// FIXME(nox): Should probably be done by surfman.
-@@ -1870,7 +1876,18 @@
+@@ -1870,7 +1881,18 @@
                      internal_format.as_gl_constant(),
                      width as i32,
                      height as i32,
@@ -39,7 +44,7 @@ diff --git a/webgl_thread.rs b/webgl_thread.rs
              },
              WebGLCommand::TexStorage3D(target, levels, internal_format, width, height, depth) => unsafe {
                  gl.tex_storage_3d(
-@@ -1880,7 +1897,17 @@
+@@ -1880,7 +1902,17 @@
                      width as i32,
                      height as i32,
                      depth as i32,
@@ -58,7 +63,7 @@ diff --git a/webgl_thread.rs b/webgl_thread.rs
              },
              WebGLCommand::DrawingBufferWidth(ref sender) => {
                  let size = device
-@@ -2612,6 +2639,136 @@
+@@ -2612,6 +2644,136 @@
          }
      }
 
@@ -195,7 +200,7 @@ diff --git a/webgl_thread.rs b/webgl_thread.rs
      fn initialize_framebuffer(gl: &Gl, state: &GLState, color: bool, depth: bool, stencil: bool) {
          let bits = [
              (color, gl::COLOR_BUFFER_BIT),
-@@ -3448,3 +3605,253 @@
+@@ -3448,3 +3610,253 @@
          };
      }
  }

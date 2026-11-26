@@ -67,3 +67,10 @@ or Servo gives capture its own preference.
    `weakReferenceable` for `MediaSource` (the backend's event callback holds a weak reference). The Rust side is
    `third_party/servo-script/dom/mse/`; see `third_party/servo-script/MERCURY.md`. Drop when a Servo release has
    its own MSE (servo/servo#44403).
+
+### Page lane: wake lock release (H22)
+
+7. **`webidls/WakeLock.webidl`:** `WakeLockSentinel` enables `Promise<undefined> release()` and `attribute EventHandler
+   onrelease`, which the scaffold kept commented out. `codegen/Bindings.conf` gives `WakeLockSentinel` a `realm` entry
+   for `Release`, so the method gets a `CurrentRealm` as `WakeLock.Request` does. The Rust side is `third_party/servo-script/dom/wakelock/wakelocksentinel.rs`;
+   see `third_party/servo-script/MERCURY.md`. Drop when the upstream WebIDL enables them.
