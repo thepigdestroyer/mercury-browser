@@ -6,6 +6,10 @@
 #
 #   scripts/dev/mse-window-run.sh pages|players|wpt|all [--resume] [--timeout SECONDS] [--only TEXT] [--list]
 #                                 [--browser PATH] [--no-lock-check] ...
+#   scripts/dev/mse-window-run.sh verdict [--gates-green] [--review-ok] [--allow-engine-gap NAME] ...
+
+# `verdict` decides the MSE flip from the journal (F1-F5; F6-F7 need the flags), writes flip-verdict-<UTC>.md
+# and exits 0 GO, 1 NO-GO or 3 INCOMPLETE. It runs no browser and needs no tools.
 #
 # Everything after the phase goes to `mse-run` (crates/mercury-devtools; see `mse-run --help`), which
 # refuses to start when the screen is locked, starts the test server, runs each page or test in its own
@@ -29,7 +33,7 @@ case "${1:-}" in
         sed -n '/^# The window run/,/^# Exit status/p' "$0" | sed 's/^# \{0,1\}//'
         exit 0
         ;;
-    pages | players | wpt | all | "") ;;
+    pages | players | wpt | all | verdict | "") ;;
     *) ;;
 esac
 
