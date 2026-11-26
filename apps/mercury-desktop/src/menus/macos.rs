@@ -36,8 +36,8 @@ use slint::winit_030::winit::platform::scancode::PhysicalKeyExtScancode;
 use slint::winit_030::winit::raw_window_handle::{HasWindowHandle, RawWindowHandle};
 
 use super::model::{
-    self, KeyDecision, KeyEquivalent, KeyWindow, MatchedItem, MenuCommand, MenuItem, Modifiers,
-    StandardAction, SystemAction, key_from_appkit_characters,
+    self, KeyDecision, KeyEquivalent, KeyWindow, MatchedItem, MenuCommand, MenuItem, MenuSnapshot,
+    Modifiers, StandardAction, SystemAction, key_from_appkit_characters,
 };
 use super::seams::BookmarkId;
 use crate::shortcuts::ShortcutAction;
@@ -137,6 +137,8 @@ define_class!(
                 })
             });
             let snapshot = super::snapshot();
+            // layout-switch: "Shrink Dock" reads "Show Dock" while the dock is shrunk
+            retitle_items(menu, &snapshot);
             if is_window_menu {
                 let items = snapshot.tab_titles.iter().enumerate().map(|(index, title)| {
                     let title = if title.is_empty() { "New Tab" } else { title.as_str() };
@@ -341,6 +343,39 @@ fn command_for_tag(tag: isize) -> Option<MenuCommand> {
     }
     let index = usize::try_from(tag).ok()?;
     COMMANDS.with(|commands| commands.borrow().get(index).copied())
+}
+
+/// The command of a table item (not a tab or a bookmark entry) from its tag.
+fn table_command_for_tag(tag: isize) -> Option<MenuCommand> {
+    if dynamic_index(tag, FIRST_TAB_TAG).is_some()
+        || dynamic_index(tag, FIRST_BOOKMARK_TAG).is_some()
+    {
+        return None;
+    }
+    command_for_tag(tag)
+}
+
+/// The title a table item should get when its current one is `current`, if it must change
+/// (layout-switch: View ▸ "Shrink Dock" and "Show Dock").
+fn retitle(current: &str, command: MenuCommand, snapshot: &MenuSnapshot) -> Option<&'static str> {
+    let wanted = model::dynamic_title(command, snapshot)?;
+    (wanted != current).then_some(wanted)
+}
+
+/// Gives the items of `menu` whose title follows the browser's state their current title. Called
+/// whenever AppKit is about to show the menu or look in it for a key equivalent.
+fn retitle_items(menu: &NSMenu, snapshot: &MenuSnapshot) {
+    for index in 0..menu.numberOfItems() {
+        let Some(item) = menu.itemAtIndex(index) else {
+            continue;
+        };
+        let Some(command) = table_command_for_tag(item.tag()) else {
+            continue;
+        };
+        if let Some(title) = retitle(&item.title().to_string(), command, snapshot) {
+            item.setTitle(&NSString::from_str(title));
+        }
+    }
 }
 
 /// The index of a dynamic item (tab or bookmark) from its tag.
@@ -679,5 +714,50 @@ mod tests {
             .map(|menu| menu.items.len())
             .sum::<usize>();
         assert!(isize::try_from(item_count).unwrap() < FIRST_TAB_TAG);
+    }
+
+    // layout-switch: the native menu is built once; each time it opens, `retitle_items` asks
+    // `retitle` what an item's title should be now, and applies it if it differs.
+    #[test]
+    fn menu_rebuild_applies_the_changed_title() {
+        let dock = MenuCommand::Shortcut(ShortcutAction::ToggleDock);
+        let open = MenuSnapshot {
+            dock_available: true,
+            ..MenuSnapshot::default()
+        };
+        let shrunk = MenuSnapshot {
+            dock_shrunk: true,
+            ..open.clone()
+        };
+
+        // The item the table builds is titled for an open dock; shrinking the dock changes it...
+        assert_eq!(retitle("Shrink Dock", dock, &shrunk), Some("Show Dock"));
+        // ...and it is left alone when it already says the right thing, so nothing is rewritten.
+        assert_eq!(retitle("Shrink Dock", dock, &open), None);
+        assert_eq!(retitle("Show Dock", dock, &shrunk), None);
+        // Opening the dock again turns it back.
+        assert_eq!(retitle("Show Dock", dock, &open), Some("Shrink Dock"));
+
+        // The table item the native menu builds is the one that gets retitled, and no other
+        // item is touched, whatever the snapshot says.
+        let titles = model::menu_bar()
+            .into_iter()
+            .flat_map(|menu| menu.items)
+            .filter_map(|item| match item {
+                MenuItem::Action { title, command, .. } => Some((title, command)),
+                _ => None,
+            })
+            .collect::<Vec<_>>();
+        assert!(titles.contains(&("Shrink Dock", dock)));
+        for (title, command) in titles {
+            let expected = (command == dock).then_some("Show Dock");
+            assert_eq!(retitle(title, command, &shrunk), expected, "{title}");
+        }
+    }
+
+    #[test]
+    fn tab_and_bookmark_items_are_never_table_commands() {
+        assert_eq!(table_command_for_tag(FIRST_TAB_TAG + 1), None);
+        assert_eq!(table_command_for_tag(FIRST_BOOKMARK_TAG), None);
     }
 }

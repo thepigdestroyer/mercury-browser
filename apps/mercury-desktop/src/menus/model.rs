@@ -514,6 +514,16 @@ pub(crate) fn menu_bar() -> Vec<Menu> {
                     SiteImages { block: false },
                 ),
                 Separator,
+                // layout-switch: the tab ring, the dock ("Show Dock" while it is shrunk, see
+                // `dynamic_title`) and the corner dial
+                action("Show Tab Ring", None, Shortcut(A::ShowTabRing)),
+                action(
+                    SHRINK_DOCK_TITLE,
+                    key('b', CONTROL_CMD),
+                    Shortcut(A::ToggleDock),
+                ),
+                action("Show Tab Dial", key('e', SHIFT_CMD), Shortcut(A::ToggleDial)),
+                Separator,
                 // AppKit retitles it "Exit Full Screen" while the window is full screen.
                 action(
                     "Enter Full Screen",
@@ -675,6 +685,45 @@ pub(crate) struct MenuSnapshot {
     pub(crate) can_set_site_images: bool,
     /// Images are off for the active tab's site (`site_images::active_site_blocks_images`).
     pub(crate) active_site_blocks_images: bool,
+    // layout-switch (`layout_switch::menu_state`)
+    /// The hub button is on screen: View ▸ "Show Tab Ring" has a ring to open.
+    pub(crate) ring_available: bool,
+    /// The dock is on screen: View ▸ "Shrink Dock" has a band to change.
+    pub(crate) dock_available: bool,
+    /// The dock is shrunk: the item reads "Show Dock".
+    pub(crate) dock_shrunk: bool,
+    /// The corner dial is on in this window: View ▸ "Show Tab Dial" has a dial to open.
+    pub(crate) dial_enabled: bool,
+}
+
+impl MenuSnapshot {
+    /// This snapshot with what the window's layout offers (`layout_switch::menu_state`).
+    pub(crate) fn with_layout(self, layout: crate::layout_switch::LayoutMenuState) -> Self {
+        Self {
+            ring_available: layout.ring_available,
+            dock_available: layout.dock_available,
+            dock_shrunk: layout.dock_shrunk,
+            dial_enabled: layout.dial_enabled,
+            ..self
+        }
+    }
+}
+
+/// View ▸ the dock item's title while the dock is open, and while it is shrunk.
+pub(crate) const SHRINK_DOCK_TITLE: &str = "Shrink Dock";
+pub(crate) const SHOW_DOCK_TITLE: &str = "Show Dock";
+
+/// The title a command's item has right now, for the items whose title follows the browser's
+/// state (the table holds the title they start with); `None` for the others.
+pub(crate) fn dynamic_title(command: MenuCommand, snapshot: &MenuSnapshot) -> Option<&'static str> {
+    match command {
+        MenuCommand::Shortcut(ShortcutAction::ToggleDock) => Some(if snapshot.dock_shrunk {
+            SHOW_DOCK_TITLE
+        } else {
+            SHRINK_DOCK_TITLE
+        }),
+        _ => None,
+    }
 }
 
 pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: EditTarget) -> bool {
@@ -699,6 +748,10 @@ pub(crate) fn is_enabled(command: MenuCommand, snapshot: &MenuSnapshot, edit: Ed
         Shortcut(ShortcutAction::RestorePreviousSession) => snapshot.can_restore_previous_session,
         // sh-pages: the source of a web page; images on or off for its site, one row at a time
         Shortcut(ShortcutAction::ViewSource) => snapshot.can_view_source,
+        // layout-switch: disabled, not hidden, while the window has nothing for them to act on
+        Shortcut(ShortcutAction::ShowTabRing) => snapshot.ring_available,
+        Shortcut(ShortcutAction::ToggleDock) => snapshot.dock_available,
+        Shortcut(ShortcutAction::ToggleDial) => snapshot.dial_enabled,
         SiteImages { block: true } => {
             snapshot.can_set_site_images && !snapshot.active_site_blocks_images
         }
@@ -1632,5 +1685,224 @@ mod tests {
             ..web
         };
         assert_eq!(enabled(&blocked), (false, true));
+    }
+
+    // layout-switch
+    const RING: MenuCommand = MenuCommand::Shortcut(ShortcutAction::ShowTabRing);
+    const DOCK: MenuCommand = MenuCommand::Shortcut(ShortcutAction::ToggleDock);
+    const DIAL: MenuCommand = MenuCommand::Shortcut(ShortcutAction::ToggleDial);
+
+    mod menu_table {
+        use super::*;
+
+        fn view_items() -> Vec<MenuItem> {
+            menu_bar()
+                .into_iter()
+                .find(|menu| menu.title == "View")
+                .expect("a View menu")
+                .items
+        }
+
+        #[test]
+        fn view_menu_has_the_tab_group_items_in_order() {
+            let items = view_items();
+            let position = |wanted: MenuItem| {
+                items
+                    .iter()
+                    .position(|item| *item == wanted)
+                    .expect("the View menu has the item")
+            };
+            let titled = |wanted: &str| {
+                items
+                    .iter()
+                    .position(|item| matches!(item, MenuItem::Action { title, .. } if *title == wanted))
+                    .expect("the View menu has the title")
+            };
+
+            let ring = MenuItem::Action {
+                title: "Show Tab Ring",
+                key: None,
+                command: RING,
+            };
+            let dock = MenuItem::Action {
+                title: "Shrink Dock",
+                key: Some(KeyEquivalent::new('b', CONTROL_CMD)),
+                command: DOCK,
+            };
+            let dial = MenuItem::Action {
+                title: "Show Tab Dial",
+                key: Some(KeyEquivalent::new('e', SHIFT_CMD)),
+                command: DIAL,
+            };
+
+            // One section, in this order, after the zoom items and before Enter Full Screen,
+            // set off from both sides by a separator.
+            let first = position(ring);
+            assert_eq!(position(dock), first + 1);
+            assert_eq!(position(dial), first + 2);
+            assert!(titled("Zoom Out") < first, "after the zoom items");
+            assert_eq!(items[first - 1], MenuItem::Separator);
+            assert_eq!(items[first + 3], MenuItem::Separator);
+            assert_eq!(first + 4, titled("Enter Full Screen"));
+        }
+
+        #[test]
+        fn the_new_keys_show_as_apple_writes_them_and_belong_to_the_window() {
+            for (title, shown, key) in [
+                ("Shrink Dock", "⌃⌘B", Key::Character("b".into())),
+                ("Show Tab Dial", "⇧⌘E", Key::Character("e".into())),
+            ] {
+                let (equivalent, command) = view_menu_actions()
+                    .into_iter()
+                    .find_map(|(item_title, key, command)| {
+                        (item_title == title).then_some((key, command))
+                    })
+                    .expect("the View menu has the item");
+                let equivalent = equivalent.expect("the item shows a key");
+                assert_eq!(equivalent.mac_label(), shown, "{title}");
+                // The window's key path runs it (`shortcuts.rs`); the menu shows it and declines.
+                assert_eq!(equivalent.owner(), KeyOwner::Window, "{title}");
+                assert_eq!(
+                    item_for_key(&key, equivalent.modifiers, 1),
+                    Some(command),
+                    "{title}"
+                );
+            }
+            // The ring has no key.
+            assert_eq!(shortcut_label(RING, Platform::MacOs), "");
+            assert_eq!(shortcut_label(RING, Platform::Other), "");
+            assert_eq!(shortcut_label(DOCK, Platform::MacOs), "⌃⌘B");
+            assert_eq!(shortcut_label(DIAL, Platform::MacOs), "⇧⌘E");
+        }
+    }
+
+    mod enabled {
+        use super::*;
+
+        fn states(snapshot: &MenuSnapshot) -> (bool, bool, bool) {
+            (
+                is_enabled(RING, snapshot, EditTarget::None),
+                is_enabled(DOCK, snapshot, EditTarget::None),
+                is_enabled(DIAL, snapshot, EditTarget::None),
+            )
+        }
+
+        #[test]
+        fn dock_item_follows_availability() {
+            let nothing = MenuSnapshot::default();
+            assert!(is_available(RING) && is_available(DOCK) && is_available(DIAL));
+            // A window that offers none of them: all three are disabled (shown, not hidden).
+            assert_eq!(states(&nothing), (false, false, false));
+
+            let dock_only = MenuSnapshot {
+                dock_available: true,
+                ..MenuSnapshot::default()
+            };
+            assert_eq!(states(&dock_only), (false, true, false));
+            // Shrunk or not, the dock item stays enabled while the dock is there...
+            let shrunk = MenuSnapshot {
+                dock_shrunk: true,
+                ..dock_only.clone()
+            };
+            assert_eq!(states(&shrunk), (false, true, false));
+            // ...and a shrunk state without a dock does not enable it.
+            let stale = MenuSnapshot {
+                dock_shrunk: true,
+                ..MenuSnapshot::default()
+            };
+            assert_eq!(states(&stale), (false, false, false));
+        }
+
+        #[test]
+        fn the_ring_and_the_dial_items_follow_their_own_availability() {
+            let ring = MenuSnapshot {
+                ring_available: true,
+                ..MenuSnapshot::default()
+            };
+            assert_eq!(states(&ring), (true, false, false));
+            let dial = MenuSnapshot {
+                dial_enabled: true,
+                ..MenuSnapshot::default()
+            };
+            assert_eq!(states(&dial), (false, false, true));
+            let all = MenuSnapshot {
+                ring_available: true,
+                dock_available: true,
+                dial_enabled: true,
+                ..MenuSnapshot::default()
+            };
+            assert_eq!(states(&all), (true, true, true));
+            // Nothing else in the snapshot, nor the edit target, switches them on.
+            let unrelated = MenuSnapshot {
+                can_go_back: true,
+                can_view_source: true,
+                tab_titles: vec!["A".to_owned(), "B".to_owned()],
+                ..MenuSnapshot::default()
+            };
+            assert_eq!(states(&unrelated), (false, false, false));
+            assert!(!is_enabled(
+                DOCK,
+                &MenuSnapshot::default(),
+                EditTarget::AddressBar
+            ));
+        }
+
+        #[test]
+        fn the_layout_state_fills_the_four_fields_and_nothing_else() {
+            use crate::layout_switch::LayoutMenuState;
+            let before = MenuSnapshot {
+                tab_titles: vec!["A".to_owned()],
+                can_go_back: true,
+                ..MenuSnapshot::default()
+            };
+            let layout = LayoutMenuState {
+                ring_available: true,
+                dock_available: true,
+                dock_shrunk: true,
+                dial_enabled: false,
+            };
+            let after = before.clone().with_layout(layout);
+            assert_eq!(
+                after,
+                MenuSnapshot {
+                    ring_available: true,
+                    dock_available: true,
+                    dock_shrunk: true,
+                    dial_enabled: false,
+                    ..before.clone()
+                }
+            );
+            // A later state replaces the earlier one in full.
+            assert_eq!(after.with_layout(LayoutMenuState::default()), before);
+        }
+    }
+
+    mod title {
+        use super::*;
+
+        #[test]
+        fn shrink_dock_becomes_show_dock_when_shrunk() {
+            let open = MenuSnapshot {
+                dock_available: true,
+                ..MenuSnapshot::default()
+            };
+            let shrunk = MenuSnapshot {
+                dock_shrunk: true,
+                ..open.clone()
+            };
+            assert_eq!(dynamic_title(DOCK, &open), Some("Shrink Dock"));
+            assert_eq!(dynamic_title(DOCK, &shrunk), Some("Show Dock"));
+
+            // The table starts the item with the open dock's title.
+            let table_title = view_menu_actions()
+                .into_iter()
+                .find_map(|(title, _, command)| (command == DOCK).then_some(title));
+            assert_eq!(table_title, dynamic_title(DOCK, &MenuSnapshot::default()));
+
+            // Only that item is retitled; the ring and the dial keep their own titles.
+            for command in [RING, DIAL, MenuCommand::Shortcut(ShortcutAction::NewTab)] {
+                assert_eq!(dynamic_title(command, &shrunk), None, "{command:?}");
+            }
+        }
     }
 }

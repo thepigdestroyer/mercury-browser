@@ -92,6 +92,14 @@ pub(crate) enum ShortcutAction {
     /// Cmd+Option+U on macOS, Ctrl+U elsewhere: the page's source in a new tab
     /// (`view_source::shortcut`).
     ViewSource,
+    // layout-switch
+    /// View ▸ "Show Tab Ring": opens the hub's ring popover. No key.
+    ShowTabRing,
+    /// Ctrl+Cmd+B on macOS, Ctrl+Alt+B elsewhere: shrinks the dock to its small band, or opens it
+    /// again.
+    ToggleDock,
+    /// Cmd+Shift+E on macOS, Ctrl+Shift+E elsewhere: opens or closes the corner dial's fan.
+    ToggleDial,
 }
 
 impl ShortcutAction {
@@ -203,15 +211,19 @@ pub(crate) fn shortcut_action(
         Platform::MacOs => (command, control),
         Platform::Other => (control, command),
     };
-    if secondary {
-        return None;
-    }
-
     let character = match key {
         Key::Character(character) => Some(character.to_lowercase()),
         _ => None,
     };
     let character = character.as_deref();
+
+    // layout-switch: the dock's chord has the platform's other modifier in it, so it comes first
+    if let Some(action) = dock_shortcut(character, modifiers, platform) {
+        return Some(action);
+    }
+    if secondary {
+        return None;
+    }
 
     // bookmarks lane
     if let Some(action) = bookmark_shortcut(character, primary, shift, alt, platform) {
@@ -247,6 +259,8 @@ pub(crate) fn shortcut_action(
             (Some("f"), false) => Some(Find),
             (Some("g"), false) => Some(FindNext),
             (Some("g"), true) => Some(FindPrevious),
+            // layout-switch
+            (Some("e"), true) => Some(ToggleDial),
             (Some(digit), false) => match digit.parse::<usize>() {
                 Ok(number @ 1..=8) => Some(SelectTab(number - 1)),
                 _ => None,
@@ -298,6 +312,29 @@ pub(crate) fn shortcut_action(
         (Key::Named(NamedKey::F5), _, false) => Some(Reload),
         _ => None,
     }
+}
+
+/// layout-switch: Ctrl+Cmd+B on macOS, Ctrl+Alt+B elsewhere, with no other modifier. It is the
+/// one chord of the table that holds both Ctrl and Cmd on macOS, and it holds Ctrl and Alt
+/// elsewhere (which some layouts use as AltGr: see the user guide), so it is matched on the
+/// whole set of modifiers rather than through "primary".
+fn dock_shortcut(
+    character: Option<&str>,
+    modifiers: ModifiersState,
+    platform: Platform,
+) -> Option<ShortcutAction> {
+    if character != Some("b") || modifiers.shift_key() {
+        return None;
+    }
+    let chord = match platform {
+        Platform::MacOs => {
+            modifiers.super_key() && modifiers.control_key() && !modifiers.alt_key()
+        }
+        Platform::Other => {
+            modifiers.control_key() && modifiers.alt_key() && !modifiers.super_key()
+        }
+    };
+    chord.then_some(ShortcutAction::ToggleDock)
 }
 
 /// The bookmarks lane's shortcuts.
@@ -504,6 +541,10 @@ pub(crate) fn run_shortcut(
         ShortcutAction::ViewSource => {
             crate::view_source::open_source_of_active_tab(window, controller)
         }
+        // layout-switch
+        ShortcutAction::ShowTabRing => crate::layout_switch::show_tab_ring(window, controller),
+        ShortcutAction::ToggleDock => crate::layout_switch::toggle_dock(window, controller),
+        ShortcutAction::ToggleDial => crate::layout_switch::toggle_dial(window, controller),
     }
 }
 
@@ -796,6 +837,9 @@ mod tests {
             (FindNext, true),
             (FindPrevious, true),
             (ViewSource, false), // sh-pages
+            (ShowTabRing, false), // layout-switch
+            (ToggleDock, false),  // layout-switch
+            (ToggleDial, false),  // layout-switch
         ];
         for (action, repeats) in expectations {
             // Exhaustive, so a new variant cannot be added without deciding here.
@@ -834,6 +878,7 @@ mod tests {
                 | FindPrevious => {}
                 SavePage | ShowDownloads => {} // downloads-ui lane
                 ViewSource => {}               // sh-pages
+                ShowTabRing | ToggleDock | ToggleDial => {} // layout-switch
             }
             assert_eq!(action.repeats(), repeats, "{action:?}");
         }
@@ -1041,9 +1086,80 @@ mod tests {
             other(character("O"), CTRL | SHIFT),
             Some(ShowBookmarksManager)
         );
-        assert_eq!(other(character("b"), CTRL | ALT), None);
+        // Ctrl+Alt+B is the dock's (layout-switch), not the bookmarks manager's.
+        assert_eq!(other(character("b"), CTRL | ALT), Some(ToggleDock));
         // Alt+D still focuses the address bar.
         assert_eq!(other(character("d"), ALT), Some(FocusAddressBar));
+    }
+
+    // layout-switch
+    #[test]
+    fn new_chords_on_both_platforms() {
+        // macOS: Ctrl+Cmd+B shrinks or opens the dock (winit reports the letter as "b"; the
+        // shifted letter is accepted for Caps Lock), Cmd+Shift+E toggles the dial.
+        assert_eq!(mac(character("b"), CTRL | CMD), Some(ToggleDock));
+        assert_eq!(mac(character("B"), CTRL | CMD), Some(ToggleDock));
+        assert_eq!(mac(character("e"), CMD | SHIFT), Some(ToggleDial));
+        assert_eq!(mac(character("E"), CMD | SHIFT), Some(ToggleDial));
+        // Elsewhere: Ctrl+Alt+B and Ctrl+Shift+E.
+        assert_eq!(other(character("b"), CTRL | ALT), Some(ToggleDock));
+        assert_eq!(other(character("B"), CTRL | ALT), Some(ToggleDock));
+        assert_eq!(other(character("e"), CTRL | SHIFT), Some(ToggleDial));
+        assert_eq!(other(character("E"), CTRL | SHIFT), Some(ToggleDial));
+
+        // Another platform's chord, or an extra or missing modifier, is not one of these.
+        assert_eq!(mac(character("b"), CTRL | ALT), None);
+        assert_eq!(mac(character("b"), CTRL), None);
+        assert_eq!(mac(character("b"), CTRL | CMD | SHIFT), None);
+        assert_eq!(mac(character("b"), CTRL | CMD | ALT), None);
+        assert_eq!(mac(character("e"), CTRL | SHIFT), None);
+        assert_eq!(mac(character("e"), CMD), None);
+        assert_eq!(mac(character("e"), CMD | SHIFT | ALT), None);
+        assert_eq!(other(character("b"), CTRL | CMD), None);
+        assert_eq!(other(character("b"), CTRL | ALT | SHIFT), None);
+        assert_eq!(other(character("b"), CTRL | ALT | CMD), None);
+        assert_eq!(other(character("b"), ALT), None);
+        assert_eq!(other(character("e"), CMD | SHIFT), None);
+        assert_eq!(other(character("e"), CTRL), None);
+        assert_eq!(other(character("e"), CTRL | SHIFT | ALT), None);
+
+        // Neither key runs more than once per press, and the ring has no key at all.
+        assert!(!ToggleDock.repeats() && !ToggleDial.repeats() && !ShowTabRing.repeats());
+        for platform in [Platform::MacOs, Platform::Other] {
+            for (token, modifiers) in
+                (0..16_u32).flat_map(|bits| ["b", "e"].map(|token| (token, bits)))
+            {
+                let flags = [CTRL, ALT, SHIFT, CMD]
+                    .into_iter()
+                    .enumerate()
+                    .filter(|(bit, _)| (modifiers >> *bit) & 1 == 1)
+                    .fold(NONE, |all, (_, flag)| all | flag);
+                assert_ne!(
+                    shortcut_action(&character(token), flags, platform),
+                    Some(ShowTabRing),
+                    "{platform:?} {token} {flags:?}"
+                );
+            }
+        }
+    }
+
+    // layout-switch: the keys other lanes chose next to the new ones
+    #[test]
+    fn no_clash_with_the_existing_table() {
+        assert_eq!(other(character("e"), ALT), Some(ShowBrowserMenu));
+        assert_eq!(other(character("f"), ALT), Some(ShowBrowserMenu));
+        assert_eq!(mac(character("b"), CMD | SHIFT), Some(ToggleBookmarksBar));
+        assert_eq!(mac(character("b"), CMD | ALT), Some(ShowBookmarksManager));
+        assert_eq!(mac(character("a"), CMD | SHIFT), Some(SearchTabs));
+        assert_eq!(mac(character("m"), CMD | SHIFT), Some(ToggleMute));
+        assert_eq!(other(character("b"), CTRL | SHIFT), Some(ToggleBookmarksBar));
+        assert_eq!(other(character("o"), CTRL | SHIFT), Some(ShowBookmarksManager));
+        assert_eq!(other(character("a"), CTRL | SHIFT), Some(SearchTabs));
+        assert_eq!(other(character("m"), CTRL), Some(ToggleMute));
+        // Cmd+E and Ctrl+E (Use Selection for Find, in a text field) stay with the page.
+        assert_eq!(mac(character("e"), CMD), None);
+        assert_eq!(mac(character("e"), CTRL), None);
+        assert_eq!(other(character("e"), CTRL), None);
     }
 
     #[test]
@@ -1328,6 +1444,10 @@ mod tests {
             ),
             // sh-pages: Cmd+U alone stays the page's (underline); Ctrl+Alt is AltGr elsewhere
             row("ViewSource", &["cmd+alt+u"], &["ctrl+u"]),
+            // layout-switch: the tab ring has no key; Ctrl+Cmd+B is a Control chord on macOS (the
+            // table's one), Ctrl+Alt+B elsewhere; Cmd+Shift+E and Ctrl+Shift+E open the dial
+            row("ToggleDock", &["ctrl+cmd+b"], &["ctrl+alt+b"]),
+            row("ToggleDial", &["cmd+shift+e"], &["ctrl+shift+e"]),
         ];
         for number in 1..=8_usize {
             table.push(row(

@@ -131,7 +131,10 @@ pub(crate) fn sync(controller: &BrowserController) {
         can_view_source: crate::view_source::can_view_source(controller),
         can_set_site_images: crate::site_images::can_set_site_images(controller),
         active_site_blocks_images: crate::site_images::active_site_blocks_images(controller),
-    };
+        ..MenuSnapshot::default()
+    }
+    // layout-switch: the tab ring, the dock and the dial
+    .with_layout(crate::layout_switch::menu_state());
     STATE.with(|menu_state| {
         if *menu_state.snapshot.borrow() != snapshot {
             menu_state.snapshot.replace(snapshot);
@@ -347,7 +350,11 @@ fn browser_window_focused() -> bool {
 }
 
 fn snapshot() -> MenuSnapshot {
-    STATE.with(|state| state.snapshot.borrow().clone())
+    // layout-switch: the dock can change between two syncs (a key press, the settle timer), and
+    // the menu must show what is true when it opens.
+    STATE
+        .with(|state| state.snapshot.borrow().clone())
+        .with_layout(crate::layout_switch::menu_state())
 }
 
 #[cfg(test)]

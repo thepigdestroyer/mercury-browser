@@ -28,6 +28,8 @@ description: Keyboard shortcuts, the macOS menu bar, the browser menu, the right
 | ++cmd+s++ | Save the page |
 | ++alt+cmd+u++ | View the page's source in a new tab (++ctrl+u++ on Linux) |
 | ++shift+cmd+j++ | Downloads |
+| ++ctrl+cmd+b++ | Shrink the group dock to its small band, or open it again |
+| ++shift+cmd+e++ | Show or hide the tab dial |
 | ++ctrl+cmd+f++ | Enter or leave full screen |
 | ++escape++ | Leave a page's full screen |
 | ++cmd+comma++ | Settings |
@@ -42,7 +44,9 @@ have. On Linux it is ++ctrl+m++, as in Firefox and Edge.
 
 ++cmd+left++ and ++cmd+right++ go back and forward only when no text field has the keyboard; in a text field they move to the start or end of the line as usual. The editing keys (++cmd+z++, ++shift+cmd+z++, ++cmd+x++, ++cmd+c++, ++cmd+v++, ++cmd+a++) work in the address bar and in the page. Holding a zoom or tab-switching shortcut, ++cmd+g++ or ++shift+cmd+g++ repeats it; other shortcuts run once per press.
 
-On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go back and forward, ++f5++ reloads, ++f3++ and ++shift+f3++ go to the next and previous match (as do ++ctrl+g++ and ++ctrl+shift+g++), ++alt+d++ goes to the address bar, ++ctrl+page-down++ and ++ctrl+page-up++ switch tabs, ++ctrl+h++ opens the history, ++ctrl+shift+delete++ clears browsing data, ++ctrl+shift+o++ opens the bookmarks manager, and Close Other Tabs has no key.
+On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go back and forward, ++f5++ reloads, ++f3++ and ++shift+f3++ go to the next and previous match (as do ++ctrl+g++ and ++ctrl+shift+g++), ++alt+d++ goes to the address bar, ++ctrl+page-down++ and ++ctrl+page-up++ switch tabs, ++ctrl+h++ opens the history, ++ctrl+shift+delete++ clears browsing data, ++ctrl+shift+o++ opens the bookmarks manager, ++ctrl+alt+b++ shrinks or opens the group dock, ++ctrl+shift+e++ shows or hides the tab dial, and Close Other Tabs has no key. On keyboard layouts that use ++ctrl+alt++ as AltGr, ++ctrl+alt+b++ may type a character instead; use **View → Shrink Dock** there.
+
+**View → Show Tab Ring** has no key; it opens the ring of tab groups from the hub button, the same as clicking it.
 
 ## The menu bar
 
@@ -51,7 +55,7 @@ On Linux, ++ctrl++ takes the place of ++cmd++, ++alt+left++ and ++alt+right++ go
 | Mercury Browser | About Mercury Browser, Settings…, Services, Hide, Hide Others, Show All, Quit |
 | File | New Tab, Duplicate Tab, Open Location…, Close Tab, Close Other Tabs, Reopen Closed Tab, Import… |
 | Edit | Undo, Redo, Cut, Copy, Paste, Select All, Find…, Find Next, Find Previous |
-| View | Reload Page, Stop, Actual Size, Zoom In, Zoom Out, View Source, Block Images on This Site, Show Images on This Site, Enter Full Screen |
+| View | Reload Page, Stop, Actual Size, Zoom In, Zoom Out, View Source, Block Images on This Site, Show Images on This Site, Show Tab Ring, Shrink Dock (Show Dock while the dock is shrunk), Show Tab Dial, Enter Full Screen |
 | History | Back, Forward, Show All History, Clear Browsing Data…, Restore Previous Session |
 | Bookmarks | Bookmark This Page…, Show Bookmarks Bar, Bookmarks Manager, then one item per bookmark or folder on the bookmarks bar |
 | Window | Minimize, Zoom, Show Next Tab, Show Previous Tab, Search Tabs…, Move Tab Left, Move Tab Right, Pin Tab, Unpin Tab, then one item per open tab |
@@ -63,6 +67,7 @@ Some items are greyed out:
 - **Reopen Closed Tab** until you have closed a tab, and **Restore Previous Session** unless the last run's tabs are still waiting to be restored.
 - **Undo**, **Redo** and **Select All** while the page has the keyboard: Servo offers only cut, copy and paste to Mercury.
 - **View Source** unless the tab shows a web page (`http` or `https`) that has loaded: a new tab, a file, one of Mercury's own pages, an error page and the source page itself have no source to view.
+- **Show Tab Ring**, **Shrink Dock** (**Show Dock**) and **Show Tab Dial** unless the window has what they act on: the hub button, the group dock and the corner dial. They stay greyed out while the tab-group interface is not switched on, and in a window whose layout and settings leave that control off (for example, Classic has no dock unless you turn it on). Their keys do nothing then either.
 - **Block Images on This Site** and **Show Images on This Site**: exactly one of them is available at a time, and neither on a page that is not a web page. See [Images on one site](privacy-and-security.md#images-on-one-site).
 
 **About Mercury Browser** shows the version, the engine and media versions, the copyright and licence, and three links: **Licence**, **Third-party notices** (the page packaged with the app, which lists the licence text and copyright of every library built into it and works offline; a build run straight from the source tree has none and opens the notices on GitHub instead) and **Source code** (the repository at the tag of your version, where the source of the MPL-2.0 parts is; a build of a version that is not released yet has no tag, and GitHub says the page is not found).
