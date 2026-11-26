@@ -12728,34 +12728,96 @@ diff --git a/mercury_page/refused.rs b/mercury_page/refused.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury_page/refused.rs
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,84 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 +
 +// Mercury: the page lane's refused navigation. Stub until the lane's tasks fill it.
 +
++use embedder_traits::{EmbedderMsg, LoadStatus};
 +use js::context::JSContext;
++use log::warn;
 +use servo_base::id::PipelineId;
 +use servo_url::ServoUrl;
++
++use crate::event_loop::script_thread::ScriptThread;
 +
 +/// Whether `url` has a scheme that does not fetch: anything except `http`, `https`, `file`, `data`,
 +/// `blob`, `about`, `javascript`, `resource`, `urlinfo` and `servo`.
 +pub(crate) fn is_non_fetch_scheme(url: &ServoUrl) -> bool {
 +    !matches!(
 +        url.scheme(),
-+        "http" | "https" | "file" | "data" | "blob" | "about" | "javascript" | "resource" | "urlinfo" |
-+            "servo"
++        "http"
++            | "https"
++            | "file"
++            | "data"
++            | "blob"
++            | "about"
++            | "javascript"
++            | "resource"
++            | "urlinfo"
++            | "servo"
 +    )
 +}
 +
-+/// The navigation of `pipeline_id` was refused. Stub: does nothing.
-+pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId) {}
++/// The navigation of `pipeline_id` was refused: a top-level page goes back to `Stopped`, so it does
++/// not stay "loading" after a link to a scheme the browser does not fetch.
++pub(crate) fn handle(_cx: &mut JSContext, pipeline_id: PipelineId) {
++    let Some(window) = ScriptThread::find_window(pipeline_id) else {
++        warn!("page lane: refused navigation for a pipeline that is gone");
++        return;
++    };
++    if window.is_top_level() {
++        window.send_to_embedder(EmbedderMsg::NotifyLoadStatusChanged(
++            window.webview_id(),
++            LoadStatus::Stopped,
++        ));
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use servo_url::ServoUrl;
++
++    use super::is_non_fetch_scheme;
++
++    #[test]
++    fn non_fetch_schemes() {
++        for url in [
++            "mailto:someone@example.com",
++            "tel:+15555550100",
++            "x-app:open",
++        ] {
++            let url = ServoUrl::parse(url).unwrap();
++            assert!(is_non_fetch_scheme(&url), "{url} does not fetch");
++        }
++    }
++
++    #[test]
++    fn fetching_schemes() {
++        for url in [
++            "https://example.com/",
++            "http://example.com/",
++            "file:///tmp/page.html",
++            "data:text/html,hello",
++            "blob:https://example.com/5f0c",
++            "about:blank",
++            "javascript:void(0)",
++            "resource://servo/index.html",
++            "urlinfo:about",
++            "servo:devtools",
++        ] {
++            let url = ServoUrl::parse(url).unwrap();
++            assert!(!is_non_fetch_scheme(&url), "{url} fetches");
++        }
++    }
++}
 diff --git a/mercury_page/reload.rs b/mercury_page/reload.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury_page/reload.rs
-@@ -0,0 +1,22 @@
+@@ -0,0 +1,51 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -12765,18 +12827,47 @@ new file mode 100644
 +use std::cell::Cell;
 +
 +use js::context::JSContext;
++use log::warn;
 +use servo_base::id::PipelineId;
++
++use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
++use crate::event_loop::script_thread::ScriptThread;
 +
 +thread_local! {
 +    static BYPASS: Cell<bool> = const { Cell::new(false) };
 +}
 +
-+/// Reload the document of `pipeline_id`, bypassing the cache. Stub: does nothing.
-+pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId) {}
++/// Reload the document of `pipeline_id`, bypassing the cache. A pipeline that has gone is warned
++/// about and ignored.
++pub(crate) fn handle(cx: &mut JSContext, pipeline_id: PipelineId) {
++    let Some(window) = ScriptThread::find_window(pipeline_id) else {
++        warn!("page lane: reload for a pipeline that is gone");
++        return;
++    };
++    BYPASS.with(|bypass| bypass.set(true));
++    window.Location(cx).reload_without_origin_check(cx, &window);
++}
 +
 +/// Whether the next fetch must bypass the cache. Clears the flag; `false` in the stub.
 +pub(crate) fn take_bypass() -> bool {
 +    BYPASS.with(|bypass| bypass.replace(false))
++}
++
++#[cfg(test)]
++mod tests {
++    use super::{BYPASS, take_bypass};
++
++    #[test]
++    fn bypass_is_taken_once() {
++        BYPASS.with(|bypass| bypass.set(true));
++        assert!(take_bypass());
++        assert!(!take_bypass());
++    }
++
++    #[test]
++    fn bypass_is_off_by_default() {
++        assert!(!take_bypass());
++    }
 +}
 diff --git a/mercury_page/response.rs b/mercury_page/response.rs
 new file mode 100644
@@ -12820,41 +12911,72 @@ diff --git a/mercury_page/stop.rs b/mercury_page/stop.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury_page/stop.rs
-@@ -0,0 +1,11 @@
+@@ -0,0 +1,21 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 +
-+// Mercury: the page lane's stop. Stub: does nothing until the lane's tasks fill it.
++// Mercury: the page lane's stop. Stops loading the document of a pipeline, as `window.stop()` does.
 +
 +use js::context::JSContext;
++use log::warn;
 +use servo_base::id::PipelineId;
 +
-+/// Stop loading the document of `pipeline_id`. Stub: does nothing.
-+pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId) {}
++use crate::dom::bindings::codegen::Bindings::WindowBinding::WindowMethods;
++use crate::event_loop::script_thread::ScriptThread;
++
++/// Stop loading the document of `pipeline_id`. A pipeline that has gone is warned about and ignored.
++pub(crate) fn handle(cx: &mut JSContext, pipeline_id: PipelineId) {
++    let Some(window) = ScriptThread::find_window(pipeline_id) else {
++        warn!("page lane: stop for a pipeline that is gone");
++        return;
++    };
++    window.Stop(cx);
++}
 diff --git a/mercury_page/unload.rs b/mercury_page/unload.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury_page/unload.rs
-@@ -0,0 +1,18 @@
+@@ -0,0 +1,39 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 +
-+// Mercury: the page lane's unload question. Stub: never prompts until the lane's tasks fill it.
++// Mercury: the page lane's unload question. The `beforeunload` prompt needs sticky activation.
 +
 +use js::context::JSContext;
++use log::warn;
 +use servo_base::id::PipelineId;
++use servo_constellation_traits::{
++    MercuryScriptToConstellation, PageScriptMsg, ScriptToConstellationMessage,
++};
 +
 +use crate::dom::window::Window;
++use crate::event_loop::script_thread::ScriptThread;
 +
-+/// Whether the unload prompt applies to `window`. Stub: `true`, so the existing behaviour holds.
-+pub(crate) fn may_prompt(_window: &Window) -> bool {
-+    true
++/// Whether the unload prompt applies to `window`: only with sticky activation.
++pub(crate) fn may_prompt(window: &Window) -> bool {
++    window.has_sticky_activation()
 +}
 +
-+/// Answer the unload question `request_id` of `pipeline_id`. Stub: does nothing.
-+pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId, _request_id: u64) {}
++/// Answer the unload question `request_id` of `pipeline_id`. The answer is `UnloadChecked`, sent
++/// to the constellation, with `allowed` set from the `beforeunload` check. A pipeline that has
++/// gone is warned about and ignored: the constellation times the question out at 30 s.
++pub(crate) fn handle(cx: &mut JSContext, pipeline_id: PipelineId, request_id: u64) {
++    let Some(document) = ScriptThread::find_document(pipeline_id) else {
++        warn!("page lane: unload check {request_id} for a pipeline that is gone");
++        return;
++    };
++    let allowed = document.check_if_unloading_is_cancelled(cx, false);
++    document
++        .window()
++        .send_to_constellation(ScriptToConstellationMessage::Mercury(
++            MercuryScriptToConstellation::Page(PageScriptMsg::UnloadChecked {
++                request_id,
++                allowed,
++            }),
++        ));
++}
 diff --git a/messaging.rs b/messaging.rs
 --- a/messaging.rs
 +++ b/messaging.rs
