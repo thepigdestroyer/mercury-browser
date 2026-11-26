@@ -100,19 +100,22 @@ pub enum Choice {
     DialCorner,
     /// The memory for Orbit previews: an index into [`snapshot_cap_choices`].
     SnapshotCap,
+    /// The palette card: an index into `palettes::selectable()`; writes both schemes.
+    Palette,
 }
 
 impl Choice {
     /// Every choice, in the order the section draws them.
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Layout,
         Self::DockStarts,
         Self::DialCorner,
         Self::SnapshotCap,
+        Self::Palette,
     ];
 
     /// The choice the Slint side named, or `None`: "layout", "dock-starts", "dial-corner",
-    /// "snapshot-cap".
+    /// "snapshot-cap", "palette".
     pub fn from_name(name: &str) -> Option<Self> {
         Self::ALL.into_iter().find(|choice| choice.name() == name)
     }
@@ -124,6 +127,7 @@ impl Choice {
             Self::DockStarts => "dock-starts",
             Self::DialCorner => "dial-corner",
             Self::SnapshotCap => "snapshot-cap",
+            Self::Palette => "palette",
         }
     }
 }
@@ -229,6 +233,7 @@ pub fn set_choice(settings: &mut AppearanceSettings, choice: Choice, index: usiz
             };
             settings.tab_groups.snapshot_cap_mb = megabytes;
         }
+        Choice::Palette => return super::palette_panel::set_palette(settings, index),
     }
     true
 }

@@ -8,11 +8,13 @@
 //! `.superpowers/sdd/lane-settings-ui-brief.md`).
 //!
 //! - [`layout_panel`]: the layout cards and the tab-group switches of Appearance.
+//! - [`palette_panel`]: the palette picker: one card per selectable palette.
 //! - [`key_panel`]: the table of the window's groups with their one-letter keys, the conflict
 //!   and dead-key notes, and the capture mode.
 
 pub mod key_panel;
 pub mod layout_panel;
+pub mod palette_panel;
 
 /// The note of D4: the tab-group interface behind the Appearance and Tab groups controls is not
 /// in yet. Both sections show these words while `interface_live` is `false`, so they live here,

@@ -208,7 +208,7 @@ fn choice_names_round_trip_and_are_the_strings_the_slint_side_sends() {
     let names: Vec<&str> = Choice::ALL.iter().map(|choice| choice.name()).collect();
     assert_eq!(
         names,
-        ["layout", "dock-starts", "dial-corner", "snapshot-cap"]
+        ["layout", "dock-starts", "dial-corner", "snapshot-cap", "palette"]
     );
     for choice in Choice::ALL {
         assert_eq!(Choice::from_name(choice.name()), Some(choice));
@@ -424,6 +424,10 @@ fn an_index_outside_the_list_returns_false_and_changes_nothing() {
             (
                 Choice::SnapshotCap,
                 snapshot_cap_choices(start.tab_groups.snapshot_cap_mb).len(),
+            ),
+            (
+                Choice::Palette,
+                mercury_appearance::palettes::selectable().count(),
             ),
         ] {
             for index in [len, len + 1, 100, usize::MAX] {
