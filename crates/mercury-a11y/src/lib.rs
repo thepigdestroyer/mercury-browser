@@ -15,16 +15,24 @@
 
 pub mod actions;
 pub mod bridge;
+pub mod features;
+pub mod gate;
+pub mod geometry;
 pub mod golden;
 pub mod graft;
 pub mod host;
+pub mod layout_table;
+pub mod lists;
+pub mod live;
 pub mod names;
 pub mod relations;
 pub mod roles;
 pub mod semantics;
 pub mod snapshot;
 pub mod states;
+pub mod tables;
 pub mod testing;
+pub mod text;
 
 /// The id index `compute` takes, so that an adapter needs no direct dependency on `accname`.
 pub use accname::IdIndex;

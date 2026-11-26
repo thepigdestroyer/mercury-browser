@@ -18,6 +18,13 @@ mod accessibility_tree;
 mod dom_adapter;
 mod frames;
 mod semantics;
+// Mercury: A11Y-2 (EE6-EE11): text runs, live regions, tables, node bounds and the update gate; stubs until
+// their tasks fill them in.
+mod damage;
+mod geometry;
+mod live;
+mod tables;
+mod text_runs;
 
 pub use accessibility_tree::AccessibilityTree;
 

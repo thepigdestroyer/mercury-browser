@@ -195,6 +195,12 @@ impl AccessibilityTree {
         self.update_focused_node(context.focused_element, &mut update);
 
         self.handle_pending_scroll_updates(&mut update);
+        // Mercury: A11Y-2 EE11: stub until A11Y-2 task 8 (no-op now).
+        super::damage::gate(self, &mut update);
+        // Mercury: A11Y-2 EE8: stub until A11Y-2 task 12 (no-op now).
+        super::live::finish(self, &mut update);
+        // Mercury: A11Y-2 EE9: stub until A11Y-2 task 13 (no-op now).
+        super::tables::finish(self, &mut update);
 
         update.finalize(
             self,

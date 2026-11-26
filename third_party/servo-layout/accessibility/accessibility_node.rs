@@ -311,6 +311,8 @@ impl AccessibilityNode {
         update: &mut AccessibilityUpdate<'update>,
     ) -> LocalAccessibilityDamage {
         // Mercury: a11y-1 item 4: an `<iframe>` has no children here: its node is a graft.
+        // Mercury: A11Y-2 EE6: text runs are children of a label; stub until A11Y-2 task 10.
+        super::text_runs::update_children(self, dom_node, tree, update);
         let mut remaining_dom_children = dom_adapter::flat_children(dom_node).peekable();
         let mut old_child_ids = self.child_ids().iter().peekable();
 
@@ -391,6 +393,10 @@ impl AccessibilityNode {
         // Mercury: a11y-1 item 4: role, name, description, states, value, relations and actions come
         // from `mercury_a11y` (was: `self.set_role(role_from_dom_node(dom_node))`).
         local_damage.insert(semantics::update_semantics(self, dom_node, tree, update));
+        // Mercury: A11Y-2 EE6: stub until A11Y-2 task 10 (`text_value` returns None now).
+        if let Some(text) = super::text_runs::text_value(dom_node) {
+            local_damage.insert(self.set_value(&text));
+        }
         if dom_node.type_id() == Some(LayoutNodeType::Text) {
             let text_content = dom_node.text_content();
             trace!("node text content = {text_content:?}");
@@ -411,6 +417,8 @@ impl AccessibilityNode {
         update: &mut AccessibilityUpdate,
     ) -> LocalAccessibilityDamage {
         let mut local_damage = LocalAccessibilityDamage::empty();
+        // Mercury: A11Y-2 EE10: union of the node's fragment rectangles; stub until A11Y-2 task 14.
+        super::geometry::bounds_for(self, dom_node);
 
         // Don't update bounds on nodes in hidden subtrees.
         if hidden || !layout_damage.intersects(AccessibilityDamage::Layout) {

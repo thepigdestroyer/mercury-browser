@@ -83,4 +83,10 @@ pub trait HostState: Document {
     fn link_url<'n>(&'n self, _node: Self::N<'n>) -> Option<String> {
         None
     }
+
+    /// The text of a list item's marker (`1.`, `•`), if the engine renders one. Without it the item
+    /// has no marker text and `list_item_info` still reports its position.
+    fn list_marker_text<'n>(&'n self, _node: Self::N<'n>) -> Option<String> {
+        None
+    }
 }

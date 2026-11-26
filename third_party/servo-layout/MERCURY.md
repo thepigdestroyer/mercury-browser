@@ -151,6 +151,60 @@ All test files named below are run by the workspace member `crates/mercury-engin
 - **Drop when:** the Servo bump that contains #42394 (or its successor): restore `fragment.rs`, `line.rs`, `inline/mod.rs`,
   `display_list/{mod,hit_test,stacking_context,paint_traversal}.rs`, `query.rs`, `text_run.rs`; delete `ellipsis.rs` and its test.
 
+## Changes: page accessibility (lane a11y-2, A11Y-2 scaffold)
+
+The scaffold adds the engine glue as stubs that return the neutral value. Each hook line calls one stub; the
+tasks that fill them in are named in each entry.
+
+### Text-run hook in `update_children_from_dom_node` — `accessibility/accessibility_node.rs`, new `accessibility/text_runs.rs`
+
+- **What:** `update_children_from_dom_node` calls `text_runs::update_children(...)` before it walks the DOM children. The
+  stub changes nothing. Filled in by A11Y-2 task 10 (EE6-B): text runs as children of a label.
+- **Why:** the hook must sit where the child list is built, so the runs are kept in the same update as their label.
+- **Tested by:** `cargo check` of this crate (the stub compiles); the engine tests with task 10.
+- **Drop when:** the text-run work is merged upstream, or the lane is dropped.
+
+### Text-value hook in `update_properties_from_dom_node` — `accessibility/accessibility_node.rs`, new `accessibility/text_runs.rs`
+
+- **What:** the text branch calls `text_runs::text_value(dom_node)` and sets the value when it returns `Some`. The stub
+  returns `None`, so the old `text_content()` branch still runs. Filled in by A11Y-2 task 10.
+- **Why:** a text run's value must come from the rendered text (after `text-transform`), not the DOM text.
+- **Tested by:** `cargo check`; the engine tests with task 10.
+- **Drop when:** as above.
+
+### Bounds hook in `update_node_from_layout` — `accessibility/accessibility_node.rs`, new `accessibility/geometry.rs`
+
+- **What:** `update_node_from_layout` calls `geometry::bounds_for(self, dom_node)` before the hidden check. The stub
+  changes nothing. Filled in by A11Y-2 task 14 (EE10): the union of the fragment rectangles.
+- **Why:** a node's bounds must come from its fragments, including nodes whose box has no area of its own (the
+  `TODO(#47164)` case).
+- **Tested by:** `cargo check`; the engine tests with task 14.
+- **Drop when:** as above.
+
+### Update-gate hook in `update_tree` — `accessibility/accessibility_tree.rs`, new `accessibility/damage.rs`
+
+- **What:** `update_tree` calls `damage::gate(self, &mut update)` after the pending scroll updates. The stub changes
+  nothing. Filled in by A11Y-2 task 8 (EE11): at most one tree update per interval, layout-only damage waits.
+- **Why:** a page that changes every frame must not send a tree update every frame.
+- **Tested by:** `cargo check`; the gate's tests (task 8) are engine-free.
+- **Drop when:** as above.
+
+### Live-region hook in `update_tree` — `accessibility/accessibility_tree.rs`, new `accessibility/live.rs`
+
+- **What:** `update_tree` calls `live::finish(self, &mut update)`. The stub changes nothing. Filled in by A11Y-2 task
+  12 (EE8): live regions and the announcement budget.
+- **Why:** live regions must reach the platform adapter as `live` nodes in the same update as the change.
+- **Tested by:** `cargo check`; the engine tests with task 12.
+- **Drop when:** as above.
+
+### Table hook in `update_tree` — `accessibility/accessibility_tree.rs`, new `accessibility/tables.rs`
+
+- **What:** `update_tree` calls `tables::finish(self, &mut update)`. The stub changes nothing. Filled in by A11Y-2 task 13
+  (EE9): table kind, rows, cells and headers.
+- **Why:** tables and lists need their row, column and position data in the same update as their cells.
+- **Tested by:** `cargo check`; the engine tests with task 13.
+- **Drop when:** as above.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in
