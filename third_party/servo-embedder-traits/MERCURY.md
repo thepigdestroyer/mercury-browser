@@ -73,6 +73,32 @@ Changes made by lane txt-1 (text, 21 Nov 2026): input methods (EB11).
 - **Tested by:** 14 unit tests in `mercury/text.rs` (windowing, surrogate pairs, password, `Debug`, `same_content_as`).
 - **Drop when:** never needed upstream.
 
+Changes made by lane TXT-2 (text: clipboard, forms, context menu; task T1, message and control types).
+
+### Clipboard, form and context-menu message types — new `mercury/clipboard.rs` and `mercury/forms.rs`, hooks in `mercury/text.rs` and `embedder_controls.rs`
+
+- **What:** `TextMsg` gains four boxed variants (`ClipboardWrite`, `ClipboardRead`, `FieldFocus`, `PasswordSubmitted`), so the
+  enum does not grow. `mercury/clipboard.rs` holds `ClipboardSource`, `ClipboardOrigin` (with `allows_async_access`),
+  `ClipboardItem`, `RawImage`, `ClipboardWrite`/`ClipboardRead`, `ClipboardRefusal`, the two reply enums and the messages
+  `ClipboardWriteMsg`/`ClipboardReadMsg` (each with a `GenericCallback` reply). Its caps are `MAX_CLIPBOARD_ITEMS` (8),
+  `MAX_CLIPBOARD_ITEM_BYTES` (8 MiB), `MAX_CLIPBOARD_TOTAL_BYTES` (32 MiB), `MAX_RAW_IMAGE_PIXELS` and
+  `MAX_COPIED_HTML_BYTES`, enforced by `clamp_items` and `clamp_chars`. `mercury/forms.rs` holds `DateTimeKind`,
+  `DateTimePickerRequest`, `ValidationMessage` (at most 300 characters), `ContextMenuDetails` with `MediaDetails`,
+  `EditableDetails` and `MediaContextAction`, `FieldFocus`, `PasswordSubmission` and `InputMethodResponse::Fill`.
+  `embedder_controls.rs` gains `EmbedderControlRequest::{DateTimePicker, ValidationMessage}`,
+  `EmbedderControlResponse::{DateTimePicker, InputMethod}`, `ContextMenuAction::{CopyImage, Media(MediaContextAction)}`, and
+  `ContextMenuElementInformation.details: Option<Box<ContextMenuDetails>>`. Each hook carries a `Mercury:` comment.
+- **Why:** the browser needs the clipboard and form messages from the content process: a page's copy and paste, the
+  asynchronous clipboard API's origin gate, password submissions and focus, the date pickers, and the context menu's page
+  details. None of these existed in the engine's messages.
+- **`Debug`:** every type that holds clipboard bytes, pixels, typed text, passwords or a selection prints its sizes and flags
+  only (`ClipboardItem`, `RawImage`, `ClipboardWrite`, `ClipboardReadReply`, `ValidationMessage`, `FieldFocus`,
+  `PasswordSubmission`, `InputMethodResponse`, `ContextMenuDetails`). A test in each file checks the content is not printed.
+- **Tested by:** the unit tests in `mercury/clipboard.rs` (caps, the origin gate, char clamping, `Debug`), `mercury/forms.rs`
+  (`Debug` leaks), `mercury/text.rs` (the new variants' `Debug`), and `embedder_controls.rs` (the `details` default); the
+  `EmbedderMsg` size test in `mercury/mod.rs` still holds.
+- **Drop when:** never needed upstream; keep with the scaffold.
+
 Changes made by lane net-1 (frame identity, the rewrite hook and the mixed-content report).
 
 ### Frame identity and a rewrite message on `WebResourceRequest` (EC38, EC37) — `lib.rs`
