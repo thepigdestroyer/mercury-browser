@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
 // SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
 
-//! List positions for AccessKit: which item of how many an `<li>` is.
+//! List item positions for AccessKit: which item of how many an `<li>` is.
 
-use a11y_dom::Rendering;
+use a11y_dom::{Node, Rendering};
 
 use crate::host::HostState;
 
@@ -14,10 +14,20 @@ pub struct ListItemInfo {
     pub size: usize,
 }
 
-// stub
+/// The position of an `li` among the `li` children of its list, and the number of them. A `value`
+/// or `reversed` attribute changes the marker, not the position.
 pub fn list_item_info<'n, D: Rendering + HostState>(
     _doc: &'n D,
-    _item: D::N<'n>,
+    item: D::N<'n>,
 ) -> Option<ListItemInfo> {
-    None
+    if !item.is_element("li") {
+        return None;
+    }
+    let list = item.parent()?;
+    let items: Vec<D::N<'n>> = list.children().filter(|c| c.is_element("li")).collect();
+    let position = items.iter().position(|c| *c == item)? + 1;
+    Some(ListItemInfo {
+        position,
+        size: items.len(),
+    })
 }

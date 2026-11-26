@@ -8,6 +8,7 @@ use std::collections::HashMap;
 use a11y_dom::{Node, Rendering};
 
 use crate::host::HostState;
+use crate::layout_table::is_probably_layout_table;
 
 /// What kind of table this is.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -63,9 +64,18 @@ const MAX_CELLS: usize = 100_000;
 
 /// The table model of `table`, or `None` for a table with no rows.
 pub fn analyze_table<'n, D: Rendering + HostState>(
-    _doc: &'n D,
+    doc: &'n D,
     table: D::N<'n>,
 ) -> Option<TableAnalysis<D::N<'n>>> {
+    let mut analysis = build_grid(table)?;
+    if analysis.kind == TableKind::Data && is_probably_layout_table(doc, table) {
+        analysis.kind = TableKind::Layout;
+    }
+    Some(analysis)
+}
+
+/// The slot grid of `table` with its kind from the ARIA role, before the layout heuristic.
+pub(crate) fn build_grid<'n, N: Node<'n>>(table: N) -> Option<TableAnalysis<N>> {
     let rows = collect_rows(table);
     if rows.is_empty() {
         return None;
@@ -75,8 +85,8 @@ pub fn analyze_table<'n, D: Rendering + HostState>(
     let row_total = rows.len();
 
     let mut occupied: Vec<Vec<bool>> = Vec::new();
-    let mut row_infos = Vec::with_capacity(row_total);
-    let mut cells: Vec<(D::N<'n>, CellInfo)> = Vec::new();
+    let mut row_infos: Vec<RowInfo<N>> = Vec::with_capacity(row_total);
+    let mut cells: Vec<(N, CellInfo)> = Vec::new();
     let mut cells_dropped = 0usize;
     let mut column_count = 0usize;
     let mut row_count = 0usize;
