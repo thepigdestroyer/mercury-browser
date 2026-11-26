@@ -251,6 +251,11 @@ pub enum BrowserEvent {
     CursorChanged {
         cursor: PointerCursor,
     },
+    /// The engine's verdict on a wheel event the desktop forwarded: `prevented` when the page
+    /// cancelled it, which keeps a swipe from navigating.
+    WheelHandled {
+        prevented: bool,
+    },
     /// Text the page wants shown in the status area, such as a hovered link's URL.
     StatusTextChanged {
         text: Option<String>,
@@ -451,6 +456,8 @@ pub struct BrowserState {
     find: FindState,
     // passwords: the context menu and the password field it was opened over.
     password_field_menu: Option<(ControlId, ControlId)>,
+    // gestures: wheel events the page cancelled
+    wheel_prevented: u64,
 }
 
 impl Default for BrowserState {
@@ -475,6 +482,7 @@ impl Default for BrowserState {
             // find
             find: FindState::default(),
             password_field_menu: None,
+            wheel_prevented: 0,
         }
     }
 }
@@ -510,6 +518,9 @@ impl BrowserState {
     }
     pub fn is_fullscreen(&self) -> bool {
         self.fullscreen
+    }
+    pub fn wheel_prevented_count(&self) -> u64 {
+        self.wheel_prevented
     }
 
     pub(crate) fn set_page_title(&mut self, title: String) {
@@ -654,6 +665,11 @@ impl BrowserState {
             }
             BrowserEvent::CursorChanged { cursor } => {
                 self.cursor = cursor;
+            }
+            BrowserEvent::WheelHandled { prevented } => {
+                if prevented {
+                    self.wheel_prevented = self.wheel_prevented.saturating_add(1);
+                }
             }
             BrowserEvent::StatusTextChanged { text } => {
                 self.status_text = text;

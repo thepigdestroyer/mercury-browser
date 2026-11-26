@@ -17,6 +17,58 @@ fn default_state_describes_the_initial_page() {
 }
 
 #[test]
+fn a_prevented_wheel_result_counts() {
+    let mut state = BrowserState::default();
+
+    for prevented in [true, false, true, false, true] {
+        state.apply(BrowserEvent::WheelHandled { prevented });
+    }
+
+    assert_eq!(state.wheel_prevented_count(), 3);
+}
+
+#[test]
+fn a_fresh_state_has_counted_nothing() {
+    assert_eq!(BrowserState::default().wheel_prevented_count(), 0);
+}
+
+#[test]
+fn wheel_results_change_no_other_state() {
+    let mut state = BrowserState::default();
+    state.apply(BrowserEvent::AddressChanged {
+        url: "https://example.com".to_owned(),
+    });
+    let before = (
+        state.url().to_owned(),
+        state.load_state().clone(),
+        state.cursor(),
+        state.can_go_back(),
+    );
+
+    state.apply(BrowserEvent::WheelHandled { prevented: false });
+    assert_eq!(
+        before,
+        (
+            state.url().to_owned(),
+            state.load_state().clone(),
+            state.cursor(),
+            state.can_go_back(),
+        )
+    );
+
+    state.apply(BrowserEvent::WheelHandled { prevented: true });
+    assert_eq!(
+        before,
+        (
+            state.url().to_owned(),
+            state.load_state().clone(),
+            state.cursor(),
+            state.can_go_back(),
+        )
+    );
+}
+
+#[test]
 fn address_changed_replaces_the_current_url() {
     let mut state = BrowserState::default();
 
