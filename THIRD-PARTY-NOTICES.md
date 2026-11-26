@@ -463,6 +463,8 @@ includes: SpiderMonkey (`mozjs_sys`, with LZ4, xsum, Zydis, irregexp, double-con
     THE SOFTWARE.
     ```
 
+- **Time-zone data for the address bar's time conversions.** `jiff` 0.2.45, `jiff-core` 0.1.7, `jiff-static` 0.2.45, `jiff-tzdb` 0.1.10 and `jiff-tzdb-platform` 0.1.3 (https://github.com/BurntSushi/jiff) are dual-licensed under Unlicense OR MIT (used under either; Copyright (c) 2015 Andrew Gallant; the texts are in each crate's `UNLICENSE`, `LICENSE-MIT` and `COPYING`). `jiff-tzdb` embeds the IANA Time Zone Database (https://www.iana.org/time-zones), which is in the public domain. `crates/mercury-omnibox` uses them to answer time-zone questions. `jiff-tzdb-platform` is compiled only on Windows and wasm.
+
 ## Codecs and patents
 
 The macOS application bundles codec libraries as separate dynamic libraries, listed in the table
