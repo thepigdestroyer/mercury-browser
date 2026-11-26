@@ -6144,6 +6144,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "mercury-omnibox"
+version = "0.2.0"
+dependencies = [
+ "jiff",
+ "jiff-tzdb",
+]
+
+[[package]]
 name = "mercury-option-keys"
 version = "0.2.0"
 dependencies = [
