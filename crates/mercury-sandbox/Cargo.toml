@@ -14,3 +14,39 @@ license.workspace = true
 # window: a light crate. The vendored Servo crates call it only through the trait of
 # `servo-embedder-traits/mercury/sandbox.rs`, implemented in `talaria-servo`.
 [dependencies]
+libc.workspace = true
+log.workspace = true
+
+# The process tests re-execute their own binary as the confined child (the pattern of
+# `third_party/gaol/tests`), so they have no test harness of their own.
+[[test]]
+name = "process_files"
+path = "tests/process_files.rs"
+harness = false
+
+[[test]]
+name = "process_network"
+path = "tests/process_network.rs"
+harness = false
+
+[[test]]
+name = "process_system"
+path = "tests/process_system.rs"
+harness = false
+
+[[test]]
+name = "process_ipc"
+path = "tests/process_ipc.rs"
+harness = false
+
+[[test]]
+name = "process_fail_closed"
+path = "tests/process_fail_closed.rs"
+harness = false
+
+[target.'cfg(target_os = "macos")'.dev-dependencies]
+# Already in the lock through Servo's fonts and ipc layers.
+core-graphics = "0.23.2"
+core-text = "20.1.0"
+ipc-channel = "0.23.1"
+serde = { workspace = true }

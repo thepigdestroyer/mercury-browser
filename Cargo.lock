@@ -6216,6 +6216,14 @@ dependencies = [
 [[package]]
 name = "mercury-sandbox"
 version = "0.2.0"
+dependencies = [
+ "core-graphics",
+ "core-text",
+ "ipc-channel",
+ "libc",
+ "log",
+ "serde",
+]
 
 [[package]]
 name = "mercury-servo-patches"

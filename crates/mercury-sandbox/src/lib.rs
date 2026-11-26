@@ -8,10 +8,16 @@
 //! * [`bundle_root`] and [`run_root_from_env`] find the application and the private run
 //!   directory from what the process knows.
 
+mod confine;
 mod env;
 mod layout;
 mod profile;
+#[cfg(target_os = "macos")]
+mod seatbelt;
 
+pub use confine::{
+    Confinement, EXIT_CODE_UNCONFINED, EnterError, confine, confine_this_process, exit_unconfined,
+};
 pub use env::{content_environment, content_process_command};
 pub use layout::{bundle_root, run_root_from_env};
 pub use profile::{
