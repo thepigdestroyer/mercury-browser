@@ -14,13 +14,16 @@ use std::rc::Rc;
 
 use servo::{
     ContextMenuAction as ServoContextMenuAction, ContextMenuElementInformation, ContextMenuItem,
-    DeviceIntRect, EmbedderControl, EmbedderControlId, FilterPattern, RgbColor,
-    SelectElementOption, SelectElementOptionOrOptgroup,
+    DeviceIntRect, EmbedderControl, EmbedderControlId, EmbedderControlResponse, FilterPattern,
+    InputMethodResponse, MediaContextAction, RgbColor, SelectElementOption,
+    SelectElementOptionOrOptgroup,
 };
 use talaria_core::{
     BrowserEvent, ContextMenuAction, ContextMenuEntry, ControlAnswer, ControlId, ControlRect,
-    ControlRequest, Rgb, SelectEntry, SelectOption,
+    ControlRequest, MediaAction, Rgb, SelectEntry, SelectOption,
 };
+
+use crate::forms_messages::{self, context_menu_info};
 
 /// Hands out control ids for the whole runtime, so an answer meant for a control of a closed
 /// or replaced web view can never reach a control of another.
@@ -134,6 +137,24 @@ impl EmbedderControls {
         }
     }
 
+    /// Fills the pending text input `id` with `text` and closes it. An id that is not a pending
+    /// input method is ignored, as `answer` ignores one that is not pending.
+    pub(crate) fn fill_input(&self, id: ControlId, text: String) {
+        let control = self.store.borrow_mut().take(id);
+        match control {
+            Some(EmbedderControl::InputMethod(input_method)) => {
+                input_method.send(EmbedderControlResponse::InputMethod(InputMethodResponse::Fill {
+                    text,
+                }));
+            }
+            Some(other) => {
+                log::debug!("ignoring a fill for control {}: not an input method", id.value());
+                drop(other);
+            }
+            None => log::debug!("ignoring a fill for control {}: not pending", id.value()),
+        }
+    }
+
     // passwords
     /// For a context menu just shown (`shown` is its `ControlShown`): the event saying it was
     /// opened in the frame of the focused password field, if a password input of that frame has
@@ -223,6 +244,11 @@ fn apply_answer(control: EmbedderControl, answer: ControlAnswer) {
             menu.select(servo_context_menu_action(action));
         }
         (EmbedderControl::ContextMenu(menu), _) => menu.dismiss(),
+        (EmbedderControl::DateTimePicker(mut picker), ControlAnswer::DateTime(value)) => {
+            picker.select(value);
+            picker.submit();
+        }
+        (EmbedderControl::DateTimePicker(picker), _) => picker.dismiss(),
         (control, ControlAnswer::Dismiss) => drop(control),
         (control, answer) => {
             log::warn!(
@@ -261,7 +287,14 @@ fn control_request(control: &EmbedderControl) -> Option<ControlRequest> {
                 entries: context_menu_entries(menu.items()),
                 link_url,
                 image_url,
+                details: menu.element_info().details.map(context_menu_info),
             }
+        }
+        EmbedderControl::DateTimePicker(picker) => {
+            forms_messages::date_time_request(control_rect(picker.position()), picker.request())
+        }
+        EmbedderControl::ValidationMessage(message) => {
+            forms_messages::validation_request(control_rect(message.position()), message.message())
         }
         EmbedderControl::InputMethod(_) | EmbedderControl::SimpleDialog(_) => return None,
     })
@@ -369,6 +402,26 @@ fn context_menu_action(action: ServoContextMenuAction) -> ContextMenuAction {
         ServoContextMenuAction::Copy => ContextMenuAction::Copy,
         ServoContextMenuAction::Paste => ContextMenuAction::Paste,
         ServoContextMenuAction::SelectAll => ContextMenuAction::SelectAll,
+        ServoContextMenuAction::CopyImage => ContextMenuAction::CopyImage,
+        ServoContextMenuAction::Media(action) => ContextMenuAction::Media(media_action(action)),
+    }
+}
+
+fn media_action(action: MediaContextAction) -> MediaAction {
+    match action {
+        MediaContextAction::PlayPause => MediaAction::PlayPause,
+        MediaContextAction::Mute => MediaAction::Mute,
+        MediaContextAction::Loop => MediaAction::Loop,
+        MediaContextAction::Controls => MediaAction::Controls,
+    }
+}
+
+fn servo_media_action(action: MediaAction) -> MediaContextAction {
+    match action {
+        MediaAction::PlayPause => MediaContextAction::PlayPause,
+        MediaAction::Mute => MediaContextAction::Mute,
+        MediaAction::Loop => MediaContextAction::Loop,
+        MediaAction::Controls => MediaContextAction::Controls,
     }
 }
 
@@ -385,6 +438,8 @@ fn servo_context_menu_action(action: ContextMenuAction) -> ServoContextMenuActio
         ContextMenuAction::Copy => ServoContextMenuAction::Copy,
         ContextMenuAction::Paste => ServoContextMenuAction::Paste,
         ContextMenuAction::SelectAll => ServoContextMenuAction::SelectAll,
+        ContextMenuAction::CopyImage => ServoContextMenuAction::CopyImage,
+        ContextMenuAction::Media(action) => ServoContextMenuAction::Media(servo_media_action(action)),
     }
 }
 
@@ -633,6 +688,33 @@ mod tests {
     }
 
     #[test]
+    fn fill_input_for_an_unknown_control_is_ignored() {
+        let controls = EmbedderControls::new(ControlIds::default());
+        controls.fill_input(ControlId::new(404), "text".to_owned());
+        assert!(controls.store.borrow().entries.is_empty());
+    }
+
+    #[test]
+    fn copy_image_and_media_actions_round_trip_between_the_engine_and_core_enums() {
+        assert_eq!(
+            servo_context_menu_action(context_menu_action(ServoContextMenuAction::CopyImage)),
+            ServoContextMenuAction::CopyImage
+        );
+        for media in [
+            MediaContextAction::PlayPause,
+            MediaContextAction::Mute,
+            MediaContextAction::Loop,
+            MediaContextAction::Controls,
+        ] {
+            let action = ServoContextMenuAction::Media(media);
+            assert_eq!(
+                servo_context_menu_action(context_menu_action(action)),
+                action
+            );
+        }
+    }
+
+    #[test]
     fn every_context_menu_action_survives_the_round_trip() {
         let actions = [
             ServoContextMenuAction::GoBack,
@@ -646,6 +728,7 @@ mod tests {
             ServoContextMenuAction::Copy,
             ServoContextMenuAction::Paste,
             ServoContextMenuAction::SelectAll,
+            ServoContextMenuAction::CopyImage,
         ];
         for action in actions {
             assert_eq!(

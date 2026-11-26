@@ -45,6 +45,7 @@ enum FakeCall {
         y: f32,
     },
     AnswerControl(ControlId, ControlAnswer),
+    FillInput(ControlId, String),
     // dialogs
     AnswerPageRequest(PageRequestId, PageRequestAnswer),
     // menus
@@ -168,6 +169,10 @@ impl WebView for FakeWebView {
 
     fn answer_control(&mut self, id: ControlId, answer: ControlAnswer) -> Result<(), Self::Error> {
         self.record(FakeCall::AnswerControl(id, answer))
+    }
+
+    fn fill_input(&mut self, id: ControlId, text: String) -> Result<(), Self::Error> {
+        self.record(FakeCall::FillInput(id, text))
     }
 
     // dialogs

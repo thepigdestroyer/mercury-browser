@@ -1348,6 +1348,42 @@ impl servo::ClipboardDelegate for BrowserDelegate {
             );
         }
     }
+
+    fn set_items(&self, _web_view: servo::WebView, write: servo::ClipboardWriteRequest) {
+        let items = write
+            .items()
+            .iter()
+            .map(|item| talaria_core::PasteboardItem {
+                mime: item.mime.clone(),
+                bytes: item.bytes.clone(),
+            })
+            .collect::<Vec<_>>();
+        let image = write.image().map(|image| talaria_core::PasteboardImage {
+            width: image.width,
+            height: image.height,
+            rgba: image.rgba.clone(),
+        });
+        if !self.clipboard.write_items(&items, image.as_ref()) {
+            log::debug!(
+                "tab {}: refused a page's clipboard write without a user gesture",
+                self.tab_id.value()
+            );
+        }
+    }
+
+    fn get_items(&self, _web_view: servo::WebView, read: servo::ClipboardReadRequest) {
+        match self.clipboard.read_items(read.mimes()) {
+            Some(items) => log::debug!(
+                "tab {}: pasted {} clipboard types",
+                self.tab_id.value(),
+                items.len()
+            ),
+            None => log::debug!(
+                "tab {}: refused a page's clipboard read (no user gesture, or script reads are off)",
+                self.tab_id.value()
+            ),
+        }
+    }
 }
 
 /// What a freshly built web view's own caches hold. Servo only notifies changes against these

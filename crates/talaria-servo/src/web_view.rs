@@ -376,6 +376,11 @@ impl TalariaWebView for ServoWebView {
         Ok(())
     }
 
+    fn fill_input(&mut self, id: ControlId, text: String) -> Result<(), Self::Error> {
+        self.controls.fill_input(id, text);
+        Ok(())
+    }
+
     // dialogs
     fn answer_page_request(
         &mut self,

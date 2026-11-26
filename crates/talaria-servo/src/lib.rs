@@ -42,6 +42,8 @@ mod session_data;
 mod site_data;
 // text lane (txt-1): the engine's text input state as a browser event.
 mod text_messages;
+// txt-2: the engine's form messages (focus, password submit, date picker, validation) as core types.
+mod forms_messages;
 mod web_view;
 // site security
 mod certificate_exceptions;

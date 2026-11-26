@@ -33,6 +33,8 @@ pub trait WebView {
     fn pointer_left(&mut self) -> Result<(), Self::Error>;
     // controls
     fn answer_control(&mut self, id: ControlId, answer: ControlAnswer) -> Result<(), Self::Error>;
+    // txt-2: fills the pending text input `id` with `text` and closes it.
+    fn fill_input(&mut self, id: ControlId, text: String) -> Result<(), Self::Error>;
     // dialogs
     fn answer_page_request(
         &mut self,

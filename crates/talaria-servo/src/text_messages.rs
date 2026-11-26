@@ -32,6 +32,13 @@ pub(crate) fn handle(message: TextMsg, emit: &dyn Fn(BrowserEvent)) {
             ))));
         }
         TextMsg::InputCleared(document) => emit(BrowserEvent::TextInputCleared { document }),
+        // txt-2: a focus is resolved to a browser control by the web view, which owns the store.
+        TextMsg::FieldFocus(_) => {}
+        TextMsg::PasswordSubmitted(submission) => emit(BrowserEvent::PasswordSubmitted(
+            crate::forms_messages::password_submitted_info(*submission),
+        )),
+        // txt-2: the clipboard messages are answered by the runtime's clipboard delegate.
+        TextMsg::ClipboardWrite(_) | TextMsg::ClipboardRead(_) => {}
     }
 }
 

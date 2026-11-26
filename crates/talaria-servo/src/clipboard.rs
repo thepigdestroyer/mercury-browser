@@ -22,7 +22,8 @@ use std::rc::Rc;
 use servo::StringRequest;
 use talaria_core::{
     ClipboardCommand, ClipboardGate, ClipboardReadDecision, ContextMenuAction, KeyboardInput,
-    MemoryPasteboard, Pasteboard, TabId, clipboard_shortcut, context_menu_clipboard_command,
+    MemoryPasteboard, Pasteboard, PasteboardImage, PasteboardItem, TabId, clipboard_shortcut,
+    context_menu_clipboard_command,
 };
 
 use crate::page_request_clock;
@@ -152,6 +153,32 @@ impl TabClipboard {
             self.access.pasteboard().write_text(text);
         }
         allowed
+    }
+
+    /// The page writes typed items (and an image) at once, through the same gate as `write_text`.
+    /// Text-only pasteboards keep the `text/plain` item only (`Pasteboard::write_items`).
+    pub(crate) fn write_items(
+        &self,
+        items: &[PasteboardItem],
+        image: Option<&PasteboardImage>,
+    ) -> bool {
+        let allowed = self.may_write();
+        if allowed {
+            self.access.pasteboard().write_items(items, image);
+        }
+        allowed
+    }
+
+    /// The page or the user reads the wanted types at once; the gate decides as for `read`.
+    pub(crate) fn read_items(&self, mimes: &[String]) -> Option<Vec<PasteboardItem>> {
+        let decision = self.gate.borrow_mut().read(page_request_clock(), || {
+            self.access
+                .has_user_activation(self.tab_id, ActivationUse::Take)
+        });
+        match decision {
+            ClipboardReadDecision::Read => Some(self.access.pasteboard().read_items(mimes)),
+            ClipboardReadDecision::AskPermission | ClipboardReadDecision::Refuse => None,
+        }
     }
 
     /// The page clears the clipboard; returns whether it was cleared.
@@ -589,5 +616,60 @@ mod tests {
         assert_eq!(page_read(&clipboard), None);
         assert!(!clipboard.write_text("page"));
         assert_eq!(pasteboard.text().as_deref(), Some("kept"));
+    }
+
+    fn html_and_text() -> Vec<PasteboardItem> {
+        vec![
+            PasteboardItem {
+                mime: "text/plain".to_owned(),
+                bytes: b"a".to_vec(),
+            },
+            PasteboardItem {
+                mime: "text/html".to_owned(),
+                bytes: b"<b>a</b>".to_vec(),
+            },
+        ]
+    }
+
+    #[test]
+    fn a_user_copy_writes_html_and_text_to_the_pasteboard() {
+        let pasteboard = Rc::new(MemoryPasteboard::default());
+        let (clipboard, _uses) = tab(&pasteboard, true);
+        clipboard.user_command(ClipboardCommand::Copy);
+        assert!(clipboard.write_items(&html_and_text(), None));
+        assert_eq!(pasteboard.text().as_deref(), Some("a"));
+    }
+
+    #[test]
+    fn a_script_write_without_browser_activation_is_refused() {
+        let pasteboard = Rc::new(MemoryPasteboard::with_text("the user's"));
+        let (clipboard, _uses) = tab(&pasteboard, false);
+        assert!(!clipboard.write_items(&html_and_text(), None));
+        assert_eq!(pasteboard.text().as_deref(), Some("the user's"));
+    }
+
+    #[test]
+    fn a_user_paste_reads_every_requested_type() {
+        let pasteboard = Rc::new(MemoryPasteboard::with_text("pasted"));
+        let (clipboard, _uses) = tab(&pasteboard, true);
+        clipboard.user_command(ClipboardCommand::Paste);
+        let items = clipboard.read_items(&["text/plain".to_owned()]);
+        assert_eq!(
+            items,
+            Some(vec![PasteboardItem {
+                mime: "text/plain".to_owned(),
+                bytes: b"pasted".to_vec(),
+            }])
+        );
+    }
+
+    #[test]
+    fn a_script_read_is_refused_while_the_gate_is_off() {
+        let pasteboard = Rc::new(MemoryPasteboard::with_text("the user's"));
+        let access = Rc::new(ClipboardAccess::default());
+        access.set_pasteboard(Rc::clone(&pasteboard) as Rc<dyn Pasteboard>);
+        access.set_user_activation_check(Rc::new(|_, _| true));
+        let clipboard = TabClipboard::with_gate(TabId::new(7), access, ClipboardGate::new(false));
+        assert_eq!(clipboard.read_items(&["text/plain".to_owned()]), None);
     }
 }
