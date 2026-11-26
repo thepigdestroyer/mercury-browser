@@ -16,7 +16,7 @@ set -uo pipefail
 cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." || exit 1
 dev="$PWD/scripts/dev"
 slot_script="${MERCURY_TEST_SLOT_SCRIPT:-$dev/build-slot.sh}"
-sections="${MERCURY_TEST_SECTIONS:-queue}"
+sections="${MERCURY_TEST_SECTIONS:-queue detach}"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/mercury-dev-tests.XXXXXX")"
 failures=0
 counter=0
@@ -199,6 +199,53 @@ if wants queue; then
         "in=1 jobs="[0-9]*) check "queue: the command runs with MERCURY_IN_SLOT=1 and CARGO_BUILD_JOBS set" ok ok ;;
         *) check "queue: the command runs with MERCURY_IN_SLOT=1 and CARGO_BUILD_JOBS set" ok "$(cat "$tmp/env.txt")" ;;
     esac
+fi
+
+if wants detach; then
+    export MERCURY_PARENT_SLOT_GRACE_SECONDS=1 MERCURY_WAIT_POLL_SECONDS=1
+    guarded="$dev/guarded.sh"
+    detach="$dev/detach.sh"
+    waitfor="$dev/wait-for.sh"
+    work="$tmp/work"
+    mkdir -p "$work"
+    # A job that reports how many light slots are held and whether it runs inside one.
+    count="$work/count.sh"
+    # shellcheck disable=SC2016 # the script's own shell expands these
+    printf '#!/bin/bash\nn=$(ls "$MERCURY_GUARD_STATE/light-slots" 2>/dev/null | wc -l | tr -d " ")\necho "slots=$n in=${MERCURY_IN_SLOT:-no}"\n' >"$count"
+    chmod +x "$count"
+
+    # (a) detach only: the detached job's own guarded.sh claims a slot of its own.
+    fresh
+    log="$tmp/a.log"
+    (cd "$work" && MERCURY_IN_SLOT=1 MERCURY_GUARDED_COMMAND=x "$detach" "$log" "$guarded $work '$count'" >/dev/null)
+    "$waitfor" "$log" >"$tmp/a.wait"
+    check "(a) detach only: the job claims its own slot" "slots=1 in=1" "$(grep '^slots=' "$log")"
+    check "(a) detach only: wait-for reports the exit code" "EXIT 0" "$(head -n 1 "$tmp/a.wait")"
+
+    # (b) detach then wait in one slot: the job reuses the outer slot, so exactly one is held.
+    fresh
+    log="$tmp/b.log"
+    queue_now b-outer - "cd '$work' && '$detach' '$log' \"$guarded $work '$count'\" >/dev/null && '$waitfor' '$log' >'$tmp/b.wait'"
+    check "(b) detach then wait: the job reuses the outer slot" "slots=1 in=1" "$(grep '^slots=' "$log")"
+    check "(b) detach then wait: wait-for returns the job's exit code" "EXIT 0" "$(head -n 1 "$tmp/b.wait")"
+
+    # (c) nesting: a guarded.sh inside a command that already holds a slot holds no second slot.
+    fresh
+    log="$tmp/c1.log"
+    queue_now c-outer - "$guarded $work '$count' >'$log'"
+    check "(c) nested guarded.sh holds one slot" "slots=1 in=1" "$(cat "$log")"
+    fresh
+    log="$tmp/c2.log"
+    queue_now c-outer - "$guarded $work \"$guarded $work '$count'\" >'$log'"
+    check "(c) guarded.sh inside guarded.sh holds one slot" "slots=1 in=1" "$(cat "$log")"
+
+    # (d) build-slot.sh with a tiny wait limit gives up with exit 75 while every slot is taken.
+    fresh
+    queue d-holder - 'sleep 4'
+    sleep 1
+    MERCURY_SLOT_WAIT_MINUTES=0 queue d-tiny - 'true'
+    wait
+    check "(d) build-slot.sh with a tiny wait limit exits 75" "75" "$(cat "$tmp/d-tiny.exit" 2>/dev/null)"
 fi
 
 if [ "$failures" -ne 0 ]; then
