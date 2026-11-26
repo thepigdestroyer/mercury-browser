@@ -59,11 +59,19 @@ fn run(name: &str, plan: &ChunkPlan) -> Summary {
         expected,
         "{name} under {plan:?}: every append is a success"
     );
+    let duration_before = rig.backend.duration();
+    let duration_events_before = rig.rec.count(|e| matches!(e, MseEvent::DurationChanged(_)));
     rig.backend.end_of_stream(None).unwrap();
-    // Let the worker deliver the events of the end of stream.
+    let duration_changes = usize::from(rig.backend.duration() != duration_before);
+    // Let the worker deliver the events of the end of stream: SourceEnded, then the duration change.
     assert!(rig.rec.wait_for(WAIT, |log| {
         log.iter()
             .any(|r| matches!(r.event, MseEvent::SourceEnded { .. }))
+            && log
+                .iter()
+                .filter(|r| matches!(r.event, MseEvent::DurationChanged(_)))
+                .count()
+                >= duration_events_before + duration_changes
     }));
     let feed = rig.backend.frame_feed();
     let mut frames = Vec::new();
