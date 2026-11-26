@@ -101,6 +101,14 @@ impl Metrics {
         tab_radius: 8.0,
         tab_title_font_size: 13.0,
     };
+
+    /// The layout sizes: a tab row of 46 px and a toolbar of 52 px, pushed by the desktop app.
+    pub const LAYOUT: Self = Self {
+        tab_row_height: 46.0,
+        toolbar_height: 52.0,
+        toolbar_padding_y: 7.0,
+        ..Self::ROOMY
+    };
 }
 
 impl Default for Metrics {

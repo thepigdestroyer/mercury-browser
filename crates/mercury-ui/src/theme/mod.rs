@@ -62,6 +62,11 @@ impl Look {
         (look, notes)
     }
 
+    /// The same look with another sizes preset; the colours are unchanged.
+    pub fn with_metrics(self, metrics: Metrics) -> Self {
+        Self { metrics, ..self }
+    }
+
     /// Today's colours and sizes, the chrome as it looked before the look was data. It is the
     /// baseline of the theme-plumbing pixel gate and no user can choose it: use it in tests only, and
     /// note that a window nobody pushes to already shows these colours. **Delete it with the

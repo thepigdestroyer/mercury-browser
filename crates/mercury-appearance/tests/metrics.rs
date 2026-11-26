@@ -91,6 +91,50 @@ fn hit_areas_are_at_least_28_px() {
 }
 
 #[test]
+fn layout_differs_from_roomy_in_exactly_three_fields() {
+    let roomy = all(&Metrics::ROOMY);
+    let layout = all(&Metrics::LAYOUT);
+    let differing: Vec<&str> = roomy
+        .iter()
+        .zip(&layout)
+        .filter(|(a, b)| a.1 != b.1)
+        .map(|(a, _)| a.0)
+        .collect();
+    assert_eq!(
+        differing,
+        ["tab_row_height", "toolbar_height", "toolbar_padding_y"]
+    );
+    let lookup = |name: &str| layout.iter().find(|(n, _)| *n == name).map(|(_, v)| *v);
+    assert_eq!(lookup("tab_row_height"), Some(46.0));
+    assert_eq!(lookup("toolbar_height"), Some(52.0));
+    assert_eq!(lookup("toolbar_padding_y"), Some(7.0));
+}
+
+#[test]
+fn layout_keeps_hit_areas_at_28_or_more() {
+    let metrics = Metrics::LAYOUT;
+    for (name, value) in [
+        ("button_width", metrics.button_width),
+        ("button_height", metrics.button_height),
+        ("address_height", metrics.address_height),
+        ("new_tab_button_size", metrics.new_tab_button_size),
+        ("tab_list_button_width", metrics.tab_list_button_width),
+    ] {
+        assert!(value >= 28.0, "{name} is {value}, a hit area needs 28 px");
+    }
+}
+
+#[test]
+fn layout_rows_hold_their_content() {
+    let metrics = Metrics::LAYOUT;
+    assert_eq!(
+        metrics.toolbar_padding_y * 2.0 + metrics.address_height,
+        metrics.toolbar_height,
+        "the address field fills the toolbar row between its paddings"
+    );
+}
+
+#[test]
 fn the_tab_widths_are_in_order() {
     let metrics = Metrics::ROOMY;
     assert!(metrics.tab_min_width <= metrics.tab_max_width);
