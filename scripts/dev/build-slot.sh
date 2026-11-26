@@ -103,6 +103,35 @@ claim() {
     return 1
 }
 
+# The light pool borrowing an idle heavy slot (see the claim loop). A live heavy waiter always wins.
+borrow_heavy() {
+    local heavy_root heavy_slots reserve held i dir file pid
+    heavy_root="$state_dir/slots"
+    heavy_slots="${MERCURY_BUILD_SLOTS:-6}"
+    reserve="${MERCURY_LIGHT_BORROW_RESERVE:-2}"
+    mkdir -p "$heavy_root"
+    for file in "$state_dir/waiting/heavy"/*; do
+        [ -f "$file" ] || continue
+        pid="$(head -n 1 "$file")"
+        case "$pid" in '' | *[!0-9]*) continue ;; esac
+        process_alive "$pid" && return 1
+    done
+    held=0
+    for dir in "$heavy_root"/*/; do
+        [ -d "$dir" ] && held=$((held + 1))
+    done
+    [ $((heavy_slots - held)) -gt "$reserve" ] || return 1
+    for i in $(seq 1 "$heavy_slots"); do
+        dir="$heavy_root/$i"
+        if mkdir "$dir" 2>/dev/null; then
+            printf '%s\n%s\n%s\n' "$$" "${worktrees:-?} (light, borrowed)" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$dir/owner"
+            printf '%s\n' "$dir"
+            return 0
+        fi
+    done
+    return 1
+}
+
 # Written whole and moved into place, so nobody reads half a file.
 register() {
     printf '%s\n%s\n%s\n%s\n%s\n%s\n' "$$" "${worktrees:-?}" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" "$pool" \
@@ -150,6 +179,12 @@ while :; do
     [ -f "$waiter" ] || register
     free="$(free_gb)"
     if [ "$free" -ge "$min_free_gb" ] && ! waiter_ahead && slot="$(claim)"; then
+        break
+    fi
+    # A light build may borrow an idle heavy slot: only while no heavy build is waiting, more than
+    # MERCURY_LIGHT_BORROW_RESERVE (2) heavy slots stay free, and it is first in the light queue.
+    if [ "$pool" = light ] && [ "${MERCURY_LIGHT_BORROW:-1}" = 1 ] && [ "$free" -ge "$min_free_gb" ] \
+        && ! waiter_ahead && slot="$(borrow_heavy)"; then
         break
     fi
     now=$(date +%s)

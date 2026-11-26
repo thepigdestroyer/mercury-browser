@@ -16,7 +16,7 @@ set -uo pipefail
 cd "$(dirname -- "${BASH_SOURCE[0]}")/../.." || exit 1
 dev="$PWD/scripts/dev"
 slot_script="${MERCURY_TEST_SLOT_SCRIPT:-$dev/build-slot.sh}"
-sections="${MERCURY_TEST_SECTIONS:-queue detach}"
+sections="${MERCURY_TEST_SECTIONS:-queue detach borrow}"
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/mercury-dev-tests.XXXXXX")"
 failures=0
 counter=0
@@ -26,6 +26,9 @@ unset MERCURY_IN_SLOT MERCURY_GUARDED_COMMAND MERCURY_GUARDED_SHELL MERCURY_GUAR
     MERCURY_DETACHED MERCURY_PARENT_SLOT_PID MERCURY_SLOT_PRIORITY MERCURY_BUILD_SLOTS \
     MERCURY_SLOT_WAIT_MINUTES MERCURY_SLOT_AGING_SECONDS CARGO_BUILD_JOBS
 export MERCURY_SLOT_POOL=light MERCURY_LIGHT_SLOTS=1 MERCURY_LIGHT_MIN_FREE_GB=0 MERCURY_SLOT_POLL_SECONDS=1
+# The queue and detach checks test the light queue alone: an empty heavy pool would let a light build borrow
+# a heavy slot. The borrow section turns borrowing on for its own checks.
+export MERCURY_LIGHT_BORROW=0
 
 # shellcheck disable=SC2329 # invoked by the EXIT trap below
 cleanup() {
@@ -246,6 +249,84 @@ if wants detach; then
     MERCURY_SLOT_WAIT_MINUTES=0 queue d-tiny - 'true'
     wait
     check "(d) build-slot.sh with a tiny wait limit exits 75" "75" "$(cat "$tmp/d-tiny.exit" 2>/dev/null)"
+fi
+
+if wants borrow; then
+    # Light builds borrow an idle heavy slot. Each check fills the light pool with two live holders
+    # (fake owner files that name a sleeping process), holds some heavy slots the same way, and runs
+    # build-slot.sh in the foreground with the light pool's settings, capturing its exit code directly.
+    export MERCURY_LIGHT_SLOTS=2 MERCURY_BUILD_SLOTS=4 MERCURY_SLOT_POLL_SECONDS=1
+    export MERCURY_LIGHT_BORROW=1
+    unset MERCURY_LIGHT_BORROW_RESERVE
+    # hold <dir> <name>: a live owner file in <dir>/<name>, held by a process that outlives the check.
+    hold() {
+        mkdir -p "$1/$2"
+        sleep 300 &
+        printf '%s\n%s\n%s\n' "$!" "fake holder" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" >"$1/$2/owner"
+        holders_pids="$holders_pids $!"
+    }
+    holders_pids=""
+    # release_holders: stop the fake holders and reap them, quietly.
+    release_holders() {
+        local p
+        for p in $holders_pids; do kill "$p" 2>/dev/null; wait "$p" 2>/dev/null; done
+        holders_pids=""
+    }
+
+    # 1. Light pool full, heavy 1 of 4 held: three heavy slots are free, more than the reserve of 2, so it borrows.
+    fresh
+    hold "$MERCURY_GUARD_STATE/slots" 1
+    hold "$MERCURY_GUARD_STATE/light-slots" 1
+    hold "$MERCURY_GUARD_STATE/light-slots" 2
+    out="$(MERCURY_SLOT_WAIT_MINUTES=0 MERCURY_GUARDED_COMMAND="echo ran >> '$order'" MERCURY_GUARDED_SHELL=/bin/bash \
+        MERCURY_GUARDED_WORKTREE="$tmp/wt-borrow1" bash "$slot_script" 2>&1)"
+    rc=$?
+    release_holders
+    check "borrow: light pool full and heavy 1/4 held: it borrows (exit 0)" "0" "$rc"
+    check "borrow: ...and the command ran" "ran" "$(order_of)"
+
+    # 2. Heavy 2 of 4 held: two free is not more than the reserve of 2, so no borrow.
+    fresh
+    hold "$MERCURY_GUARD_STATE/slots" 1
+    hold "$MERCURY_GUARD_STATE/slots" 2
+    hold "$MERCURY_GUARD_STATE/light-slots" 1
+    hold "$MERCURY_GUARD_STATE/light-slots" 2
+    out="$(MERCURY_SLOT_WAIT_MINUTES=0 MERCURY_GUARDED_COMMAND="echo ran >> '$order'" MERCURY_GUARDED_SHELL=/bin/bash \
+        MERCURY_GUARDED_WORKTREE="$tmp/wt-borrow2" bash "$slot_script" 2>&1)"
+    rc=$?
+    release_holders
+    check "borrow: heavy 2/4 held: no borrow (exit 75)" "75" "$rc"
+    check "borrow: ...and the command did not run" "" "$(order_of)"
+
+    # 3. A live heavy waiter is queued: a light build never takes a heavy slot ahead of it.
+    fresh
+    hold "$MERCURY_GUARD_STATE/light-slots" 1
+    hold "$MERCURY_GUARD_STATE/light-slots" 2
+    mkdir -p "$MERCURY_GUARD_STATE/waiting/heavy"
+    sleep 300 &
+    heavy_waiter=$!
+    holders_pids="$holders_pids $heavy_waiter"
+    printf '%s\nx\nnow\nheavy\n1\n%s\n' "$heavy_waiter" "$(date +%s)" >"$MERCURY_GUARD_STATE/waiting/heavy/$heavy_waiter"
+    out="$(MERCURY_SLOT_WAIT_MINUTES=0 MERCURY_GUARDED_COMMAND="echo ran >> '$order'" MERCURY_GUARDED_SHELL=/bin/bash \
+        MERCURY_GUARDED_WORKTREE="$tmp/wt-borrow4" bash "$slot_script" 2>&1)"
+    rc=$?
+    release_holders
+    check "borrow: a live heavy waiter: no borrow (exit 75)" "75" "$rc"
+
+    # 4. MERCURY_LIGHT_BORROW=0 turns borrowing off, even with heavy slots free.
+    fresh
+    hold "$MERCURY_GUARD_STATE/light-slots" 1
+    hold "$MERCURY_GUARD_STATE/light-slots" 2
+    out="$(MERCURY_LIGHT_BORROW=0 MERCURY_SLOT_WAIT_MINUTES=0 MERCURY_GUARDED_COMMAND="echo ran >> '$order'" MERCURY_GUARDED_SHELL=/bin/bash \
+        MERCURY_GUARDED_WORKTREE="$tmp/wt-borrow5" bash "$slot_script" 2>&1)"
+    rc=$?
+    release_holders
+    check "borrow: MERCURY_LIGHT_BORROW=0: no borrow (exit 75)" "75" "$rc"
+    check "borrow: ...and it gave up at the wait limit" "yes" "$(grep -q 'gave up' <<<"$out" && echo yes || echo no)"
+    check "borrow: ...and the command did not run" "" "$(order_of)"
+
+    unset MERCURY_LIGHT_SLOTS MERCURY_BUILD_SLOTS MERCURY_SLOT_POLL_SECONDS
+    export MERCURY_LIGHT_BORROW=0
 fi
 
 if [ "$failures" -ne 0 ]; then
