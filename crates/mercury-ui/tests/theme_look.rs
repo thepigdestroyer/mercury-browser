@@ -9,8 +9,8 @@ use std::rc::Rc;
 use mercury_appearance::resolve::AppearanceSettings;
 use mercury_appearance::{Metrics, Role, Scheme, palettes};
 use mercury_ui::{
-    AboutWindow, BookmarksManager, ChromePalette, ChromeTheme, Look, MainWindow, SettingsWindow,
-    apply_look,
+    AboutWindow, BookmarksManager, ChromeMetrics, ChromePalette, ChromeTheme, Look, MainWindow,
+    SettingsWindow, apply_look,
 };
 use slint::platform::software_renderer::{MinimalSoftwareWindow, RepaintBufferType};
 use slint::platform::{Platform, WindowAdapter};
@@ -93,6 +93,39 @@ fn two_different_palettes_give_a_mixed_look() {
     );
     assert_eq!(ids(&mixed), ("forest", "hermes"));
     assert!(look.palette_light.id != mixed.palette_dark.id);
+}
+
+#[test]
+fn with_metrics_changes_only_the_metrics() {
+    let (look, _) = Look::from_appearance(&appearance("forest", "glacier"));
+    let layout = look.with_metrics(Metrics::LAYOUT);
+    assert!(std::ptr::eq(layout.palette_light, look.palette_light));
+    assert!(std::ptr::eq(layout.palette_dark, look.palette_dark));
+    assert_eq!(layout.metrics, Metrics::LAYOUT);
+    assert_eq!(look.metrics, Metrics::ROOMY, "the original is a copy");
+}
+
+#[test]
+fn pushing_the_layout_look_sets_46_and_52() {
+    init_platform();
+    let window = MainWindow::new().expect("a window");
+    apply_look(&window, &Look::hermes_roomy().with_metrics(Metrics::LAYOUT));
+    let sizes = window.global::<ChromeMetrics>();
+    assert_eq!(sizes.get_tab_row_height(), 46.0);
+    assert_eq!(sizes.get_toolbar_height(), 52.0);
+    assert_eq!(sizes.get_toolbar_padding_y(), 7.0);
+    assert_eq!(sizes.get_address_height(), 38.0);
+}
+
+#[test]
+fn hermes_roomy_still_pushes_48_and_60() {
+    init_platform();
+    let window = MainWindow::new().expect("a window");
+    apply_look(&window, &Look::hermes_roomy());
+    let sizes = window.global::<ChromeMetrics>();
+    assert_eq!(sizes.get_tab_row_height(), 48.0);
+    assert_eq!(sizes.get_toolbar_height(), 60.0);
+    assert_eq!(sizes.get_toolbar_padding_y(), 11.0);
 }
 
 fn background(palette: &ChromePalette<'_>, theme: ChromeTheme) -> Color {
