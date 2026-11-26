@@ -185,6 +185,7 @@ fn the_only_export_of_a_key_in_the_clear_needs_an_explicit_acknowledgement() {
         &[record],
         ExportAcknowledgement::PrivateKeysInClear,
         1_800_000_000,
+        &FakeVerifier::new(),
     )
     .expect("the export works");
     // The one legitimate place for the key in the clear: PKCS#8 as base64url text. The raw scalar

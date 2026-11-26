@@ -6,6 +6,7 @@ use crate::model::{
     MAX_CREDENTIAL_ID_BYTES, MAX_NAME_BYTES, MAX_RP_ID_BYTES, MAX_USER_HANDLE_BYTES,
     MIN_CREDENTIAL_ID_BYTES,
 };
+use crate::verifier::{UserVerifier, VerificationPurpose, require_verified_user};
 use crate::{
     AddOutcome, PasskeyBackend, PasskeyError, PasskeyKey, PasskeyRecord, PasskeySummary,
     SaveOutcome,
@@ -108,22 +109,51 @@ impl<B: PasskeyBackend> PasskeyStore<B> {
         self.backend.set_counter(key, counter)
     }
 
-    /// Removes one passkey; `false` if it was not stored. Any key is accepted.
-    pub fn remove(&self, key: &PasskeyKey) -> Result<bool, PasskeyError> {
+    /// Removes one passkey; `false` if it was not stored. Any key is accepted. The user must be
+    /// verified by `verifier` first: if not, [`PasskeyError::NotAllowed`] is returned and nothing
+    /// is removed.
+    pub fn remove(
+        &self,
+        key: &PasskeyKey,
+        verifier: &dyn UserVerifier,
+    ) -> Result<bool, PasskeyError> {
+        require_verified_user(
+            verifier,
+            VerificationPurpose::DeletePasskeys { count: Some(1) },
+        )?;
         self.backend.delete(key)
     }
 
     /// Removes every passkey of one relying party and returns how many were removed. A passkey that
     /// cannot be removed does not stop the others; the result is then
-    /// [`PasskeyError::RemoveIncomplete`].
-    pub fn remove_for_rp(&self, rp_id: &str) -> Result<u64, PasskeyError> {
-        self.remove_listed(self.matching(rp_id, &[])?)
+    /// [`PasskeyError::RemoveIncomplete`]. The user must be verified by `verifier` first, as for
+    /// [`PasskeyStore::remove`].
+    pub fn remove_for_rp(
+        &self,
+        rp_id: &str,
+        verifier: &dyn UserVerifier,
+    ) -> Result<u64, PasskeyError> {
+        let listed = self.matching(rp_id, &[])?;
+        require_verified_user(
+            verifier,
+            VerificationPurpose::DeletePasskeys {
+                count: Some(listed.len()),
+            },
+        )?;
+        self.remove_listed(listed)
     }
 
-    /// Removes every passkey this application stored and returns how many were removed; same rule
+    /// Removes every passkey this application stored and returns how many were removed; same rules
     /// as [`PasskeyStore::remove_for_rp`].
-    pub fn remove_all(&self) -> Result<u64, PasskeyError> {
-        self.remove_keys(self.backend.stored_keys()?)
+    pub fn remove_all(&self, verifier: &dyn UserVerifier) -> Result<u64, PasskeyError> {
+        let keys = self.backend.stored_keys()?;
+        require_verified_user(
+            verifier,
+            VerificationPurpose::DeletePasskeys {
+                count: Some(keys.len()),
+            },
+        )?;
+        self.remove_keys(keys)
     }
 
     fn remove_listed(&self, listed: Vec<PasskeySummary>) -> Result<u64, PasskeyError> {

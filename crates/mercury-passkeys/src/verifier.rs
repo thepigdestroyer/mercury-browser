@@ -31,6 +31,16 @@ pub enum VerificationPurpose {
         /// The site's relying party id.
         rp_id: String,
     },
+    /// Export stored passkeys, private keys included, to a file. The user must be verified.
+    ExportPasskeys {
+        /// How many passkeys the export holds.
+        count: usize,
+    },
+    /// Remove stored passkeys. The user must be verified.
+    DeletePasskeys {
+        /// How many passkeys would be removed, if known.
+        count: Option<usize>,
+    },
 }
 
 /// One question for the user.
@@ -90,4 +100,25 @@ pub trait UserVerifier: Send + Sync {
     /// Asks a [`UserVerifier::verify`] or [`UserVerifier::choose_passkey`] that is waiting to give
     /// up. They then return `Err(PasskeyError::Cancelled)`. Safe to call from another thread.
     fn cancel(&self) {}
+}
+
+/// Asks the user to allow `purpose` and fails with [`PasskeyError::NotAllowed`] unless the user is
+/// present and verified. Used before an export or a removal, which have no site, so the origin is
+/// empty.
+pub(crate) fn require_verified_user(
+    verifier: &dyn UserVerifier,
+    purpose: VerificationPurpose,
+) -> Result<(), PasskeyError> {
+    let request = VerificationRequest {
+        origin: String::new(),
+        purpose,
+        require_presence: true,
+        require_verification: true,
+    };
+    let answer = verifier.verify(&request)?;
+    if answer.presence && answer.verification {
+        Ok(())
+    } else {
+        Err(PasskeyError::NotAllowed)
+    }
 }

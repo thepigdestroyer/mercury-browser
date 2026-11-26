@@ -9,6 +9,7 @@ use mercury_passkeys::cxf::{
     ExportAcknowledgement, Exported, Imported, MAX_IMPORT_BYTES, MAX_IMPORT_ITEMS, SkipReason,
     export_cxf, import_cxf, read_import_file, write_export_file,
 };
+use mercury_passkeys::testing::{FakeAnswer, FakeVerifier};
 use mercury_passkeys::{
     COSE_ES256, MemoryBackend, PasskeyBackend, PasskeyError, PasskeyKey, PasskeyRecord,
     PasskeyStore, PasskeySummary, PrivateKey,
@@ -86,7 +87,7 @@ fn record_with(
 }
 
 fn export_bytes(records: &[PasskeyRecord]) -> Exported {
-    export_cxf(records, ACK, NOW).expect("export")
+    export_cxf(records, ACK, NOW, &FakeVerifier::new()).expect("export")
 }
 
 fn export_json(records: &[PasskeyRecord]) -> Value {
@@ -229,6 +230,25 @@ fn round_trip_keeps_keys_ids_names_handles_and_dates() {
         .public_key()
         .verify(message, &signature)
         .expect("the original public key verifies the imported key's signature");
+}
+
+#[test]
+fn an_export_the_user_refuses_writes_nothing_and_errors() {
+    let (a, _) = record_with("example.com", &[1; 32], "alice", Some(b"h1"));
+    let verifier = FakeVerifier::new();
+    verifier.set_default_answer(FakeAnswer::Decline);
+    let result = export_cxf(&[a], ACK, NOW, &verifier);
+    assert!(matches!(result, Err(PasskeyError::NotAllowed)));
+    assert_eq!(verifier.requests().len(), 1, "the user was asked");
+}
+
+#[test]
+fn an_export_the_user_allows_holds_every_passkey() {
+    let (a, _) = record_with("example.com", &[1; 32], "alice", Some(b"h1"));
+    let verifier = FakeVerifier::new();
+    let exported = export_cxf(&[a], ACK, NOW, &verifier).expect("export");
+    assert!(!exported.as_bytes().is_empty());
+    assert_eq!(verifier.requests().len(), 1, "the user was asked");
 }
 
 #[test]

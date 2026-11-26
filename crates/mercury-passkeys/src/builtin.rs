@@ -47,7 +47,7 @@ use passkey::types::webauthn::{
 use passkey::types::{Bytes, CredentialExtensions, Passkey};
 use zeroize::{Zeroize, Zeroizing};
 
-use crate::crypto::{MercuryCrypto, probe_os_rng};
+use crate::crypto::{MercuryCrypto, probe_os_rng, unsynced_backup_flags};
 use crate::exec::block_on;
 use crate::{
     AssertRequest, AssertResponse, Attachment, AuthenticatorKind, COSE_ES256, CreateRequest,
@@ -703,8 +703,9 @@ impl<B: PasskeyBackend + 'static> PasskeyAuthenticator for BuiltInAuthenticator<
             pin_auth: None,
             pin_protocol: None,
         };
-        let response = block_on(authenticator.make_credential(ctap_request))
+        let mut response = block_on(authenticator.make_credential(ctap_request))
             .map_err(|status| problems.take().unwrap_or_else(|| error_from_status(status)))?;
+        response.auth_data.flags = unsynced_backup_flags(response.auth_data.flags);
 
         let attested =
             response
@@ -748,8 +749,9 @@ impl<B: PasskeyBackend + 'static> PasskeyAuthenticator for BuiltInAuthenticator<
             pin_auth: None,
             pin_protocol: None,
         };
-        let response = block_on(authenticator.get_assertion(ctap_request))
+        let mut response = block_on(authenticator.get_assertion(ctap_request))
             .map_err(|status| problems.take().unwrap_or_else(|| error_from_status(status)))?;
+        response.auth_data.flags = unsynced_backup_flags(response.auth_data.flags);
 
         let credential = response.credential.as_ref().ok_or(PasskeyError::Internal(
             "the authenticator returned no credential",
