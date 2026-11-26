@@ -8,9 +8,11 @@
 //! * [`bundle_root`] and [`run_root_from_env`] find the application and the private run
 //!   directory from what the process knows.
 
+mod env;
 mod layout;
 mod profile;
 
+pub use env::{content_environment, content_process_command};
 pub use layout::{bundle_root, run_root_from_env};
 pub use profile::{
     BUNDLE_IDENTIFIER, CONTENT_PROFILE, Profile, ProfileError, ProfileInputs, content_profile,
