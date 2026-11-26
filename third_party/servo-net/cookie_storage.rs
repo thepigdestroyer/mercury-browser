@@ -21,12 +21,16 @@ use serde::{Deserialize, Serialize};
 use servo_url::ServoUrl;
 
 use crate::cookie::ServoCookie;
+use crate::net_policy::SiteKey;
 
 #[derive(Clone, Debug, Deserialize, Serialize, MallocSizeOf)]
 pub struct CookieStorage {
-    version: u32,
-    cookies_map: HashMap<String, Vec<ServoCookie>>,
-    max_per_host: usize,
+    pub(crate) version: u32,
+    pub(crate) cookies_map: HashMap<String, Vec<ServoCookie>>,
+    pub(crate) max_per_host: usize,
+    // Mercury: partitioned cookies (CHIPS), one jar per top-level site (EC7). Missing in a jar written before this.
+    #[serde(default)]
+    pub(crate) partitions: HashMap<SiteKey, CookieStorage>,
 }
 
 #[derive(Debug)]
@@ -41,6 +45,7 @@ impl CookieStorage {
             version: 1,
             cookies_map: HashMap::new(),
             max_per_host: max_cookies,
+            partitions: HashMap::new(),
         }
     }
 
@@ -115,6 +120,15 @@ impl CookieStorage {
                     cookie.set_expiry_time_in_past();
                 }
             }
+            for partition in self.partitions.values_mut() {
+                partition.delete_cookies_for_sites(&vec![site.clone()]);
+            }
+            // Mercury: the partition keyed by the site (top-level site) goes with the site's data.
+            if let Some(partition) = self.partitions.get_mut(site) {
+                for cookie in partition.cookies_map.values_mut().flat_map(|c| c.iter_mut()) {
+                    cookie.set_expiry_time_in_past();
+                }
+            }
         }
     }
 
@@ -124,6 +138,9 @@ impl CookieStorage {
             .flat_map(|cookies| cookies.iter_mut())
             .filter(|cookie| !cookie.persistent)
             .for_each(|cookie| cookie.set_expiry_time_in_past());
+        for partition in self.partitions.values_mut() {
+            partition.clear_session_cookies();
+        }
     }
 
     pub fn clear_storage(&mut self, url: Option<&ServoUrl>) {
@@ -134,8 +151,12 @@ impl CookieStorage {
                     cookie.set_expiry_time_in_past();
                 }
             }
+            for partition in self.partitions.values_mut() {
+                partition.clear_storage(Some(url));
+            }
         } else {
             self.cookies_map.clear();
+            self.partitions.clear();
         }
     }
 
@@ -147,6 +168,9 @@ impl CookieStorage {
                     cookie.set_expiry_time_in_past();
                 }
             }
+        }
+        for partition in self.partitions.values_mut() {
+            partition.delete_cookie_with_name(url, name.clone());
         }
     }
 
@@ -208,6 +232,9 @@ impl CookieStorage {
                 entry.remove_entry();
             }
         }
+        for partition in self.partitions.values_mut() {
+            partition.remove_expired_cookies_for_url(url);
+        }
     }
 
     pub fn remove_all_expired_cookies(&mut self) {
@@ -215,6 +242,10 @@ impl CookieStorage {
             cookies.retain(|c| !is_cookie_expired(c));
             !cookies.is_empty()
         });
+        for partition in self.partitions.values_mut() {
+            partition.remove_all_expired_cookies();
+        }
+        self.partitions.retain(|_, partition| !partition.cookies_map.is_empty());
     }
 
     // http://tools.ietf.org/html/rfc6265#section-5.4
@@ -337,7 +368,7 @@ fn accept_every_cookie(_: &Cookie<'static>) -> bool {
     true
 }
 
-fn reg_host(url: &str) -> String {
+pub(crate) fn reg_host(url: &str) -> String {
     let host_for_ip_parse = url
         .strip_prefix('[')
         .and_then(|url| url.strip_suffix(']'))
@@ -350,7 +381,7 @@ fn reg_host(url: &str) -> String {
     reg_suffix(url).to_lowercase()
 }
 
-fn is_cookie_expired(cookie: &ServoCookie) -> bool {
+pub(crate) fn is_cookie_expired(cookie: &ServoCookie) -> bool {
     matches!(cookie.expiry_time, Some(date_time) if date_time <= SystemTime::now())
 }
 

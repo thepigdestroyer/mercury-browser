@@ -357,6 +357,32 @@ only the `Set-Cookie` of responses and adds a global setter message; it is *cons
 
 **`Cargo.lock` of this crate** (listed as `unmarked` in `third_party/vendor.toml`, a lock file takes no comments) now records `servo-net-traits` and `servo-embedder-traits` as path packages without a registry source or checksum, because `make test-servo-net` patches the vendored copies in (see below).
 
+### 8. Partitioned cookies (CHIPS, EC7, storage side) — `cookie_storage.rs`, `lib.rs`, new `mercury_partitions.rs`
+
+Made by lane net-2 (decisions N2-D1 to N2-D3 in `.superpowers/sdd/plans/net-2-spec.md`). `mercury_partitions.rs` is new,
+PolyForm Noncommercial, and copies nothing from another project; the rules come from the CHIPS draft and the spec. Servo 0.8
+has no partitioned jar: a `Partitioned` cookie is an ordinary cookie in the one shared jar.
+
+- **What:** a `Set-Cookie` with `Partitioned` (and `Secure`, and a partition key from the request) is kept in
+  `CookieStorage::partitions`, one `CookieStorage` per top-level site (`SiteKey`), so every rule of the jar applies to it
+  unchanged. `push_scoped` routes a cookie by its `Partitioned` flag; an unpartitioned cookie is stored only in
+  `CookieAccess::Full`. `cookies_for_scope` sends the unpartitioned cookies (Full only) and the cookies of the partition of the
+  top-level site, sorted by `cookie_comparator`, in one cookie string. At most `MAX_PARTITIONS` (2048) partitions: a new
+  one over the cap is refused, with a `warn!` that carries no cookie value. The clearing functions walk the partitions too.
+  The field is `#[serde(default)]`, so a jar written before this change still loads; `version` becomes 2 once a partition exists.
+- **Deviations from the plan:** `CookieScope`, `CookieAccess`, `MAX_PARTITIONS`, `push_scoped`, `cookies_for_scope` and
+  `partition_count` are `pub` (not `pub(crate)`): the integration tests in `tests/` are a separate crate and cannot reach
+  `pub(crate)` items. `CookieScope` lives in `net` (the crate root) so the tests import it from there, not from `net_policy`.
+  The JSON round-trip test in the plan needs `serde_json`, which servo-net does not declare; the test uses `postcard`, which
+  it already depends on. The old-jar load check (a JSON jar without the field) is not covered here.
+- **Tested by:** `tests/mercury_partitions.rs`: a partitioned cookie is read only under its own partition; the same name, domain
+  and path in two partitions do not overwrite; an unpartitioned cookie is refused in partitioned-only mode and stored in full
+  mode; full mode sends the unpartitioned cookies and the partition of the top-level site; a partitioned cookie needs `Secure`
+  and a key; the 2049th partition is refused and the first 2048 keep working; clearing a site clears its cookies in every
+  partition; a jar with partitions round-trips through postcard.
+- **Drop when:** Servo keeps partitioned cookies in a partitioned jar itself (Servo's `CookieStorage` and CHIPS support,
+  when it lands upstream).
+
 ## Running the tests
 
 `servo-net` is a vendored dependency with dev-dependencies, so `cargo test -p servo-net` from the

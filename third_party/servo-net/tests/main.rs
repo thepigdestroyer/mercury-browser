@@ -31,6 +31,7 @@ mod subresource_integrity;
 // WebSockets through the proxy and the limits on sign-in prompts.
 mod cookie_policy;
 mod mercury_auth;
+mod mercury_partitions;
 mod mercury_request_path;
 mod mercury_ws;
 mod net_policy;
