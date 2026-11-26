@@ -107,11 +107,7 @@ mod tests {
     fn only_default_prevented_counts() {
         for bits in 0u8..8 {
             let result = InputEventResult::from_bits_truncate(bits);
-            assert_eq!(
-                wheel_prevented(result),
-                bits & 1 != 0,
-                "flags {bits:#05b}"
-            );
+            assert_eq!(wheel_prevented(result), bits & 1 != 0, "flags {bits:#05b}");
         }
     }
 }

@@ -341,7 +341,7 @@ mod tests {
             }),
             ("gpu-canvas", |s| s.web.gpu_canvas),
             ("swipe-navigation", |s| s.web.swipe_navigation), // gestures
-            ("https-only", |s| s.privacy.https_only), // site-security
+            ("https-only", |s| s.privacy.https_only),         // site-security
         ] {
             for value in [true, false] {
                 assert!(apply_toggle(&mut settings, name, value), "{name}");
