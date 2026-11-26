@@ -41,9 +41,12 @@ mod websocket_loader;
 pub mod mercury_auth;
 pub mod mercury_cookies;
 mod mercury_mixed_content;
+// Mercury: partitioned cookies (CHIPS, EC7); the cookie access types are re-exported for the tests and the policy.
+mod mercury_partitions;
 mod mercury_rewrite;
 pub mod mercury_ws;
 pub mod net_policy;
+pub use mercury_partitions::{CookieAccess, CookieScope, MAX_PARTITIONS};
 
 /// An implementation of the [Fetch specification](https://fetch.spec.whatwg.org/)
 pub mod fetch {
