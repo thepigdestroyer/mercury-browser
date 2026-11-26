@@ -50,6 +50,8 @@ pub struct RunSpec {
     pub direction: Direction,
     pub dom_start: usize,
     pub dom_end: usize,
+    /// DOM offset of each grapheme, plus one past the end; one more entry than graphemes.
+    pub dom_offsets: Vec<usize>,
 }
 
 /// The runs of one line, and what was dropped to stay within the limits.
@@ -150,12 +152,11 @@ pub fn build_runs(line: &LineInput<'_>) -> RunBuild {
         } else {
             (None, None)
         };
-        let dom_start = line.dom_offsets.get(run_start).copied().unwrap_or(0);
-        let dom_end = line
-            .dom_offsets
-            .get(run_end)
-            .copied()
-            .unwrap_or(dom_start + run_end - run_start);
+        let dom_offsets: Vec<usize> = (run_start..=run_end)
+            .map(|index| line.dom_offsets.get(index).copied().unwrap_or(index))
+            .collect();
+        let dom_start = dom_offsets[0];
+        let dom_end = *dom_offsets.last().unwrap_or(&dom_start);
         build.runs.push(RunSpec {
             text,
             character_lengths,
@@ -165,6 +166,7 @@ pub fn build_runs(line: &LineInput<'_>) -> RunBuild {
             direction: line.direction,
             dom_start,
             dom_end,
+            dom_offsets,
         });
         run_start = run_end;
     }
@@ -195,21 +197,67 @@ fn advances_for(
     (Some(positions), Some(widths))
 }
 
-// stub
-pub fn dom_offset_to_position(_runs: &[RunSpec], _dom_offset: usize) -> Option<TextPositionSpec> {
-    None
+/// The run and character index for a DOM offset. An offset on a boundary between two runs belongs to
+/// the earlier run, at its end, unless the earlier run ends a line.
+pub fn dom_offset_to_position(runs: &[RunSpec], dom_offset: usize) -> Option<TextPositionSpec> {
+    let containing = runs.iter().enumerate().find(|(index, run)| {
+        let next_starts_here = runs
+            .get(index + 1)
+            .is_some_and(|next| next.dom_start == dom_offset);
+        dom_offset >= run.dom_start
+            && dom_offset <= run.dom_end
+            && !(dom_offset == run.dom_end && next_starts_here)
+    });
+    if let Some((run_index, run)) = containing {
+        let character_index = run
+            .dom_offsets
+            .iter()
+            .position(|&offset| offset >= dom_offset)
+            .unwrap_or(run.character_lengths.len());
+        return Some(TextPositionSpec {
+            run: run_index,
+            character_index,
+        });
+    }
+    runs.iter()
+        .position(|run| run.dom_start > dom_offset)
+        .map(|run| TextPositionSpec {
+            run,
+            character_index: 0,
+        })
 }
 
-// stub
-pub fn position_to_dom_offset(_runs: &[RunSpec], _pos: TextPositionSpec) -> Option<usize> {
-    None
+/// The DOM offset for a run position, the inverse of [`dom_offset_to_position`].
+pub fn position_to_dom_offset(runs: &[RunSpec], pos: TextPositionSpec) -> Option<usize> {
+    let run = runs.get(pos.run)?;
+    run.dom_offsets.get(pos.character_index).copied()
 }
 
-// stub
+/// The selection between two DOM offsets, clipped to the runs. Returns `None` when neither offset
+/// lies in a run. A backward selection keeps its direction: anchor is the earlier offset when the
+/// selection runs forward, and the later one when it runs backward.
 pub fn clip_selection(
-    _runs: &[RunSpec],
-    _dom_anchor: usize,
-    _dom_focus: usize,
+    runs: &[RunSpec],
+    dom_anchor: usize,
+    dom_focus: usize,
 ) -> Option<SelectionSpec> {
-    None
+    let lo = dom_anchor.min(dom_focus);
+    let hi = dom_anchor.max(dom_focus);
+    if !runs
+        .iter()
+        .any(|run| run.dom_end >= lo && run.dom_start <= hi)
+    {
+        return None;
+    }
+    let anchor = clip_end(runs, dom_anchor)?;
+    let focus = clip_end(runs, dom_focus)?;
+    Some(SelectionSpec { anchor, focus })
+}
+
+/// One end of a selection, moved into the nearest run when it lies outside all of them.
+fn clip_end(runs: &[RunSpec], dom_offset: usize) -> Option<TextPositionSpec> {
+    let first = runs.first()?;
+    let last = runs.last()?;
+    let clipped = dom_offset.clamp(first.dom_start, last.dom_end);
+    dom_offset_to_position(runs, clipped)
 }

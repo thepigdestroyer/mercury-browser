@@ -1,0 +1,7 @@
+# SPDX-License-Identifier: PolyForm-Noncommercial-1.0.0
+# SPDX-FileCopyrightText: 2026 Mrinal Joshi and the Mercury Browser contributors
+# Rewrite with: MERCURY_A11Y_BLESS=1 cargo test --release -p mercury-a11y --test snapshot
+label value="Hello world"
+  text-run value="Hello " lengths=[1, 1, 1, 1, 1, 1] words=[0]
+  text-run value="world" lengths=[1, 1, 1, 1, 1] words=[0]
+  selection=(0@2, 1@2)
