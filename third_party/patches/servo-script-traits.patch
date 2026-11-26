@@ -1,0 +1,117 @@
+# Mercury's changes to servo-script-traits 0.8.0, against the crate as published on crates.io
+# (SHA-256 6b56acb2276ef730d1a71c1e076b3a8003e7442ce92778847422f773c566d00f). Written by `mercury-servo-patches export`; do not edit by hand.
+# The changed files stay under the licence of servo-script-traits.
+diff --git a/lib.rs b/lib.rs
+--- a/lib.rs
++++ b/lib.rs
+@@ -64,6 +64,11 @@
+ use webrender_api::ImageKey;
+ use webrender_api::units::DevicePixel;
+
++// Mercury: the lanes' script-thread messages (H1).
++/// Mercury's lane messages to a script thread.
++pub mod mercury;
++pub use mercury::{MercuryScriptThreadMsg, PageThreadMsg};
++
+ /// A representation of the `WebView` state that is kept in each `EventLoop`
+ /// and in the `Constellation`.
+ #[derive(Clone, Debug, Deserialize, MallocSizeOf, Serialize)]
+@@ -303,6 +308,8 @@
+     ReportCSSError(PipelineId, String, u32, u32, String),
+     /// Reload the given page.
+     Reload(PipelineId),
++    /// Mercury: a message of one of Mercury's lanes (H1).
++    Mercury(mercury::MercuryScriptThreadMsg),
+     /// Notifies the script thread about a new recorded paint metric.
+     PaintMetric(PipelineId, PaintMetricEvent),
+     /// Notifies the media session about a user requested media session action.
+diff --git a/mercury/mod.rs b/mercury/mod.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/mod.rs
+@@ -0,0 +1,31 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the messages Mercury's lanes send to a script thread. One payload type per lane; add
++// lanes here, but never grow `ScriptThreadMessage` itself.
++
++/// The `page` lane's messages.
++pub mod page;
++
++use std::fmt;
++
++use serde::{Deserialize, Serialize};
++use strum::IntoStaticStr;
++
++pub use self::page::PageThreadMsg;
++
++/// Every Mercury message to a script thread, wrapped once in `ScriptThreadMessage::Mercury`.
++#[derive(Deserialize, IntoStaticStr, Serialize)]
++pub enum MercuryScriptThreadMsg {
++    /// A message of the `page` lane.
++    Page(PageThreadMsg),
++}
++
++impl fmt::Debug for MercuryScriptThreadMsg {
++    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
++        match self {
++            Self::Page(message) => write!(formatter, "Page({message:?})"),
++        }
++    }
++}
+diff --git a/mercury/page.rs b/mercury/page.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/page.rs
+@@ -0,0 +1,49 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file belongs to the page lane. Add variants here only, never in another lane's file.
++
++use std::fmt;
++
++use serde::{Deserialize, Serialize};
++use servo_base::id::PipelineId;
++use strum::IntoStaticStr;
++
++/// Messages from the constellation to a script thread for the `page` lane. `Debug` prints only the
++/// variant name.
++#[derive(Deserialize, IntoStaticStr, Serialize)]
++pub enum PageThreadMsg {
++    /// Ask the page whether it may unload; answered with `UnloadChecked`.
++    PermitUnload {
++        /// The document asked.
++        pipeline_id: PipelineId,
++        /// The question's id, echoed in the answer.
++        request_id: u64,
++    },
++    /// Stop loading the document.
++    StopLoading(PipelineId),
++    /// Reload the document, bypassing the cache.
++    ReloadBypassingCache(PipelineId),
++    /// The navigation of the document was refused.
++    NavigationRefused(PipelineId),
++}
++
++impl PageThreadMsg {
++    /// The document the message is about.
++    pub fn pipeline_id(&self) -> PipelineId {
++        match self {
++            Self::PermitUnload { pipeline_id, .. } => *pipeline_id,
++            Self::StopLoading(pipeline_id) |
++            Self::ReloadBypassingCache(pipeline_id) |
++            Self::NavigationRefused(pipeline_id) => *pipeline_id,
++        }
++    }
++}
++
++impl fmt::Debug for PageThreadMsg {
++    fn fmt(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
++        let variant: &'static str = self.into();
++        write!(formatter, "{variant}")
++    }
++}

@@ -1144,7 +1144,19 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
      pub(crate) fn set_activity(&self, cx: &mut JSContext, activity: DocumentActivity) {
          // This function should only be called on documents with a browsing context
          assert!(self.has_browsing_context);
-@@ -2531,6 +2544,8 @@
+@@ -2383,7 +2396,10 @@
+             .unwrap()
+             .ReturnValue()
+             .is_empty();
+-        if default_prevented || return_value_not_empty {
++        // Mercury: the page lane's unload question (H5).
++        if (default_prevented || return_value_not_empty) &&
++            crate::mercury_page::unload::may_prompt(&self.window)
++        {
+             let (chan, port) = generic_channel::channel().expect("Failed to create IPC channel!");
+             let msg = EmbedderMsg::AllowUnload(self.webview_id(), chan);
+             self.send_to_embedder(msg);
+@@ -2531,6 +2547,8 @@
      }
 
      /// Step 9 of <https://html.spec.whatwg.org/multipage/#the-end>
@@ -1153,7 +1165,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
      fn queue_document_completion(&self, cx: &mut JSContext) {
          // The initial about:blank document passes through
          // https://html.spec.whatwg.org/multipage/#creating-a-new-browsing-context
-@@ -3429,6 +3444,8 @@
+@@ -3429,6 +3447,8 @@
          }
 
          let (reflow_phases, statistics) = self.window().reflow(cx, ReflowGoal::UpdateTheRendering);
@@ -1162,7 +1174,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          let phases = phases.union(reflow_phases);
 
          self.window().paint_api().update_epoch(
-@@ -3605,7 +3622,7 @@
+@@ -3605,7 +3625,7 @@
      }
 
      /// <https://html.spec.whatwg.org/multipage/#allowed-to-use>
@@ -1171,7 +1183,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          // Step 1. If document's browsing context is null, then return false.
          if !self.has_browsing_context {
              return false;
-@@ -3621,6 +3638,19 @@
+@@ -3621,6 +3641,19 @@
          // Step 4. Return false.
          // TODO: All features are currently enabled for `Document`s because we do not
          // implement the Permissions Policy specification.
@@ -1191,7 +1203,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          true
      }
 
-@@ -4333,6 +4363,8 @@
+@@ -4333,6 +4366,8 @@
              dirty_canvases: DomRefCell::new(Default::default()),
              has_pending_animated_image_update: Cell::new(false),
              selection: MutNullableDom::new(None),
@@ -1200,7 +1212,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
              timeline: Dom::from_ref(timeline),
              animation_manager: AnimationManager::new(),
              dirty_root: Default::default(),
-@@ -5133,6 +5165,8 @@
+@@ -5133,6 +5168,8 @@
              .collect()
      }
 
@@ -1209,7 +1221,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
      pub(crate) fn advance_animation_timeline_for_testing(&self, delta: TimeDuration) {
          self.timeline.advance_specific(delta);
          let current_timeline_value = self.current_animation_timeline_value();
-@@ -6793,11 +6827,18 @@
+@@ -6793,11 +6830,18 @@
          let url = self.url();
          let (tx, rx) =
              profile_generic_channel::channel(self.global().time_profiler_chan().clone()).unwrap();
@@ -1229,7 +1241,7 @@ diff --git a/dom/document/document.rs b/dom/document/document.rs
          let cookies = rx.recv().unwrap();
          Ok(cookies.map_or(DOMString::new(), DOMString::from))
      }
-@@ -6822,11 +6863,18 @@
+@@ -6822,11 +6866,18 @@
              vec![]
          };
 
@@ -1412,12 +1424,12 @@ diff --git a/dom/document/document_event_handler.rs b/dom/document/document_even
 +            ImeEvent::InsertText { text, replacement } => {
 +                self.ime
 +                    .insert_text(cx, &self.window.Document(), text, replacement)
++            },
++            ImeEvent::Composition(composition_event) => {
++                self.handle_ime_composition(cx, composition_event)
              },
 -            ImeEvent::Composition(composition_event) => composition_event,
 -        };
-+            ImeEvent::Composition(composition_event) => {
-+                self.handle_ime_composition(cx, composition_event)
-+            },
 +        }
 +    }
 
@@ -1458,6 +1470,15 @@ diff --git a/dom/document/document_event_handler.rs b/dom/document/document_even
      fn handle_wheel_event(
          &self,
          cx: &mut JSContext,
+@@ -3066,6 +3165,8 @@
+     ///
+     /// TODO: This should be sending a referrer and not setting `noopener`.
+     pub(crate) fn open_url_in_new_webview(&self, cx: &mut JSContext, url: ServoUrl) {
++        // Mercury: the open hints of a middle click (H14).
++        crate::mercury_page::open::capture_middle_click(&self.window);
+         let Some(browsing_context) = self.window.document_unrooted(cx.no_gc()).browsing_context()
+         else {
+             return;
 diff --git a/dom/document/editing.rs b/dom/document/editing.rs
 --- a/dom/document/editing.rs
 +++ b/dom/document/editing.rs
@@ -5793,6 +5814,35 @@ diff --git a/dom/html/htmlelement.rs b/dom/html/htmlelement.rs
              // Adding or removing a "disabled" attribute may disable or enable a disableable
              // form control.
              (&local_name!("disabled"), _) => {
+diff --git a/dom/html/links/relations.rs b/dom/html/links/relations.rs
+--- a/dom/html/links/relations.rs
++++ b/dom/html/links/relations.rs
+@@ -405,12 +405,12 @@
+     // Also allow the user to open links in a new WebView by pressing either the meta or
+     // control key (depending on the platform).
+     let document = subject.owner_document();
++    let modifier_new_tab = document
++        .event_handler()
++        .alternate_action_keyboard_modifier_active();
+     let target_attribute_value =
+         if subject.is::<HTMLAreaElement>() || subject.is::<HTMLAnchorElement>() {
+-            if document
+-                .event_handler()
+-                .alternate_action_keyboard_modifier_active()
+-            {
++            if modifier_new_tab {
+                 Some(DOMString::from_static("_blank"))
+             } else {
+                 get_element_target(subject, None)
+@@ -432,6 +432,8 @@
+     //         choosing a navigable given targetAttributeValue, subject's node navigable, and
+     //         noopener.
+     let window = document.window();
++    // Mercury: the open hints of a followed link (H13).
++    crate::mercury_page::open::capture_link(window, modifier_new_tab);
+
+     let Some(source) = document.browsing_context() else {
+         return;
 diff --git a/dom/indexeddb/idbcursor.rs b/dom/indexeddb/idbcursor.rs
 --- a/dom/indexeddb/idbcursor.rs
 +++ b/dom/indexeddb/idbcursor.rs
@@ -10796,6 +10846,22 @@ diff --git a/dom/permission/permissions.rs b/dom/permission/permissions.rs
      // Step 4. If there exists a policy-controlled feature for feature and settings'
      // relevant global object has an associated Document run the following step:
      //   1. Let document be settings' relevant global object's associated Document.
+@@ -362,6 +372,7 @@
+     let (sender, receiver) = generic_channel::channel().expect("Failed to create IPC channel!");
+     global_scope.send_to_embedder(EmbedderMsg::PromptPermission(
+         webview_id,
++        global_scope.pipeline_id(),
+         name.convert(),
+         sender,
+     ));
+@@ -409,6 +420,7 @@
+
+     global_scope.send_to_embedder(EmbedderMsg::RequestPermission(
+         webview_id,
++        global_scope.pipeline_id(),
+         name.convert(),
+         callback,
+     ));
 diff --git a/dom/range/range.rs b/dom/range/range.rs
 --- a/dom/range/range.rs
 +++ b/dom/range/range.rs
@@ -11091,6 +11157,20 @@ diff --git a/dom/url/url.rs b/dom/url/url.rs
          let origin = global.origin().immutable().clone();
 
          if let Ok(url) = ServoUrl::parse(&url.str()) &&
+diff --git a/dom/wakelock/wakelock.rs b/dom/wakelock/wakelock.rs
+--- a/dom/wakelock/wakelock.rs
++++ b/dom/wakelock/wakelock.rs
+@@ -85,8 +85,10 @@
+         let task_manager = global.task_manager();
+         let task_source = task_manager.dom_manipulation_task_source();
+         let callback = callback_promise(&promise, self, task_source);
++        // Mercury: the requesting pipeline is carried with the permission (H7).
+         global.send_to_embedder(EmbedderMsg::RequestPermission(
+             webview_id,
++            global.pipeline_id(),
+             embedder_traits::PermissionFeature::ScreenWakeLock(self.type_.get().convert()),
+             callback,
+         ));
 diff --git a/dom/webgl/validations/tex_image_2d.rs b/dom/webgl/validations/tex_image_2d.rs
 --- a/dom/webgl/validations/tex_image_2d.rs
 +++ b/dom/webgl/validations/tex_image_2d.rs
@@ -12178,6 +12258,34 @@ diff --git a/dom/window/window.rs b/dom/window/window.rs
      }
 
      /// <https://html.spec.whatwg.org/multipage/#sticky-activation>
+diff --git a/dom/window/windowproxy.rs b/dom/window/windowproxy.rs
+--- a/dom/window/windowproxy.rs
++++ b/dom/window/windowproxy.rs
+@@ -381,6 +381,8 @@
+             opener_webview_id: window.webview_id(),
+             opener_pipeline_id: self.currently_active.get().unwrap(),
+             response_sender,
++            // Mercury: the open hints of this request (H12).
++            page_hints: crate::mercury_page::open::take(),
+         };
+         let constellation_msg = ScriptToConstellationMessage::CreateAuxiliaryWebView(load_info);
+         window.send_to_constellation(constellation_msg);
+@@ -525,6 +527,15 @@
+         if self.discarded.get() {
+             return Ok(None);
+         }
++        // Mercury: the open hints of this `window.open` (H12).
++        if let Some(window) = self
++            .currently_active
++            .get()
++            .and_then(ScriptThread::find_document)
++            .map(|doc| DomRoot::from_ref(doc.window()))
++        {
++            crate::mercury_page::open::capture_window_open(&window, &features.str());
++        }
+         // Step 2. Let sourceDocument be the entry global object's associated Document.
+         //
+         // It's possible to end up in a situation where JS code is executing but
 diff --git a/dom/workers/dedicatedworkerglobalscope.rs b/dom/workers/dedicatedworkerglobalscope.rs
 --- a/dom/workers/dedicatedworkerglobalscope.rs
 +++ b/dom/workers/dedicatedworkerglobalscope.rs
@@ -12407,7 +12515,18 @@ diff --git a/event_loop/script_thread.rs b/event_loop/script_thread.rs
  use net_traits::request::{Referrer, RequestId};
  use net_traits::response::ResponseInit;
  use net_traits::{
-@@ -3366,6 +3366,8 @@
+@@ -1907,6 +1907,10 @@
+                 self.handle_css_error_reporting(pipeline_id, filename, line, column, msg)
+             },
+             ScriptThreadMessage::Reload(pipeline_id) => self.handle_reload(cx, pipeline_id),
++            // Mercury: the page lane (H3).
++            ScriptThreadMessage::Mercury(message) => {
++                crate::mercury_page::handle_thread_message(cx, message)
++            },
+             ScriptThreadMessage::Resize(id, size, size_type) => {
+                 self.handle_resize_message(id, size, size_type);
+             },
+@@ -3366,6 +3370,8 @@
      }
 
      /// Handles animation tick requested during testing.
@@ -12416,7 +12535,16 @@ diff --git a/event_loop/script_thread.rs b/event_loop/script_thread.rs
      pub(crate) fn handle_tick_all_animations_for_testing(no_gc: &NoGC, id: PipelineId) {
          with_script_thread(|script_thread| {
              let Some(document) = script_thread.documents.borrow().find_document(id) else {
-@@ -4170,7 +4172,8 @@
+@@ -3717,6 +3723,8 @@
+         self.documents
+             .borrow_mut()
+             .insert(incomplete.pipeline_id, &document);
++        // Mercury: the page lane's identity and main-document response (H4).
++        crate::mercury_page::document_committed(&window, Some(metadata));
+
+         // Step 10. Set window's associated Document to document.
+         window.init_document(&document);
+@@ -4170,7 +4178,8 @@
              .borrow_mut()
              .push((incomplete.pipeline_id, context));
 
@@ -12426,7 +12554,7 @@ diff --git a/event_loop/script_thread.rs b/event_loop/script_thread.rs
          incomplete.controller = FetchController::new(
              request_builder.id,
              false,
-@@ -4310,6 +4313,17 @@
+@@ -4310,6 +4319,17 @@
          }
      }
 
@@ -12444,7 +12572,7 @@ diff --git a/event_loop/script_thread.rs b/event_loop/script_thread.rs
      fn handle_navigation_redirect(&self, id: PipelineId, metadata: &Metadata) {
          // TODO(mrobinson): This tries to accomplish some steps from
          // <https://html.spec.whatwg.org/multipage/#process-a-navigate-fetch>, but it's
-@@ -4332,7 +4346,8 @@
+@@ -4332,7 +4352,8 @@
                  metadata.final_url.clone(),
              ));
 
@@ -12483,17 +12611,287 @@ diff --git a/layout_dom/servo_layout_node.rs b/layout_dom/servo_layout_node.rs
      fn text_node_paints_caret(&self) -> bool {
          self.node.text_node_paints_caret()
      }
+diff --git a/lib.rs b/lib.rs
+--- a/lib.rs
++++ b/lib.rs
+@@ -36,6 +36,8 @@
+ mod engine;
+ mod event_loop;
+ pub mod layout_dom;
++// Mercury: the page lane's script half (H2).
++mod mercury_page;
+ pub(crate) mod messaging;
+ pub(crate) mod mime;
+ mod navigation;
+diff --git a/mercury_page/identity.rs b/mercury_page/identity.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/identity.rs
+@@ -0,0 +1,35 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the page lane's document identity. Stub: returns defaults until the lane's tasks fill it.
++
++use embedder_traits::{MAX_ORIGIN_BYTES, RequesterInfo};
++use servo_base::id::{BrowsingContextId, PipelineId};
++use servo_url::ImmutableOrigin;
++
++use crate::dom::document::Document;
++
++/// The ASCII serialisation of `origin`, or `"null"` when it is opaque or longer than
++/// [`MAX_ORIGIN_BYTES`].
++pub(crate) fn origin_string(origin: &ImmutableOrigin) -> String {
++    let serialised = origin.ascii_serialization();
++    if serialised.len() > MAX_ORIGIN_BYTES {
++        return "null".to_owned();
++    }
++    serialised.into_owned()
++}
++
++/// The identity of `document`. Stub: returns an empty identity.
++pub(crate) fn requester_info(_document: &Document) -> RequesterInfo {
++    RequesterInfo {
++        pipeline_id: PipelineId::new(),
++        browsing_context_id: BrowsingContextId::new(),
++        origin: "null".to_owned(),
++        top_level_origin: "null".to_owned(),
++        is_top_level: false,
++    }
++}
++
++/// Sends the identity of `document` to the embedder. Stub: does nothing.
++pub(crate) fn announce(_document: &Document) {}
+diff --git a/mercury_page/mod.rs b/mercury_page/mod.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/mod.rs
+@@ -0,0 +1,28 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this directory is the page lane's script half. One file per concern; Mercury-only.
++
++pub(crate) mod identity;
++pub(crate) mod open;
++pub(crate) mod refused;
++pub(crate) mod reload;
++pub(crate) mod response;
++pub(crate) mod stop;
++pub(crate) mod unload;
++
++use js::context::JSContext;
++use log::warn;
++use net_traits::Metadata;
++use script_traits::MercuryScriptThreadMsg;
++
++use crate::dom::window::Window;
++
++/// Handle a message from the constellation that belongs to the page lane. Stub: warns only.
++pub(crate) fn handle_thread_message(_cx: &mut JSContext, message: MercuryScriptThreadMsg) {
++    warn!("page lane: {message:?} not handled yet");
++}
++
++/// Called once a document is committed to its window. Stub: does nothing.
++pub(crate) fn document_committed(_window: &Window, _metadata: Option<&Metadata>) {}
+diff --git a/mercury_page/open.rs b/mercury_page/open.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/open.rs
+@@ -0,0 +1,23 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the page lane's open hints. Stub: records nothing until the lane's tasks fill it.
++
++use embedder_traits::OpenHints;
++
++use crate::dom::window::Window;
++
++/// Records that a link was followed, from the modifier keys. Stub: does nothing.
++pub(crate) fn capture_link(_window: &Window, _modifier_new_tab: bool) {}
++
++/// Records that a middle click opened a new webview. Stub: does nothing.
++pub(crate) fn capture_middle_click(_window: &Window) {}
++
++/// Records the features of a `window.open`. Stub: does nothing.
++pub(crate) fn capture_window_open(_window: &Window, _features: &str) {}
++
++/// Takes the hints recorded for the next opening, and resets them. Stub: always the default.
++pub(crate) fn take() -> OpenHints {
++    OpenHints::default()
++}
+diff --git a/mercury_page/refused.rs b/mercury_page/refused.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/refused.rs
+@@ -0,0 +1,22 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the page lane's refused navigation. Stub until the lane's tasks fill it.
++
++use js::context::JSContext;
++use servo_base::id::PipelineId;
++use servo_url::ServoUrl;
++
++/// Whether `url` has a scheme that does not fetch: anything except `http`, `https`, `file`, `data`,
++/// `blob`, `about`, `javascript`, `resource`, `urlinfo` and `servo`.
++pub(crate) fn is_non_fetch_scheme(url: &ServoUrl) -> bool {
++    !matches!(
++        url.scheme(),
++        "http" | "https" | "file" | "data" | "blob" | "about" | "javascript" | "resource" | "urlinfo" |
++            "servo"
++    )
++}
++
++/// The navigation of `pipeline_id` was refused. Stub: does nothing.
++pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId) {}
+diff --git a/mercury_page/reload.rs b/mercury_page/reload.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/reload.rs
+@@ -0,0 +1,22 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the page lane's reload. Stub: does nothing until the lane's tasks fill it.
++
++use std::cell::Cell;
++
++use js::context::JSContext;
++use servo_base::id::PipelineId;
++
++thread_local! {
++    static BYPASS: Cell<bool> = const { Cell::new(false) };
++}
++
++/// Reload the document of `pipeline_id`, bypassing the cache. Stub: does nothing.
++pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId) {}
++
++/// Whether the next fetch must bypass the cache. Clears the flag; `false` in the stub.
++pub(crate) fn take_bypass() -> bool {
++    BYPASS.with(|bypass| bypass.replace(false))
++}
+diff --git a/mercury_page/response.rs b/mercury_page/response.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/response.rs
+@@ -0,0 +1,33 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the page lane's main-document response. Stub: returns defaults until the lane's tasks fill it.
++
++use embedder_traits::MainDocumentResponse;
++use http::{HeaderMap, StatusCode};
++use net_traits::Metadata;
++use servo_base::id::PipelineId;
++use servo_url::ServoUrl;
++
++use crate::dom::document::Document;
++
++/// The response of the main document. Stub: returns an empty response.
++pub(crate) fn build(
++    pipeline_id: PipelineId,
++    _url: &ServoUrl,
++    _status: &StatusCode,
++    _headers: Option<&HeaderMap>,
++) -> MainDocumentResponse {
++    MainDocumentResponse {
++        pipeline_id,
++        url: String::new(),
++        status: 0,
++        status_text: String::new(),
++        content_type: None,
++        headers: Vec::new(),
++    }
++}
++
++/// Sends the main-document response of `document` to the embedder. Stub: does nothing.
++pub(crate) fn announce(_document: &Document, _metadata: &Metadata) {}
+diff --git a/mercury_page/stop.rs b/mercury_page/stop.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/stop.rs
+@@ -0,0 +1,11 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the page lane's stop. Stub: does nothing until the lane's tasks fill it.
++
++use js::context::JSContext;
++use servo_base::id::PipelineId;
++
++/// Stop loading the document of `pipeline_id`. Stub: does nothing.
++pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId) {}
+diff --git a/mercury_page/unload.rs b/mercury_page/unload.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury_page/unload.rs
+@@ -0,0 +1,18 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: the page lane's unload question. Stub: never prompts until the lane's tasks fill it.
++
++use js::context::JSContext;
++use servo_base::id::PipelineId;
++
++use crate::dom::window::Window;
++
++/// Whether the unload prompt applies to `window`. Stub: `true`, so the existing behaviour holds.
++pub(crate) fn may_prompt(_window: &Window) -> bool {
++    true
++}
++
++/// Answer the unload question `request_id` of `pipeline_id`. Stub: does nothing.
++pub(crate) fn handle(_cx: &mut JSContext, _pipeline_id: PipelineId, _request_id: u64) {}
+diff --git a/messaging.rs b/messaging.rs
+--- a/messaging.rs
++++ b/messaging.rs
+@@ -18,7 +18,7 @@
+ use profile_traits::mem::{self as profile_mem, OpaqueSender, ReportsChan};
+ use profile_traits::time::{self as profile_time};
+ use rustc_hash::FxHashSet;
+-use script_traits::{Painter, ScriptThreadMessage};
++use script_traits::{MercuryScriptThreadMsg, Painter, ScriptThreadMessage};
+ use servo_base::generic_channel::{GenericCallback, GenericSender, RoutedReceiver};
+ use servo_base::id::{PipelineId, WebViewId};
+ #[cfg(feature = "bluetooth")]
+@@ -117,6 +117,10 @@
+                 ScriptThreadMessage::ForwardAccessibilityAction(id, _) => Some(*id),
+                 ScriptThreadMessage::TriggerGarbageCollection => None,
+                 ScriptThreadMessage::SetNetworkOnlineState(_) => None,
++                // Mercury: the page lane's messages name their document (H1).
++                ScriptThreadMessage::Mercury(MercuryScriptThreadMsg::Page(message)) => {
++                    Some(message.pipeline_id())
++                },
+             },
+             MixedMessage::FromScript(inner_msg) => match inner_msg {
+                 MainThreadScriptMsg::Common(CommonScriptMsg::Task(_, _, pipeline_id, _)) => {
 diff --git a/navigation.rs b/navigation.rs
 --- a/navigation.rs
 +++ b/navigation.rs
-@@ -17,6 +17,7 @@
+@@ -17,8 +17,9 @@
  use js::context::JSContext;
  use net_traits::blob_url_store::UrlWithBlobClaim;
  use net_traits::fetch::fetch_controller::FetchController;
 +use net_traits::pub_domains::Site;
  use net_traits::request::{
-     CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
+-    CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
++    CacheMode, CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
      RequestBuilder, RequestClient, RequestMode,
+ };
+ use net_traits::response::ResponseInit;
 @@ -219,7 +220,15 @@
          self.webview_state.id
      }
@@ -12523,6 +12921,53 @@ diff --git a/navigation.rs b/navigation.rs
          };
 
          let mut request_builder = RequestBuilder::new(
+@@ -265,6 +277,10 @@
+
+         request_builder.reload_navigation = self.load_data.reload_navigation;
+         request_builder.history_navigation = self.load_data.history_navigation;
++        // Mercury: a reload that bypasses the cache (H20).
++        if crate::mercury_page::reload::take_bypass() {
++            request_builder.cache_mode = CacheMode::Reload;
++        }
+
+         if !request_builder.headers.contains_key(header::ACCEPT) {
+             request_builder
+@@ -535,9 +551,11 @@
+     //
+     // TODO: in parallel
+
++    // Mercury: a scheme that does not fetch never unloads the document (H19).
++    let unloads = !crate::mercury_page::refused::is_non_fetch_scheme(&load_data.url);
+     // Step 24.1. Let unloadPromptCanceled be the result of checking if unloading
+     // is canceled for navigable's active document's inclusive descendant navigables.
+-    let unload_prompt_canceled = document.check_if_unloading_is_cancelled(cx, false);
++    let unload_prompt_canceled = !unloads || document.check_if_unloading_is_cancelled(cx, false);
+     // Step 24.2. If unloadPromptCanceled is not "continue",
+     // or navigable's ongoing navigation is no longer navigationId:
+     //
+@@ -554,13 +572,15 @@
+     // Step 24.4. Queue a global task on the navigation and traversal task source given
+     // navigable's active window to abort a document and its descendants given navigable's
+     // active document.
+-    let trusted_document = Trusted::new(&*document);
+-    window
+-        .task_manager()
+-        .navigation_and_traversal_task_source()
+-        .queue(task!(abort_a_document_and_its_descendants: move |cx| {
+-            trusted_document.root().abort_a_document_and_its_descendants(cx, AbortReason::Navigate);
+-        }));
++    if unloads {
++        let trusted_document = Trusted::new(&*document);
++        window
++            .task_manager()
++            .navigation_and_traversal_task_source()
++            .queue(task!(abort_a_document_and_its_descendants: move |cx| {
++                trusted_document.root().abort_a_document_and_its_descendants(cx, AbortReason::Navigate);
++            }));
++    }
+
+     // Step 24.9. Attempt to populate the history entry's document for historyEntry,
+     // given navigable, "navigate", sourceSnapshotParams, targetSnapshotParams,
 diff --git a/tasks/task_manager.rs b/tasks/task_manager.rs
 --- a/tasks/task_manager.rs
 +++ b/tasks/task_manager.rs

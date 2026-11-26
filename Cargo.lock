@@ -10842,8 +10842,6 @@ dependencies = [
 [[package]]
 name = "servo-script-traits"
 version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6b56acb2276ef730d1a71c1e076b3a8003e7442ce92778847422f773c566d00f"
 dependencies = [
  "accesskit",
  "bitflags 2.13.2",

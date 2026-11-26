@@ -2396,7 +2396,10 @@ impl Document {
             .unwrap()
             .ReturnValue()
             .is_empty();
-        if default_prevented || return_value_not_empty {
+        // Mercury: the page lane's unload question (H5).
+        if (default_prevented || return_value_not_empty) &&
+            crate::mercury_page::unload::may_prompt(&self.window)
+        {
             let (chan, port) = generic_channel::channel().expect("Failed to create IPC channel!");
             let msg = EmbedderMsg::AllowUnload(self.webview_id(), chan);
             self.send_to_embedder(msg);

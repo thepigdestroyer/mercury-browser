@@ -85,8 +85,10 @@ impl WakeLockMethods<crate::DomTypeHolder> for WakeLock {
         let task_manager = global.task_manager();
         let task_source = task_manager.dom_manipulation_task_source();
         let callback = callback_promise(&promise, self, task_source);
+        // Mercury: the requesting pipeline is carried with the permission (H7).
         global.send_to_embedder(EmbedderMsg::RequestPermission(
             webview_id,
+            global.pipeline_id(),
             embedder_traits::PermissionFeature::ScreenWakeLock(self.type_.get().convert()),
             callback,
         ));

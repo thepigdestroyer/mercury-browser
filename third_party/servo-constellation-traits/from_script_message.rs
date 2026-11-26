@@ -495,6 +495,8 @@ pub struct AuxiliaryWebViewCreationRequest {
     pub opener_pipeline_id: PipelineId,
     /// Sender for the constellation’s response to our request.
     pub response_sender: GenericSender<Option<AuxiliaryWebViewCreationResponse>>,
+    // Mercury: how the window was opened (H11, page lane).
+    pub page_hints: embedder_traits::OpenHints,
 }
 
 /// Constellation’s response to auxiliary browsing context creation requests.

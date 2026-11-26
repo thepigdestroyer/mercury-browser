@@ -98,6 +98,25 @@ Changes made by lane net-1 (frame identity, the rewrite hook and the mixed-conte
 - **Tested by:** the unit tests in `mercury/net.rs`, `servo-net/tests/mercury_request_path.rs` and `talaria-servo`'s `net_messages`.
 - **Drop when:** never needed upstream; keep with the scaffold.
 
+Changes made by lane page-1 (page lifecycle, scaffold).
+
+### The page lane's types — new `mercury/page.rs`
+
+- **What:** `mercury/page.rs` (Mercury's file) holds `PageMsg` (`DocumentIdentity`, `MainDocumentResponse`, `LoadStopped`,
+  `UnloadPermission`, `OpenWebViewRequested`), `RequesterInfo`, `MainDocumentResponse`, `OpenHints`, `OpenDisposition`,
+  `UnloadReason` and the caps `MAX_ORIGIN_BYTES`, `MAX_RESPONSE_HEADERS`, `MAX_HEADER_VALUE_BYTES` with the header
+  allow-list. `Debug` on each prints no URL, origin or header value.
+- **Why:** the page lane's messages between the engine and Mercury.
+- **Tested by:** the unit tests in `mercury/page.rs`.
+- **Drop when:** never needed upstream; keep with the scaffold.
+
+### `EmbedderMsg` permission requests carry the pipeline — `lib.rs`
+
+- **What:** `PromptPermission` and `RequestPermission` take a `PipelineId` after the `WebViewId`, the pipeline that asked.
+- **Why:** the page lane must tell which document asked for a screen wake lock or any other permission.
+- **Tested by:** `cargo check` of `servo`, and the wake-lock tests in the page lane.
+- **Drop when:** never needed upstream; keep until Mercury stops patching Servo's message enums.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

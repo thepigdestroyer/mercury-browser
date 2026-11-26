@@ -42,6 +42,17 @@ Changes made by lane a11y-1 (21 Nov 2026).
   (ignored, needs a GL context).
 - **Drop when:** upstream Servo activates child documents itself.
 
+## Changes made by lane page-1 (page lifecycle, scaffold)
+
+### Hooks to the page lane — `constellation.rs`, `mercury/page.rs`
+
+- **What:** the wake-lock acquire, release and pipeline-exit hooks (`handle_pipeline_exited`), the refused-navigation hook in
+  `handle_allow_navigation_response`, and the open-hints hook in `handle_script_new_auxiliary`. The handlers are stubs in
+  `mercury/page.rs` until the lane's tasks fill them.
+- **Why:** the constellation keeps the page lane's state (wake-lock counts, pending unload questions).
+- **Tested by:** `cargo check`; the lane's tests.
+- **Drop when:** the scaffold is dropped and Servo has equivalents.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

@@ -405,12 +405,12 @@ pub(crate) fn follow_hyperlink(
     // Also allow the user to open links in a new WebView by pressing either the meta or
     // control key (depending on the platform).
     let document = subject.owner_document();
+    let modifier_new_tab = document
+        .event_handler()
+        .alternate_action_keyboard_modifier_active();
     let target_attribute_value =
         if subject.is::<HTMLAreaElement>() || subject.is::<HTMLAnchorElement>() {
-            if document
-                .event_handler()
-                .alternate_action_keyboard_modifier_active()
-            {
+            if modifier_new_tab {
                 Some(DOMString::from_static("_blank"))
             } else {
                 get_element_target(subject, None)
@@ -432,6 +432,8 @@ pub(crate) fn follow_hyperlink(
     //         choosing a navigable given targetAttributeValue, subject's node navigable, and
     //         noopener.
     let window = document.window();
+    // Mercury: the open hints of a followed link (H13).
+    crate::mercury_page::open::capture_link(window, modifier_new_tab);
 
     let Some(source) = document.browsing_context() else {
         return;

@@ -381,6 +381,8 @@ impl WindowProxy {
             opener_webview_id: window.webview_id(),
             opener_pipeline_id: self.currently_active.get().unwrap(),
             response_sender,
+            // Mercury: the open hints of this request (H12).
+            page_hints: crate::mercury_page::open::take(),
         };
         let constellation_msg = ScriptToConstellationMessage::CreateAuxiliaryWebView(load_info);
         window.send_to_constellation(constellation_msg);
@@ -524,6 +526,15 @@ impl WindowProxy {
         // and https://github.com/whatwg/html/issues/11797 for a discussion at the level of the spec.
         if self.discarded.get() {
             return Ok(None);
+        }
+        // Mercury: the open hints of this `window.open` (H12).
+        if let Some(window) = self
+            .currently_active
+            .get()
+            .and_then(ScriptThread::find_document)
+            .map(|doc| DomRoot::from_ref(doc.window()))
+        {
+            crate::mercury_page::open::capture_window_open(&window, &features.str());
         }
         // Step 2. Let sourceDocument be the entry global object's associated Document.
         //

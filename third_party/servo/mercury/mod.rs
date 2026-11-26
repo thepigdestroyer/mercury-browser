@@ -36,6 +36,9 @@ use crate::Servo;
 use crate::servo_delegate::ServoDelegate;
 use crate::webview::WebView;
 
+// Mercury: the page lane's embedder half (H-page). Lane-only; nothing else is edited.
+pub(crate) mod page;
+
 /// Deliver a Mercury lane message: to the delegate of `webview` when the web view still exists,
 /// and to the delegate of the whole `Servo` instance when the message names no web view or the web
 /// view is gone. `webview_id` is only used for the log line about a vanished web view.

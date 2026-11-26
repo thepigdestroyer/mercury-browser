@@ -161,6 +161,7 @@ servo-net = { path = "third_party/servo-net" }
 servo-net-traits = { path = "third_party/servo-net-traits" }
 servo-script = { path = "third_party/servo-script" }
 servo-script-bindings = { path = "third_party/servo-script-bindings" }
+servo-script-traits = { path = "third_party/servo-script-traits" }
 servo-script-webcrypto = { path = "third_party/servo-script-webcrypto" }
 servo-storage = { path = "third_party/servo-storage" }
 servo-storage-traits = { path = "third_party/servo-storage-traits" }

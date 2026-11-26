@@ -677,7 +677,12 @@ impl ServoInner {
                     );
                 }
             },
-            EmbedderMsg::PromptPermission(webview_id, requested_feature, response_sender) => {
+            EmbedderMsg::PromptPermission(
+                webview_id,
+                requested_pipeline,
+                requested_feature,
+                response_sender,
+            ) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
                     let permission_request = PermissionRequest {
                         requested_feature,
@@ -686,13 +691,19 @@ impl ServoInner {
                             AllowOrDeny::Deny,
                             self.servo_errors.sender(),
                         ),
+                        requested_pipeline,
                     };
                     webview
                         .delegate()
                         .request_permission(webview, permission_request);
                 }
             },
-            EmbedderMsg::RequestPermission(webview_id, requested_feature, callback) => {
+            EmbedderMsg::RequestPermission(
+                webview_id,
+                requested_pipeline,
+                requested_feature,
+                callback,
+            ) => {
                 if let Some(webview) = self.get_webview_handle(webview_id) {
                     let permission_request = PermissionRequest {
                         requested_feature,
@@ -701,6 +712,7 @@ impl ServoInner {
                             AllowOrDeny::Deny,
                             self.servo_errors.sender(),
                         ),
+                        requested_pipeline,
                     };
                     webview
                         .delegate()
@@ -1124,6 +1136,7 @@ impl Servo {
             async_runtime,
             public_storage_threads.clone(),
             private_storage_threads.clone(),
+            builder.wake_lock_delegate,
         );
 
         net::connector::prewarm_tls();
@@ -1349,6 +1362,7 @@ fn create_constellation(
     async_runtime: Box<dyn net_traits::AsyncRuntime>,
     public_storage_threads: StorageThreads,
     private_storage_threads: StorageThreads,
+    wake_lock_delegate: Box<dyn WakeLockDelegate>,
 ) {
     // Global configuration options, parsed from the command line.
     let opts = opts::get();
@@ -1393,7 +1407,7 @@ fn create_constellation(
         wgpu_image_map: paint.webgpu_image_map(),
         async_runtime,
         privileged_urls,
-        wake_lock_provider: Box::new(DefaultWakeLockDelegate),
+        wake_lock_provider: wake_lock_delegate,
     };
 
     let layout_factory = Arc::new(LayoutFactoryImpl());
@@ -1562,6 +1576,8 @@ pub struct ServoBuilder {
     preferences: Option<Box<Preferences>>,
     event_loop_waker: Box<dyn EventLoopWaker>,
     protocol_registry: ProtocolRegistry,
+    // Mercury: the screen wake-lock delegate of the constellation (H9).
+    wake_lock_delegate: Box<dyn WakeLockDelegate>,
 }
 
 impl Default for ServoBuilder {
@@ -1571,6 +1587,7 @@ impl Default for ServoBuilder {
             preferences: Default::default(),
             event_loop_waker: Box::new(DefaultEventLoopWaker),
             protocol_registry: Default::default(),
+            wake_lock_delegate: Box::new(DefaultWakeLockDelegate),
         }
     }
 }
@@ -1597,6 +1614,12 @@ impl ServoBuilder {
 
     pub fn protocol_registry(mut self, protocol_registry: ProtocolRegistry) -> Self {
         self.protocol_registry = protocol_registry;
+        self
+    }
+
+    // Mercury: sets the screen wake-lock delegate (H9).
+    pub fn wake_lock_delegate(mut self, delegate: Box<dyn WakeLockDelegate>) -> Self {
+        self.wake_lock_delegate = delegate;
         self
     }
 }

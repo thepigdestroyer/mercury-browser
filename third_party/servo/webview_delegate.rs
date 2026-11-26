@@ -77,6 +77,8 @@ impl Drop for NavigationRequest {
 pub struct PermissionRequest {
     pub(crate) requested_feature: PermissionFeature,
     pub(crate) allow_deny_request: AllowOrDenyRequest,
+    // Mercury: the pipeline that asked for the permission (H10).
+    pub(crate) requested_pipeline: servo_base::id::PipelineId,
 }
 
 impl PermissionRequest {

@@ -84,6 +84,17 @@ Changes made by lane net-1 (21 Nov 2026).
   upgrade, not in `make test`) and `talaria-servo`'s `net_messages` tests.
 - **Drop when:** the scaffold is dropped and Servo has equivalents.
 
+## Changes made by lane page-1 (page lifecycle, scaffold)
+
+### The page lane's embedder API — `mercury/page.rs`, `servo.rs`, `webview_delegate.rs`
+
+- **What:** `mercury/page.rs` adds the `WebView` page methods (`stop_loading`, `permit_unload`, `reload_bypassing_cache`) as
+  stubs. `servo.rs`: `ServoBuilder::wake_lock_delegate` (default `DefaultWakeLockDelegate`) and the permission arms bind the
+  requesting pipeline. `webview_delegate.rs`: `PermissionRequest` gets `requested_pipeline`.
+- **Why:** Mercury's embedder needs the page lane's calls and the requesting pipeline of a permission.
+- **Tested by:** `cargo check`; the lane's tests.
+- **Drop when:** the scaffold is dropped and Servo has equivalents.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

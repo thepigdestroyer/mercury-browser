@@ -19,7 +19,7 @@ use net_traits::blob_url_store::UrlWithBlobClaim;
 use net_traits::fetch::fetch_controller::FetchController;
 use net_traits::pub_domains::Site;
 use net_traits::request::{
-    CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
+    CacheMode, CredentialsMode, InsecureRequestsPolicy, Origin, PreloadedResources, RedirectMode,
     RequestBuilder, RequestClient, RequestMode,
 };
 use net_traits::response::ResponseInit;
@@ -277,6 +277,10 @@ impl InProgressLoad {
 
         request_builder.reload_navigation = self.load_data.reload_navigation;
         request_builder.history_navigation = self.load_data.history_navigation;
+        // Mercury: a reload that bypasses the cache (H20).
+        if crate::mercury_page::reload::take_bypass() {
+            request_builder.cache_mode = CacheMode::Reload;
+        }
 
         if !request_builder.headers.contains_key(header::ACCEPT) {
             request_builder
@@ -547,9 +551,11 @@ pub(crate) fn navigate(
     //
     // TODO: in parallel
 
+    // Mercury: a scheme that does not fetch never unloads the document (H19).
+    let unloads = !crate::mercury_page::refused::is_non_fetch_scheme(&load_data.url);
     // Step 24.1. Let unloadPromptCanceled be the result of checking if unloading
     // is canceled for navigable's active document's inclusive descendant navigables.
-    let unload_prompt_canceled = document.check_if_unloading_is_cancelled(cx, false);
+    let unload_prompt_canceled = !unloads || document.check_if_unloading_is_cancelled(cx, false);
     // Step 24.2. If unloadPromptCanceled is not "continue",
     // or navigable's ongoing navigation is no longer navigationId:
     //
@@ -566,13 +572,15 @@ pub(crate) fn navigate(
     // Step 24.4. Queue a global task on the navigation and traversal task source given
     // navigable's active window to abort a document and its descendants given navigable's
     // active document.
-    let trusted_document = Trusted::new(&*document);
-    window
-        .task_manager()
-        .navigation_and_traversal_task_source()
-        .queue(task!(abort_a_document_and_its_descendants: move |cx| {
-            trusted_document.root().abort_a_document_and_its_descendants(cx, AbortReason::Navigate);
-        }));
+    if unloads {
+        let trusted_document = Trusted::new(&*document);
+        window
+            .task_manager()
+            .navigation_and_traversal_task_source()
+            .queue(task!(abort_a_document_and_its_descendants: move |cx| {
+                trusted_document.root().abort_a_document_and_its_descendants(cx, AbortReason::Navigate);
+            }));
+    }
 
     // Step 24.9. Attempt to populate the history entry's document for historyEntry,
     // given navigable, "navigate", sourceSnapshotParams, targetSnapshotParams,

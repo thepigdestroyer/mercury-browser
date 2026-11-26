@@ -41,6 +41,24 @@ Changes made by lane net-1 (21 Nov 2026).
 - **Tested by:** compiling `servo-script`; the network policy's side is `servo-net/tests/net_policy.rs` and `cookie_policy.rs`.
 - **Drop when:** Servo gives workers the network partition key of their creator.
 
+## Changes made by lane page-1 (page lifecycle, scaffold)
+
+### The page lane's constellation types — new `mercury/page.rs`
+
+- **What:** `mercury/page.rs` (Mercury's file) holds `PageScriptMsg::UnloadChecked`, `PageEmbedderMsg` (`StopLoading`,
+  `PermitUnload`, `ReloadBypassingCache`, `LoadWithPolicy`, `AllowNavigationWithPolicy`), `apply_scripts_policy`,
+  `WakeLockLedger`, `UnloadTracker` and `UNLOAD_TIMEOUT`. `Debug` on both messages prints only the variant name.
+- **Why:** the constellation's state for the page lane (wake-lock counts per pipeline, pending unload questions).
+- **Tested by:** the unit tests in `mercury/page.rs`.
+- **Drop when:** never needed upstream; keep with the scaffold.
+
+### `AuxiliaryWebViewCreationRequest` carries the open hints — `from_script_message.rs`
+
+- **What:** the struct gets `page_hints: embedder_traits::OpenHints`.
+- **Why:** the embedder must see how a window was opened (a link, a middle click, a `window.open` with features).
+- **Tested by:** the page lane's open tests.
+- **Drop when:** never needed upstream; keep until Mercury stops patching this message.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

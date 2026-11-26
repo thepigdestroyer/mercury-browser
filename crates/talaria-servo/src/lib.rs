@@ -33,6 +33,7 @@ mod opengl_context;
 mod openurl;
 mod page_defaults;
 mod page_feedback;
+mod page_messages;
 mod page_requests;
 mod page_tabs;
 mod panics;
@@ -42,6 +43,7 @@ mod session_data;
 mod site_data;
 // text lane (txt-1): the engine's text input state as a browser event.
 mod text_messages;
+mod wake_lock;
 mod web_view;
 // site security
 mod certificate_exceptions;

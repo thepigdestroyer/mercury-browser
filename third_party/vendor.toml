@@ -190,6 +190,15 @@ path = "components/script_bindings"
 license = "MPL-2.0 AND BSD-3-Clause"
 
 [[crate]]
+name = "servo-script-traits"
+version = "0.8.0"
+checksum = "6b56acb2276ef730d1a71c1e076b3a8003e7442ce92778847422f773c566d00f"
+repository = "https://github.com/servo/servo"
+commit = "4e136d8ef31b7c4748fbfac606ca463f3efd7537"
+path = "components/shared/script"
+license = "MPL-2.0"
+
+[[crate]]
 name = "servo-script-webcrypto"
 version = "0.8.0"
 checksum = "c57ab02cc56817713f0a8a18a125c90604f66d20479a2cd6e572874b2b5c4d7b"

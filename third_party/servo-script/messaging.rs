@@ -18,7 +18,7 @@ use net_traits::image_cache::ImageCacheResponseMessage;
 use profile_traits::mem::{self as profile_mem, OpaqueSender, ReportsChan};
 use profile_traits::time::{self as profile_time};
 use rustc_hash::FxHashSet;
-use script_traits::{Painter, ScriptThreadMessage};
+use script_traits::{MercuryScriptThreadMsg, Painter, ScriptThreadMessage};
 use servo_base::generic_channel::{GenericCallback, GenericSender, RoutedReceiver};
 use servo_base::id::{PipelineId, WebViewId};
 #[cfg(feature = "bluetooth")]
@@ -117,6 +117,10 @@ impl MixedMessage {
                 ScriptThreadMessage::ForwardAccessibilityAction(id, _) => Some(*id),
                 ScriptThreadMessage::TriggerGarbageCollection => None,
                 ScriptThreadMessage::SetNetworkOnlineState(_) => None,
+                // Mercury: the page lane's messages name their document (H1).
+                ScriptThreadMessage::Mercury(MercuryScriptThreadMsg::Page(message)) => {
+                    Some(message.pipeline_id())
+                },
             },
             MixedMessage::FromScript(inner_msg) => match inner_msg {
                 MainThreadScriptMsg::Common(CommonScriptMsg::Task(_, _, pipeline_id, _)) => {

@@ -36,6 +36,8 @@ mod drag;
 mod engine;
 mod event_loop;
 pub mod layout_dom;
+// Mercury: the page lane's script half (H2).
+mod mercury_page;
 pub(crate) mod messaging;
 pub(crate) mod mime;
 mod navigation;

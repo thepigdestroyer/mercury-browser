@@ -1907,6 +1907,10 @@ impl ScriptThread {
                 self.handle_css_error_reporting(pipeline_id, filename, line, column, msg)
             },
             ScriptThreadMessage::Reload(pipeline_id) => self.handle_reload(cx, pipeline_id),
+            // Mercury: the page lane (H3).
+            ScriptThreadMessage::Mercury(message) => {
+                crate::mercury_page::handle_thread_message(cx, message)
+            },
             ScriptThreadMessage::Resize(id, size, size_type) => {
                 self.handle_resize_message(id, size, size_type);
             },
@@ -3719,6 +3723,8 @@ impl ScriptThread {
         self.documents
             .borrow_mut()
             .insert(incomplete.pipeline_id, &document);
+        // Mercury: the page lane's identity and main-document response (H4).
+        crate::mercury_page::document_committed(&window, Some(metadata));
 
         // Step 10. Set window's associated Document to document.
         window.init_document(&document);

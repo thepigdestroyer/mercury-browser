@@ -29,6 +29,16 @@ Changes made by lane K0 (engine base, 19 Nov 2026).
 - **Drop when:** the Servo bump that contains PR #49436. Not taken: #49404 and #49902 (they change `servo-canvas-traits`,
   which is not vendored; they arrive with B1).
 
+## Changes made by lane page-1 (page lifecycle, scaffold)
+
+### Hook to the page lane — `webgl_thread.rs`
+
+- **What:** `process` calls `mercury_drop_contexts_after_failed_receive` after its receive loop. The function is a stub until
+  the lane's tasks fill it.
+- **Why:** the page lane drops the WebGL contexts of a thread whose receive failed.
+- **Tested by:** `cargo check`; the lane's tests.
+- **Drop when:** the scaffold is dropped and Servo has equivalents.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry in the root `Cargo.toml`, the entry in

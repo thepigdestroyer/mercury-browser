@@ -3165,6 +3165,8 @@ impl DocumentEventHandler {
     ///
     /// TODO: This should be sending a referrer and not setting `noopener`.
     pub(crate) fn open_url_in_new_webview(&self, cx: &mut JSContext, url: ServoUrl) {
+        // Mercury: the open hints of a middle click (H14).
+        crate::mercury_page::open::capture_middle_click(&self.window);
         let Some(browsing_context) = self.window.document_unrooted(cx.no_gc()).browsing_context()
         else {
             return;

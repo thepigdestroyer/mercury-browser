@@ -475,6 +475,18 @@ lint, which concerns only this manifest's dependency list.
 
 The other three vendored crates compile without warnings.
 
+## Changes made by lane page-1 (page lifecycle, scaffold)
+
+### Hooks to the page lane — `mercury_page/`, `event_loop/script_thread.rs`, `dom/`, `navigation.rs`
+
+- **What:** `mod mercury_page` (crate-private, one file per concern), the `ScriptThreadMessage::Mercury` arm and the document
+  commit hook in `script_thread.rs`, the unload guard in `document.rs`, the open-hints capture in `windowproxy.rs`,
+  `relations.rs` and `document_event_handler.rs`, the refused-scheme guard and cache bypass in `navigation.rs`. Every hook is a
+  call into `mercury_page`, which is a stub until the lane's tasks fill it.
+- **Why:** the page lane's script half: identity, main-document response, unload question, stop, reload, open hints.
+- **Tested by:** `cargo check`; the lane's tests.
+- **Drop when:** the scaffold is dropped and Servo has equivalents.
+
 ## Removing this directory
 
 Remove the `[patch.crates-io]` entry and this directory once a Servo release

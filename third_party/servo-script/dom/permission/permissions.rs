@@ -372,6 +372,7 @@ fn prompt_user_from_embedder(name: PermissionName, global_scope: &GlobalScope) -
     let (sender, receiver) = generic_channel::channel().expect("Failed to create IPC channel!");
     global_scope.send_to_embedder(EmbedderMsg::PromptPermission(
         webview_id,
+        global_scope.pipeline_id(),
         name.convert(),
         sender,
     ));
@@ -419,6 +420,7 @@ pub(crate) fn request_permission_to_use_async(
 
     global_scope.send_to_embedder(EmbedderMsg::RequestPermission(
         webview_id,
+        global_scope.pipeline_id(),
         name.convert(),
         callback,
     ));

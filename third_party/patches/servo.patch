@@ -40,7 +40,7 @@ diff --git a/mercury/mod.rs b/mercury/mod.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury/mod.rs
-@@ -0,0 +1,111 @@
+@@ -0,0 +1,114 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
@@ -78,6 +78,9 @@ new file mode 100644
 +use crate::Servo;
 +use crate::servo_delegate::ServoDelegate;
 +use crate::webview::WebView;
++
++// Mercury: the page lane's embedder half (H-page). Lane-only; nothing else is edited.
++pub(crate) mod page;
 +
 +/// Deliver a Mercury lane message: to the delegate of `webview` when the web view still exists,
 +/// and to the delegate of the whole `Servo` instance when the message names no web view or the web
@@ -152,6 +155,30 @@ new file mode 100644
 +        assert_eq!(*recording.seen.borrow(), ["Core::Probe"]);
 +    }
 +}
+diff --git a/mercury/page.rs b/mercury/page.rs
+new file mode 100644
+--- /dev/null
++++ b/mercury/page.rs
+@@ -0,0 +1,19 @@
++/* This Source Code Form is subject to the terms of the Mozilla Public
++ * License, v. 2.0. If a copy of the MPL was not distributed with this
++ * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
++
++// Mercury: this file belongs to the page lane's embedder half. Stub: the methods are filled by the
++// lane's tasks; they do nothing until then.
++
++use crate::webview::WebView;
++
++impl WebView {
++    /// Stop loading the document of this webview. Stub: does nothing.
++    pub fn stop_loading(&self) {}
++
++    /// Answer an unload question of this webview. Stub: does nothing.
++    pub fn permit_unload(&self, _request_id: u64, _allowed: bool) {}
++
++    /// Reload this webview, bypassing the cache. Stub: does nothing.
++    pub fn reload_bypassing_cache(&self) {}
++}
 diff --git a/servo.rs b/servo.rs
 --- a/servo.rs
 +++ b/servo.rs
@@ -178,7 +205,51 @@ diff --git a/servo.rs b/servo.rs
          }
      }
 
-@@ -853,6 +862,12 @@
+@@ -668,7 +677,12 @@
+                     );
+                 }
+             },
+-            EmbedderMsg::PromptPermission(webview_id, requested_feature, response_sender) => {
++            EmbedderMsg::PromptPermission(
++                webview_id,
++                requested_pipeline,
++                requested_feature,
++                response_sender,
++            ) => {
+                 if let Some(webview) = self.get_webview_handle(webview_id) {
+                     let permission_request = PermissionRequest {
+                         requested_feature,
+@@ -677,6 +691,7 @@
+                             AllowOrDeny::Deny,
+                             self.servo_errors.sender(),
+                         ),
++                        requested_pipeline,
+                     };
+                     webview
+                         .delegate()
+@@ -683,7 +698,12 @@
+                         .request_permission(webview, permission_request);
+                 }
+             },
+-            EmbedderMsg::RequestPermission(webview_id, requested_feature, callback) => {
++            EmbedderMsg::RequestPermission(
++                webview_id,
++                requested_pipeline,
++                requested_feature,
++                callback,
++            ) => {
+                 if let Some(webview) = self.get_webview_handle(webview_id) {
+                     let permission_request = PermissionRequest {
+                         requested_feature,
+@@ -692,6 +712,7 @@
+                             AllowOrDeny::Deny,
+                             self.servo_errors.sender(),
+                         ),
++                        requested_pipeline,
+                     };
+                     webview
+                         .delegate()
+@@ -853,6 +874,12 @@
                      webview.process_accessibility_tree_update(tree_update, epoch);
                  }
              },
@@ -191,7 +262,7 @@ diff --git a/servo.rs b/servo.rs
          }
      }
 
-@@ -951,6 +966,12 @@
+@@ -951,6 +978,12 @@
                          .notify_media_session_event(webview, media_session_event);
                  }
              },
@@ -204,6 +275,61 @@ diff --git a/servo.rs b/servo.rs
          }
      }
  }
+@@ -1103,6 +1136,7 @@
+             async_runtime,
+             public_storage_threads.clone(),
+             private_storage_threads.clone(),
++            builder.wake_lock_delegate,
+         );
+
+         net::connector::prewarm_tls();
+@@ -1328,6 +1362,7 @@
+     async_runtime: Box<dyn net_traits::AsyncRuntime>,
+     public_storage_threads: StorageThreads,
+     private_storage_threads: StorageThreads,
++    wake_lock_delegate: Box<dyn WakeLockDelegate>,
+ ) {
+     // Global configuration options, parsed from the command line.
+     let opts = opts::get();
+@@ -1372,7 +1407,7 @@
+         wgpu_image_map: paint.webgpu_image_map(),
+         async_runtime,
+         privileged_urls,
+-        wake_lock_provider: Box::new(DefaultWakeLockDelegate),
++        wake_lock_provider: wake_lock_delegate,
+     };
+
+     let layout_factory = Arc::new(LayoutFactoryImpl());
+@@ -1541,6 +1576,8 @@
+     preferences: Option<Box<Preferences>>,
+     event_loop_waker: Box<dyn EventLoopWaker>,
+     protocol_registry: ProtocolRegistry,
++    // Mercury: the screen wake-lock delegate of the constellation (H9).
++    wake_lock_delegate: Box<dyn WakeLockDelegate>,
+ }
+
+ impl Default for ServoBuilder {
+@@ -1550,6 +1587,7 @@
+             preferences: Default::default(),
+             event_loop_waker: Box::new(DefaultEventLoopWaker),
+             protocol_registry: Default::default(),
++            wake_lock_delegate: Box::new(DefaultWakeLockDelegate),
+         }
+     }
+ }
+@@ -1578,6 +1616,12 @@
+         self.protocol_registry = protocol_registry;
+         self
+     }
++
++    // Mercury: sets the screen wake-lock delegate (H9).
++    pub fn wake_lock_delegate(mut self, delegate: Box<dyn WakeLockDelegate>) -> Self {
++        self.wake_lock_delegate = delegate;
++        self
++    }
+ }
+
+ #[cfg(feature = "multiprocess")]
 diff --git a/servo_delegate.rs b/servo_delegate.rs
 --- a/servo_delegate.rs
 +++ b/servo_delegate.rs
@@ -1536,7 +1662,16 @@ diff --git a/webview_delegate.rs b/webview_delegate.rs
  };
  use paint_api::rendering_context::RenderingContext;
  use servo_base::generic_channel::{GenericCallback, GenericSender, SendError};
-@@ -277,6 +278,21 @@
+@@ -76,6 +77,8 @@
+ pub struct PermissionRequest {
+     pub(crate) requested_feature: PermissionFeature,
+     pub(crate) allow_deny_request: AllowOrDenyRequest,
++    // Mercury: the pipeline that asked for the permission (H10).
++    pub(crate) requested_pipeline: servo_base::id::PipelineId,
+ }
+
+ impl PermissionRequest {
+@@ -277,6 +280,21 @@
              error_sender: self.error_sender,
          }
      }
@@ -1558,7 +1693,7 @@ diff --git a/webview_delegate.rs b/webview_delegate.rs
  }
 
  /// An intercepted web resource load. This struct allows the client to send an alternative response
-@@ -1073,6 +1089,13 @@
+@@ -1073,6 +1091,13 @@
      /// <https://developer.mozilla.org/en-US/docs/Web/API/Console_API>
      fn show_console_message(&self, _webview: WebView, _level: ConsoleLogLevel, _message: String) {}
 
@@ -1572,7 +1707,7 @@ diff --git a/webview_delegate.rs b/webview_delegate.rs
      /// There is a new accessibility tree update from this [`WebView`].
      ///
      /// Generally the impl should send this update to an AccessKit adapter, but it may need to queue
-@@ -1223,6 +1246,10 @@
+@@ -1223,6 +1248,10 @@
              referrer_url: None,
              is_for_main_frame: false,
              is_redirect: false,
@@ -1583,7 +1718,7 @@ diff --git a/webview_delegate.rs b/webview_delegate.rs
          };
          let web_resource_response = || {
              WebResourceResponse::new(
-@@ -1299,4 +1326,66 @@
+@@ -1299,4 +1328,66 @@
          drop(request);
          assert!(errors.try_recv().is_none());
      }

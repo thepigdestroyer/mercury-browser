@@ -2073,6 +2073,7 @@ where
             },
             ScriptToConstellationMessage::AcquireWakeLock(type_) => match type_ {
                 WakeLockType::Screen => {
+                    self.mercury_wake_lock_acquire(source_pipeline_id);
                     self.screen_wake_lock_count += 1;
                     if self.screen_wake_lock_count == 1 &&
                         let Err(e) = self.wake_lock_provider.acquire(type_)
@@ -2083,6 +2084,7 @@ where
             },
             ScriptToConstellationMessage::ReleaseWakeLock(type_) => match type_ {
                 WakeLockType::Screen => {
+                    self.mercury_wake_lock_release(source_pipeline_id);
                     self.screen_wake_lock_count = self.screen_wake_lock_count.saturating_sub(1);
                     if self.screen_wake_lock_count == 0 &&
                         let Err(e) = self.wake_lock_provider.release(type_)
@@ -2997,6 +2999,7 @@ where
 
     fn handle_pipeline_exited(&mut self, pipeline_id: PipelineId, exit_source: PipelineExitSource) {
         debug!("{}: Exited", pipeline_id);
+        self.mercury_wake_lock_pipeline_gone(pipeline_id);
         self.remove_worker_animation_frame_providers_for_pipeline(pipeline_id);
 
         let Some(pipeline) = self.pipelines.remove(&pipeline_id) else {
@@ -3728,6 +3731,7 @@ where
             opener_webview_id,
             opener_pipeline_id,
             response_sender,
+            page_hints,
         } = load_info;
 
         let Some(browsing_context_group) =
@@ -3743,6 +3747,7 @@ where
             let _ = response_sender.send(None);
             return;
         };
+        self.mercury_send_open_hints(opener_webview_id, page_hints);
         self.constellation_to_embedder_proxy
             .send(ConstellationToEmbedderMsg::AllowOpeningWebView(
                 opener_webview_id,
@@ -4194,6 +4199,7 @@ where
                         pending.target_snapshot_params,
                     );
                 } else {
+                    self.mercury_navigation_refused(pipeline_id, webview_id);
                     if let Some((sender, id)) = &self.webdriver_load_status_sender &&
                         pipeline_id == *id
                     {

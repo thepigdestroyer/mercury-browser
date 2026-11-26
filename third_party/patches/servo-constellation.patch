@@ -48,7 +48,23 @@ diff --git a/constellation.rs b/constellation.rs
          }
      }
 
-@@ -2075,6 +2091,10 @@
+@@ -2057,6 +2073,7 @@
+             },
+             ScriptToConstellationMessage::AcquireWakeLock(type_) => match type_ {
+                 WakeLockType::Screen => {
++                    self.mercury_wake_lock_acquire(source_pipeline_id);
+                     self.screen_wake_lock_count += 1;
+                     if self.screen_wake_lock_count == 1 &&
+                         let Err(e) = self.wake_lock_provider.acquire(type_)
+@@ -2067,6 +2084,7 @@
+             },
+             ScriptToConstellationMessage::ReleaseWakeLock(type_) => match type_ {
+                 WakeLockType::Screen => {
++                    self.mercury_wake_lock_release(source_pipeline_id);
+                     self.screen_wake_lock_count = self.screen_wake_lock_count.saturating_sub(1);
+                     if self.screen_wake_lock_count == 0 &&
+                         let Err(e) = self.wake_lock_provider.release(type_)
+@@ -2075,6 +2093,10 @@
                      }
                  },
              },
@@ -59,7 +75,15 @@ diff --git a/constellation.rs b/constellation.rs
          }
      }
 
-@@ -3268,6 +3288,8 @@
+@@ -2977,6 +2999,7 @@
+
+     fn handle_pipeline_exited(&mut self, pipeline_id: PipelineId, exit_source: PipelineExitSource) {
+         debug!("{}: Exited", pipeline_id);
++        self.mercury_wake_lock_pipeline_gone(pipeline_id);
+         self.remove_worker_animation_frame_providers_for_pipeline(pipeline_id);
+
+         let Some(pipeline) = self.pipelines.remove(&pipeline_id) else {
+@@ -3268,6 +3291,8 @@
              ScriptThreadMessage::SetAccessibilityActive(pipeline_id, active, epoch),
              "Set accessibility active after closure",
          );
@@ -68,7 +92,7 @@ diff --git a/constellation.rs b/constellation.rs
      }
 
      fn forward_accessibility_action(&mut self, action_request: ActionRequest) {
-@@ -3277,8 +3299,11 @@
+@@ -3277,8 +3302,11 @@
              .copied()
              .find(|&pipeline_id| TreeId::from(pipeline_id) == action_request.target_tree)
          else {
@@ -81,7 +105,31 @@ diff --git a/constellation.rs b/constellation.rs
              );
              return;
          };
-@@ -6104,6 +6129,10 @@
+@@ -3703,6 +3731,7 @@
+             opener_webview_id,
+             opener_pipeline_id,
+             response_sender,
++            page_hints,
+         } = load_info;
+
+         let Some(browsing_context_group) =
+@@ -3718,6 +3747,7 @@
+             let _ = response_sender.send(None);
+             return;
+         };
++        self.mercury_send_open_hints(opener_webview_id, page_hints);
+         self.constellation_to_embedder_proxy
+             .send(ConstellationToEmbedderMsg::AllowOpeningWebView(
+                 opener_webview_id,
+@@ -4169,6 +4199,7 @@
+                         pending.target_snapshot_params,
+                     );
+                 } else {
++                    self.mercury_navigation_refused(pipeline_id, webview_id);
+                     if let Some((sender, id)) = &self.webdriver_load_status_sender &&
+                         pipeline_id == *id
+                     {
+@@ -6104,6 +6135,10 @@
              return warn!("Tried closing unknown pipeline: {pipeline_id:?}");
          };
 
@@ -92,7 +140,7 @@ diff --git a/constellation.rs b/constellation.rs
          if let Some(browsing_context) = self.browsing_contexts.get_mut(&browsing_context_id) {
              browsing_context.pipelines.remove(&pipeline_id);
          }
-@@ -6247,6 +6276,9 @@
+@@ -6247,6 +6282,9 @@
              return;
          };
          if webview.active_top_level_pipeline_id == Some(new_pipeline_id) {
@@ -102,7 +150,7 @@ diff --git a/constellation.rs b/constellation.rs
              return;
          }
 
-@@ -6282,6 +6314,9 @@
+@@ -6282,6 +6320,9 @@
              ),
              "Set accessibility active after closure",
          );
@@ -608,14 +656,16 @@ diff --git a/mercury/page.rs b/mercury/page.rs
 new file mode 100644
 --- /dev/null
 +++ b/mercury/page.rs
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,51 @@
 +/* This Source Code Form is subject to the terms of the Mozilla Public
 + * License, v. 2.0. If a copy of the MPL was not distributed with this
 + * file, You can obtain one at https://mozilla.org/MPL/2.0/. */
 +
 +// Mercury: this file belongs to the page lane. Implement handlers here only.
 +
++use embedder_traits::OpenHints;
 +use layout_api::ScriptThreadFactory;
++use log::warn;
 +use servo_base::id::{PipelineId, WebViewId};
 +use servo_constellation_traits::{PageEmbedderMsg, PageScriptMsg, ServiceWorkerManagerFactory};
 +
@@ -626,21 +676,37 @@ new file mode 100644
 +    STF: ScriptThreadFactory,
 +    SWF: ServiceWorkerManagerFactory,
 +{
-+    /// Handle a message of the `page` lane from the embedding layer. The enum is still empty.
++    /// Handle a message of the `page` lane from the embedding layer. Handlers are added with the
++    /// lane's tasks.
 +    pub(super) fn handle_page_embedder_message(&mut self, message: PageEmbedderMsg) {
-+        match message {}
++        warn!("page lane: {message:?} not handled yet");
 +    }
 +
 +    /// Handle a message of the `page` lane from the script thread of `source_pipeline_id` in
-+    /// `webview_id`. The enum is still empty.
++    /// `webview_id`. Handlers are added with the lane's tasks.
 +    pub(super) fn handle_page_script_message(
 +        &mut self,
 +        _webview_id: WebViewId,
 +        _source_pipeline_id: PipelineId,
 +        message: PageScriptMsg,
 +    ) {
-+        match message {}
++        warn!("page lane: {message:?} not handled yet");
 +    }
++
++    /// Forward the open hints of an auxiliary webview request to the embedder. Stub: nothing yet.
++    pub(crate) fn mercury_send_open_hints(&mut self, _opener: WebViewId, _hints: OpenHints) {}
++
++    /// Count a screen wake lock of `pipeline_id`. Stub: nothing yet.
++    pub(crate) fn mercury_wake_lock_acquire(&mut self, _pipeline_id: PipelineId) {}
++
++    /// Count the release of a screen wake lock of `pipeline_id`. Stub: nothing yet.
++    pub(crate) fn mercury_wake_lock_release(&mut self, _pipeline_id: PipelineId) {}
++
++    /// Drop the wake locks of an exited pipeline. Stub: nothing yet.
++    pub(crate) fn mercury_wake_lock_pipeline_gone(&mut self, _pipeline_id: PipelineId) {}
++
++    /// Report a refused navigation of `pipeline_id`. Stub: nothing yet.
++    pub(crate) fn mercury_navigation_refused(&mut self, _pipeline_id: PipelineId, _webview_id: WebViewId) {}
 +}
 diff --git a/mercury/text.rs b/mercury/text.rs
 new file mode 100644

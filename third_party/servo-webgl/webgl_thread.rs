@@ -324,7 +324,13 @@ impl WebGLThread {
                 break;
             }
         }
+        // Mercury: the contexts of a thread whose receive failed are dropped (H21).
+        self.mercury_drop_contexts_after_failed_receive();
     }
+
+    /// Drops the WebGL contexts left after the receive loop ends on a failed receive. Stub: does
+    /// nothing yet.
+    fn mercury_drop_contexts_after_failed_receive(&mut self) {}
 
     /// Enable GL_POINT_SPRITE and GL_PROGRAM_POINT_SIZE on desktop OpenGL.
     ///
